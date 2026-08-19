@@ -1,0 +1,458 @@
+{
+  "schema": 1,
+  "kind": "vibeic.gate-fixture-debt",
+  "baseline_taken_at": "397b3f25f",
+  "note": "The gates that do not yet carry BOTH a can-pass and a can-fail fixture. THIS LIST MAY ONLY SHRINK. An entry is deleted by writing the two fixtures, never by deleting the gate's line from the declaration site. A gate that is not in this list and carries no fixtures FAILS gate_mutation_fixture_check, which is what makes a NEW gate arrive with both directions or not arrive.",
+  "entries": [
+    {
+      "gate": "PPA head-to-head records",
+      "slug": "ppa_head_to_head_records",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:104",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/ppa_head_to_head_records.py."
+    },
+    {
+      "gate": "plugin version stated in prose",
+      "slug": "plugin_version_stated_in_prose",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:107",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/plugin_version_stated_in_prose.py."
+    },
+    {
+      "gate": "container exec deadlines",
+      "slug": "container_exec_deadlines",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:118",
+      "why": "CANNOT_FAIL \u2014 declared WITHOUT --strict, and the checker's own docstring says findings are ADVISORY (exit 0) under that flag set; repo_hygiene_gates.sh states the reason at the declaration ('54 findings stand today'). With the argv the dispatcher passes there is no input that makes this gate exit non-zero on a finding, so its can-fail direction cannot be written until the declaration changes."
+    },
+    {
+      "gate": "container login-banner parses",
+      "slug": "container_login_banner_parses",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:138",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/container_login_banner_parses.py."
+    },
+    {
+      "gate": "fork downgrades stay visible",
+      "slug": "fork_downgrades_stay_visible",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:143",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/fork_downgrades_stay_visible.py."
+    },
+    {
+      "gate": "severity=ERROR is consumed",
+      "slug": "severity_error_is_consumed",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:163",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/severity_error_is_consumed.py."
+    },
+    {
+      "gate": "watchdog compliance",
+      "slug": "watchdog_compliance",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:178",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/watchdog_compliance.py."
+    },
+    {
+      "gate": "marketplace version sync",
+      "slug": "marketplace_version_sync",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:179",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/marketplace_version_sync.py."
+    },
+    {
+      "gate": "plugin full audit",
+      "slug": "plugin_full_audit",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:180",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/plugin_full_audit.py."
+    },
+    {
+      "gate": "openroad TCL deprecations",
+      "slug": "openroad_tcl_deprecations",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:201",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/openroad_tcl_deprecations.py."
+    },
+    {
+      "gate": "practical notes specificity",
+      "slug": "practical_notes_specificity",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:202",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/practical_notes_specificity.py."
+    },
+    {
+      "gate": "P0 disposition backing",
+      "slug": "p0_disposition_backing",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:219",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/p0_disposition_backing.py."
+    },
+    {
+      "gate": "image-version pins are internally consistent",
+      "slug": "image_version_pins_are_internally_consistent",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:241",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/image_version_pins_are_internally_consistent.py."
+    },
+    {
+      "gate": "upstream image currency (report-only)",
+      "slug": "upstream_image_currency_report_only",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:253",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/upstream_image_currency_report_only.py."
+    },
+    {
+      "gate": "no upstream forked twice",
+      "slug": "no_upstream_forked_twice",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:267",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/no_upstream_forked_twice.py."
+    },
+    {
+      "gate": "PR bases reach main",
+      "slug": "pr_bases_reach_main",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:309",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/pr_bases_reach_main.py."
+    },
+    {
+      "gate": "flow-gate enforcement audit",
+      "slug": "flow_gate_enforcement_audit",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:314",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/flow_gate_enforcement_audit.py."
+    },
+    {
+      "gate": "stage membership declared once",
+      "slug": "stage_membership_declared_once",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:323",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/stage_membership_declared_once.py."
+    },
+    {
+      "gate": "L-doc field producer",
+      "slug": "l_doc_field_producer",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:338",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/l_doc_field_producer.py."
+    },
+    {
+      "gate": "tracked-symlink portability",
+      "slug": "tracked_symlink_portability",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:351",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/tracked_symlink_portability.py."
+    },
+    {
+      "gate": "STA engines agree",
+      "slug": "sta_engines_agree",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:406",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/sta_engines_agree.py."
+    },
+    {
+      "gate": "P0 gate invocability drift",
+      "slug": "p0_gate_invocability_drift",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:422",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/p0_gate_invocability_drift.py."
+    },
+    {
+      "gate": "evidence citation resolves",
+      "slug": "evidence_citation_resolves",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:438",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/evidence_citation_resolves.py."
+    },
+    {
+      "gate": "citation routing is true",
+      "slug": "citation_routing_is_true",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:451",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/citation_routing_is_true.py."
+    },
+    {
+      "gate": "checker execution wiring",
+      "slug": "checker_execution_wiring",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:455",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/checker_execution_wiring.py."
+    },
+    {
+      "gate": "gates are wired to something",
+      "slug": "gates_are_wired_to_something",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:462",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/gates_are_wired_to_something.py."
+    },
+    {
+      "gate": "prose extractors read polarity",
+      "slug": "prose_extractors_read_polarity",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:469",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/prose_extractors_read_polarity.py."
+    },
+    {
+      "gate": "per-source record merges",
+      "slug": "per_source_record_merges",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:482",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/per_source_record_merges.py."
+    },
+    {
+      "gate": "declaration scans strip comments",
+      "slug": "declaration_scans_strip_comments",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:488",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/declaration_scans_strip_comments.py."
+    },
+    {
+      "gate": "macro OBS not crossed ($(basename \"$(dirname \"$_cell\")\"))",
+      "slug": "macro_obs_not_crossed",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:534",
+      "why": "RUNTIME_EXPANDED \u2014 the shell variable $_cell, bound by the enclosing loop. This gate is wired once and invoked once per PUBLISHED CELL; a bare checkout expands it over 0 items, so its fixture needs a published cell to mutate and cannot be a synthetic tree alone."
+    },
+    {
+      "gate": "DRC PASS is not vacuous ($(basename \"$(dirname \"$_cell\")\"))",
+      "slug": "drc_pass_is_not_vacuous",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:543",
+      "why": "RUNTIME_EXPANDED \u2014 the shell variable $_cell, bound by the enclosing loop. This gate is wired once and invoked once per PUBLISHED CELL; a bare checkout expands it over 0 items, so its fixture needs a published cell to mutate and cannot be a synthetic tree alone."
+    },
+    {
+      "gate": "inner FAILs reach the verdict ($(basename \"$(dirname \"$_cell\")\"))",
+      "slug": "inner_fails_reach_the_verdict",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:552",
+      "why": "RUNTIME_EXPANDED \u2014 the shell variable $_cell, bound by the enclosing loop. This gate is wired once and invoked once per PUBLISHED CELL; a bare checkout expands it over 0 items, so its fixture needs a published cell to mutate and cannot be a synthetic tree alone."
+    },
+    {
+      "gate": "new tool diagnostic id ($(basename \"$(dirname \"$_cell\")\"))",
+      "slug": "new_tool_diagnostic_id",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:567",
+      "why": "RUNTIME_EXPANDED \u2014 the shell variable $_cell, bound by the enclosing loop. This gate is wired once and invoked once per PUBLISHED CELL; a bare checkout expands it over 0 items, so its fixture needs a published cell to mutate and cannot be a synthetic tree alone."
+    },
+    {
+      "gate": "triage notes state a true reason",
+      "slug": "triage_notes_state_a_true_reason",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:583",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/triage_notes_state_a_true_reason.py."
+    },
+    {
+      "gate": "NDA scan of the TRACKED tree",
+      "slug": "nda_scan_of_the_tracked_tree",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:590",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/nda_scan_of_the_tracked_tree.py."
+    },
+    {
+      "gate": "vendored attribution retained",
+      "slug": "vendored_attribution_retained",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:604",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/vendored_attribution_retained.py."
+    },
+    {
+      "gate": "PDK registry selectable",
+      "slug": "pdk_registry_selectable",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:611",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/pdk_registry_selectable.py."
+    },
+    {
+      "gate": "PDK via patch vs layer min width",
+      "slug": "pdk_via_patch_vs_layer_min_width",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:640",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/pdk_via_patch_vs_layer_min_width.py."
+    },
+    {
+      "gate": "layout-artefact size policy",
+      "slug": "layout_artefact_size_policy",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:651",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/layout_artefact_size_policy.py."
+    },
+    {
+      "gate": "provenance correction notes",
+      "slug": "provenance_correction_notes",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:657",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/provenance_correction_notes.py."
+    },
+    {
+      "gate": "declared outputs are findable",
+      "slug": "declared_outputs_are_findable",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:663",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/declared_outputs_are_findable.py."
+    },
+    {
+      "gate": "artefact-defect close discipline",
+      "slug": "artefact_defect_close_discipline",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:674",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/artefact_defect_close_discipline.py."
+    },
+    {
+      "gate": "cross-layer reference regression",
+      "slug": "cross_layer_reference_regression",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:721",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/cross_layer_reference_regression.py."
+    },
+    {
+      "gate": "step FAIL bubbles up",
+      "slug": "step_fail_bubbles_up",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:775",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/step_fail_bubbles_up.py."
+    },
+    {
+      "gate": "blocker list contract on committed reports",
+      "slug": "blocker_list_contract_on_committed_reports",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:796",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/blocker_list_contract_on_committed_reports.py."
+    },
+    {
+      "gate": "per-PDK table coverage",
+      "slug": "per_pdk_table_coverage",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:803",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/per_pdk_table_coverage.py."
+    },
+    {
+      "gate": "L4 -> SystemRDL disposition",
+      "slug": "l4_systemrdl_disposition",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:826",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/l4_systemrdl_disposition.py."
+    },
+    {
+      "gate": "published-evidence index honest",
+      "slug": "published_evidence_index_honest",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:851",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/published_evidence_index_honest.py."
+    },
+    {
+      "gate": "programs index fresh",
+      "slug": "programs_index_fresh",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:861",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/programs_index_fresh.py."
+    },
+    {
+      "gate": "engineering evidence fresh",
+      "slug": "engineering_evidence_fresh",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:880",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/engineering_evidence_fresh.py."
+    },
+    {
+      "gate": "inner timeouts fit the harness",
+      "slug": "inner_timeouts_fit_the_harness",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:896",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/inner_timeouts_fit_the_harness.py."
+    },
+    {
+      "gate": "gates disclose their denominator",
+      "slug": "gates_disclose_their_denominator",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:906",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/gates_disclose_their_denominator.py."
+    },
+    {
+      "gate": "stated corpus figures are derived, not typed",
+      "slug": "stated_corpus_figures_are_derived_not_typed",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:916",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/stated_corpus_figures_are_derived_not_typed.py."
+    },
+    {
+      "gate": "a zero denominator refuses",
+      "slug": "a_zero_denominator_refuses",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:923",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/a_zero_denominator_refuses.py."
+    },
+    {
+      "gate": "d3 declaration/manifest parity",
+      "slug": "d3_declaration_manifest_parity",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:943",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/d3_declaration_manifest_parity.py."
+    },
+    {
+      "gate": "gate skips reach the vacuous tier",
+      "slug": "gate_skips_reach_the_vacuous_tier",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:946",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/gate_skips_reach_the_vacuous_tier.py."
+    },
+    {
+      "gate": "no gate is left neutered",
+      "slug": "no_gate_is_left_neutered",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:962",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/no_gate_is_left_neutered.py."
+    },
+    {
+      "gate": "liar census controls still fire",
+      "slug": "liar_census_controls_still_fire",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:975",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/liar_census_controls_still_fire.py."
+    },
+    {
+      "gate": "argparse help format",
+      "slug": "argparse_help_format",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:978",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/argparse_help_format.py."
+    },
+    {
+      "gate": "dead plugin path",
+      "slug": "dead_plugin_path",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:979",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/dead_plugin_path.py."
+    },
+    {
+      "gate": "ic_expert_db health",
+      "slug": "ic_expert_db_health",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:980",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/ic_expert_db_health.py."
+    },
+    {
+      "gate": "verdict token propagation",
+      "slug": "verdict_token_propagation",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:981",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/verdict_token_propagation.py."
+    },
+    {
+      "gate": "signoff gate self-skip",
+      "slug": "signoff_gate_self_skip",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:982",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/signoff_gate_self_skip.py."
+    },
+    {
+      "gate": "waveform artifact hygiene",
+      "slug": "waveform_artifact_hygiene",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:983",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/waveform_artifact_hygiene.py."
+    },
+    {
+      "gate": "silent remedy decline",
+      "slug": "silent_remedy_decline",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1036",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/silent_remedy_decline.py."
+    },
+    {
+      "gate": "final-summary roll-up consistency",
+      "slug": "final_summary_roll_up_consistency",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1046",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/final_summary_roll_up_consistency.py."
+    },
+    {
+      "gate": "published records not superseded",
+      "slug": "published_records_not_superseded",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1067",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/published_records_not_superseded.py."
+    },
+    {
+      "gate": "input-doc claims vs installed PDK",
+      "slug": "input_doc_claims_vs_installed_pdk",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1244",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/input_doc_claims_vs_installed_pdk.py."
+    },
+    {
+      "gate": "a step whose gate cannot fail",
+      "slug": "a_step_whose_gate_cannot_fail",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1262",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/a_step_whose_gate_cannot_fail.py."
+    },
+    {
+      "gate": "flow-gate grid",
+      "slug": "flow_gate_grid",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1275",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/flow_gate_grid.py."
+    },
+    {
+      "gate": "flow dependency graph",
+      "slug": "flow_dependency_graph",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1277",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/flow_dependency_graph.py."
+    },
+    {
+      "gate": "image-gated verifications are not silently skipped",
+      "slug": "image_gated_verifications_are_not_silently_skipped",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1415",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/image_gated_verifications_are_not_silently_skipped.py."
+    },
+    {
+      "gate": "an argued direction is pinned",
+      "slug": "an_argued_direction_is_pinned",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1418",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/an_argued_direction_is_pinned.py."
+    },
+    {
+      "gate": "declared reports are written atomically",
+      "slug": "declared_reports_are_written_atomically",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1435",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/declared_reports_are_written_atomically.py."
+    },
+    {
+      "gate": "gates are host-independent",
+      "slug": "gates_are_host_independent",
+      "declared_at": "tools/ci/repo_hygiene_gates.sh:1468",
+      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/gates_are_host_independent.py."
+    }
+  ]
+}
