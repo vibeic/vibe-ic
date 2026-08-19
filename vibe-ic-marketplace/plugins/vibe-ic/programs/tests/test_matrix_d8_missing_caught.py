@@ -103,6 +103,83 @@ CELL STATES (63 = 61 + 0 + 2)
 exactly, so a cell cannot go silently unprobed.
 
 ====================================================================
+PRESENCE IS NOT CORRECTNESS — WHAT EVERY DIMENSION CAN AND CANNOT SEE
+====================================================================
+This dimension's question — "if a declared output is MISSING, does the
+mechanism CATCH it?" — has a twin the 63x9 matrix could not ask until
+2026-08-19: *if a declared output is PRESENT AND WRONG, does anything catch
+it?* Measured across all nine dimensions on `0d7b6428a`, in the pinned
+container. Two columns: what makes the cell red today, and whether a declared
+artefact that is present, parseable and WRONG can do it.
+
+  D1 wiring        RED: the gate names a program that does not resolve, or no
+                   executor ever dispatches it (test_matrix_d1_wiring.py:868).
+                   CONTENT: NO — the subject is the PROGRAM, not the artefact;
+                   no artefact is ever opened. NOT DETERMINED by construction.
+
+  D2 falsifiable   RED: no fixture drives the gate to a real non-zero exit
+                   (test_matrix_d2_falsifiable.py:1989). CONTENT: YES,
+                   ALREADY — this dimension drew the distinction first, grading
+                   an ABSENCE_RED as a NON-demonstration.
+
+  D3 outputs_prod  RED: a declared entry with no tracked, non-empty,
+                   non-symlink match (test_matrix_d3_outputs_produced.py:2232).
+                   CONTENT: NOT DETERMINED HERE, and adding a predicate would be
+                   VACUOUS: `run_roots()` is {} and `corpus_root()` is None in
+                   this checkout since the published runs moved out, so every
+                   D3 cell resolves against nothing.
+
+  D4 criteria      RED: a declared output is named nowhere the gate's SOURCE
+                   reaches (test_matrix_d4_criteria_match.py:487). CONTENT: NO
+                   — static grounding over source text; no artefact is read.
+
+  D5 deps          RED: `blocks_on` disagrees with the derived producer /
+                   consumer graph (test_matrix_d5_deps_correct.py:900).
+                   CONTENT: NO — yaml + AST only.
+
+  D6 skip          RED: a leg fires on the EMPTY / SEEDED probe
+                   (test_matrix_d6_skip_discipline.py:1581). CONTENT: NO — the
+                   legs judge the gate's DISCLOSURE TIER, not the bytes.
+                   NOT DETERMINED, and the reason is NOT cost: `_STATUS_SCENARIOS`
+                   already carries four scenarios and the whole module runs in
+                   53 s, so a fifth WRONG scenario is cheap. It is left undone
+                   because the leg it would carry — "a plain PASS on an artefact
+                   the gate did not read" — is the property D8's content arm now
+                   measures, and a second instrument for one defect is how four
+                   blocking rows turn out to be three. If D6 takes this up it
+                   should ask what D8 cannot: whether the gate DISCLOSED that it
+                   did not read the content, which on today's flow would charge
+                   nearly every step and is a policy decision, not a test.
+
+  D7 outputs_list  RED: an undeclared write found by AST + write records
+                   (test_matrix_d7_outputs_list_complete.py:303). CONTENT: NO —
+                   the subject is the DECLARATION, not the artefact.
+
+  D8 missing       RED: drop one declared entry, require MISSING (`probe_negative`,
+                   :538). CONTENT: **THIS IS WHERE IT WAS FIXED.** The catcher
+                   for absence is `_glob_first` — presence, nothing else — and
+                   `fixture_body` seeded a content-free stub, so no wrong body
+                   had ever been constructed. See THE CONTENT ARM below.
+
+  D9 artefact      RED: replay a mutated published artefact against the step's
+                   own gate (test_matrix_artefact_mutation_channel.py:466).
+                   CONTENT: YES BY CONSTRUCTION — and it is the ONLY dimension
+                   built for the question. But its 8 entries all target
+                   dimension 2, all name ONE published run, and every one SKIPs
+                   unless `VIBE_IC_BENCHMARK_DATA` names a benchmark-data clone,
+                   which this checkout does not carry. Pointed at one it DOES
+                   run and its 8 replays reproduce their recorded verdicts
+                   (7 REDDENED, 1 STAYED_GREEN) — so the capability is real and
+                   the REACH is the limit: 8 entries against ONE published
+                   run, and not one of them targets this dimension.
+
+So of nine dimensions, two could see content at all, one of those two cannot
+run here, and the seven that CAN always run never open an artefact. That is an
+existence check wearing the clothes of a correctness check — and it is the same
+family as every finding this repository is chasing: an instrument reporting on
+something it cannot distinguish.
+
+====================================================================
 FALSIFIABILITY — every assertion here was mutation-proved
 ====================================================================
 A predicate that cannot fail is worthless however carefully it is worded, so
@@ -1399,6 +1476,311 @@ def test_d8_every_waiver_is_evidence_backed():
         problems = W.validate(w)
         assert not problems, f"waiver {w.label} is not admissible: {problems}"
 
+
+# ══════════════════════════════════════════════════════════════════════
+# THE CONTENT ARM — an artefact that is PRESENT, PARSEABLE, AND WRONG
+#
+# Everything above this line moves ONE variable: whether a declared artefact
+# EXISTS. That makes this dimension — and, measured below, the matrix it
+# belongs to — an existence check wearing the clothes of a correctness check.
+# `probe_negative` deletes a file; `_glob_first` reports that it is gone; the
+# verdict moves. Nothing anywhere in the sweep ever OPENS an artefact and
+# disagrees with what it says.
+#
+# MEASURED, 2026-08-19, over the same PASS-tier population `_real_gate_sweep`
+# already drives (each step's OWN gate, on a synthesized tree):
+#
+#     absence moves the verdict            16 of 16
+#     content(SKIPPED-CONDITION) moves      3 of 16
+#     content(verdict=FAIL) moves           0 of 16   <- before the fix
+#
+# The third row was the defect and it was NOT a missing reader: `check_step`
+# opened those artefacts, parsed them as JSON, read the `verdict` field, and
+# compared it against exactly ONE value. `flow_compliance_check`'s
+# `_SELF_FAIL_VERDICTS` (2026-08-19) is the value it was missing; this arm is
+# the standing measurement that says so and keeps saying so.
+#
+# WHY THE MOVING NUMBER IS 3 AND NOT 16, stated rather than left to be found:
+# `_evidence_integrity_scan` returns untouched unless the status is a PLAIN
+# PASS, and 12 of the 16 reach only VACUOUS_PASS — a tier at which the flow has
+# no content channel at all. Those rows are recorded as NOT_REACHED, not as a
+# gate that read its artefact and disagreed with nothing.
+# ══════════════════════════════════════════════════════════════════════
+
+#: The WRONG counterpart of every body in `_KIND_BODIES`, one per kind.
+#:
+#: Each is PRESENT, non-empty, parses as its own kind, lands at exactly the
+#: same path and still satisfies the entry through the real `_glob_first` —
+#: `test_d8_the_wrong_fixture_is_present_parseable_and_still_resolves` proves
+#: all four rather than assuming them. The ONLY thing that differs from
+#: `fixture_body` is what the bytes SAY.
+#:
+#: The JSON body self-reports `verdict: FAIL` because that is this repo's own
+#: machine-readable verdict-self-report contract (#433c / §4.05) — the same
+#: field `_evidence_integrity_scan` already reads for SKIPPED-CONDITION — and
+#: not a schema invented here. The Verilog and prose bodies have no contract to
+#: violate, so they differ SEMANTICALLY (a netlist that drives a constant
+#: instead of the input; a report that records violations instead of none) and
+#: are expected to move nothing. That expectation is recorded per row, so
+#: "no channel exists for this kind" never reads as "the gate looked and
+#: agreed".
+_WRONG_JSON_BODY = (
+    '{"d8_fixture": true, "verdict": "FAIL", "violations": 3,'
+    ' "reason": "d8 content arm: this artefact records a FAILED run"}\n'
+)
+_WRONG_JSONL_BODY = _WRONG_JSON_BODY
+_WRONG_VERILOG_BODY = (
+    "// d8 content arm: present, parseable, and semantically wrong\n"
+    "module d8_fixture_top (input wire clk, output wire q);\n"
+    "  assign q = 1'b0;\n"
+    "endmodule\n"
+)
+_WRONG_FIXTURE_BODY = "d8 content arm: FAIL — 3 violations recorded\n"
+
+_WRONG_KIND_BODIES: Tuple[Tuple[str, str], ...] = (
+    (".jsonl", _WRONG_JSONL_BODY),
+    (".json", _WRONG_JSON_BODY),
+    (".sv", _WRONG_VERILOG_BODY),
+    (".v", _WRONG_VERILOG_BODY),
+)
+
+#: Kinds for which the flow has ANY content channel at all today. Read by the
+#: census so a row can say WHY it did not move.
+_CONTENT_BEARING_SUFFIXES = (".json", ".jsonl")
+
+
+def wrong_body(rel: str) -> str:
+    """The WRONG body for ``rel`` — same kind as :func:`fixture_body`, other bytes."""
+    lowered = rel.lower()
+    for suffix, body in _WRONG_KIND_BODIES:
+        if lowered.endswith(suffix):
+            return body
+    return _WRONG_FIXTURE_BODY
+
+
+def _content_bearing(rel: str) -> bool:
+    return rel.lower().endswith(_CONTENT_BEARING_SUFFIXES)
+
+
+def _mutate_outputs(project: Path, step: Dict[str, Any]) -> List[str]:
+    """Rewrite every already-materialized declared output with its WRONG body.
+
+    Returns the rel paths actually rewritten. Presence, path and kind are
+    unchanged by construction: the same `concretize(alt)` that wrote the right
+    body is what gets overwritten.
+    """
+    rewritten: List[str] = []
+    for entry in (step.get("required_outputs") or []):
+        for alt in alternatives(entry):
+            rel = concretize(alt)
+            p = project / rel
+            if not p.is_file():
+                continue
+            p.write_text(wrong_body(rel))
+            assert FCC._glob_first(project, alt), (
+                f"content-arm defect: rewriting {rel!r} with its wrong body "
+                f"stopped the real _glob_first from finding it — the mutation "
+                f"changed PRESENCE, which is the variable this arm holds fixed"
+            )
+            rewritten.append(rel)
+    return rewritten
+
+
+#: ``{step: (right status, wrong status, rel paths rewritten)}`` over the same
+#: population `_real_gate_sweep` drives. Shared with the controls below so a
+#: sweep that hard-coded its answer reddens.
+@lru_cache(maxsize=1)
+def _content_arm_sweep() -> Dict[str, Tuple[str, str, Tuple[str, ...]]]:
+    out: Dict[str, Tuple[str, str, Tuple[str, ...]]] = {}
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        if key not in _real_gate_sweep():
+            continue
+        step = dict(F.step_by_id(sid))          # the REAL gate, not PASS_GATE
+        tmp = Path(tempfile.mkdtemp(prefix="d8_contentarm_"))
+        try:
+            right_dir = tmp / "right"
+            right_dir.mkdir(parents=True)
+            _materialize(right_dir, step)
+            right = FCC.check_step(right_dir, step, {}).status
+
+            wrong_dir = tmp / "wrong"
+            wrong_dir.mkdir(parents=True)
+            _materialize(wrong_dir, step)
+            rewritten = _mutate_outputs(wrong_dir, step)
+            wrong = FCC.check_step(wrong_dir, step, {}).status
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        out[key] = (right, wrong, tuple(sorted(rewritten)))
+    return out
+
+
+def _content_state(key: str) -> str:
+    """One machine-readable state per row, so an absence never reads as a zero."""
+    right, wrong, rewritten = _content_arm_sweep()[key]
+    if not rewritten:
+        return "NOT_MUTATED"          # the step declared nothing to corrupt
+    if not any(_content_bearing(r) for r in rewritten):
+        return "NO_CHANNEL"           # corrupted, but no kind the flow can read
+    if right not in ("PASS",):
+        return "NOT_REACHED"          # the content channel is plain-PASS only
+    return "MOVED" if wrong != right else "UNMOVED"
+
+
+#: THE CENSUS, pinned BOTH WAYS.
+#:
+#:   UNMOVED/NOT_REACHED -> MOVED   a gate LEARNED to read its artefact, and
+#:                                  that must be recorded, not absorbed.
+#:   MOVED -> UNMOVED               a gate STOPPED, and nothing else in this
+#:                                  repository would notice.
+#:   a step JOINING the population  arrives unpinned and reddens BY NAME.
+#:
+#: A step LEAVING is not graded here: `REAL_GATE_PASS_TIER_STEPS`' shrink guard
+#: already owns that question, and two gates reporting one defect is how four
+#: blocking rows turn out to be three.
+CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
+    "D1": "NOT_REACHED",
+    "1": "NO_CHANNEL",
+    "2": "NOT_REACHED",
+    "12": "NO_CHANNEL",
+    "A1": "NOT_REACHED",
+    "A2": "NO_CHANNEL",
+    "A4": "NOT_REACHED",
+    "A5": "NO_CHANNEL",
+    "A6": "NOT_REACHED",
+    "A8": "NO_CHANNEL",
+    "14": "NO_CHANNEL",
+    "28": "NOT_REACHED",
+    "30": "NOT_REACHED",
+    "32": "MOVED",
+    "35": "MOVED",
+    "38": "MOVED",
+}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# CONTROLS. Sixteen rows of "the verdict did not move" are worth nothing
+# until the arm proves it wrote a real, different, still-resolving artefact.
+# ──────────────────────────────────────────────────────────────────────
+def test_d8_the_wrong_fixture_is_present_parseable_and_still_resolves(tmp_path):
+    """UNMOVED must never be able to mean "I wrote nothing".
+
+    For every kind the arm knows, the wrong body must be non-empty, parse as
+    its own kind, and — written at the path `concretize` produces — still be
+    found by the REAL `_glob_first` for the pattern it claims to satisfy.
+    """
+    probes = (("reports/x/a.json", "json"), ("reports/x/a.jsonl", "json"),
+              ("phase2/stage1/rtl/a.v", "verilog"),
+              ("phase2/stage1/rtl/a.sv", "verilog"),
+              ("reports/x/a.rpt", "text"))
+    for rel, kind in probes:
+        body = wrong_body(rel)
+        assert body.strip(), f"{rel}: wrong body is empty — that is ABSENCE, not wrongness"
+        if kind == "json":
+            doc = json.loads(body.splitlines()[0])
+            assert isinstance(doc, dict), f"{rel}: wrong body does not parse as a JSON object"
+        if kind == "verilog":
+            assert "module" in body and "endmodule" in body, (
+                f"{rel}: wrong Verilog body declares no module — that is a "
+                f"CORRUPT file, and this arm's variable is content, not form")
+        _write(tmp_path, rel, body)
+        assert FCC._glob_first(tmp_path, rel), (
+            f"{rel}: the wrong body does not satisfy its own pattern through "
+            f"the real _glob_first")
+
+
+def test_d8_the_wrong_fixture_differs_from_the_right_one():
+    """...and it must actually DIFFER, per kind, or the arm is a no-op."""
+    for rel in ("reports/x/a.json", "reports/x/a.jsonl", "phase2/stage1/rtl/a.v",
+                "phase2/stage1/rtl/a.sv", "reports/x/a.rpt"):
+        assert wrong_body(rel) != fixture_body(rel), (
+            f"{rel}: the wrong body is BYTE-IDENTICAL to the right body, so "
+            f"every row of the content census measures nothing")
+
+
+def test_d8_the_content_arm_actually_rewrote_something():
+    """WORK STARTED, not merely "the test could fail".
+
+    A sweep whose `_mutate_outputs` silently rewrote nothing would report 16
+    honest-looking UNMOVED rows. Assert the denominator directly: at least one
+    step must have had a content-bearing declared output rewritten, and every
+    row whose state is MOVED or UNMOVED must name the files it rewrote.
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm swept ZERO steps — that is a dead arm, not a clean one"
+    bearing = {k: v[2] for k, v in sweep.items()
+               if any(_content_bearing(r) for r in v[2])}
+    assert bearing, (
+        f"the content arm rewrote no content-bearing artefact in any of "
+        f"{len(sweep)} steps; every row below would be vacuous")
+    for key in sweep:
+        if _content_state(key) in ("MOVED", "UNMOVED"):
+            assert sweep[key][2], f"step {key}: graded {_content_state(key)} having rewritten nothing"
+
+
+def test_d8_a_present_but_wrong_declared_output_is_CAUGHT():
+    """THE PREDICATE. Corrupt a passing cell's artefact CONTENT — keeping it
+    present, parseable and well-formed — and the cell must go red.
+
+    Population: every step in the PASS-tier sweep that (a) declares an output
+    of a kind the flow has a content channel for and (b) reaches a PLAIN PASS,
+    the only tier at which `_evidence_integrity_scan` engages. Both conditions
+    are RE-DERIVED per run, never pinned, so a step that becomes gradable joins
+    this predicate on its own.
+
+    The other rows are not silently dropped — they are stated by
+    `test_d8_the_content_census_matches_its_pin` with the reason they could not
+    be graded (NO_CHANNEL / NOT_REACHED / NOT_MUTATED).
+    """
+    sweep = _content_arm_sweep()
+    gradable = [k for k in sweep if _content_state(k) in ("MOVED", "UNMOVED")]
+    assert gradable, (
+        f"ZERO of {len(sweep)} pass-tier steps are gradable for content today. "
+        f"That is a REFUSAL, not a pass: it means no step both reaches a plain "
+        f"PASS and declares an artefact of a kind the flow can read, so this "
+        f"predicate would certify a matrix that cannot redden on content at "
+        f"all. States: { {k: _content_state(k) for k in sweep} }")
+    blind = {k: sweep[k] for k in gradable if _content_state(k) == "UNMOVED"}
+    assert not blind, (
+        f"these steps' OWN gates were handed a declared output that is "
+        f"PRESENT, PARSEABLE, WELL-FORMED and whose own machine-readable "
+        f"verdict says the run FAILED, and reported the step at the same "
+        f"PASS tier as the correct artefact: "
+        f"{ {k: (v[0], v[1], list(v[2])) for k, v in blind.items()} }.\n"
+        f"An artefact that is present and wrong must not be worth the same as "
+        f"one that is present and right.")
+
+
+def test_d8_the_content_census_matches_its_pin():
+    """THE RATCHET, both directions, by name."""
+    live = {k: _content_state(k) for k in _content_arm_sweep()}
+    assert live == CONTENT_ARM_AS_MEASURED, (
+        f"the content census moved.\n"
+        f"  changed: "
+        f"{ {k: (CONTENT_ARM_AS_MEASURED.get(k, '<unpinned>'), v) for k, v in live.items() if CONTENT_ARM_AS_MEASURED.get(k) != v} }\n"
+        f"  pinned but no longer present: "
+        f"{sorted(set(CONTENT_ARM_AS_MEASURED) - set(live))}\n"
+        f"UNMOVED/NOT_REACHED -> MOVED is a gate that LEARNED to read its own "
+        f"artefact: record it here in the same change. MOVED -> UNMOVED is a "
+        f"gate that STOPPED, and nothing else in this repository would notice.")
+
+
+def test_d8_the_content_arm_is_not_uniformly_blind():
+    """A POSITIVE CONTROL that shares the sweep with the predicate above.
+
+    Every row of a 16-row all-UNMOVED census looks exactly like a 16-row census
+    produced by an arm that hard-codes UNMOVED. Requiring at least one MOVED
+    makes those two distinguishable, and it fails the moment the content
+    channel is removed from `flow_compliance_check` — which is the regression
+    this whole arm exists to catch.
+    """
+    live = {k: _content_state(k) for k in _content_arm_sweep()}
+    moved = sorted(k for k, v in live.items() if v == "MOVED")
+    assert moved, (
+        f"NO step in the pass-tier population reddens on artefact content. "
+        f"The 63x9 matrix is once again an existence check: it turns red when "
+        f"an artefact is MISSING and never when one is PRESENT AND WRONG. "
+        f"States: {live}")
 
 # ══════════════════════════════════════════════════════════════════════
 # UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
