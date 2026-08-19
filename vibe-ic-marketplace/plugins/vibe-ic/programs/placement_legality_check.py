@@ -712,6 +712,29 @@ def _emit(args, project, verdict, summary, findings, waiver):
         if f["severity"] in ("FAIL", "WAIVED"):
             print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
 
+    # vibe-ic#1080 — emit the per-step metric HERE, at the one point this gate
+    # publishes its numbers, so a later reader gets the count the gate COMPUTED
+    # instead of re-deriving it from the report above or from a DEF. This is
+    # the whole of the wiring: the numbers already exist, they were simply
+    # never handed to anyone. Best-effort by construction — see
+    # `step_metrics.emit_best_effort`.
+    import step_metrics as _sm  # noqa: PLC0415
+    _sm.emit_best_effort(project, "17", {
+        "verdict": verdict,
+        "declared_components": summary.get("declared_components"),
+        "parsed_components": summary.get("parsed_components"),
+        "placed": summary.get("placed"),
+        "unplaced": summary.get("unplaced"),
+        "density_pct": summary.get("density_pct"),
+        # These summary fields are LISTS of offenders, not counts. Emitting
+        # `len()` is the measurement; emitting the list would be refused by
+        # the flat schema, which is how this was caught.
+        "violation_count": len(summary.get("check_placement_violations") or []),
+        "legalizer_failed_marker_count":
+            len(summary.get("legalizer_failed_markers") or []),
+        "findings_count": len(findings),
+    }, domain="design")
+
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
