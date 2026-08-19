@@ -1,0 +1,41 @@
+# Invariants for tools/ci — the landing gates and their plumbing.
+#
+# These rules are ENFORCED by programs/package_invariants_check.py. A violation
+# is a red gate, not advice. The file is here, and not in a central register,
+# so that the rule is visible to whoever is editing this directory.
+#
+# Patterns are SINGLE-quoted on purpose: a double-quoted YAML scalar processes
+# \t and \n itself, so a regex written that way is not the regex it looks like.
+package: tools/ci
+invariants:
+
+  - id: ci-code-carries-no-host-home-path
+    rule: |
+      No file of code in this directory may name a host home directory.
+      The landing arm runs this code inside a hermetic container as an
+      unprivileged non-login user with a read-only root filesystem, and CI
+      runners have neither this repository's checkout path nor this developer's
+      account. A path literal that resolves on one workstation turns a gate
+      into a check that silently examines the wrong tree — or nothing at all.
+      Derive locations from the subject root the caller passes in, or from
+      `${BASH_SOURCE[0]}` / `__file__`, exactly as every file here already does.
+      Scope is deliberately code only: a systemd unit is host configuration by
+      definition and an absolute path in one is correct.
+    applies_to: ['*.py', '*.sh']
+    forbid: '/home/[A-Za-z0-9_.-]+/'
+    counterexample: '_CACHE = "/home/builder/vibe-ic/.cache"'
+
+  - id: ci-never-bypasses-its-own-review
+    rule: |
+      The landing path never uses an escape hatch that skips the gates it
+      exists to run. Concretely: no `--admin` merge, and no force push. A gate
+      set that can be waived by the same process that runs it is a record of
+      what was skipped, not a control. The prohibition is on what this code
+      DOES, which is why it binds executable files and not the prose that
+      documents the rule — `install_hooks.sh` legitimately prints the local
+      `--no-verify` escape to the developer who is installing the hook, and a
+      pattern that could not tell those apart would fire on the documentation
+      of its own rule.
+    applies_to: ['*.py', '*.sh']
+    forbid: '--admin(?![A-Za-z0-9-])|git[ \t]+push\b[^\n]*--force'
+    counterexample: 'git push --force origin main'

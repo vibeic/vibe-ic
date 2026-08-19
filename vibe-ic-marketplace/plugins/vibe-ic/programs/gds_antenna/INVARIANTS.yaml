@@ -1,0 +1,26 @@
+# Invariants for the vendored sign-off engine.
+#
+# ENFORCED by programs/package_invariants_check.py. A violation is a red gate.
+#
+# This is the case a central rule cannot state: the constraint is not "code in
+# this repo obeys X", it is "THIS DIRECTORY is a verbatim copy of somewhere
+# else". Nothing outside the directory knows that, which is exactly why the
+# rule has to live inside it.
+package: vibe-ic-marketplace/plugins/vibe-ic/programs/gds_antenna
+invariants:
+
+  - id: vendored-engine-pins-its-upstream-commit
+    rule: |
+      PROVENANCE.md names the exact upstream commit this copy was taken from,
+      as a full 40-character object id.
+      These files are vendored verbatim so that a clean install reaches the
+      capability without re-imaging the container, and the standing instruction
+      is to fix them upstream and re-vendor rather than edit them in place. Both
+      halves of that instruction depend on the pin: without it nobody can diff
+      this copy against its origin, so nobody can tell a faithful copy from one
+      that has quietly drifted, and "re-vendor from upstream" has no defined
+      starting point. A branch name or a version string will not do — only an
+      object id identifies the bytes that were copied.
+    applies_to: ['PROVENANCE.md']
+    require: '(?mi)^\*[ \t]+upstream commit:[ \t]+[0-9a-f]{40}\b'
+    counterexample: '* upstream commit: main'

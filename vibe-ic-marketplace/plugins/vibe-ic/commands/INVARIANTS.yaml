@@ -1,0 +1,31 @@
+# Invariants for the plugin's slash commands.
+#
+# ENFORCED by programs/package_invariants_check.py. A violation is a red gate.
+package: vibe-ic-marketplace/plugins/vibe-ic/commands
+invariants:
+
+  - id: command-opens-with-yaml-frontmatter
+    rule: |
+      A command file opens with a YAML frontmatter block on its very first
+      line. The loader identifies a command by that block; a file without one
+      is shipped, is readable, and is simply never offered to the user — a
+      failure with no error message anywhere, which is why it is worth a gate
+      rather than a convention. `---` must be the first bytes: a leading blank
+      line or a title above it is enough to lose the command.
+      Scope is the command files themselves. A leading underscore marks a
+      fragment that other command files include rather than a command the
+      loader should register, and a fragment correctly has no frontmatter.
+    applies_to: ['vibe-ic-*.md']
+    require: '\A---\r?\n'
+    counterexample: "\n---\nname: vibe-ic-example\n---\n"
+
+  - id: command-frontmatter-declares-a-description
+    rule: |
+      Every command declares a `description:`. It is the only text a user sees
+      when choosing between commands, and it is what routes a request to the
+      right entry point. A command with a name and no description is
+      discoverable only by someone who already knows it exists, which defeats
+      the reason it is a command rather than a documented procedure.
+    applies_to: ['vibe-ic-*.md']
+    require: '(?m)^description:[ \t]*\S'
+    counterexample: "---\nname: vibe-ic-example\ndescription:\n---\n"

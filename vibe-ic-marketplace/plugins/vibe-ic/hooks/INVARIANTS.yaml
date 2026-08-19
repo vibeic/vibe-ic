@@ -1,0 +1,35 @@
+# Invariants for the plugin's hooks — code the harness runs on every session.
+#
+# ENFORCED by programs/package_invariants_check.py. A violation is a red gate.
+package: vibe-ic-marketplace/plugins/vibe-ic/hooks
+invariants:
+
+  - id: hook-never-enables-errexit
+    rule: |
+      A hook script must not enable `set -e` (nor `-eu`, `-euo pipefail`).
+      These scripts fire on SessionStart and UserPromptSubmit. With errexit
+      active, any transient local failure — an offline package registry, a full
+      disk, an unwritable cache, a tool missing from this user's PATH —
+      propagates a non-zero exit out of the hook, and the harness then refuses
+      to start the session. That was measured and fixed once already
+      (`post_install.sh`, v1.6.11 Fix 2); its remedy is `set +e` and an
+      unconditional `exit 0`, and it is a remedy that is easy to undo by
+      reflex, because `set -euo pipefail` is the right default nearly
+      everywhere else in this repo. It is not the right default here.
+      A hook that deliberately blocks — a Stop hook returning 2 — does so by
+      an explicit `exit`, which is a decision, not an inherited side effect.
+    applies_to: ['*.sh']
+    forbid: '(?m)^[ \t]*set[ \t]+-[A-Za-z]*e'
+    counterexample: 'set -euo pipefail'
+
+  - id: hook-command-is-plugin-rooted
+    rule: |
+      Every command in hooks.json resolves through ${CLAUDE_PLUGIN_ROOT}.
+      The harness invokes these with a working directory that belongs to the
+      user's project, not to the plugin, and the plugin is installed under a
+      cache path that no hook can predict. A relative path therefore resolves
+      against someone else's tree: at best the hook does not run, at worst it
+      runs a same-named file from the project it was supposed to observe.
+    applies_to: ['hooks.json']
+    forbid: '"command"\s*:\s*"(?![^"]*\$\{CLAUDE_PLUGIN_ROOT\})[^"]*"'
+    counterexample: '"command": "bash hooks/post_install.sh"'

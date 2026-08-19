@@ -1,0 +1,24 @@
+# Invariants for the device drivers — the JSON-IO contract, next to the drivers.
+#
+# ENFORCED by programs/package_invariants_check.py. A violation is a red gate.
+package: vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/devices
+invariants:
+
+  - id: device-driver-keeps-stdout-for-json
+    rule: |
+      A driver's stdout carries exactly one JSON object and nothing else.
+      Every driver here states that contract in its own docstring, and the
+      registry that speaks to them parses stdout as a whole: one stray progress
+      line, one banner, one debug print, and the object no longer parses. The
+      failure surfaces as a decode error in the caller, several layers away
+      from the print that caused it, on whichever machine happens to have the
+      hardware attached.
+      So: a `print(...)` writes either `json.dumps(...)` to stdout, or anything
+      at all with `file=sys.stderr`. Progress, warnings and debug go to stderr.
+      The check reads a bounded window after the call opens, so that a
+      multi-line `print(` whose `file=sys.stderr` sits several lines down is
+      accepted; the bound is why this rule catches an unredirected print rather
+      than proving stdout discipline outright.
+    applies_to: ['**/driver.py']
+    forbid: '(?m)^[ \t]*print\((?!json\.dumps\()(?![\s\S]{0,300}?file=sys\.stderr)'
+    counterexample: 'print("driver ready")'

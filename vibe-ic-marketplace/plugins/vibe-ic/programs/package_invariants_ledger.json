@@ -1,0 +1,42 @@
+{
+  "_comment": "The register of packages that OWE an invariant declaration. Read by package_invariants_check.py. It lives here, outside every package it records, for one reason: deleting a package's own INVARIANTS.yaml must not also delete the record that the package owes one. A missing declaration is a refusal (UNDECLARED), never 'this package has no constraints'. The comparison against what is on disk is EXACT-SET EQUALITY in both directions, so this file can neither quietly absorb a new package (UNLEDGERED) nor quietly forget an old one. Adding a package is free and takes two edits; removing one takes three, the third being the named membership constant in programs/tests/test_package_invariants_check.py.",
+  "schema": 1,
+  "packages": [
+    {
+      "package": "tools/ci",
+      "form": "directory",
+      "since": "2026-08-19",
+      "why": "the landing gates and their plumbing; the rules bind what this code does, and both were measured here"
+    },
+    {
+      "package": "vibe-ic-marketplace/plugins/vibe-ic/commands",
+      "form": "directory",
+      "since": "2026-08-19",
+      "why": "a command whose frontmatter is malformed is loaded, is readable, and is never offered to a user"
+    },
+    {
+      "package": "vibe-ic-marketplace/plugins/vibe-ic/hooks",
+      "form": "directory",
+      "since": "2026-08-19",
+      "why": "these scripts run on every session start; a non-zero exit refuses the session"
+    },
+    {
+      "package": "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/devices",
+      "form": "directory",
+      "since": "2026-08-19",
+      "why": "the drivers' JSON-IO contract, stated in their own docstrings and enforced nowhere until now"
+    },
+    {
+      "package": "vibe-ic-marketplace/plugins/vibe-ic/programs/gds_antenna",
+      "form": "directory",
+      "since": "2026-08-19",
+      "why": "a verbatim vendored copy; nothing outside the directory knows that, which is why the rule is inside it"
+    },
+    {
+      "package": "vibe-ic-marketplace/plugins/vibe-ic/programs:l9",
+      "form": "prefix",
+      "since": "2026-08-19",
+      "why": "the flat-namespace form, so a rule can bind a subsystem of the 1200-file programs/ tree without moving a file"
+    }
+  ]
+}

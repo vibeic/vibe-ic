@@ -1,0 +1,33 @@
+# Invariants for the l9_* namespace inside the flat programs/ directory.
+#
+# ENFORCED by programs/package_invariants_check.py. A violation is a red gate.
+#
+# THIS FILE IS THE FLAT-NAMESPACE FORM. Its name — `<prefix>.INVARIANTS.yaml` —
+# gives it ownership of `programs/l9*` and of nothing else. programs/ holds
+# ~1200 files in one directory on purpose: the flat namespace is what every
+# whole-registry audit here greps. Moving these five files into an `l9/`
+# subdirectory to buy them a rule of their own would pay for locality with the
+# property the audits depend on. Alphabetical adjacency in a flat directory IS
+# locality: this file sorts next to the code it binds.
+package: vibe-ic-marketplace/plugins/vibe-ic/programs:l9
+invariants:
+
+  - id: l9-program-names-the-layer-it-owns
+    rule: |
+      A program in this namespace names its layer, in upper case, in its own
+      text — `L9`, or a field of it such as `L9_FLOORPLAN`.
+      The lower-case prefix in the filename is a sorting convenience. The
+      upper-case token is the layer identifier that the L-docs, the consumer
+      contracts and the cross-layer reference audit all key on, and it is what
+      lets a reader trace a producer to its consumer without opening every
+      file. A program that reads a layer it never names is invisible to that
+      trace.
+      The pattern's boundaries are `_`-aware on purpose. `\b` does not match
+      between a letter and an underscore, so a naive `\bL9\b` reports a file
+      whose only mention is `L9_FLOORPLAN` as silent — measured on the
+      neighbouring L21 namespace, where exactly that produced one false
+      finding out of 58. It is the same trap `gate_discloses_denominator_check`
+      documents for this repo's SKIP/VACUOUS vocabulary.
+    applies_to: ['*.py']
+    require: '(?<![A-Za-z0-9])L9(?![0-9])'
+    counterexample: 'reads the floorplan from L91 via l9_helpers'
