@@ -1,0 +1,43 @@
+# LANDING SEQUENCE — re-derived against origin/main = 4b22e36ea (v1.10.32)
+# Measured: 51 failing nodes / 13 files on clean detached 4b22e36ea.
+# CHANGED since my previous list: #1048 #1049 #1050 MERGED; #1086 #1088 #1090 #1091 NEW (31 open).
+# v1.10.32 CLEARED 3 nodes (test_programs_index_freshness x2, test_issue538 x1).
+#   => #1074 is now REDUNDANT (index row already regenerated) - verify before landing.
+#   => #1072 no longer repairs red (its 1 node is already green) - demoted to capability.
+# Positions 1-9 carry 50 of the 51 nodes. Position 10 (d4) is mine, PR pending.
+
+##### POSITIONS 1-10 : THE GREEN-CRITICAL PATH #####
+1   #1067  land-after=-                     re-test-after=-                        files-it-collides-on=programs/tests/matrix_63x8/README.md                     reason=biggest single repair, 18 nodes (test_matrix_d3_outputs_produced)
+2   #1077  land-after=1067                  re-test-after=1067                     files-it-collides-on=programs/tests/matrix_63x8/README.md                     reason=12 nodes (d7 outputs 10 + 63x8_ledger 2); second writer of that README
+3   #1058  land-after=-                     re-test-after=1066                     files-it-collides-on=-                                                        reason=7 nodes, VERIFIED by me (0 new); same #923 root cause as 1066
+4   #1066  land-after=-                     re-test-after=1058                     files-it-collides-on=-                                                        reason=6 nodes (P0 umbrella verdict+registry); semantic pair with 1058
+5   #1078  land-after=-                     re-test-after=1062                     files-it-collides-on=programs/INDEX.md +11 shared with 1062                   reason=5 nodes (signoff 2, issue434 1, issue377 1, flow_compliance_check_gate 1)
+6   #1062  land-after=1078                  re-test-after=1078                     files-it-collides-on=programs/INDEX.md +11 shared with 1078                   reason=4 nodes; heaviest file overlap in the batch
+7   #1069  land-after=1067,1077             re-test-after=1067,1077                files-it-collides-on=programs/tests/matrix_63x8/README.md                     reason=2 nodes (matrix_63x8_coverage); third writer of that README
+8   #1060  land-after=1078,1062             re-test-after=1078,1062                files-it-collides-on=programs/INDEX.md                                        reason=last INDEX.md writer; re-verify it is not also redundant post-v1.10.32
+9   #1074  land-after=1078,1062,1060        re-test-after=all INDEX.md writers      files-it-collides-on=programs/INDEX.md                                        reason=LIKELY REDUNDANT - v1.10.32 already regenerated the index; confirm then close or land as no-op
+10  #NEW   land-after=-                     re-test-after=-                        files-it-collides-on=flow/phase1_phase2_phase3.yaml                           reason=test_matrix_d4_criteria_match, the 1 node no PR touched - my fix, PR pending
+
+##### POSITIONS 11-31 : CAPABILITY / NO RED REPAIR #####
+11  #1053  land-after=-                     re-test-after=-                        files-it-collides-on=-                                                        reason=no collision; verified clean earlier (0 new)
+12  #1085  land-after=-                     re-test-after=-                        files-it-collides-on=-                                                        reason=no collision; pins PDK gate wiring
+13  #1057  land-after=-                     re-test-after=-                        files-it-collides-on=-                                                        reason=verified clean (0 new); ships an UNGATED tools/test_*.py
+14  #1055  land-after=-                     re-test-after=-                        files-it-collides-on=-                                                        reason=verified clean (0 new); rc-discipline, disjoint from 1056/1061
+15  #1086  land-after=-                     re-test-after=-                        files-it-collides-on=TBD                                                      reason=NEW - host-independence probe; addresses the contamination, not a per-PR defect
+16  #1090  land-after=1086                  re-test-after=1086                     files-it-collides-on=TBD                                                      reason=NEW - argued-direction pin determinism; same contamination family
+17  #1091  land-after=1086,1090             re-test-after=1086,1090                files-it-collides-on=TBD                                                      reason=NEW - pin gate verdict decided by which failure pytest saw first
+18  #1072  land-after=-                     re-test-after=-                        files-it-collides-on=tools/ci/_gate_dispatch.sh, programs/gatekeeper_review.py reason=DEMOTED - its 1 node is already green on v1.10.32
+19  #1084  land-after=1072                  re-test-after=1072                     files-it-collides-on=tools/ci/_gate_dispatch.sh                               reason=zero-expansion loop corpus must leave a verdict
+20  #1061  land-after=1072,1084             re-test-after=1072,1084                files-it-collides-on=_gate_dispatch.sh, gatekeeper_review.py, selector         reason=sweep that decided nothing reported success
+21  #1056  land-after=1061                  re-test-after=1061                     files-it-collides-on=ci_targeted_test_select.py (SAME SMOKE_BASENAMES anchor)  reason=textual conflict with 1061 at one anchor; KEEP BOTH entries
+22  #1059  land-after=1056,1061             re-test-after=1056,1061                files-it-collides-on=ci_targeted_test_select.py                               reason=selector rule 6; capability only, 0 red repaired
+23  #1068  land-after=1059                  re-test-after=EVERYTHING ABOVE          files-it-collides-on=ci_targeted_test_select.py                               reason=widens union 202->465 and changes 16/30 selections; budget one FULL re-run here
+24  #1051  land-after=-                     re-test-after=-                        files-it-collides-on=tools/liar_census.py, tools/test_liar_census.py           reason=liar-census root of a 6-PR stack
+25  #1054  land-after=1051                  re-test-after=1051                     files-it-collides-on=tools/liar_census.py, tools/test_liar_census.py           reason=STACKED: base branch is 1051
+26  #1064  land-after=1054                  re-test-after=1054                     files-it-collides-on=tools/liar_census.py, tools/test_liar_census.py           reason=STACKED: base branch is 1054
+27  #1071  land-after=1064                  re-test-after=1064                     files-it-collides-on=tools/liar_census.py, tools/test_liar_census.py           reason=STACKED: base branch is 1064
+28  #1065  land-after=1054                  re-test-after=1064,1071                files-it-collides-on=tools/liar_census.py, tools/test_liar_census.py           reason=STACKED on 1054; shares both census files with 1064/1071
+29  #1063  land-after=1051,1054,1064,1071,1065  re-test-after=all census PRs        files-it-collides-on=tools/liar_census.py, tools/test_liar_census.py           reason=base is main but collides with the whole census stack
+30  #1073  land-after=1063                  re-test-after=1063                     files-it-collides-on=-                                                        reason=STACKED: base branch is 1063 (no file collision, hard base dep)
+31  #1088  land-after=1068                  re-test-after=1068                     files-it-collides-on=README.md                                                reason=image-anchor 0.2.89; supersedes merged 1050; selection widens sharply under 1068
+32  #1028  land-after=EVERYTHING            re-test-after=ALL cell-walking tests    files-it-collides-on=README.md                                                reason=CONFLICTING/DIRTY - must rebase; strips phase1/generated_docs from every cell so ~20 test files go SKIP (silent coverage loss, adds no red)
