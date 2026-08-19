@@ -22626,6 +22626,77 @@ def _derive_metal_fill_density(pdk: "PdkConfig",
         return None
 
 
+def _pdk_dir_of(pdk: "PdkConfig") -> str:
+    """`<PDK_ROOT>/<PDK>` for this PDK, from the tech-LEF path prefix before
+    `/libs.ref/`. Same derivation `_max_captable_c` already uses — PDK layout,
+    not a PDK name — so it resolves for any PDK laid out the standard way."""
+    tlef = str(getattr(pdk, "tech_lef", "") or "")
+    i = tlef.find("/libs.ref/")
+    return tlef[:i] if i > 0 else ""
+
+
+def _die_finishing(project: Path, top: str, pdk: PdkConfig,
+                     gds_path: Path,
+                     container: Optional[str] = None) -> Tuple[bool, str]:
+    """Step 26.5ic — die finishing: the PDK's OWN seal ring on the streamed GDS.
+
+    Delegates to the `die_finishing_gen` plugin program, which locates the PDK's
+    script and invokes it the way LibreLane's `KLayout.SealRing` step does.
+    This function contains no geometry and no ring: the seal ring's width,
+    layer stack, corner construction and slot pattern are foundry data and the
+    PDK ships the generator for them.
+
+    WHY IT RUNS HERE. At streamout, after the layer merge and BEFORE the fill
+    passes, the density checks and the sign-off DRC/LVS read this GDS — which
+    is LibreLane's own chip-flow order (SealRing -> Filler -> Density). The
+    alternative, adding the ring at foundry handoff, would put metal on the die
+    AFTER Step 31 signed it off: the die that was verified would not be the die
+    that ships.
+
+    NONFATAL, like its `_klayout_dummy_fill` / `_density_metal_fill` siblings:
+    any failure leaves the GDS untouched and is DISCLOSED in the step note, and
+    the Step-26.5ic gate (`die_finishing_check`) reports the same verdict from the program's own report. A
+    PDK that ships no generator is a named skip, never a silent "sealed".
+    """
+    if not gds_path.is_file():
+        return False, "no GDS to seal"
+    prog = Path(__file__).resolve().parent / "die_finishing_gen.py"
+    if not prog.is_file():
+        return False, "die_finishing_gen program not found"
+    pdk_dir = _pdk_dir_of(pdk)
+    if not pdk_dir:
+        return False, ("cannot locate the PDK directory from the tech LEF — "
+                       "no seal-ring generator was looked for")
+    argv = [sys.executable, str(prog), str(project),
+            "--gds", str(gds_path), "--in-place",
+            "--pdk-root", str(Path(pdk_dir).parent),
+            "--pdk", Path(pdk_dir).name]
+    # Same reason `_density_metal_fill` passes it: the program resolves its own
+    # KLayout runner via `_klayout_launch`, which looks for a container NAMED
+    # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run
+    # container has a different generated name, so without this the program
+    # would skip with "no KLayout runner available" while KLayout is right
+    # there in THIS run's own container.
+    run_env = dict(os.environ)
+    if container:
+        run_env["VIBEIC_EDA_CONTAINER"] = container
+    try:
+        cp = subprocess.run(argv, capture_output=True, text=True,
+                            timeout=3600, env=run_env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"die finishing NONFATAL: {exc}"
+    if cp.returncode != 0:
+        # rc 2 is the program's NAMED disclosed skip (this PDK ships no
+        # generator); rc 1 is a real failure with its reason in the report.
+        # Both are reported, never hidden.
+        tail = ((cp.stdout or "") + (cp.stderr or "")).strip().splitlines()
+        why = next((ln for ln in reversed(tail)
+                    if ln.startswith(("VACUOUS_PASS:", "die_finishing_gen:"))),
+                   (tail[-1] if tail else f"rc={cp.returncode}"))
+        return False, f"die finishing did NOT complete: {why[:300]}"
+    return True, "PDK seal ring inserted and verified around the die"
+
+
 def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
                         gds_path: Path, container: Optional[str] = None) -> Tuple[bool, str]:
     """Per-layer DENSITY-TARGETED metal fill on the streamed GDS.
@@ -24257,6 +24328,12 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
         snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container,
                                             gds_out)
+        # Step 26.5ic — die finishing (the PDK's OWN seal ring), BEFORE the
+        # fill and before the sign-off DRC/LVS read this GDS, so the ring is
+        # verified with the rest of the die instead of appearing after its
+        # evidence.
+        seal_ok, seal_note = _die_finishing(project, top, pdk, gds_out,
+                                            container)
         # Per-layer density fill BEFORE the density checks / sign-off DRC read
         # this GDS. Config-gated + NONFATAL; the note always discloses.
         dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
@@ -24283,10 +24360,12 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
             f"(streamout=magic, abutting geometry merged"
             f"{'; ' + snap_note if snap_ok else ''}"
+            f"{'; ' + seal_note if seal_ok else ''}"
             f"{'; ' + dfill_note if dfill_ok else ''}"
             f"{'; ' + label_note if label_ok else ''})",
             [str(gds_out)],
             extras={"streamout_engine": "magic",
+                    "die_finishing": seal_ok, "die_finishing_note": seal_note,
                     "grid_snap": snap_ok, "grid_snap_note": snap_note,
                     "density_fill": dfill_ok,
                     "density_fill_note": dfill_note,
@@ -24401,6 +24480,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                                                   gds_out))
                           if pdk.same_net_heal else
                           (False, "no same_net_heal config"))
+    # Step 26.5ic — die finishing (the PDK's OWN seal ring), after the merge
+    # (so the ring's own geometry is not fused into the core's) and BEFORE the
+    # fill passes, the density checks and the sign-off DRC/LVS consume this
+    # GDS. That is LibreLane's chip-flow order, SealRing -> Filler -> Density;
+    # adding the ring later would put metal on the die after Step 31 signed it
+    # off — the artefact changing after the evidence.
+    seal_ok, seal_note = _die_finishing(project, top, pdk, gds_out, container)
     # v1.3.83 — config-driven dummy-METAL fill AFTER merge, BEFORE the
     # sign-off DRC consumes this GDS (the deck's own density + spacing +
     # wide-metal rules then verify the fill honestly — no rule is waived).
@@ -24481,11 +24567,14 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                       f"{'; ' + snap_note if snap_ok else ''}"
                       f"{'; ' + merge_note if merge_ok else ''}"
                       f"{'; ' + heal_note if heal_ok else ''}"
+                      f"{'; ' + seal_note if seal_ok else ''}"
                       f"{'; ' + fill_note if fill_ok else ''}"
                       f"{'; ' + dfill_note if dfill_ok else ''}"
                       f"{'; ' + label_note if label_ok else ''})",
                       [str(gds_out)],
                       extras={"streamout_engine": "klayout",
+                              "die_finishing": seal_ok,
+                              "die_finishing_note": seal_note,
                               "density_fill": dfill_ok,
                               "density_fill_note": dfill_note,
                               "grid_snap": snap_ok,
