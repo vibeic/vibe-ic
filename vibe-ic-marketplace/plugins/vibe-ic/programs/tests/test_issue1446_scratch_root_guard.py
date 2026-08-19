@@ -305,3 +305,104 @@ def test_the_inner_git_bound_is_under_the_harness_ceiling():
     outlives the harness and takes the whole session down."""
     assert G._GIT_TIMEOUT <= 60, G._GIT_TIMEOUT
     assert _BOUND <= 60, _BOUND
+
+
+# ── the SECOND refusal: a control character in the interpolated identity ─────
+#
+# The root can be outside every checkout and still falsify the run, because
+# pytest does not use it directly: with no `--basetemp` it builds
+# `temproot / f"pytest-of-{getpass.getuser()}"` and only backs off to
+# `pytest-of-unknown` when that mkdir RAISES. A newline is a legal filename
+# character here, so it does not raise.
+
+_NEWLINE_IDENTITY = "1000\nsomebody"
+
+
+def _run_pytest_no_basetemp(root: Path, tmpdir: Path, *extra: str,
+                            env_extra=None):
+    """The arm that MATTERS: no `--basetemp`, so pytest interpolates.
+
+    Every other arm in this file pins `--basetemp`, which is exactly the
+    condition under which the identity never enters the path — so none of them
+    could ever have seen this.
+    """
+    env = dict(os.environ)
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env.pop("VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO", None)
+    env.pop("VIBE_IC_ALLOW_SCRATCH_IDENTITY", None)
+    env["TMPDIR"] = str(tmpdir)
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         *extra, "test_mini.py"],
+        cwd=root, capture_output=True, text=True, timeout=_BOUND, env=env)
+
+
+def test_an_identity_with_a_control_character_is_refused(tmp_path):
+    """MEASURED in the pinned EDA container image: `getpass.getuser()` there is
+    `'1000\\ndesigner'` (USER is a two-line value, uid 1000 has no passwd
+    entry), and three dimension-2 cells fail because of it while naming their
+    own subject and never the root."""
+    root = _mini_tree(tmp_path)
+    r = _run_pytest_no_basetemp(root, _outside(tmp_path),
+                                env_extra={"USER": _NEWLINE_IDENTITY})
+    blob = r.stdout + r.stderr
+    assert r.returncode != 0, (
+        f"an identity carrying a newline was accepted:\n{blob}")
+    assert "control character" in blob.lower(), (
+        f"the refusal did not name the cause:\n{blob}")
+    assert "--basetemp" in blob, (
+        f"the refusal did not name the one-word fix:\n{blob}")
+    assert "test_the_session_reached_a_test" not in blob, (
+        f"the session ran tests before refusing, so a count could be taken "
+        f"from it:\n{blob}")
+
+
+def test_the_same_identity_with_basetemp_given_runs(tmp_path):
+    """The negative control, and it is the load-bearing one.
+
+    pytest uses an explicit `--basetemp` VERBATIM and interpolates nothing, so
+    the identity cannot reach the path and there is nothing to refuse. Without
+    this arm the guard could be refusing on `USER` itself — a property of the
+    environment rather than of the run — and no assertion here would notice.
+    """
+    root = _mini_tree(tmp_path)
+    bt = _outside(tmp_path) / "bt"
+    r = _run_pytest(root, bt, env_extra={"USER": _NEWLINE_IDENTITY})
+    assert r.returncode == 0, (
+        f"a run that pins --basetemp was refused over an identity that never "
+        f"enters its path:\n{r.stdout}{r.stderr}")
+
+
+def test_an_ordinary_identity_is_not_refused(tmp_path):
+    """Non-degeneracy: the refusal must not fire on every interpolating run,
+    or the arm above would prove nothing about control characters."""
+    root = _mini_tree(tmp_path)
+    r = _run_pytest_no_basetemp(root, _outside(tmp_path),
+                                env_extra={"USER": "ordinary"})
+    assert r.returncode == 0, (
+        f"an ordinary one-line identity was refused:\n{r.stdout}{r.stderr}")
+
+
+def test_the_identity_refusal_has_a_disclosed_escape_hatch(tmp_path):
+    root = _mini_tree(tmp_path)
+    r = _run_pytest_no_basetemp(
+        root, _outside(tmp_path),
+        env_extra={"USER": _NEWLINE_IDENTITY,
+                   "VIBE_IC_ALLOW_SCRATCH_IDENTITY": "1"})
+    blob = r.stdout + r.stderr
+    assert r.returncode == 0, f"the hatch did not let the run through:\n{blob}"
+    assert "not trustworthy" in blob, (
+        f"the allowed run did not disclose the allowance, so a count lifted "
+        f"out of it carries no caveat:\n{blob}")
+
+
+def test_a_slash_is_left_to_pytests_own_back_off():
+    """`/` is excluded ON PURPOSE. pytest's `rootdir.mkdir` raises on it and
+    pytest falls back to `pytest-of-unknown` by itself, so refusing here would
+    stop a session pytest was already going to make safe."""
+    assert G.control_characters("a/b") == ()
+    assert G.control_characters("a\nb") == (repr("\n"),)
+    assert G.control_characters("plain") == ()
+    assert G.control_characters(None) == ()
