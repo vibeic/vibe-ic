@@ -156,6 +156,38 @@ _LINE_PASS_RE = re.compile(
     r"\bpass(?:ed)?\b[\s=*!.-]*$", re.I | re.M)
 
 
+# The PASS FORMS of the contract above — every sentence a submission could PRINT
+# to make `testbench_verdict` say True. DERIVED from the same patterns the verdict
+# is decided on (the counted form with its count pinned to 0), so there is no
+# second copy of the harness's vocabulary to drift from this one. Each is scanned
+# in its own right: RTLLM accepts ALTERNATIVE pass sentences, and gluing them into
+# one alternation would make `verdict_anchors` read the branches as a conjunction.
+# The opening of `harness_verdict_forgery_gate`'s own refusal sentence — the
+# marker that tells a caller the run was REFUSED rather than merely not passed.
+_FORGERY_REASON_PREFIX = "harness_verdict_forgery"
+
+def _forgery_pattern(rx, sub: Optional[Tuple[str, str]] = None) -> str:
+    """One compiled verdict pattern as a source string for the forgery gate,
+    CARRYING ITS FLAGS. `_LINE_PASS_RE` is re.I|re.M; handing over the bare
+    `.pattern` made the gate case-SENSITIVE, so `$display("PASSED")` — which
+    `testbench_verdict` accepts — walked straight past it."""
+    src = rx.pattern
+    if sub:
+        src = src.replace(sub[0], sub[1], 1)
+    letters = "".join(ch for flag, ch in ((re.I, "i"), (re.M, "m"),
+                                          (re.S, "s"), (re.X, "x"))
+                      if rx.flags & flag)
+    return (f"(?{letters})" if letters else "") + src
+
+
+_PASS_FORGERY_REGEXES = (
+    _forgery_pattern(_BANNER_PASS_RE),
+    _forgery_pattern(_LINE_PASS_RE),
+    # the counted line is a PASS exactly when its count is zero.
+    _forgery_pattern(_COUNTED_VERDICT_RE, (r"(\d+)", "0")),
+)
+
+
 def testbench_verdict(out: str, returncode: Optional[int] = None) -> Tuple[bool, str]:
     """(passed, reason) from a simulation transcript, decided on the TB's own
     verdict statement. FAIL-SAFE: anything unrecognised is NOT a pass.
@@ -261,7 +293,8 @@ def required_module_name(design_dir: str) -> Optional[str]:
 # (0) the iverilog scorer — RTLLM's pass/fail oracle (VCS -> iverilog disclosed)
 # --------------------------------------------------------------------------- #
 def iverilog_score(design_dir: str, rtl_text: str, top: str,
-                   timeout_run: int = 30) -> Tuple[bool, bool, str]:
+                   timeout_run: int = 30,
+                   submitted: bool = True) -> Tuple[bool, bool, str]:
     """Compile `rtl_text` (defining module `top`) together with the design's
     testbench.v in a SCRATCH COPY of the design dir (so relative $readmemh data
     files resolve — the cwd=design rule), run it under vvp, and apply RTLLM's
@@ -271,7 +304,25 @@ def iverilog_score(design_dir: str, rtl_text: str, top: str,
     TOOL SUBSTITUTION (disclosed): RTLLM's makefile drives Synopsys VCS
     (`vcs -sverilog +v2k` + `simv`); we substitute the open Icarus Verilog
     (`iverilog -g2012` + `vvp`) — the same compile-then-simulate contract over the
-    SAME unmodified testbench."""
+    SAME unmodified testbench.
+
+    vibe-ic#1745: the verdict is read off the SIMULATION's transcript, which the
+    DUT SHARES with the testbench, so a candidate that PRINTS one of RTLLM's own
+    pass sentences forges its own PASS. Because RTLLM's pass rule is a token
+    rather than a counted comparison, the forgery here is a ONE-LINE
+    `$display("=== Your Design Passed ===")`. The gate is BLOCKING and runs
+    BEFORE the compile. `submitted=False` is the Tier-5 floor probe, whose
+    "candidate" is the design's OWN golden rather than an answer to the question:
+    the gate has nothing to protect there and could only FALSE-FLOOR a sound
+    design. The gate can only ever turn a PASS into a FAIL, never the reverse."""
+    if submitted:
+        try:
+            import harness_verdict_forgery_gate as _hvfg
+            _g = _hvfg.gate(rtl_text, list(_PASS_FORGERY_REGEXES))
+            if _g["verdict"] == _hvfg.FORGERY:
+                return False, False, _g["reason"]
+        except ImportError:
+            pass          # gate unavailable: never MANUFACTURE a failure
     tb = os.path.join(design_dir, "testbench.v")
     if not os.path.exists(tb):
         return False, False, "no testbench.v"
@@ -346,7 +397,8 @@ def golden_floor_evidence(design_dir: str) -> Optional[str]:
     if target is None:
         target = top if top in gmods else gmods[0]
     renamed = re.sub(rf"\bmodule\s+{re.escape(target)}\b", f"module {top}", gtext)
-    compiled, passed, log = iverilog_score(design_dir, renamed, top)
+    compiled, passed, log = iverilog_score(design_dir, renamed, top,
+                                           submitted=False)
     if passed:
         return None
     if not compiled:
@@ -526,6 +578,12 @@ def tier1_emit_verified(design_dir: str) -> Tuple[Optional[str], Optional[str], 
     compiled, passed, log = iverilog_score(design_dir, rtl, top)
     if passed:
         return kind, rtl, log
+    # §6 degrade loudly: a REFUSAL TO SCORE (vibe-ic#1745 forgery gate) is neither
+    # a compile failure nor a run that produced no pass, and collapsing it into
+    # either would hide the one reason a reader needs. Carry the scorer's own
+    # sentence through instead of re-deriving a coarser one.
+    if log.startswith(_FORGERY_REASON_PREFIX):
+        return None, None, log
     return None, None, ("emit did not pass testbench: "
                         + ("compile-fail" if not compiled else "run-nopass"))
 

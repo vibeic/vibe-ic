@@ -277,6 +277,14 @@ def _interface_complete(prob: dict, gate: dict) -> bool:
 # predicate to it would silently stop reporting genuine compile failures.
 _TOOL_ABSENT = "iverilog: COMMAND_NOT_FOUND"
 
+# The PASS form of the official testbench's own verdict line — what the forgery
+# gate (vibe-ic#1745) has to keep a candidate from PRINTING. The scorer below
+# decides PASS by matching `Mismatches: N in M samples` on the SIMULATION's
+# stdout, and the DUT shares that stdout, so a candidate carrying
+# `$display("Mismatches: 0 in 20 samples")` forges its own verdict. Kept in the
+# same shape the harness greps for, so there is no second vocabulary to drift.
+_MISMATCH_PASS_REGEX = r"Mismatches:\s*0\s+in\s+\d+\s+samples"
+
 
 def _tool_was_absent(log: str) -> bool:
     """True iff `log` is _run_iverilog's own absent-compiler sentinel."""
@@ -296,6 +304,21 @@ def _run_iverilog(top_sv_text: Optional[str], ref_path: str, test_path: str,
     rename of the golden, the only honest way to ask "does the golden pass its own
     test"). This is the §4.05-clean floor proof: a real floor is the golden
     failing here."""
+    # vibe-ic#1745 — FORGERY GATE, BLOCKING, ahead of the compile. `top_sv_text
+    # is None` is the Tier-5 floor probe, whose "candidate" is the dataset's own
+    # golden rather than an answer to the question: the gate has nothing to
+    # protect there and could only FALSE-FLOOR a sound problem, so it is scoped
+    # to a SUBMITTED candidate. The gate can only turn a PASS into a FAIL, never
+    # the reverse; an unavailable gate returns clean rather than manufacturing a
+    # failure it did not observe.
+    if top_sv_text is not None:
+        try:
+            import harness_verdict_forgery_gate as _hvfg
+            _g = _hvfg.gate(top_sv_text, _MISMATCH_PASS_REGEX)
+            if _g["verdict"] == _hvfg.FORGERY:
+                return False, _g["reason"]
+        except ImportError:
+            pass          # gate unavailable: never MANUFACTURE a failure
     ref_text = Path(ref_path).read_text(errors="replace")
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
