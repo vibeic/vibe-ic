@@ -1358,6 +1358,87 @@ _PASS_TIER_LABELS = frozenset({"PASS", "VACUOUS_PASS", "VACUOUS-PASS"})
 
 
 @lru_cache(maxsize=1)
+def _real_gate_rejections() -> Dict[str, Tuple[str, Tuple[str, ...]]]:
+    """``{step: (seeded status, the gate's own reasons)}`` for every step that
+    HAD a gate and declared outputs and still did not reach a PASS tier.
+
+    WHY THIS EXISTS. The set comparison below reports a loss as ``Lost: ['4']``
+    and stops there, and that sentence is not enough to act on: it names WHICH
+    step left and nothing about WHY, and the two causes it can have need
+    opposite responses.
+
+      * a REPO cause — a gate got weaker, a declaration moved — is the finding
+        the assertion exists to raise, and it should be fixed;
+      * a HOST cause is not a fact about the repository at all. MEASURED on
+        this branch, in the pinned container image, step 4 both ways, the same
+        seeded tree, the ONLY difference being whether `verilator` is on PATH:
+
+            verilator present   FAIL          `verilator_coverage_measure`
+                                              refuses the synthesized coverage
+                                              payload — "written by another
+                                              producer, so line/toggle/branch
+                                              was never measured here", and it
+                                              says in the same breath that
+                                              "'verilator' IS installed"
+            verilator absent    VACUOUS_PASS  reaches the tier, and step 4 is
+                                              in the population
+
+        so the pinned set is decided in part by the host's tool inventory, and
+        a reader given only ``Lost: ['4']`` cannot tell that from a regression.
+
+    This function changes NO verdict and relaxes nothing — the assertion is
+    exactly as strict as it was. It only makes the failure say what it saw, so
+    the next reader spends a minute on it rather than an afternoon.
+    """
+    out: Dict[str, Tuple[str, Tuple[str, ...]]] = {}
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        if not F.declares_required_outputs(sid) or not F.has_gate(sid):
+            continue
+        step = dict(F.step_by_id(sid))
+        tmp = Path(tempfile.mkdtemp(prefix="d8_realgate_why_"))
+        try:
+            full = tmp / "full"
+            full.mkdir(parents=True)
+            try:
+                _materialize(full, step)
+            except AssertionError:
+                continue
+            res = FCC.check_step(full, step, {})
+            if res.status in _PASS_TIER_LABELS:
+                continue
+            out[key] = (res.status,
+                        tuple(str(r) for r in getattr(res, "reasons", ())))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+def _why_lost(steps) -> str:
+    """One line per lost step: the tier its real gate reached, and the reasons
+    it gave. Empty string when nothing was lost.
+
+    TWO reasons, not one. The first is the consumer's own `program failed: …`
+    line, which names the clause; the second is the program's own words, which
+    is where a host-capability cause actually appears ("'verilator' IS
+    installed"). Quoting only the first names the clause and hides the cause.
+    """
+    if not steps:
+        return ""
+    seen = _real_gate_rejections()
+    lines = []
+    for k in steps:
+        status, reasons = seen.get(k, ("NOT RE-MEASURED", ()))
+        said = [r[:400] for r in reasons[:2]] or ["(the gate gave no reason)"]
+        lines.append(f"\n    {k}: {status}"
+                     + "".join(f"\n        :: {r}" for r in said))
+    return ("\nWHAT THE LOST STEP(S) ANSWERED on the same seeded tree — read "
+            "this before treating a loss as a regression; a gate that refuses "
+            "because a TOOL IS PRESENT is measuring the host, not the repo:"
+            + "".join(lines))
+
+
+@lru_cache(maxsize=1)
 def _real_gate_sweep() -> Dict[str, Tuple[str, str]]:
     """``{step: (seeded status, status after dropping one declared output)}``
     using each step's OWN gate, for every step whose real gate reaches a PASS
@@ -1423,6 +1504,7 @@ def test_d8_downgrade_is_reachable_through_each_steps_own_real_gate():
         f"enforcement became substituted-gate-only without anyone saying so. "
         f"Lost: {sorted(set(REAL_GATE_PASS_TIER_STEPS) - set(measured))}; "
         f"gained: {sorted(set(measured) - set(REAL_GATE_PASS_TIER_STEPS))}."
+        + _why_lost(sorted(set(REAL_GATE_PASS_TIER_STEPS) - set(measured)))
     )
     survivors = {k: v for k, v in sweep.items() if v[1] in _PASS_TIER_LABELS}
     assert not survivors, (
