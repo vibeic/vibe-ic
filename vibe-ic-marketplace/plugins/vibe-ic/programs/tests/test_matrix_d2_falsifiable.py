@@ -1540,7 +1540,13 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
 #: ``flow_compliance_check._check_program_exit_zero`` against all 12 fixtures
 #: in :data:`FIXTURES`.
 UNREDDENED: Dict[Tuple[str, str], str] = {
-    ("D1", "phase1_expert_parse_track ."):
+    # RE-KEYED, not re-graded: the clause grew an explicit `--json` so the
+    # auditor would stop writing D1's own declared required_output (see
+    # `test_gate_clause_is_not_a_producer_of_a_declared_output`). The
+    # destination of the report is not what this register grades — the tier
+    # was RE-MEASURED under the new argv and is the same rc=2 VACUOUS_PASS.
+    ("D1", "phase1_expert_parse_track . --json "
+           "reports/phase1/gates/expert_parse_track.json"):
         "rc=2 VACUOUS_PASS under every fixture: the expert-parse track needs a "
         "real Phase-1 extraction run to have happened, and a stubbed "
         "generated_docs/ tree still reads as 'track not attempted'",
