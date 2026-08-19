@@ -114,8 +114,10 @@ def test_a_slot_is_recorded_verbatim_with_the_file_it_came_from(template, projec
     assert a["die_area"]["raw"] == [0, 0, 1000, 2000]
     assert a["core_area"]["raw"] == [26, 26, 974, 1974]
     assert a["fp_sizing"] == {"key": "FP_SIZING", "raw": "absolute"}
-    assert a["pads"]["raw"] == ["pad_n0", "pad_n1", "pad_s0"]
+    assert a["pads"]["keys_matched"] == ["pads"]
+    assert a["pads"]["lists"][0]["raw"] == ["pad_n0", "pad_n1", "pad_s0"]
     assert a["pads"]["count"] == 3
+    assert a["pads"]["unmatched_list_keys"] == []
     assert a["ring"]["key"] == "SEAL_RING_WIDTH"
     # and traceable to the file it was read out of
     assert a["source_file"] == str(template / "slots" / "slot_a.yaml")
@@ -314,6 +316,45 @@ def test_a_container_format_this_program_cannot_parse_says_so(template, project)
 # --------------------------------------------------------------------------- #
 # I9 — the scan is honest about what it could not read
 # --------------------------------------------------------------------------- #
+def test_a_pad_list_per_die_side_is_read_as_one_slots_pads(template, project):
+    """MEASURED on a real operator template: the pad list is not one key, it is
+    one per die side. An ingester that looked for a single singular name found
+    none and recorded a null -- a slot whose pads it had not understood, told
+    apart from a slot with no pads by nothing at all."""
+    (template / "slots" / "slot_a.yaml").write_text(
+        "DIE_AREA: [0, 0, 1000, 2000]\n"
+        "CORE_AREA: [26, 26, 974, 1974]\n"
+        "FP_SIZING: absolute\n"
+        "PAD_SOUTH: [s0, s1]\n"
+        "PAD_EAST: [e0]\n"
+        "PAD_NORTH: [n0, n1, n2]\n"
+        "PAD_WEST: [w0]\n"
+        "VERILOG_DEFINES: [SOME_DEFINE]\n")
+    rec = _run(project, "--template", str(template), "--slot", "slot_a")
+    a = next(s for s in rec["slots"] if s["slot"] == "slot_a")
+    assert a["pads"]["keys_matched"] == ["PAD_SOUTH", "PAD_EAST", "PAD_NORTH",
+                                         "PAD_WEST"]
+    assert a["pads"]["count"] == 7
+    assert [d["raw"] for d in a["pads"]["lists"]] == [
+        ["s0", "s1"], ["e0"], ["n0", "n1", "n2"], ["w0"]]
+    # and the list key that is NOT a pad list is named, not swallowed
+    assert a["pads"]["unmatched_list_keys"] == ["VERILOG_DEFINES"]
+
+
+def test_a_pad_list_under_an_unknown_name_is_recorded_as_unread(
+        template, project):
+    (template / "slots" / "slot_a.yaml").write_text(
+        "DIE_AREA: [0, 0, 1000, 2000]\n"
+        "CORE_AREA: [26, 26, 974, 1974]\n"
+        "PAD_RING: [p0, p1]\n")
+    rec = _run(project, "--template", str(template), "--slot", "slot_a")
+    a = next(s for s in rec["slots"] if s["slot"] == "slot_a")
+    assert a["pads"]["lists"] == []
+    assert a["pads"]["unmatched_list_keys"] == ["PAD_RING"], (
+        "the key the pattern did not claim must be NAMED — that is what makes "
+        "a miss visible on the first run instead of the second")
+
+
 def test_a_config_that_pins_no_die_is_not_a_slot(template, project):
     (template / "tool.yaml").write_text("SOME_TOOL_OPTION: 3\n")
     rec = _run(project, "--template", str(template), "--slot", "slot_a")

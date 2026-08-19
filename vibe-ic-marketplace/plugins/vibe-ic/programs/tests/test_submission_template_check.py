@@ -261,6 +261,21 @@ def _sub_slot_file_unreadable(tmp_path):
     return proj
 
 
+def _sub_pad_list_unread(tmp_path):
+    """A real operator template spells its pad lists PER DIE SIDE. This subject
+    spells one under a name the pattern does not claim, which is the shape that
+    produced a silent `pads: null` the first time this ingester met real input.
+    """
+    proj, tmpl = _accepted(tmp_path)
+    (tmpl / "slots" / "slot_a.yaml").write_text(
+        "DIE_AREA: [0, 0, 1000, 2000]\n"
+        "CORE_AREA: [26, 26, 974, 1974]\n"
+        "FP_SIZING: absolute\n"
+        "PAD_RING: [pad_n0, pad_n1]\n")
+    _ingest(proj, "--template", str(tmpl), "--slot", "slot_a")
+    return proj
+
+
 def _sub_report_absent(tmp_path):
     proj = tmp_path / "design"
     proj.mkdir()
@@ -314,6 +329,7 @@ SUBJECTS = [
     ("TREE_DISAGREES_WITH_REPORT", _sub_tree_disagrees),
     ("SLOT_FILE_DISAGREES_WITH_RECORD", _sub_slot_file_edited),
     ("SLOT_FILE_DISAGREES_WITH_RECORD", _sub_slot_file_unreadable),
+    ("PAD_LIST_UNREAD", _sub_pad_list_unread),
     ("REPORT_ABSENT", _sub_report_absent),
     ("REPORT_UNREADABLE", _sub_report_unreadable),
     ("REPORT_SCHEMA", _sub_report_schema),

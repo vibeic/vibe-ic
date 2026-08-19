@@ -26,6 +26,12 @@ WHAT IT REFUSES
                                   cannot be checked against itself.
     SLOT_GEOMETRY_DEGENERATE      a rect that is not four numbers, or has a
                                   non-positive width or height.
+    PAD_LIST_UNREAD               a slot declares no pad list under any name the
+                                  ingester knows, while the same file does carry
+                                  list-valued keys it did not claim. That is not
+                                  a slot with no pads; it is a slot whose pads
+                                  were not understood, and the two must not
+                                  share an answer.
     CORE_NOT_INSIDE_DIE           the core rect is not contained in the die rect.
     RING_DISAGREES                the slot DECLARES a ring width and the die is
                                   not the core grown by it on all four sides.
@@ -181,6 +187,32 @@ def check_slot_geometry(slot: dict) -> List[Dict[str, Any]]:
                 f"{ST.dec_str(right)}, {ST.dec_str(top)}).",
                 slot=name, source_file=src))
     return out
+
+
+def check_slot_pads(slot: dict) -> List[Dict[str, Any]]:
+    """Refusals raised by ONE slot's pad declaration.
+
+    MEASURED against a real operator template: its slot files carry one pad list
+    PER DIE SIDE, and an ingester looking for a single singular key found none
+    and recorded a null. Nothing refused that, so "this slot has no pads" and
+    "this program did not understand this slot" were the same sentence. They are
+    not the same sentence any more.
+    """
+    pads = slot.get("pads") or {}
+    if pads.get("lists"):
+        return []
+    unmatched = pads.get("unmatched_list_keys") or []
+    if not unmatched:
+        return []          # genuinely no list-valued key at all: nothing missed
+    return [_refusal(
+        "PAD_LIST_UNREAD",
+        f"slot {slot.get('slot')!r} ({slot.get('source_file')}) declares no pad "
+        f"list matching {pads.get('pattern')!r}, and the same file carries "
+        f"{len(unmatched)} list-valued key(s) this program did not claim: "
+        f"{', '.join(map(str, unmatched))}. A slot whose pads were not "
+        f"understood must not read as a slot with no pads.",
+        slot=slot.get("slot"), source_file=slot.get("source_file"),
+        unmatched_list_keys=unmatched)]
 
 
 def _geometry_key(slot: dict) -> tuple:
@@ -353,6 +385,7 @@ def evaluate(project: Path, doc: Optional[dict],
                     slot=s.get("slot"), source_file=src,
                     recorded_sha256=recorded, actual_sha256=now))
         refusals.extend(check_slot_geometry(s))
+        refusals.extend(check_slot_pads(s))
 
     # THE ARTEFACT A LATER STEP OPENS MUST SAY WHAT THE RECORD SAYS. The slot
     # files under the project are the step's declared output and the thing
