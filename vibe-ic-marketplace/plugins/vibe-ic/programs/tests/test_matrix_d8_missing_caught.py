@@ -263,6 +263,54 @@ _VERILOG_BODY = (
     "endmodule\n"
 )
 
+# ──────────────────────────────────────────────────────────────────────
+# PATH-CORRECT FIXTURE BODIES
+#
+# The suffix table below stopped being enough the moment two artefacts of the
+# SAME kind needed different content. Measured 2026-08-19: step 4's own gate
+# runs `verilator_coverage_measure`, which classifies the JSON at
+# `reports/phase2/coverage/coverage_actual.json` and reports
+#
+#     the file at the declared coverage path is a 'another producer' payload
+#     written by another producer, so line/toggle/branch was never measured here
+#
+# for `_JSON_BODY`. Step 4 therefore FAILed on the fully seeded tree and dropped
+# out of REAL_GATE_PASS_TIER_STEPS — the shrink
+# `test_d8_downgrade_is_reachable_through_each_steps_own_real_gate` names. It has
+# been red since the pin landed (d4136c3053), on its own commit and on every one
+# since, so the pin never matched the tree it claims to measure.
+#
+# WHAT THESE NUMBERS ARE, AND ARE NOT. They are not a coverage result: nothing
+# here was simulated, and no run this tree describes ever existed. They are the
+# same kind of stand-in as `_VERILOG_BODY`'s `module d8_fixture_top` — a
+# well-formed artefact of the right SHAPE, so a content-aware gate can reach a
+# verdict and the MISSING-output downgrade this module measures stays reachable.
+# A fixture that cannot satisfy a gate does not measure that gate; it only
+# measures the fixture. The counters clear `coverage_closure`'s 80 % goal
+# deliberately — at 0 % the step FAILs on the goal instead of on the missing
+# output, which is the same "failing for an unrelated reason" the suffix table
+# was introduced to end.
+#
+# NO NARRATIVE FIELDS. `verilator_coverage_measure.artefact_looks_tool_generated`
+# rejects `note` / `notes` / `source` / `tool` carrying estimation language, and
+# `classify_coverage_artefact` calls a bare percentage with no `totals` a
+# FORGERY. Only the `totals` container is written, so the payload cannot be read
+# as a coverage CLAIM — it is counters, or it is nothing.
+_COVERAGE_BODY = (
+    '{"totals": {'
+    '"line": {"covered": 100, "total": 100, "pct": 100.0}, '
+    '"toggle": {"covered": 100, "total": 100, "pct": 100.0}, '
+    '"branch": {"covered": 100, "total": 100, "pct": 100.0}}}\n'
+)
+
+#: Keyed by the tail of the declared path, consulted BEFORE the suffix table.
+#: One entry today; the mechanism exists so the NEXT content-aware gate is a
+#: one-line addition rather than a second special case grown beside this one.
+_PATH_BODIES: Tuple[Tuple[str, str], ...] = (
+    ("reports/phase2/coverage/coverage_actual.json", _COVERAGE_BODY),
+)
+
+
 _KIND_BODIES: Tuple[Tuple[str, str], ...] = (
     (".jsonl", _JSONL_BODY),
     (".json", _JSON_BODY),
@@ -272,7 +320,10 @@ _KIND_BODIES: Tuple[Tuple[str, str], ...] = (
 
 
 def fixture_body(rel: str) -> str:
-    """The body to seed ``rel`` with: kind-correct where a gate parses it."""
+    """The body to seed ``rel`` with: path-correct first, then kind-correct."""
+    for tail, body in _PATH_BODIES:
+        if rel == tail or rel.endswith("/" + tail):
+            return body
     lowered = rel.lower()
     for suffix, body in _KIND_BODIES:
         if lowered.endswith(suffix):
@@ -1601,6 +1652,13 @@ def _content_arm_sweep() -> Dict[str, Dict[str, Any]]:
 #: owns, and duplicating it would report one defect as two.
 CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
     "D1": _CONTENT_UNMOVED, "1": _CONTENT_UNMOVED, "2": _CONTENT_UNMOVED,
+    # 4 REJOINS the population with `_COVERAGE_BODY`. Measured, not assumed:
+    # UNMOVED — corrupting the coverage artefact's content does not move step 4's
+    # verdict, because the gate that reads it (`verilator_coverage_measure`) is
+    # reached through an ADVISORY clause on this tree. That is a content channel
+    # the flow HAS and does not act on, which is exactly the gap the D8 content
+    # arm exists to make visible rather than to hide.
+    "4": _CONTENT_UNMOVED,
     "12": _CONTENT_UNMOVED, "A1": _CONTENT_UNMOVED, "A2": _CONTENT_UNMOVED,
     "A4": _CONTENT_UNMOVED, "A5": _CONTENT_UNMOVED, "A6": _CONTENT_UNMOVED,
     "A8": _CONTENT_UNMOVED, "14": _CONTENT_UNMOVED, "28": _CONTENT_UNMOVED,
