@@ -1052,6 +1052,10 @@
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",
           "size_bytes": 1188
+        },
+        "reports/phase3/magic_illegal_overlap.json": {
+          "status": "UNPROVEN",
+          "provenance_note": "declared 2026-08-20 with the step-31 gate clause that writes it (74b6abbe3, 2026-08-19). NO published run carries it: the clause's own commit message records a blast radius of 0 run trees, so there is nothing to record a size or a producing run from. UNPROVEN is the measured state, not a placeholder -- the UNPROVEN branch SEARCHES every admissible root on every host and reddens the moment one resolves, which is what turns this entry into evidence the day a run produces the file. PRODUCED_LIVE was considered and REJECTED on a measurement: `magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json` writes a non-empty JSON in ANY tree, including an empty one, where it records skipped=true reason=no_extraction_in_scope and violation_count=null. Recording that as a live production would prove the gate can write an absence record, not that step 31 produced this artefact -- the same false pass the 969-byte SCOPE_NOT_FOUND note in produce_live() exists to refuse."
         }
       }
     },

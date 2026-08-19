@@ -4122,6 +4122,23 @@ steps:
       # only under `flow_compliance_check --strict-audit-evidence`.
       - "reports/phase3/lvs.json"
       - "reports/phase2/gates/erc_density.json"
+      # The extraction-feedback verdict, declared for the same reason the two
+      # above are and by the same rule. `magic_illegal_overlap_check` writes it
+      # as this step's own gate `--json` target and
+      # `phase3_one_shot_runner._run_extraction_lvs` READS it to decide whether
+      # the run may reach netgen — written by one program, read by another,
+      # declared by nothing, which is dimension 7's W1
+      # (`gate_output_read_elsewhere`) exactly. The clause landed 2026-08-19
+      # (74b6abbe3) and the declaration did not come with it, so step 31 could
+      # complete with the file the runner reads never written.
+      #
+      # SAME CAVEAT AS THE TWO ABOVE, restated rather than assumed: it is this
+      # step's own gate output and nothing outside that gate writes it, so on a
+      # root that lacks it `check_step` re-probes after the gate and credits
+      # the copy the audit just wrote. That absence is named in the
+      # SELF-CERTIFIED EVIDENCE advisory and becomes a verdict only under
+      # `flow_compliance_check --strict-audit-evidence`.
+      - "reports/phase3/magic_illegal_overlap.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.

@@ -716,7 +716,31 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # NINE of the ten admissible run roots before the record was written -- the
 # per-path check this pin exists to force (#527). Its verdict is therefore LIVE
 # and it adds no fixture attestation: fixture stays at 7, as it was.
-_LIVE_ENTRY_COUNT = 134
+# 2026-08-20: 134 -> 135. Step 31 `reports/phase3/magic_illegal_overlap.json`,
+# declared in the flow yaml on the step whose own gate writes it and whose
+# runner reads it (dimension 7 W1). It is the FIRST entry added here as
+# `UNPROVEN` rather than PRODUCED_BY_RUN: the clause landed 2026-08-19 and its
+# own commit message records a blast radius of 0 run trees, so no published run
+# carries the artefact and there is no size or producing run to record.
+#
+# WHY THAT STILL MOVES THIS PIN, and it is not an inference: `check_entry`'s
+# UNPROVEN branch returns mode LIVE on BOTH of its paths -- resolved and
+# unresolved -- so an UNPROVEN entry is counted live wherever it is counted at
+# all. MEASURED on this tree, corpus absent:
+#     check_entry("31", "reports/phase3/magic_illegal_overlap.json",
+#                 {"status": "UNPROVEN"})
+#     -> EntryVerdict(produced=False, mode='LIVE', detail="no committed
+#        non-empty artefact matches ... in any of the 0 admissible run roots")
+#
+# AND THE CONSEQUENCE, stated rather than discovered later: on a host that DOES
+# carry the corpus, `audit_step` counts an unproduced entry as missing, so
+# 31/d3 goes RED there until a published run carries the file. That is the true
+# answer to dimension 3's question and not a regression to route around -- the
+# artefact is declared, no run produces it yet, and the entry closes itself the
+# moment one does (the UNPROVEN branch searches every admissible root and
+# reddens on a resolve). This checkout carries no corpus, so 31/d3 skips here
+# and the change is not measurable on this host in either direction.
+_LIVE_ENTRY_COUNT = 135
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.

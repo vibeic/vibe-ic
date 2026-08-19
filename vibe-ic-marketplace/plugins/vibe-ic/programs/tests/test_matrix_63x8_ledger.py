@@ -548,8 +548,31 @@ def test_output_entries_classify_into_the_four_kinds():
     # (`spm/v1.9.96_gf180mcuD`, 7608 B), and it resolves in 9 of the 10
     # admissible run roots — declaring an artefact d3 cannot then evidence
     # would move the finding from d7 to d3 instead of closing it.
-    assert sum(seen.values()) == 141, seen
-    assert seen[F.FILE] == 107
+    # 2026-08-20: 141 -> 142, FILE 107 -> 108. Step 31
+    # `reports/phase3/magic_illegal_overlap.json` — the `--json` target of the
+    # `magic_illegal_overlap_check` clause that landed on step 31 on 2026-08-19
+    # (74b6abbe3), read by `phase3_one_shot_runner._run_extraction_lvs` to
+    # decide whether the run may reach netgen, and declared by nobody. Same
+    # shape as step 31's own lvs.json / erc_density.json and step 23's
+    # sta_corner_record_completeness.json: the step's own UNCONDITIONAL gate
+    # --json target, which is the form this ledger declares rather than waives.
+    # It is a plain FILE, so GLOB (12) and ANY_OF (22) are untouched.
+    #
+    # IT DIFFERS FROM EVERY ENTRY ABOVE IN ONE WAY, said here rather than
+    # discovered later: its dimension-3 record is UNPROVEN, not PRODUCED_BY_RUN.
+    # No published run carries the artefact — the clause is one day old and its
+    # own commit message records a blast radius of 0 run trees — so on a host
+    # that carries the corpus this declaration moves 31/d3 from green to red
+    # until a run produces the file. The earlier entries above refuse a
+    # declaration for exactly that reason, and the difference that decides it
+    # here is that theirs was a PERMANENT gap (no producer in this repository,
+    # or a producer only the auditor could satisfy) while this one is a dated
+    # one: step 31's gate writes this file on every real run, so the UNPROVEN
+    # branch closes the entry the first time a run is published. Waiving 31/d7
+    # instead would silence the whole cell — including the fourteen-artefact
+    # class step 23's waiver names — over a finding that is TRUE.
+    assert sum(seen.values()) == 142, seen
+    assert seen[F.FILE] == 108
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
