@@ -1763,12 +1763,53 @@ def _run_progress_supervised(
     return result.rc, out, incomplete
 
 
+def _declared_rootdir(pytest_argv: Sequence[str],
+                      cwd: Optional[str]) -> List[str]:
+    """Make the selection and the JUnit share ONE coordinate system.
+
+    The aggregate coverage check compares the paths the caller SELECTED against
+    the ``file`` attributes pytest REPORTED.  The selection is resolved against
+    this session's working directory; pytest's ``file`` attribute is relative to
+    its ``rootdir``, which pytest infers from the arguments' nearest ini file.
+    When those two directories differ, every selected file is simultaneously
+    "missing" and "extra" and a completely green session is refused as UNKNOWN.
+
+    MEASURED at 49d2b3328 on the landing gate's ``full:unselectable-tests``
+    lane: 111 files selected as ``vibe-ic-marketplace/plugins/vibe-ic/...`` with
+    cwd at the repository root, ``rc=0``, 852 cases, ``784 passed, 60 skipped,
+    5 xfailed, 3 xpassed``, ZERO failures -- and refused, ``missing=111`` of 111
+    with ``extra=110``, because the plugin subtree carries its own ``pytest.ini``
+    and the repository root carries none, so rootdir was the plugin and every
+    reported path came back plugin-relative.  The comparison matched nothing, so
+    that lane's aggregate arm had never measured anything, and "UNKNOWN" and
+    "broken" look the same from outside.
+
+    The frame is therefore DECLARED to pytest rather than inferred on either
+    side.  MEASURED, same tree: the ini file is still discovered and applied
+    with rootdir moved (``rootdir: <repo root>``, ``configfile:
+    vibe-ic-marketplace/plugins/vibe-ic/pytest.ini``), so ``addopts`` and the
+    conftest-loaded plugins -- ``suite_write_guard`` among them -- are
+    unaffected; only the frame the report is written in moves.  ``testpaths`` IS
+    resolved against rootdir and does move, which cannot matter here: it applies
+    only when no argument is given, and this driver always names every file
+    explicitly and refuses an empty selection (rc 3).
+
+    A caller that already declared a rootdir keeps it.  This adds a frame; it
+    never overrides one.
+    """
+    for arg in pytest_argv:
+        if arg == "--rootdir" or arg.startswith("--rootdir="):
+            return []
+    anchor = Path(cwd).resolve() if cwd else Path.cwd()
+    return [f"--rootdir={anchor}"]
+
+
 def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
             stall_after: float, cwd: Optional[str], *,
             progress_relay_path: Optional[Path] = None,
             ) -> Tuple[Optional[int], str, bool]:
     """One pytest session for one file, supervised by forward progress."""
-    cmd = list(pytest_argv) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
         "-p", _PROGRESS_PLUGIN,
         # xunit1 CARRIES THE `file` ATTRIBUTE and xunit2 drops it. The merge
         # gate answers "did every file we selected actually run" off that
@@ -1791,7 +1832,7 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
                       Callable[["_SemanticProgressProbe"], None]] = None,
                   ) -> Tuple[Optional[int], str, bool]:
     """Run the original whole-selection pytest shape as a semantics canary."""
-    cmd = list(pytest_argv) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
         "-p", _PROGRESS_PLUGIN,
         "-o", "junit_family=xunit1", f"--junitxml={junit_path}",
         *test_files,
@@ -1813,7 +1854,7 @@ def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
     FSM must also observe a count-preserving collect-only terminal followed by
     ``session_finish``.
     """
-    cmd = list(pytest_argv) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
         "-p", _PROGRESS_PLUGIN, "--collect-only", *test_files,
     ]
     return _run_progress_supervised(
