@@ -46,10 +46,12 @@ _LAND = _ROOT / "tools" / "gatekeeper-land.sh"
 _SCHEDULER = (
     "gk_cleanup",
     "lane_write",
+    "lane_reported",
     "run_capture",
     "fn_capture",
     "lane_resolve",
     "run_emit",
+    "fn_emit",
     "run",
     "lane_launch",
     "lane_join",
@@ -141,7 +143,17 @@ GK_HYG=(); GK_HYG_ENV=()
 # overlapped, rather than inferring it from the round's wall clock.
 mark() { printf '%s %s %s\n' "$1" "$2" "$(date +%s.%N)" >> "$WORK/marks"; }
 stage() {                            # stage <lane> <seconds> <rc>
-  mark "$1" start; sleep "$2"; mark "$1" end
+  mark "$1" start
+  # THE STAGE'S OWN PID, so a test can kill exactly THIS STAGE and leave the
+  # lane around it alive. `$BASHPID` here is the command-substitution subshell
+  # `run_capture`/`fn_capture` captures in — the process whose death the
+  # killed-stage tests below are about.
+  printf '%s\n' "$BASHPID" > "$WORK/pid.$1"
+  # The sleeper must NOT inherit the capture pipe: with it inherited, killing
+  # the stage leaves the substitution blocked on a child that outlived it and
+  # the test would measure a timeout instead of the scheduler.
+  sleep "$2" >/dev/null 2>&1
+  mark "$1" end
   echo "stub stage $1 says something"
   [ "$3" -eq 0 ] || { echo "FAIL: stub $1"; FAILED=1; }
   return "$3"
@@ -468,3 +480,150 @@ def test_there_is_no_way_to_opt_IN(land_text):
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── A STAGE KILLED INSIDE A LANE THAT IS STILL ALIVE ───────────────────────
+# The test above kills a whole LANE, and a dead lane leaves its units' `.rc`
+# holding the literal NORECORD the main shell pre-created. A stage that dies
+# INSIDE A LIVE LANE is a different event and it was the blind spot: the
+# capture writes `.rc` either way, and for a killed subshell it holds
+# 128+signal — a PARSABLE integer. Reading that as "the stage reported" is
+# wrong for the three `fn_capture` stages specifically, because those report by
+# PRINTING `  FAIL  <label>` and the integer is merely the capture's exit
+# status. `landing_merge_verdict.py` subtracts BY PRINTED LABEL, so a stage
+# that died before its own print contributes NOTHING for the differential to
+# see, and the landing is absorbed as "no new failure".
+#
+# On the direct-push path there is no second backstop to catch it:
+# `gatekeeper-land-differential.sh` launches both gate arms without
+# `VIBEIC_LANDING_PROGRESS`, so the journal is off.
+
+_KILL_ONE_STAGE = r"""
+lane_run_window
+for _ in $(seq 400); do
+  [ -s "$WORK/pid.corpus" ] && break
+  sleep 0.05
+done
+# EXACTLY ONE STAGE, by its own pid — not the process group, which is what the
+# whole-lane test kills. The lane's remaining units must still report, or this
+# would be the previous test with extra steps.
+kill -KILL "$(cat "$WORK/pid.corpus")" 2>/dev/null || true
+lane_emit_window
+echo "FAILED=$FAILED"
+"""
+
+
+def test_a_killed_stage_inside_a_live_lane_is_still_labelled(scheduler, work):
+    """FAILS if a stage killed mid-flight contributes no `  FAIL  ` line.
+
+    Three things are asserted together, and the first is what makes this a
+    different test from the killed-LANE one: the lane SURVIVED — its later
+    units reported normally — and the killed stage is STILL a labelled FAIL
+    with a non-zero journal row.
+    """
+    proc = _run(scheduler, work, {"LANE_WIDTH": "4", "C_SEC": "60"},
+                body=_KILL_ONE_STAGE)
+    rows = {row[0]: row[1:] for row in _journal(work)}
+    assert rows["full:unselectable-tests"][0] == "PASS", (
+        "the LANE was killed, not the stage — this test then asserts nothing "
+        f"the previous one does not: {rows}")
+    assert rows["full:unselectable-census"][0] == "PASS", rows
+    assert rows["full:repo-tools-tests"][0] == "FAIL", rows
+    assert rows["full:repo-tools-tests"][1] != "0", rows
+    assert "  FAIL  repo tools tests" in proc.stdout, proc.stdout
+    assert "did not reach its own report" in proc.stdout, proc.stdout
+    assert "FAILED=1" in proc.stdout, proc.stdout
+    assert set(rows) == set(_WINDOW), rows
+
+
+# ── THE SAME KILL, CARRIED THROUGH TO THE JUDGE ────────────────────────────
+# The assertion above is about this file's own scheduler. This one is about
+# what the NEXT program does with the log that scheduler wrote, because that is
+# where the consequence lives: `landing_merge_verdict.decide` compares the two
+# arms' gate logs BY PRINTED LABEL, and a candidate log carrying no label for a
+# stage that died is one it reads as "this branch broke no gate".
+#
+# `--candidate-gate-rc 1` and `--require-composite-gate-record` are passed
+# exactly as `gatekeeper-land-differential.sh` passes them, so the composite
+# record check is satisfied and the only thing left to decide the gate tier is
+# the labels. Both arms' test reports are GREEN on purpose: if this refuses, it
+# refuses for the killed stage and for nothing else.
+
+_PLUGIN_REL = "vibe-ic-marketplace/plugins/vibe-ic"
+_VERDICT = _ROOT / _PLUGIN_REL / "programs" / "landing_merge_verdict.py"
+_SELECTED = "programs/tests/test_subject.py"
+_GREEN_JUNIT = (
+    '<?xml version="1.0"?><testsuites>'
+    '<testsuite name="aggregate::selection" tests="1">'
+    '<testcase classname="pytest_aggregate.programs.tests.test_subject" '
+    f'name="test_one" file="{_SELECTED}"/></testsuite>'
+    '<testsuite name="whole_selection::process_exit" tests="1">'
+    '<testcase classname="pytest_aggregate_process" '
+    'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
+    '<properties><property name="process_rc" value="0"/></properties>'
+    '</testcase></testsuite></testsuites>')
+_BASE_LAND_LOG = (
+    "=== gatekeeper landing gates — base=stub ===\n"
+    "  PASS  repo tools tests (3 file(s))\n"
+    "  PASS  unselectable tests\n"
+    "  PASS  unselectable-test census is not stale\n"
+    "  PASS  repo hygiene gates\n"
+    "  PASS  plugin full audit\n"
+    "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite "
+    "verdict ===\n")
+
+
+def test_the_judge_refuses_the_log_a_killed_stage_leaves(scheduler, work,
+                                                         tmp_path):
+    """FAILS if a stage killed inside a live lane lands.
+
+    Nothing about the judge is relaxed to make this pass, and nothing may be:
+    a missing label MUST be a refusal, and the repair is that the label is no
+    longer missing.
+    """
+    sys.path.insert(0, str(_ROOT / _PLUGIN_REL / "programs" / "tests"))
+    import _protected_transition_fixture as protected
+
+    proc = _run(scheduler, work, {"LANE_WIDTH": "4", "C_SEC": "60"},
+                body=_KILL_ONE_STAGE)
+    # THE REAL LOG, not a re-description of it: the header and the terminal
+    # sentinel `gatekeeper-land.sh` writes around exactly this stream.
+    land_log = tmp_path / "land.log"
+    land_log.write_text(
+        "=== gatekeeper landing gates — base=stub ===\n"
+        + proc.stdout
+        + "=== FAILURES ABOVE — stamp removed; the pre-push hook will "
+          "refuse ===\n", encoding="utf-8")
+    base_land_log = tmp_path / "base_land.log"
+    base_land_log.write_text(_BASE_LAND_LOG, encoding="utf-8")
+    for name in ("base.xml", "cand.xml"):
+        (tmp_path / name).write_text(_GREEN_JUNIT, encoding="utf-8")
+    (tmp_path / "sel.txt").write_text(_SELECTED + "\n", encoding="utf-8")
+
+    base, head = "a" * 40, "b" * 40
+    base_tree, head_tree = "c" * 40, "d" * 40
+    receipt = protected.receipt_for(
+        tmp_path / "protected.json", base_commit=base, base_tree=base_tree,
+        candidate_commit=head, candidate_tree=head_tree)
+    verdict = subprocess.run(
+        [sys.executable, str(_VERDICT),
+         "--base-sha", base, "--base-tree", base_tree, "--head-sha", head,
+         "--verified-sha", head, "--rebase-status", "ok",
+         "--expected-tree", head_tree, "--verified-tree", head_tree,
+         "--land-log", str(land_log), "--base-land-log", str(base_land_log),
+         "--selection", str(tmp_path / "sel.txt"),
+         "--base-selection", str(tmp_path / "sel.txt"),
+         "--base-junit", str(tmp_path / "base.xml"),
+         "--candidate-junit", str(tmp_path / "cand.xml"),
+         "--verification-tier", "direct-push",
+         "--candidate-gate-rc", "1", "--require-composite-gate-record",
+         "--protected-transition-receipt", str(receipt),
+         "--json", str(tmp_path / "verdict.json")],
+        capture_output=True, text=True)
+    record = json.loads((tmp_path / "verdict.json").read_text())
+    assert verdict.returncode == 1, (
+        "the killed stage was absorbed as 'no new failure' — the gate tier "
+        f"saw no label for it:\n{verdict.stdout}")
+    assert record["verdict"] == "REFUSE"
+    assert any("repo tools tests" in reason for reason in record["reasons"]), \
+        record["reasons"]
