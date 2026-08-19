@@ -2506,3 +2506,121 @@ def test_an_ABSENT_control_arm_that_TIMED_OUT_is_NA_not_a_liar(monkeypatch,
     res = lc.probe_producer_emitted_nothing(cl, sandbox)
     assert res.verdict == lc.NA, res
     assert "control arm did not run" in res.detail, res.detail
+
+
+# --------------------------------------------------------------------------
+# THE ARM'S OWN BOUND. `pytest_timeout` is a third-party plugin, `-p <plugin>`
+# on a pytest that cannot import it is an `ImportError` raised during
+# PRE-PARSE, and the session then exits having printed no summary line, no
+# `FAILED` lines and no counts -- which `_PYTEST_DONE` reads, correctly, as a
+# dead arm. On the pinned runner image that plugin is absent, so every arm of
+# every mutation probe died on arrival, every mutation probe scored N/A, and
+# the census refused to certify a population it had never measured. Seven tests
+# in this file were red on untouched main for that one reason, and the report
+# named neither the plugin nor the ImportError: diagnosing it meant
+# reconstructing the inner argv by hand and running it.
+#
+# These are the controls for both halves of the repair -- the bound is REQUESTED
+# rather than assumed, and a dead arm now says why it died.
+# --------------------------------------------------------------------------
+
+_TRIVIALLY_GREEN = "def test_ok():\n    assert True\n"
+
+
+def _one_green_file(tmp_path: Path) -> Path:
+    f = tmp_path / "test_green.py"
+    f.write_text(_TRIVIALLY_GREEN)
+    return f
+
+
+def test_an_arm_naming_a_plugin_this_pytest_cannot_import_never_reaches_a_verdict(
+        tmp_path, monkeypatch):
+    """The defect, reproduced on purpose and independently of the host.
+
+    Runs a selection that cannot fail, under a bound naming a plugin that does
+    not exist. Nothing about the SUBJECT is wrong; the arm is simply never run.
+    An arm in this state reports an empty failure set, and an empty failure set
+    minus an empty baseline is "the mutation killed nothing" -- the finding. So
+    the only acceptable outcome is `completed=False`, and this pins it.
+    """
+    monkeypatch.setattr(lc, "_PER_TEST_BOUND",
+                        ["-p", "a_pytest_plugin_that_is_not_installed"])
+    arm = lc._run_selection(tmp_path, [_one_green_file(tmp_path)], _T)
+    assert arm is not None, "the arm was not even spawned"
+    assert arm.completed is False, (
+        "a session killed during pre-parse was read as a measurement: %r" % (arm,))
+    assert arm.passed == 0 and not arm.failed, arm
+
+
+def test_the_same_selection_under_the_REAL_bound_does_reach_its_verdict(tmp_path):
+    """The other half of the control above.
+
+    Without it, the assertion `completed is False` is satisfied by an arm that
+    could never complete for any reason at all -- a broken `_run_selection`, a
+    missing interpreter, a cwd that does not exist -- and would keep passing
+    after the repair it is meant to protect was reverted. Same file, same
+    function, only the bound differs, so a difference between the two can only
+    be the bound.
+    """
+    arm = lc._run_selection(tmp_path, [_one_green_file(tmp_path)], _T)
+    assert arm is not None and arm.completed is True, arm
+    assert arm.passed == 1 and not arm.failed, arm
+
+
+def test_a_dead_arm_reports_WHY_it_died_not_merely_THAT_it_did(tmp_path,
+                                                               monkeypatch):
+    """The decline must carry the evidence that identifies its own cause.
+
+    "The probe could not run here" and "the subject took its own session down"
+    are two bugs with opposite fixes and the same verdict, and for as long as
+    the note said only "never reached its own summary line" the report could
+    not tell a reader which one they had. The session's own last words are the
+    shortest thing that can.
+    """
+    monkeypatch.setattr(lc, "_PER_TEST_BOUND",
+                        ["-p", "a_pytest_plugin_that_is_not_installed"])
+    arm = lc._run_selection(tmp_path, [_one_green_file(tmp_path)], _T)
+    assert "a_pytest_plugin_that_is_not_installed" in arm.tail, arm.tail
+    assert "a_pytest_plugin_that_is_not_installed" in lc._why(arm), lc._why(arm)
+    # and a LIVE arm carries no tail at all: the field is evidence about a
+    # failure, not a log every measurement drags along. `undo` first, or the
+    # broken bound is still in force and this half asserts nothing.
+    monkeypatch.undo()
+    assert lc._why(lc._run_selection(tmp_path,
+                                     [_one_green_file(tmp_path)], _T)) == ""
+
+
+def test_the_arms_never_name_a_pytest_plugin_this_interpreter_cannot_import():
+    """The invariant, stated over whatever `_PER_TEST_BOUND` currently holds.
+
+    Asserted against `sys.executable` because that is the interpreter the arms
+    are actually spawned with (`_run_selection` builds its argv from it), so a
+    plugin importable for the test session but not for the arm would still be
+    caught here.
+    """
+    import importlib.util
+    named = [lc._PER_TEST_BOUND[i + 1]
+             for i, tok in enumerate(lc._PER_TEST_BOUND)
+             if tok == "-p" and i + 1 < len(lc._PER_TEST_BOUND)]
+    missing = [n for n in named
+               if not n.startswith("no:")
+               and importlib.util.find_spec(n) is None]
+    assert not missing, (
+        "the mutation arms name plugin(s) this python cannot import, so every "
+        "arm dies during pre-parse and every mutation probe scores N/A: %s"
+        % missing)
+
+
+def test_which_bound_is_in_force_is_DISCLOSED_and_matches_what_was_found():
+    """A bound that changed units without saying so is the silent half of this
+    defect. `_bound_disclosure` is the sentence the report and the stderr line
+    both carry, so it has to agree with the detection rather than restate a
+    constant.
+    """
+    import importlib.util
+    have = importlib.util.find_spec("pytest_timeout") is not None
+    assert lc._HAVE_PYTEST_TIMEOUT is have
+    assert bool(lc._PER_TEST_BOUND) is have, lc._PER_TEST_BOUND
+    said = lc._bound_disclosure()
+    assert ("PER TEST" in said) is have, said
+    assert ("NOT INSTALLED" in said) is (not have), said

@@ -85,6 +85,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -1389,6 +1390,77 @@ _PYTEST_DONE = re.compile(
     r"in \d+(?:\.\d+)?s(?:\s*\(\d+:\d{2}:\d{2}\))?\s*$", re.M)
 
 
+#: The per-test bound, and whether this interpreter can actually impose one.
+#:
+#: `pytest_timeout` is a THIRD-PARTY plugin. It is not in the pinned runner
+#: image, and `-p pytest_timeout` on a pytest that cannot import it is not a
+#: degraded run -- it is `ImportError: Error importing plugin "pytest_timeout"`
+#: raised during pre-parse, before a single test is collected. The session then
+#: exits 1 having printed no summary line, no `FAILED` lines and no counts.
+#:
+#: That is EXACTLY the shape `_PYTEST_DONE` was written to catch, and it caught
+#: it: on the pinned image every arm of every mutation probe died on arrival, so
+#: `verdict_forced_pass` and `verdict_forced_fail` scored N/A on every clause and
+#: the census -- correctly -- refused to call an unmeasured population clean.
+#: The instrument was honest; it was simply unable to run. Seven tests in
+#: `tools/test_liar_census.py` were red on untouched main for this one reason.
+#:
+#: So the bound is REQUESTED, not assumed. `find_spec` asks the same interpreter
+#: that will run the arms (`sys.executable`, `-m pytest`) whether the plugin is
+#: importable; `PYTEST_DISABLE_PLUGIN_AUTOLOAD` does not enter into it, because
+#: an explicit `-p` loads regardless of autoload and fails hard regardless too.
+#:
+#: WHAT IS LOST WITHOUT IT, stated rather than hidden: the arm keeps its outer
+#: bound -- `_run_selection` already runs the whole session under
+#: `subprocess.run(timeout=...)` (`--mutation-timeout`, 900 s), and blowing that
+#: yields `None`, which is the TIMEOUT decline, not a finding. What goes away is
+#: per-TEST granularity: with the plugin a hung test is failed at 45 s and every
+#: other test in the selection still reports; without it the hang consumes the
+#: arm's whole budget and the arm is declined wholesale. Strictly less coverage,
+#: never a false clean -- and `_bound_disclosure()` prints which one ran, because
+#: a reader must not have to guess which of the two bounds was in force.
+_HAVE_PYTEST_TIMEOUT = importlib.util.find_spec("pytest_timeout") is not None
+_PER_TEST_BOUND = (["-p", "pytest_timeout",
+                    # 45 s per test. The comment moved here from the argv
+                    # opened "300 s per test, not 120" while the value beside it
+                    # had already been lowered to 45 (#1220, when the harness
+                    # session bound came in above it); the number is restated
+                    # from the code rather than left disagreeing with it.
+                    # This bound exists to stop a hung
+                    # test from burning the arm's whole budget -- but reaching
+                    # it KILLS THE SESSION rather than the test
+                    # (`--timeout-method=thread`), and a killed session is a
+                    # dead arm. Under `--mutation-jobs 8` on a loaded machine,
+                    # tests that finish in seconds when idle crossed 120 s and
+                    # took their arm down with them; that is how
+                    # `drc_report_check` was reported as having no positive
+                    # control when an idle re-run of the same code killed 25
+                    # tests. The arm's own subprocess ceiling
+                    # (`--mutation-timeout`, 900 s by default) is the real
+                    # bound; this one only has to be generous enough not to fire
+                    # on a slow machine, and `_PYTEST_DONE` catches it when it
+                    # does.
+                    "--timeout=45", "--timeout-method=thread"]
+                   if _HAVE_PYTEST_TIMEOUT else [])
+
+
+def _bound_disclosure() -> str:
+    """One line naming which per-arm bound is actually in force.
+
+    Printed once to stderr when the mutation pass starts and carried into the
+    report's BOUNDS section, because "the arms were bounded per test" and "the
+    arms were bounded only as whole sessions" are different measurements and
+    the difference is invisible in the verdicts.
+    """
+    if _HAVE_PYTEST_TIMEOUT:
+        return ("mutation arms bounded PER TEST at 45 s by pytest_timeout, "
+                "under the per-arm session ceiling")
+    return ("pytest_timeout is NOT INSTALLED for %s, so the mutation arms are "
+            "bounded only as WHOLE SESSIONS by the per-arm ceiling "
+            "(--mutation-timeout): one hung test now costs its entire arm, "
+            "which is DECLINED as TIMEOUT rather than scored" % sys.executable)
+
+
 @dataclass
 class ArmResult:
     failed: set
@@ -1396,6 +1468,14 @@ class ArmResult:
     rc: int
     #: did pytest reach its own summary line? See `_PYTEST_DONE`.
     completed: bool = True
+    #: the tail of what the session printed, kept ONLY for the arms that did not
+    #: complete. An arm can die because the probe cannot run here at all (a
+    #: missing plugin, an unimportable conftest) or because the gate under test
+    #: really did take its own session down -- two bugs with opposite fixes, and
+    #: for a long time the report distinguished them not at all. Diagnosing the
+    #: missing-plugin case cost a hand-run of the exact inner argv to see an
+    #: `ImportError` the census had been swallowing since the arm was born.
+    tail: str = ""
 
 
 def _run_selection(cwd: Path, selection: List[Path],
@@ -1411,21 +1491,14 @@ def _run_selection(cwd: Path, selection: List[Path],
     # the flag the broken module is reported as an ERROR node ID, which appears
     # in every arm and cancels in the difference, and the other seven files are
     # actually measured.
+    # The per-test bound is APPENDED ONLY WHEN IT EXISTS -- see
+    # `_PER_TEST_BOUND`. Naming a plugin pytest cannot import kills the session
+    # during pre-parse, which this function then reports as a dead arm; that is
+    # a correct reading of a run that never happened, and it is what made every
+    # mutation probe N/A on the pinned image.
     argv = [sys.executable, "-m", "pytest", "-q", "--no-header", "--tb=no",
-            "-rfE", "-p", "no:cacheprovider", "-p", "pytest_timeout",
-            "--continue-on-collection-errors",
-            # 300 s per test, not 120. This bound exists to stop a hung test
-            # from burning the arm's whole budget -- but reaching it KILLS THE
-            # SESSION rather than the test (`--timeout-method=thread`), and a
-            # killed session is a dead arm. Under `--mutation-jobs 8` on a
-            # loaded machine, tests that finish in seconds when idle crossed
-            # 120 s and took their arm down with them; that is how
-            # `drc_report_check` was reported as having no positive control
-            # when an idle re-run of the same code killed 25 tests. The arm's
-            # own subprocess ceiling (`--mutation-timeout`, 900 s by default)
-            # is the real bound; this one only has to be generous enough not to
-            # fire on a slow machine, and `_PYTEST_DONE` catches it when it does.
-            "--timeout=45", "--timeout-method=thread"]
+            "-rfE", "-p", "no:cacheprovider",
+            "--continue-on-collection-errors"] + _PER_TEST_BOUND
     argv += [str(p) for p in selection]
     env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
                PYTHONDONTWRITEBYTECODE="1")
@@ -1440,10 +1513,33 @@ def _run_selection(cwd: Path, selection: List[Path],
     # session's result, and the number this feeds decides BASELINE_DEAD -- the
     # verdict that says "this gate could not be measured".
     counts = _PYTEST_PASSED.findall(out)
+    completed = bool(_PYTEST_DONE.search(out))
     return ArmResult(failed=set(_PYTEST_FAILED.findall(out)),
                      passed=int(counts[-1]) if counts else 0,
                      rc=proc.returncode,
-                     completed=bool(_PYTEST_DONE.search(out)))
+                     completed=completed,
+                     # Only for the arms that did NOT finish, and bounded, so a
+                     # decline carries the evidence for WHY without turning the
+                     # report into a log. The last non-empty lines are where
+                     # pytest puts the pre-parse `ImportError`, the collection
+                     # abort and the `+++ Timeout +++` banner alike.
+                     tail="" if completed else " | ".join(
+                         [ln.strip() for ln in out.splitlines() if ln.strip()][-3:])[:300])
+
+
+def _why(arm: ArmResult) -> str:
+    """The dead arm's own last words, appended to the decline that reports it.
+
+    A dead arm has two very different causes with opposite fixes -- the probe
+    could not run HERE (a plugin pytest cannot import, a conftest that will not
+    load, an interpreter mismatch), or the subject really did take its own
+    session down -- and the decline used to name neither, so telling them apart
+    meant reconstructing the inner argv by hand and running it. On the pinned
+    image the answer was one line long and the census had been discarding it.
+    """
+    if not arm.tail:
+        return ""
+    return f"; the session's last output was: {arm.tail}"
 
 
 @dataclass
@@ -1655,7 +1751,8 @@ def mutation_run(program: str, timeout: int, budget: "Budget") -> MutationRun:
             return _done(MutationRun(
                 program, "ARM_DIED", tests=run.tests,
                 note="the unmutated arm's pytest session never reached its own "
-                     "summary line, so nothing it reported is a measurement"))
+                     "summary line, so nothing it reported is a measurement"
+                     + _why(base)))
         if base.passed == 0:
             # Nothing in the selection is green, so nothing COULD die. Scoring
             # "no test noticed" here would be an accusation the measurement
@@ -1683,7 +1780,8 @@ def mutation_run(program: str, timeout: int, budget: "Budget") -> MutationRun:
                             f"{arm.passed} passing, {len(arm.failed)} failing "
                             f"against {base.passed}/{len(base.failed)} at "
                             f"baseline), so its empty failure set is a dead "
-                            f"measurement and not a gate without a control")
+                            f"measurement and not a gate without a control"
+                            + _why(arm))
                 return _done(run)
             run.arm_passed[const] = arm.passed
             run.killed[const] = sorted(arm.failed - base.failed)
@@ -3520,6 +3618,13 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
     # front means the per-clause loop below reads a cache, and it is what makes
     # `--mutation-jobs` possible at all.
     if {"forcedpass", "forcedfail"} & set(probes):
+        # WHICH BOUND IS IN FORCE, said once before the arms run and again in
+        # the report. Whether a hung test costs one test or a whole arm changes
+        # what a run of these probes establishes, and nothing in the verdicts
+        # shows it.
+        print(f"liar_census: {_bound_disclosure()}", file=sys.stderr, flush=True)
+        if not _HAVE_PYTEST_TIMEOUT:
+            notes.append(_bound_disclosure())
         prewarm_mutation_cache(sorted({c.program for c in clauses}),
                                mutation_jobs, mutation_timeout, mut_budget)
     #: which programs each step declares as gate clauses -- the structure the
