@@ -506,7 +506,16 @@ def test_end_to_end_the_record_says_when_it_was_not_asked(tmp_path):
 def test_the_hygiene_label_this_program_matches_is_the_one_land_sh_prints():
     """A regex that stopped matching the real label would silently disable the
     cross-check above, and nothing else in this file would notice."""
-    printed = re.findall(r'^run "([^"]*hygiene[^"]*)"',
-                         _LAND.read_text(encoding="utf-8"), re.M)
+    # `run` takes TWO quoted words: `run <unit> <label> <cmd…>`, and it is the
+    # SECOND that it prints (`printf '  PASS  %s\n' "$label"`). The unit id is a
+    # machine name for the landing record and is never printed, so keying on the
+    # first quoted word reads `full:repo-hygiene` and compares a name this
+    # program was never asked to match. The id arrived with the semantic landing
+    # runtime, 7c376e348 (v1.10.69), which gave every `run`/`report` call site a
+    # leading unit; the printed label did not move.
+    calls = re.findall(r'^run "([^"]*)" "([^"]*)"',
+                       _LAND.read_text(encoding="utf-8"), re.M)
+    printed = [label for unit, label in calls
+               if "hygiene" in unit or "hygiene" in label]
     assert printed, "gatekeeper-land.sh no longer runs a labelled hygiene tier"
     assert any(V._HYGIENE_TIER.match(l) for l in printed), printed
