@@ -1,0 +1,15 @@
+# Invariants of the Phase-1 fact-graph engine.
+package: tools/phase1_engine
+invariants:
+  - id: phase1-engine-reads-only-the-design-input
+    rule: >
+      Section 4.05, enforced where the ingesting happens rather than in a
+      doctrine document this code never loads: Phase 1 reads the design INPUT
+      -- the prompt and the documents provided with it -- and never the oracle,
+      the harness, or the golden answer. An engine that can open a golden file
+      turns every downstream benchmark number into a measurement of itself, and
+      no gate further down the flow can tell the difference.
+    applies_to: ["*.py"]
+    forbid: '(?m)^(?![ \t]*#).*\b(?:golden|oracle|expected_output)\b'
+    counterexample: |
+      ref = json.load(open(design_dir / "golden" / "L1_datasheet.json"))

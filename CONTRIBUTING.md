@@ -178,6 +178,20 @@ We will run CI on merge to a temp branch first.
 5. **No bundled secrets / API keys / proprietary PDK files** in
    commits. Use environment variables and `.gitignore` for paths to
    licensed PDK installs.
+6. **Obey the `INVARIANTS.yaml` in the directory you are editing.**
+   Some directories declare their own rules in a file called
+   `INVARIANTS.yaml`, sitting next to the code those rules bind — read
+   it before you change anything in that directory. Each entry states
+   the rule in prose and the pattern the gate matches, so the reason a
+   change is refused is in the same file as the refusal. Enforced by
+   `programs/package_invariants_check.py` through
+   `tools/ci/repo_hygiene_gates.sh`; a violation is a red landing gate.
+   Deleting the file does not remove the rules: the package is
+   registered in `programs/package_invariants_registry.json` and a
+   registered package with no declaration is a refusal. To declare a
+   NEW package, add the file and the registry row and raise
+   `MIN_REGISTERED_PACKAGES`. Shape and rationale:
+   `docs/PER_PACKAGE_INVARIANTS.md`.
 
 ## Adding a new skill
 

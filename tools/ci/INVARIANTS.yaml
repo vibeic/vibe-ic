@@ -1,0 +1,33 @@
+# Invariants of tools/ci -- the landing authority.
+#
+# Read by `programs/package_invariants_check.py`, wired into
+# `repo_hygiene_gates.sh` in this same directory. A violation is a red landing
+# gate. Shape and rationale: docs/PER_PACKAGE_INVARIANTS.md.
+package: tools/ci
+invariants:
+  - id: ci-worktree-snapshot-must-see-ignored-files
+    rule: >
+      A worktree snapshot taken to attribute what a gate wrote must pass
+      --ignored. The leftover class this repo actually produces is INVISIBLE to
+      a plain `git status` while still being read by the next gate: measured at
+      _gate_dispatch.sh:69-71 as 1078 leftovers in the main checkout, inflating
+      that script's own declared-gate count from 68 to 169 and reproducing 13
+      phantom FAILs on two unrelated PRs. A snapshot that cannot see them
+      reports a clean tree and attributes the next gate's finding to the wrong
+      writer.
+    applies_to: ["*.sh", "*.py"]
+    forbid: '(?m)^(?![ \t]*#).*git status --porcelain(?![^\n]*--ignored)'
+    counterexample: |
+      leftovers="$(git status --porcelain -- benchmark-data)"
+
+  - id: ci-no-shell-interpolated-subprocess
+    rule: >
+      Nothing under tools/ci may hand a command line to a shell. This directory
+      decides whether a candidate lands, and it runs git against
+      candidate-supplied refs and paths (hermetic_git_subject.py); one
+      shell=True is the difference between a branch name and arbitrary
+      execution inside the authority that is judging it. Build argv lists.
+    applies_to: ["*.py"]
+    forbid: '(?m)^(?![ \t]*#).*shell\s*=\s*True'
+    counterexample: |
+      subprocess.run(f"git log --oneline {ref}", shell=True, check=True)
