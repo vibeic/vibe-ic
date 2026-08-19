@@ -969,11 +969,41 @@ run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate
 # decides whether everything else is honest. 95 tests; measured twice at
 # this consolidation at 25 s and 137 s on the same tree -- the mutation
 # probes dominate and vary with machine load, so budget for the high one.
-# Every subprocess this file starts is bounded at 55 s or less, strictly under
-# the 180 s `--timeout-method=thread` session bound below, so a hang fails
-# ONE test here instead of killing the run and losing every other result.
+# Every subprocess this file starts is bounded at 55 s or less, and that is now
+# the ONLY bound: the `-p pytest_timeout --timeout=180 --timeout-method=thread`
+# session bound this line used to carry is gone. It was the LAST SURVIVING USE
+# in this repo of an idiom the repo has already retired, and it made this gate
+# unrunnable on the runtime the repo anchors.
+#
+#   CAPABILITY, measured: `-p pytest_timeout` is a hard import, and
+#   `pytest-timeout` is absent from `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2`
+#   (the image named by `protected_landing_transition.json` .runner.image) and
+#   from every 0.2.x/0.3.x tag of it on this host. There, this exact line did
+#   not run 108 tests and report zero failures — it exited before collection
+#   with `ImportError: Error importing plugin "pytest_timeout"`. The only lane
+#   that ever installed the plugin was `.github/workflows`, and those files now
+#   live under `.github/workflows-disabled`; the pass this gate used to record
+#   depended on an ambient host pip package that nothing in this tree declares.
+#
+#   DOCTRINE, already settled: `tools/gatekeeper-land.sh` dropped this idiom at
+#   v1.10.69 and TWO live tests forbid its return
+#   (`tools/ci/test_phase_b_activated_parity.py::test_the_activated_runtime_no_
+#   longer_uses_a_wall_clock_pytest_timeout` and
+#   `tools/ci/test_repo_tools_tests_gate.py::test_pytest_is_progress_supervised
+#   _without_an_elapsed_verdict`), `ci_harness_timeout_ceiling_check.py` reports
+#   it there as "reintroduces a fixed pytest elapsed-time verdict", and
+#   `programs/pytest_per_file_junit.py` carries the measurement behind that
+#   retirement: `--timeout-method=thread` kills the SESSION, so the run that
+#   trips it loses every result it had already earned. This script is invoked
+#   BY `gatekeeper-land.sh`, so it is on that same landing path.
+#
+# NOTHING IS LEFT UNBOUNDED THAT WAS BOUNDED: the 180 s session bound sat above
+# per-subprocess bounds of 55 s or less, so by this file's own design it could
+# only ever fire after the inner bounds had already failed a test — and when it
+# did fire it destroyed the other 107 results. Its removal deletes a backstop
+# whose only reachable behaviour was the destructive one.
 run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-    python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+    python3 -m pytest -q \
     "$ROOT/tools/test_liar_census.py"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py

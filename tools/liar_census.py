@@ -1411,21 +1411,42 @@ def _run_selection(cwd: Path, selection: List[Path],
     # the flag the broken module is reported as an ERROR node ID, which appears
     # in every arm and cancels in the difference, and the other seven files are
     # actually measured.
+    #
+    # NO FIXED ELAPSED VERDICT, and the plugin that supplied one is no longer
+    # named in this argv. Two independent reasons, both measured.
+    #
+    # (1) CAPABILITY. `-p pytest_timeout` is a HARD import -- pytest refuses to
+    #     start at all when the module is absent. It is absent from the image
+    #     this repo anchors (`ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2e057...`,
+    #     `tools/ci/protected_landing_transition.json` .runner.image) and from
+    #     every 0.2.x/0.3.x tag of it that is on this host; MEASURED there,
+    #     every arm this function started died with `ImportError: Error
+    #     importing plugin "pytest_timeout"` before collecting one test. The
+    #     only lane that ever supplied the plugin was `.github/workflows`, and
+    #     those files are now under `.github/workflows-disabled`. A census that
+    #     cannot start measures nothing, and "nothing" is the value this probe
+    #     reads as "the mutation killed nothing".
+    #
+    # (2) DOCTRINE, already settled elsewhere in this repo and merely late
+    #     arriving here. `--timeout-method=thread` does not fail the TEST; it
+    #     takes the SESSION down, and a killed session prints no `FAILED`
+    #     lines, so `arm.failed` comes back EMPTY -- which is exactly the shape
+    #     this probe reports as a finding. The comment this text replaces said
+    #     so in its own words, and `programs/pytest_per_file_junit.py` carries
+    #     the reproduction ("There is deliberately no pytest-timeout guard on
+    #     the landing path"), as does the retirement of the same idiom from
+    #     `tools/gatekeeper-land.sh` at v1.10.69.
+    #
+    # THE BOUND IS NOT LOST. The replaced comment already named the real one:
+    # the arm's own subprocess ceiling, `subprocess.run(timeout=timeout)` below
+    # (`--mutation-timeout`, 900 s by default). Reaching it returns `None` --
+    # NOT MEASURED -- which the caller reports as a declined arm, instead of an
+    # empty failure set that reads as an accusation. The change is therefore in
+    # HOW LONG an unmeasurable arm takes to be declared unmeasurable, never in
+    # whether a dead arm can be mistaken for a clean one.
     argv = [sys.executable, "-m", "pytest", "-q", "--no-header", "--tb=no",
-            "-rfE", "-p", "no:cacheprovider", "-p", "pytest_timeout",
-            "--continue-on-collection-errors",
-            # 300 s per test, not 120. This bound exists to stop a hung test
-            # from burning the arm's whole budget -- but reaching it KILLS THE
-            # SESSION rather than the test (`--timeout-method=thread`), and a
-            # killed session is a dead arm. Under `--mutation-jobs 8` on a
-            # loaded machine, tests that finish in seconds when idle crossed
-            # 120 s and took their arm down with them; that is how
-            # `drc_report_check` was reported as having no positive control
-            # when an idle re-run of the same code killed 25 tests. The arm's
-            # own subprocess ceiling (`--mutation-timeout`, 900 s by default)
-            # is the real bound; this one only has to be generous enough not to
-            # fire on a slow machine, and `_PYTEST_DONE` catches it when it does.
-            "--timeout=45", "--timeout-method=thread"]
+            "-rfE", "-p", "no:cacheprovider",
+            "--continue-on-collection-errors"]
     argv += [str(p) for p in selection]
     env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
                PYTHONDONTWRITEBYTECODE="1")
