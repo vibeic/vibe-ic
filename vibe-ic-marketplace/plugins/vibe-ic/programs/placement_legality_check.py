@@ -11,7 +11,25 @@ is a vacuous-PASS hole: a renamed/copied ``floorplan.def`` (where every
 component is still UNPLACED — it carries no ``+ PLACED`` status), or a
 placement run that silently left cells unplaced, would sail through.
 
-This program parses the REAL OpenROAD/Innovus DEF and verifies SUBSTANCE:
+Two independent things are checked, and NEITHER stands in for the other.
+
+(A) The placer's OWN legality verdict — `check_placement`'s violation
+    count. It is the only reading here that can see an overlap, a padding
+    violation or an off-site instance, because none of those change the
+    DEF status token: an overlapping instance still says
+    `+ PLACED ( x y ) N`. The runner runs `check_placement` at every
+    placement-mutating site; this gate reads the count it returns and
+    refuses on a non-zero one. A count that was caught and printed as a
+    warning is itself a FAIL — a discarded count is not a legal placement,
+    it is an unknown one that exited 0.
+
+(B) The DEF structural checks below. They catch a DIFFERENT failure — a
+    renamed floorplan.def, a truncated DEF, an aborted placement that left
+    instances UNPLACED — which the placer's verdict does not speak to,
+    and they are kept for exactly that reason.
+
+For (B), this program parses the REAL OpenROAD/Innovus DEF and verifies
+SUBSTANCE:
 
   1. COMPONENTS section is present and its declared count > 0.
   2. The number of parsed component records equals the declared
@@ -44,13 +62,16 @@ Verdicts
 --------
 * PASS  (rc=0) — placed.def parses; COMPONENTS > 0; declared count ==
                  parsed count; zero UNPLACED instances; any derivable
-                 density in (0, 100]%.
+                 density in (0, 100]%; and the placer's own
+                 `check_placement` reported no violation it could not
+                 legalize.
 * FAIL  (rc=1) — placed.def absent / empty / unparseable, OR COMPONENTS
                  missing/zero, OR declared-vs-parsed count mismatch, OR
                  >= 1 UNPLACED instance, OR a derivable density out of
-                 (0, 100]%. (Step 17's precondition — placement was run —
-                 means an absent placed.def is a real failure, never a
-                 vacuous pass.)
+                 (0, 100]%, OR the placer's own verdict says the design is
+                 illegal (see below). (Step 17's precondition — placement
+                 was run — means an absent placed.def is a real failure,
+                 never a vacuous pass.)
 * WAIVED (rc=0) — ``waivers.json`` declares this step waived.
 * SKIP  (rc=2) — project dir not found (operational, not a placement
                  result).
@@ -247,8 +268,9 @@ def _read_def_density_comment(path: Path) -> Optional[float]:
 #     <SITE>_LEGALIZE_OK disp=<rung>     check_placement returned clean
 #     <SITE>_LEGALIZE_FAILED             every escalation rung exhausted
 # `check_placement` is the placer's OWN legality verdict — it is what detects
-# an overlap, a padding violation or an off-site instance. This gate is named
-# `placement_legality_check` and never read it.
+# an overlap, a padding violation or an off-site instance. These markers are
+# the ESCALATION LOOP's condensed form of it; the loop's final count, and the
+# counts from the other call sites, are read separately below.
 _LEGALIZE_FAILED_SUFFIX = "_LEGALIZE_FAILED"
 _LEGALIZE_OK_SUFFIX = "_LEGALIZE_OK"
 _LEGALIZE_MARKER_RE = re.compile(
@@ -283,6 +305,188 @@ def _legalizer_markers(project: Path) -> tuple[List[str], List[str]]:
     return failed, ok
 
 
+# ---------------------------------------------------------------------------
+# The placer's OWN verdict: `check_placement`'s violation COUNT.
+#
+# From the installed binary's own proc body (`info body check_placement`):
+#     "Returns the violation count. Without `-no_abort` a non-zero count
+#      raises DPL-33 instead of returning, so an illegal placement can never
+#      be mistaken for a legal one by a caller that ignores the result."
+#
+# The runner calls `check_placement` at FINAL sites — after spare insertion,
+# after ECO repair, and in the ship-convergence loop. Each of those sites used
+# to wrap the call in `catch` and print the caught string as a WARN. That is
+# the count being demoted to a warning: the tool exits 0, the WARN is read by
+# nothing, and this gate — the one named for placement legality — passed the
+# run. MEASURED on a two-instance fixture: `check_placement -no_abort` returns
+# 2 and logs `DPL-0040 ... 2 violation(s) returned to caller`; the same
+# database under a bare `check_placement` logs `[ERROR DPL-0033]`, the catch
+# prints `..._CHECK_PLACEMENT_WARN: DPL-0033`, and the process exits 0.
+#
+# Only the FINAL sites are scored here. The escalating legalizer deliberately
+# catches DPL-33 on each displacement rung and retries the next one, so DPL-33
+# lines appear in fully converged runs; that loop's verdict is the
+# `*_LEGALIZE_OK` / `*_LEGALIZE_FAILED` pair read above, not these markers.
+#
+# Two shapes are read, because a log written by an older runner is still a log:
+#   * CURRENT — `CHECK_PLACEMENT_VIOLATIONS <scope> <n>` carries the count that
+#     `check_placement -no_abort` returned; `CHECK_PLACEMENT_CLEAN <scope> 0`
+#     is the certified-legal counterpart, and
+#     `CHECK_PLACEMENT_NOT_DETERMINED <scope> <err>` says the call itself did
+#     not produce a verdict (never a pass).
+#   * LEGACY — `<SCOPE>_CHECK_PLACEMENT_WARN` / `SHIP_CP_WARN` /
+#     `SHIP_CVG_CP_WARN` is a caught DPL-33: a non-zero count that was thrown
+#     away. It fails on its own; the count is recovered from the tool's own
+#     diagnostic lines that precede it and quoted when they are present.
+#
+# chip-AGNOSTIC: the tool's own diagnostic IDs and the runner's own marker
+# grammar. No chip, PDK, library or design literal.
+_CP_VIOLATIONS_RE = re.compile(
+    r"\bCHECK_PLACEMENT_VIOLATIONS\s+([A-Z0-9_]+)\s+(\d+)\b")
+_CP_CLEAN_RE = re.compile(
+    r"\bCHECK_PLACEMENT_CLEAN\s+([A-Z0-9_]+)\s+(\d+)\b")
+_CP_NOT_DETERMINED_RE = re.compile(
+    r"\bCHECK_PLACEMENT_NOT_DETERMINED\s+([A-Z0-9_]+)\s*(.*)$")
+# A caught DPL-33 at a final site, under any of the runner's scope prefixes.
+_CP_DEMOTED_RE = re.compile(
+    r"\b([A-Z0-9_]*(?:CHECK_PLACEMENT|CP)_WARN)\b")
+# The tool's own words. DPL-40 is the `-no_abort` return path (it states the
+# count); DPL-33 is the abort path (it does not, so the per-category
+# `... check failed (n)` warnings above it are what carry the numbers).
+_DPL_RETURNED_COUNT_RE = re.compile(
+    r"\bDPL-0*40\b[^\n]*?(\d+)\s+violation", re.IGNORECASE)
+_DPL_ABORT_RE = re.compile(r"\bDPL-0*33\b")
+_DPL_CATEGORY_COUNT_RE = re.compile(
+    r"\b(DPL-\d+)\]\s*(.+?)\s+check failed\s*\((\d+)\)", re.IGNORECASE)
+# Any of these ends one `check_placement` invocation's diagnostic window, so
+# evidence is never attributed to the wrong call.
+_CP_BOUNDARY_RE = re.compile(
+    r"\bCHECK_PLACEMENT_(?:VIOLATIONS|CLEAN|NOT_DETERMINED)\b"
+    r"|[A-Z0-9_]*(?:CHECK_PLACEMENT|CP)_(?:WARN|PASS)\b"
+    r"|[A-Z0-9_]+_LEGALIZE_(?:OK|FAILED)\b")
+
+
+def _cp_log_dirs(project: Path) -> List[Path]:
+    """Directories the runner writes PnR-stage OpenROAD logs into.
+
+    The ECO repair deck runs `check_placement` too and tees its log into
+    `phase3/stage3/eco/`, so a scan pinned to `pnr/` alone would miss that
+    site's verdict entirely.
+    """
+    return [project / "phase3" / "stage3" / "pnr",
+            project / "phase3" / "stage3" / "eco"]
+
+
+def _check_placement_verdicts(project: Path) -> dict:
+    """Read the placer's own `check_placement` verdict out of the run logs.
+
+    Returns a dict with `violations`, `demoted`, `not_determined`, `clean`
+    and `logs_scanned`. Absence of every marker is reported as absence — it is
+    never turned into either a pass or a failure.
+    """
+    res: dict = {
+        "violations": [],
+        "demoted": [],
+        "not_determined": [],
+        "clean": [],
+        "logs_scanned": [],
+    }
+    for d in _cp_log_dirs(project):
+        if not d.is_dir():
+            continue
+        for log in sorted(d.rglob("*.log")):
+            try:
+                text = log.open(errors="replace")
+            except OSError:
+                continue
+            rel = str(log.relative_to(project))
+            res["logs_scanned"].append(rel)
+            evidence: List[str] = []
+            with text as fh:
+                for raw in fh:
+                    line = raw.rstrip("\n")
+                    # A marker CLOSES the diagnostic window it belongs to, so
+                    # markers are matched before the window is appended to —
+                    # otherwise the marker line (which names DPL-33 itself)
+                    # would be filed as its own evidence.
+                    is_marker = bool(_CP_VIOLATIONS_RE.search(line)
+                                     or _CP_CLEAN_RE.search(line)
+                                     or _CP_NOT_DETERMINED_RE.search(line)
+                                     or _CP_DEMOTED_RE.search(line)
+                                     or _CP_BOUNDARY_RE.search(line))
+                    if not is_marker and (
+                            _DPL_RETURNED_COUNT_RE.search(line)
+                            or _DPL_CATEGORY_COUNT_RE.search(line)
+                            or _DPL_ABORT_RE.search(line)):
+                        ev = line.strip()
+                        if ev and ev not in evidence:
+                            evidence.append(ev)
+
+                    m = _CP_VIOLATIONS_RE.search(line)
+                    if m:
+                        n = int(m.group(2))
+                        entry = {"scope": m.group(1), "count": n,
+                                 "log": rel, "tool_evidence": list(evidence)}
+                        if n > 0:
+                            res["violations"].append(entry)
+                        else:
+                            # A marker that names itself VIOLATIONS with a zero
+                            # count is a contradiction; record the scope as
+                            # clean rather than invent a failure.
+                            res["clean"].append(
+                                {"scope": m.group(1), "count": 0, "log": rel})
+                        evidence = []
+                        continue
+                    m = _CP_CLEAN_RE.search(line)
+                    if m:
+                        res["clean"].append({"scope": m.group(1),
+                                             "count": int(m.group(2)),
+                                             "log": rel})
+                        evidence = []
+                        continue
+                    m = _CP_NOT_DETERMINED_RE.search(line)
+                    if m:
+                        res["not_determined"].append(
+                            {"scope": m.group(1),
+                             "detail": (m.group(2) or "").strip(),
+                             "log": rel})
+                        evidence = []
+                        continue
+                    m = _CP_DEMOTED_RE.search(line)
+                    if m:
+                        res["demoted"].append({"marker": m.group(1),
+                                               "line": line.strip(),
+                                               "log": rel,
+                                               "tool_evidence": list(evidence)})
+                        evidence = []
+                        continue
+                    if _CP_BOUNDARY_RE.search(line):
+                        evidence = []
+    return res
+
+
+def _cp_count_from_evidence(evidence: List[str]) -> Optional[int]:
+    """The tool's own violation count, recovered from its own log lines.
+
+    Prefers the `-no_abort` return line (which states the total); otherwise
+    sums the per-category `... check failed (n)` warnings, which is how the
+    total is composed on the abort path. Returns None when the tool said
+    nothing countable — NOT DETERMINED beats a guess.
+    """
+    for ev in evidence:
+        m = _DPL_RETURNED_COUNT_RE.search(ev)
+        if m:
+            return int(m.group(1))
+    total = 0
+    seen = False
+    for ev in evidence:
+        m = _DPL_CATEGORY_COUNT_RE.search(ev)
+        if m:
+            total += int(m.group(3))
+            seen = True
+    return total if seen else None
+
+
 def inspect(project: Path):
     """Return (verdict, rc, findings, summary)."""
     findings: List[dict] = []
@@ -290,6 +494,10 @@ def inspect(project: Path):
         "placed_def": _PLACED_DEF_REL,
         "legalizer_failed_markers": [],
         "legalizer_ok_markers": [],
+        "check_placement_violations": [],
+        "check_placement_demoted": [],
+        "check_placement_not_determined": [],
+        "check_placement_clean": [],
         "declared_components": None,
         "parsed_components": None,
         "placed": None,
@@ -435,6 +643,84 @@ def inspect(project: Path):
                 "pass."),
         })
 
+    # ---- The placer's own violation COUNT, not a warning ----------------
+    # The legalizer markers above are the escalation loop's condensed verdict.
+    # They are emitted only by that loop. `check_placement` is also run at the
+    # FINAL sites — after spare insertion, after ECO repair, in the ship
+    # convergence loop — and a non-zero count there was printed as a WARN and
+    # read by nobody. It is the placer refusing the design; refuse on it.
+    cpv = _check_placement_verdicts(project)
+    summary["check_placement_violations"] = cpv["violations"]
+    summary["check_placement_demoted"] = cpv["demoted"]
+    summary["check_placement_not_determined"] = cpv["not_determined"]
+    summary["check_placement_clean"] = cpv["clean"]
+
+    for v in cpv["violations"]:
+        findings.append({
+            "severity": "FAIL", "rule": "CHECK_PLACEMENT_VIOLATIONS",
+            "message": (
+                f"the placer's own `check_placement` returned "
+                f"{v['count']} violation(s) at site {v['scope']} "
+                f"({v['log']}). That is OpenROAD's own count of overlapping, "
+                f"off-site or padding-violating instances; a non-zero count "
+                f"is what DPL-33 is raised for. The DEF status-token checks "
+                f"above cannot see it — an overlapping instance still carries "
+                f"`+ PLACED ( x y ) N`."
+                + (f" tool said: {v['tool_evidence']}"
+                   if v["tool_evidence"] else "")),
+        })
+        verdict, rc = "FAIL", 1
+
+    for d in cpv["demoted"]:
+        n = _cp_count_from_evidence(d["tool_evidence"])
+        findings.append({
+            "severity": "FAIL", "rule": "CHECK_PLACEMENT_DEMOTED_TO_WARNING",
+            "message": (
+                f"`{d['marker']}` in {d['log']}: the placer raised DPL-33 and "
+                f"the caller caught it and printed it as a warning, so the "
+                f"violation count was discarded and the tool exited 0. "
+                + (f"the tool's own count for this call is {n}. "
+                   if n is not None else
+                   "the tool's own count for this call is NOT DETERMINED from "
+                   "this log — the abort path does not state a total. ")
+                + f"verbatim: {d['line']!r}."
+                + (f" tool said: {d['tool_evidence']}"
+                   if d["tool_evidence"] else "")),
+        })
+        verdict, rc = "FAIL", 1
+
+    for nd in cpv["not_determined"]:
+        findings.append({
+            "severity": "FAIL", "rule": "CHECK_PLACEMENT_NOT_DETERMINED",
+            "message": (
+                f"`check_placement` was invoked at site {nd['scope']} "
+                f"({nd['log']}) and did not return a verdict: "
+                f"{nd['detail'] or 'no detail recorded'}. Placement legality "
+                f"is therefore unknown for this run, which is not a pass."),
+        })
+        verdict, rc = "FAIL", 1
+
+    if not (cpv["violations"] or cpv["demoted"] or cpv["not_determined"]):
+        if cpv["clean"]:
+            findings.append({
+                "severity": "INFO", "rule": "CHECK_PLACEMENT_CLEAN",
+                "message": (
+                    "the placer's own `check_placement` returned 0 violations "
+                    "at: "
+                    + ", ".join(f"{c['scope']} ({c['log']})"
+                                for c in cpv["clean"])),
+            })
+        else:
+            findings.append({
+                "severity": "INFO", "rule": "CHECK_PLACEMENT_VERDICT_ABSENT",
+                "message": (
+                    "no `CHECK_PLACEMENT_*` marker in the "
+                    f"{len(cpv['logs_scanned'])} scanned log(s) — this run "
+                    "records no final `check_placement` count, so the checks "
+                    "above stand alone. Absence is stated, not scored as a "
+                    "pass."),
+            })
+
     # ---- Placement density (only if derivable; never fabricated) --------
     density_pct, dsrc = _read_density(project)
     if density_pct is None:
@@ -490,6 +776,14 @@ def _emit(args, project, verdict, summary, findings, waiver):
         "unplaced": summary["unplaced"],
         "density_pct": summary["density_pct"],
         "density_source": summary["density_source"],
+        "legalizer_failed_markers": summary.get("legalizer_failed_markers", []),
+        "legalizer_ok_markers": summary.get("legalizer_ok_markers", []),
+        "check_placement_violations": summary.get(
+            "check_placement_violations", []),
+        "check_placement_demoted": summary.get("check_placement_demoted", []),
+        "check_placement_not_determined": summary.get(
+            "check_placement_not_determined", []),
+        "check_placement_clean": summary.get("check_placement_clean", []),
         "waiver": waiver,
         "findings": findings,
     }

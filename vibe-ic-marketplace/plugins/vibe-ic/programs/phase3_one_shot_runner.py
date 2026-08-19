@@ -14614,13 +14614,10 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
         "  } _stn_e]} { puts \"SPARE_TIE_NET_DONT_TOUCH_NONFATAL: $_stn -- $_stn_e\" }",
         "}",
         "# ORGANIC #562 — check_placement gate: verify no off-site spares",
-        "# remain after legalization. DPL-0033 is caught so a misaligned",
-        "# inherited instance does not abort PnR (print WARN, flow continues).",
-        "if {[catch {check_placement} _cp_err]} {",
-        "  puts \"SPARE_CHECK_PLACEMENT_WARN: $_cp_err\"",
-        "} else {",
-        "  puts \"SPARE_CHECK_PLACEMENT_PASS\"",
-        "}",
+        "# remain after legalization. The count is REPORTED, not caught and",
+        "# demoted to a WARN; the flow still continues. See",
+        "# _check_placement_tcl.",
+        _check_placement_tcl("SPARE", "_spare").rstrip("\n"),
     ]
     return "\n".join(lines) + "\n"
 
@@ -15373,6 +15370,71 @@ def _pg_net_cleanup_tcl() -> str:
 # rung measured from the live floorplan (#337) covers the case where even
 # 100 um is small relative to the die.
 _DPL_ESCALATION_SITES = (5, 20, 100)
+
+
+# ---------------------------------------------------------------------------
+# The placer's own legality verdict must survive the call that produces it.
+#
+# `check_placement` WITHOUT `-no_abort` raises DPL-33 on a non-zero violation
+# count. The installed binary says so in its own proc body: "Returns the
+# violation count. Without `-no_abort` a non-zero count raises DPL-33 instead
+# of returning, so an illegal placement can never be mistaken for a legal one
+# by a caller that ignores the result."
+#
+# Every FINAL call site here used to be
+# `if {[catch {check_placement} e]} { puts "<SCOPE>_..._WARN: $e" }`. The catch
+# was there for a real reason — an inherited mis-aligned instance must not
+# abort PnR — and it achieved that. It also threw the count away: `$e` is the
+# string "DPL-0033", the WARN it prints is read by no gate, and OpenROAD exits
+# 0 on an illegal placement.
+#
+# `-no_abort` is the same non-aborting behaviour WITH the count returned.
+# MEASURED on a two-instance fixture, one instance overlapping its neighbour:
+#   check_placement            -> [ERROR DPL-0033] ..., throws, the catch
+#                                 prints the WARN, process exits 0
+#   check_placement -no_abort  -> [WARNING DPL-0040] ... 2 violation(s)
+#                                 returned to caller, returns 2
+# The count is emitted as one machine-readable marker that
+# `placement_legality_check` refuses on. The flow still continues, so the
+# artefacts a triage needs are still produced — but the verdict now reaches a
+# gate instead of a log reader.
+#
+# chip-AGNOSTIC: the tool's own flag and the runner's own marker grammar.
+_CP_VIOLATIONS_MARKER = "CHECK_PLACEMENT_VIOLATIONS"
+_CP_CLEAN_MARKER = "CHECK_PLACEMENT_CLEAN"
+_CP_NOT_DETERMINED_MARKER = "CHECK_PLACEMENT_NOT_DETERMINED"
+
+
+def _check_placement_tcl(scope: str, var_tag: str, indent: str = "") -> str:
+    """Tcl that runs `check_placement` and REPORTS its violation count.
+
+    `scope` names the call site in the emitted marker (e.g. ``SPARE``);
+    `var_tag` disambiguates the Tcl variables when several blocks share one
+    interpreter. The legacy ``<SCOPE>_CHECK_PLACEMENT_PASS`` line is still
+    printed on the clean path, so existing readers of it keep working.
+    """
+    v = "_cpv" + var_tag
+    e = "_cpe" + var_tag
+    i = indent
+    q = '"'
+    return (
+        i + "# The placer's OWN legality verdict. `-no_abort` keeps an\n"
+        + i + "# inherited mis-alignment from aborting PnR (what the old\n"
+        + i + "# `catch` was for) AND returns the violation count instead of\n"
+        + i + "# discarding it. A non-zero count is emitted for\n"
+        + i + "# placement_legality_check to refuse on, never demoted here.\n"
+        + i + "if {[catch {set " + v + " [check_placement -no_abort]} " + e
+        + "]} {\n"
+        + i + "  puts " + q + _CP_NOT_DETERMINED_MARKER + " " + scope + " $"
+        + e + q + "\n"
+        + i + "} elseif {$" + v + " != 0} {\n"
+        + i + "  puts " + q + _CP_VIOLATIONS_MARKER + " " + scope + " $" + v
+        + q + "\n"
+        + i + "} else {\n"
+        + i + "  puts " + q + _CP_CLEAN_MARKER + " " + scope + " 0" + q + "\n"
+        + i + "  puts " + q + scope + "_CHECK_PLACEMENT_PASS" + q + "\n"
+        + i + "}\n"
+    )
 
 
 def _build_escalating_legalize_tcl(marker: str, var_tag: str = "",
@@ -16964,15 +17026,11 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "}\n"
         + _build_escalating_legalize_tcl("ECO_DPL", "_eco")
         + "\n"
-        "# ORGANIC #561 (d): DPL-0033 — catch around check_placement.\n"
-        "# check_placement throws on inherited mis-aligned instances; catch\n"
-        "# keeps the flow moving while still surfacing the WARN message.\n"
-        "if {[catch {check_placement} _cp_err]} {\n"
-        "  puts \"ECO_CHECK_PLACEMENT_WARN: $_cp_err\"\n"
-        "} else {\n"
-        "  puts \"ECO_CHECK_PLACEMENT_PASS\"\n"
-        "}\n"
-        "\n"
+        "# ORGANIC #561 (d): DPL-0033 — check_placement on inherited\n"
+        "# mis-aligned instances. `-no_abort` keeps the flow moving AND\n"
+        "# reports the count, instead of catching the throw and losing it.\n"
+        + _check_placement_tcl("ECO", "_eco_cp")
+        + "\n"
         "# ORGANIC #561 (c): DRT-0305 — PG net cleanup before global_route.\n"
         "# A dangling zero_/one_ constant-tie net with POWER/GROUND SigType in\n"
         "# regular NETS makes TritonRoute abort ALL detailed routing.\n"
@@ -22655,7 +22713,7 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
     if {[catch {repair_timing -setup} e]} { puts "SHIP_CVG_RT_NONFATAL: $e"; incr _ship_rt_failed }
     if {[catch {detailed_placement} e]} { puts "SHIP_CVG_DP_NONFATAL: $e"; break }
   }
-  if {[catch {check_placement} e]} { puts "SHIP_CVG_CP_WARN: $e" }
+__SHIP_CVG_CHECK_PLACEMENT__
 __SPARE_SAFE_CLEAR__
   if {[catch {global_route} e]} { puts "SHIP_CVG_GR_NONFATAL: $e" }
   if {[catch {detailed_route -droute_end_iter __SHIP_DR_ITERS__} e]} { puts "SHIP_CVG_DR_NONFATAL: $e"; incr _ship_dr_failed }
@@ -22717,6 +22775,12 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
     # __SPARE_SAFE_CLEAR__ -> the shared spare-net-safe clear (#349 salvage;
     # a third inline copy of the filter is how a drift starts).
     return (_SHIP_POSTROUTE_CVG_TCL
+            # __SHIP_CVG_CHECK_PLACEMENT__ -> the placer's own verdict with its
+            # count intact. This call site used to be a `catch` that printed
+            # SHIP_CVG_CP_WARN and dropped the number on the floor.
+            .replace("__SHIP_CVG_CHECK_PLACEMENT__",
+                     _check_placement_tcl("SHIP_CVG", "_shipcvg",
+                                          indent="  ").rstrip())
             .replace("__SPARE_SAFE_CLEAR__",
                      _spare_safe_routing_clear_tcl("SHIP_CVG").rstrip())
             .replace("__ROUTING_INTEGRITY_CHECK__",
@@ -22867,8 +22931,8 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "  if {[catch {detailed_placement} _drv_dp]} { "
         "puts \"SHIP_DP_NONFATAL: $_drv_dp\"; break }\n"
         "}\n"
-        "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
-        "if {$_ship_rt_failed > 0} { "
+        + _check_placement_tcl("SHIP", "_ship_cp")
+        + "if {$_ship_rt_failed > 0} { "
         "puts \"SHIP_SETUP_REPAIR_REFUSED: $_ship_rt_failed\" }\n"
         "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
         # === v1.8.43 — DO NOT THROW AWAY A GOOD ROUTE TO SHIP AN IDENTICAL ONE ===

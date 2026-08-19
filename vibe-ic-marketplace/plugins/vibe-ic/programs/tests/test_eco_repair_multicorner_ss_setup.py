@@ -63,7 +63,9 @@ def test_multicorner_retains_all_four_561_workarounds():
     assert "post_hold.def" in tcl          # (a) RSZ-0074
     assert "setup-only" in tcl             # (b) Signal-11
     assert "PG_CLEANUP" in tcl             # (c) DRT-0305
-    assert "catch {check_placement}" in tcl  # (d) DPL-0033
+    # (d) DPL-0033 — still non-aborting, but the count is now REPORTED
+    # rather than caught and printed as a warning nothing reads.
+    assert "check_placement -no_abort" in tcl
 
 
 def test_single_corner_is_byte_identical_regression():

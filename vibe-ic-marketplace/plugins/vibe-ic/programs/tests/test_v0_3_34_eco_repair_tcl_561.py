@@ -52,10 +52,18 @@ def test_561_drt0305_zero_net_cleanup():
     assert pg_idx < cmd_idx
 
 
-def test_561_dpl0033_catch_check_placement():
-    # (d) DPL-0033: catch around check_placement must be present
+def test_561_dpl0033_check_placement_reports_its_count():
+    # (d) DPL-0033: check_placement must still not abort the ECO deck on an
+    # inherited mis-alignment — AND must not throw the violation count away
+    # doing it. `catch {check_placement}` achieved the first at the cost of
+    # the second: the caught value is the string "DPL-0033", the WARN it
+    # printed was read by no gate, and OpenROAD exited 0 on an illegal
+    # placement. `-no_abort` is the same non-aborting call WITH the count.
     tcl = _build()
-    assert "catch {check_placement}" in tcl
+    assert "check_placement -no_abort" in tcl
+    assert "CHECK_PLACEMENT_VIOLATIONS ECO" in tcl
+    assert "ECO_CHECK_PLACEMENT_WARN" not in tcl, (
+        "the ECO deck must not demote the placer's verdict to a warning")
 
 
 def test_561_eco_output_paths_use_correct_dir():
@@ -102,4 +110,4 @@ def test_561_canonicalize_emits_eco_tcl(tmp_path):
     assert "post_hold.def" in tcl_text
     assert "setup-only" in tcl_text
     assert "PG_CLEANUP" in tcl_text
-    assert "catch {check_placement}" in tcl_text
+    assert "check_placement -no_abort" in tcl_text

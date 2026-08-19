@@ -103,9 +103,17 @@ def test_562_postfix_tcl_contains_firm_set():
     assert "setPlacementStatus FIRM" in tcl
 
 
-def test_562_postfix_tcl_catch_check_placement():
+def test_562_postfix_tcl_check_placement_reports_its_count():
+    # #562's requirement was that the spare postfix VERIFY no off-site spare
+    # survives legalization without aborting PnR on an inherited one. The
+    # `catch {check_placement}` that used to satisfy it also discarded the
+    # violation count — the caught value is the string "DPL-0033" and the
+    # WARN it printed was read by no gate. `-no_abort` is non-aborting AND
+    # returns the count, which placement_legality_check now refuses on.
     tcl = R._build_spare_postfix_tcl(_spare_plan_with_instances())
-    assert "catch {check_placement" in tcl
+    assert "check_placement -no_abort" in tcl
+    assert "CHECK_PLACEMENT_VIOLATIONS SPARE" in tcl
+    assert "SPARE_CHECK_PLACEMENT_WARN" not in tcl
 
 
 def test_562_postfix_tcl_no_instances_returns_comment():
