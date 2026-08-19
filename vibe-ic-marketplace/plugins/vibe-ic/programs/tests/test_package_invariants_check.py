@@ -316,3 +316,9 @@ def test_every_real_declaration_states_a_severity_and_a_why():
             assert inv["why"].strip(), rel
             assert inv["statement"].strip(), rel
 
+
+def test_the_gate_is_wired_into_the_repo_wide_gate_list():
+    """A gate nothing runs produces no verdict, and the tree looks the same."""
+    text = (_REPO_ROOT / "tools" / "ci" / "repo_hygiene_gates.sh").read_text()
+    live = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+    assert "package_invariants_check.py" in live

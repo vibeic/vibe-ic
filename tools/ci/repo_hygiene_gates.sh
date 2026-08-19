@@ -460,6 +460,23 @@ run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_w
 # coverage. A gate nothing runs produces no verdict, and the tree looks the same
 # either way.
 run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check.py"
+# W7 — and the question this FILE cannot ask about itself: does a rule reach the
+# contributor? Every gate above is strong, and every one of them lives somewhere
+# other than the code it binds. The three defects that cost the most here were
+# not weak rules, they were rules that never ARRIVED: `tools/phase1_engine/tests/`
+# collected by NOTHING (#1391); `mcp-eda/test/`'s 201 tests named by the PR
+# template and by no runner (#1420); the repo-level tests under `tools/` reaching
+# no selection at all — 28 files / 552 tests gating nothing. In all three the
+# missing knowledge was PER-PACKAGE — this directory has tests, and here is what
+# runs them — and in all three it was stored centrally, where its absence looked
+# like nothing at all.
+#
+# Each source package now declares its own rules in its own INVARIANTS.yaml,
+# beside the code they constrain, and this reads them: violated, missing,
+# orphaned, misplaced, empty, subject-less, or naming a runner that does not
+# name it back. The population is DERIVED from the tracked tree and never from
+# the declarations, so deleting one is a failure and not a smaller repo.
+run "packages declare their invariants" "$ROOT" python3 "$PG/package_invariants_check.py" --root "$ROOT"
 # vibe-ic#712 — a prose extractor that reads a value out of a sentence without
 # asking whether the sentence DENIES it publishes a denied value as a
 # declaration. Twice in one day, in two fields, and each fix grew its OWN copy
