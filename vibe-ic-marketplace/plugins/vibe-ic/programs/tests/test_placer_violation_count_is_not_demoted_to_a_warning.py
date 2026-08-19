@@ -58,6 +58,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,9 @@ import phase3_one_shot_runner as R  # noqa: E402
 
 _TCLSH = shutil.which("tclsh")
 _needs_tcl = pytest.mark.skipif(_TCLSH is None, reason="tclsh not installed")
+_OPENROAD = shutil.which("openroad")
+_needs_openroad = pytest.mark.skipif(
+    _OPENROAD is None, reason="openroad not on PATH (container-only tool)")
 
 
 # --------------------------------------------------------------- fixtures ---
@@ -489,3 +493,209 @@ def test_the_runners_own_output_is_what_the_gate_refuses_on(tmp_path):
     assert (verdict, rc) == ("FAIL", 1)
     assert "PLACER_REPORTED_VIOLATIONS" in rules
     assert summary["check_placement_sites"] == {"SPARE": "2"}
+
+
+# ====================================================== THE PLANTED OVERLAP ===
+# Everything above drives the chain with a stub placer. This section drives it
+# with the REAL one: a hand-written generic LEF and a DEF whose only difference
+# from a legal placement is that ONE instance sits on its neighbour's site.
+#
+# MEASURED in the pinned image (OpenROAD 26Q3-1535-g543c33894f):
+#
+#   legal      -> check_placement -no_abort returns 0
+#   overlapped -> [WARNING DPL-0005] Overlap check failed (1).
+#                 [WARNING DPL-0011] Padding check failed (1).
+#                 [WARNING DPL-0040] detailed placement checks failed during
+#                                    check placement: 2 violation(s) returned
+#                                    to caller.
+#                 check_placement -no_abort returns 2
+#   overlapped, WITHOUT -no_abort ->
+#                 [ERROR DPL-0033] detailed placement checks failed during
+#                                  check placement.
+#
+# which is the tool's own sentence made concrete: without `-no_abort` a non-zero
+# count raises DPL-33 instead of returning. The pre-fix emitter caught that
+# abort and printed `SPARE_CHECK_PLACEMENT_WARN: DPL-0033` -- the 2 never left
+# the call, and the gate passed the design.
+#
+# chip-AGNOSTIC: the LEF below is written here, in this file, out of generic
+# names. It is not a PDK, a library or a vendor artefact.
+
+_ACCEPT_LEF = """VERSION 5.8 ;
+BUSBITCHARS "[]" ;
+DIVIDERCHAR "/" ;
+UNITS
+  DATABASE MICRONS 1000 ;
+END UNITS
+MANUFACTURINGGRID 0.005 ;
+LAYER metal1
+  TYPE ROUTING ;
+  DIRECTION HORIZONTAL ;
+  PITCH 0.5 ;
+  WIDTH 0.2 ;
+  SPACING 0.2 ;
+END metal1
+SITE unitsite
+  CLASS CORE ;
+  SIZE 1.0 BY 10.0 ;
+END unitsite
+MACRO CELLA
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  FOREIGN CELLA 0 0 ;
+  SIZE 2.0 BY 10.0 ;
+  SITE unitsite ;
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER metal1 ;
+        RECT 0.4 4.8 0.6 5.2 ;
+    END
+  END A
+  PIN Y
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER metal1 ;
+        RECT 1.4 4.8 1.6 5.2 ;
+    END
+  END Y
+END CELLA
+END LIBRARY
+"""
+
+_ACCEPT_DEF_HEAD = """VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN top ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 100000 40000 ) ;
+ROW ROW_0 unitsite 0 0 N DO 100 BY 1 STEP 1000 0 ;
+ROW ROW_1 unitsite 0 10000 FS DO 100 BY 1 STEP 1000 0 ;
+"""
+
+
+def _accept_def(u1_x: int) -> str:
+    """A DEF that is legal at u1_x=4000 and has u1 sitting on u0 at u1_x=1000.
+
+    `u0` occupies x 0..2000 (the macro is two sites wide), so 1000 puts u1
+    half on top of it. Nothing else differs between the two files, and EVERY
+    component carries `+ PLACED` in both -- which is the point: the status
+    token cannot tell them apart.
+    """
+    rows = [("u0", 0, 0, "N"), ("u1", u1_x, 0, "N"), ("u2", 10000, 0, "N"),
+            ("u3", 0, 10000, "FS"), ("u4", 6000, 10000, "FS")]
+    body = ["COMPONENTS %d ;" % len(rows)]
+    body += ["  - %s CELLA + PLACED ( %d %d ) %s ;" % r for r in rows]
+    body += ["END COMPONENTS", "END DESIGN"]
+    return _ACCEPT_DEF_HEAD + "\n".join(body) + "\n"
+
+
+_LEGAL_X, _OVERLAP_X = 4000, 1000
+
+
+def _openroad_on(def_text: str, verdict_tcl: str):
+    """Run `verdict_tcl` in real OpenROAD over the given DEF; return stdout.
+
+    `tempfile.mkdtemp` rather than pytest's `tmp_path`: in this image the
+    pytest base temp path contains a newline, which OpenROAD's own argument
+    handling does not survive.
+    """
+    work = Path(tempfile.mkdtemp(prefix="cp_accept_"))
+    (work / "tech.lef").write_text(_ACCEPT_LEF)
+    (work / "in.def").write_text(def_text)
+    (work / "run.tcl").write_text(
+        "read_lef tech.lef\nread_def in.def\n" + verdict_tcl)
+    res = subprocess.run([_OPENROAD, "-no_init", "-exit", "run.tcl"],
+                         cwd=str(work), capture_output=True, text=True,
+                         timeout=300)
+    return work, res.stdout + res.stderr
+
+
+# The emitter shape this fix REMOVES, kept here verbatim as the control. It is
+# what `origin/main` put at each of the four sites.
+_PREFIX_EMITTER = (
+    "if {[catch {check_placement} _cp_err]} {\n"
+    "  puts \"SPARE_CHECK_PLACEMENT_WARN: $_cp_err\"\n"
+    "} else {\n"
+    "  puts \"SPARE_CHECK_PLACEMENT_PASS\"\n"
+    "}\n")
+
+
+def _gate_on(log_text: str, def_text: str):
+    proj = Path(tempfile.mkdtemp(prefix="cp_gate_"))
+    pnr = proj / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "placed.def").write_text(def_text)
+    (pnr / "openroad.log").write_text(log_text)
+    return proj, _run(proj)
+
+
+@_needs_openroad
+def test_the_real_placer_counts_the_planted_overlap():
+    """The fixture has to actually be illegal, and legal without the move --
+    otherwise everything below is testing a log, not a placement."""
+    _w, dirty = _openroad_on(_accept_def(_OVERLAP_X),
+                             'puts "N: [check_placement -no_abort]"\n')
+    _w, clean = _openroad_on(_accept_def(_LEGAL_X),
+                             'puts "N: [check_placement -no_abort]"\n')
+    assert "Overlap check failed" in dirty, dirty
+    assert "N: 0" in clean, clean
+    n = int(next(l for l in dirty.splitlines()
+                 if l.startswith("N: ")).split()[1])
+    assert n > 0, dirty
+
+
+@_needs_openroad
+def test_the_prefix_emitter_loses_the_real_count():
+    """THE DEMOTION, from the real tool: the abort is caught, the exception
+    text is printed, and the number the placer computed is gone."""
+    _w, out = _openroad_on(_accept_def(_OVERLAP_X), _PREFIX_EMITTER)
+    assert "DPL-0033" in out, out
+    assert "SPARE_CHECK_PLACEMENT_WARN" in out, out
+    assert "CHECK_PLACEMENT_VIOLATIONS" not in out, out
+
+
+@_needs_openroad
+def test_todays_gate_passes_the_planted_overlap_and_this_one_fails_it():
+    """The acceptance A/B, end to end and with nothing hand-written in the
+    middle: the runner's OWN emitter runs in real OpenROAD over the planted
+    overlap, its stdout becomes the PnR log unedited, and the gate refuses --
+    quoting the count the placer returned."""
+    def_text = _accept_def(_OVERLAP_X)
+    _w, out = _openroad_on(
+        def_text, R._build_check_placement_measured_tcl("SPARE", "_sp"))
+    count = next(l.split()[1] for l in out.splitlines()
+                 if l.startswith("SPARE_CHECK_PLACEMENT_VIOLATIONS"))
+    assert count.isdigit() and int(count) > 0, out
+
+    _p, (verdict, rc, rules, summary) = _gate_on(out, def_text)
+    assert summary["unplaced"] == 0, "the DEF is token-clean, as it must be"
+    assert (verdict, rc) == ("FAIL", 1)
+    assert "PLACER_REPORTED_VIOLATIONS" in rules
+    assert summary["check_placement_sites"] == {"SPARE": count}
+
+    # ... and the same overlap, seen only through the pre-fix emitter, is what
+    # today's gate was handed. The count is absent from that log entirely.
+    _w2, old = _openroad_on(def_text, _PREFIX_EMITTER)
+    assert "CHECK_PLACEMENT_VIOLATIONS" not in old
+    _p2, (v2, rc2, rules2, _s2) = _gate_on(old, def_text)
+    assert (v2, rc2) == ("FAIL", 1), (
+        "the legacy WARN spelling must still be refused, as NOT_DETERMINED")
+    assert "PLACER_REPORTED_VIOLATIONS" in rules2
+
+
+@_needs_openroad
+def test_the_same_fixture_without_the_overlap_stays_green():
+    """The negative control that keeps the fix from being 'always FAIL': move
+    the one instance back onto its own site and nothing else, and the real
+    placer returns 0 and the gate passes."""
+    def_text = _accept_def(_LEGAL_X)
+    _w, out = _openroad_on(
+        def_text, R._build_check_placement_measured_tcl("SPARE", "_sp"))
+    assert "SPARE_CHECK_PLACEMENT_VIOLATIONS 0" in out, out
+    _p, (verdict, rc, rules, summary) = _gate_on(out, def_text)
+    assert (verdict, rc) == ("PASS", 0)
+    assert summary["check_placement_sites"] == {"SPARE": "0"}
+    assert "PLACER_REPORTED_VIOLATIONS" not in rules
