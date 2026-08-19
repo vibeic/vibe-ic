@@ -126,12 +126,27 @@ def test_no_baseline_is_not_a_pass(tmp_path):
     assert T.main(["--baseline", str(tmp_path / "nope.json")]) == 2
 
 
-def test_the_seven_that_the_question_actually_applies_to():
+def test_the_ones_that_the_question_actually_applies_to():
     """Recorded so the population is a fact, not a recollection: these are the
     entries whose input a real run can genuinely lack, and #659's question is
-    for them."""
+    for them.
+
+    SEVEN when #659 was answered. NINE since vibe-ic#1347 tightened
+    `checker_execution_wiring_audit` — `eda_log_check` (`--log-file`) and
+    `sv_compat_check` (`--rtl-dir --out-dir`) were never wired and were being
+    reported as wired by a sibling's message text, so they entered the
+    baseline, and each names a SPECIFIC artefact rather than the run's own
+    directory. The third entry #1347 added, `agent_report_presence_check`,
+    needs only `project_dir` and is therefore in the other bucket — it lacks a
+    CALLER, which is exactly what #1347 found.
+
+    This number tracks the baseline; it is not a budget. It grows only when an
+    entry whose input can genuinely be absent is added, and `known` may only
+    SHRINK, so the way it comes back down is by wiring those checkers.
+    """
     d = json.loads(_BASELINE.read_text())
     left = sorted(k for k, v in d["triage"].items()
                   if "lack of a CALLER" not in v)
     assert "pdk_consistency_check.py" in left
-    assert len(left) == 7, left
+    assert {"eda_log_check.py", "sv_compat_check.py"} <= set(left)
+    assert len(left) == 9, left

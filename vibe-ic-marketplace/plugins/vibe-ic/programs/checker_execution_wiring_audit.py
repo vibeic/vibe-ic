@@ -136,6 +136,58 @@ matcher reported 12 checkers as wired NOWHERE when every one of them was
 in fact wired — a false accusation produced entirely by the matcher's own
 assumption. Match the stem on WORD BOUNDARIES and nothing else.
 
+A NAME IN A SENTENCE IS NOT AN EXECUTION PATH (vibe-ic#1347)
+------------------------------------------------------------
+The METHOD NOTE above is one half of the matcher's problem and it hid the
+other half for as long as it stood alone. Match on word boundaries and
+nothing else, and a checker is "wired" the moment ANY file names it —
+including the file that names it in order to say it is somebody else's job.
+
+`_strip_prose` removes comments and docstrings, and KEEPS ordinary string
+literals on purpose, because `subprocess.run([..., "foo_check.py"])` is a real
+invocation. A checker's own error message naming a sibling is the same kind of
+literal, so a sentence promoted the sibling to "wired". Appending
+`_UNUSED_NAME = "<any checker stem>"` to any non-test program was enough to
+flip that checker's verdict — a name's presence read as evidence of the thing
+the name refers to, in the instrument other landings depend on.
+
+So membership is now NECESSARY everywhere and SUFFICIENT only in the
+CONFIGURATION kinds. A flow definition, a CI workflow and a skill document
+exist in order to make something run; PROGRAM SOURCE also carries prose, and
+there a reference has to be invocation-SHAPED — a `<stem>.py` filename, a real
+import, `import_module("<stem>")` — or be a bare name HELD by a file that
+demonstrably builds program filenames it does not spell out. The last clause is
+load-bearing: `flow_compliance_check` runs ~500 per-design gates from bare
+names in registry tuples via `PROGRAMS_DIR / f"{gate_name}.py"`, and a registry
+a dispatcher executes IS an execution path. See `_invocable` and
+`invocation_index` for the rule, and the block comment above them for the three
+rules that were measured and discarded before this one.
+
+WHAT IT FOUND, AND WHERE THAT DEBT WENT. Measured on 397b3f25f: three checkers
+were held up by nothing but another program's message text —
+`agent_report_presence_check`, `eda_log_check`, `sv_compat_check`. They were
+never wired; the instrument was reporting them as wired. They enter `known`
+through `--scope-expanded`, the same door #693 used when the population glob
+widened, because a stricter predicate finding pre-existing debt is not a
+regression — and `known` may only SHRINK, so the record cannot become
+permission. Three more lost their only PROG reference without becoming
+findings: `analog_block_list_emit_check`, `ir_drop_budget_check` and
+`otp_image_check` still carry a SKILL runner, and are counted in the
+SKILL-only disclosure instead.
+`otp_image_check` is the clearest case in the set — `design_one_shot_runner`
+holds `StepResult("otp_image_check", ...)` and runs `otp_image_nonzero_check
+.py`; the STEP wears the name, the PROGRAM is a different file, and nothing
+invokes it.
+
+WIRING THOSE THREE IS A SEPARATE REPAIR, AND IT IS NOT DONE HERE. All three
+take a project / RTL directory, so they are per-design Phase-2/3 checkers whose
+home is `flow_compliance_check`'s registry at the step each belongs to — not
+the repo-wide hygiene gates, which run with no design to judge. Declaring a
+gate BLOCKING before it has been measured green on a real design tree turns
+"unverified" into "blocking" and teaches CI about the finding by turning red;
+that is per-design work against the 44-step flow, and it is what the `triage`
+line beside each new entry exists to carry until it is done.
+
 chip-AGNOSTIC: operates on this repo's own layout. No design, PDK or
 vendor literal appears here.
 
@@ -159,11 +211,13 @@ tree. The first test-only checker against it is therefore NEW and still exits
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
+import warnings
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -187,7 +241,26 @@ _SKILL_ONLY_NAME = "checker_skill_only_reasons.json"
 _SKIP_PARTS = frozenset((".claude", "node_modules", ".git", "worktrees"))
 
 
-def _strip_prose(path: Path, text: str) -> str:
+def _parse_python(text: str):
+    """`ast.parse(text)`, or ``None`` when the source will not parse.
+
+    Hoisted out of `_strip_prose` so ONE parse serves both passes over a file:
+    the prose strip and the invocation-shape read (#1347). Parsing every
+    program twice put this gate over the 30s inner bound vibe-ic#1241 pins
+    (harness_bound/3), and a ceiling is not a thing to raise because the
+    program got slower.
+    """
+    try:
+        with warnings.catch_warnings():
+            # Some sources carry invalid escape sequences in docstrings;
+            # that is their own (separate) defect, not this gate's news.
+            warnings.simplefilter("ignore", SyntaxWarning)
+            return ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+
+
+def _strip_prose(path: Path, text: str, tree=None, drop=None) -> str:
     """Remove COMMENTS and DOCSTRINGS — prose names a checker, it never runs one.
 
     This is not a nicety. Adding a docstring to THIS file that named
@@ -200,40 +273,26 @@ def _strip_prose(path: Path, text: str) -> str:
     real invocation. Only bare-expression strings (docstrings) are dropped.
     """
     if path.suffix == ".py":
+        import io
+        import tokenize
+        if drop is None:
+            if tree is None:
+                tree = _parse_python(text)
+            if tree is None:
+                # Unparseable source: keep it whole. Over-counting a reference
+                # is the safe direction for an ACCUSATION, and this branch is
+                # loud in the report rather than silent.
+                return text
+            drop = _walk_python(tree, False)[0]
+        lines = text.splitlines()
+        kept = [("" if i + 1 in drop else ln) for i, ln in enumerate(lines)]
+        src = "\n".join(kept)
         try:
-            import ast
-            import io
-            import tokenize
-            import warnings
-            with warnings.catch_warnings():
-                # Some sources carry invalid escape sequences in docstrings;
-                # that is their own (separate) defect, not this gate's news.
-                warnings.simplefilter("ignore", SyntaxWarning)
-                tree = ast.parse(text)
-            drop = set()
-            for node in ast.walk(tree):
-                body = getattr(node, "body", None)
-                if not isinstance(body, list) or not body:
-                    continue
-                first = body[0]
-                if (isinstance(first, ast.Expr)
-                        and isinstance(first.value, ast.Constant)
-                        and isinstance(first.value.value, str)):
-                    drop.update(range(first.lineno, (first.end_lineno or first.lineno) + 1))
-            lines = text.splitlines()
-            kept = [("" if i + 1 in drop else ln) for i, ln in enumerate(lines)]
-            src = "\n".join(kept)
-            try:
-                toks = tokenize.generate_tokens(io.StringIO(src).readline)
-                return "\n".join(t.string for t in toks
-                                 if t.type != tokenize.COMMENT)
-            except (tokenize.TokenError, IndentationError, SyntaxError):
-                return src
-        except (SyntaxError, ValueError, RecursionError):
-            # Unparseable source: keep it whole. Over-counting a reference is
-            # the safe direction for an ACCUSATION, and this branch is loud
-            # in the report rather than silent.
-            return text
+            toks = tokenize.generate_tokens(io.StringIO(src).readline)
+            return "\n".join(t.string for t in toks
+                             if t.type != tokenize.COMMENT)
+        except (tokenize.TokenError, IndentationError, SyntaxError):
+            return src
     if path.suffix in (".yml", ".yaml", ".sh"):
         return "\n".join(ln for ln in text.splitlines()
                          if not ln.lstrip().startswith("#"))
@@ -257,7 +316,16 @@ def _rel_parts(f: Path, root: Path):
         return set(f.parts)
 
 
-def _read(paths, root: Path) -> Dict[str, str]:
+def _read(paths, root: Path,
+          invocations: Optional[Dict[str, tuple]] = None) -> Dict[str, str]:
+    """Prose-stripped text per file, and — when `invocations` is supplied —
+    that file's invocation shape (#1347) out of the SAME `ast.parse`.
+
+    The two passes are fused rather than run one after the other because
+    parsing every program twice costs this gate ~50% of its runtime and puts
+    it over the 30s inner bound vibe-ic#1241 pins. The tree is dropped at the
+    end of each iteration, so nothing accumulates.
+    """
     root = root.resolve()
     out: Dict[str, str] = {}
     for f in paths:
@@ -265,27 +333,58 @@ def _read(paths, root: Path) -> Dict[str, str]:
         if _SKIP_PARTS & _rel_parts(f, root):
             continue
         try:
-            out[s] = _strip_prose(f, f.read_text(errors="replace"))
+            text = f.read_text(errors="replace")
         except OSError:
             continue
+        if f.suffix == ".py":
+            tree = _parse_python(text)
+            if tree is None:
+                # Unparseable: both passes take their documented over-counting
+                # branch rather than a silent empty answer.
+                out[s] = text
+                if invocations is not None:
+                    invocations[s] = (set(_TOKEN_RE.findall(text)), set(), True)
+                continue
+            drop, inv = _walk_python(tree, invocations is not None)
+            out[s] = _strip_prose(f, text, tree, drop)
+            if invocations is not None:
+                invocations[s] = inv
+        else:
+            out[s] = _strip_prose(f, text)
+            if invocations is not None:
+                invocations[s] = _invocable(f, text)
     return out
 
 
-def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, str]]:
+def _haystacks(plugin: Path, repo_root: Path,
+               invocations: Optional[Dict[str, Dict[str, tuple]]] = None
+               ) -> Dict[str, Dict[str, str]]:
+    """The six haystacks. `invocations`, when supplied, is FILLED with the
+    invocation-shape index (#1347) for the PROGRAM-SOURCE kinds only — the
+    kinds outside `_BARE_NAME_KINDS`, where a bare name runs nothing.
+    """
     programs = plugin / "programs"
     pys = list(programs.rglob("*.py"))
     is_test = lambda p: "/tests/" in str(p) or p.name.startswith("test_")
+
+    def _sink(kind: str) -> Optional[Dict[str, tuple]]:
+        if invocations is None or kind in _BARE_NAME_KINDS:
+            return None
+        return invocations.setdefault(kind, {})
+
     return {
         "CI": _read(list((repo_root / ".github").rglob("*.yml"))
                     + list((repo_root / ".github").rglob("*.yaml")), repo_root),
         "FLOW": _read(list((plugin / "flow").rglob("*.yml"))
                       + list((plugin / "flow").rglob("*.yaml")), repo_root),
         "TOOLS": _read(list((repo_root / "tools").rglob("*.py"))
-                       + list((repo_root / "tools").rglob("*.sh")), repo_root),
+                       + list((repo_root / "tools").rglob("*.sh")), repo_root,
+                       _sink("TOOLS")),
         "SKILL": _read(list((plugin / "skills").rglob("*.md"))
                        + list((plugin / "agents").rglob("*.md"))
                        + list((plugin / "commands").rglob("*.md")), repo_root),
-        "PROG": _read([p for p in pys if not is_test(p)], repo_root),
+        "PROG": _read([p for p in pys if not is_test(p)], repo_root,
+                      _sink("PROG")),
         "TEST": _read([p for p in pys if is_test(p)]
                       + list((plugin / "tests").rglob("*.py")), repo_root),
     }
@@ -294,8 +393,236 @@ def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, str]]:
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
-def runners(stem: str, hay: Dict[str, Dict[str, str]], self_path: str) -> Set[str]:
-    """Which categories contain a WORD-BOUNDARY reference to `stem`.
+# ── #1347: a NAME in a sentence is not an execution path ────────────────────
+#
+# `runners()` below asks whether the checker's stem appears as a token in a
+# haystack file. For a CONFIGURATION file that is the whole question — every
+# name in a flow definition or a CI workflow is there in order to make
+# something run. For PROGRAM SOURCE it is not, and `_strip_prose` cannot close
+# the gap: it drops comments and docstrings, and deliberately KEEPS ordinary
+# string literals, because `subprocess.run([..., "foo_check.py"])` is a real
+# invocation. A checker's own ERROR MESSAGE naming a sibling is the same kind
+# of literal, so the sibling was promoted to "wired" by a sentence.
+#
+# MEASURED on 397b3f25f, over this audit's own population of 604: requiring an
+# invocation-shaped reference in PROG/TOOLS moves 36 checkers' runner sets and
+# turns THREE of them from "wired" into the finding they always were —
+# `agent_report_presence_check`, `eda_log_check`, `sv_compat_check`, each held
+# up solely by another program's message text. Every one of the 36 dropped
+# references was read before this rule was kept; all 36 are prose, a report
+# PATH, a waiver/skip REGISTER keyed by gate name, or a mutation payload.
+#
+# THE ONE THAT PAYS FOR THE RULE ON ITS OWN. `design_one_shot_runner` contains
+# `StepResult("otp_image_check", ...)` and runs `otp_image_nonzero_check.py`.
+# The STEP is called `otp_image_check`; the PROGRAM `otp_image_check.py` is a
+# different file, and nothing there invokes it. Token membership read the step
+# name as evidence of the program the name refers to.
+#
+# WHY BARE NAMES STILL COUNT IN PROG — AND WHY THAT IS NOT A LOOPHOLE. A first
+# rule requiring a literal `<stem>.py` reports ~200 findings, and sampling kills
+# it: `flow_compliance_check` holds ~500 gate names BARE in registry tuples and
+# builds `PROGRAMS_DIR / f"{gate_name}.py"` from them. A registry a dispatcher
+# executes IS an execution path. So a bare name counts in PROG/TOOLS exactly
+# when the file it sits in demonstrably builds a program filename from a value
+# it does not spell out — an f-string / concatenation / `with_suffix('.py')`
+# ending in `.py`, or a dynamic `import_module`. In a file that dispatches
+# nothing, a bare name runs nothing.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO. It does not try to tell a COMMAND string
+# ("clock_plan_check . --json out.json", a gate clause in this repo's own
+# grammar) from a SENTENCE that opens with the same word ("sv_compat_check
+# should have verified this"). Both are a literal whose first token is the
+# stem, and the only difference is what the rest of the words mean. Guessing
+# would reintroduce exactly the failure this rule removes, so a command string
+# inside program source counts as prose; the one instance measured on 397b3f25f
+# is a mutation canary whose checker is wired by the FLOW regardless.
+#
+# WHAT IT COSTS, MEASURED, because this gate has a CEILING. vibe-ic#1241 pins
+# an inner bound of 30s (harness_bound/3) on running this audit, so the shape
+# read is folded into the `ast.walk` the prose strip already does — see `_read`
+# and `_walk_python`. Taken separately it would cost a second `ast.parse` per
+# program (~+50%); a function call per node, a regex per string literal and
+# `isinstance` chains account for most of the remainder, and none of the three
+# is there any more. What is left is the branches themselves: measured on
+# 397b3f25f as the MINIMUM of five alternating runs each (this host is shared,
+# so any single reading is a reading of the load), 22.5s of user CPU becomes
+# 24.2s. The dominant term in both is `tokenize`, which this change does not
+# touch. Both numbers are under the bound on a quiet host and BOTH exceed it on
+# a loaded one — measured, base included — so the bound tracks the host rather
+# than this change.
+#
+# THE SHAPE MUST BE READ OFF THE RAW FILE, NOT OFF `_strip_prose`'s OUTPUT.
+# For a `.py` source that function returns TOKENIZE output — one token per
+# line — so `import_module("gds_streamout_layermap_check")` arrives as three
+# separate lines and no multi-token pattern can ever match it. Membership is
+# still asked of the stripped text (that is this audit's question); only the
+# SHAPE test reads the file as written, and it reads it through the AST so
+# comments are absent by construction and docstrings are identifiable.
+_PY_FILENAME_RE = re.compile(r"([A-Za-z0-9_]+)\.py\b")
+_SH_DYNAMIC_PY_RE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\.py\b")
+#: Calls that import a module named at run time. A LITERAL argument is itself
+#: an invocation; a NON-literal one makes the file a dispatcher.
+_DYNAMIC_IMPORT_FNS = frozenset(
+    ("import_module", "__import__", "find_spec", "spec_from_file_location"))
+#: Haystack kinds where a BARE name IS a reference to the program. The flow
+#: definition writes gate names bare (see METHOD NOTE), a CI workflow exists in
+#: order to run things, a SKILL document is followed by an agent that then runs
+#: the program (#693 counts it deliberately, and says so), and TEST is this
+#: classification's own denominator rather than evidence of coverage.
+_BARE_NAME_KINDS = frozenset(("CI", "FLOW", "SKILL", "TEST"))
+
+
+def _builds_a_program_filename(node) -> bool:
+    """True when `node` makes a `*.py` name out of something it does not spell.
+
+    The dispatcher signature. `PROGRAMS_DIR / f"{gate_name}.py"` and
+    `name + ".py"` both mean the names this file can invoke are values it
+    holds, not tokens it types. (`with_suffix(".py")` and a non-literal
+    `import_module` are the same statement and are recognised by
+    `_walk_python` on the `Call` branch it already visits.)
+    """
+    if isinstance(node, ast.JoinedStr):
+        if any(isinstance(v, ast.FormattedValue) for v in node.values):
+            consts = [v for v in node.values if isinstance(v, ast.Constant)]
+            if (consts and isinstance(consts[-1].value, str)
+                    and consts[-1].value.endswith(".py")):
+                return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        right = node.right
+        if (isinstance(right, ast.Constant) and isinstance(right.value, str)
+                and right.value.endswith(".py")
+                and not isinstance(node.left, ast.Constant)):
+            return True
+    return False
+
+
+def _walk_python(tree, want_invocations: bool):
+    """ONE `ast.walk` producing everything both passes need.
+
+    Returns `(docstring_lines, invocable)` where `invocable` is
+    `(invoked, held, dispatches)` — see `_invocable` — or ``None`` when the
+    caller only wants the prose strip.
+
+    Fused because it is walked per PROGRAM, and this gate walks every program
+    in the repo: the prose strip needs the docstring LINE ranges, the
+    invocation read needs the docstring NODE ids, and both come off the same
+    `body[0]` test. Three separate walks put this gate over the 30s inner
+    bound vibe-ic#1241 pins (harness_bound/3), and a ceiling is not a thing to
+    raise because the program got slower.
+
+    `ast.walk` is breadth-first, so a node carrying a docstring is always
+    yielded before the `Constant` two levels under it — the id is recorded
+    before it is tested.
+    """
+    drop: Set[int] = set()
+    docstrings: Set[int] = set()
+    invoked: Set[str] = set()
+    held: Set[str] = set()
+    dispatches = False
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list) and body:
+            first = body[0]
+            if (isinstance(first, ast.Expr)
+                    and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                drop.update(range(first.lineno,
+                                  (first.end_lineno or first.lineno) + 1))
+                docstrings.add(id(first.value))
+        if not want_invocations:
+            continue
+        # This runs once per AST node of EVERY program in the repo, and the
+        # gate has a 30s bound (vibe-ic#1241, harness_bound/3). So: exact-type
+        # dispatch rather than `isinstance` (the node classes are concrete —
+        # `ast.parse` emits no subclass of them), the commonest type first, a
+        # substring guard before any regex, and `str.isidentifier` — a C method
+        # — in place of one. `isidentifier` is exactly equivalent HERE: `held`
+        # is only ever asked `stem in held`, and every checker stem is a module
+        # name, hence an identifier, so nothing it admits beyond the old
+        # pattern can ever be looked up.
+        cls = node.__class__
+        if cls is ast.Constant:
+            val = node.value
+            if val.__class__ is str and id(node) not in docstrings:
+                if ".py" in val:
+                    invoked.update(_PY_FILENAME_RE.findall(val))
+                if val.isidentifier():
+                    held.add(val)
+        elif cls is ast.Call:
+            fn = node.func
+            name = (fn.attr if isinstance(fn, ast.Attribute)
+                    else fn.id if isinstance(fn, ast.Name) else "")
+            if name in _DYNAMIC_IMPORT_FNS and node.args:
+                arg = node.args[0]
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    invoked.add(arg.value.split(".")[-1])
+                else:
+                    dispatches = True
+            elif (name == "with_suffix" and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == ".py"):
+                dispatches = True
+        elif cls is ast.JoinedStr or cls is ast.BinOp:
+            if not dispatches and _builds_a_program_filename(node):
+                dispatches = True
+        elif cls is ast.Import:
+            for alias in node.names:
+                invoked.add(alias.name.split(".")[0])
+                invoked.add(alias.name.split(".")[-1])
+        elif cls is ast.ImportFrom:
+            if node.module:
+                invoked.add(node.module.split(".")[0])
+                invoked.add(node.module.split(".")[-1])
+            for alias in node.names:
+                invoked.add(alias.name)
+    return drop, ((invoked, held, dispatches) if want_invocations else None)
+
+
+def _invocable(path: Path, raw: str, tree=None):
+    """`(invoked, held, dispatches)` for one PROGRAM-SOURCE haystack file.
+
+    `invoked`  stems this file names in an invocation SHAPE — a `<stem>.py`
+               filename, a real `import`, or `import_module("<stem>")`.
+    `held`     bare identifier-shaped literals: candidate registry entries,
+               which mean nothing on their own.
+    `dispatches` whether the file builds a program filename dynamically, i.e.
+               whether `held` is a set of names it can actually run.
+
+    An UNPARSEABLE source keeps every token and is marked as dispatching, so
+    it over-counts references. That is the safe direction for an ACCUSATION
+    and it is the same choice `_strip_prose` documents making.
+    """
+    if path.suffix != ".py":
+        body = "\n".join(ln for ln in raw.splitlines()
+                          if not ln.lstrip().startswith("#"))
+        return (set(_PY_FILENAME_RE.findall(body)),
+                set(_TOKEN_RE.findall(body)),
+                bool(_SH_DYNAMIC_PY_RE.search(body)))
+    if tree is None:
+        tree = _parse_python(raw)
+    if tree is None:
+        return set(_TOKEN_RE.findall(raw)), set(), True
+    return _walk_python(tree, True)[1]
+
+
+def invocation_index(plugin: Path, repo_root: Path
+                     ) -> Dict[str, Dict[str, tuple]]:
+    """`{kind: {path: (invoked, held, dispatches)}}` for the PROGRAM-SOURCE kinds.
+
+    Built from the file as WRITTEN — see the block comment above for why it
+    cannot be built from `_strip_prose`'s output. This entry point re-walks the
+    tree; `audit()` does not use it, and instead has `_haystacks` fill the index
+    from the same parse it already does, because two walks cost this gate more
+    than the 30s inner bound vibe-ic#1241 pins allows.
+    """
+    index: Dict[str, Dict[str, tuple]] = {}
+    _haystacks(plugin, repo_root, index)
+    return index
+
+
+def runners(stem: str, hay: Dict[str, Dict[str, str]], self_path: str,
+            invocations: Optional[Dict[str, Dict[str, tuple]]] = None) -> Set[str]:
+    """Which categories can actually INVOKE `stem`.
 
     Word boundaries only — never assume the reference is quoted or carries
     the `.py` suffix (the flow definition writes gate names bare).
@@ -304,13 +631,28 @@ def runners(stem: str, hay: Dict[str, Dict[str, str]], self_path: str) -> Set[st
     and testing membership. That is EQUIVALENT to the word-boundary regex —
     `stem` is such a token exactly when it is surrounded by characters
     outside the class — and it turns 485 x ~2900 searches into one pass.
+
+    Membership is NECESSARY in every kind and SUFFICIENT only in the
+    configuration kinds. Where `invocations` supplies an index for a kind
+    (PROGRAM SOURCE — see `invocation_index`), a member also has to appear in
+    an invocation SHAPE, or be held by a file that dispatches program
+    filenames it builds. Passing no index restores bare-token membership
+    everywhere, which is what this function did before #1347.
     """
     found: Set[str] = set()
     for kind, files in hay.items():
+        index = (invocations or {}).get(kind)
         for path, tokens in files.items():
-            if path != self_path and stem in tokens:
-                found.add(kind)
-                break
+            if path == self_path or stem not in tokens:
+                continue
+            if index is not None:
+                invoked, held, dispatches = index.get(
+                    path, (frozenset(), frozenset(), False))
+                if stem not in invoked and not (dispatches and stem in held):
+                    # NAMED here, but not in any shape that runs it.
+                    continue
+            found.add(kind)
+            break
     return found
 
 
@@ -426,7 +768,8 @@ CORPUS_FIGURES = CorpusFigures({
 def audit(plugin: Path, repo_root: Path) -> dict:
     programs = plugin / "programs"
     checkers = checker_population(programs)
-    hay = _tokenise(_haystacks(plugin, repo_root))
+    invocations: Dict[str, Dict[str, tuple]] = {}
+    hay = _tokenise(_haystacks(plugin, repo_root, invocations))
     test_only: List[str] = []
     unrun: List[str] = []
     skill_only: List[str] = []
@@ -436,7 +779,7 @@ def audit(plugin: Path, repo_root: Path) -> dict:
     # above is unchanged, so this adds no finding to the existing ratchet.
     machine_runners: Dict[str, List[str]] = {}
     for name in checkers:
-        r = runners(name[:-3], hay, str(programs / name))
+        r = runners(name[:-3], hay, str(programs / name), invocations)
         machine_runners[name] = sorted(r - {"TEST", "SKILL"})
         if not r:
             unrun.append(name)
@@ -729,8 +1072,21 @@ def main(argv=None) -> int:
                 prev_triage = {}
         if a.refresh_triage:
             prev_triage = measure_triage(plugin / "programs", now)
+        # The `_comment` is HAND-MAINTAINED — it carries the REMOVAL LOG, which
+        # is the only record of why an entry left a register that may only
+        # shrink. Rewriting it from the constant below silently deleted that
+        # log once (#1347), the same way dropping `unwired_by_decision` would.
+        # Keep whatever the file states; write the default only when there is
+        # nothing to preserve.
+        prev_comment = ""
+        if bl.is_file():
+            try:
+                prev_comment = str(json.loads(bl.read_text()).get("_comment") or "")
+            except (OSError, ValueError):
+                prev_comment = ""
         bl.write_text(json.dumps(
-            {"_comment": ("Checkers that NOTHING but their own unit test ever "
+            {"_comment": prev_comment or
+                         ("Checkers that NOTHING but their own unit test ever "
                           "runs (vibe-ic#381). MAY ONLY SHRINK — each entry is "
                           "a checker with zero coverage of real inputs. "
                           "`triage` records why an entry is still here; the "
