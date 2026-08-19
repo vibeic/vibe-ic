@@ -178,3 +178,24 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_pdk_registry_asset_half_
 # rewrite it and every anchor bump would otherwise need a hand edit (measured: 0.2.89 ->
 # 0.2.96 -> 0.2.97 in one afternoon).
 vibe-ic-marketplace/plugins/vibe-ic/programs/not_verified_tier.py
+
+# A MEASUREMENT RECORD in a research note, not a live install pointer. The
+# section it sits in discharges the "do any `*ws_ip*` cells ship inside a PDK
+# tree?" question INSIDE a named container, and states the image so a reader can
+# reproduce the two commands and the empty result: the note names the 0.2.88
+# image (the one that carries `/foss/pdks`) and records that
+# `find /foss/pdks -iname "*ws_ip*"` returned no hits in it.
+# (NB: as in the entry above, this comment deliberately does NOT spell the full
+#  ghcr ref — the drift-net scans this file too, and a ref written here is
+#  itself a live pointer. MEASURED: it flagged `.image-version-ignore:187` on
+#  the first draft of this very comment.)
+#
+# Advancing that tag with VERSION would claim the `find` was run on an image it
+# was never run on — the same measurement-honesty violation every entry above
+# exists to prevent. Nothing pulls the tag; it is prose about a past run.
+#
+# BOUNDED BY THE EXACT PATH, not by `docs/research/*`. MEASURED on this tree: it
+# is the ONLY file under docs/research/ carrying a pinned ghcr tag, so a
+# directory glob would buy no coverage today and would silently exempt the next
+# research note that legitimately IS an install doc.
+docs/research/wafer_space_id_cells.md
