@@ -1258,6 +1258,75 @@ def _f_macro_obs_spanned(p: Path) -> None:
     _write_macro_obs_layout(p, spanning=6)
 
 
+#: The extraction-feedback dump, in magic's own `feedback save` format: a
+#: bounding box followed by the message the extractor filed against it. One
+#: record, carrying magic's own literal (`Illegal overlap between %s and %s
+#: (types do not connect)`).
+#:
+#: chip-AGNOSTIC by construction: `layerA` / `layerB` are synthetic names with
+#: no PDK, foundry or process meaning, and the gate's rule is the MARKER, never
+#: a layer name — it counts marker occurrences and never inspects the two
+#: operands, so no real layer is needed to reach the verdict.
+_FEEDBACK_DIRTY = (
+    "box 20 20 35 40\n"
+    'feedback add "Illegal overlap between layerA and layerB '
+    '(types do not connect)" pale\n'
+)
+
+#: The transcript magic tees beside the dump. It is the gate's SECOND channel
+#: and is read independently, so the fixture supplies the agreeing pair the
+#: real tool writes rather than a dump the transcript contradicts.
+_TRANSCRIPT_DIRTY = (
+    "Extracting cell chip_top\n"
+    "Illegal overlap between layerA and layerB (types do not connect)\n"
+    "1 problems occurred.  See feedback entries.\n"
+)
+
+#: The SAME tree with the one variable moved: an EMPTY dump and a transcript
+#: reporting zero areas. `feedback save` writes a 0-byte file when there are no
+#: feedback areas, so this is the shape of a clean extraction and not of an
+#: absent one — which is the distinction the gate's own docstring calls trap 1.
+_TRANSCRIPT_CLEAN = (
+    "Extracting cell chip_top\n"
+    "0 problems occurred.  See feedback entries.\n"
+)
+
+
+def _f_extraction_illegal_overlap(p: Path) -> None:
+    """An extraction whose feedback dump says the extractor refused a rectangle.
+
+    `magic_illegal_overlap_check` landed as a BLOCKING clause on step 31 on
+    2026-08-19 (74b6abbe3) and :data:`CLAUSE_FIXTURE` was not extended, so the
+    clause fell back to ``EMPTY`` — a tree with no extraction at all, on which
+    the gate correctly answers rc 2 ``__VACUOUS_HINT__`` ("there is no
+    extraction for this gate to be about"). That is the gate being honest, not
+    the gate being unfalsifiable; what was missing was an input. This fixture
+    supplies it. The same shape, and the same sentence, as the two obstruction
+    gates above.
+
+    MEASURED, verbatim, in the container:
+
+        EMPTY  rc 2  VACUOUS_PASS: magic_illegal_overlap_check examined nothing
+                     (reason: no_extraction_in_scope)
+        THIS   rc 1  [FAIL] 1 illegal overlap(s) in the extraction feedback
+                     (threshold 0) … Counted from: feedback dump string=1
+                     structural=1 (1 area(s)), transcript=1
+
+    The reverse arm is asserted in
+    :func:`test_d2_the_extraction_feedback_fixture_reddens_and_only_on_content`:
+    the same tree with the dump emptied and the transcript reporting zero areas
+    reads PASS, on a MEASURED zero rather than on an absence.
+    """
+    _w(p, "phase3/stage3/extracted/extract_feedback.txt", _FEEDBACK_DIRTY)
+    _w(p, "phase3/stage3/extracted/ext2spice.log", _TRANSCRIPT_DIRTY)
+
+
+def _correct_extraction_feedback(p: Path) -> None:
+    """The one-variable negative control: the extraction ran and found nothing."""
+    _w(p, "phase3/stage3/extracted/extract_feedback.txt", "")
+    _w(p, "phase3/stage3/extracted/ext2spice.log", _TRANSCRIPT_CLEAN)
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1289,6 +1358,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
+    "EXTRACTION_ILLEGAL_OVERLAP": _f_extraction_illegal_overlap,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1372,6 +1442,18 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # EMPTY tree gives them nothing to refuse; each needs the absence of
     # positive evidence to be OBSERVABLE, which means the artefact has to
     # exist and be unverifiable.
+    # The clause `magic_illegal_overlap_check` added to step 31 on 2026-08-19
+    # (74b6abbe3). EMPTY cannot redden it and the gate says why in its own
+    # words: with no extraction artefact and no feedback dump under
+    # `phase3/stage3/extracted` there is "no extraction for this gate to be
+    # about", which is rc 2 VACUOUS_PASS — a disclosed skip, not a judgement.
+    # The fixture supplies the extraction AND its feedback dump, so the red is
+    # earned by what the extractor SAID rather than by the tree being bare.
+    #
+    # Assigned here rather than registered in UNREDDENED: a fixture DOES break
+    # it, and an UNREDDENED entry whose clause reddens fails this suite by
+    # design ("the gap closed and nobody noticed").
+    ("31", "magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json"): "EXTRACTION_ILLEGAL_OVERLAP",
     ("31", "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"): "SIGNOFF_UNVERIFIABLE",
     ("31", "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"): "SIGNOFF_UNVERIFIABLE",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
@@ -2588,6 +2670,54 @@ def test_d2_the_three_replaced_empty_reds_are_earned_by_content(
             f"step {key}: the same tree with the defect corrected must PASS, "
             f"else the red above is the tree's shape and not the content the "
             f"gate judges :: {tier} {out[-300:]}")
+
+
+def test_d2_the_extraction_feedback_fixture_reddens_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """Step 31's extraction-feedback clause: three arms, one variable.
+
+    The clause landed 2026-08-19 (74b6abbe3) with no fixture, so it fell back
+    to EMPTY and the cell went red as `unproven`. A fixture that merely turns
+    that red green is worth nothing on its own — it has to be shown that the
+    fixture is what reddens the gate, that the bare tree does NOT, and that the
+    SAME tree with the one variable corrected reads PASS. Otherwise the red is
+    the tree's shape and not the content the gate judges.
+
+    The variable is the feedback dump's CONTENT, and only that: both arms carry
+    an extraction and a dump, so neither is decided by absence. The corrected
+    arm's dump is 0 bytes, which is what `feedback save` writes for zero areas
+    and is therefore a MEASURED zero — the gate's own trap 1, asserted here in
+    both directions rather than described.
+    """
+    command = ("magic_illegal_overlap_check . --json "
+               "reports/phase3/magic_illegal_overlap.json")
+    key = "31"
+    live = {_clause_signature(c) for c in F.gate_clauses(key) if c.is_blocking}
+    assert command in live, (
+        f"step {key} no longer declares {command!r} as a blocking clause; this "
+        f"control and the matrix cell would be measuring different things")
+    assert CLAUSE_FIXTURE.get((key, command)) == "EXTRACTION_ILLEGAL_OVERLAP", (
+        f"step {key}: {command!r} is no longer assigned "
+        f"'EXTRACTION_ILLEGAL_OVERLAP'")
+
+    tier, out = _tier(
+        _build_project(tmp_path, "mio_red", "EXTRACTION_ILLEGAL_OVERLAP"),
+        command)
+    assert tier == RED, (
+        f"the fixture no longer reddens {command!r} -> {tier} :: {out[-300:]}")
+
+    tier, out = _tier(_build_project(tmp_path, "mio_empty", "EMPTY"), command)
+    assert tier != RED, (
+        f"EMPTY now reddens {command!r}, so the dedicated fixture is measuring "
+        f"nothing the bare tree does not :: {out[-300:]}")
+
+    project = _build_project(tmp_path, "mio_ctl", "EXTRACTION_ILLEGAL_OVERLAP")
+    _correct_extraction_feedback(project)
+    tier, out = _tier(project, command)
+    assert tier == PASS, (
+        f"the same extraction with an EMPTY feedback dump must PASS — a dump "
+        f"that exists and holds nothing is a measured zero :: {tier} "
+        f"{out[-300:]}")
 
 
 def test_d2_a_content_earned_program_red_is_still_a_real_red(
