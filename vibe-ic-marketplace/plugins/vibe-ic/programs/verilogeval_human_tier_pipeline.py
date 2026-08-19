@@ -283,6 +283,17 @@ def _tool_was_absent(log: str) -> bool:
     return _TOOL_ABSENT in (log or "")
 
 
+# vibe-ic#1745 — the verdict this function returns comes from searching the
+# SIMULATOR'S COMBINED STDOUT, which the candidate shares with the testbench.
+# A candidate that prints the harness's own verdict marker therefore scores a
+# pass no matter what it computes (MEASURED on benchmark/score_iverilog_tb.py:
+# two candidates with identical wrong logic, only one of them printing, scored
+# differently). Refuse such a candidate BEFORE it is run. Applied to the
+# CANDIDATE only — the golden-vs-its-own-test floor prover grades the
+# benchmark's own reference, which is not a submission.
+import harness_verdict_token_guard as _hvtg
+
+
 def _run_iverilog(top_sv_text: Optional[str], ref_path: str, test_path: str,
                   top_name: str = "TopModule") -> Tuple[bool, str]:
     """Compile + run a TopModule (given as text, or — when top_sv_text is None —
@@ -444,7 +455,10 @@ def tier1_verify(prob: dict, rtl: str) -> Tuple[bool, str]:
     hit = _VERIFY_CACHE.get(key)
     if hit is not None:
         return hit
-    res = _run_iverilog(rtl, prob.get("ref_path"), prob.get("test_path"))
+    _refusal = _hvtg.refuse_or_none(
+        rtl, _hvtg.registry_patterns("verilogeval-human"))
+    res = ((False, _refusal) if _refusal else
+           _run_iverilog(rtl, prob.get("ref_path"), prob.get("test_path")))
     _VERIFY_CACHE[key] = res
     return res
 
