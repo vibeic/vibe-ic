@@ -311,6 +311,25 @@ def test_an_unparseable_channel_does_not_silently_become_the_string_count(
     assert "FEEDBACK_UNPARSEABLE" in [f["rule"] for f in doc["findings"]]
 
 
+def test_a_box_whose_arguments_are_not_coordinates_is_unparseable(tmp_path):
+    """A `box` that is not a box means the token stream is not this grammar.
+    Skipping four tokens blindly would resynchronise on the wrong word and
+    return a number that looks like an answer."""
+    _extraction_run(
+        tmp_path,
+        'box a b c d\nfeedback add "Illegal overlap between a and b" medium\n')
+    rc, doc = _run(tmp_path)
+    assert rc == RC_FAIL
+    assert "FEEDBACK_UNPARSEABLE" in [f["rule"] for f in doc["findings"]]
+    # ...and the neighbouring well-formed box does not trip it:
+    other = tmp_path / "other"
+    _extraction_run(
+        other,
+        'box 1 2 3 4\nfeedback add "Illegal overlap between a and b" medium\n')
+    _, doc2 = _run(other)
+    assert "FEEDBACK_UNPARSEABLE" not in [f["rule"] for f in doc2["findings"]]
+
+
 def test_a_wellformed_channel_parses(tmp_path):
     count, rules = mefc.parse_magic_feedback(FEEDBACK_TWO_OVERLAPS)
     assert count == 2

@@ -214,6 +214,7 @@ import re
 import shlex
 import sys
 from dataclasses import dataclass, asdict, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -331,6 +332,19 @@ def parse_magic_feedback(text: str) -> Tuple[int, List[str]]:
             if len(components) - i < 4:
                 raise ValueError(
                     "invalid syntax: 'box' command has less than 4 arguments")
+            # Upstream parses each coordinate as a Decimal and raises if it
+            # cannot. Validating here is not decoration: a `box` whose
+            # arguments are not coordinates means the token stream is not the
+            # grammar this walk assumes, and skipping four tokens blindly
+            # would resynchronise on the wrong word and return a count that
+            # looks like an answer.
+            for c in components[i:i + 4]:
+                try:
+                    Decimal(c)
+                except InvalidOperation:
+                    raise ValueError(
+                        f"invalid bounding box: {c!r} is not a coordinate"
+                    ) from None
             i += 4
             have_box = True
         elif instruction == "feedback":
