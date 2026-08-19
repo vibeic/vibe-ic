@@ -2720,7 +2720,7 @@ steps:
   - id: 15.5ic
     name: "Pad Ring (chip/IC path only)"
     stage: stage3
-    path: ic
+    flow_path: ic
     required_inputs:
       - from: 15
         path: "phase3/stage3/pnr/floorplan.def"
@@ -3820,7 +3820,7 @@ steps:
   - id: 26.5ic
     name: "Die Finishing — seal ring + die identification (chip/IC path only)"
     stage: stage3
-    path: ic
+    flow_path: ic
     required_inputs:
       - from: 21
         path: "phase3/stage3/pnr/routed.def"
@@ -5088,7 +5088,7 @@ steps:
   - id: 37.5ip
     name: "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (cell/IP path TERMINAL)"
     stage: stage4
-    path: ip
+    flow_path: ip
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
@@ -5113,7 +5113,7 @@ steps:
   - id: 37.5ic
     name: "Shuttle Precheck — the operator's own refusal (chip/IC path only)"
     stage: stage4
-    path: ic
+    flow_path: ic
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
