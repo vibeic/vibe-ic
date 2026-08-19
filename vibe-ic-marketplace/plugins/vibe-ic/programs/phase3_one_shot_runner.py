@@ -79,6 +79,7 @@ import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helper
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
 import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
+import step_metrics as _sm  # vibe-ic#1080 — the ONE per-step metrics mechanism
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
 import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
@@ -12059,6 +12060,38 @@ def _drt_final_violations(log_text: str) -> Optional[int]:
     return _sdf.router_iter_last_count(log_text)
 
 
+#: The router's own end-of-route DRC count, under the metrics stage the PnR
+#: Tcl opens. MEASURED equal to the last `[INFO DRT-0199]` on a real route
+#: (trajectory 59/12/10/0, metric 0), which is what makes the log parser a
+#: cross-check of the SAME quantity rather than a second opinion.
+_KEY_DRT = "detailedroute__route__drc_errors"
+
+
+def _drt_reading(out_dir: Path, log_text: str):
+    """(reconciliation, raw tool metrics) for the route DRC count.
+
+    PURE — a directory and a string; runs no tool and enters no container, so
+    the three acceptance cases (agree / disagree / no metric) can be built
+    directly instead of inferred from a full PnR.
+    """
+    prose = _drt_final_violations(log_text)
+    if prose is None:
+        lp = out_dir / "openroad.log"
+        if lp.is_file():
+            prose = _drt_final_violations(lp.read_text(errors="ignore"))
+    metrics: Dict[str, Any] = {}
+    mf = out_dir / _PNR_METRICS
+    try:
+        loaded = json.loads(mf.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            metrics = loaded
+    except (OSError, ValueError):
+        metrics = {}
+    raw = metrics.get(_KEY_DRT)
+    metric = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+    return _sm.reconcile("route__drc_errors", metric, prose), metrics
+
+
 def _compute_resized_die(die_w: int, die_h: int,
                          actual_util_pct: float,
                          target_util_pct: float = _DEFAULT_TARGET_UTIL_PCT,
@@ -18940,6 +18973,14 @@ if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
 # PDKs without RC files have detailed_route that completes without wire
 # geometry but at least the global_route step does write SPECIALNETS).
 puts "{_PNR_STAGE_MARKER} detailed_route"
+# vibe-ic#1080 — ASK THE ROUTER for its own count instead of scraping it.
+# `push`, not `set`: this Tcl is one session and the metrics stage is global,
+# so a bare `set` would re-label every LATER stage's metrics as routing ones.
+# The namespace stays open across EVERY route pass (the post-route SPEF /
+# antenna / ECO reroutes below are route passes) because the log parser takes
+# the LAST DRT-0199; closing it after the first pass would pin the metric while
+# the prose moved on and manufacture a disagreement on a design that converged.
+utl::push_metrics_stage "detailedroute__{{}}"
 if {{[catch {{detailed_route}} dr_err]}} {{
   puts "DETAILED_ROUTE_NONFATAL: $dr_err"
 }}
@@ -18981,6 +19022,11 @@ puts "{_PNR_STAGE_MARKER} postroute_fill"
 # sees the final geometry (post antenna-repair, post filler) and every
 # downstream consumer (write_def / write_verilog / RCX / magic GDS / DRC /
 # LVS) reads the patched route.
+# Close the routing metrics namespace once the shipped geometry is final.
+# `catch`-wrapped: a RESUME Tcl elides the routing body (and with it the push)
+# but keeps this tail, and an uncaught pop on an empty stack would kill a route
+# that had already succeeded.
+if {{[catch {{utl::pop_metrics_stage}} _tm_err]}} {{ puts "METRICS_STAGE_POP_SKIPPED: $_tm_err" }}
 {min_area_patch_block}write_def {out_dir_c}/routed.def
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
@@ -19075,6 +19121,8 @@ def _build_pnr_resume_tcl_text(pnr_tcl_text: str, *, checkpoint_def_c: str,
 
 _PNR_RESUME_TCL = "pnr_resume.tcl"
 _PNR_RESUME_LOG = "openroad_resume.log"
+#: vibe-ic#1080 — where OpenROAD writes the numbers IT computed.
+_PNR_METRICS = "openroad.metrics.json"
 
 
 def _pnr_resume_after_fatal_signal(*, project: Path, top: str, container: str,
@@ -20171,7 +20219,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         sizing_drv_report_block=sizing_drv_report_block))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-           f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
+           f"openroad -no_init -exit -metrics {out_dir_c}/{_PNR_METRICS} "
+           f"{pnr_tcl_c} 2>&1 | "
            f"tee {out_dir_c}/openroad.log")
     # v1.6.163 (#60 P0-3) — auto-resize retry loop. If OpenROAD
     # reports `[ERROR GPL-0301] Utilization N% exceeds 100%`, rewrite
@@ -20592,12 +20641,30 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # of fake DRC/LVS/STA findings. The honest verdict is FAIL naming N
     # and the congestion knobs; outputs stay on disk for debugging but
     # are marked non-signoff.
-    _drt_viol = _drt_final_violations(out + err)
-    if _drt_viol is None:
-        _log_p = out_dir / "openroad.log"
-        if _log_p.is_file():
-            _drt_viol = _drt_final_violations(
-                _log_p.read_text(errors="ignore"))
+    #
+    # vibe-ic#1080 — BOTH READINGS RUN AND MUST AGREE. The prose parser is
+    # kept, deliberately: deleting it would leave one unchecked source, and
+    # letting it WIN would keep the blindness this exists to remove. When the
+    # two differ this step FAILS and the message names BOTH numbers, because
+    # a silent preference for either is the defect and not the fix.
+    _drt_rec, _drt_metrics = _drt_reading(out_dir, out + err)
+    _drt_extras: Dict[str, Any] = {"drt_reconciliation": _drt_rec.as_dict()}
+    # A metric that was never emitted must not read as clean. Say what it is.
+    if _drt_rec.status in (_sm.NO_METRIC, _sm.NEITHER, _sm.PROSE_BLIND):
+        print(f"[pnr] ROUTE_DRC {_drt_rec.status}: {_drt_rec.detail}",
+              file=sys.stderr)
+    if not _drt_rec.ok:
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            (f"ROUTE_DRC_METRIC_DISAGREEMENT: {_drt_rec.detail} No "
+             f"route-convergence verdict is issued while the two disagree. "
+             f"Emitted DEF/GDS are kept for debugging but are NOT sign-off "
+             f"artifacts."),
+            [str(out_dir / "openroad.log"), str(out_dir / _PNR_METRICS)],
+            extras={"finding": "ROUTE_DRC_METRIC_DISAGREEMENT",
+                    "resize_history": resize_history,
+                    "loosen_declines": loosen_declines, **_drt_extras})
+    _drt_viol = _drt_rec.value
     if _drt_viol is not None and _drt_viol > 0:
         # #914 — this verdict used to hand the operator a remedy ("increase
         # --die-um, lower --util") that the automatic ladder had just declined
