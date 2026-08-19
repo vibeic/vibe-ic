@@ -40,7 +40,7 @@ execution engines.
 
 It is also **program-first**. The product is the deterministic runner chain
 (`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1195 top-level programs
-→ MCP-EDA), not a prompt. **60 of the 63 flow steps are gated by a program
+→ MCP-EDA), not a prompt. **66 of the 68 flow steps are gated by a program
 whose exit code is the verdict**; the AI is the fall-through when a program
 cannot decide, never the thing that declares PASS.
 
