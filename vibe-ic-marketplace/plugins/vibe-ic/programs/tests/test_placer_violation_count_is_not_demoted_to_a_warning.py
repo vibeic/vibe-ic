@@ -55,6 +55,7 @@ chip-AGNOSTIC: the runner's own marker grammar and standard OpenROAD commands.
 No chip, PDK, library, vendor or design literal in the fix or in this test.
 """
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -180,6 +181,25 @@ def test_a_legacy_bare_warn_with_no_count_still_fails(tmp_path):
     assert "DPL-0033" in _msg(tmp_path, "PLACER_REPORTED_VIOLATIONS")
 
 
+def test_a_legacy_bare_pass_with_no_count_is_a_measured_zero(tmp_path):
+    """The other half of the archive, and it must NOT be read as unknown.
+
+    The pre-count runner printed `<SITE>_CHECK_PLACEMENT_PASS` only from the
+    `else` branch of `catch {check_placement}` -- i.e. only when the aborting
+    form did not throw, which is the placer returning zero. Reading that as
+    NOT_DETERMINED would redden every archived run that was actually legal.
+    MEASURED: a published run's `eco/eco_repair.log` carries this bare line.
+    """
+    _mk(tmp_path, None)
+    eco = tmp_path / "phase3" / "stage3" / "eco"
+    eco.mkdir(parents=True)
+    (eco / "eco_repair.log").write_text("ECO_CHECK_PLACEMENT_PASS\n")
+    verdict, rc, rules, summary = _run(tmp_path)
+    assert (verdict, rc) == ("PASS", 0)
+    assert summary["check_placement_sites"] == {"ECO": "0"}
+    assert "PLACER_REPORTED_VIOLATIONS" not in rules
+
+
 @pytest.mark.parametrize("marker,site", [
     # the ship-time signoff repair...
     ("SHIP_CP_WARN", "SHIP"),
@@ -220,6 +240,56 @@ def test_the_older_spelling_does_not_fire_on_a_clean_run(tmp_path):
     verdict, rc, _rules, summary = _run(tmp_path)
     assert (verdict, rc) == ("PASS", 0)
     assert summary["check_placement_sites"] == {"SHIP": "0", "SHIP_CVG": "0"}
+
+
+def test_the_generated_deck_is_not_read_as_a_verdict(tmp_path):
+    """`pnr/signoff_spef_repair.tcl` contains the literal marker text -- it is
+    the SCRIPT that emits it. MEASURED: a published run's deck carries
+    `puts "SHIP_CP_WARN: $e"` while its log carries no such line. Reading a
+    deck as a result would refuse every design that merely emitted one.
+    """
+    _mk(tmp_path, ["SPARE_CHECK_PLACEMENT_VIOLATIONS 0"])
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    (pnr / "signoff_spef_repair.tcl").write_text(
+        'if {[catch {check_placement} e]} { puts "SHIP_CP_WARN: $e" }\n'
+        'puts "SHIP_CHECK_PLACEMENT_VIOLATIONS 99"\n')
+    verdict, rc, _rules, summary = _run(tmp_path)
+    assert (verdict, rc) == ("PASS", 0)
+    assert summary["check_placement_sites"] == {"SPARE": "0"}
+
+
+def test_the_legacy_spelling_is_a_closed_set_not_a_wildcard(tmp_path):
+    """`*_CP_WARN` as a wildcard would let any future marker from any
+    subsystem redden the PLACEMENT gate. The legacy set is closed -- the two
+    names the runner ever emitted from a bare `catch {check_placement}` -- so
+    an unrelated marker that merely ends the same way is not a placer verdict.
+    """
+    _mk(tmp_path, ["SPARE_CHECK_PLACEMENT_VIOLATIONS 0",
+                   "SOME_OTHER_SUBSYSTEM_CP_WARN: unrelated"])
+    verdict, rc, _rules, summary = _run(tmp_path)
+    assert (verdict, rc) == ("PASS", 0)
+    assert summary["check_placement_sites"] == {"SPARE": "0"}
+
+
+def test_the_closed_legacy_set_is_exactly_what_the_runner_ever_emitted():
+    """...and the set is only closed while it is complete. Every
+    `<X>_CP_WARN` name still present anywhere in the runner must be in it; a
+    new one added without extending the set would be read as silence.
+    """
+    # The set itself, pinned: shrinking it must be a deliberate edit, not a
+    # side effect. These are the two names `git log --all -S_CP_WARN` yields
+    # over the runner's whole history, and both really are recognised.
+    assert set(P._CP_LEGACY_WARN_SITES) == {"SHIP", "SHIP_CVG"}
+    for site in P._CP_LEGACY_WARN_SITES:
+        assert P._CP_LEGACY_WARN_RE.search(f"{site}_CP_WARN: DPL-0033")
+
+    # ...and nothing in the runner emits a name outside it. The current runner
+    # emits none at all (every site now carries the count), so this holds as a
+    # guard on what comes next: a new bare `catch {check_placement}` printing
+    # `<X>_CP_WARN` without extending the set would be read as silence.
+    src = (Path(R.__file__)).read_text()
+    emitted = set(re.findall(r'puts \\?"([A-Z0-9_]+)_CP_WARN', src))
+    assert emitted <= set(P._CP_LEGACY_WARN_SITES), emitted
 
 
 def test_not_determined_is_never_reported_as_zero(tmp_path):
@@ -354,6 +424,51 @@ def test_the_count_is_found_in_any_pnr_log(tmp_path):
     assert rc == 1 and "PLACER_REPORTED_VIOLATIONS" in rules
 
 
+def test_the_eco_repairs_verdict_is_read_where_the_runner_writes_it(tmp_path):
+    """The ECO site writes to `phase3/stage3/eco`, not to `pnr/`.
+
+    `_build_eco_repair_tcl`'s output is run into `eco_dir()/eco_repair.log`
+    (`_path_layout.eco_dir`), so a gate that walked only `pnr/` would have the
+    ECO site emitting a count nothing ever opened -- the same demotion one
+    directory over.
+    """
+    _mk(tmp_path, ["SPARE_CHECK_PLACEMENT_VIOLATIONS 0"])
+    eco = tmp_path / "phase3" / "stage3" / "eco"
+    eco.mkdir(parents=True)
+    (eco / "eco_repair.log").write_text(
+        "ECO_CHECK_PLACEMENT_VIOLATIONS 3\n"
+        "ECO_CHECK_PLACEMENT_WARN: violations=3\n")
+    _v, rc, rules, summary = _run(tmp_path)
+    assert rc == 1 and "PLACER_REPORTED_VIOLATIONS" in rules
+    assert summary["check_placement_sites"] == {"ECO": "3", "SPARE": "0"}
+    assert "3" in _msg(tmp_path, "PLACER_REPORTED_VIOLATIONS")
+
+
+def test_the_log_roots_are_the_ones_the_runner_actually_writes_to():
+    """Pin the roots to the layout module, so a directory rename cannot make
+    this gate quietly stop reading a site."""
+    import _path_layout as L
+    proj = Path("/nonexistent-project")
+    roots = {str(proj.joinpath(*parts)) for parts in P._LOG_ROOTS}
+    assert str(L.pnr_dir(proj)) in roots
+    assert str(L.eco_dir(proj)) in roots
+
+
+def test_two_roots_do_not_merge_same_named_logs(tmp_path):
+    """`pnr/x.log` and `eco/x.log` are different files and must stay different
+    sequences -- otherwise a clean reading in one would cancel a dirty reading
+    in the other by pretending they are one chronological log."""
+    _mk(tmp_path, None)
+    (tmp_path / "phase3" / "stage3" / "pnr" / "x.log").write_text(
+        "ECO_CHECK_PLACEMENT_VIOLATIONS 5\n")
+    eco = tmp_path / "phase3" / "stage3" / "eco"
+    eco.mkdir(parents=True)
+    (eco / "x.log").write_text("ECO_CHECK_PLACEMENT_VIOLATIONS 0\n")
+    _v, rc, rules, summary = _run(tmp_path)
+    assert rc == 1 and "PLACER_REPORTED_VIOLATIONS" in rules
+    assert summary["check_placement_sites"] == {"ECO": "5"}
+
+
 def test_the_ladder_verdict_is_still_read(tmp_path):
     """The pre-existing `*_LEGALIZE_FAILED` reading must not regress."""
     _mk(tmp_path, ["INITIAL_DPL_LEGALIZE_OK disp=default",
@@ -442,6 +557,16 @@ def test_no_call_site_swallows_the_exception_text_alone(site):
     # guess, and beats zero.
     ('proc check_placement {} { error "DPL-0033 checks failed" }',
      "NOT_DETERMINED", "WARN"),
+    # an OpenROAD that TAKES -no_abort but returns nothing (check_placement did
+    # not always return the count). Taking the flag is not the same as getting
+    # a number back, and the difference is a false ALARM, not a false pass: a
+    # LEGAL placement here must still read 0. Before the fallback covered this
+    # shape it read NOT_DETERMINED and reddened every design on such a build.
+    ("proc check_placement {args} { return }", "0", "PASS"),
+    # ...and the same build with an ILLEGAL placement: the flagged form still
+    # returns nothing, the bare form aborts, and the size stays unknown.
+    ('proc check_placement {args} { if {[lsearch $args -no_abort] >= 0} '
+     '{ return } ; error "DPL-0033" }', "NOT_DETERMINED", "WARN"),
 ])
 def test_the_emitted_tcl_measures_the_count_on_every_openroad_shape(
         tmp_path, stub, expect_count, expect_verdict):
@@ -622,6 +747,34 @@ _PREFIX_EMITTER = (
     "  puts \"SPARE_CHECK_PLACEMENT_PASS\"\n"
     "}\n")
 
+# ...and the GATE that emitter was paired with. Every rule the pre-fix gate
+# could FAIL on, enumerated from `origin/main`'s own source. The pre-fix gate
+# is exactly this set: parse `placed.def`, refuse an UNPLACED token, refuse a
+# `*_LEGALIZE_FAILED` marker, refuse a derivable density outside (0, 100].
+# Asserting that NONE of them fires on the planted overlap is the same
+# statement as "today's gate PASSES this design", and unlike loading the old
+# source out of git it stays true as the gate grows — a future check that
+# starts refusing this fixture for a DIFFERENT reason is a change to the
+# control, and this assertion is where it surfaces.
+_PRE_FIX_FAIL_RULES = frozenset({
+    "PLACED_DEF_MISSING", "PLACED_DEF_EMPTY", "PLACED_DEF_UNPARSEABLE",
+    "NO_COMPONENTS_SECTION", "EMPTY_COMPONENTS", "COMPONENT_COUNT_MISMATCH",
+    "UNPLACED_INSTANCES", "LEGALIZER_REPORTED_FAILURE",
+    "DENSITY_NONPOSITIVE", "DENSITY_OVER_100",
+})
+
+
+def _pre_fix_verdict(project: Path):
+    """What the pre-fix gate would have returned for this project.
+
+    It ran the SAME DEF/ladder/density readings this gate still runs and had
+    no other predicate, so its verdict is FAIL iff one of those rules fires.
+    """
+    _v, _rc, findings, _s = P.inspect(project)
+    fired = sorted({f["rule"] for f in findings
+                    if f["severity"] == "FAIL"} & _PRE_FIX_FAIL_RULES)
+    return ("FAIL" if fired else "PASS"), fired
+
 
 def _gate_on(log_text: str, def_text: str):
     proj = Path(tempfile.mkdtemp(prefix="cp_gate_"))
@@ -670,20 +823,48 @@ def test_todays_gate_passes_the_planted_overlap_and_this_one_fails_it():
                  if l.startswith("SPARE_CHECK_PLACEMENT_VIOLATIONS"))
     assert count.isdigit() and int(count) > 0, out
 
-    _p, (verdict, rc, rules, summary) = _gate_on(out, def_text)
+    proj, (verdict, rc, rules, summary) = _gate_on(out, def_text)
     assert summary["unplaced"] == 0, "the DEF is token-clean, as it must be"
+
+    # A. TODAY'S GATE. Not one of the rules it could refuse on fires: the DEF
+    #    parses, every component carries `+ PLACED`, there is no
+    #    `*_LEGALIZE_FAILED` marker and no derivable density. It PASSES a
+    #    design the placer just counted violations in.
+    pre_v, pre_fired = _pre_fix_verdict(proj)
+    assert (pre_v, pre_fired) == ("PASS", []), (
+        "the acceptance fixture must be one TODAY'S gate passes -- otherwise "
+        "the A/B is measuring some other failure")
+
+    # B. THIS GATE. Same project, same log, and it refuses -- quoting the
+    #    number the placer returned.
     assert (verdict, rc) == ("FAIL", 1)
     assert "PLACER_REPORTED_VIOLATIONS" in rules
     assert summary["check_placement_sites"] == {"SPARE": count}
+    assert count in _msg(proj, "PLACER_REPORTED_VIOLATIONS")
 
     # ... and the same overlap, seen only through the pre-fix emitter, is what
-    # today's gate was handed. The count is absent from that log entirely.
-    _w2, old = _openroad_on(def_text, _PREFIX_EMITTER)
-    assert "CHECK_PLACEMENT_VIOLATIONS" not in old
-    _p2, (v2, rc2, rules2, _s2) = _gate_on(old, def_text)
+    # today's gate was handed. The count is absent from that log entirely, and
+    # today's gate passes that one too.
+    _w2, old_log = _openroad_on(def_text, _PREFIX_EMITTER)
+    assert "CHECK_PLACEMENT_VIOLATIONS" not in old_log
+    proj2, (v2, rc2, rules2, _s2) = _gate_on(old_log, def_text)
+    assert _pre_fix_verdict(proj2) == ("PASS", [])
     assert (v2, rc2) == ("FAIL", 1), (
         "the legacy WARN spelling must still be refused, as NOT_DETERMINED")
     assert "PLACER_REPORTED_VIOLATIONS" in rules2
+
+
+def test_the_pre_fix_control_list_is_not_stale():
+    """The control is only a control while it names rules the gate really has.
+
+    Every name in `_PRE_FIX_FAIL_RULES` must still be a rule this program can
+    emit; if one is renamed away the control silently stops refusing anything
+    and the A/B above degrades to "PASS because I looked for nothing".
+    """
+    src = (Path(P.__file__)).read_text()
+    missing = sorted(r for r in _PRE_FIX_FAIL_RULES
+                     if '"%s"' % r not in src)
+    assert missing == [], missing
 
 
 @_needs_openroad
@@ -695,7 +876,10 @@ def test_the_same_fixture_without_the_overlap_stays_green():
     _w, out = _openroad_on(
         def_text, R._build_check_placement_measured_tcl("SPARE", "_sp"))
     assert "SPARE_CHECK_PLACEMENT_VIOLATIONS 0" in out, out
-    _p, (verdict, rc, rules, summary) = _gate_on(out, def_text)
+    proj, (verdict, rc, rules, summary) = _gate_on(out, def_text)
+    assert _pre_fix_verdict(proj) == ("PASS", []), (
+        "today's gate passes the legal fixture too -- the A/B turns on the "
+        "overlap and on nothing else")
     assert (verdict, rc) == ("PASS", 0)
     assert summary["check_placement_sites"] == {"SPARE": "0"}
     assert "PLACER_REPORTED_VIOLATIONS" not in rules

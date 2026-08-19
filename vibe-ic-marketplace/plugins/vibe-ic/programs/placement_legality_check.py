@@ -45,7 +45,11 @@ This program parses the REAL OpenROAD/Innovus DEF and verifies SUBSTANCE:
      "Last" is per LOG FILE, because the logs are walked in filename
      order and that is not time order: a site read non-zero in any one
      log is illegal, so a clean reading in a file that merely sorts
-     later cannot cancel it.
+     later cannot cancel it. The logs are read from BOTH roots the
+     runner writes them to — ``phase3/stage3/pnr`` (spare insertion and
+     both ship-time sites) and ``phase3/stage3/eco`` (the ECO timing
+     repair) — because a site whose log this gate does not open is a
+     verdict demoted just as surely as one nobody parsed.
 
   5. Placement density (occupied-site-area / core-area) is verified to be
      in the universal sanity range (0, 100]% — but ONLY when it is
@@ -284,22 +288,39 @@ _LEGALIZE_MARKER_RE = re.compile(
     r"\b([A-Z0-9_]+_LEGALIZE_(?:OK|FAILED))\b")
 
 
+# WHERE THE VERDICT LANDS. The runner asks `check_placement` at four sites and
+# they do NOT all write into one directory:
+#   pnr/  spare insertion, and both ship-time repair sites
+#         (`signoff_spef_repair.log`, which carries SHIP and SHIP_CVG).
+#   eco/  the ECO timing repair (`eco_repair.log`), written to
+#         `phase3/stage3/eco` by `_path_layout.eco_dir`, NOT to pnr/.
+# Reading pnr/ alone would leave the ECO site emitting a count that no gate
+# ever opens -- the same demotion this program exists to end, one directory
+# over. Both roots are read, and a log is keyed by root/relative-path so two
+# files of the same name in different roots stay distinct sequences.
+_LOG_ROOTS = (
+    ("phase3", "stage3", "pnr"),
+    ("phase3", "stage3", "eco"),
+)
+
+
 def _iter_pnr_log_lines(project: Path):
-    """Yield (log_name, line) for every line of every PnR log.
+    """Yield (log_name, line) for every line of every PnR / ECO log.
 
     One traversal shared by every log-derived check below, so the marker read
     and the violation-count read can never disagree about which files they saw.
     """
-    pnr_dir = project / "phase3" / "stage3" / "pnr"
-    if not pnr_dir.is_dir():
-        return
-    for log in sorted(pnr_dir.rglob("*.log")):
-        try:
-            with log.open(errors="replace") as fh:
-                for line in fh:
-                    yield str(log.relative_to(pnr_dir)), line
-        except OSError:
+    for parts in _LOG_ROOTS:
+        root = project.joinpath(*parts)
+        if not root.is_dir():
             continue
+        for log in sorted(root.rglob("*.log")):
+            try:
+                with log.open(errors="replace") as fh:
+                    for line in fh:
+                        yield f"{parts[-1]}/{log.relative_to(root)}", line
+            except OSError:
+                continue
 
 
 # --- The placer's OWN violation COUNT --------------------------------------
@@ -341,9 +362,23 @@ _CP_PASS_RE = re.compile(r"\b([A-Z0-9_]+?)_CHECK_PLACEMENT_PASS\b")
 # An ARCHIVED log can still carry that spelling, and reading it as "no verdict
 # recorded" would be a silent false NEGATIVE of the same shape this gate exists
 # to refuse. It is read like any other count-less WARN: NOT_DETERMINED, never
-# zero. MEASURED across the published run roots: no log carries this spelling,
-# so recognising it flips nothing today and only covers the archive.
-_CP_LEGACY_WARN_RE = re.compile(r"\b([A-Z0-9_]+?)_CP_WARN\b\s*:?[ \t]*(.*)")
+# zero. MEASURED across the published run roots: no *.log carries this
+# spelling, so recognising it flips nothing today and only covers the archive.
+# The generated DECK does carry it — `pnr/signoff_spef_repair.tcl` holds the
+# literal `puts "SHIP_CP_WARN: $e"` next to the log it produced — which is why
+# this traversal reads `*.log` and nothing else. A deck is the instruction to
+# run a check, never its result, and reading one as a verdict would refuse
+# every design that merely emitted the deck.
+# ...and it is spelled out, not globbed. `*_CP_WARN` as a wildcard would make
+# ANY future marker ending `_CP_WARN` — from any subsystem, about anything —
+# redden the PLACEMENT gate. The legacy set is CLOSED and known exactly:
+# `git log --all -S_CP_WARN` over the runner yields these two names and no
+# other, because they were emitted from the only two `catch {check_placement}`
+# sites that ever used this spelling. Naming them is exhaustive for the archive
+# and cannot mis-fire on something unrelated.
+_CP_LEGACY_WARN_SITES = ("SHIP_CVG", "SHIP")
+_CP_LEGACY_WARN_RE = re.compile(
+    r"\b(" + "|".join(_CP_LEGACY_WARN_SITES) + r")_CP_WARN\b\s*:?[ \t]*(.*)")
 _COUNT_NOT_DETERMINED = "NOT_DETERMINED"
 
 
@@ -392,8 +427,13 @@ def _check_placement_verdicts(lines) -> dict:
                 rec["worst"] = m.group(2)
         for m in _CP_PASS_RE.finditer(line):
             rec = _rec(log, m.group(1))
-            # The PASS line accompanies its own VIOLATIONS 0 line; it is only a
-            # READING of its own for a log that carries no count at all.
+            # The PASS line accompanies its own VIOLATIONS 0 line; it is only
+            # a READING of its own for a log that carries no count at all —
+            # and there it means a MEASURED zero, because the runner that
+            # predates the count printed `<SITE>_CHECK_PLACEMENT_PASS` only
+            # from the `else` of `catch {check_placement}`, i.e. only when the
+            # aborting form did NOT throw. MEASURED: a published run's
+            # `eco/eco_repair.log` carries exactly this bare PASS line.
             if rec["readings"] == 0:
                 rec["count"] = "0"
         for m in list(_CP_WARN_RE.finditer(line)) + list(
