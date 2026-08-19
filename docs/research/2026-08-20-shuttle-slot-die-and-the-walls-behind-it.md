@@ -171,11 +171,20 @@ seal-ring generator — `fill_all.rb`, which chains `fill_comp.rb`, `fill_poly2.
 and `fill_metal.rb` onto COMP, Poly2 and Metal1-5. Driven the way upstream's
 `KLayout.Filler` drives it (`klayout -b -zz -r <script> -rd input= -rd output=`):
 
-    density errors   8  ->  3      (cleared: DCF.1b PL.8 M1.4 M3.4 M4.4)
-    remaining               M2.4  M5.4  MT.3
-    bounding box     unchanged, 1936.0 x 2531.0, still exactly the slot
+the FILLED die was put through the whole precheck again, `sha256 5476ab12…`, and
+sixteen stages executed a second time:
 
-So the density wall is one PDK script call from being two thirds gone. Upstream's
+    stage                     sealed        sealed + PDK fill
+    3  CheckSize              PASS          PASS   (1936.0 x 2531.0, unchanged)
+    7  Checker.Density           8  ->        3     (cleared: DCF.1b PL.8 M1.4 M3.4 M4.4)
+                                             remaining M2.4 M5.4 MT.3
+    11 Checker.Antenna           1             1
+    13 Checker.MagicDRC        252  ->        0     "Check for Magic DRC errors clear."
+    15 Checker.KLayoutDRC     1177          1177    (unchanged — the fill adds none)
+
+So one call to the PDK's own fill script takes Magic DRC from 252 to CLEAR and
+minimum density from 8 to 3, and costs nothing anywhere else. It is the single
+highest-value thing not yet in this flow. Upstream's
 `chip.py` already has the shape to copy, in this exact order:
 
     "+Checker.KLayoutAntenna": KLayout.SealRing
