@@ -233,6 +233,32 @@ refuses a duplicate registration. We have 1178 programs in one namespace and no
 mechanism that says "this rule already has an owner" — which is precisely how a
 duplicate checker gets written. That is a small, flat-tree-compatible ratchet.
 
+### (d) What was built instead — and why (c) does not argue against it
+
+(c) rejected ONE shape of locality: relocating checkers into per-subsystem
+directories. That rejection stands, and nothing was relocated. `programs/` is
+still flat and every audit that greps it still works.
+
+What landed is a different shape with the same goal:
+`programs/package_invariants_check.py` plus a `<package>/INVARIANTS.json` in six
+packages (`tools/ci`, `tools/phase1_engine`, and the plugin's `agents`,
+`commands`, `ip-catalog`, `skills`). The rule the contributor must obey sits in
+the directory they are editing; the checker that enforces it stays central. Each
+entry carries the rule twice — `statement`/`why` for the reader, `rule` for the
+machine — plus a `counterexample` that is re-evaluated on every run, so a rule
+that stops discriminating is a FAIL rather than surviving as decoration.
+
+Exclusive ownership, the half (c) named as worth taking, is what
+`package_invariants_enrolled.json` provides: a rule belongs to exactly one
+package, and an `INVARIANTS.json` in a package nobody enrolled is `UNENROLLED`,
+not silently accepted.
+
+The two checks-that-cannot-fail listed below were answered rather than inherited.
+`ZERO_ENROLLMENT` is the direct answer to defect 1 in the next section: an empty
+population must not print a confident conform-line. `VACUOUS_RULE` answers the
+same shape one level down — a rule whose glob no longer selects any of its own
+package's files held over nothing, and says so.
+
 ---
 
 ## Checks of theirs that cannot fail
