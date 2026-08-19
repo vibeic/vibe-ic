@@ -1,0 +1,17 @@
+# Invariants of the MCP-EDA shared library.
+package: vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/lib
+invariants:
+  - id: mcp-lib-builds-no-shell-command-from-a-string
+    rule: >
+      No module here may assemble a command as a string and hand it to a shell.
+      This is the directory that OWNS the fix: shell_safety.mjs:1-11 records
+      that before v0.114.6 every EDA tool interpolated caller-supplied params
+      into execSync("docker exec C bash -c \"" + cmd.replace(/\"/g,'\\\"') +
+      "\"") -- escaping only double quotes -- so a value containing ; $ ` ' or a
+      newline executed arbitrary shell, on the HOST for the FPGA / doc-extract /
+      DB tools. Use spawnSync/execFileSync with an argv array, and shq() /
+      assertSafeIdent() for anything that must appear inside a quoted script.
+    applies_to: ["*.mjs"]
+    forbid: '(?m)^(?![ \t]*(?:#|//|\*)).*\bexecSync\s*\('
+    counterexample: |
+      const out = execSync("docker exec " + c + " bash -c \"" + cmd + "\"");
