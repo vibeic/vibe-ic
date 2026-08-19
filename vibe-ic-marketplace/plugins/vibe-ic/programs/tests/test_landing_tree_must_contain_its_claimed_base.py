@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -656,8 +657,16 @@ def test_landing_script_wires_the_gate_blocking(tmp_path):
     """
     script = (_REPO_ROOT / "tools" / "gatekeeper-land.sh").read_text(
         encoding="utf-8")
-    assert 'run "tree contains the base it claims as parent"' in script
+    # `run <unit> <label> <cmd…>` since 7c376e348 (v1.10.69): the landing record
+    # gave every call site a leading machine unit id, so the LABEL this gate is
+    # known by is now the second quoted word. The label itself did not move.
+    _LABEL = "tree contains the base it claims as parent"
+    assert re.search(rf'^\s*run "[^"]*" "{re.escape(_LABEL)}"', script, re.M), (
+        "the base-ancestry gate is no longer wired into gatekeeper-land.sh")
     assert 'gatekeeper_stale_branch_check.py' in script
     # `run`, not `report`: `report` never touches FAILED, so a gate wired
     # through it is printed and not counted.
-    assert 'report "tree contains the base it claims as parent"' not in script
+    assert not re.search(
+        rf'^\s*report "[^"]*" "{re.escape(_LABEL)}"', script, re.M), (
+        "the base-ancestry gate was demoted from `run` to `report`, which never "
+        "touches FAILED — it would be printed and not counted")
