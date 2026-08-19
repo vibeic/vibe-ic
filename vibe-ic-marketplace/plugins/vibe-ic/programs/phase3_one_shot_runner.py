@@ -14366,6 +14366,82 @@ def _build_spare_protection_tcl(plan: Dict[str, Any], out_dir_c: str
     return "\n".join(lines) + "\n"
 
 
+# === The placer's OWN legality verdict: MEASURE it, never swallow it ========
+# `check_placement` RETURNS the violation count. From the installed binary's
+# own `info body check_placement`:
+#
+#   "Returns the violation count. Without -no_abort a non-zero count raises
+#    DPL-33 instead of returning, so an illegal placement can never be mistaken
+#    for a legal one by a caller that ignores the result."
+#
+# Four call sites in this runner did precisely what that sentence warns about:
+# they wrapped the call in `catch` and printed the exception text as a WARN, so
+# the COUNT never left the log line and no gate could refuse on it.
+#
+# MEASURED, on a published run already in the corpus, from its own PnR log:
+#     [WARNING DPL-0006] Site aligned check failed (1).
+#     [ERROR DPL-0033] detailed placement checks failed during check placement.
+#     SPARE_CHECK_PLACEMENT_WARN: DPL-0033
+# and `placement_legality_check` on that same project returned PASS. One
+# site-alignment violation, reported by the placer, demoted to a warning, and
+# the gate NAMED for placement legality never read it.
+#
+# The `catch` STAYS — aborting the whole PnR on one inherited mis-aligned
+# instance was never the intent and is not the fix. What changes is that the
+# number is emitted in a form a gate reads and refuses on:
+#
+#     <MARKER>_CHECK_PLACEMENT_VIOLATIONS <n>
+#
+# where <n> is an integer, or the literal NOT_DETERMINED when the count could
+# not be obtained (an OpenROAD without `-no_abort`, whose aborting form tells us
+# only THAT the count is non-zero, never how large). NOT_DETERMINED is never
+# reported as zero. `placement_legality_check` refuses on n > 0 and on the WARN.
+#
+# chip-AGNOSTIC: one standard OpenROAD command and this runner's own marker
+# grammar. No design, PDK, library or vendor literal.
+_CP_VIOLATIONS_SUFFIX = "_CHECK_PLACEMENT_VIOLATIONS"
+_CP_WARN_SUFFIX = "_CHECK_PLACEMENT_WARN"
+_CP_PASS_SUFFIX = "_CHECK_PLACEMENT_PASS"
+
+
+def _build_check_placement_measured_tcl(marker: str, var_tag: str = "") -> str:
+    """Emit the placer's own legality verdict WITH its violation count.
+
+    Preserves the existing `<MARKER>_CHECK_PLACEMENT_PASS` /
+    `<MARKER>_CHECK_PLACEMENT_WARN` grammar (so nothing that reads it breaks)
+    and ADDS `<MARKER>_CHECK_PLACEMENT_VIOLATIONS <n>`, which is the line the
+    gate keys on. The flow still continues on a violation — this changes what
+    is RECORDED, not what aborts.
+    """
+    v = var_tag
+    return (
+        f"# The placer's OWN legality verdict, MEASURED (not swallowed).\n"
+        f"# `-no_abort` makes check_placement RETURN the violation count\n"
+        f"# instead of raising DPL-0033, so the number survives the call.\n"
+        f"set _cpn{v} NOT_DETERMINED\n"
+        f"set _cpe{v} \"\"\n"
+        f"if {{![catch {{check_placement -no_abort}} _cpr{v}]}} {{\n"
+        f"  if {{[string is integer -strict $_cpr{v}]}} {{ "
+        f"set _cpn{v} $_cpr{v} }}\n"
+        f"}} else {{\n"
+        f"  # No `-no_abort` on this build: fall back to the aborting form,\n"
+        f"  # which throws IFF the count is non-zero. The count itself is then\n"
+        f"  # NOT DETERMINED — which is not zero and is not reported as zero.\n"
+        f"  if {{[catch {{check_placement}} _cpe{v}]}} {{\n"
+        f"    set _cpn{v} NOT_DETERMINED\n"
+        f"  }} else {{\n"
+        f"    set _cpn{v} 0\n"
+        f"  }}\n"
+        f"}}\n"
+        f"puts \"{marker}{_CP_VIOLATIONS_SUFFIX} $_cpn{v}\"\n"
+        f"if {{$_cpn{v} eq \"0\"}} {{\n"
+        f"  puts \"{marker}{_CP_PASS_SUFFIX}\"\n"
+        f"}} else {{\n"
+        f"  puts \"{marker}{_CP_WARN_SUFFIX}: violations=$_cpn{v} $_cpe{v}\"\n"
+        f"}}\n"
+    )
+
+
 def _build_spare_postfix_tcl(plan: Dict[str, Any],
                              tie_lo_cell: Optional[str] = None,
                              tie_lo_pin: str = "LO") -> str:
@@ -14613,13 +14689,13 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
         "  } _stn_e]} { puts \"SPARE_TIE_NET_DONT_TOUCH_NONFATAL: $_stn -- $_stn_e\" }",
         "}",
         "# ORGANIC #562 — check_placement gate: verify no off-site spares",
-        "# remain after legalization. DPL-0033 is caught so a misaligned",
-        "# inherited instance does not abort PnR (print WARN, flow continues).",
-        "if {[catch {check_placement} _cp_err]} {",
-        "  puts \"SPARE_CHECK_PLACEMENT_WARN: $_cp_err\"",
-        "} else {",
-        "  puts \"SPARE_CHECK_PLACEMENT_PASS\"",
-        "}",
+        "# remain after legalization. DPL-0033 is still caught so a misaligned",
+        "# inherited instance does not abort PnR (flow continues) — but W2.2:",
+        "# the violation COUNT is now MEASURED and emitted, so",
+        "# `placement_legality_check` can refuse on it instead of a WARN line",
+        "# nobody reads. This exact site is where a published run in the",
+        "# corpus swallowed `DPL-0006 Site aligned check failed (1)`.",
+        _build_check_placement_measured_tcl("SPARE", "_sp").rstrip("\n"),
     ]
     return "\n".join(lines) + "\n"
 
@@ -16964,14 +17040,12 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         + _build_escalating_legalize_tcl("ECO_DPL", "_eco")
         + "\n"
         "# ORGANIC #561 (d): DPL-0033 — catch around check_placement.\n"
-        "# check_placement throws on inherited mis-aligned instances; catch\n"
-        "# keeps the flow moving while still surfacing the WARN message.\n"
-        "if {[catch {check_placement} _cp_err]} {\n"
-        "  puts \"ECO_CHECK_PLACEMENT_WARN: $_cp_err\"\n"
-        "} else {\n"
-        "  puts \"ECO_CHECK_PLACEMENT_PASS\"\n"
-        "}\n"
-        "\n"
+        "# check_placement throws on inherited mis-aligned instances; the catch\n"
+        "# keeps the flow moving. W2.2: surfacing the exception TEXT is not the\n"
+        "# same as recording the verdict — the COUNT is measured and emitted so\n"
+        "# `placement_legality_check` can refuse on it.\n"
+        + _build_check_placement_measured_tcl("ECO", "_eco_cp")
+        + "\n"
         "# ORGANIC #561 (c): DRT-0305 — PG net cleanup before global_route.\n"
         "# A dangling zero_/one_ constant-tie net with POWER/GROUND SigType in\n"
         "# regular NETS makes TritonRoute abort ALL detailed routing.\n"
@@ -22654,7 +22728,7 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
     if {[catch {repair_timing -setup} e]} { puts "SHIP_CVG_RT_NONFATAL: $e"; incr _ship_rt_failed }
     if {[catch {detailed_placement} e]} { puts "SHIP_CVG_DP_NONFATAL: $e"; break }
   }
-  if {[catch {check_placement} e]} { puts "SHIP_CVG_CP_WARN: $e" }
+__SHIP_CVG_CHECK_PLACEMENT__
 __SPARE_SAFE_CLEAR__
   if {[catch {global_route} e]} { puts "SHIP_CVG_GR_NONFATAL: $e" }
   if {[catch {detailed_route -droute_end_iter __SHIP_DR_ITERS__} e]} { puts "SHIP_CVG_DR_NONFATAL: $e"; incr _ship_dr_failed }
@@ -22716,6 +22790,12 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
     # __SPARE_SAFE_CLEAR__ -> the shared spare-net-safe clear (#349 salvage;
     # a third inline copy of the filter is how a drift starts).
     return (_SHIP_POSTROUTE_CVG_TCL
+            # W2.2 — the loop's own `catch {check_placement}` printed
+            # SHIP_CVG_CP_WARN and dropped the count; it now emits the measured
+            # violation count that `placement_legality_check` refuses on.
+            .replace("__SHIP_CVG_CHECK_PLACEMENT__",
+                     _build_check_placement_measured_tcl(
+                         "SHIP_CVG", "_ship_cvg_cp").rstrip())
             .replace("__SPARE_SAFE_CLEAR__",
                      _spare_safe_routing_clear_tcl("SHIP_CVG").rstrip())
             .replace("__ROUTING_INTEGRITY_CHECK__",
@@ -22866,7 +22946,10 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "  if {[catch {detailed_placement} _drv_dp]} { "
         "puts \"SHIP_DP_NONFATAL: $_drv_dp\"; break }\n"
         "}\n"
-        "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
+        # W2.2 — the placer's verdict here used to be a bare `catch` whose
+        # exception text went to SHIP_CP_WARN and no further. The count is now
+        # measured and emitted for `placement_legality_check` to refuse on.
+        + _build_check_placement_measured_tcl("SHIP", "_ship_cp") +
         "if {$_ship_rt_failed > 0} { "
         "puts \"SHIP_SETUP_REPAIR_REFUSED: $_ship_rt_failed\" }\n"
         "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
