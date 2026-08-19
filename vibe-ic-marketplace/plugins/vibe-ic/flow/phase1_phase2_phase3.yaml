@@ -301,12 +301,21 @@ steps:
       # the flow currently calls whole is reddened.
       #
       # HOW THAT NUMBER WAS GOT, because the first attempt got 0 and 0 was
-      # wrong. `check_step` RUNS the step's gate, and this step's gate WRITES
+      # wrong. `check_step` RUNS the step's gate, and this step's gate WROTE
       # this artefact — so measuring both arms against the same tree lets the
       # control arm manufacture the evidence the treatment arm is then
       # credited with. Each arm here is a fresh `copytree` of the run root,
       # discarded after one `check_step`. A/B over a shared tree is not an A/B
       # when the probe is also a producer.
+      #
+      # CORRECTED 2026-08-19: the gate no longer writes it. The tense above is
+      # left in the past because the measurement it describes was taken that
+      # way and the number stands; what changed is the tree it was taken
+      # against. The clause below now carries an explicit `--json`, because
+      # the same property that made the A/B hard made the AUDIT a producer of
+      # this step's own declared output — measured on
+      # `benchmark-data/ic/u_hawaii_adc`, where one `flow_compliance_check`
+      # run created this file at 6834 B in a copy that had none.
       #
       # It RESOLVES in three admissible run roots
       # (caravel_user_project/v1.9.43_sky130A, spm/v1.9.96_gf180mcuD,
@@ -371,7 +380,26 @@ steps:
         # the two tracks needs converging, not an automatic stop); running is
         # not. A missing/unparseable report exits 1 here, because a second
         # track that can quietly not run is the same as no second track.
-        - program_exit_zero: "phase1_expert_parse_track ."
+        #
+        # `--json` IS LOAD-BEARING AND MUST NOT BE DROPPED. Without it the
+        # program falls back to `_pl.report_path(project,
+        # "phase1/expert_parse_track.json")` = `reports/audit/phase1/
+        # expert_parse_track.json`, which is one of THIS STEP'S OWN declared
+        # `required_outputs` above. The audit would then CREATE the artefact it
+        # goes on to report as present — measured on
+        # `benchmark-data/ic/u_hawaii_adc`, where a `flow_compliance_check` run
+        # against a fresh copy created that file at 6834 B where the copy had
+        # none. The producer is `phase1_one_shot_runner._run_expert_track`,
+        # which clears the previous report first so "the report exists" can
+        # only mean THIS run wrote it; a second producer inside the auditor
+        # defeats that, and the freshness it establishes with it.
+        #
+        # Redirected, not silenced: the clause still RUNS the track and still
+        # exits non-zero on a track that cannot complete. Only the destination
+        # of its own copy of the report moves, to the same
+        # `reports/<phase>/gates/` convention the phase-2 gate outputs were
+        # moved to in v1.6.36 for the same reason.
+        - program_exit_zero: "phase1_expert_parse_track . --json reports/phase1/gates/expert_parse_track.json"
         # The CLAUSE that reads the two extraction-coverage entries moved here
         # from step 1 (#1219). Without it, moving the declaration alone would
         # only RELOCATE d4's "declared by no clause" finding from step 1 to D1.
