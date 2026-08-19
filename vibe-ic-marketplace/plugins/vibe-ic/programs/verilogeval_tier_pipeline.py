@@ -310,6 +310,17 @@ def gate_check(gate: dict, candidate_rtl: str) -> dict:
 # --------------------------------------------------------------------------- #
 # (3) iverilog verification — score a candidate against the official test
 # --------------------------------------------------------------------------- #
+# vibe-ic#1745 — the verdict this function returns comes from searching the
+# SIMULATOR'S COMBINED STDOUT, which the candidate shares with the testbench.
+# A candidate that prints the harness's own verdict marker therefore scores a
+# pass no matter what it computes (MEASURED on benchmark/score_iverilog_tb.py:
+# two candidates with identical wrong logic, only one of them printing, scored
+# differently). Refuse such a candidate BEFORE it is run. Applied to the
+# CANDIDATE only — the golden-vs-its-own-test floor prover grades the
+# benchmark's own reference, which is not a submission.
+import harness_verdict_token_guard as _hvtg
+
+
 def iverilog_score(prob: Problem, candidate_rtl: str,
                    timeout: int = 60) -> Tuple[bool, str]:
     """Compile `candidate_rtl` (renamed to TopModule) + the golden ref (RefModule)
@@ -508,7 +519,12 @@ def tier_result(prob: Problem, verify: bool = False,
     detail = ""
     if emit:
         if verify:
-            ok, detail = iverilog_score(prob, emit, timeout=timeout)
+            _refusal = _hvtg.refuse_or_none(
+                emit, _hvtg.registry_patterns("verilogeval-v2"))
+            if _refusal:
+                ok, detail = False, _refusal
+            else:
+                ok, detail = iverilog_score(prob, emit, timeout=timeout)
             verified = ok
             if ok:
                 # GATE PARITY: a Tier-1 emit must survive the SAME conformance the

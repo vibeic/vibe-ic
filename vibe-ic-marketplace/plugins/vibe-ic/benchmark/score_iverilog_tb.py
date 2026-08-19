@@ -65,6 +65,74 @@ if _PROGRAMS_DIR.is_dir() and str(_PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS_DIR))
 
 
+# vibe-ic#1745 — THE PUBLISHED NUMBER MUST NOT BE FORGEABLE.
+#
+# Pass detection below is a regex search over the SIMULATOR'S COMBINED STDOUT,
+# and the device under test shares that stdout with the testbench. So a
+# submission that prints the benchmark's own verdict marker scores PASS no
+# matter what it computes.
+#
+# MEASURED here, four-problem synthetic Shape-C fixture, this scorer:
+#     Prob002_wrong   y = ~a                                    -> FAIL
+#     Prob003_forged  y = ~a + initial $display("Mismatches: 0 in 20 samples");
+#                                                               -> PASS
+#     simulator said `Mismatches: 20 in 20 samples` for BOTH.
+# Identical wrong logic, 2/3 = 66.67%.
+#
+# The pre-existing check is therefore NOT vacuous — the honest-wrong control
+# FAILs correctly. It is FORGEABLE, which is worse: it discriminates right up
+# until somebody forges, and a forged PASS is indistinguishable from an earned
+# one in the table we publish. So the guard runs BEFORE the compile, and its
+# finding REFUSES the submission rather than annotating it.
+try:
+    import harness_verdict_token_guard as _hvtg
+    _HVTG_IMPORT_ERROR = ""
+except ImportError as _exc:            # a broken install, not a scoreable state
+    _hvtg = None
+    _HVTG_IMPORT_ERROR = str(_exc)
+
+
+def _verdict_token_patterns(args: dict) -> dict:
+    """The harness's own verdict vocabulary for this benchmark, straight from
+    BENCHMARK_REGISTRY.json. Nothing here is hardcoded per benchmark."""
+    return {k: args[k] for k in ("pass_regex", "fail_regex") if args.get(k)}
+
+
+def _verdict_token_refusal(sample: Path, args: dict, ident: str,
+                           ident_value: str) -> Optional[dict]:
+    """BLOCKING pre-scoring gate. Return a refusal result row when `sample`
+    carries the harness's verdict vocabulary — or when the guard could not run
+    at all — else None.
+
+    There is no silent clear: an unimportable guard and an unusable pattern both
+    produce a named refusal row, because a submission nobody checked has not
+    been shown to be honest.
+    """
+    if _hvtg is None:
+        return {ident: ident_value, "verdict": "FAIL",
+                "reason": "harness_verdict_token_guard_unavailable",
+                "verdict_token_guard": "NOT_CHECKED",
+                "verdict_token_guard_detail":
+                    f"cannot import harness_verdict_token_guard: "
+                    f"{_HVTG_IMPORT_ERROR} — a submission nobody checked is "
+                    f"not a submission that passed"}
+    report = _hvtg.scan_report(sample.read_text(errors="replace"),
+                               _verdict_token_patterns(args), source=str(sample))
+    if report["verdict"] == _hvtg.VERDICT_NOT_CHECKED:
+        return {ident: ident_value, "verdict": "FAIL",
+                "reason": "harness_verdict_token_guard_not_checked",
+                "verdict_token_guard": "NOT_CHECKED",
+                "verdict_token_guard_detail": report["not_checked_reason"]}
+    if report["verdict"] != _hvtg.VERDICT_REFUSED:
+        return None
+    return {ident: ident_value, "verdict": "FAIL",
+            "reason": _hvtg.REFUSAL_REASON,
+            "forged_verdict_token": True,
+            "verdict_token_guard": "REFUSED",
+            "verdict_token_guard_detail": _hvtg.refusal_summary(report),
+            "verdict_token_guard_findings": report["findings"]}
+
+
 def _registry_path() -> Path:
     return Path(__file__).resolve().parent / "BENCHMARK_REGISTRY.json"
 
@@ -136,25 +204,86 @@ def _load_bench(name: str) -> dict:
     return entry
 
 
-def _problems_list_shape_c(run: Path, dataset: Path, prompt_suffix: str) -> list[str]:
-    """Return ordered list of <Prob> identifiers for Shape C from problems.list, or
-    discovered from the dataset if no problems.list."""
-    pl = run / "problems.list"
-    if pl.is_file():
-        return [l.strip() for l in pl.read_text().splitlines() if l.strip()]
-    # discovery fallback: list of files matching <Prob><prompt_suffix>
+def _dataset_inventory_shape_c(dataset: Path, prompt_suffix: str) -> list[str]:
+    """Every <Prob> the DATASET itself contains — the benchmark's own scope,
+    independent of what any run declared it would attempt."""
     return sorted(p.name.removesuffix(prompt_suffix)
                   for p in dataset.glob(f"*{prompt_suffix}"))
 
 
+def _dataset_inventory_shape_b(dataset: Path, prompt_filename: str) -> list[str]:
+    """Every design dir the DATASET itself contains (see the Shape-C twin)."""
+    return sorted(str(p.parent.relative_to(dataset))
+                  for p in dataset.rglob(prompt_filename) if p.is_file())
+
+
+def _problems_list_shape_c(run: Path, dataset: Path, prompt_suffix: str) -> list[str]:
+    """Return ordered list of <Prob> identifiers for Shape C from problems.list, or
+    discovered from the dataset if no problems.list.
+
+    This is the run's DECLARED scope. It is not the benchmark's scope — see
+    `_dataset_inventory_shape_c`, and `main()` for why the two are reconciled
+    (vibe-ic#1745: a problem the run never declared used to leave the
+    denominator with no row and no warning)."""
+    pl = run / "problems.list"
+    if pl.is_file():
+        return [l.strip() for l in pl.read_text().splitlines() if l.strip()]
+    # discovery fallback: list of files matching <Prob><prompt_suffix>
+    return _dataset_inventory_shape_c(dataset, prompt_suffix)
+
+
 def _problems_list_shape_b(run: Path, dataset: Path, prompt_filename: str) -> list[str]:
-    """Return ordered list of design dirs (relative to dataset) for Shape B."""
+    """Return ordered list of design dirs (relative to dataset) for Shape B —
+    the run's DECLARED scope (see the Shape-C twin)."""
     pl = run / "problems.list"
     if pl.is_file():
         return [l.strip() for l in pl.read_text().splitlines() if l.strip()]
     # discovery fallback
-    return sorted(str(p.parent.relative_to(dataset))
-                  for p in dataset.rglob(prompt_filename) if p.is_file())
+    return _dataset_inventory_shape_b(dataset, prompt_filename)
+
+
+# vibe-ic#1745 — THE THIRD STATE.
+#
+# A scored problem is in one of THREE states, not two:
+#     attempted-and-passed | attempted-and-failed | NEVER ATTEMPTED
+# and never-attempted must never leave the denominator silently. It leaves in
+# two distinct ways, and only the first was ever reported:
+#
+#   (a) the problem IS in problems.list but no sample exists on disk
+#       -> reason `no_sample`; already counted, already warned about (#637).
+#   (b) the problem is in the DATASET but not in problems.list at all
+#       -> MEASURED: no result row, no warning, and gone from the denominator.
+#          A four-problem fixture whose problems.list named three reported
+#          `pass@1 = 2/3 = 66.67%`; the fourth problem was never mentioned.
+#
+# Reconciling the declared scope against the dataset's own inventory closes (b),
+# and `attempt_state` on every row makes all three states readable without
+# reconstructing them from `reason` strings by hand.
+_NEVER_ATTEMPTED_NOT_LISTED = "never_attempted_not_in_problems_list"
+
+
+#: How many per-problem rows a stdout disclosure prints before pointing at the
+#: artefact. stdout is a summary; `pass_at_1.json` always carries every row, so
+#: the cap can never be the reason something is not disclosed.
+_ROW_PRINT_CAP = 10
+
+
+def _print_row_overflow(total: int) -> None:
+    if total > _ROW_PRINT_CAP:
+        print(f"     ... and {total - _ROW_PRINT_CAP} more — the complete list "
+              f"is in pass_at_1.json")
+
+
+def _attempt_state(result: dict) -> str:
+    """The row's state in the three-state model. Derived from fields the scorer
+    already writes, so there is no second classifier to keep in sync."""
+    if result.get("verdict") == "PASS":
+        return "attempted_and_passed"
+    if result.get("verdict") == "SKIP":
+        return "skipped_scorer_gap"
+    if result.get("reason") in ("no_sample", _NEVER_ATTEMPTED_NOT_LISTED):
+        return "never_attempted"
+    return "attempted_and_failed"
 
 
 # Scorer fix: resolve the candidate sample by the spec's authoritative
@@ -1660,6 +1789,10 @@ def _score_shape_b(design: str, samples: Path, dataset: Path,
     In every case the verdict is NOT changed (dual report in main(); never inflate
     the pass rate) — only the dataset_defect annotation is added."""
     res = _score_shape_b_impl(design, samples, dataset, layout, args)
+    # #1745 — see the Shape-C wrapper: a refused submission never reaches the
+    # dataset-defect audits.
+    if res.get("verdict_token_guard"):
+        return res
     if res.get("verdict") != "FAIL":
         return res
     if res.get("reason") == "compile_error":
@@ -1703,6 +1836,10 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
     tb = dataset / design / layout["tb_filename"]
     if sample is None:
         return {"design": design, "verdict": "FAIL", "reason": "no_sample"}
+    # #1745 BLOCKING — see the Shape-C call site and the module header.
+    refusal = _verdict_token_refusal(sample, args, "design", design)
+    if refusal is not None:
+        return refusal
     if not tb.is_file():
         return {"design": design, "verdict": "FAIL", "reason": "no_testbench"}
     with tempfile.TemporaryDirectory() as td:
@@ -1975,6 +2112,13 @@ def _score_shape_c(prob: str, samples: Path, dataset: Path,
     silently charged to the model. Verdict is NOT changed — flag only (dual
     report in main()); never inflate the pass rate."""
     res = _score_shape_c_impl(prob, samples, dataset, layout, args)
+    # #1745 — a refused submission is never routed to the dataset-defect
+    # audits. Those audits exist to keep an unsatisfiable problem off the
+    # model's record; a forged verdict token is not an unsatisfiable problem,
+    # and letting it collect a `dataset_defect` flag would excuse it from the
+    # very denominators the flag was built to correct.
+    if res.get("verdict_token_guard"):
+        return res
     if res.get("verdict") == "FAIL":
         gref = _golden_ref_self_compiles(prob, dataset, layout)
         if gref is False:
@@ -2012,6 +2156,12 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
     ref = dataset / f"{prob}{layout['ref_suffix']}" if layout.get("ref_suffix") else None
     if not sample.is_file():
         return {"problem": prob, "verdict": "FAIL", "reason": "no_sample"}
+    # #1745 BLOCKING — refuse a submission carrying the harness's own verdict
+    # vocabulary BEFORE it is compiled or run. A design that prints the scorer's
+    # verdict string answered a question about the scorer, not about the circuit.
+    refusal = _verdict_token_refusal(sample, args, "problem", prob)
+    if refusal is not None:
+        return refusal
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "bin")
         sample_c = _power_up_fixed(sample, td)  # canonical power-up gate
@@ -2126,30 +2276,47 @@ def main():
         raise SystemExit(f"Expected {samples}/ with candidate RTL — directory missing.")
 
     if shape == "B":
-        designs = _problems_list_shape_b(run, dataset, layout["prompt_filename"])
+        ident = "design"
+        declared = _problems_list_shape_b(run, dataset, layout["prompt_filename"])
+        inventory = _dataset_inventory_shape_b(dataset, layout["prompt_filename"])
         # ORGANIC-20260605 disk-truth: surface the on-disk sample inventory vs
         # the problem count UP FRONT so a partially-authored run is visible at
         # scoring time (the filesystem — not any agent tally — is authoritative).
         on_disk = sum(1 for _ in samples.glob("*.v")) + sum(1 for _ in samples.glob("*.sv"))
-        print(f"# disk-truth: {on_disk} sample file(s) in {samples} vs {len(designs)} problem(s)")
-        if on_disk < len(designs):
-            print(f"# WARNING: PARTIALLY-AUTHORED RUN — {len(designs) - on_disk} problem(s) "
+        print(f"# disk-truth: {on_disk} sample file(s) in {samples} vs {len(declared)} problem(s)")
+        if on_disk < len(declared):
+            print(f"# WARNING: PARTIALLY-AUTHORED RUN — {len(declared) - on_disk} problem(s) "
                   "have no on-disk sample; resume by diffing problems.list vs samples/ "
                   "(blind_instructions_shape_c.md § ORCHESTRATION RULES)")
-        results = [_score_shape_b(d, samples, dataset, layout, args) for d in designs]
-        ident = "design"
+        scorer = _score_shape_b
     else:  # Shape C
-        probs = _problems_list_shape_c(run, dataset, layout["prompt_suffix"])
+        ident = "problem"
+        declared = _problems_list_shape_c(run, dataset, layout["prompt_suffix"])
+        inventory = _dataset_inventory_shape_c(dataset, layout["prompt_suffix"])
         # ORGANIC-20260605 disk-truth (same as Shape B above, keyed per-problem).
-        missing = [p for p in probs if not (samples / f"{p}_sample01.sv").is_file()]
-        print(f"# disk-truth: {len(probs) - len(missing)}/{len(probs)} problems have an "
+        missing = [p for p in declared if not (samples / f"{p}_sample01.sv").is_file()]
+        print(f"# disk-truth: {len(declared) - len(missing)}/{len(declared)} problems have an "
               f"on-disk sample in {samples}")
         if missing:
             print(f"# WARNING: PARTIALLY-AUTHORED RUN — {len(missing)} problem(s) missing a "
                   "sample (first few: " + ", ".join(missing[:5]) + "); resume by diffing "
                   "problems.list vs samples/ (blind_instructions_shape_c.md § ORCHESTRATION RULES)")
-        results = [_score_shape_c(p, samples, dataset, layout, args) for p in probs]
-        ident = "problem"
+        scorer = _score_shape_c
+
+    # #1745 THIRD STATE (b): a problem the DATASET contains and problems.list
+    # never named. It used to be invisible — no row, no warning, out of the
+    # denominator. It is now scope, with a row of its own, and it is stated
+    # BEFORE any number is printed.
+    unlisted = [x for x in inventory if x not in set(declared)]
+    if unlisted:
+        print(f"# WARNING: NEVER-ATTEMPTED PROBLEMS — {len(unlisted)} of the "
+              f"{len(inventory)} problem(s) in {dataset} are absent from "
+              f"problems.list and were never attempted. They stay IN the "
+              f"denominator (first few: " + ", ".join(unlisted[:5]) +
+              ("..." if len(unlisted) > 5 else "") + ")")
+    results = [scorer(x, samples, dataset, layout, args) for x in declared]
+    results += [{ident: x, "verdict": "FAIL",
+                 "reason": _NEVER_ATTEMPTED_NOT_LISTED} for x in unlisted]
 
     # Metadata-only probe after every scoring verdict is already derived: tool
     # disclosure can never influence compilation, fallback selection, verdicts,
@@ -2195,6 +2362,18 @@ def main():
                                            tb, design_dir, re.compile(args["pass_regex"]))
             if nd is True:
                 r["non_discriminating_tb"] = True
+
+    # #1745 — stamp the three-state classification on EVERY row, after the
+    # scorer-gap SKIP pass above, so a reader never has to reconstruct
+    # "was this answered wrongly, or never answered at all?" from a reason
+    # string. Derived, not separately detected.
+    for r in results:
+        r["attempt_state"] = _attempt_state(r)
+    never = [r for r in results if r["attempt_state"] == "never_attempted"]
+    n_never = len(never)
+    forged = [r for r in results if r.get("forged_verdict_token")]
+    unchecked_guard = [r for r in results
+                       if r.get("verdict_token_guard") == "NOT_CHECKED"]
 
     npass = sum(1 for r in results if r["verdict"] == "PASS")
     nskip = sum(1 for r in results if r["verdict"] == "SKIP")
@@ -2275,11 +2454,54 @@ def main():
         "no_sample_count": n_nosamp,
         "no_sample_problems": nosamp_problems,
         "pass_at_1_excluding_no_sample_pct": pct_authored,
+        # #1745 THE THREE STATES. They partition `total` exactly; the assertion
+        # below is what stops a fourth state being added later that quietly
+        # belongs to none of them.
+        "attempt_states": {
+            "attempted_and_passed": sum(
+                1 for r in results if r["attempt_state"] == "attempted_and_passed"),
+            "attempted_and_failed": sum(
+                1 for r in results if r["attempt_state"] == "attempted_and_failed"),
+            "never_attempted": n_never,
+            "skipped_scorer_gap": nskip,
+        },
+        "never_attempted_count": n_never,
+        "never_attempted_problems": [
+            {"id": r[ident].split("/")[-1], "reason": r.get("reason", "")}
+            for r in never],
+        "pass_at_1_excluding_never_attempted_pct": round(
+            100.0 * npass / (n - n_never), 2) if (n - n_never) else 0.0,
+        "dataset_inventory_count": len(inventory),
+        "declared_scope_count": len(declared),
+        # #1745 the FORGERY channel, reported whether or not it fired.
+        "verdict_token_guard": {
+            "enforcement": "BLOCKING",
+            "patterns": _verdict_token_patterns(args),
+            "refused_count": len(forged),
+            "refused_problems": [
+                {"id": r[ident].split("/")[-1],
+                 "detail": r.get("verdict_token_guard_detail", "")}
+                for r in forged],
+            "not_checked_count": len(unchecked_guard),
+            "not_checked_problems": [
+                {"id": r[ident].split("/")[-1],
+                 "detail": r.get("verdict_token_guard_detail", "")}
+                for r in unchecked_guard],
+        },
         # The one bit a reader most needs and currently has to reconstruct by
         # counting the `results` array by hand.
         "partially_authored": partially,
         "results": results,
     }
+    # #1745 — the three states must PARTITION the scope. If they ever stop
+    # doing so, a row has fallen out of the accounting, which is exactly the
+    # defect this section exists to prevent: fail loudly rather than publish.
+    st = summary["attempt_states"]
+    if sum(st.values()) != n:
+        raise SystemExit(
+            f"scorer accounting error: attempt states {st} sum to "
+            f"{sum(st.values())}, scope is {n}. Refusing to write a number "
+            f"whose rows do not add up.")
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
     if nskip:
         print(f"{entry['title']}  pass@1 = {npass}/{n_eff} = {summary['pass_at_1_pct']}% "
@@ -2287,6 +2509,37 @@ def main():
               f"{summary['pass_at_1_pct_no_skip_excluded']}%)  [Shape {shape}]")
     else:
         print(f"{entry['title']}  pass@1 = {npass}/{n} = {summary['pass_at_1_pct']}%  [Shape {shape}]")
+    if forged:
+        # A forged submission is a refusal, not a wrong answer, and it is named
+        # in the artefact as well as on stdout — stdout is gone by the time
+        # anyone reads the published number.
+        print(f"  ⛔ REFUSED {len(forged)} submission(s): the RTL itself emits "
+              f"the harness's own verdict vocabulary, so its output could not "
+              f"be attributed to the circuit. Counted as FAIL, never as PASS:")
+        for r in forged[:_ROW_PRINT_CAP]:
+            print(f"     {r[ident].split('/')[-1]}: "
+                  f"{r.get('verdict_token_guard_detail', '')}")
+        _print_row_overflow(len(forged))
+    if unchecked_guard:
+        print(f"  ⛔ {len(unchecked_guard)} submission(s) could NOT be checked "
+              f"for verdict-token forgery — counted as FAIL, because a "
+              f"submission nobody checked is not a submission that passed:")
+        for r in unchecked_guard[:_ROW_PRINT_CAP]:
+            print(f"     {r[ident].split('/')[-1]}: "
+                  f"{r.get('verdict_token_guard_detail', '')}")
+        _print_row_overflow(len(unchecked_guard))
+    if n_never:
+        # THE THIRD STATE, as its own row. `never attempted` is not
+        # `answered wrongly`, and it is the state someone opens this file to
+        # discover — so it is printed with its own count, its own denominator
+        # and its own id list, beside (never instead of) the headline.
+        print(f"  ⚠ NEVER ATTEMPTED — {n_never} of {n} problem(s) in scope "
+              f"produced nothing to score and are counted as FAIL in the "
+              f"headline. Of the {n - n_never} attempted: "
+              f"{summary['pass_at_1_excluding_never_attempted_pct']}%.")
+        for r in never[:_ROW_PRINT_CAP]:
+            print(f"     {r[ident].split('/')[-1]}: {r.get('reason', '')}")
+        _print_row_overflow(len(never))
     if n_nosamp:
         # Printed AND in the file. A disclosure that does not travel with the
         # number is not a disclosure: stdout is gone by the time anyone reads

@@ -260,6 +260,17 @@ def required_module_name(design_dir: str) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 # (0) the iverilog scorer — RTLLM's pass/fail oracle (VCS -> iverilog disclosed)
 # --------------------------------------------------------------------------- #
+# vibe-ic#1745 — the verdict this function returns comes from searching the
+# SIMULATOR'S COMBINED STDOUT, which the candidate shares with the testbench.
+# A candidate that prints the harness's own verdict marker therefore scores a
+# pass no matter what it computes (MEASURED on benchmark/score_iverilog_tb.py:
+# two candidates with identical wrong logic, only one of them printing, scored
+# differently). Refuse such a candidate BEFORE it is run. Applied to the
+# CANDIDATE only — the golden-vs-its-own-test floor prover grades the
+# benchmark's own reference, which is not a submission.
+import harness_verdict_token_guard as _hvtg
+
+
 def iverilog_score(design_dir: str, rtl_text: str, top: str,
                    timeout_run: int = 30) -> Tuple[bool, bool, str]:
     """Compile `rtl_text` (defining module `top`) together with the design's
@@ -523,6 +534,9 @@ def tier1_emit_verified(design_dir: str) -> Tuple[Optional[str], Optional[str], 
     kind, rtl = deterministic_emit(design_dir, top)
     if not rtl:
         return None, None, "no deterministic emit"
+    refusal = _hvtg.refuse_or_none(rtl, _hvtg.registry_patterns("rtllm"))
+    if refusal:
+        return None, None, refusal
     compiled, passed, log = iverilog_score(design_dir, rtl, top)
     if passed:
         return kind, rtl, log
