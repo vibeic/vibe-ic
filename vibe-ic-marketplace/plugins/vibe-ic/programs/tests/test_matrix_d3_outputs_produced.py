@@ -716,7 +716,22 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # NINE of the ten admissible run roots before the record was written -- the
 # per-path check this pin exists to force (#527). Its verdict is therefore LIVE
 # and it adds no fixture attestation: fixture stays at 7, as it was.
-_LIVE_ENTRY_COUNT = 134
+# 2026-08-19: 134 -> 135. Step 31 `reports/phase3/lvs_verdict.json`, declared
+# in the flow yaml on the step that PRODUCES it, after the dimension-7 write-
+# record binding was restored to the corpus repository it lost in #1723 — while
+# that binding was inert the W2 finding naming this path could not be seen at
+# all. Same reading as the L21, coverage.yml, #1215 and #1348 moves above: one
+# fewer entry decided by nothing, not one more artefact found. It is recorded
+# PRODUCED_BY_RUN at `benchmark-data/ic/spm/v1.9.96_gf180mcuD` (1131 B), and it
+# was checked `git ls-files`-TRACKED at HEAD, non-empty and not a symlink in
+# each of the SIX admissible run roots that carry it -- caravel_user_project
+# (367 B), its v1.9.43_sky130A cell (367 B), sha256/clean_run_v1427_20260715
+# (1001 B), spm/v1.5.58_ihp-sg13g2 (944 B), spm/v1.9.96_gf180mcuD (1131 B) and
+# subservient (1568 B) -- the per-path check this pin exists to force (#527).
+# The other four admissible roots carry neither it nor this step's already-
+# declared lvs.rpt/lvs.json, so the entry adds no UNEVIDENCED cell: its verdict
+# is LIVE and the fixture attestation count is unchanged.
+_LIVE_ENTRY_COUNT = 135
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.

@@ -548,8 +548,20 @@ def test_output_entries_classify_into_the_four_kinds():
     # (`spm/v1.9.96_gf180mcuD`, 7608 B), and it resolves in 9 of the 10
     # admissible run roots — declaring an artefact d3 cannot then evidence
     # would move the finding from d7 to d3 instead of closing it.
-    assert sum(seen.values()) == 141, seen
-    assert seen[F.FILE] == 107
+    # 2026-08-19: 141 -> 142, FILE 107 -> 108. Step 31
+    # `reports/phase3/lvs_verdict.json`, the W2 promotion that surfaced the
+    # moment the dimension-7 write-record binding was restored to the corpus
+    # repository it lost in #1723 — written by
+    # `phase3_one_shot_runner._lvs_verdict` (#477) and read by step 31's own
+    # `magic_illegal_overlap_check` gate as one of three interchangeable
+    # proofs that an LVS verdict exists. A plain FILE, so GLOB (12) and ANY_OF
+    # (22) are again untouched and the whole delta lands on FILE. Recorded in
+    # the dimension-3 manifest at the run root and byte size it was MEASURED at
+    # (`spm/v1.9.96_gf180mcuD`, 1131 B); it resolves in exactly the 6 of 10
+    # admissible run roots that carry this step's already-declared
+    # lvs.rpt/lvs.json, so declaring it does not move the finding from d7 to d3.
+    assert sum(seen.values()) == 142, seen
+    assert seen[F.FILE] == 108
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
