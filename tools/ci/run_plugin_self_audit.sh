@@ -45,6 +45,15 @@ GATES=(
     "changelog_metric_reproducibility_check"
     "changelog_command_reproducibility_check"
     "self_audit_doc_claim_consistency_check"
+    # Every code package declares its own invariants, next to the code
+    # they bind, and the declaration is checked rather than believed: a
+    # missing INVARIANTS.yaml, a stale one, a rule naming an enforcer
+    # that is not there, or a local rule a file in the package violates.
+    # Belongs in THIS lane because it audits the plugin's own source
+    # shape, which is what this script is for. The gate that BLOCKS a
+    # landing on it is programs/tests/test_package_invariants_check.py,
+    # in the one tree the landing pytest actually runs.
+    "package_invariants_check"
 )
 
 fail=0

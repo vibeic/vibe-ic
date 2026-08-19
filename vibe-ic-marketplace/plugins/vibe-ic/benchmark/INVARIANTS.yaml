@@ -1,0 +1,51 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by
+# vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py.
+schema: 1
+package: vibe-ic-marketplace/plugins/vibe-ic/benchmark
+namespace: benchmark
+
+role: >-
+  The measuring apparatus: shape classification, blind instructions, task
+  routing, the scorers, and the registry that says which run-shape a given open
+  benchmark is entitled to. Everything here produces a NUMBER that is published,
+  which makes the rules below rules about honesty rather than about code.
+
+invariants:
+  - id: benchmark.results-and-plugin-fixes-never-share-a-commit
+    statement: >-
+      The role that MEASURES the plugin may also author fixes to it, and the
+      only thing standing between that and an inflated number is the NO-MIX
+      invariant: a single commit may not carry both a benchmark result and a
+      plugin edit. A hand-patch can then never ride inside the commit that
+      publishes the score it improved.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/agent_checkin_scope_guard.py
+
+  - id: benchmark.the-run-shape-is-declared-before-the-number-is-believed
+    statement: >-
+      A benchmark number measures what the deterministic runner chain can do,
+      not what an agent with the same tools can do. Which of the canonical
+      run-shapes was used, and every tool substitution, is disclosed with the
+      result; a number whose shape is not stated is not a number.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/benchmark_result_md_lint.py
+
+  - id: benchmark.the-scorer-runs-from-the-design-directory
+    statement: >-
+      A benchmark testbench loads its golden vectors by RELATIVE path, and the
+      simulator resolves that against the current working directory, not against
+      the source file. Invoking the scorer from anywhere else silently fails
+      designs that are correct — measured at 3 false fails in one run before the
+      guard existed.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/benchmark_score_cwd_guard.py
+
+  - id: benchmark.a-clean-room-run-inherits-nothing
+    statement: >-
+      A scoring run may not read samples or scores left by a previous run in the
+      same directory. Inheritance is how a benchmark reports last week's answer
+      with this week's confidence.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/benchmark_clean_room_check.py
