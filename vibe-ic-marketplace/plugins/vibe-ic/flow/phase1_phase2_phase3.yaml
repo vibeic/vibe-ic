@@ -613,6 +613,52 @@ steps:
         - advisory_program_exit_zero: "spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md"
     blocks_on: []
 
+  - id: 0.5ic
+    name: "Submission Template Ingest — the operator's slot geometry and fixtures (chip/IC path only)"
+    stage: stage_phase1
+    # WHY A STEP AND NOT A CALCULATION. Two independent investigations landed on
+    # the same missing input rather than a missing formula:
+    #   * docs/research/wafer_space_id_cells.md — the four gf180mcu_ws_ip__* die-id
+    #     cells are SHIPPED as pre-built hardmacros by the operator's project
+    #     template. The operator's own generate_id.py does not create them; it
+    #     places and edits cells that must already be in the layout, and the
+    #     template's src carries "Do not remove, necessary for tapeout".
+    #   * docs/research/shuttle_slot_geometry.md — die size is never pinned in this
+    #     flow (step 15 declares only a netlist and constraints; the floorplan check
+    #     tests only that DIEAREA is non-degenerate; 188 of 194 L19 documents carry
+    #     no machine-usable die budget). All 8 published GDS miss every slot in both
+    #     dimensions, the closest filling 3.15% of the smallest slot. Meanwhile all
+    #     four of the template's slot files pin DIE_AREA absolutely, to exactly the
+    #     values the operator's check_size.py computes, with CORE_AREA, FP_SIZING
+    #     and the per-slot pad lists alongside.
+    # So the geometry is not ours to compute. It is data we never went and got.
+    required_inputs:
+      - from: external
+        check: none
+        what: >-
+          the shuttle operator's published project template — the repository or
+          archive that pins the slot geometry, ships the die-identification
+          fixtures, and lists the pads for each slot. Declared as external and
+          unprobed because it is fetched, not produced, and the flow must be able
+          to say it was never fetched.
+    programs:
+      - submission_template_ingest
+    required_outputs:
+      # THE `OR` IS THE HONEST HALF. A design that targets no shuttle still has to
+      # SAY so: this flow has no `optional:` key on an input, and a step that
+      # silently produces nothing is indistinguishable from one that never ran.
+      - "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt"
+      - "reports/phase1/submission_template.json"
+    gate:
+      program_exit_zero: "submission_template_check . --json reports/phase1/submission_template.json"
+    blocks_on: []
+    notes: >-
+      Chip/IC path only: an IP is delivered as a hardmacro (37.5ip) and is never
+      submitted to a shuttle, so it has no slot and no operator fixtures. The
+      report must record WHICH slot was declared and the DIE_AREA read from it,
+      because a die that was chosen and a die that was defaulted are the same
+      number with different provenance, and only one of them can be checked.
+
   - id: 1
     name: "Spec-to-RTL"
     stage: stage1
@@ -2720,7 +2766,8 @@ steps:
   - id: 15.5ic
     name: "Pad Ring (chip/IC path only)"
     stage: stage3
-    flow_path: ic
+    condition:
+      files_exist: ["input/submission_template/slots/*.yaml"]
     required_inputs:
       - from: 15
         path: "phase3/stage3/pnr/floorplan.def"
@@ -3820,7 +3867,8 @@ steps:
   - id: 26.5ic
     name: "Die Finishing — seal ring + die identification (chip/IC path only)"
     stage: stage3
-    flow_path: ic
+    condition:
+      files_exist: ["input/submission_template/slots/*.yaml"]
     required_inputs:
       - from: 21
         path: "phase3/stage3/pnr/routed.def"
@@ -5088,7 +5136,8 @@ steps:
   - id: 37.5ip
     name: "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (cell/IP path TERMINAL)"
     stage: stage4
-    flow_path: ip
+    condition:
+      files_exist: ["input/submission_template/NO_TEMPLATE.txt"]
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
@@ -5113,7 +5162,8 @@ steps:
   - id: 37.5ic
     name: "Shuttle Precheck — the operator's own refusal (chip/IC path only)"
     stage: stage4
-    flow_path: ic
+    condition:
+      files_exist: ["input/submission_template/slots/*.yaml"]
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"

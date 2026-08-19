@@ -713,7 +713,20 @@ def evaluate(
     # (1) A RETIRED shuttle can never produce an external verdict. Not a PASS,
     #     and not a FAIL either — the vendor did not refuse, the vendor stopped.
     if shuttle.status == RETIRED:
-        rep = _report(NOT_DETERMINED, shuttle.retired_reason, layouts_found=0)
+        # NAME WHAT WAS UNSUPPORTED, the way the unreachable-tool branch below
+        # already names the image. LibreLane's own unsupported-configuration
+        # decline (`KLayout.SealRing`, steps/klayout.py:933) states the unset
+        # variable AND the PDK in one sentence, because a decline that says
+        # only "not supported" is one nobody can act on. Measured here: the
+        # registry's `retired_reason` explains the RETIREMENT and never says
+        # which shuttle it belongs to, so the prose channel alone could not
+        # tell one retired counterparty from another. Composed from the
+        # registry entry, so it names any future retired shuttle too.
+        rep = _report(
+            NOT_DETERMINED,
+            f"the '{shuttle.shuttle_id}' shuttle is RETIRED, so its precheck "
+            f"tool '{shuttle.tool}' was never run: {shuttle.retired_reason}",
+            layouts_found=0)
         rep.undetermined_steps = [s.step_id for s in steps]
         return rep
 

@@ -458,3 +458,418 @@ def test_an_unrecognised_verdict_token_is_not_promoted_to_a_pass(tmp_path):
     payload = json.loads(
         (proj / "reports/audit/tapeout_checklist.json").read_text())
     assert payload["external_refusal"]["verdict"] == "NOT_DETERMINED"
+
+
+# --------------------------------------------------------------------------- #
+# THE FLOW STEP — step 37.5ic, the gate as the flow ACTUALLY invokes it
+#
+# Everything above drives `evaluate()`, the library call. The flow never makes
+# that call. `flow_compliance_check._check_program_exit_zero` runs
+#
+#     tapeout_readiness_check . --json reports/phase3/shuttle_precheck.json
+#
+# with `cwd` set to the PROJECT ROOT, and reads exactly two things back: the
+# process exit STATUS, and whether the declared artefact appeared. Three
+# properties live in that gap and in no test above.
+#
+#   * The project argument is `.` and the `--json` path is RELATIVE, so the
+#     artefact lands where the step declares only if both resolve against the
+#     same directory. No test above ever ran the CLI from a project root.
+#
+#   * The artefact is written on EVERY path, including the ones that determined
+#     nothing. So the step's `required_outputs` check is SATISFIED by a run that
+#     never reached the counterparty, and the exit status is the only thing
+#     separating "the shuttle looked and was fine" from "nobody asked". A
+#     presence check over this file is the exact defect this gate exists for,
+#     one directory further down.
+#
+#   * That exit status is read by a classifier which credits rc 2 as
+#     VACUOUS_PASS and rc 3 as PASS_WITH_WAIVERS — both of which aggregate as
+#     PASSES. "`main` returns non-zero" is therefore not the property that
+#     matters; it has to be the ONE non-zero this classifier reads as a failure,
+#     and that is asserted here THROUGH the classifier rather than restated.
+# --------------------------------------------------------------------------- #
+import shlex
+
+import yaml
+
+import _hostpaths
+
+fcc = importlib.import_module("flow_compliance_check")
+enforcement = importlib.import_module("flow_gate_enforcement_audit")
+
+#: The step this program was written for, and the argv its declared gate
+#: command reduces to. `test_the_flow_declares_this_gate_...` re-derives both
+#: from the checked-in flow definition, so a yaml edit that moves the artefact
+#: turns THAT test red and tells the author the cases below are now driving a
+#: command the flow no longer issues.
+_STEP_ID = "37.5ic"
+_DECLARED_OUT = "reports/phase3/shuttle_precheck.json"
+_DECLARED_ARGV = [".", "--json", _DECLARED_OUT]
+
+
+def _flow_yaml():
+    """The checked-in flow definition — the one the flow engine itself reads."""
+    p = _hostpaths.require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
+                                "flow", "phase1_phase2_phase3.yaml")
+    # Not merely A copy of the flow: the SAME file `flow_compliance_check`
+    # resolves for itself. A test that read a second copy would keep passing
+    # while the engine read something else.
+    assert p.resolve() == Path(fcc.DEFAULT_FLOW_DEF).resolve()
+    return p
+
+
+def _complete_run(tmp_path, name="run"):
+    """A run directory in which every ladder step COMPLETED.
+
+    Built the way the upstream tool builds one — a numbered directory per step
+    carrying `state_out.json` — because that file is the discriminator the
+    parser turns on."""
+    run = tmp_path / name / "runs" / "RUN_X"
+    run.mkdir(parents=True)
+    for i, st in enumerate(trc.SHUTTLES[trc.DEFAULT_SHUTTLE].ladder, start=1):
+        d = run / f"{i:02d}-{trc._slug(st.step_id)}"
+        d.mkdir()
+        (d / "state_out.json").write_text("{}")
+    return tmp_path / name
+
+
+def _run_as_the_flow_step(monkeypatch, proj, *extra):
+    """Drive the CLI exactly as the flow does: cwd = the project, project `.`,
+    and the declared RELATIVE --json path. Returns (rc, artefact, payload)."""
+    monkeypatch.chdir(proj)
+    rc = trc.main(_DECLARED_ARGV + list(extra))
+    art = proj / _DECLARED_OUT
+    payload = json.loads(art.read_text()) if art.is_file() else None
+    return rc, art, payload
+
+
+def _flow_gate(proj, cmd):
+    """Run one gate the way `flow_compliance_check` runs it, and return
+    (ok, snippet, ledger_row). This spawns the REAL program in a subprocess —
+    no seam is injected, because the seam is not there when the flow runs."""
+    before = len(fcc._GATE_LEDGER)
+    ok, snippet = fcc._check_program_exit_zero(proj, cmd)
+    row = fcc._GATE_LEDGER[before:][-1]
+    return ok, snippet, row
+
+
+# ─────────────────────────────────── the declaration, re-derived from the yaml
+def test_the_flow_declares_this_gate_with_the_path_this_program_writes():
+    """The step, its slot, its command and its declared output — from the file.
+
+    Read rather than restated: the point of the step is that the artefact the
+    flow will look for is the artefact the gate command writes, and those are
+    two different lines in two different files."""
+    flow = yaml.safe_load(_flow_yaml().read_text())
+    steps = {str(s.get("id")): s for s in flow.get("steps", [])}
+    assert _STEP_ID in steps, (
+        f"step {_STEP_ID} is not declared in the flow definition; the cases "
+        f"below drive a gate no step invokes")
+    step = steps[_STEP_ID]
+
+    # The BLOCKING slot, not the advisory one. A shuttle refusal recorded and
+    # continued past is not an external bar, it is a note.
+    gate = step["gate"]
+    assert "program_exit_zero" in gate, sorted(gate)
+    argv = shlex.split(gate["program_exit_zero"])
+    assert argv[0] == "tapeout_readiness_check"
+    assert argv[1:] == _DECLARED_ARGV
+
+    # And the artefact the step will be judged on is the one that command names.
+    assert step["required_outputs"] == [_DECLARED_OUT]
+
+    # The command resolves to a program that exists — the same resolution the
+    # flow engine performs, so "program not found" cannot hide behind a name.
+    assert fcc._resolve_program_cmd(gate["program_exit_zero"], cwd=None)
+
+
+# ───────────────────────────── every outcome writes exactly the declared file
+#: (case, expected verdict, expected rc). NOT_DETERMINED and FAIL deliberately
+#: share rc 1 — the distinction lives in the `verdict` field, where an
+#: aggregator must read it on purpose. Only a real clean ladder is rc 0.
+_FLOW_CASES = (
+    ("absent_gds", trc.NOT_DETERMINED, 1),
+    ("unreachable", trc.NOT_DETERMINED, 1),
+    ("refusal", trc.FAIL, 1),
+    ("pass", trc.PASS, 0),
+)
+
+
+def _arrange(case, tmp_path, monkeypatch):
+    """Put the tree and the seams into the state `case` names."""
+    if case == "absent_gds":
+        return _project(tmp_path, with_layout=False), ()
+    proj = _project(tmp_path)
+    if case == "unreachable":
+        monkeypatch.setattr(trc, "default_image_resolver", _never_resolves)
+        return proj, ()
+    monkeypatch.setattr(trc, "default_image_resolver", _resolves)
+    if case == "refusal":
+        # The counterparty's OWN run directory, captured from its own tool.
+        monkeypatch.setattr(trc, "default_runner", _no_op_runner(rc=1))
+        return proj, ("--rundir", str(_REAL_REFUSAL))
+    monkeypatch.setattr(trc, "default_runner", _no_op_runner(rc=0))
+    return proj, ("--rundir", str(_complete_run(tmp_path)))
+
+
+@pytest.mark.parametrize("case,verdict,rc", _FLOW_CASES)
+def test_the_declared_artefact_is_written_on_every_flow_step_outcome(
+        case, verdict, rc, tmp_path, monkeypatch):
+    """Presence is NOT the signal, and the relative paths resolve together.
+
+    The artefact appears for all four outcomes — including the two that
+    determined nothing — so a step check that only asks whether
+    `reports/phase3/shuttle_precheck.json` exists passes a run in which the
+    counterparty was never asked. What separates them is the exit status and
+    the `verdict` field, and both are asserted here."""
+    proj, extra = _arrange(case, tmp_path, monkeypatch)
+    got_rc, art, payload = _run_as_the_flow_step(monkeypatch, proj, *extra)
+
+    assert art.is_file(), (
+        f"[{case}] the step declares {_DECLARED_OUT} as a required output and "
+        f"the gate wrote nothing there")
+    assert payload["verdict"] == verdict, f"[{case}] {payload['reason']}"
+    assert got_rc == rc, f"[{case}] {payload['reason']}"
+    # rc 2 and rc 3 are the two non-zeros this repo credits as passes.
+    if verdict != trc.PASS:
+        assert got_rc not in (0, 2, 3), (
+            f"[{case}] rc {got_rc} is read as a PASS tier by "
+            f"flow_compliance_check._check_program_exit_zero")
+
+
+# ───────────────────────────── the one that matters: silence through the FLOW
+def test_an_unreachable_counterparty_is_a_flow_step_FAIL_not_a_vacuous_pass():
+    """THE case this gate exists for, asserted through the flow's OWN classifier.
+
+    A `main() == 1` assertion measures the program. It does not measure what
+    the flow does with that 1, and the flow is where the damage would be:
+    `_check_program_exit_zero` maps rc 2 to VACUOUS_PASS and rc 3 to
+    PASS_WITH_WAIVERS, and both aggregate as passes. So the property is stated
+    where it is consumed — the classifier is run for real, on a real subprocess,
+    and its own verdict word is read back out of its own ledger.
+
+    Deterministic without a network: the image name cannot resolve locally, and
+    `--pull` is off, so `default_image_resolver` returns None on any host."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        proj = _project(Path(td))
+        cmd = ("tapeout_readiness_check . --json " + _DECLARED_OUT
+               + " --image no.such.registry.invalid/never:never")
+        ok, snippet, row = _flow_gate(proj, cmd)
+
+        assert ok is False, snippet
+        assert row["rc"] == 1, row
+        assert row["verdict"] == "FAIL", row
+        assert not snippet.startswith(fcc._VACUOUS_HINT_PREFIX), snippet
+        assert not snippet.startswith(fcc._WAIVER_HINT_PREFIX), snippet
+        assert not snippet.startswith(fcc._CRASH_HINT_PREFIX), snippet
+
+        # The declared artefact IS there — which is the whole point. A step
+        # check that stopped at presence would have called this run complete.
+        payload = json.loads((proj / _DECLARED_OUT).read_text())
+        assert payload["verdict"] == trc.NOT_DETERMINED
+        assert payload["layouts_found"] == 1
+        assert payload["steps_with_evidence"] == 0
+        assert len(payload["undetermined_steps"]) == payload["required_steps"]
+
+
+def test_a_project_with_no_layout_is_a_flow_step_FAIL_not_a_vacuous_pass():
+    """Nothing to check is not a pass, asserted through the same classifier.
+
+    Step 37.5ic declares `phase3/stage4/gds/*.gds` as its required input. When
+    that input is absent the honest answers are all non-zero; the one that must
+    NOT come back is rc 2, because `_check_program_exit_zero` turns rc 2 into
+    the VACUOUS_PASS tier, which is precisely "there was nothing here, carry
+    on"."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        proj = _project(Path(td), with_layout=False)
+        ok, snippet, row = _flow_gate(
+            proj, "tapeout_readiness_check . --json " + _DECLARED_OUT)
+
+        assert ok is False, snippet
+        assert row["rc"] == 1, row
+        assert row["verdict"] == "FAIL", row
+        payload = json.loads((proj / _DECLARED_OUT).read_text())
+        assert payload["verdict"] == trc.NOT_DETERMINED
+        assert payload["layouts_found"] == 0
+
+
+# ───────────────────────────────────────── the run directory and the artefact
+def test_the_tools_run_directory_does_not_displace_the_declared_artefact(
+        tmp_path, monkeypatch):
+    """`reports/phase3/shuttle_precheck/` and `…/shuttle_precheck.json` share a
+    stem, and the gate writes BOTH when it is left to its own default rundir.
+
+    Measured on the real tool: the run root is a directory the precheck fills
+    with `runs/<tag>/NN-<step>/`, while the step's declared output is a file one
+    suffix away. If either default ever moved onto the other, the flow would
+    read a directory as its verdict or the tool would fail to make its run root
+    — and the first symptom of both is an artefact that is present and wrong."""
+    proj = _project(tmp_path)
+    monkeypatch.setattr(trc, "default_image_resolver", _resolves)
+    monkeypatch.setattr(trc, "default_runner", _no_op_runner(rc=1))
+    rc, art, payload = _run_as_the_flow_step(monkeypatch, proj)
+
+    rundir = proj / "reports" / "phase3" / "shuttle_precheck"
+    assert rundir.is_dir(), "the tool's run root was not created"
+    assert art.is_file() and art != rundir
+    assert payload["rundir"] == str(rundir.resolve())
+    # The verdict survived being written next to its own run directory.
+    assert payload["verdict"] == trc.NOT_DETERMINED
+    assert rc == 1
+
+
+# ──────────────────────────────────────────────── the retired path, via the CLI
+def test_the_retired_shuttle_stays_selectable_from_the_flow_step_command(
+        tmp_path, monkeypatch):
+    """RETIRED is reachable through the same command the flow issues, and it is
+    NOT_DETERMINED there too — never PASS (a fabrication) and never FAIL (the
+    vendor did not refuse, the vendor stopped answering).
+
+    Asserted at the CLI because that is where a `choices=` list can quietly drop
+    an option: deleting the registry entry would make this argv a usage error,
+    which is a different failure from the one the docstring promises."""
+    proj = _project(tmp_path)
+    # Selectable — and not by being the default.
+    assert trc.DEFAULT_SHUTTLE != "efabless_open_mpw"
+    rc, art, payload = _run_as_the_flow_step(
+        monkeypatch, proj, "--shuttle", "efabless_open_mpw")
+
+    assert rc == 1
+    assert payload["verdict"] == trc.NOT_DETERMINED
+    assert payload["shuttle_status"] == trc.RETIRED
+    assert payload["shuttle"] == "efabless_open_mpw"
+    # Not one ladder step is credited, and the reason names why nobody answered.
+    assert payload["failed_steps"] == []
+    assert len(payload["undetermined_steps"]) == payload["required_steps"]
+    assert payload["steps_with_evidence"] == 0
+    assert "ceased operating" in payload["reason"]
+
+
+# ─────────────────────────────── the refusal, end to end, at the declared path
+def test_the_counterpartys_refusal_survives_the_flow_step_path(
+        tmp_path, monkeypatch):
+    """The captured refusal, driven through the CLI the flow issues.
+
+    Reproduced on the live tool on 2026-08-19 against a published layout:
+    verdict FAIL, rc 1, `the shuttle refused: KLayout.CheckSize`, 3 of 9 ladder
+    steps carrying evidence. Those numbers are the assertion — a parser change
+    that credited an incomplete step, or a ladder edit that changed the
+    denominator, moves them."""
+    proj = _project(tmp_path)
+    monkeypatch.setattr(trc, "default_image_resolver", _resolves)
+    monkeypatch.setattr(trc, "default_runner", _no_op_runner(rc=1))
+    rc, art, payload = _run_as_the_flow_step(
+        monkeypatch, proj, "--rundir", str(_REAL_REFUSAL))
+
+    assert rc == 1
+    assert payload["verdict"] == trc.FAIL
+    assert payload["failed_steps"] == ["KLayout.CheckSize"]
+    assert payload["required_steps"] == 9
+    assert payload["steps_with_evidence"] == 3
+    assert "the shuttle refused: KLayout.CheckSize" in payload["reason"]
+
+    refused = next(s for s in payload["steps"] if s["verdict"] == trc.FAIL)
+    assert "GUARD_RING_MK" in refused["evidence"]
+    # The steps after the refusal are NOT_DETERMINED, not passed over.
+    assert payload["undetermined_steps"] == [
+        s["step_id"] for s in payload["steps"][3:]]
+
+
+def test_only_a_clean_ladder_earns_the_flow_step_rc_zero(tmp_path, monkeypatch):
+    """The single rc-0 path: the tool ran, every ladder step it ran completed.
+
+    The counterweight to the three above — without it every assertion in this
+    section is satisfied by a gate that can only ever fail, which is not a gate
+    either."""
+    proj = _project(tmp_path)
+    monkeypatch.setattr(trc, "default_image_resolver", _resolves)
+    monkeypatch.setattr(trc, "default_runner", _no_op_runner(rc=0))
+    rc, art, payload = _run_as_the_flow_step(
+        monkeypatch, proj, "--rundir", str(_complete_run(tmp_path)))
+
+    assert rc == 0, payload["reason"]
+    assert payload["verdict"] == trc.PASS
+    assert payload["failed_steps"] == []
+    assert payload["undetermined_steps"] == []
+    assert payload["steps_with_evidence"] == payload["required_steps"] == 9
+
+
+# --------------------------------------------------------------------------- #
+# THE DECLINE SHAPE — borrowed from LibreLane, and where we deliberately differ
+#
+# MEASURED in the pinned image (librelane 3.1.0.dev1,
+# /usr/local/lib/python3.12/dist-packages/librelane), not remembered.
+#
+# `KLayout.SealRing` is upstream's canonical unsupported-configuration decline
+# (steps/klayout.py:933). It does three things and no more:
+#
+#     self.warn(f"KLAYOUT_SEALRING_SCRIPT is unset. KLayout.SealRing may not be "
+#               f"supported for the {self.config['PDK']} PDK. This step will be "
+#               f"skipped.")
+#     return views_updates, {}
+#
+#   1. it NAMES the thing that was unsupported — the variable AND the PDK;
+#   2. it says plainly that the step is being skipped;
+#   3. it neither passes silently nor crashes.
+#
+# Two things we take, one we deliberately do not:
+#
+#   TAKEN — the decline must name what was unsupported. A decline that says only
+#     "not supported" is a decline nobody can act on.
+#   BETTER — upstream's decline is a `self.warn` into a log and an EMPTY metrics
+#     dict; nothing machine-readable records that it happened. Ours is a field in
+#     the artefact its own gate declares, so a decline is a datum.
+#   NOT TAKEN — upstream returns normally and the flow carries on, which is right
+#     for one optional step among forty. Here the decline IS the verdict: there is
+#     no other party to ask, so a continue would publish "nobody refused this" for
+#     a layout nobody looked at. Ours is rc 1.
+#
+# UPSTREAM HAS NO ANALOGUE FOR THE STEP ITSELF, and that was measured rather than
+# searched for. Over the whole installed librelane tree: `precheck` 0 files,
+# `shuttle` 0, `wafer_space` 0, `mpw_precheck` 0 — against a POSITIVE CONTROL on
+# the same tree in which `SealRing` is 2 files, `PadRing` 2 and `KLayoutDensity`
+# 2, so the search demonstrably finds what is there. The 151 `efabless` hits are
+# 149 copyright headers plus a `--save-views-to` output FORMAT "compatible with
+# Caravel User Project"; and `librelane/steps/*.py` contains no network client
+# and no container spawn at all. Upstream can write files in the shuttle's
+# expected layout. It never asks anyone whether they would be accepted.
+# --------------------------------------------------------------------------- #
+#: (case, the token the record MUST name, extra argv). Both of this gate's
+#: decline paths, because a shape held by one of two is not a shape.
+_DECLINE_CASES = (
+    ("retired shuttle", "efabless_open_mpw", ("--shuttle", "efabless_open_mpw")),
+    ("unreachable tool", "no.such.registry.invalid/never:never",
+     ("--image", "no.such.registry.invalid/never:never")),
+)
+
+
+@pytest.mark.parametrize("label,must_name,extra", _DECLINE_CASES)
+def test_a_decline_names_what_was_unsupported_in_its_own_record(
+        label, must_name, extra, tmp_path, monkeypatch):
+    """The SealRing shape, confirmed on both decline paths rather than assumed.
+
+    `self.warn(...)` upstream names the unset variable and the PDK. The same
+    obligation, discharged into the artefact instead of a log: whatever could
+    not be reached is named IN the record, in prose a human reads and in fields
+    a program reads, and the run is not credited."""
+    proj = _project(tmp_path)
+    rc, art, payload = _run_as_the_flow_step(monkeypatch, proj, *extra)
+
+    # 1. it names the thing — in the prose, the way upstream's warn does.
+    assert must_name in payload["reason"], f"[{label}] {payload['reason']}"
+
+    # 2. and it is a DATUM, not only prose: a reader never has to parse the
+    #    sentence to learn who was asked or what tool would have answered.
+    for key in ("shuttle", "shuttle_status", "tool", "upstream", "verdict"):
+        assert payload[key], f"[{label}] empty field {key!r}"
+
+    # 3. the decline is not credited, on either channel.
+    assert payload["verdict"] == trc.NOT_DETERMINED, label
+    assert rc == 1, label
+    assert payload["steps_with_evidence"] == 0, label
+    assert payload["failed_steps"] == [], (
+        f"[{label}] nobody refused this layout — a decline must not be dressed "
+        f"as a refusal any more than as a pass")
