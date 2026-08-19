@@ -3981,6 +3981,51 @@ steps:
         # BLAST RADIUS over the 13 published runs carrying this artefact: 0.
         # All 6 runs green on this gate today stay green.
         - program_exit_zero: "drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
+        # W2.3 — THE EXTRACTION TOOL'S ERROR CHANNEL, read BEFORE the LVS
+        # verdict below is allowed to mean anything. Magic writes two things:
+        # the netlist, and `feedback.txt` — the file it uses to say the
+        # geometry it just extracted does not make electrical sense. The
+        # loudest entry there is `Illegal overlap`, which in many cases IS an
+        # undetected short; the netlist is emitted regardless, so netgen can
+        # match against it and the LVS gate below can sign off clean over a
+        # circuit that cannot exist.
+        #
+        # MEASURED on the tree this landed against (origin/main 0d7b6428a):
+        # `grep -rEil 'illegal.{0,3}overlap'` over the whole plugin sans .git
+        # returned 0 files, and `feedback.txt` 0 files. `magic_extract_spice_
+        # emit` validates the TCL we SEND (`extract all`, `ext2spice lvs`);
+        # the four LVS-side programs read netgen's verdict and nothing else.
+        # Nobody had ever opened the channel.
+        #
+        # POSITION IS THE POINT, and it is upstream's: LibreLane runs
+        # `Checker.IllegalOverlap` between `Magic.SpiceExtraction` and
+        # `Checker.LVS` (flows/classic.py:111-114), at THRESHOLD 0. This
+        # clause sits immediately in front of `lvs_report_check` for the same
+        # reason.
+        #
+        # STRICTER THAN UPSTREAM IN TWO PLACES, both of them the "could not
+        # look" == "looked and it was fine" defect. (1) An extraction run
+        # whose feedback file is missing or unreadable is rc 1 with its own
+        # finding, not a warn-and-continue — upstream's `MetricChecker.run`
+        # warns and returns clean when the metric is absent. Only the total
+        # absence of any extraction run is rc 2 NOT CHECKED, and it says so.
+        # (2) The string count and the bounding-box count are both computed
+        # and must agree; upstream silently overwrites one with the other at
+        # steps/magic.py:666. A disagreement is rc 1 and the verdict takes
+        # max(), never the smaller of two numbers it cannot reconcile.
+        #
+        # SCOPED to `phase3/stage3` — where the layout declares extraction
+        # lands — and the scope cannot be used to blind it: a scoped scan that
+        # finds NO run rescans the whole project and fails with
+        # SCOPE_MISSES_EXTRACTION if an extraction exists outside the scope.
+        #
+        # BLAST RADIUS: 0. `git ls-files benchmark-data | grep -ci feedback`
+        # is 0 and no tracked tree carries `cif_scale.txt` or a `.ext`, so no
+        # published run holds a Magic SPICE-extraction run today and every one
+        # of them takes the disclosed rc-2 path. The gate becomes load-bearing
+        # the first time a run actually extracts — which is why it has to be
+        # wired before that run, not after it.
+        - program_exit_zero: "magic_extract_feedback_check . --under phase3/stage3 --json reports/phase3/magic_illegal_overlap.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
         # vibe-ic#693 — the LVS counterpart, and a DIFFERENT question from the
         # gate above: not "did netgen say match" but "could netgen's match mean
