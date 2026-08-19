@@ -735,9 +735,49 @@ def test_maxfail_prefix_is_norecord_not_a_complete_failure_set(tmp_path):
 
 def test_protocol_refusal_is_not_mislabeled_as_a_stall():
     reason = D._norecord_reason(
-        0, "PROGRESS_PROTOCOL_INCOMPLETE: collection mismatch\n", True, 3)
+        0, "PROGRESS_PROTOCOL_INCOMPLETE: collection mismatch\n", True, 3,
+        stalled=False, protocol_error="collection mismatch")
     assert reason == "pytest progress protocol incomplete: collection mismatch"
     assert "STALLED" not in reason
+
+
+def test_a_subject_that_prints_the_stall_marker_is_not_called_a_stall():
+    """THE HALF THE TEST ABOVE NEVER EXERCISED, and it cost a session.
+
+    MEASURED on clean origin/main 49d2b3328, this very file driven one at a time
+    the way the landing gate drives it: `10 failed, 11 passed in 24.13s`, natural
+    exit, truncated at 21 of 72 items by its own `--maxfail` bound — reported as
+    `STALLED after 300 s`. The only `WATCHDOG_STALLED:` in the whole buffer came
+    from an assertion dump belonging to this file's own test of the stall
+    detector. The supervisor's watchdog never fired.
+    """
+    out = ("E   AssertionError: assert 'X' in '\\nWATCHDOG_STALLED: configured "
+           "forward-progress signals did not advance for > 0.25s\\n'\n"
+           "PROGRESS_PROTOCOL_INCOMPLETE: m.16.1.jsonl: session finished before "
+           "every selected item completed (21/72)\n")
+    reason = D._norecord_reason(
+        1, out, True, 300, stalled=False,
+        protocol_error="m.16.1.jsonl: session finished before every selected "
+                       "item completed (21/72)")
+    assert reason == ("pytest progress protocol incomplete: m.16.1.jsonl: session "
+                      "finished before every selected item completed (21/72)")
+    assert "STALLED" not in reason
+
+
+def test_a_stall_the_supervisor_actually_saw_is_still_called_a_stall():
+    """The other direction: the label must survive where it is TRUE."""
+    reason = D._norecord_reason(None, "", True, 300, stalled=True,
+                                protocol_error="")
+    assert reason == ("STALLED after 300 s with no validated pytest lifecycle "
+                      "progress")
+
+
+def test_the_stall_verdict_is_a_required_argument():
+    """A caller that forgets it must not silently inherit the old guess."""
+    with pytest.raises(TypeError):
+        D._norecord_reason(1, "", True, 300)
+    with pytest.raises(TypeError):
+        D._norecord_reason(1, "", True, 300, stalled=False)
 
 
 def test_progress_stall_cleans_a_descendant_that_escaped_the_process_group(
@@ -2241,3 +2281,42 @@ def test_an_unknown_session_shape_is_never_called_a_truncation():
                      ("items_finished", 9)):
         broken = dict(full, **{key: bad})
         assert D._maxfail_truncation(2, 1, 2, broken, 1, 3, []) is None, key
+
+
+def test_a_nested_drivers_complaint_is_not_this_sessions_reason():
+    """The detail must come from THIS session's probe, not from the buffer.
+
+    MEASURED with only the `stalled` half repaired: this file's per-file arm
+    reported "no pytest progress stream was produced" for a session whose own
+    probe had just said "session finished before every selected item completed
+    (29/83)". The first `PROGRESS_PROTOCOL_INCOMPLETE:` in the buffer belonged to
+    a NESTED driver run that this file spawns as its subject.
+    """
+    out = ("PROGRESS_PROTOCOL_INCOMPLETE: no pytest progress stream was produced\n"
+           "PROGRESS_PROTOCOL_INCOMPLETE: m.139.138.jsonl: session finished before "
+           "every selected item completed (29/83)\n")
+    reason = D._norecord_reason(
+        1, out, True, 300, stalled=False,
+        protocol_error="m.139.138.jsonl: session finished before every selected "
+                       "item completed (29/83)")
+    assert reason.endswith("completed (29/83)"), reason
+    assert "no pytest progress stream" not in reason
+
+
+def test_a_probe_that_made_no_complaint_yields_no_protocol_reason():
+    """Fail closed: an unsupplied detail must not be invented from the buffer."""
+    out = "PROGRESS_PROTOCOL_INCOMPLETE: something the child printed\n"
+    reason = D._norecord_reason(1, out, True, 300, stalled=False,
+                                protocol_error="")
+    assert "protocol incomplete" not in reason
+    assert reason == "pytest supervision ended without a complete liveness record"
+
+
+def test_the_sink_reader_refuses_a_complete_join():
+    assert D._sink_protocol_error({}) == ""
+    assert D._sink_protocol_error({"protocol_complete": True,
+                                   "protocol_error": "x"}) == ""
+    assert D._sink_protocol_error({"protocol_complete": False,
+                                   "protocol_error": "x"}) == "x"
+    assert D._sink_protocol_error({"protocol_complete": False,
+                                   "protocol_error": None}) == ""
