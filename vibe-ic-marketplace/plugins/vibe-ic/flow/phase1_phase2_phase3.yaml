@@ -371,7 +371,30 @@ steps:
         # the two tracks needs converging, not an automatic stop); running is
         # not. A missing/unparseable report exits 1 here, because a second
         # track that can quietly not run is the same as no second track.
-        - program_exit_zero: "phase1_expert_parse_track ."
+        #
+        # `--verify-only` 2026-08-19, and it is not a weakening. The clause
+        # used to invoke the PRODUCER, and this step DECLARES the report the
+        # producer writes. `flow_compliance_check` runs each step's gate and
+        # then reports whether that step's `required_outputs` are present, so
+        # on a tree without the report the audit CREATED it and certified its
+        # own output, and the clause could never fail for absence — the one
+        # thing the yaml text above says it is here to do. MEASURED on
+        # `benchmark-data/ic/u_hawaii_adc`: the audit created
+        # `reports/audit/phase1/expert_parse_track.json` in the tree it was
+        # auditing. `test_d3_the_compliance_audit_does_not_create_declared_
+        # outputs` names that state and its assertion states the remedy —
+        # "Move the producer to the runner that owns the step; the audit must
+        # measure a tree it did not touch." Production already lives in
+        # `phase1_one_shot_runner` (`_EXPERT_TRACK`); only the gate had to stop
+        # doing it. Same shape as A8's withdrawn `analog_hardmacro_gds_emit`
+        # clause and as `metal_fill_emit --verify-only`.
+        #
+        # WHAT IT STILL ENFORCES is unchanged and is now the whole of what it
+        # does: absent / unreadable / unparseable / another producer's file at
+        # the declared path all exit 1, and the recorded verdict's own cost is
+        # re-derived through the SAME `RC_BY_VERDICT` table the producing path
+        # uses, so VACUOUS_PASS and REFUSED keep costing exactly what they cost.
+        - program_exit_zero: "phase1_expert_parse_track . --verify-only"
         # The CLAUSE that reads the two extraction-coverage entries moved here
         # from step 1 (#1219). Without it, moving the declaration alone would
         # only RELOCATE d4's "declared by no clause" finding from step 1 to D1.

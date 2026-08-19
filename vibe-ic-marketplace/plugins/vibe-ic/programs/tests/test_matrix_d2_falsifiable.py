@@ -1584,10 +1584,23 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
 #: ``flow_compliance_check._check_program_exit_zero`` against all 12 fixtures
 #: in :data:`FIXTURES`.
 UNREDDENED: Dict[Tuple[str, str], str] = {
-    ("D1", "phase1_expert_parse_track ."):
-        "rc=2 VACUOUS_PASS under every fixture: the expert-parse track needs a "
-        "real Phase-1 extraction run to have happened, and a stubbed "
-        "generated_docs/ tree still reads as 'track not attempted'",
+    # ("D1", "phase1_expert_parse_track .") WAS HERE, excused as
+    #     "rc=2 VACUOUS_PASS under every fixture: the expert-parse track needs
+    #      a real Phase-1 extraction run to have happened, and a stubbed
+    #      generated_docs/ tree still reads as 'track not attempted'"
+    # and the excuse was true of the PRODUCING form for a reason that had
+    # nothing to do with Phase 1: the clause RAN the track, so it wrote the
+    # report it was judging and could never find it absent. That is the same
+    # defect `test_d3_the_compliance_audit_does_not_create_declared_outputs`
+    # measured from the other side (the audit created D1's declared output on
+    # five of seven published roots).
+    #
+    # The clause is now `phase1_expert_parse_track . --verify-only`, which
+    # READS the report a run left behind. It carries no assignment because it
+    # needs none: EMPTY reddens it — no report, exit 1 — which is exactly the
+    # failure the yaml always said this clause was here to produce. A blocking
+    # clause that no fixture in this library could break is now broken by the
+    # simplest one.
     ("2", "rom_init_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json "
           "reports/phase2/lint/rom_init_lint.json"):
         "PASS/VACUOUS: needs RTL carrying a Quartus-unsafe ROM initialiser "

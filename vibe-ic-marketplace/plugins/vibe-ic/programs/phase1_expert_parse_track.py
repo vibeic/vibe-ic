@@ -194,6 +194,17 @@ import _path_layout as _pl  # noqa: E402
 import nvm_program_supply_intent as _nps  # noqa: E402
 
 PROGRAM = "phase1_expert_parse_track"
+
+#: Exit code per verdict word, in ONE place. `--verify-only` re-derives the
+#: exit code from the verdict a previous run RECORDED, and a second copy of
+#: this table is how the two modes would come to disagree about what
+#: VACUOUS_PASS costs.
+RC_BY_VERDICT: Dict[str, int] = {
+    "REFUSED": 2,
+    "VACUOUS_PASS": 2,
+    "FINDINGS": 0,
+    "PASS": 0,
+}
 VERSION = "1.0.0"
 
 _EXPERT_DB = (_HERE.parent / "agents" / "ic_expert_db" / "ic_expert_db.json")
@@ -881,13 +892,14 @@ def evaluate(project: Path) -> Dict[str, Any]:
         # top-line word on this run may imply it was examined. The
         # deterministic findings are still listed and still printed — the
         # refusal replaces the CLAIM of coverage, never the evidence.
-        verdict, rc = "REFUSED", 2
+        verdict = "REFUSED"
     elif not examined:
-        verdict, rc = "VACUOUS_PASS", 2
+        verdict = "VACUOUS_PASS"
     elif findings:
-        verdict, rc = "FINDINGS", 0
+        verdict = "FINDINGS"
     else:
-        verdict, rc = "PASS", 0
+        verdict = "PASS"
+    rc = RC_BY_VERDICT[verdict]
 
     sidecar = _pl.phase1_ai_deep_review_patches_file(project)
     return {
@@ -953,16 +965,98 @@ def evaluate(project: Path) -> Dict[str, Any]:
     }
 
 
+def _verify_only(project: Path, json_arg: Optional[str]) -> int:
+    """Re-derive this program's verdict from the report a RUN left behind.
+
+    WHY A GATE MAY NOT RUN THE TRACK
+    ================================
+    `flow_compliance_check` is the acceptance auditor: it runs each step's gate
+    and then reports whether that step's `required_outputs` are present. D1
+    DECLARES `reports/audit/phase1/expert_parse_track.json`, and D1's gate
+    clause was `phase1_expert_parse_track .` — the producer. So on a tree that
+    did not have the report, the audit CREATED it and then certified it, and
+    the clause could never fail for absence. Measured on
+    `benchmark-data/ic/u_hawaii_adc`:
+
+        Newly self-certified: {'benchmark-data/ic/u_hawaii_adc':
+            ['D1::reports/audit/phase1/expert_parse_track.json']}
+
+    That is the state `test_d3_the_compliance_audit_does_not_create_declared_
+    outputs` exists to refuse, and its remedy is written into the assertion:
+    "Move the producer to the runner that owns the step; the audit must measure
+    a tree it did not touch." `phase1_one_shot_runner` already runs the track
+    (`_EXPERT_TRACK`), so the production half needs no new home — only the gate
+    needs to stop doing it. The precedent is A8's withdrawn
+    `analog_hardmacro_gds_emit` clause and `metal_fill_emit --verify-only`.
+
+    WHAT THE CLAUSE STILL ENFORCES, unchanged. The yaml's reason for the clause
+    was "a missing/unparseable report exits 1 here, because a second track that
+    can quietly not run is the same as no second track". That is EXACTLY what
+    this does, and it is now the whole of what it does: absent, unreadable,
+    unparseable or foreign report -> exit 1. The verdict's own cost is
+    re-derived through :data:`RC_BY_VERDICT`, the same table the producing path
+    uses, so VACUOUS_PASS and REFUSED keep costing what they cost.
+    """
+    target = Path(json_arg) if json_arg else \
+        _pl.report_path(project, "phase1/expert_parse_track.json")
+    if not target.exists():
+        print(f"{PROGRAM}: FAIL — --verify-only found no report at {target}. "
+              f"The second track did not run, or did not write. A second "
+              f"track that can quietly not run is the same as no second "
+              f"track. Run `{PROGRAM} {project}` (the runner does this) "
+              f"before the gate.", file=sys.stderr)
+        return 1
+    try:
+        rep = json.loads(target.read_text())
+    except Exception as exc:  # noqa: BLE001
+        print(f"{PROGRAM}: FAIL — the report at {target} does not parse: "
+              f"{exc}", file=sys.stderr)
+        return 1
+    if not isinstance(rep, dict) or rep.get("program") != PROGRAM:
+        print(f"{PROGRAM}: FAIL — {target} is not this program's report "
+              f"(program={rep.get('program')!r} if it is an object at all). "
+              f"Another producer owns that path, so this track's report was "
+              f"never written there.", file=sys.stderr)
+        return 1
+    verdict = rep.get("verdict")
+    if verdict not in RC_BY_VERDICT:
+        print(f"{PROGRAM}: FAIL — {target} records verdict {verdict!r}, which "
+              f"this program cannot have written (known: "
+              f"{sorted(RC_BY_VERDICT)}).", file=sys.stderr)
+        return 1
+
+    den = rep.get("denominator") or {}
+    ai = rep.get("ai_subtrack") or {}
+    print(f"{PROGRAM}: {verdict} — VERIFIED from the report this run "
+          f"produced; examined {den.get('total')} expectation(s) "
+          f"({den.get('deterministic')} deterministic + {den.get('ai')} from "
+          f"the AI sub-track); {len(rep.get('findings') or [])} finding(s); "
+          f"AI sub-track {ai.get('status')}")
+    print(f"  report: {target}")
+    return RC_BY_VERDICT[verdict]
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("--json", default=None)
+    ap.add_argument(
+        "--verify-only", action="store_true",
+        help="READ the report a run already produced and re-derive this "
+             "program's exit code from it; never run the track and never "
+             "write. This is the form a GATE must use: a gate clause that "
+             "runs the track produces the very artefact the audit then "
+             "reports as present.")
     args = ap.parse_args(argv)
     if not args.project_dir.is_dir():
         print(f"ERROR: not a directory: {args.project_dir}", file=sys.stderr)
         return 1
 
     project = args.project_dir.resolve()
+
+    if args.verify_only:
+        return _verify_only(project, args.json)
+
     try:
         rep = evaluate(project)
     except Exception as exc:  # noqa: BLE001
