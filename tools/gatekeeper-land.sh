@@ -919,7 +919,7 @@ run_pytest() {
     # the write guard from the session would be a false green, and it would look
     # exactly like this one. The guard reports on every session it is loaded into,
     # so its absence from the output means it did not run.
-    if ! printf '%s\n' "$out" | grep -qa 'suite_write_guard:'; then
+    if ! grep -qa 'suite_write_guard:' <<<"$out"; then
       echo "  FAIL  suite_write_guard did not report — the session ran WITHOUT the"
       echo "        write guard, so 'the suite wrote nothing' was never checked."
       FAILED=1
@@ -940,27 +940,56 @@ run_pytest() {
     # absolute NORECORD refusal.
     [ "$rc" -eq 2 ] && { TARGETED_NORECORD=1; : > "$LANE_DIR/targeted.norecord"; }
   fi
+  # `grep -q … <<<"$out"`, NEVER `printf … | grep -q …`. THE PIPE FORM ANSWERS
+  # THE WRONG QUESTION, AND IT ANSWERS IT IN THE PERMISSIVE DIRECTION.
+  #
+  # This file runs under `set -o pipefail`. `grep -q` exits the instant it
+  # matches; if the buffer is bigger than a pipe can hold, `printf` is still
+  # writing, takes SIGPIPE, and the PIPELINE's status becomes 141 — so a MATCH
+  # is reported to the `if` as a NON-match. MEASURED, this shell, 1.75 MB
+  # buffer, `^AGGREGATE_NORECORD`:
+  #
+  #     match on the FIRST line   → 141 141 141 141 141 141 141 141 141 141 141 141
+  #     match on the LAST line    →   0   0   0   0   0   0
+  #
+  # The verdict therefore depended on WHERE in the driver's output the marker
+  # landed and on how the two processes were scheduled — not on the subject.
+  # Caught by exactly that: two rounds over one frozen tree whose targeted arms
+  # were byte-identical (same 18 files, same AGGREGATE_NORECORD text, same 382
+  # cases) printed DIFFERENT labels, `targeted aggregate session produced no
+  # status` and `… produced no complete record`.
+  #
+  # THE DIRECTION IS WHAT MAKES IT A DEFECT AND NOT A WART. For the NORECORD /
+  # NOTRUN / AGGREGATE_NORECORD probes a 141 MISSES A REAL REFUSAL — "I could
+  # not look" reaching the reader as "I looked and it was fine", which is the
+  # one direction this battery exists to make impossible. It also renames a
+  # gate between two arms that `landing_merge_verdict` subtracts BY PRINTED
+  # LABEL, so the differential reads one gate as two.
+  #
+  # A herestring has no pipe, no second process and no SIGPIPE, and asks the
+  # identical question of the identical bytes.
+  #
   # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
   # driver/subject stdout channel: pytest can print marker-looking text. It
   # derives completeness from exact process suites in the merged JUnit.
-  if printf '%s\n' "$out" | grep -qa '^=== pytest junit summary'; then
+  if grep -qa '^=== pytest junit summary' <<<"$out"; then
     printf '  REPORT  targeted test process verdicts embedded in junit\n'
   else
     printf '  FAIL  targeted test instrument produced no junit summary\n'
     FAILED=1
   fi
-  if printf '%s\n' "$out" | grep -qa '^NORECORD'; then
+  if grep -qa '^NORECORD' <<<"$out"; then
     printf '  FAIL  targeted per-file session produced no complete record\n'
     FAILED=1
   fi
-  if printf '%s\n' "$out" | grep -qa '^NOTRUN'; then
+  if grep -qa '^NOTRUN' <<<"$out"; then
     printf '  FAIL  targeted per-file session was not run\n'
     FAILED=1
   fi
-  if printf '%s\n' "$out" | grep -qa '^AGGREGATE_NORECORD'; then
+  if grep -qa '^AGGREGATE_NORECORD' <<<"$out"; then
     printf '  FAIL  targeted aggregate session produced no complete record\n'
     FAILED=1
-  elif printf '%s\n' "$out" | grep -qa '^AGGREGATE_COMPLETE'; then
+  elif grep -qa '^AGGREGATE_COMPLETE' <<<"$out"; then
     printf '  REPORT  targeted aggregate session completed\n'
   else
     printf '  FAIL  targeted aggregate session produced no status\n'
