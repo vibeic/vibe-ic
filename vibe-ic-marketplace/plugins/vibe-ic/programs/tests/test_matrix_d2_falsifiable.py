@@ -2842,7 +2842,7 @@ _D2_CRASH_SHAPES = {
 
 @pytest.mark.parametrize("shape", sorted(_D2_CRASH_SHAPES))
 def test_d2_a_real_crash_is_disclosed_by_the_consumer_not_guessed(
-        shape, tmp_path):
+        shape, monkeypatch, tmp_path):
     """Drive a REALLY crashing gate through the REAL consumer, deep path.
 
     Everything above classifies STRINGS. That leaves the mechanism this
@@ -2869,13 +2869,35 @@ def test_d2_a_real_crash_is_disclosed_by_the_consumer_not_guessed(
         f"the {FCC._OUTPUT_SNIPPET_CHARS}-char evidence window it exists to "
         f"overflow — this cell would prove nothing")
     src, overflows = _D2_CRASH_SHAPES[shape]
-    helper = FCC.PROGRAMS_DIR / f"_d2_crash_probe_{shape}.py"
+    # The probe is a PROGRAM, so the consumer resolves it by NAME against
+    # `flow_compliance_check.PROGRAMS_DIR` (`_resolve_program_cmd`). Writing it
+    # into the real one put an untracked file in the repository work tree for
+    # the length of the subprocess, and this module's own header forbids
+    # exactly that: "the fixture is a deliberately-broken project tree built in
+    # a pytest tmp_path (never in the repo, never in /tmp by hand)".
+    #
+    # It was not a leak — the old `finally` removed the file — and it was
+    # invisible to this session's own `suite_write_guard`, which samples once
+    # at the END. It was visible to every CONCURRENT reader. MEASURED: with
+    # `test_matrix_d4_criteria_match.py` running beside this module, d4 exited
+    # rc=1 with 71 passed and no failed test, on `suite_write_guard: this
+    # pytest session WROTE INTO THE TREE — ?? .../programs/
+    # _d2_crash_probe_multiline_message.py (appeared)`. That is a red attached
+    # to a module that did nothing wrong, from a change nobody made — the
+    # "wandering red that belongs to no change" this suite's own `--basetemp`
+    # discipline was introduced to end, arriving through a different door.
+    #
+    # The resolver reads the module global at call time, so pointing it at a
+    # tmp directory keeps the REAL consumer and the REAL dynamic dispatch —
+    # `_check_program_exit_zero` -> `_resolve_program_cmd` -> subprocess — and
+    # moves only the address the probe is written to.
+    probe_programs = tmp_path / "d2_probe_programs"
+    probe_programs.mkdir()
+    monkeypatch.setattr(FCC, "PROGRAMS_DIR", probe_programs)
+    helper = probe_programs / f"_d2_crash_probe_{shape}.py"
     helper.write_text(src, encoding="utf-8")
-    try:
-        passed, out = FCC._check_program_exit_zero(
-            project, f"{helper.stem} {project}")
-    finally:
-        helper.unlink(missing_ok=True)
+    passed, out = FCC._check_program_exit_zero(
+        project, f"{helper.stem} {project}")
 
     assert passed is False, f"{shape}: a crash must never be a PASS"
     assert out.startswith(FCC._CRASH_HINT_PREFIX), (
