@@ -270,10 +270,82 @@ _KIND_BODIES: Tuple[Tuple[str, str], ...] = (
     (".v", _VERILOG_BODY),
 )
 
+# ──────────────────────────────────────────────────────────────────────
+# WHEN THE KIND IS NARROWER THAN THE SUFFIX
+#
+# The suffix table above generalises where a gate asks "is this JSON". Some
+# gates ask a narrower question, and for those `.json` is not the kind — the
+# CONTAINER is. A body that is merely parseable then fails the real gate for a
+# reason that has nothing to do with the missing-output downgrade this module
+# measures, which is the same failure `_KIND_BODIES` was introduced for one
+# level up.
+#
+# Measured the day it bit, and it is the shape the comment above predicted:
+# step 4 dropped out of `REAL_GATE_PASS_TIER_STEPS` after
+# `verilator_coverage_measure` learned to classify what sits at the declared
+# coverage path. `{"d8_fixture": true}` carries no `totals` container, so the
+# program classifies it `foreign` — "the file at the declared coverage path is
+# a 'another producer' payload written by another producer, so line/toggle/
+# branch was never measured here" — and exits non-zero. Verilator IS installed
+# on the host, so this was not a capability gap: step 4's real gate simply
+# could no longer reach the tier at which the MISSING downgrade fires, and its
+# cell became substituted-gate-only.
+#
+# Keyed by path TAIL, not by suffix, because the narrowing is a property of the
+# declared path and not of `.json` in general — seeding every `.json` in the
+# tree with a coverage container would be a different lie.
+#
+# THE RIGHT BODY IS A REAL CONTAINER, not a number asserted. It carries
+# `totals.{line,toggle,branch}.{covered,total,pct}`, which is exactly what
+# `verilator_coverage_measure.artefact_looks_tool_generated` requires, above
+# that program's own default thresholds (line 70 / toggle 60 / branch 70), and
+# it records NO `coverage_dat` backlink — a recorded one must exist on disk,
+# and pointing at a file this fixture did not produce is the forgery the gate
+# exists to reject.
+_COVERAGE_ACTUAL_TAIL = "reports/phase2/coverage/coverage_actual.json"
+
+_COVERAGE_BODY = json.dumps(
+    {
+        "d8_fixture": True,
+        "totals": {
+            "line": {"covered": 95, "total": 100, "pct": 95.0},
+            "toggle": {"covered": 90, "total": 100, "pct": 90.0},
+            "branch": {"covered": 85, "total": 100, "pct": 85.0},
+        },
+    },
+    indent=2, sort_keys=True) + "\n"
+
+#: The same CONTAINER, reporting that coverage FAILED — below every threshold.
+#: Same kind, same path, same writer: an unmoved verdict can never be explained
+#: by "the gate could not read it", which is what the content arm needs.
+_WRONG_COVERAGE_BODY = json.dumps(
+    {
+        "d8_fixture": True,
+        "totals": {
+            "line": {"covered": 10, "total": 100, "pct": 10.0},
+            "toggle": {"covered": 5, "total": 100, "pct": 5.0},
+            "branch": {"covered": 8, "total": 100, "pct": 8.0},
+        },
+    },
+    indent=2, sort_keys=True) + "\n"
+
+#: Path-tail bodies, consulted BEFORE `_KIND_BODIES`. Same two-table discipline
+#: the suffix pair has, asserted by `test_d8_every_seeded_kind_has_a_wrong_counterpart`.
+_PATH_BODIES: Tuple[Tuple[str, str], ...] = (
+    (_COVERAGE_ACTUAL_TAIL, _COVERAGE_BODY),
+)
+
+_WRONG_BY_PATH: Dict[str, str] = {
+    _COVERAGE_ACTUAL_TAIL: _WRONG_COVERAGE_BODY,
+}
+
 
 def fixture_body(rel: str) -> str:
     """The body to seed ``rel`` with: kind-correct where a gate parses it."""
     lowered = rel.lower()
+    for tail, body in _PATH_BODIES:
+        if lowered.endswith(tail):
+            return body
     for suffix, body in _KIND_BODIES:
         if lowered.endswith(suffix):
             return body
@@ -342,6 +414,9 @@ _WRONG_BY_SUFFIX: Dict[str, str] = {
 def wrong_body(rel: str) -> str:
     """The body to seed ``rel`` with when it must be PRESENT but WRONG."""
     lowered = rel.lower()
+    for tail, _right in _PATH_BODIES:
+        if lowered.endswith(tail):
+            return _WRONG_BY_PATH[tail]
     for suffix, _right in _KIND_BODIES:
         if lowered.endswith(suffix):
             return _WRONG_BY_SUFFIX[suffix]
@@ -1681,8 +1756,15 @@ def _content_arm_sweep() -> Dict[str, Dict[str, Any]]:
 #: A step LEAVING the population is NOT graded here: that is the shrink guard
 #: `test_d8_downgrade_is_reachable_through_each_steps_own_real_gate` already
 #: owns, and duplicating it would report one defect as two.
+#: 2026-08-19, SAME CHANGE: step `4` REJOINED the population when its coverage
+#: artefact stopped being seeded as a payload the gate classifies `foreign`
+#: (see `_PATH_BODIES`). It arrived unpinned and this table reddened by name,
+#: exactly as the "a step JOINS" row above says it must. MEASURED on the
+#: rejoining run, not assumed from its neighbours: `4: UNMOVED`, which is the
+#: same answer all sixteen give and is the asymmetry this arm exists to state.
 CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
     "D1": _CONTENT_UNMOVED, "1": _CONTENT_UNMOVED, "2": _CONTENT_UNMOVED,
+    "4": _CONTENT_UNMOVED,
     "12": _CONTENT_UNMOVED, "A1": _CONTENT_UNMOVED, "A2": _CONTENT_UNMOVED,
     "A4": _CONTENT_UNMOVED, "A5": _CONTENT_UNMOVED, "A6": _CONTENT_UNMOVED,
     "A8": _CONTENT_UNMOVED, "14": _CONTENT_UNMOVED, "28": _CONTENT_UNMOVED,
@@ -1827,6 +1909,43 @@ def test_d8_every_seeded_kind_has_a_wrong_counterpart():
             f"{suffix}: fixture_body no longer returns the pinned right body")
     assert wrong_body("probe.rpt") == _WRONG_TEXT
     assert wrong_body("probe.rpt") != _FIXTURE_BODY
+
+    # THE PATH-TAIL PAIR, held to the same discipline. A tail added to the
+    # right table without a wrong counterpart would fall through to the
+    # SUFFIX body, which for `.json` is `{"d8_fixture": true}` — the exact
+    # payload the gate this narrowing exists for classifies `foreign`. The
+    # wrong tree would then fail on kind again and the step would silently
+    # go back to being unmeasurable, which is what this whole table is for.
+    right_tails = {tail for tail, _ in _PATH_BODIES}
+    assert right_tails == set(_WRONG_BY_PATH), (
+        f"the seeded-path tables disagree: fixture_body handles "
+        f"{sorted(right_tails)}, wrong_body handles {sorted(_WRONG_BY_PATH)}")
+    for tail, right in _PATH_BODIES:
+        assert fixture_body(tail) == right, tail
+        assert wrong_body(tail) != right, f"{tail}: wrong body equals right"
+        # The tail must WIN over the suffix, or the narrowing does nothing.
+        assert fixture_body(tail) != fixture_body("probe.json"), tail
+
+    # AND THE BODIES MUST SATISFY / FAIL THE REAL CLASSIFIER, not a
+    # description of it. A hand-checked shape is how the previous body came to
+    # be wrong: it was correct JSON for a gate that had since stopped asking
+    # whether the file was JSON.
+    import verilator_coverage_measure as _vcm
+    with tempfile.TemporaryDirectory(prefix="d8_cov_") as td:
+        for body, want in ((_COVERAGE_BODY, "measured"),
+                           (_WRONG_COVERAGE_BODY, "measured")):
+            probe = Path(td) / "coverage_actual.json"
+            probe.write_text(body)
+            kind, detail, payload = _vcm.classify_coverage_artefact(probe)
+            assert kind == want, (
+                f"the seeded coverage body classifies {kind!r} ({detail}); "
+                f"the fixture must present a real container, not a claim")
+        # ...and they must differ in VERDICT, or the content arm proves nothing.
+        right = json.loads(_COVERAGE_BODY)["totals"]
+        wrong = json.loads(_WRONG_COVERAGE_BODY)["totals"]
+        for cat, floor in (("line", 70.0), ("toggle", 60.0), ("branch", 70.0)):
+            assert right[cat]["pct"] >= floor, cat
+            assert wrong[cat]["pct"] < floor, cat
 
 
 #: THE POSITIVE CONTROL's subject, anchored to the flow rather than described.
