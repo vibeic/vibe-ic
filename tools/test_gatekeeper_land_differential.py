@@ -24,6 +24,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -34,6 +36,12 @@ DIFFERENTIAL = REPO / "tools" / "gatekeeper-land-differential.sh"
 LAND = REPO / "tools" / "gatekeeper-land.sh"
 PLUGIN_REL = "vibe-ic-marketplace/plugins/vibe-ic"
 REAL_VERDICT = REPO / PLUGIN_REL / "programs" / "landing_merge_verdict.py"
+
+# The protected-landing-transition tuple this synthetic repository has to carry
+# before `landing_merge_verdict` can be answered at all. See that module's
+# docstring for why the refusal it satisfies is correct and stays.
+sys.path.insert(0, str(REPO / PLUGIN_REL / "programs" / "tests"))
+import _protected_transition_fixture as protected  # noqa: E402
 
 SELECTED = "programs/tests/test_subject.py"
 
@@ -57,6 +65,60 @@ def _junit_stub(outcome: str) -> str:
         '<properties><property name="process_rc" value="'
         + ("1" if outcome == "failed" else "0")
         + '"/></properties></testcase></testsuite></testsuites>')
+
+
+#: THE AGGREGATE HYGIENE RECORD, in the shape the dispatcher really writes.
+#:
+#: `hygiene_finding_delta._validate_record` accepts nothing less than a
+#: COMPLETE one: redundant counters that agree with the gate array, one process
+#: attestation per gate that agrees with that gate's state, and a measurement
+#: DAY it can parse. Anything short of that is REFUSED as unmeasurable — which
+#: is correct, and which makes every differential case below refuse for the
+#: record's shape instead of for the rule it is about.
+_HYGIENE_RECORD = r"""# Write the one-gate aggregate hygiene record for this stub arm.
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(
+    0, str(Path.cwd() / "vibe-ic-marketplace/plugins/vibe-ic" / "programs"))
+import gate_process_attestation as attest
+
+# THE TWO ARMS MUST AGREE ON THE DAY. `hygiene_finding_delta.delta` refuses a
+# pair measured on different days, because `exemption_expired` is computed
+# against it and a promise coming due is the calendar's doing rather than the
+# branch's. A stub that read the clock could straddle midnight between the arms
+# and turn this file's whole battery red for a reason no test is about.
+TODAY = "2026-08-15"
+LABEL = "stub gate"
+ARGV = ["python3", "stub_gate.py", LABEL]
+OUTPUT = {"PASS": "[PASS] checked\n",
+          "FAIL": "[FAIL] named finding\n",
+          "NOT_CHECKED": "[NOT_CHECKED] unavailable\n"}
+RETURNCODE = {"PASS": 0, "FAIL": 1, "NOT_CHECKED": 2}
+
+state = os.environ.get("ARM_HYGIENE_STATE") or "PASS"
+gate = {"label": LABEL, "state": state, "seconds": 1, "corpus": None,
+        "exempt_until": None, "exempt_reason": None,
+        "exemption_expired": False, "scope": None}
+record = {
+    "shard": None, "today": TODAY, "listed_only": False,
+    "declared": 1, "ran": 1,
+    "decided": int(state in ("PASS", "FAIL")),
+    "passed": int(state == "PASS"),
+    "failed": int(state == "FAIL"),
+    "not_checked": int(state == "NOT_CHECKED"),
+    "wrote_corpus": int(state == "WROTE_CORPUS"),
+    "deferred": 0, "other_shard": 0, "out_of_scope": 0,
+    "not_checked_unexempted": [LABEL] if state == "NOT_CHECKED" else [],
+    "exemptions_expired": [], "wiring_errors": [], "corpora": [],
+    "gates": [gate],
+    "process_attestations": [attest.process_attestation(
+        LABEL, OUTPUT[state], RETURNCODE[state], ARGV, state=state)],
+}
+Path(sys.argv[1]).write_text(json.dumps(record), encoding="utf-8")
+"""
 
 
 def _write_stub_tree(root: Path) -> None:
@@ -110,17 +172,12 @@ def _write_stub_tree(root: Path) -> None:
         'sleep "${ARM_DWELL:-0}"\n'
         '[ -n "${ARM_PROBE_DIR:-}" ] && printf \'%s %s\\n\' "$start" '
         '"$(date +%s.%N)" > "$ARM_PROBE_DIR/$arm"\n'
-        # A MINIMAL BUT VALID `--summary-json` record. `hygiene_finding_delta`
-        # refuses anything that is not one, so a `{}` here would make every
-        # case below refuse as UNMEASURABLE and prove nothing about the rule
-        # under test. `${ARM_HYGIENE_FINDING}` lets a test introduce one.
-        '[ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] && cat > '
-        '"$GATEKEEPER_HYGIENE_REPORT" <<JSON\n'
-        '{"shard": null, "today": "fixed", "listed_only": false,\n'
-        ' "wiring_errors": [], "corpora": [], "exemptions_expired": [],\n'
-        ' "gates": [{"label": "stub gate", "corpus": "", "state":\n'
-        '   "${ARM_HYGIENE_STATE:-PASS}", "exemption_expired": false}]}\n'
-        "JSON\n"
+        # A COMPLETE `--summary-json` record, written by the helper beside
+        # this stub. `hygiene_finding_delta._validate_record` refuses anything
+        # that is not one — a sketch of the shape makes every case below refuse
+        # as UNMEASURABLE and prove nothing about the rule under test.
+        '[ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] && python3 '
+        'tools/stub_hygiene_record.py "$GATEKEEPER_HYGIENE_REPORT"\n'
         "echo '=== gatekeeper landing gates — base=stub ==='\n"
         'if [ "$arm" = A2 ]; then\n'
         '  echo "  ${ARM_A2_RANGE_LINE:-SKIP  range is empty — nothing new to land}"\n'
@@ -152,26 +209,56 @@ def _write_stub_tree(root: Path) -> None:
     # `landing_merge_verdict` imports the finding differential from beside
     # itself; without it the hygiene tier is UNMEASURABLE and every case below
     # would refuse for that reason instead of the one it is about.
-    for mod in ("hygiene_finding_delta.py", "_atomic_artefact.py"):
+    # `gate_process_attestation` is what the record helper below builds its
+    # process attestations with — the same module the real dispatcher uses, so
+    # the stub cannot attest in a dialect the validator would never see.
+    for mod in ("hygiene_finding_delta.py", "_atomic_artefact.py",
+                "gate_process_attestation.py"):
         shutil.copy(REPO / PLUGIN_REL / "programs" / mod, prog / mod)
+
+    (root / "tools" / "stub_hygiene_record.py").write_text(_HYGIENE_RECORD)
 
 
 @pytest.fixture()
-def synthetic(tmp_path):
-    """A repo with a base commit and one candidate commit on top of it."""
-    root = tmp_path / "repo"
+def synthetic():
+    """A repo with a base commit and one candidate commit on top of it.
+
+    DELIBERATELY NOT under pytest's `tmp_path`, and that is measured rather
+    than stylistic. `trusted_worktree_attest` reads a linked worktree's `.git`
+    control file as ONE canonical ASCII line, and pytest roots its temporaries
+    at `pytest-of-$USER`; in the landing image `$USER` is literally
+    `'1000\ndesigner'`, so every path under `tmp_path` carries an EMBEDDED
+    NEWLINE. The attester then refuses the worktree — correctly, and about the
+    harness's own path rather than about the protected tuple under test.
+    """
+    holder = Path(tempfile.mkdtemp(prefix="gk_synthetic_repo."))
+    root = holder / "repo"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
     _git(root, "config", "user.email", "t@example.invalid")
     _git(root, "config", "user.name", "t")
     _write_stub_tree(root)
+    # THE PROTECTED TUPLE BELONGS TO THE BASE COMMIT, because the manifest is
+    # BASE-owned policy: `protected_landing_transition.build_receipt` reads it
+    # out of the base commit's own object database and a candidate never
+    # supplies it. Without it `landing_merge_verdict` refuses every case here
+    # as PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED — correctly, since
+    # a landing gate that cannot measure the protected tuple must not pretend
+    # it did. The manifest is written after the staging pass because it
+    # describes the very object ids that pass creates.
+    protected.install(root)
     _git(root, "add", "-f", ".")
+    protected.write_manifest(root)
+    _git(root, "add", "-f", protected.MANIFEST_REL)
     _git(root, "commit", "-q", "-m", "base")
     base = _git(root, "rev-parse", "HEAD")
     (root / "candidate_marker").write_text("x\n")
     _git(root, "add", "-f", "candidate_marker")
     _git(root, "commit", "-q", "-m", "candidate")
-    return root, base
+    try:
+        yield root, base
+    finally:
+        shutil.rmtree(holder, ignore_errors=True)
 
 
 def _run(root: Path, base: str, *, cand_test="passed", base_test="passed",
