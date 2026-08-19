@@ -1,0 +1,105 @@
+base head   reds 41   |   cand head   reds 47
+
+=== INTRODUCED  (7) ===
+  FAILURE programs/tests/test_ci_harness_timeout_ceiling_check.py::test_a_recorded_advisory_that_stopped_existing_is_deleted
+          FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-designer/pytest-1/test_a_recorded_advisory_that_0/r.json'
+  FAILURE programs/tests/test_ci_harness_timeout_ceiling_check.py::test_each_root_prints_its_own_file_count
+          FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-designer/pytest-1/test_each_root_prints_its_own_0/r.json'
+  FAILURE programs/tests/test_ci_harness_timeout_ceiling_check.py::test_semantic_landing_harness_has_no_elapsed_ceiling
+          AssertionError: [FAIL] ci_harness_timeout_ceiling_check: the landing gate declares semantic pytest supervision but its contract is incomplete:
+  FAILURE programs/tests/test_ci_harness_timeout_ceiling_check.py::test_the_advisory_residual_does_not_grow_unreviewed
+          FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-designer/pytest-1/test_the_advisory_residual_doe0/r.json'
+  FAILURE programs/tests/test_ci_harness_timeout_ceiling_check.py::test_the_json_record_carries_what_the_text_says
+          AssertionError: [FAIL] ci_harness_timeout_ceiling_check: the landing gate declares semantic pytest supervision but its contract is incomplete:
+  FAILURE programs/tests/test_ci_harness_timeout_ceiling_check.py::test_the_shipped_tree_is_clean
+          AssertionError: [FAIL] ci_harness_timeout_ceiling_check: the landing gate declares semantic pytest supervision but its contract is incomplete:
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_the_landing_harness_declares_semantic_progress_not_elapsed_time
+          AssertionError: {'declared': True, 'errors': ['semantic pytest driver is not the exact reviewed executable (sha256=37d80899488be20df90...GRAMS/trusted
+
+=== PRE_EXISTING  (40) ===
+  FAILURE programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step15]
+          AssertionError: step 15 (Floorplan + PDN): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not cover them:
+  FAILURE programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step17]
+          AssertionError: step 17 (Placement (global + detailed)): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not
+  FAILURE programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step19]
+          AssertionError: step 19 (CTS (Clock Tree Synthesis)): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not co
+  FAILURE programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step20]
+          AssertionError: step 20 (#x1F501 Post-CTS hold fixing): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not 
+  FAILURE programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step30]
+          AssertionError: step 30 (Post-Layout SPICE Verification (critical-path correlation + analog)): 2 declared output(s) cite a run root NO corpus can supp
+  FAILURE programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step32]
+          AssertionError: step 32 (#x1F501 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)): 1 declared output(s) cite a ru
+  FAILURE programs/tests/test_matrix_d3_outputs_produced.py::test_d3_waived_unproven_entries_have_no_committed_artefact
+          AssertionError: `git ls-tree -r HEAD` exited 128 under /work/cand, which DOES carry git metadata — so this is a broken environment, not a tree without
+  FAILURE programs/tests/test_matrix_d7_outputs_list_complete.py::test_d7_required_outputs_list_is_complete[step31]
+          AssertionError: step 31: required_outputs is INCOMPLETE — 1 load-bearing artefact(s) it never declares.
+  FAILURE programs/tests/test_program_inventory_no_drift.py::test_a_source_mismatch_is_not_checked_rather_than_a_drift_verdict
+          AssertionError: ('NOT_CHECKED', ["the committed inventory was enumerated from 'git-tracked' and this run enumerated from 'working-tree...e are differe
+  FAILURE programs/tests/test_program_inventory_no_drift.py::test_an_untracked_stray_module_does_not_move_any_count
+          AssertionError: the tracked listing came back empty
+  FAILURE programs/tests/test_program_inventory_no_drift.py::test_check_mode_exits_zero_on_the_committed_tree
+          AssertionError: `gen_program_inventory.py --check` exited 2
+  FAILURE programs/tests/test_program_inventory_no_drift.py::test_the_inventory_is_enumerated_from_the_tracked_set
+          AssertionError: this checkout is a git work tree, so the inventory must be enumerated from it, not from 'working-tree'
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_a_red_test_is_a_red_run_not_a_missing_record
+          AssertionError: === [1/2] test_green_neighbour.py
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_a_session_level_red_is_not_erased_by_green_testcase_xml
+          AssertionError: === [1/1] test_green_neighbour.py
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_aggregate_canary_preserves_cross_file_process_semantics
+          AssertionError: === [aggregate] 2 file(s) in one pytest process
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_aggregate_loss_confines_norecord_to_the_hanging_file
+          AssertionError: === [aggregate] 3 file(s) in one pytest process
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_aggregate_norecord_fallback_ignores_legacy_failure_threshold
+          assert not ["NORECORD  test_01_red.py  pytest progress protocol incomplete: no pytest progress stream was produced — this file's ... progress protocol
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_aggregate_norecord_is_named_and_returns_unknown
+          AssertionError: assert [] == ['test_01_mut...t_02_hang.py']
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_aggregate_norecord_runs_diagnostic_fallback_and_stays_unknown
+          AssertionError: assert [] == ['test_01_mut..._05_green.py']
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_aggregate_refuses_a_selected_file_that_collected_no_tests
+          assert 'does not exactly cover the selected files' in '=== [aggregate] 2 file(s) in one pytest process\nTraceback (most recent call last):\n  File "/u
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_chatty_import_output_is_diagnostic_not_pytest_progress
+          AssertionError: assert [] == ['test_green_...neighbour.py']
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_complete_aggregate_check_does_not_launch_per_file_sessions
+          AssertionError: === [aggregate] 2 file(s) in one pytest process
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_cpu_activity_without_pytest_progress_is_still_a_stall
+          AssertionError: assert [] == ['test_green_...neighbour.py']
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_driver_signal_cleanup_reaps_the_active_detached_descendant
+          AssertionError: fixture never launched its detached child
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_files_not_launched_are_named_rather_than_looking_clean
+          AssertionError: === [1/2] test_red.py
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_natural_exit_reaps_dead_adopted_zombie_without_norecord
+          AssertionError: === [aggregate] 1 file(s) in one pytest process
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_natural_exit_with_live_descendant_is_norecord_after_cleanup
+          assert 'LIVE_DESCENDANTS_CLEANED:' in '=== [aggregate] 1 file(s) in one pytest process\nTraceback (most recent call last):\n  File "/usr/local/lib/pyt
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_nested_collect_progress_is_relayed_to_the_outer_session
+          AssertionError: 
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_one_session_loses_the_whole_record_and_per_file_does_not
+          AssertionError: []
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_progress_stall_catches_a_hang_pytest_timeout_cannot_see
+          AssertionError: assert [] == ['test_green_...neighbour.py']
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_signal_during_parallel_fallback_reaps_detached_descendant
+          AssertionError: parallel fallback never launched its escapee
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_stratified_probe_preserves_late_and_early_green_files[eight-local-hangs-first]
+          assert 10 == 8
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_stratified_probe_preserves_late_and_early_green_files[two-green-files-first]
+          assert 10 == 8
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_systemic_import_hang_recovery_is_bounded_parallel_not_serial
+          AssertionError: assert 0 == 9
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_term_during_cleanup_cancels_before_fallback_and_leaves_zero
+          AssertionError: aggregate cleanup never entered its TERM-ignoring grace
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_the_file_with_no_record_is_named
+          AssertionError: === [1/2] test_green_neighbour.py
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_the_merged_report_is_xunit1_and_carries_the_file_attribute
+          AssertionError: === [1/2] test_green_neighbour.py
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_unproved_final_descendant_census_is_norecord
+          AssertionError: Traceback (most recent call last):
+  FAILURE programs/tests/test_pytest_per_file_junit.py::test_zero_record_probe_still_attempts_the_one_unprobed_green_file
+          AssertionError: === [aggregate] 9 file(s) in one pytest process
+  FAILURE programs/tests/test_selector_second_hop_helpers.py::test_an_unmapped_path_that_nothing_names_is_still_the_floor
+          AssertionError: an unreferenced data path selected 19 files, not the floor
+
+=== FIXED  (1) ===
+  FAILURE programs/tests/test_ci_harness_timeout_ceiling_check.py::test_the_two_trees_use_different_globs_for_a_measured_reason
+          AssertionError: ['base/tools/ci/test_landing_runtime_preflight_gate.py:153  subprocess.run(timeout=600)', 'base/tools/ci/test_landing_...y:148  subpro
+
+=== NOT_DETERMINED  (0) ===
