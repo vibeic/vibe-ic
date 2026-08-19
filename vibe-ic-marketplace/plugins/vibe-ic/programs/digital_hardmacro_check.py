@@ -394,6 +394,7 @@ def parse_lef(lef_text: str, stem: str = "") -> Dict[str, object]:
 
     signal: Set[str] = set()
     pg: Set[str] = set()
+    pg_kind: Dict[str, str] = {}
     raw: Dict[str, List[str]] = {}
     geom_by_pin: Dict[str, List[tuple]] = {}
     for m in _LEF_PIN_BLOCK_RE.finditer(scope):
@@ -404,6 +405,11 @@ def parse_lef(lef_text: str, stem: str = "") -> Dict[str, object]:
         use_m = _LEF_USE_RE.search(body)
         if use_m and use_m.group(1).lower() in _PG_USES:
             pg.add(b)
+            # WHICH RAIL, not merely that it is one. `USE POWER` vs
+            # `USE GROUND` is the only place the LEF says so, and it is the
+            # half of the supply declaration that `lef nocheck` guarantees
+            # Magic did not verify.
+            pg_kind[b] = use_m.group(1).lower()
         else:
             signal.add(b)
         geom_by_pin.setdefault(b, []).extend(pin_geometry(body))
@@ -422,7 +428,7 @@ def parse_lef(lef_text: str, stem: str = "") -> Dict[str, object]:
             # one parser, rather than one question with two answers.
             "origin_ll": _require(parse_lef_frame_ll, "parse_lef_frame_ll")(
                 _LEF_FOREIGN_STRIP_RE.sub(" ", scope or lef_text))[:2],
-            "signal": signal, "pg": pg, "raw": raw,
+            "signal": signal, "pg": pg, "pg_kind": pg_kind, "raw": raw,
             "geometry": geom_by_pin,
             "macro_count": len(blocks),
             "has_obs": bool(_LEF_OBS_RE.search(scope)),
@@ -436,6 +442,11 @@ _LIB_CELL_RE = re.compile(
 _LIB_PIN_RE = re.compile(
     r"(?:^|[^\w])(?P<kind>pg_pin|bus|pin)\s*\(\s*[\"']?"
     r"(?P<name>[^)\s\"',]+)[\"']?\s*\)\s*\{", re.IGNORECASE)
+#: `pg_type : primary_ground ;` inside a pg_pin group. The rail a supply pin
+#: belongs to is stated NOWHERE ELSE in a Liberty, and a `pg_pin` that omits
+#: it does not say which supply it is.
+_LIB_PG_TYPE_RE = re.compile(
+    r"\bpg_type\s*:\s*([A-Za-z_]+)\s*;", re.IGNORECASE)
 
 
 def parse_liberty(lib_text: str, bus_chars: str = "[]<>") -> Dict[str, object]:
@@ -450,15 +461,23 @@ def parse_liberty(lib_text: str, bus_chars: str = "[]<>") -> Dict[str, object]:
     cell_m = _LIB_CELL_RE.search(text)
     signal: Set[str] = set()
     pg: Set[str] = set()
-    for m in _LIB_PIN_RE.finditer(text):
+    pg_type: Dict[str, str] = {}
+    matches = list(_LIB_PIN_RE.finditer(text))
+    for i, m in enumerate(matches):
         b = base_name(m.group("name"), bus_chars)
         if m.group("kind").lower() == "pg_pin":
             pg.add(b)
+            # Scoped to THIS pg_pin's group: from its `{` up to the start of
+            # the next pin/bus/pg_pin declaration, so a `pg_type` belonging
+            # to the following group is never read as this one's.
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            tm = _LIB_PG_TYPE_RE.search(text, m.end(), end)
+            pg_type[b] = tm.group(1).lower() if tm else ""
         else:
             signal.add(b)
     signal -= pg
     return {"cell": cell_m.group("name") if cell_m else None,
-            "signal": signal, "pg": pg}
+            "signal": signal, "pg": pg, "pg_type": pg_type}
 
 
 # ── Verilog ───────────────────────────────────────────────────────────────
@@ -808,6 +827,8 @@ def check_package(name: str, views: Dict[str, Path], project: Path,
         "lef_signal": sorted(sig_lef), "lef_pg": sorted(pg_lef),
         "lib_signal": sorted(sig_lib), "lib_pg": sorted(pg_lib),
         "v_ports": sorted(v_ports), "v_style": ver["style"],
+        "lef_pg_kind": dict(sorted(lef.get("pg_kind", {}).items())),
+        "lib_pg_type": dict(sorted(lib.get("pg_type", {}).items())),
     }
 
     if not (sig_lef or pg_lef):
@@ -833,6 +854,64 @@ def check_package(name: str, views: Dict[str, Path], project: Path,
                          f"exposes and STA times what the Liberty declares; "
                          f"a pin only one of them knows is either unconnected "
                          f"or untimed.")))
+
+    # ── 6b. WHICH RAIL each supply pin is ─────────────────────────────
+    # THE NAME SETS AGREEING IS NOT THE SUPPLIES AGREEING. `PG_PIN_DISAGREE`
+    # above compares only WHICH supply pins exist; two views can list the
+    # same two names and still disagree about which of them is ground. That
+    # is not hypothetical: MEASURED on a real kit produced by this flow's own
+    # producer, a LEF declaring `USE POWER` on one pin and `USE GROUND` on
+    # the other was paired with a Liberty declaring BOTH as `primary_power`,
+    # and every clause in this gate was green over it. A Liberty that calls
+    # ground a power rail merges the two supply domains for every consumer
+    # that reads it — and `scripts/magic/lef.tcl`'s `lef nocheck $VDD_NETS
+    # $GND_NETS` means the producer of the LEF half was explicitly told not
+    # to check these very pins, so no tool upstream of here looks at all.
+    _LIB_RAIL = {"primary_power": "power", "backup_power": "power",
+                 "internal_power": "power", "pwell": "ground",
+                 "primary_ground": "ground", "backup_ground": "ground",
+                 "internal_ground": "ground", "nwell": "power",
+                 "deepnwell": "power", "deeppwell": "ground"}
+    lef_kind = lef.get("pg_kind", {}) or {}
+    lib_type = lib.get("pg_type", {}) or {}
+    rail_conflict, rail_unstated = [], []
+    for b in sorted(pg_lef & pg_lib):
+        a = (lef_kind.get(b) or "").lower()
+        d = (lib_type.get(b) or "").lower()
+        if not d:
+            rail_unstated.append(b)
+            continue
+        mapped = _LIB_RAIL.get(d)
+        if mapped is None:
+            # An unknown pg_type is NOT read as agreement. It is reported as
+            # undetermined, under the same rule, so a token this gate does
+            # not model cannot pass by being unrecognised.
+            rail_unstated.append(b)
+            continue
+        if a and mapped != a:
+            rail_conflict.append((b, a, d))
+    if rail_conflict or rail_unstated:
+        ok = False
+        parts = []
+        if rail_conflict:
+            parts.append("; ".join(
+                f"'{b}': LEF says USE {a.upper()}, Liberty says pg_type {d}"
+                for b, a, d in rail_conflict))
+        if rail_unstated:
+            parts.append(
+                f"supply pin(s) {rail_unstated} carry a Liberty `pg_pin` "
+                f"whose `pg_type` is absent or is a token this gate does not "
+                f"model, so which rail they are was NOT established")
+        F.append(Finding(
+            rule="PG_TYPE_DISAGREE", severity="ERROR", macro=name,
+            file=cite(lib_p),
+            message=(f"macro '{name}': the LEF and the Liberty name the same "
+                     f"supply pins and disagree about WHICH RAIL they are — "
+                     f"{'. '.join(parts)}. A ground declared as a power rail "
+                     f"merges the two supply domains in every tool that reads "
+                     f"this Liberty, and Magic's own LEF writer is told "
+                     f"`lef nocheck` on exactly these pins, so nothing before "
+                     f"this gate looked.")))
 
     # Verilog: every port it declares must be a pin the LEF knows; every
     # SIGNAL pin must appear. PG may be omitted — narrow, stated exception.
@@ -1037,6 +1116,12 @@ def run_audit(project: Path, tol_pct: float = DEFAULT_TOL_PCT,
             undetermined.append(name)
 
     result.passed = not failed
+    # THE TIER WORD RIDES THE VERDICT AND MUST NOT CONTRADICT IT. The default
+    # is the plain-PASS word; on a refusal a consumer reading `verdict_tier`
+    # alone would otherwise read "PASS" out of a report whose `passed` is
+    # false.
+    if failed:
+        result.verdict_tier = "FAIL"
     # RANKED, and the ranking is an argument: an axis this gate could not
     # DETERMINE is a stronger caveat than one it determined to be absent. A
     # kit whose obstruction policy is unknown may be wrong in somebody else's

@@ -735,3 +735,113 @@ def test_lef_reader_reports_obstructions_and_macro_count():
     assert parsed["has_obs"] is True
     assert parsed["macro_count"] == 1
     assert sorted(parsed["geometry"]) == ["clk", "dout", "vgnd", "vpwr"]
+
+
+# ───────── WHICH RAIL a supply pin is, not merely that it is one ───────────
+# MEASURED on the first real kit this flow ever produced. A DEF declaring
+# `VDD + USE POWER` and `VSS + USE GROUND` yielded a Magic-written LEF that
+# carried both `USE` tokens correctly and a producer-written Liberty that
+# declared BOTH as `primary_power`. The PG NAME sets agreed, so every clause
+# in this gate was green over two supply domains merged into one, in the view
+# integration STA reads. `scripts/magic/lef.tcl` carries
+# `lef nocheck $VDD_NETS $GND_NETS`, so nothing upstream of this gate looks at
+# these pins at all.
+
+def test_ground_declared_as_a_power_rail_is_refused(tmp_path):
+    p = make_kit(tmp_path, lib=LIB_OK.replace(
+        "pg_pin (vgnd) { voltage_name : VGND ; pg_type : primary_ground ; }",
+        "pg_pin (vgnd) { voltage_name : VGND ; pg_type : primary_power ; }"))
+    assert run(p).returncode == 1
+    assert "PG_TYPE_DISAGREE" in rules(p)
+    assert "PG_PIN_DISAGREE" not in rules(p), \
+        "the NAME sets agree; this must be caught on the RAIL axis alone"
+
+
+def test_power_declared_as_a_ground_rail_is_refused(tmp_path):
+    """Both directions, so the clause is not a one-sided string test."""
+    p = make_kit(tmp_path, lib=LIB_OK.replace(
+        "pg_pin (vpwr) { voltage_name : VPWR ; pg_type : primary_power ; }",
+        "pg_pin (vpwr) { voltage_name : VPWR ; pg_type : primary_ground ; }"))
+    assert run(p).returncode == 1
+    assert "PG_TYPE_DISAGREE" in rules(p)
+
+
+def test_pg_pin_without_a_pg_type_is_not_read_as_agreement(tmp_path):
+    """NOTHING TO CHECK IS NOT A PASS, on this axis too: a `pg_pin` that does
+    not say which rail it is has not agreed with the LEF — it has said
+    nothing, and an unmodelled token must not pass by being unrecognised."""
+    p = make_kit(tmp_path, lib=LIB_OK.replace(
+        "pg_pin (vgnd) { voltage_name : VGND ; pg_type : primary_ground ; }",
+        "pg_pin (vgnd) { voltage_name : VGND ; }"))
+    assert run(p).returncode == 1
+    assert "PG_TYPE_DISAGREE" in rules(p)
+
+
+def test_unmodelled_pg_type_token_is_not_read_as_agreement(tmp_path):
+    """And it is reported as UNDETERMINED, not as a conflict. A token this
+    gate does not model does not license the claim that the Liberty said the
+    opposite rail — it said something this gate cannot read, and the report
+    has to say that and not more."""
+    p = make_kit(tmp_path, lib=LIB_OK.replace(
+        "pg_type : primary_ground ;", "pg_type : not_a_liberty_token ;"))
+    out = tmp_path / "r.json"
+    assert run(p, "--json", str(out)).returncode == 1
+    msg = [f["message"] for f in json.loads(out.read_text())["findings"]
+           if f["rule"] == "PG_TYPE_DISAGREE"]
+    assert msg, "PG_TYPE_DISAGREE did not fire"
+    assert "NOT established" in msg[0]
+    assert "Liberty says pg_type not_a_liberty_token" not in msg[0]
+
+
+def test_agreeing_rails_are_not_refused(tmp_path):
+    """The negative control. The shipped fixture already declares vpwr as
+    primary_power and vgnd as primary_ground; the clause must be silent."""
+    p = make_kit(tmp_path)
+    assert run(p).returncode == 0
+    assert "PG_TYPE_DISAGREE" not in rules(p)
+
+
+def test_a_kit_with_no_supply_pin_at_all_is_not_touched_by_the_rail_clause(
+        tmp_path):
+    """A kit whose LEF and Liberty both declare no supply pin has NOTHING for
+    this clause to compare, and it must not invent a disagreement. Recorded
+    because it is the shape of every real kit in this tree's corpus today."""
+    lef = LEF_OK
+    for pin in ("vpwr", "vgnd"):
+        head = lef.index(f"  PIN {pin}")
+        tail = lef.index(f"  END {pin}") + len(f"  END {pin}\n")
+        lef = lef[:head] + lef[tail:]
+    lib = LIB_OK
+    for line in ("    pg_pin (vpwr) { voltage_name : VPWR ; "
+                 "pg_type : primary_power ; }\n",
+                 "    pg_pin (vgnd) { voltage_name : VGND ; "
+                 "pg_type : primary_ground ; }\n"):
+        lib = lib.replace(line, "")
+    p = make_kit(tmp_path, lef=lef, lib=lib)
+    assert run(p).returncode == 0
+    assert "PG_TYPE_DISAGREE" not in rules(p)
+
+
+def test_the_rail_axis_is_recorded_on_a_passing_report(tmp_path):
+    """Both halves of the comparison in the record, so a reader can see the
+    clause had something to look at and is not vacuously green."""
+    p = make_kit(tmp_path)
+    out = tmp_path / "r.json"
+    assert run(p, "--json", str(out)).returncode == 0
+    i = json.loads(out.read_text())["summary"]["packages"][0]["interface"]
+    assert i["lef_pg_kind"] == {"vgnd": "ground", "vpwr": "power"}
+    assert i["lib_pg_type"] == {"vgnd": "primary_ground",
+                                "vpwr": "primary_power"}
+
+
+def test_verdict_tier_never_reads_pass_on_a_refused_kit(tmp_path):
+    """A consumer keying on `verdict_tier` alone read the word "PASS" out of
+    a report whose `passed` was false, because the field defaulted to it and
+    was only ever overwritten on the pass paths."""
+    p = make_kit(tmp_path, v=V_OK.replace("clk", "clock"))
+    out = tmp_path / "r.json"
+    assert run(p, "--json", str(out)).returncode == 1
+    d = json.loads(out.read_text())
+    assert d["passed"] is False
+    assert not d["verdict_tier"].startswith("PASS")
+    assert d["summary"]["verdict_tier"] == d["verdict_tier"]

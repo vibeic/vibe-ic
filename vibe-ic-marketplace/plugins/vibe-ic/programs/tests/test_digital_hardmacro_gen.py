@@ -341,3 +341,42 @@ def test_the_runner_step_never_fails_the_run(tmp_path, monkeypatch):
     assert "--json" in seen["cmd"]
     assert seen["cmd"][seen["cmd"].index("--json") + 1].endswith(
         "reports/phase3/digital_hardmacro_gen.json")
+
+
+# ───────── WHICH RAIL, from `USE` and never from `DIRECTION` ───────────────
+# MEASURED end to end on a real signed-off run. A DEF declaring
+# `VDD + USE POWER` and `VSS + USE GROUND` produced a Liberty declaring BOTH
+# as `primary_power`: `pg_type` was derived from the DEF DIRECTION, which is
+# INPUT/OUTPUT/INOUT and can never hold the token "GROUND", so the else-branch
+# was unreachable and every supply pin this producer has ever emitted was a
+# power rail. Two rails declared as one is the supply-domain merge that step
+# 37.5ip's gate exists to refuse, and it was this flow writing it.
+
+def test_the_ground_rail_is_declared_as_a_ground_rail(tmp_path):
+    lib = mod.emit_liberty("macro_a", mod.read_interface(DEF_OK))
+    assert "pg_pin (vgnd) { pg_type : primary_ground ; }" in lib
+    assert "pg_pin (vpwr) { pg_type : primary_power ; }" in lib
+
+
+def test_pg_type_follows_use_when_direction_says_otherwise(tmp_path):
+    """The DEF DIRECTION is deliberately the OPPOSITE of the useful answer on
+    both pins, so a pg_type read from DIRECTION cannot produce this result."""
+    d = DEF_OK.replace("- vgnd + NET vgnd + DIRECTION INOUT + USE GROUND",
+                       "- vgnd + NET vgnd + DIRECTION INPUT + USE GROUND")
+    pins = mod.read_interface(d)
+    assert [p.use for p in pins if p.name == "vgnd"] == ["GROUND"]
+    assert "pg_pin (vgnd) { pg_type : primary_ground ; }" in \
+        mod.emit_liberty("macro_a", pins)
+
+
+def test_the_emitted_liberty_agrees_with_the_lef_about_which_rail(tmp_path):
+    """The producer's own output must survive the gate clause that reads it —
+    the same coupling `test_emitted_views_satisfy_the_gate_they_are_built_for`
+    asserts for the pin SETS, now for the RAILS."""
+    sys.path.insert(0, str(PROG.parent))
+    import digital_hardmacro_check as gate
+
+    pins = mod.read_interface(DEF_OK)
+    lib = gate.parse_liberty(mod.emit_liberty("macro_a", pins))
+    assert lib["pg_type"] == {"vpwr": "primary_power",
+                              "vgnd": "primary_ground"}

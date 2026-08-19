@@ -196,6 +196,15 @@ class Pin:
     name: str
     direction: str
     is_pg: bool
+    #: The DEF's own `USE` token, upper-cased ("POWER" / "GROUND" / "SIGNAL"
+    #: / ""). CARRIED AND NOT COLLAPSED INTO `is_pg`, and the reason was
+    #: MEASURED on a real kit: the Liberty's `pg_type` was derived from the
+    #: DEF *DIRECTION*, which is INPUT/OUTPUT/INOUT and can never hold the
+    #: token "GROUND", so EVERY supply pin came out `primary_power` — two
+    #: rails declared as one, which is the supply-domain merge this step's
+    #: gate exists to refuse. Whether a rail is power or ground lives in
+    #: `USE`, so `USE` is what must reach the emitter.
+    use: str = ""
 
 
 def read_interface(def_text: str) -> List[Pin]:
@@ -217,7 +226,8 @@ def read_interface(def_text: str) -> List[Pin]:
         um = _DEF_USE_RE.search(entry)
         use_by_name[m.group(1)] = (um.group(1).upper() if um else "")
     return [Pin(name=p.name, direction=(p.direction or "INOUT"),
-                is_pg=use_by_name.get(p.name, "") in _PG_USES)
+                is_pg=use_by_name.get(p.name, "") in _PG_USES,
+                use=use_by_name.get(p.name, ""))
             for p in pins]
 
 
@@ -309,8 +319,15 @@ def emit_liberty(design: str, pins: List[Pin]) -> str:
     ]
     for p in pins:
         if p.is_pg:
-            kind = ("primary_power" if p.direction.upper() != "GROUND"
-                    else "primary_ground")
+            # FROM `USE`, NEVER FROM `DIRECTION`. A DEF DIRECTION is
+            # INPUT/OUTPUT/INOUT; it cannot spell "GROUND", so a pg_type
+            # derived from it is `primary_power` for every supply pin there
+            # is. Measured on a real kit: a DEF declaring `VDD + USE POWER`
+            # and `VSS + USE GROUND` produced a Liberty declaring BOTH as
+            # `primary_power` — the two rails merged into one domain, in the
+            # view integration STA reads, written by this flow.
+            kind = ("primary_ground" if p.use.upper() == "GROUND"
+                    else "primary_power")
             lines.append(f"    pg_pin ({p.name}) {{ pg_type : {kind} ; }}")
     for base, direction, rng in group_buses([p for p in pins if not p.is_pg]):
         d = _LIB_DIR.get(direction.upper(), "inout")
