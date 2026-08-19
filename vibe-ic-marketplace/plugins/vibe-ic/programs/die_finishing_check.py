@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """die_finishing_check.py — the Step 26.5ic gate.
 
+ENFORCEMENT: advisory here — this gate is not in
+``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
+it inline at all. It runs when ``flow_compliance_check`` evaluates step 26.5ic's
+``program_exit_zero`` clause, so its rc IS that step's verdict — "advisory"
+names the RUNNER channel it is absent from, not a verdict this gate cannot
+reach. Declared because vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an
+enforcement decision nobody made; wiring it into the runner would change what a
+real run blocks on, which is the flow owner's call and is recorded, not taken
+here. Kept in the first 4 kB: `declared_intent` reads only `text[:4000]`.
+
 It RE-REPORTS what `die_finishing_gen` measured. It never runs a seal-ring
 generator, never opens a layout and never writes a GDS, so auditing a finished
 project can never mutate the die it is auditing — the same producer/auditor

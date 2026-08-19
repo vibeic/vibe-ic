@@ -178,3 +178,19 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_pdk_registry_asset_half_
 # rewrite it and every anchor bump would otherwise need a hand edit (measured: 0.2.89 ->
 # 0.2.96 -> 0.2.97 in one afternoon).
 vibe-ic-marketplace/plugins/vibe-ic/programs/not_verified_tier.py
+
+# docs/research/wafer_space_id_cells.md:269 — a RESEARCH MEASUREMENT RECORD, not
+# an install pointer. The line states which image the `/foss/pdks` search for
+# `*ws_ip*` was ACTUALLY discharged inside (0.2.88), next to the second tree the
+# same question was put to. Rewriting the tag to VERSION would claim the search
+# was re-run against an image it was never run against — the finding ("no hits,
+# so `ws` is the shuttle operator, not a PDK vendor") would then cite evidence
+# that does not exist. Same posture as the pdk_registry.json and
+# fault_scan_chain_insert.py entries above: registered, not rewritten.
+#
+# BOUNDED BY PATH, per this file's own rule. The other three ghcr refs in that
+# document are `ghcr.io/wafer-space/gf180mcu-precheck:latest` — a different org,
+# already outside this drift-net, which only reads `ghcr.io/vibeic/vibeic-eda`.
+# If the search is ever REDONE on a newer image, update the tag and the prose
+# together, in that order.
+docs/research/wafer_space_id_cells.md
