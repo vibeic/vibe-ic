@@ -1507,6 +1507,73 @@ def _correct_sta_corner_record(p: Path) -> None:
     _write_sta_corner_record(p, "0.18", "0.00")
 
 
+#: The tapeout-signoff multicorner SPEF report, in the exact dialect
+#: `phase3_one_shot_runner._emit_multicorner` writes and this gate's docstring
+#: quotes. The ONLY thing that moves between the fixture and its control is the
+#: SETUP corner's worst slack.
+_MULTICORNER_SPEF_RPT = """\
+# Multi-corner SPEF STA (TAPEOUT-SIGNOFF P1)
+# SETUP corner: max-RC   HOLD corner: min-RC
+# corners_available: max,min,nom
+=== SETUP (max-RC corner, SPEF=max) ===
+worst slack max {setup}
+tns max {tns}
+=== HOLD (min-RC corner, SPEF=min) ===
+worst slack min 0.54
+tns min 0.00
+"""
+
+
+def _f_signoff_corner_violated(p: Path) -> None:
+    """A populated multi-corner report whose slow-RC corner is VIOLATED.
+
+    ``post_route_signoff_corner_check`` is a BLOCKING clause of step 23 and was
+    registered in :data:`UNREDDENED` — "needs a post-route STA corner set that
+    is missing a signoff corner — a populated multi-corner report no fixture
+    here produces". The second half is the true half and is what this fixture
+    supplies; the first half describes a DIFFERENT rule, and the gate's own
+    governing rule is the slack:
+
+        governing_worst_slack = min over every `worst slack {{max|min}} <ns>`
+        FAIL when governing_worst_slack < -slack_tol
+
+    Absence cannot reach it, by design and out loud — with no report the gate
+    answers rc 0 ``NOT_APPLICABLE — no multicorner sign-off report
+    (sta_spef_multicorner.rpt) found — nothing to gate``, which is the
+    backward-compatibility the flow asked for and not a judgement.
+
+    The numbers are the ones from the gate's own docstring: the #147 hole was a
+    design that shipped ``worst slack max -1.71`` as a Step-23 PASS.
+
+    MEASURED, verbatim, in the container, through the exact clause command:
+
+        EMPTY  rc 0  NOT_APPLICABLE — no multicorner sign-off report
+                     (sta_spef_multicorner.rpt) found — nothing to gate.
+                     Through THIS harness the wording differs and the tier
+                     does not: `_prepare_report_dirs` stages the clause's
+                     declared paths, so the gate sees the file and answers
+                     `NOT_APPLICABLE — multicorner sign-off report present
+                     but no ``worst slack`` line`. Both are the same
+                     refusal to judge, and neither is a demonstration.
+        THIS   rc 1  FAIL — setup worst-slack -1.710 ns at the sign-off
+                     (max-RC) corner is VIOLATED
+        CTL    rc 0  PASS — all analyzed sign-off corners MET (governing
+                     worst-slack +0.360 ns; corners analyzed: max,min,nom)
+
+    chip-AGNOSTIC: max-RC / min-RC / nom are the parasitic-corner roles the
+    report header itself declares, and no PDK, node, vendor or design name
+    appears in the fixture.
+    """
+    _w(p, "phase3/stage3/sta/sta_spef_multicorner.rpt",
+       _MULTICORNER_SPEF_RPT.format(setup="-1.71", tns="-10.91"))
+
+
+def _correct_signoff_corner(p: Path) -> None:
+    """The one-variable negative control: every sign-off corner MEETS."""
+    _w(p, "phase3/stage3/sta/sta_spef_multicorner.rpt",
+       _MULTICORNER_SPEF_RPT.format(setup="0.36", tns="0.00"))
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1541,6 +1608,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EXTRACTION_ILLEGAL_OVERLAP": _f_extraction_illegal_overlap,
     "DERIVED_CLOCK_UNCONSTRAINED": _f_derived_clock_unconstrained,
     "STA_TYP_MET_SIGNOFF_VIOLATED": _f_sta_typ_met_signoff_violated,
+    "SIGNOFF_CORNER_VIOLATED": _f_signoff_corner_violated,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1660,6 +1728,16 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("23", "sta_corner_record_completeness_check . --json "
            "reports/phase3/sta/sta_corner_record_completeness.json"):
         "STA_TYP_MET_SIGNOFF_VIOLATED",
+    # Step 23's `post_route_signoff_corner_check` was registered in UNREDDENED
+    # ("a populated multi-corner report no fixture here produces"). EMPTY
+    # cannot redden it and says so: rc 0 `NOT_APPLICABLE — no multicorner
+    # sign-off report ... nothing to gate`, the backward-compatibility the flow
+    # asked for. Assigned here rather than left registered: a fixture DOES
+    # break it, and an UNREDDENED entry whose clause reddens fails this suite
+    # by design.
+    ("23", "post_route_signoff_corner_check . --json "
+           "reports/phase3/sta/post_route_signoff_corner.json"):
+        "SIGNOFF_CORNER_VIOLATED",
     ("31", "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"): "SIGNOFF_UNVERIFIABLE",
     ("31", "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"): "SIGNOFF_UNVERIFIABLE",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
@@ -1947,10 +2025,6 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
            "reports/phase2/gates/ip_integration.json"):
         "VACUOUS: needs a declared IP catalogue with an integration defect; "
         "the gate is inapplicable to a project that integrates no IP",
-    ("23", "post_route_signoff_corner_check . --json "
-           "reports/phase3/sta/post_route_signoff_corner.json"):
-        "PASS: needs a post-route STA corner set that is missing a signoff "
-        "corner — a populated multi-corner report no fixture here produces",
     ("23", "drv_promotion_corroboration_check . --json "
            "reports/phase3/sta/drv_promotion_corroboration.json"):
         "PASS: needs an STA report claiming a DRV promotion that a second "
@@ -3031,6 +3105,59 @@ def test_d2_the_sta_corner_record_fixture_reddens_and_only_on_content(
         f"the SAME record with the slow corner MEETING must PASS — otherwise "
         f"the red is the record's shape and not its numbers :: {tier} "
         f"{out[-400:]}")
+
+
+def test_d2_the_signoff_corner_fixture_reddens_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """Step 23's sign-off SLACK clause: three arms, one variable.
+
+    Sibling of the record-completeness control above and deliberately a
+    SEPARATE fixture: the two gates read two different reports and their
+    docstrings are explicit that the slack rule is not re-implemented in the
+    completeness gate. Sharing one tree would have made each cell's red
+    ambiguous between the two.
+
+    Both arms carry the same populated multi-corner report; only the SETUP
+    corner's worst slack moves. The absent-report arm is the one that matters
+    for this particular gate — it is wired OPTIONAL on the report existing, so
+    "no report" is its designed NOT_APPLICABLE and must never be mistaken for
+    a demonstration.
+    """
+    command = ("post_route_signoff_corner_check . --json "
+               "reports/phase3/sta/post_route_signoff_corner.json")
+    key = "23"
+    live = {_clause_signature(c) for c in F.gate_clauses(key) if c.is_blocking}
+    assert command in live, (
+        f"step {key} no longer declares {command!r} as a blocking clause; this "
+        f"control and the matrix cell would be measuring different things")
+    assert CLAUSE_FIXTURE.get((key, command)) == "SIGNOFF_CORNER_VIOLATED", (
+        f"step {key}: {command!r} is no longer assigned "
+        f"'SIGNOFF_CORNER_VIOLATED'")
+    assert (key, command) not in UNREDDENED, (
+        f"step {key}: {command!r} is registered UNREDDENED again while a "
+        f"fixture reddens it — the register would be excusing a gap that is "
+        f"closed")
+
+    tier, out = _tier(
+        _build_project(tmp_path, "soc_red", "SIGNOFF_CORNER_VIOLATED"), command)
+    assert tier == RED, (
+        f"the fixture no longer reddens {command!r} -> {tier} :: {out[-300:]}")
+    assert "VIOLATED" in out, (
+        f"the fixture reddens {command!r} without naming a violated sign-off "
+        f"corner :: {out[-400:]}")
+
+    tier, out = _tier(_build_project(tmp_path, "soc_empty", "EMPTY"), command)
+    assert tier != RED, (
+        f"EMPTY now reddens {command!r}, so the dedicated fixture is measuring "
+        f"nothing the bare tree does not :: {out[-300:]}")
+
+    project = _build_project(tmp_path, "soc_ctl", "SIGNOFF_CORNER_VIOLATED")
+    _correct_signoff_corner(project)
+    tier, out = _tier(project, command)
+    assert tier == PASS, (
+        f"the SAME report with every sign-off corner MEETING must PASS — "
+        f"otherwise the red is the report's presence and not its slack :: "
+        f"{tier} {out[-400:]}")
 
 
 def test_d2_a_content_earned_program_red_is_still_a_real_red(
