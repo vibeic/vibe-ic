@@ -349,9 +349,16 @@ _CLAIMS: tuple[tuple[str, str, str], ...] = (
 #: about six specific sentences.
 _NOT_A_POPULATION_COUNT: tuple[tuple[str, str, str], ...] = (
     ("README.md",
-     "**60 of the 63 flow steps are gated by a program",
-     "63 counts FLOW STEPS, not programs. The flow step count is owned by "
-     "flow/phase1_phase2_phase3.yaml and flow_compliance_check.py."),
+     "**66 of the 68 flow steps are gated by a program",
+     "68 counts FLOW STEPS, not programs. The flow step count is owned by "
+     "flow/phase1_phase2_phase3.yaml and flow_compliance_check.py. "
+     "Re-examined 2026-08-20 when the two-paths split moved the flow 63 -> 68: "
+     "this sentence was reworded, test_declared_non_counts_are_still_present "
+     "went RED on the old literal exactly as intended, and both figures were "
+     "re-MEASURED from the yaml rather than adjusted -- step_ids()=68, a gate "
+     "on 67 (absent on P0 alone), a PROGRAM gate on 66. The old pair was 60/63, "
+     "which is not 66/68 minus the five new steps, so it could not have been "
+     "derived arithmetically."),
     ("plugins/vibe-ic/README.md",
      "**60 skills** that back the programs up",
      "60 counts SKILLS, not programs, so this gate does not own it — but it "
