@@ -19,7 +19,7 @@ and the contribution guides for extending it.
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
-| Canonical flow | **63 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) |
+| Canonical flow | **68 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) — **26 are conditional** and do not run for every design |
 | Test files | **2630** under `plugins/vibe-ic/programs/tests/` + **32** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
 | License | Apache-2.0 |
 
@@ -40,7 +40,7 @@ execution engines.
 
 It is also **program-first**. The product is the deterministic runner chain
 (`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1195 top-level programs
-→ MCP-EDA), not a prompt. **60 of the 63 flow steps are gated by a program
+→ MCP-EDA), not a prompt. **61 of the 68 flow steps are gated by a program
 whose exit code is the verdict**; the AI is the fall-through when a program
 cannot decide, never the thing that declares PASS.
 
@@ -66,7 +66,7 @@ designed in the abstract:
 
 ---
 
-## The canonical flow (63 steps, 8 stages)
+## The canonical flow (68 steps, 8 stages, 26 of them conditional)
 
 **Source of truth**:
 [`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`](plugins/vibe-ic/flow/phase1_phase2_phase3.yaml)
@@ -75,9 +75,14 @@ designed in the abstract:
 mandatory first read.
 
 The flow covers **Phase 1 (spec extraction) as well as Phase 2 and Phase 3**.
-Four of the eight stages are **conditional** — the analog and mixed-signal
-stages activate only for designs with analog content, and the manufacturing
-stage only once real silicon comes back. Every step declares
+**26 of the 68 steps are conditional: no design runs all 68.** The analog track
+(A1-A9) and the mixed-signal track (M1-M4) run only when Phase 1 declares analog
+blocks (`condition: files_exist: [phase1/analog/analog_block_list.json]`); the
+five manufacturing steps (40-44) only once real silicon comes back. The flow
+also forks into two mutually exclusive paths: the **chip path** (15.5ic, 26.5ic,
+37.5ic) runs when a submission template was ingested, the **IP path** (37.5ip)
+when one was searched for and declared absent. Step **0.5ic** runs
+unconditionally and decides which. Every step declares
 `required_outputs` plus a machine `gate` (`files_exist` and/or
 `program_exit_zero`); `↻` marks a close-loop step that re-runs until its gate
 is satisfied.
@@ -471,7 +476,7 @@ cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
 
 | Program | Role |
 |---|---|
-| **`flow_compliance_check.py`** | Strict 63-step gate — reads `flow/phase1_phase2_phase3.yaml`, validates every step's outputs + gate predicate, rejects rubber-stamp waivers. **Exit 0 is the only PASS.** |
+| **`flow_compliance_check.py`** | Strict 68-step gate — reads `flow/phase1_phase2_phase3.yaml`, validates every step's outputs + gate predicate, rejects rubber-stamp waivers. **Exit 0 is the only PASS.** |
 | `stage{1,2,3,4}_compliance.py` | Per-stage interim gates |
 | `analog_flow_compliance_check.py` | A1-A9 analog-stage gate |
 | **`waivers_schema_check.py`** | Rejects placeholder reasons (`TODO`, `n/a`), self-approvers (`agent`, `claude`), duplicate ids |
@@ -544,7 +549,7 @@ vibe-ic-marketplace/
     └── vibe-ic/                         ← the single plugin (v1.10.96)
         ├── .claude-plugin/plugin.json
         ├── flow/
-        │   └── phase1_phase2_phase3.yaml   ← 63-step source of truth
+        │   └── phase1_phase2_phase3.yaml   ← 68-step source of truth
         ├── commands/                    ← 7 slash commands
         ├── agents/
         │   ├── ic-expert-agent.md       ← assembles JSON from answers + defaults

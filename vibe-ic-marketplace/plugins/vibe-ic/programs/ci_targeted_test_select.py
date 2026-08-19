@@ -449,7 +449,7 @@ _REPO_TOOL_DIRS: tuple[str, ...] = ("tools",)
 #                                     1-4 each             0
 #
 # Every path outside `programs/` and `benchmark/` selected exactly the 15-file
-# floor. `flow/phase1_phase2_phase3.yaml` is the canonical 44-step flow — the
+# floor. `flow/phase1_phase2_phase3.yaml` is the canonical 68-step flow — the
 # repo's single source of truth — and a change to it selected nothing that reads
 # it. Enumerating directories would have to keep pace with every new one; the
 # generalisation below needs no list at all, so there is nothing to keep in step.

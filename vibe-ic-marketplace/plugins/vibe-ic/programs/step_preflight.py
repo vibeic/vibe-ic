@@ -51,7 +51,7 @@ built by a caller-supplied factory — so `plan[-1]` keeps meaning what it meant
 
 THE MAPPING PROBLEM, STATED HONESTLY
 ====================================
-The flow declares 63 steps. The runners dispatch ~8 coarse ones. `step_pnr` is
+The flow declares 68 steps. The runners dispatch ~8 coarse ones. `step_pnr` is
 ONE OpenROAD session that covers canonical steps 15..22; `step_drc` and
 `step_lvs` are two halves of canonical step 31. A runner call site therefore
 executes a SPAN of flow steps, and this module is built on spans, not on a

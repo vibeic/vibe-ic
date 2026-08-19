@@ -8,7 +8,7 @@ The flow-gate dashboard publishes eight per-step dimensions, one of which asks
 the page's own generator says so in its docstring and carries the distribution
 forward untouched, so the figure is a judgement someone made once.
 
-Recomputed from the flow yaml, SEVEN of the 63 steps have no criterion capable
+Recomputed from the flow yaml, SEVEN of the 68 steps have no criterion capable
 of failing on content (it was EIGHT until step 12 was given
 `program_exit_zero: dft_post_optimization_scan_survival_check` in 23d96bf55,
 which is why the entry below is gone rather than merely quiet):

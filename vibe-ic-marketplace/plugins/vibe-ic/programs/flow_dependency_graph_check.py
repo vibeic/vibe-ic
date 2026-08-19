@@ -3,7 +3,7 @@
 
 WHY
 ===
-The flow-gate dashboard publishes 63 steps x 8 dimensions = 504 cells under the
+The flow-gate dashboard publishes 68 steps x 8 dimensions = 544 cells under the
 words "every cell is a predicate recomputed against the current source, not a
 stored verdict read back".
 

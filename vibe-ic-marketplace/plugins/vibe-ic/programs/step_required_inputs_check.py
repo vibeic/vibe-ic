@@ -77,7 +77,7 @@ back to. A run that cannot be asked a question gets "unanswered", not "pass".
 
 A step with NO `required_inputs` is `UNDECLARED`, which is NOT `READY`. It is
 counted separately, listed by id, and never contributes to exit 0 as though it
-had been checked. 7 of the flow's 63 steps are undeclared today and saying so
+had been checked. 7 of the flow's 68 steps are undeclared today and saying so
 is the point; a check that reported them green would be the falsely-clean
 result this whole exercise exists to remove.
 

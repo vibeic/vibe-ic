@@ -41,8 +41,12 @@ design INPUT — prompt + provided context — never the oracle / harness / gold
 ### § IC-EXPERT OPERATING MAP — phase → step → program → gate → skill (when/where to trigger)
 
 The canonical, machine-readable sources you MUST consult (never guess the flow):
-`flow/phase1_phase2_phase3.yaml` (the 44-step single source of truth, enforced by
-`flow_compliance_check.py` — never claim PASS without its exit 0) and
+`flow/phase1_phase2_phase3.yaml` (the 68-step single source of truth, enforced by
+`flow_compliance_check.py` — never claim PASS without its exit 0; **26 of the 68
+are conditional**, so no design runs all 68 — the analog A1-A9 and mixed-signal
+M1-M4 tracks require Phase 1 to declare analog blocks, steps 40-44 require
+returned silicon, and 0.5ic decides between the chip path (15.5ic, 26.5ic,
+37.5ic) and the IP path (37.5ip)) and
 `benchmark/CAPTURE_ROUTING.json` (step → program → skill). The readable summary:
 
 | Phase / step | Trigger a PROGRAM (deterministic, first) | then a GATE / SKILL (verify / judge / repair) |

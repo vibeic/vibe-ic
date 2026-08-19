@@ -675,7 +675,7 @@ def main():
     # check` recognises `final|overall|headline|run|top-level verdict` and
     # would adopt a bare one as the DELIVERABLE's headline — which is the
     # category error in the other direction: pillar 2 reads "39/39 applicable
-    # PASS" while the flow audit counts 63 steps, so a bare PASS here would let
+    # PASS" while the flow audit counts 68 steps, so a bare PASS here would let
     # a 39-step judgement impersonate a whole-flow one.
     #
     # So the scope travels WITH the sentence. Anyone quoting this line quotes

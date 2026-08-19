@@ -9499,7 +9499,7 @@ def _waiver_step_name_mismatch(waiver: Dict[str, Any],
 # order-independent, and only the RESULTS-LIST ORDER (for display + the
 # downstream cascade attribution) must be preserved — which we do by collecting
 # the futures in submission order. This turns a large-SoC compliance sweep
-# (e.g. `final_audit` over 44 steps) from SUM-of-gate-times into
+# (e.g. `final_audit` over 68 steps) from SUM-of-gate-times into
 # MAX-of-gate-times WITHOUT changing a single verdict (proven byte-identical
 # seq-vs-parallel across the benchmark IC suite).
 #
