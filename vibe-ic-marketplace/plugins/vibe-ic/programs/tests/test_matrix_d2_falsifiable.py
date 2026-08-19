@@ -1327,6 +1327,81 @@ def _correct_extraction_feedback(p: Path) -> None:
     _w(p, "phase3/stage3/extracted/ext2spice.log", _TRANSCRIPT_CLEAN)
 
 
+_DIVIDER_RTL = """\
+module top (input wire ext_clk, input wire rst_n, input wire d, output reg q);
+  reg core_clk;
+  always @(posedge ext_clk or negedge rst_n) begin
+    if (!rst_n) core_clk <= 1'b0;
+    else        core_clk <= ~core_clk;
+  end
+  always @(posedge core_clk or negedge rst_n) begin
+    if (!rst_n) q <= 1'b0;
+    else        q <= d;
+  end
+endmodule
+"""
+
+#: The same design constrained two ways. ONE line differs — the
+#: ``create_generated_clock`` — because that line is the entire subject of the
+#: gate, and a control that also moved the RTL would be measuring two things.
+_SDC_NO_GENERATED_CLOCK = (
+    "create_clock -name ext_clk -period 20.000 [get_ports ext_clk]\n"
+    "set_input_delay 2.0 -clock ext_clk [get_ports rst_n]\n"
+)
+_SDC_WITH_GENERATED_CLOCK = (
+    "create_clock -name ext_clk -period 20.000 [get_ports ext_clk]\n"
+    "create_generated_clock -name core_clk -source [get_ports ext_clk] "
+    "-divide_by 2 [get_pins core_clk_reg/Q]\n"
+    "set_input_delay 2.0 -clock ext_clk [get_ports rst_n]\n"
+)
+
+
+def _f_derived_clock_unconstrained(p: Path) -> None:
+    """RTL that divides a clock in a register, and an SDC that never says so.
+
+    ``derived_clock_sdc_required_check`` is a BLOCKING clause of step 8 and was
+    registered in :data:`UNREDDENED` — "needs RTL that DERIVES a clock
+    (divider/gater) with no matching create_generated_clock; the fixture
+    derives no clock". That is a missing INPUT, not an unfalsifiable gate, and
+    the input is two small files.
+
+    The shape is the gate's own Form A, taken from its docstring: a register
+    toggled on ``posedge ext_clk`` IS a divide-by-2 clock, and with no
+    ``create_generated_clock`` on it STA reports zero slack on every path
+    crossing into its domain because no clock is declared there. Deliberately
+    ONE divider with a plain data flop as the payload: a second toggling
+    register would be a second divided clock, and the control arm could not
+    reach PASS without constraining that one too. MEASURED, that mistake in
+    the first draft: ``errors: 2`` on the fixture and ``errors: 1`` on the
+    control, so the control still read FAIL and would have proved nothing.
+
+    MEASURED, verbatim, in the container, through the exact clause command:
+
+        EMPTY  rc 2  error: target not found: phase2/stage1/rtl
+                     (this harness classifies rc 2 as tier PASS: an
+                     argument error is not a content-earned FAIL, which is
+                     precisely why the register called the clause
+                     unreddened rather than reddened-by-absence)
+        THIS   rc 1  derived_clock_sdc_missing — "register-divided clock
+                     'core_clk' from 'ext_clk' (line 5) has no matching
+                     `create_generated_clock` entry in the SDC"
+        CTL    rc 0  verdict PASS, errors 0
+
+    The reverse arm is asserted in
+    :func:`test_d2_the_derived_clock_fixture_reddens_and_only_on_content`.
+    chip-AGNOSTIC: the module, the port names and the divide ratio are
+    synthetic, and the gate's rule is the RTL SHAPE, never an identifier.
+    """
+    _w(p, "phase2/stage1/rtl/top.v", _DIVIDER_RTL)
+    _w(p, "phase2/stage2/constraints/top.sdc", _SDC_NO_GENERATED_CLOCK)
+
+
+def _correct_derived_clock_sdc(p: Path) -> None:
+    """The one-variable negative control: the divider IS constrained."""
+    _w(p, "phase2/stage1/rtl/top.v", _DIVIDER_RTL)
+    _w(p, "phase2/stage2/constraints/top.sdc", _SDC_WITH_GENERATED_CLOCK)
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1359,6 +1434,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
     "EXTRACTION_ILLEGAL_OVERLAP": _f_extraction_illegal_overlap,
+    "DERIVED_CLOCK_UNCONSTRAINED": _f_derived_clock_unconstrained,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1454,6 +1530,19 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # it, and an UNREDDENED entry whose clause reddens fails this suite by
     # design ("the gap closed and nobody noticed").
     ("31", "magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json"): "EXTRACTION_ILLEGAL_OVERLAP",
+    # Step 8's `derived_clock_sdc_required_check` was registered in UNREDDENED
+    # ("needs RTL that DERIVES a clock (divider/gater) with no matching
+    # create_generated_clock; the fixture derives no clock"). EMPTY cannot
+    # redden it — with no `phase2/stage1/rtl` the gate exits 2 on
+    # `target not found`, which this harness classifies tier PASS: an
+    # argument error is not a judgement — and no other
+    # fixture carries a divider, so the clause needs an input of its own.
+    # Assigned here rather than left registered: a fixture DOES break it, and
+    # an UNREDDENED entry whose clause reddens fails this suite by design.
+    ("8", "derived_clock_sdc_required_check phase2/stage1/rtl --sdc "
+          "phase2/stage2/constraints --json "
+          "reports/phase2/gates/derived_clock_sdc.json"):
+        "DERIVED_CLOCK_UNCONSTRAINED",
     ("31", "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"): "SIGNOFF_UNVERIFIABLE",
     ("31", "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"): "SIGNOFF_UNVERIFIABLE",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
@@ -1716,11 +1805,6 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
           "reports/phase2/gates/sdc_exceptions.json"):
         "PASS/VACUOUS: needs SDC exceptions that fail to correlate with a "
         "real netlist; the broken-SDC fixture has no netlist to correlate to",
-    ("8", "derived_clock_sdc_required_check phase2/stage1/rtl --sdc "
-          "phase2/stage2/constraints --json "
-          "reports/phase2/gates/derived_clock_sdc.json"):
-        "PASS: needs RTL that DERIVES a clock (divider/gater) with no matching "
-        "create_generated_clock; the fixture derives no clock",
     # ("FS1", "fmeda_fault_injection_coverage ...") — DE-REGISTERED, on the
     # SUBSTANTIVE arm. The entry read "PASS (NOT_APPLICABLE): fires only when
     # the RTL DECLARES an ECC/parity/lockstep mechanism, and reaching its FAIL
@@ -2718,6 +2802,59 @@ def test_d2_the_extraction_feedback_fixture_reddens_and_only_on_content(
         f"the same extraction with an EMPTY feedback dump must PASS — a dump "
         f"that exists and holds nothing is a measured zero :: {tier} "
         f"{out[-300:]}")
+
+
+def test_d2_the_derived_clock_fixture_reddens_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """Step 8's derived-clock clause: three arms, one variable.
+
+    The clause sat in :data:`UNREDDENED` because no fixture in this file
+    derived a clock. A fixture that merely turns that register entry green is
+    worth nothing on its own — it has to be shown that the fixture is what
+    reddens the gate, that the bare tree does NOT, and that the SAME tree with
+    the one variable corrected reads PASS. Otherwise the red is the tree's
+    shape and not the content the gate judges.
+
+    The variable is the SDC line, and only that: both arms carry the identical
+    RTL, so neither verdict is decided by the presence or absence of a
+    divider. That is the direction that matters here — the gate's whole claim
+    is that a divider WITHOUT its constraint is the defect, and a control that
+    also removed the divider would confirm nothing about the constraint.
+    """
+    command = ("derived_clock_sdc_required_check phase2/stage1/rtl --sdc "
+               "phase2/stage2/constraints --json "
+               "reports/phase2/gates/derived_clock_sdc.json")
+    key = "8"
+    live = {_clause_signature(c) for c in F.gate_clauses(key) if c.is_blocking}
+    assert command in live, (
+        f"step {key} no longer declares {command!r} as a blocking clause; this "
+        f"control and the matrix cell would be measuring different things")
+    assert CLAUSE_FIXTURE.get((key, command)) == "DERIVED_CLOCK_UNCONSTRAINED", (
+        f"step {key}: {command!r} is no longer assigned "
+        f"'DERIVED_CLOCK_UNCONSTRAINED'")
+    assert (key, command) not in UNREDDENED, (
+        f"step {key}: {command!r} is registered UNREDDENED again while a "
+        f"fixture reddens it — the register would be excusing a gap that is "
+        f"closed")
+
+    tier, out = _tier(
+        _build_project(tmp_path, "dck_red", "DERIVED_CLOCK_UNCONSTRAINED"),
+        command)
+    assert tier == RED, (
+        f"the fixture no longer reddens {command!r} -> {tier} :: {out[-300:]}")
+
+    tier, out = _tier(_build_project(tmp_path, "dck_empty", "EMPTY"), command)
+    assert tier != RED, (
+        f"EMPTY now reddens {command!r}, so the dedicated fixture is measuring "
+        f"nothing the bare tree does not :: {out[-300:]}")
+
+    project = _build_project(tmp_path, "dck_ctl", "DERIVED_CLOCK_UNCONSTRAINED")
+    _correct_derived_clock_sdc(project)
+    tier, out = _tier(project, command)
+    assert tier == PASS, (
+        f"the SAME RTL with a create_generated_clock on the divider must "
+        f"PASS — otherwise the red is the divider and not the missing "
+        f"constraint :: {tier} {out[-300:]}")
 
 
 def test_d2_a_content_earned_program_red_is_still_a_real_red(
