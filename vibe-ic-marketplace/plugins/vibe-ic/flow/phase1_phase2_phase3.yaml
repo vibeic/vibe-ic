@@ -2987,6 +2987,7 @@ steps:
     mcp_tools: [eda_extraction]
     programs:
       - spef_extraction_check
+      - magic_extract_illegal_overlap_check
     required_outputs:
       - "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
     gate:
@@ -2995,6 +2996,47 @@ steps:
           any_of: true
         - program_exit_zero: "spef_extraction_check . --json reports/phase2/gates/spef_extraction.json"
         - program_exit_zero: "provenance_check . --output phase3/stage3/extracted/*.spef --tool magic,openroad"
+        # THE EXTRACTOR'S OWN ERROR CHANNEL, read for the first time. The two
+        # clauses above ask whether extraction produced an artefact and where
+        # it came from; neither asks what the extractor SAID while producing
+        # it. `magic_extract_spice_emit` validates the TCL we EMIT (`extract
+        # all`, `ext2spice lvs`) — the commands we sent, never the complaints
+        # that came back. MEASURED on this tree before the change:
+        # `grep -rEil 'illegal.{0,3}overlap'` over
+        # vibe-ic-marketplace/plugins/vibe-ic/ returned 0 files, and all four
+        # LVS-side programs (lvs_report_check, lvs_tapeout_signoff_check,
+        # lvs_verdict_tokens, lvs_power_aware_extract_tcl) read netgen's
+        # verdict, none the extractor's.
+        #
+        # WHY IT SITS HERE AND NOT ON STEP 31. When magic cannot resolve
+        # geometry it does not abort and does not poison the netlist: it
+        # writes a feedback entry, prints "N error(s)", and emits the netlist
+        # anyway. Netgen then matches a structure built over geometry magic
+        # said it could not interpret, and answers its own question correctly.
+        # The question has to be asked at the step that ran the extractor —
+        # ahead of step 31, which is where the LVS verdict is signed off.
+        #
+        # ABSENCE IS NOT ZERO. An absent feedback file is rc 1 with its own
+        # rule (EXTRACTION_FEEDBACK_ABSENT), never the disclosed-vacuous rc 2,
+        # because `flow_compliance_check._check_program_exit_zero` credits rc 2
+        # from a `program_exit_zero` gate as a VACUOUS_PASS unconditionally —
+        # "I could not look" would turn this step GREEN. rc 2 is reachable only
+        # when phase3/stage3/extracted/ holds nothing at all, which the
+        # `files_exist` clause above already fails on.
+        #
+        # NOT DECLARED as a required_output, deliberately: no producer in this
+        # plugin writes phase3/stage3/extracted/feedback.txt today, so the file
+        # has no declared producer to name. The gate's own failure message
+        # carries the one-line repair (`feedback save
+        # phase3/stage3/extracted/feedback.txt` at the end of the extraction
+        # TCL), which is a better instruction than a bare MISSING artefact.
+        #
+        # BLAST RADIUS over the published run corpus: NOT DETERMINED. The
+        # corpus lives in its own repository and is absent from this checkout
+        # with $VIBE_IC_BENCHMARK_DATA unset. What IS determined: no producer
+        # writes the file yet, so any tree carrying extraction output and no
+        # feedback file is RED on this clause until the extraction captures it.
+        - program_exit_zero: "magic_extract_illegal_overlap_check . --json reports/phase2/gates/magic_extract_illegal_overlap.json"
     blocks_on: [21]
     notes: |
       Coupling tiers (increasing accuracy, all DISCLOSED, none foundry-calibrated):

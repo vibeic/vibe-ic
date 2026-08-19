@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1111
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1111)
+- **Total programs (excluding helpers / shims):** 1112
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1112)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1102 |
+| `any` | 1103 |
 
 ## Alphabetical listing
 
@@ -629,6 +629,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `macro_non_seq_arc_contract_check` | any | — | a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS. |
 | `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
 | `macro_obs_load_parity_check` | any | — | The obstructions the LEF DECLARES vs the obstructions the tool can LOAD. |
+| `magic_extract_illegal_overlap_check` | any | — | read the EXTRACTOR'S ERROR CHANNEL. |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
@@ -1183,7 +1184,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1102 programs)
+### `any` (1103 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1783,6 +1784,7 @@ _(no programs in this group)_
 - `macro_non_seq_arc_contract_check` — a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS.
 - `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 - `macro_obs_load_parity_check` — The obstructions the LEF DECLARES vs the obstructions the tool can LOAD.
+- `magic_extract_illegal_overlap_check` — read the EXTRACTOR'S ERROR CHANNEL.
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
