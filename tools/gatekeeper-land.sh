@@ -252,10 +252,26 @@ lane_write() {                       # lane_write <unit> <output> <rc>
   printf '%s' "$rc" > "$LANE_DIR/$unit.rc.tmp" \
     && mv -f "$LANE_DIR/$unit.rc.tmp" "$LANE_DIR/$unit.rc"
 }
+lane_reported() {                    # lane_reported <unit>
+  # THE POSITIVE SIGNAL THAT A STAGE REACHED THE END OF ITS OWN REPORT.
+  #
+  # `.rc` alone cannot carry it. A capture subshell that is SIGKILLed exits
+  # 128+signal, and 137 is as parsable an integer as 0 or 1 — so for the three
+  # `fn_capture` stages, which report by PRINTING `  FAIL  <label>` rather than
+  # by exiting, a parsable `.rc` is not evidence that anything was reported.
+  # This file is written by the stage's own process AFTER that print, so its
+  # presence means exactly one thing and its absence means the other.
+  printf 'REPORTED' > "$LANE_DIR/$1.reported.tmp" \
+    && mv -f "$LANE_DIR/$1.reported.tmp" "$LANE_DIR/$1.reported"
+}
 run_capture() {                      # run_capture <unit> <cmd…>
+  # These stages report BY EXIT STATUS: `run_emit` prints their label from the
+  # return code, so the capture returning at all IS the report, and the marker
+  # belongs here in the lane shell.
   local unit="$1"; shift
   local out rc
   out="$("$@" 2>&1)"; rc=$?
+  lane_reported "$unit"
   lane_write "$unit" "$out" "$rc"
   return 0
 }
@@ -265,9 +281,15 @@ fn_capture() {                       # fn_capture <unit> <fn…>
   # inside the subshell so the stage's verdict is its OWN, and the function's
   # return code is folded in as well: a stage that returned non-zero without
   # setting FAILED must not be read as a pass.
+  #
+  # `lane_reported` is INSIDE the subshell, after the stage function has
+  # returned and therefore after its own label was printed. A stage killed
+  # before that point leaves no marker, and `lane_resolve` then refuses to read
+  # its exit status as a verdict.
   local unit="$1"; shift
   local out rc
   out="$( FAILED=0; "$@" 2>&1; _frc=$?; [ "$_frc" -eq 0 ] || FAILED=1
+          lane_reported "$unit"
           exit "$FAILED" )"; rc=$?
   lane_write "$unit" "$out" "$rc"
   return 0
@@ -294,10 +316,11 @@ lane_resolve() {                     # lane_resolve <unit> [--last]
   # unparsable — is resolved HERE into a labelled FAIL. rc must be non-zero
   # because `landing_completion_record.py:190-196` refuses FAIL with rc 0; 199
   # is the value `pytest_per_file_junit` already uses for the same meaning.
-  local unit="$1" last="${2:-}" raw
+  local unit="$1" last="${2:-}" raw reported=0
   EMIT_OUT="$(cat "$LANE_DIR/$unit.out" 2>/dev/null || true)"
   raw="$(cat "$LANE_DIR/$unit.rc" 2>/dev/null || true)"
-  if [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -le 255 ] \
+  [ -f "$LANE_DIR/$unit.reported" ] && reported=1
+  if [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -le 255 ] && [ "$reported" -eq 1 ] \
      && { [ "$LANE_BROKEN" -eq 0 ] || [ "$last" != "--last" ]; }; then
     EMIT_RC="$raw"
     return 0
@@ -305,8 +328,17 @@ lane_resolve() {                     # lane_resolve <unit> [--last]
   EMIT_RC="$LANE_WAIT_RC"
   [[ "$EMIT_RC" =~ ^[0-9]+$ ]] && [ "$EMIT_RC" -ne 0 ] && [ "$EMIT_RC" -le 255 ] \
     || EMIT_RC=199
-  EMIT_OUT="$EMIT_OUT
+  if [ "$reported" -eq 0 ] && [[ "$raw" =~ ^[0-9]+$ ]]; then
+    # THE STAGE DIED INSIDE A LANE THAT STAYED ALIVE. Named separately because
+    # the two events need different repairs from a reader: a dead lane loses
+    # every unit after the one it was on, a dead STAGE loses only this one and
+    # the lane's later units reported normally right underneath it.
+    EMIT_OUT="$EMIT_OUT
+NORECORD  stage $unit exited (rc $raw) but did not reach its own report — killed inside a lane that stayed alive. Its label was never printed, and an unprinted label is not a pass."
+  else
+    EMIT_OUT="$EMIT_OUT
 NORECORD  lane $unit left no verdict — killed, or it did not finish. This is not a pass."
+  fi
   return 1
 }
 run_emit() {                         # run_emit <unit> <label>
@@ -338,6 +370,28 @@ run_emit() {                         # run_emit <unit> <label>
     state=FAIL
   fi
   landing_record "$unit" "$state" "$rc" "$out"
+}
+fn_emit() {                          # fn_emit <unit> <label> [--last]
+  # THE EMIT FOR A STAGE THAT PRINTS ITS OWN LABEL.
+  #
+  # `run_emit` prints `PASS`/`FAIL <label>` from the return code. The three
+  # `fn_capture` stages print it themselves, so this one normally only replays
+  # what they wrote — EXCEPT when they never got there. A stage killed inside a
+  # live lane leaves a parsable `.rc` and no report marker, and
+  # `landing_merge_verdict.py` subtracts the two arms' gate logs BY PRINTED
+  # LABEL: a stage that contributed no label at all is absorbed as "no new
+  # failure", which is the permissive direction and the one that lands.
+  #
+  # So the label is printed HERE when the stage could not print it. WITHOUT ITS
+  # DISCOVERY COUNT, because the count was never measured: the base arm's line
+  # carries one and this one does not, the two labels therefore do not match,
+  # and the differential reads the gate as failing on the candidate alone —
+  # which is exactly what an unmeasured stage is.
+  local unit="$1" label="$2" resolved=0
+  lane_resolve "$unit" "${3:-}" || resolved=1
+  printf '%s\n' "$EMIT_OUT"
+  [ "$resolved" -eq 0 ] || printf '  FAIL  %s\n' "$label"
+  return 0
 }
 run() {                              # run <unit> <label> <cmd…>
   local unit="$1" label="$2"; shift 2
@@ -765,6 +819,9 @@ lane_window_reset() {
   for unit in "${LANE_WINDOW_UNITS[@]}"; do
     printf 'NORECORD' > "$LANE_DIR/$unit.rc"
     : > "$LANE_DIR/$unit.out"
+    # The report marker is EVIDENCE FROM THIS ROUND. A stale one from the
+    # serial re-run's predecessor would vouch for a stage this round killed.
+    rm -f "$LANE_DIR/$unit.reported" "$LANE_DIR/$unit.reported.tmp"
   done
   rm -f "$LANE_DIR/targeted.norecord"
 }
@@ -1350,29 +1407,26 @@ lane_emit_window() {
     landing_skip "full:targeted-tests" "measured by the aggregate test arm"
   else
     lane_join targeted
-    lane_resolve "full:targeted-tests" --last || true
-    printf '%s\n' "$EMIT_OUT"
     _landing_before="$FAILED"
+    fn_emit "full:targeted-tests" "targeted tests" --last
     [ "$EMIT_RC" -eq 0 ] || FAILED=1
     landing_manual_stage "full:targeted-tests" "$_landing_before"
   fi
 
   lane_join corpus
-  lane_resolve "full:repo-tools-tests" || true
-  printf '%s\n' "$EMIT_OUT"
+  fn_emit "full:repo-tools-tests" "repo tools tests"
   if [ "$EMIT_RC" -eq 0 ]; then
     landing_record "full:repo-tools-tests" PASS 0 "repo tools tests complete"
   else
     FAILED=1
-    landing_record "full:repo-tools-tests" FAIL 1 "repo tools tests failed"
+    landing_record "full:repo-tools-tests" FAIL "$EMIT_RC" "repo tools tests failed"
   fi
-  lane_resolve "full:unselectable-tests" || true
-  printf '%s\n' "$EMIT_OUT"
+  fn_emit "full:unselectable-tests" "unselectable tests"
   if [ "$EMIT_RC" -eq 0 ]; then
     landing_record "full:unselectable-tests" PASS 0 "unselectable tests complete"
   else
     FAILED=1
-    landing_record "full:unselectable-tests" FAIL 1 "unselectable tests failed"
+    landing_record "full:unselectable-tests" FAIL "$EMIT_RC" "unselectable tests failed"
   fi
   run_emit "full:unselectable-census" "unselectable-test census is not stale" --last
 
