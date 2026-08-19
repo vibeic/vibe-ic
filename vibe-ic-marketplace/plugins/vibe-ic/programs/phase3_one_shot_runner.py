@@ -14379,13 +14379,34 @@ def _build_spare_protection_tcl(plan: Dict[str, Any], out_dir_c: str
 # they wrapped the call in `catch` and printed the exception text as a WARN, so
 # the COUNT never left the log line and no gate could refuse on it.
 #
-# MEASURED, on a published run already in the corpus, from its own PnR log:
-#     [WARNING DPL-0006] Site aligned check failed (1).
-#     [ERROR DPL-0033] detailed placement checks failed during check placement.
-#     SPARE_CHECK_PLACEMENT_WARN: DPL-0033
-# and `placement_legality_check` on that same project returned PASS. One
-# site-alignment violation, reported by the placer, demoted to a warning, and
-# the gate NAMED for placement legality never read it.
+# MEASURED on real runs. TWO of them, because no single one carries both halves
+# and stating it as one run would be a claim nothing supports.
+#
+#   (i) THE DEMOTION. A published run in the corpus, quoted from its own PnR
+#       log byte for byte:
+#           [WARNING DPL-0006] Site aligned check failed (1).
+#           [ERROR DPL-0033] detailed placement checks failed.
+#           SPARE_CHECK_PLACEMENT_WARN: DPL-0033
+#       One site-alignment violation, reported by the placer, reduced to a WARN
+#       line carrying no count. (That project's own gate verdict is FAIL, for a
+#       reason unconnected to placement legality -- its published tree carries
+#       no `phase3/stage3/pnr/placed.def` at all -- so it evidences the
+#       demotion and nothing else.)
+#
+#  (ii) WHAT THE DEMOTION THEN COST. Two published benchmark runs that DO carry
+#       a `placed.def`, each with `SPARE_CHECK_PLACEMENT_WARN: DPL-0033` in its
+#       log: `placement_legality_check` before this change returned PASS rc=0
+#       on both. The gate NAMED for placement legality passed a design whose
+#       placer had just refused it. After this change both read
+#       `SPARE=NOT_DETERMINED` and FAIL rc=1.
+#
+# The DPL-0033 wording differs between builds and is NOT parsed. MEASURED on the
+# OpenROAD in the current image, on the acceptance fixture: the aborting form
+# says `[ERROR DPL-0033] detailed placement checks failed during check
+# placement.` and the `-no_abort` form says `[WARNING DPL-0040] detailed
+# placement checks failed during check placement: 2 violation(s) returned to
+# caller.` -- a different diagnostic id and a different sentence. The count is
+# read from this runner's own marker, never from the tool's prose.
 #
 # The `catch` STAYS — aborting the whole PnR on one inherited mis-aligned
 # instance was never the intent and is not the fix. What changes is that the

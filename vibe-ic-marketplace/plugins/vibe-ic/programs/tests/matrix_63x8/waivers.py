@@ -1146,7 +1146,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "`\"--cell\", top, \"--in-place\"],` (the last argv element, so "
             "the whole argv is visible and carries no --json), guarded by the "
             "two early returns at "
-            "programs/phase3_one_shot_runner.py:22608-22610 "
+            "programs/phase3_one_shot_runner.py:22629-22631 "
             "(\"no GDS to fill\" / \"metal_fill_density config has no "
             "layers\"). The competing path the gate really reads is "
             "flow/phase1_phase2_phase3.yaml::\"metal_fill_emit . "
@@ -1201,6 +1201,22 @@ WAIVERS: Tuple[Waiver, ...] = (
             # unambiguous and cannot rot. The range stays line-form for the
             # reason above, re-based to 22526-22528, which is the same three
             # lines it always named.
+            #
+            # 2026-08-19, later the same day — and again. W2.2 (the placer's
+            # own legality verdict) added a comment block to
+            # phase3_one_shot_runner.py ABOVE this range, shifting it by 103
+            # lines in total. It rotted the QUIET way once more: 22526-22528
+            # came to read a docstring line and `mfd = pdk.metal_fill_density`,
+            # and this registry's own `citation_problems` reported NOTHING,
+            # because the surrounding evidence text still supplies matching
+            # anchor words. Re-based to 22629-22631 -- MEASURED on this tree,
+            # those are `return False, "no GDS to fill"`, the `if not (mfd or
+            # {}).get("layers"):` between them, and `return False,
+            # "metal_fill_density config has no layers"`: the same three lines,
+            # both quoted reasons inside the range. Third re-base of one
+            # citation in one day; the line form survives here only because
+            # both content anchors are AMBIGUOUS in that file, and that is a
+            # cost this entry pays knowingly, not a preference.
             "MEASURED 2026-08-14 on the rebased tree: "
             "`grep -rn cmp_fill_emit flow/ programs/*.py` names "
             "reports/phase3/cmp_fill_emit.json in metal_fill_emit.py alone, "

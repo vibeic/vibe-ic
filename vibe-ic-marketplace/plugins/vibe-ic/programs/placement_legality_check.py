@@ -333,10 +333,20 @@ def _iter_pnr_log_lines(project: Path):
 #     SPARE_CHECK_PLACEMENT_WARN: DPL-0033
 #
 # The count never left the call, and this gate — the one named for placement
-# legality — did not read even the warning. MEASURED on a published project
-# already in the corpus: its PnR log carries
-# `[WARNING DPL-0006] Site aligned check failed (1).` followed by
-# `[ERROR DPL-0033]` and that WARN line, and this gate returned PASS.
+# legality — did not read even the warning.
+#
+# MEASURED on real runs, and on TWO of them, because no single one carries both
+# halves. THE DEMOTION: a published project in the corpus whose PnR log carries
+# `[WARNING DPL-0006] Site aligned check failed (1).`, then
+# `[ERROR DPL-0033] detailed placement checks failed.`, then that WARN line —
+# and no predicate in this program could see any of the three. (Its own verdict
+# is FAIL, for PLACED_DEF_MISSING: that published tree carries no DEF at all.
+# Unconnected to placement legality, so it evidences the demotion and nothing
+# else.) WHAT THE DEMOTION COST: two published benchmark runs that DO carry a
+# `placed.def`, each with `SPARE_CHECK_PLACEMENT_WARN: DPL-0033` in its log,
+# were returned PASS rc=0 by this program before this change — a design the
+# placer had refused, passed by the gate named for placement legality. Both now
+# read `SPARE=NOT_DETERMINED` and FAIL rc=1.
 #
 # The runner now emits the measured count at every one of those sites:
 #     <SITE>_CHECK_PLACEMENT_VIOLATIONS <n>     n = integer, or NOT_DETERMINED

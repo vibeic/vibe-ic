@@ -14,13 +14,27 @@ DPL-33 abort, `puts` the exception TEXT as a WARN, continue. The count never
 left the call, and `placement_legality_check` -- the gate NAMED for placement
 legality -- read neither the count nor the warning.
 
-MEASURED, on a project already in the corpus, from its own PnR log:
+MEASURED on real runs -- two of them, because no single run carries both halves
+and stating it as one would claim more than the evidence does.
+
+THE DEMOTION, on a project already in the corpus, quoted from its own PnR log
+byte for byte:
 
     [WARNING DPL-0006] Site aligned check failed (1).
-    [ERROR DPL-0033] detailed placement checks failed during check placement.
+    [ERROR DPL-0033] detailed placement checks failed.
     SPARE_CHECK_PLACEMENT_WARN: DPL-0033
 
-and `placement_legality_check` on that same project: `verdict: PASS`.
+and no predicate in `placement_legality_check` could see any of the three.
+(That project's own verdict is FAIL for PLACED_DEF_MISSING -- its published
+tree carries no DEF at all -- which is unconnected to placement legality, so it
+evidences the demotion and nothing else.)
+
+WHAT THE DEMOTION COST, on two published benchmark runs that DO carry a
+`placed.def`, each with `SPARE_CHECK_PLACEMENT_WARN: DPL-0033` in its log:
+
+    gate before -> PASS rc=0        gate after -> FAIL rc=1, SPARE=NOT_DETERMINED
+
+The gate named for placement legality passed a design the placer had refused.
 
 MEASURED, on a fixture that is one real placed DEF with ONE instance moved onto
 its neighbour's site and nothing else changed, run through real OpenROAD:
