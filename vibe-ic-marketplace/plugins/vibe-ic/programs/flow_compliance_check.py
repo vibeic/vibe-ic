@@ -1978,9 +1978,9 @@ def _binding_stat_key(project: Path) -> Tuple[Any, ...]:
     """Cache key that INVALIDATES when the record changes.
 
     Keyed on (project, stat of steps/index.json, stat of the run ledger)
-    rather than on the path alone: `check_step` is called ~63 times per audit
-    in a thread pool and re-reading 63 `written.json` files per step would be
-    63x the I/O, but a plain path-keyed cache would go stale the moment a
+    rather than on the path alone: `check_step` is called once per declared
+    step per audit (~68 today) in a thread pool, and re-reading a `written.json`
+    file per step would be that many times the I/O, but a plain path-keyed cache would go stale the moment a
     caller (a test, a re-run) regenerates the tree inside one process."""
     def k(p: Path) -> Optional[Tuple[int, int]]:
         try:
@@ -9499,7 +9499,7 @@ def _waiver_step_name_mismatch(waiver: Dict[str, Any],
 # order-independent, and only the RESULTS-LIST ORDER (for display + the
 # downstream cascade attribution) must be preserved — which we do by collecting
 # the futures in submission order. This turns a large-SoC compliance sweep
-# (e.g. `final_audit` over 44 steps) from SUM-of-gate-times into
+# (e.g. `final_audit` over 68 steps) from SUM-of-gate-times into
 # MAX-of-gate-times WITHOUT changing a single verdict (proven byte-identical
 # seq-vs-parallel across the benchmark IC suite).
 #

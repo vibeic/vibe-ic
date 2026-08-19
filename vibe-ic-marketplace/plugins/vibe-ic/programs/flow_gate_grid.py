@@ -3,10 +3,12 @@
 
 WHY
 ===
-The dashboard publishes 63 steps x 8 dimensions = 504 cells under the words
+The dashboard publishes 68 steps x 8 dimensions = 544 cells under the words
 "every cell is a predicate recomputed against the current source, not a stored
 verdict read back". Nothing recomputed them: the page's own generator says so in
-its docstring and carries the eight distributions forward.
+its docstring and carries the eight distributions forward. (The grid was 63 x 8
+= 504 when this was found; the shape of the defect is independent of its size,
+and the figures here are the live ones.)
 
 This program recomputes every dimension that IS decidable from the flow source,
 and for the rest says plainly that it is not and why — because the alternative,

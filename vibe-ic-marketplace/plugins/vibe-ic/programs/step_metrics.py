@@ -14,8 +14,9 @@ and the aggregator does almost nothing — `genMetrics.py` is glob-and-merge.
 "Is this run better or worse than the last one" is then one `diff`.
 
 We had 63 declared step entries, 62 carrying a gate, many writing
-`--json reports/.../xxx.json`, and every checker chose its own shape. Measured
-on v1.10.32: `ls programs/ | grep -iE "metric|qor"` returns no per-step QoR
+`--json reports/.../xxx.json`, and every checker chose its own shape (the flow
+is 68 / 67 as of 2026-08-20; the shape of the problem did not change with it).
+Measured on v1.10.32: `ls programs/ | grep -iE "metric|qor"` returns no per-step QoR
 aggregator and nothing computes a run-to-run delta.
 
 THE TWO RULES THIS MODULE EXISTS TO KEEP
@@ -426,8 +427,12 @@ def reconcile(name: str, metric: Optional[Any], prose: Optional[Any], *,
 # flow fails. The count cannot drift away from the tree without something red.
 
 #: Every step in `flow/phase1_phase2_phase3.yaml` that carries a `gate:` key.
-#: Measured on v1.10.92: 63 step entries, of which `P0` alone carries no gate.
-GATE_CARRYING_STEPS: int = 62
+#: Re-measured 2026-08-20: 68 step entries, of which `P0` alone carries no gate.
+#: (Was 62 of 63 on v1.10.92. The exception is unchanged — P0 is still the only
+#: step with no `gate:` key — so the +5 is the two-path split's five new steps,
+#: every one of which declares a gate. `test_step_metrics_coverage` was RED on
+#: the base for exactly this, `assert 67 == 62`; the guard did its job.)
+GATE_CARRYING_STEPS: int = 67
 
 #: EMITTING — gate-carrying steps whose gate runs a program that calls `emit`.
 #: Supply side only: emitting a number changes no verdict.

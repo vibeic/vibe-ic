@@ -349,9 +349,12 @@ _CLAIMS: tuple[tuple[str, str, str], ...] = (
 #: about six specific sentences.
 _NOT_A_POPULATION_COUNT: tuple[tuple[str, str, str], ...] = (
     ("README.md",
-     "**60 of the 63 flow steps are gated by a program",
-     "63 counts FLOW STEPS, not programs. The flow step count is owned by "
-     "flow/phase1_phase2_phase3.yaml and flow_compliance_check.py."),
+     "**66 of the 68 flow steps are gated by a program",
+     "68 counts FLOW STEPS, not programs. The flow step count is owned by "
+     "flow/phase1_phase2_phase3.yaml and flow_compliance_check.py. "
+     "Re-derived 2026-08-20 (was 60 of 63): 68 steps, 67 gated, 66 of those "
+     "naming a program whose exit code is the verdict; step 1 has a "
+     "file-existence-only gate and P0 has no gate key."),
     ("plugins/vibe-ic/README.md",
      "**60 skills** that back the programs up",
      "60 counts SKILLS, not programs, so this gate does not own it — but it "

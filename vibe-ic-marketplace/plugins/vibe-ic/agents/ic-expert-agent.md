@@ -41,7 +41,9 @@ design INPUT — prompt + provided context — never the oracle / harness / gold
 ### § IC-EXPERT OPERATING MAP — phase → step → program → gate → skill (when/where to trigger)
 
 The canonical, machine-readable sources you MUST consult (never guess the flow):
-`flow/phase1_phase2_phase3.yaml` (the 44-step single source of truth, enforced by
+`flow/phase1_phase2_phase3.yaml` (the 68-step single source of truth — 44 of them
+carry a plain integer id 1-44, which is the top-level `total_steps: 44` and NOT the
+number of steps — enforced by
 `flow_compliance_check.py` — never claim PASS without its exit 0) and
 `benchmark/CAPTURE_ROUTING.json` (step → program → skill). The readable summary:
 

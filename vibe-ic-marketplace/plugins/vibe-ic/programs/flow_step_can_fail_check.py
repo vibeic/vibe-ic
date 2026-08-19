@@ -4,12 +4,15 @@
 WHY
 ===
 The flow-gate dashboard publishes eight per-step dimensions, one of which asks
-"can this step actually fail". It reads 62 of 63 clean. Nothing recomputes it —
+"can this step actually fail". It read 62 of 63 clean on the flow of the day.
+Nothing recomputes it —
 the page's own generator says so in its docstring and carries the distribution
 forward untouched, so the figure is a judgement someone made once.
 
-Recomputed from the flow yaml, SEVEN of the 63 steps have no criterion capable
-of failing on content (it was EIGHT until step 12 was given
+Recomputed from the flow yaml, SEVEN of the 68 steps have no criterion capable
+of failing on content (the NUMERATOR is unchanged across the 63 -> 68 growth —
+re-measured 2026-08-20, `flow_step_can_fail_check` reports "68 step(s); 61 can
+fail on content, 7 cannot") (it was EIGHT until step 12 was given
 `program_exit_zero: dft_post_optimization_scan_survival_check` in 23d96bf55,
 which is why the entry below is gone rather than merely quiet):
 

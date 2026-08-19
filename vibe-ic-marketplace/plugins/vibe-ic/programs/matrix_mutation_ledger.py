@@ -2,8 +2,9 @@
 """matrix_mutation_ledger.py — a cell may not be called ENFORCED until a NAMED,
 RUNNABLE mutation has been shown to turn it red.
 
-    "63 steps x 8 dimensions, 481 ENFORCED cells" is a claim about the
-    repository. A green run is evidence for it only if a red run were
+    "63 steps x 8 dimensions, 481 ENFORCED cells" (the 2026-08 census;
+    the flow is larger now) is a claim about the repository. A green run
+    is evidence for it only if a red run were
     POSSIBLE. This module carries, per cell, the mutation that makes the
     red happen — and the machinery that re-executes it rather than
     believing it.

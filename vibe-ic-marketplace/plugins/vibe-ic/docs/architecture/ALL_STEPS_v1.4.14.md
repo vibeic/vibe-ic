@@ -16,6 +16,32 @@ M1–M4** — run alongside.
   (output+tapeout) · Stage 5 (manufacturing & test)
 - **Parallel** — Analog A1–A9 · Mixed-signal M1–M4
 
+**Two exit paths.** The numbered 1→44 sequence is common to both. Five further
+steps are not: they carry an `ip`/`ic` suffix rather than a number because they
+are outside the sequential count.
+
+Which of the five apply is **not declared by a key** — it is a `condition` on
+what Phase 1 actually produced, the same mechanism the analog A1–A9 and
+mixed-signal M1–M4 tracks already use. An unmet condition resolves to
+`SKIPPED-CONDITION`, not to a failure.
+
+- **0.5ic — the step that decides.** It ingests the shuttle operator's published
+  project template and always writes one of two files: slot geometry
+  (`input/submission_template/slots/*.yaml`) or a file that says out loud there
+  is no template (`NO_TEMPLATE.txt`). It carries **no** condition of its own — a
+  decider gated on its own decision would be circular.
+- **cell/IP path** — triggered by `NO_TEMPLATE.txt`. The deliverable is a block
+  somebody else places, and it terminates at **37.5ip** (Digital Hardmacro
+  Generation: LEF + Liberty + GDS + Verilog). It does **not** continue to Step 38
+  or into Stage 5.
+- **chip/IC path** — triggered by `slots/*.yaml`. The deliverable is a
+  submittable die: **15.5ic** (pad ring), **26.5ic** (die finishing: seal ring +
+  die identification) and **37.5ic** (shuttle precheck), then Step 38 and Stage 5.
+
+Steps 1–38 on their own build a **bare die**: no pad ring, no seal ring, no die
+identification. That is correct for an IP hand-off and is not a submittable
+chip.
+
 ---
 
 ## Phase 1 — Specification & documents
@@ -42,6 +68,12 @@ Flow: user free text → IC Expert Agent → finalised L-series documents.
 | D3 | Extended docs L14–L27 | Protocol, timing, power intent (L21), skeletons. | L1–L13 | `L14`–`L27` JSON | overlay extractor | — |
 | D4 | Protocol-class synthesis | Detect the IC's protocol class (86 classes) and synthesise class facts. | full input text | `ic_class` + protocol facts | is_<proto> + <proto>_synth | — |
 | D5 | Coverage report | Verify the input documents landed completely in the L docs. | input docs + L docs | parity / coverage report | parity reporter | — |
+
+#### Submission template ingest (0.5ic — decides which of the two paths runs)
+
+| # | Step | What it does | Input | Output | Tools (EDA) | Programs / Skills |
+|---|---|---|---|---|---|---|
+| 0.5ic | Submission template ingest | Fetch and read the shuttle operator's published project template: slot geometry, die-identification fixtures, per-slot pad list. Always writes a discriminator — slot geometry, or a file stating there is no template — so the two paths are decided by an artefact rather than by an assumption. Declared external and unprobed: it is fetched, not produced, so the flow can say it was never fetched. | operator's template (external) | `input/submission_template/slots/*.yaml` **or** `NO_TEMPLATE.txt` · `submission_template.json` | — (fetch + parse) | `submission_template_ingest`・`submission_template_check` |
 
 ### Architecture-exploration front-ends (optional, feed Step 1)
 
@@ -94,6 +126,7 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 | # | Step | What it does | Input | Output | Tools (EDA) | Programs / Skills |
 |---|---|---|---|---|---|---|
 | 15 | Floorplan + PDN | Chip floorplan + power delivery network; tapcell insertion (latch-up well-ties, SKY130 14 µm rule). | netlist · hardmacro LEFs (`pdk_local/` auto-included, via the IP integration check: LEF/GDS/Liberty alignment + corner coverage + L21 supply consistency; macro LEFs should carry obstruction layers) | `floorplan.def` · PDN | OpenROAD (init_floorplan+pdngen+tapcell)<br>`eda_pnr` | `phase3_backend_step`・`floorplan_pdn_check`・`ip_integration_check` |
+| 15.5ic | Pad ring (chip/IC path only) | Place the I/O pad ring around the core so the die has bond-out. Not run on the cell/IP path. | `floorplan.def` | `padring.def` · `padring.json` | OpenROAD / PDK I/O library | `pad_ring_gen`・`pad_ring_check` |
 | 16 | Clock planning | Clock-tree distribution strategy. | floorplan | `clock_plan.json` | OpenROAD CTS planning | `clock_plan_check` |
 | 17 | Placement (global + detailed) | Place standard cells. | floorplan · netlist | `placed.def` | OpenROAD (global+detailed place)<br>`eda_pnr` | `placement_legality_check` |
 | 18 | Spare-cell + ECO-prep insertion | Pre-place spare cells / ECO readiness so later fixes are metal-only (paired with Step 32 ECO: provisioned here, consumed there). | placed.def | `spare_cells.json` · coverage report | OpenROAD<br>`eda_pnr` | `spare_cell_coverage_check` (preservation is audited at Step 34, after the passes a spare must survive) |
@@ -105,6 +138,7 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 | 24 | 🔁 IR drop (static + dynamic) | Power-grid voltage-drop analysis vs budget: static, plus VCD-vectored dynamic IR (activity-weighted droop under a real switching VCD). | routed.def (PSM) · VCD | static + dynamic IR reports | OpenROAD PSM (`read_vcd`) | `ir_drop_report_check`・`dynamic_ir_drop_check`<br>skills: `ir-drop-triage` |
 | 25 | 🔁 EM check (electromigration) | Current-density / metal-lifetime screen. | routed.def (PSM -enable_em) | EM report + per-segment currents | OpenROAD PSM -enable_em | `em_report_check` |
 | 26 | 🔁 Antenna check | Detect + repair process-antenna violations. | routed.def | antenna report | OpenROAD check_antennas/repair | `antenna_report_check` |
+| 26.5ic | Die finishing — seal ring + die identification (chip/IC path only) | Add the PDK's own seal ring and the shuttle's die-identification cells. Placed **after** the antenna check and **before** physical verification, so the die that Step 31 signs off is the die that ships. Not run on the cell/IP path. | `routed.def` | `die_finished.def` (or a stated `die_finishing.SKIPPED.txt`) · `die_finishing.json` | PDK seal-ring generator (KLayout/Magic), called — never reimplemented | `die_finishing_gen`・`die_finishing_check` |
 | 27 | 🔁 Signal integrity (crosstalk) | Crosstalk/noise screen (SPEF coupling-cap; advisory tier explicitly named). | SPEF | SI report (incl. >0.9 coupling watch-list) | in-house SPEF coupling screen (OpenSTA window advisory) | `si_crosstalk_check` |
 | 28 | 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) | Enforced sign-off: ESD pad-ring + discharge topology, latch-up well-tap, cross-voltage-domain protection; maps to the four PERC categories — netlist checks + netlist-driven layout checks (automated), current density + P2P resistance (named manual-review). Manual review is signed off by a senior physical-design / reliability engineer; criteria live in `perc_equivalent.json` (categories[].status=MANUAL_REVIEW + `review_criteria`: PDK Jmax tables, foundry ESD discharge-path P2P limit, Vhold>Vdd, L21 cross-domain contract), results back-filled into checklist[].confirmed. | gate netlist · routed.def · L21 power intent · L3 ESD spec · step-24–27 reports | `perc_equivalent.json` · PERC memo · gate verdict | in-house PERC-equivalent (DEF-driven) | `perc_signoff_check` |
 | 29 | Post-layout gate-level simulation (SDF) | Gate-level sim with SDF delays to confirm post-layout function (honest SKIP when no SDF re-sim ran). | gate netlist · SDF · TB | post-sim results | iverilog + SDF<br>`eda_simulate` | `post_layout_sim_check` |
@@ -121,6 +155,8 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 | 35 | DFM screen (manufacturability) | Manufacturability screen: redundant-via ratio (single-cut fraction advisory) + density **OPTIMIZATION ADVISORY** (cross-references the Step 34 gate result only — never a duplicate FAIL); OPC/RET/SRAF/PSM as FOUNDRY_SIDE disclosure items (escalated to DESIGNER_COLLAB_REVIEW at ≤28nm; the node is derived by `dfm_screen_check` from the `input/pdk/liberty` filenames and recorded in the same `dfm_screen.json` — process_nm / advanced_node / foundry_side fields). | routed.def · density report | `dfm_screen.json` (via stats + foundry-side list) | in-house DEF via statistics + density cross-ref | `dfm_screen_check` |
 | 36 | Tapeout checklist (final sign-off) | Item-by-item final confirmation (substance checks: DRC counts, evidence chains). | all sign-off reports | `tapeout_checklist.json` | — (inventory aggregation) | `tapeout_signoff_check`<br>skills: `tapeout-checklist` |
 | 37 | GDSII output | Stream the foundry-deliverable GDSII (only when Step 31 PV is fully clean). | routed.def · merged GDS | sign-off `*.gds` | Magic/KLayout stream-out<br>`eda_gds` | `gds_size_check`・`provenance_check` |
+| 37.5ip | Digital hardmacro generation (cell/IP path TERMINAL) | Package the signed-off block as a reusable hardmacro. **This is where the cell/IP path ends** — no Step 38, no Stage 5. | sign-off `*.gds` | `hardmacro/*.lef` · `*.lib` · `*.gds` · `*.v` | abstract + Liberty + stream-out | `digital_hardmacro_gen`・`digital_hardmacro_check` |
+| 37.5ic | Shuttle precheck — the operator's own refusal (chip/IC path only) | Run the shuttle operator's published precheck against the GDS and record its verdict. An external authority, not our own bar. | sign-off `*.gds` | `shuttle_precheck.json` | shuttle operator's precheck container | `tapeout_readiness_check` |
 | 38 | Foundry handoff (mask spec + WAT + scribe + corner vectors) | Foundry physical mask kit: mask spec + WAT plan + scribe PCM + corner ATE vectors (chip-specific; foundry-supplied fields named `PENDING_FOUNDRY_*` — tracked in the Step 36 checklist and back-filled after the foundry replies). | GDS · netlist stats · L10 cases | `mask_spec.json` · `wat_plan.json` · scribe · `corner_test_vectors.json` | — (pack generator) | `foundry_handoff_package_check`<br>skills: `tapeout-checklist` |
 | 39 | FPGA final sign-off (on-board test) | Final FPGA recompile + on-board attestation with hardware evidence. | RTL · board | final `.sof` · `on_board_pass.json` | Quartus + on-board measurement | `bringup_plan_gen`・`fpga_on_board_attestation_check` |
 
@@ -182,6 +218,17 @@ Trigger timing: runs once **A8 hardmacros are complete** and **Stage 3 is near c
 **44 sequential steps** (Stage 1: 1–6 · Stage 2: 7–14 · Stage 3: 15–32 ·
 Stage 4: 33–39 · Stage 5: 40–44), plus Phase 1 (Agent path & doc-gen path
 D1–D5) and the two parallel tracks (Analog A1–A9 · Mixed-signal M1–M4).
+**26 of the 68 steps are conditional** — they carry a step-level `condition:` and
+resolve to SKIPPED-CONDITION, not to a failure, when it is unmet: the analog
+A1–A9 and mixed-signal M1–M4 tracks (Phase 1 must have declared analog blocks),
+FS1 and DT1–DT3 (safety and scan designs), stage 5 40–44 (only once silicon
+comes back), and the four path-specific steps below. No design runs all 68.
+
+Path-specific steps, outside the 1→44 count: 0.5ic (the decider, always runs) ·
+15.5ic · 26.5ic · 37.5ic (chip/IC path) · 37.5ip (cell/IP path terminal). A
+design runs one path or the other, never both, and which one is decided by the
+file 0.5ic writes — not by a flag. The four conditional steps resolve to
+SKIPPED-CONDITION on the path they do not belong to.
 Preflight: P0 (environment health check). Conditional lettered steps: FS1 (ISO-26262 FMEDA diagnostic-coverage,
 safety designs only) · DT1 (transition-delay-fault ATPG, scan designs only) · DT2 (path-delay-fault at-speed
 ATPG, scan designs after routing) · DT3 (small-delay-defect at-speed grade, after DT2).
