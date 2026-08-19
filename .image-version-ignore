@@ -179,18 +179,29 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_pdk_registry_asset_half_
 # 0.2.96 -> 0.2.97 in one afternoon).
 vibe-ic-marketplace/plugins/vibe-ic/programs/not_verified_tier.py
 
-# docs/research/wafer_space_id_cells.md:269 — a RESEARCH MEASUREMENT RECORD, not
-# an install pointer. The line states which image the `/foss/pdks` search for
-# `*ws_ip*` was ACTUALLY discharged inside (0.2.88), next to the second tree the
-# same question was put to. Rewriting the tag to VERSION would claim the search
-# was re-run against an image it was never run against — the finding ("no hits,
-# so `ws` is the shuttle operator, not a PDK vendor") would then cite evidence
-# that does not exist. Same posture as the pdk_registry.json and
-# fault_scan_chain_insert.py entries above: registered, not rewritten.
+# docs/research/wafer_space_id_cells.md — a RESEARCH MEASUREMENT RECORD, not an
+# install pointer. The line states which image the `/foss/pdks` search for `*ws_ip*`
+# was ACTUALLY discharged inside (0.2.88 — the one that carries /foss/pdks), next to
+# the second tree the same question was put to, and records that the search returned
+# no hits. Rewriting the tag to VERSION would claim the search was re-run against an
+# image it was never run on, and the finding ("no hits, so `ws` is the shuttle
+# operator, not a PDK vendor") would then cite evidence that does not exist. Nothing
+# pulls the tag; it is prose about a past run. Registered, not rewritten.
 #
-# BOUNDED BY PATH, per this file's own rule. The other three ghcr refs in that
-# document are `ghcr.io/wafer-space/gf180mcu-precheck:latest` — a different org,
-# already outside this drift-net, which only reads `ghcr.io/vibeic/vibeic-eda`.
+# BOUNDED BY THE EXACT PATH, per this file's own rule, for two measured reasons:
+#   * it is the ONLY file under docs/research/ carrying a pinned ghcr tag, so a
+#     directory glob buys no coverage today and would silently exempt the next
+#     research note that legitimately IS an install doc;
+#   * the other three ghcr refs in that document are
+#     `ghcr.io/wafer-space/gf180mcu-precheck` — a different org, already outside this
+#     drift-net, which only reads the vibeic image.
+#
+# NB: this comment deliberately does NOT spell the full vibeic ghcr ref. The
+# drift-net scans THIS FILE TOO, so a "helpful" clarification written here would
+# create a new drift target inside the exemption list itself.
+#
 # If the search is ever REDONE on a newer image, update the tag and the prose
 # together, in that order.
+# (This entry was written twice, independently, by two agents that never spoke; they
+#  reached the same verdict and each caught something the other missed. Both kept.)
 docs/research/wafer_space_id_cells.md
