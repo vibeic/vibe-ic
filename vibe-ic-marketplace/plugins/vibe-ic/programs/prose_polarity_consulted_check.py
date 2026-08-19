@@ -142,6 +142,28 @@ _NOT_PROSE: Dict[str, str] = {
         "would not import. Contrast the two defects this gate was built from "
         "(#706 pdk_target, #711 die_area_budget_um): both read English design "
         "documents, where denial is spellable and was spelled.",
+    "pytest_per_file_junit::_admit":
+        "Progress-stream FILENAMES in a parent-owned directory. The matched "
+        "text is ONE POSIX path component, minted by this repo's own "
+        "`_pytest_progress_plugin.pytest_configure` in exactly two forms -- "
+        "`m.<pid>.<ppid>.jsonl` and `w.<workerid>.<pid>.<ppid>.jsonl` -- and "
+        "both patterns are anchored `\\A...\\Z`, so the ENTIRE subject IS the "
+        "token: there is no surrounding text for a denial to live in, and a "
+        "path component has no form that says 'this stream is NOT from pid "
+        "41'. A name that does not match is not ignored, it REFUSES the whole "
+        "set (`unexpected file in progress directory`), so absence is already "
+        "reported more strictly than any polarity branch could report it. "
+        "What the function writes -- `self.streams[name]` and "
+        "`self.kinds[name]` -- is a demultiplexing key for an open probe, not "
+        "a value published as a declaration that a neighbouring sentence "
+        "could retract; and the one claim the name does carry, the owning "
+        "pid, is not believed either -- it is re-checked against the launched "
+        "process and a mismatch refuses the set. Contrast the two defects "
+        "this gate was built from (#706 pdk_target, #711 die_area_budget_um): "
+        "both read English design documents, where denial is spellable and "
+        "was spelled. Consulting `_prose_polarity` on a directory entry would "
+        "add a branch that can never fire, and a call that can never fire is "
+        "a green light rather than a check.",
 }
 
 
