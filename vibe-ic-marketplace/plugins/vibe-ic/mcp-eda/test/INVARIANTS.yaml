@@ -1,0 +1,45 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by
+# vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py.
+schema: 1
+package: vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/test
+namespace: mcp-test
+
+role: >-
+  The test suite of the MCP-EDA server sub-project — the tool surface every
+  eda_* call in the flow goes through. It is a SEPARATE suite with its own
+  runner, which is exactly what makes the rules below worth stating here.
+
+invariants:
+  - id: mcp-test.this-suite-is-run-by-run-tests-sh-and-by-no-landing-stage
+    statement: >-
+      pytest.ini declares one testpath and it is not this one, and the landing
+      selector cannot emit outside programs/tests, so nothing here can block a
+      landing. run_tests.sh discovers this directory explicitly — before that,
+      the suite was named only in prose in a PR checklist, and prose in a
+      checklist is not automation: its tests ran when a human remembered.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/landing_unselectable_pytest_corpus.py
+
+  - id: mcp-test.a-test-file-must-be-able-to-fail-the-suite
+    statement: >-
+      Every file named test_*.py here must define at least one pytest test.
+      pytest collects zero items from a file that defines none, and a zero
+      collection is reported as a clean run — so a file that cannot fail reads
+      exactly like a file that passed. The one standing exemption is named
+      below and reported on every run.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py
+    rule:
+      kind: require_regex
+      applies_to: ["test_*.py"]
+      pattern: '(?m)^[ \t]*(?:async[ \t]+)?def[ \t]+test_|^[ \t]*class[ \t]+Test'
+      exempt:
+        - file: test_mcp_live_probe.py
+          because: >-
+            An end-to-end JSON-RPC probe with a main() and an exit-code
+            contract, not a pytest module: it speaks the protocol over stdio to
+            a locally-built server and reports PASS/SKIP/FAIL per step. Named
+            test_* because it is a smoke test an operator runs by hand; pytest
+            collects zero items from it.
