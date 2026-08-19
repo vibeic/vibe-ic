@@ -105,9 +105,20 @@ three visible edits instead of one, and the last of them is in a test.
 ## Rule selection
 
 Candidate rules must HOLD on day one or the gate is red on arrival. Two
-measured candidates that do NOT hold were rejected as written: `set -euo
-pipefail` in `tools/ci/*.sh` (3 of 11 files carry it) and a module docstring in
-`tools/ci/*.py` (7 of 29 missing). What shipped is six packages and nine rules,
+measured candidates were rejected, and the second was rejected for a different
+reason than the earlier draft of this note gave:
+
+* `set -euo pipefail` in `tools/ci/*.sh` — 3 of 11 files carry it. Does not
+  hold, and could not be made to without editing eight scripts.
+* a module docstring in `tools/ci/*.py` — 8 of 29 missing (the draft said 7;
+  re-measured). All eight are `test_*.py`, so the rule DOES hold over the 21
+  non-test files and `excludes: ["test_*.py"]` would have shipped it green.
+  It was still rejected: an exclusion carved to fit exactly the failing class
+  is a rule shaped to its own population, and "every file has a docstring" is
+  a style preference rather than a measured hazard, which is the bar the nine
+  that shipped meet.
+
+What shipped is six packages and nine rules,
 each measured to hold over its whole applicable population before it was
 written down, and each reverted afterwards to confirm it fires.
 
