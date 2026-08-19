@@ -9,7 +9,7 @@ clause whose `condition_files_exist` matched no path as
     if not present:
         return True, reasons  # no inputs -> N/A -> pass
 
-No marker, no reason, no record. MEASURED on origin/main (397b3f25f) against an
+No marker, no reason, no record. MEASURED on the pre-fix commit (397b3f25f) against an
 EMPTY project tree, every one of step 2's nine optional clauses:
 
     origin/main -> PASS   reasons=[]
@@ -124,8 +124,30 @@ def test_undeclared_unmet_condition_fails_and_names_the_empty_corpus():
 
 
 # ── A1' — the same call against ORIGIN/MAIN's evaluator, measured ─────────
+#: The commit this change was authored against — the last one whose
+#: `flow_compliance_check` still carried the defect. AN IMMUTABLE SHA, AND THAT
+#: IS THE WHOLE POINT.
+#:
+#: This helper used to read `origin/main:` instead, and the day the fix LANDED
+#: the control stopped being a control: `origin/main` then carried the repaired
+#: file, so all three `test_negative_control_*` arms fired their own
+#: "the control no longer discriminates" assertion and this file went red on a
+#: tree it had certified hours earlier. MEASURED at 8e60dd954: 3 failed,
+#: 90 passed across the four flow test files, every failure one of these arms.
+#:
+#: A control has to be pinned to the state it is a control FOR. A moving ref
+#: cannot be that state, because the thing that moves it is the fix.
+_PRE_FIX_SHA = "397b3f25fc8f88f9c7852cfce9c6c89bb27c1530"
+
+#: The symbol the fix introduced. Read out of the loaded module rather than
+#: trusted from the sha, so a rewritten history, a mis-resolved ref or a
+#: mistyped constant cannot hand this file a control that already contains the
+#: repair — which is exactly the failure being fixed, one level down.
+_FIX_SYMBOL = "_NOT_APPLICABLE_HINT_PREFIX"
+
+
 def _origin_main_fcc():
-    """origin/main's `flow_compliance_check`, loaded from git at test time.
+    """The PRE-FIX `flow_compliance_check`, loaded from git at test time.
 
     The negative control has to be the code that actually shipped, not a
     hand-written imitation of it: a control that cannot fail proves nothing,
@@ -136,10 +158,19 @@ def _origin_main_fcc():
         repo = repo.parent
     rel = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
            "flow_compliance_check.py")
-    r = subprocess.run(["git", "-C", str(repo), "show", f"origin/main:{rel}"],
-                       capture_output=True, text=True, timeout=_T)
+    r = subprocess.run(
+        ["git", "-C", str(repo), "show", f"{_PRE_FIX_SHA}:{rel}"],
+        capture_output=True, text=True, timeout=_T)
     if r.returncode != 0 or not r.stdout:
-        pytest.skip("origin/main not fetched in this checkout")
+        pytest.skip(f"{_PRE_FIX_SHA[:9]} not present in this checkout "
+                    f"(shallow clone); the negative control cannot be loaded")
+    if _FIX_SYMBOL in r.stdout:
+        raise AssertionError(
+            f"{_PRE_FIX_SHA[:9]} already carries {_FIX_SYMBOL}, so it is not "
+            f"a PRE-FIX control and every arm below would be measuring the "
+            f"fixed code against itself. Re-pin `_PRE_FIX_SHA` to the last "
+            f"commit whose `_evaluate_gate` returned a bare True on an unmet "
+            f"`condition_files_exist`.")
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / "base_fcc.py"
         src.write_text(r.stdout, encoding="utf-8")
@@ -150,12 +181,12 @@ def _origin_main_fcc():
         return mod
 
 
-def test_negative_control_origin_main_passes_the_same_empty_corpus_silently():
+def test_negative_control_pre_fix_passes_the_same_empty_corpus_silently():
     base = _origin_main_fcc()
     with tempfile.TemporaryDirectory() as td:
         ok, reasons = base._evaluate_gate(Path(td), _gate(dict(_CLAUSE)))
     assert ok is True and reasons == [], (
-        "the defect this file pins is that origin/main returned a BARE True "
+        "the defect this file pins is that the pre-fix code returned a BARE True "
         f"with no record; it returned {(ok, reasons)!r} instead, so the "
         "control no longer discriminates and this test is measuring nothing")
 
@@ -353,7 +384,7 @@ def test_an_empty_predicate_list_fails_and_says_it_examined_nothing(gate, word):
         f"the FAIL must name WHICH empty list it was: {reasons}")
 
 
-def test_negative_control_origin_main_passed_the_empty_predicate_lists():
+def test_negative_control_pre_fix_passed_the_empty_predicate_lists():
     base = _origin_main_fcc()
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)
@@ -500,7 +531,7 @@ def test_declared_advisory_condition_is_recorded_on_the_advisory_channel():
     assert "n/a (declared;" in adv[0] and why in adv[0]
 
 
-def test_negative_control_origin_main_was_silent_on_the_advisory_slot():
+def test_negative_control_pre_fix_was_silent_on_the_advisory_slot():
     base = _origin_main_fcc()
     with tempfile.TemporaryDirectory() as td:
         ok, reasons = base._evaluate_gate(
