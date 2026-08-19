@@ -12858,6 +12858,109 @@ def _l19_declared_die_area(project: Optional[Path]) -> Optional[str]:
     return None
 
 
+# ── Step 0.5ic — the SLOT is an EXTERNAL mandate, not one of our documents ──
+# A shuttle slot is a rectangle the OPERATOR owns. Their own precheck compares
+# the submitted layout's bounding box against it with `!=` on floats and no
+# tolerance (`check_size.py`), so a die this flow sized from its own
+# `FP_CORE_UTIL` opinion is refused at stage 3 of 16 before any of the other
+# thirteen checks ever runs. MEASURED, and this is why the step exists: all 8
+# published GDS missed every slot in both dimensions, the closest filling 3.15%
+# of the smallest one.
+#
+# This reads the Step 0.5ic report and NOTHING else. It carries no slot
+# dimension, no saw-street width and no seal-ring width:
+# `submission_template_ingest` put the operator's own files under
+# `input/submission_template/` and `submission_template_check` re-hashed and
+# re-derived every number FROM those files, so by the time phase 3 reads this
+# the geometry has been measured twice against the operator's copy.
+#
+# WHY IT REFUSES INSTEAD OF FALLING BACK. Everywhere else in this resolver an
+# unreadable source means "this flow owns the die" — which is right, because a
+# design with no shuttle target genuinely does. But a report that SAYS a slot
+# was declared and then cannot produce its geometry is a different fact, and
+# quietly auto-sizing there would hand the operator a die they will reject
+# while every gate upstream reported PASS.
+def _slot_declared_geometry(project: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """The DECLARED shuttle slot's pinned geometry, or None.
+
+    None means: no Step 0.5ic report, or one that declares no slot. Both are
+    states in which this flow legitimately owns the die, which is exactly the
+    pre-0.5ic behaviour. A report that declares a slot whose record is missing
+    or unusable returns a dict carrying `unusable` — a REFUSAL, not a None.
+
+    chip/PDK/operator-AGNOSTIC: it reads a report and copies numbers."""
+    if project is None:
+        return None
+    try:
+        rp = Path(project) / "reports" / "phase1" / "submission_template.json"
+        if not rp.is_file():
+            return None
+        doc = json.loads(rp.read_text(errors="ignore"))
+    except Exception:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    rec = doc.get("ingest")
+    if not isinstance(rec, dict) or rec.get("status") != "INGESTED":
+        return None
+    declared = rec.get("declared_slot")
+    if not isinstance(declared, str) or not declared.strip():
+        return None
+    declared = declared.strip()
+    slots = rec.get("slots")
+    if not isinstance(slots, list):
+        return {"name": declared,
+                "unusable": "the report declares a slot but ships no slot list"}
+    match = [s for s in slots
+             if isinstance(s, dict) and str(s.get("slot")) == declared]
+    if len(match) != 1:
+        return {"name": declared,
+                "unusable": (f"the declared slot {declared!r} matches "
+                             f"{len(match)} slot record(s) in the report")}
+    entry = match[0]
+
+    def _rect(key: str) -> Optional[List[int]]:
+        blk = entry.get(key)
+        if not isinstance(blk, dict):
+            return None
+        raw = blk.get("raw")
+        if not isinstance(raw, list) or len(raw) != 4:
+            return None
+        out: List[int] = []
+        for v in raw:
+            # The operator compares with `!=` and no tolerance, so half a
+            # database unit is a refusal, not a rounding. A non-integral
+            # micron here is REFUSED rather than rounded.
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            if f != int(f):
+                return None
+            out.append(int(f))
+        return out
+
+    die = _rect("die_area")
+    if die is None:
+        return {"name": declared,
+                "unusable": (f"slot {declared} pins no integral four-number "
+                             f"DIE_AREA this runner can floorplan to")}
+    if die[0] != 0 or die[1] != 0:
+        return {"name": declared,
+                "unusable": (f"slot {declared} pins DIE_AREA {die}, whose "
+                             f"origin is not (0, 0) — the operator's own "
+                             f"origin check refuses that before it measures "
+                             f"anything else")}
+    return {
+        "name": declared,
+        "die_um": f"{die[2] - die[0]}x{die[3] - die[1]}",
+        "die_area": die,
+        "core_area": _rect("core_area"),
+        "source_file": entry.get("source_relpath") or entry.get("source_file"),
+        "sha256": entry.get("source_sha256"),
+    }
+
+
 def _effective_die_um(die_um_flag: str,
                       project: Optional[Path]
                       ) -> Tuple[str, Optional[str]]:
@@ -19581,6 +19684,34 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # Resolve it BEFORE computing `_auto_die_requested` so an L9-pinned die
     # behaves EXACTLY like an explicit `--die-um` (pinned — never auto-sized
     # over, in either direction).
+    # Step 0.5ic — a DECLARED shuttle slot outranks every die this flow could
+    # compute, and CONTRADICTING it is refused rather than honoured: a die the
+    # operator's own check_size.py will reject is not a die, and silently
+    # preferring the caller's number would hide that until the submission
+    # bounced.
+    _slot_geom = _slot_declared_geometry(project)
+    if _slot_geom is not None and _slot_geom.get("unusable"):
+        return StepResult("pnr", "FAIL", time.time() - t0,
+                          f"SLOT_UNUSABLE: {_slot_geom['unusable']}")
+    if _slot_geom is not None:
+        _slot_die = _slot_geom["die_um"]
+        if str(die_um).lower() == "auto":
+            print(f"[phase3] die-um=auto and Step 0.5ic declares shuttle slot "
+                  f"{_slot_geom['name']} — honoring the OPERATOR's pinned "
+                  f"DIE_AREA {_slot_die}µm verbatim (read from "
+                  f"{_slot_geom['source_file']}, sha256 "
+                  f"{str(_slot_geom.get('sha256'))[:12]}); no auto-size",
+                  file=sys.stderr)
+            die_um = _slot_die
+        elif str(die_um).lower() != _slot_die.lower():
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                f"SLOT_DIE_CONTRADICTED: --die-um {die_um} contradicts the "
+                f"DECLARED shuttle slot {_slot_geom['name']}, whose own file "
+                f"({_slot_geom['source_file']}) pins {_slot_die}µm. The "
+                f"operator compares the layout bbox to the slot with `!=` and "
+                f"no tolerance, so this die would be refused at their own "
+                f"size check. Re-declare the slot, or drop --die-um.")
     die_um, _l9_die_note = _effective_die_um(die_um, project)
     if _l9_die_note:
         print(f"[phase3] {_l9_die_note}", file=sys.stderr)
@@ -19598,6 +19729,33 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     core_pad = 10
     core_w = die_w - 2 * core_pad
     core_h = die_h - 2 * core_pad
+    # Step 0.5ic — the operator ships CORE_AREA in the SAME file as DIE_AREA,
+    # and it is NOT the die minus a margin: the outer ring is theirs (the seal
+    # ring plus the pad ring the slot's own PAD_* lists enumerate). A core that
+    # runs to the die edge puts our cells and our pins where their fixtures go.
+    # The emitted `-core_area` takes ONE inset for both llx and lly, because
+    # every die-resize retry path recomputes it that way; an asymmetric origin
+    # is therefore REFUSED rather than silently squared off.
+    if _slot_geom is not None and isinstance(_slot_geom.get("core_area"), list):
+        _ca = _slot_geom["core_area"]
+        if _ca[0] != _ca[1]:
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                f"SLOT_CORE_ORIGIN_ASYMMETRIC: slot {_slot_geom['name']} pins "
+                f"CORE_AREA {_ca}, whose llx and lly differ. This runner emits "
+                f"one inset for both and would silently square it off.")
+        if not (0 <= _ca[0] and _ca[2] <= die_w and _ca[3] <= die_h
+                and _ca[2] > _ca[0] and _ca[3] > _ca[1]):
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                f"SLOT_CORE_OUTSIDE_DIE: slot {_slot_geom['name']} pins "
+                f"CORE_AREA {_ca}, which is not a positive rectangle inside "
+                f"the {die_w}x{die_h}µm die it ships alongside.")
+        core_pad, core_w, core_h = _ca[0], _ca[2], _ca[3]
+        print(f"[phase3] Step 0.5ic slot {_slot_geom['name']} pins CORE_AREA "
+              f"{_ca} — using the OPERATOR's core rather than "
+              f"die-minus-margin (the outer ring is theirs: seal ring + pad "
+              f"ring)", file=sys.stderr)
 
     # Pick clock buffer cells: PdkConfig-carried masters win (every registry
     # PDK carries clk_buf_cell/root); otherwise DISCOVER them from the PDK's own
