@@ -49,7 +49,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import pytest
 
 from matrix_63x8 import flowref as F
 

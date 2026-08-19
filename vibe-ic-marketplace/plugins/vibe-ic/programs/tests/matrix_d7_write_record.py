@@ -445,8 +445,8 @@ def _record_repo() -> Tuple[Optional[Path], str, str]:
     if plugin is not None and any(
             rel.endswith("/" + RECORD_REL) for rel in tracked_at_head(plugin)):
         return plugin, "", (
-            f"the population was read from this checkout, which still tracks "
-            f"the corpus in-tree (the pre-#1723 shape)")
+            "the population was read from this checkout, which still tracks "
+            "the corpus in-tree (the pre-#1723 shape)")
 
     corpus = _pc.corpus_root()
     if corpus is None:
