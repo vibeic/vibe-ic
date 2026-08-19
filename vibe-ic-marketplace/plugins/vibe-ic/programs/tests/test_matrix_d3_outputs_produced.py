@@ -480,6 +480,7 @@ import pytest
 
 from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers
+import matrix_d3_artefact_kind as KIND
 from matrix_63x8.cells import cells_for
 
 import _plugin_tree
@@ -1316,10 +1317,11 @@ class Rejected:
     untracked: Tuple[str, ...] = ()
     unwritten: Tuple[str, ...] = ()
     unattributed: Tuple[str, ...] = ()
+    malformed: Tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.empty or self.symlinked or self.untracked
-                    or self.unwritten or self.unattributed)
+                    or self.unwritten or self.unattributed or self.malformed)
 
 
 def resolve(root: Path, entry: str,
@@ -1369,6 +1371,7 @@ def resolve(root: Path, entry: str,
     empty: List[str] = []
     symlinked: List[str] = []
     untracked: List[str] = []
+    malformed: List[str] = []
     for alt in F.split_any_of(entry):
         for rel in _GLOB_FIRST(root, alt):
             p = root / rel
@@ -1386,6 +1389,19 @@ def resolve(root: Path, entry: str,
                 continue
             if not is_tracked(root, rel):
                 untracked.append(f"{rel} ({size} B)")
+                continue
+            # THE CONTENT RULE, applied LAST on purpose. Everything above is a
+            # stat call: present, non-empty, a real file, carried by the
+            # commit. None of them opens the file, so a placeholder, a tool's
+            # error message or the wrong file entirely reads as the artefact it
+            # stands in for. `matrix_d3_artefact_kind` opens it and asks whether
+            # the bytes are the KIND the declared path names. Applying it last
+            # keeps this arm a pure subtraction from what the older rules had
+            # already accepted, and keeps the older, more specific reason on any
+            # candidate that never got this far.
+            kv = KIND.check(rel, p)
+            if kv.rejects:
+                malformed.append(f"{rel} ({size} B): {kv.reason}")
                 continue
             if best is None or size > best.size_bytes:
                 best = Hit(root="", alternative=alt, path=rel, size_bytes=size)
@@ -1413,7 +1429,8 @@ def resolve(root: Path, entry: str,
                 f"it'.")
             best = None
     return best, Rejected(tuple(empty), tuple(symlinked), tuple(untracked),
-                          tuple(unwritten), tuple(unattributed))
+                          tuple(unwritten), tuple(unattributed),
+                          tuple(malformed))
 
 
 def resolve_anywhere(entry: str,
@@ -1436,7 +1453,7 @@ def resolve_anywhere(entry: str,
 
 
 def _rejected_note(rejected: Dict[str, Rejected]) -> str:
-    """The five near-miss categories, named rather than folded into "missing"."""
+    """The six near-miss categories, named rather than folded into "missing"."""
     bits = []
     for field, label in (("empty", "0-byte matches"),
                          ("symlinked", "symlinked (not produced here)"),
@@ -1446,7 +1463,10 @@ def _rejected_note(rejected: Dict[str, Rejected]) -> str:
                                        "STEP never wrote it"),
                          ("unattributed", "matched, but the run's write ledger "
                                           "attributes that path to no write by "
-                                          "this step")):
+                                          "this step"),
+                         ("malformed", "present, non-empty, tracked — and NOT "
+                                       "the kind of artefact its declared path "
+                                       "names")):
         per_root = {k: list(getattr(v, field)) for k, v in rejected.items()
                     if getattr(v, field)}
         if per_root:
@@ -1631,6 +1651,15 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
                 f"ran `{program} {' '.join(argv)}` in a copy of {label!r} and "
                 f"{writes} landed at 0 bytes — a zero-byte artefact is not a "
                 f"produced artefact"
+            )
+        # Same content rule as `resolve`, for the same reason: a producer that
+        # runs, exits 0 and writes a placeholder has not produced the artefact.
+        kv = KIND.check(writes, target)
+        if kv.rejects:
+            return False, (
+                f"ran `{program} {' '.join(argv)}` in a copy of {label!r} and "
+                f"{writes} landed at {size} B, but {kv.reason} — a file of the "
+                f"wrong kind is not a produced artefact"
             )
         return True, f"{writes} produced live at {size} B in a copy of {label!r}"
 
@@ -5616,7 +5645,13 @@ def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
         # module applies BEFORE the ledger accepts it.
         landed = probe / entry
         landed.parent.mkdir(parents=True, exist_ok=True)
-        landed.write_text(json.dumps({"landed": "by a later commit"}) * 20)
+        # A VALID JSON document, not the same one repeated 20 times. The
+        # entry is `reports/lec.json` and `resolve` now decides content as
+        # well as presence (`matrix_d3_artefact_kind`), so a concatenation
+        # of 20 objects is not JSON, is refused as malformed, and would
+        # never reach the ledger contradiction this control is about.
+        landed.write_text(json.dumps(
+            {"landed": "by a later commit", "pad": ["x"] * 20}))
         commit(entry)
         assert not landed.is_symlink() and landed.stat().st_size > 0 \
             and is_tracked(probe, entry)
@@ -5696,7 +5731,13 @@ def test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver():
         # The staleness, made real: a later commit lands the declared path.
         landed = probe / _LEDGER_PROBE_ENTRY
         landed.parent.mkdir(parents=True, exist_ok=True)
-        landed.write_text(json.dumps({"landed": "by a later commit"}) * 20)
+        # A VALID JSON document, not the same one repeated 20 times. The
+        # entry is `reports/lec.json` and `resolve` now decides content as
+        # well as presence (`matrix_d3_artefact_kind`), so a concatenation
+        # of 20 objects is not JSON, is refused as malformed, and would
+        # never reach the ledger contradiction this control is about.
+        landed.write_text(json.dumps(
+            {"landed": "by a later commit", "pad": ["x"] * 20}))
         commit(_LEDGER_PROBE_ENTRY)
 
         stale = ledger_staleness(probe)
@@ -5906,3 +5947,260 @@ def test_d3_the_blind_capture_predicate_fires_on_a_checkout_walk():
     # quietly treated as a live capture.
     assert _blind_capture_reason("u", {"__unreadable__": "boom"})
     assert _blind_capture_reason("n", None)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE CONTENT ARM — present, parseable, and the WRONG ARTEFACT
+#
+# Everything above this line reddens on ABSENCE, or on one of the three
+# stat-level near-misses (0 bytes, a symlink, a build product no commit
+# carries). Not one of them opens the file. `matrix_d3_artefact_kind` does,
+# and these are the tests that keep it a decision rather than a decoration.
+#
+# WHAT THE ARM CLOSES, IN ONE SENTENCE
+#     A declared output that is present, non-empty, a real file, carried by
+#     the commit and NOT THE KIND OF ARTEFACT ITS DECLARED PATH NAMES is no
+#     longer evidence that the step produced anything.
+#
+# WHAT IT DOES NOT CLOSE — stated here as well as in the module, because a
+# reader arrives at whichever they open first:
+#     A right-kind artefact carrying a WRONG NUMBER still passes. That is the
+#     step's own gate's question, and the instrument that measures whether the
+#     gate answers it is `matrix_mutation_ledger.ARTEFACT_MUTATIONS`.
+# ══════════════════════════════════════════════════════════════════════
+
+#: One CONFORMING and one WRONG body per decidable kind. Both halves are
+#: required, and `test_d3_kind_conformance_decides_both_ways` asserts both, so
+#: no decider can be a predicate that always passes OR one that always fails.
+#:
+#: Every WRONG body is deliberately a *valid document of a different kind* —
+#: never a truncation, never a zero-byte file, never binary noise. That is the
+#: whole point of the arm: the corruption this repository could not previously
+#: see is the one that leaves a present, well-formed file behind.
+_KIND_FIXTURES: Dict[str, Tuple[bytes, bytes]] = {
+    # kind:        (conforms,                       wrong)
+    "JSON": (b'{"violations": 0}\n',
+             b'module top; endmodule\n'),
+    "DEF": (b'VERSION 5.8 ;\nDESIGN probe ;\nEND DESIGN\n',
+            b'{"design": "probe", "end": true}\n'),
+    "VERILOG": (b'module probe (input a, output b);\nendmodule\n',
+                b'{"module": "probe", "ports": ["a", "b"]}\n'),
+    "GDS": (bytes([0x00, 0x06, 0x00, 0x02, 0x00, 0x07]) + b"\x00" * 32,
+            b'{"gds": "this is not a stream file"}\n'),
+    "LEF": (b'VERSION 5.7 ;\nMACRO probe\nEND probe\nEND LIBRARY\n',
+            b'{"macro": "probe"}\n'),
+    "LIBERTY": (b'library (probe) {\n  time_unit : "1ns";\n}\n',
+                b'{"library": "probe"}\n'),
+    "SPICE": (b'.subckt probe a b\n.ends\n.end\n',
+              b'{"subckt": "probe"}\n'),
+    "XML": (b'<?xml version="1.0"?>\n<report/>\n',
+            b'{"report": {}}\n'),
+}
+
+#: A declared path per decidable kind, so the wrong body can be written at a
+#: path the flow itself declares rather than at one invented for a test.
+_KIND_DECLARED_PATH: Dict[str, str] = {}
+for _sid in F.step_ids():
+    for _entry in F.required_outputs(_sid):
+        for _alt in F.split_any_of(_entry):
+            _k = KIND.kind_for(_alt)
+            if _k is not None and _k not in _KIND_DECLARED_PATH:
+                _KIND_DECLARED_PATH[_k] = _alt
+del _sid, _entry, _alt, _k
+
+
+def test_d3_kind_conformance_decides_both_ways():
+    """Every decidable kind accepts its own document and rejects another's.
+
+    A decider that cannot reject is the disease. A decider that cannot accept
+    is the over-correction, and it is the more expensive of the two here
+    because it would redden the corpus. Both are asserted, per kind, by name.
+    """
+    assert set(_KIND_FIXTURES) == set(KIND.SUFFIX_KIND.values()), (
+        f"the fixture table and the kind table have drifted: fixtures cover "
+        f"{sorted(_KIND_FIXTURES)}, SUFFIX_KIND names "
+        f"{sorted(set(KIND.SUFFIX_KIND.values()))}. A kind with no wrong "
+        f"counterpart is a decider nobody proved can fail"
+    )
+    tmp = Path(tempfile.mkdtemp(prefix="d3_kind_"))
+    try:
+        for suffix, kind in sorted(KIND.SUFFIX_KIND.items()):
+            good, bad = _KIND_FIXTURES[kind]
+            rel = f"probe{suffix}"
+            p = tmp / rel
+
+            p.write_bytes(good)
+            v = KIND.check(rel, p)
+            assert v.kind == kind and v.conforms is True, (
+                f"{kind} ({suffix}): a CONFORMING document was rejected — "
+                f"{v}. This half is what stops the arm from reddening real "
+                f"artefacts"
+            )
+
+            p.write_bytes(bad)
+            v = KIND.check(rel, p)
+            assert v.kind == kind and v.conforms is False, (
+                f"{kind} ({suffix}): a document of the WRONG kind was accepted "
+                f"— {v}. This half is what makes the arm a check"
+            )
+            assert kind in v.reason, (
+                f"{kind} ({suffix}): the rejection does not name the kind it "
+                f"expected: {v.reason!r}"
+            )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_d3_an_undecidable_suffix_is_reported_as_undecided_not_as_healthy():
+    """UNDECIDABLE must never collapse into "looked at it and it was fine"."""
+    tmp = Path(tempfile.mkdtemp(prefix="d3_undec_"))
+    try:
+        p = tmp / "drc.rpt"
+        p.write_bytes(b"anything at all\n")
+        v = KIND.check("reports/drc.rpt", p)
+        assert v.kind == KIND.UNDECIDABLE, v
+        assert v.conforms is None, (
+            f"an undecidable suffix reported conforms={v.conforms!r}; a "
+            f"tri-state collapsed to a bool is how 'I did not look' becomes "
+            f"'I looked and it was fine'"
+        )
+        assert v.decided is False and v.rejects is False, v
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_d3_the_kind_arm_names_every_suffix_it_cannot_decide():
+    """The denominator, and the anti-drift pin on the undecidable set.
+
+    A suffix that appears in the live flow's ``required_outputs`` is either
+    decided by :mod:`matrix_d3_artefact_kind` or listed in its
+    ``UNDECIDABLE_SUFFIXES``. A NEW one is in neither and reddens HERE, by
+    name, which is what stops the population growing into a kind nobody
+    decided whether to decide.
+    """
+    alts = [alt for sid in F.step_ids()
+            for entry in F.required_outputs(sid)
+            for alt in F.split_any_of(entry)]
+    assert alts, (
+        "the live flow declares NO required_outputs alternatives at all — the "
+        "denominator is zero and this arm would pass over an empty population"
+    )
+    decidable, undecidable = KIND.decidable_population(alts)
+    assert sum(decidable.values()) > 0, (
+        f"not one of the {len(alts)} declared alternatives has a decidable "
+        f"kind; the content arm has no subject and a green here would mean "
+        f"nothing. by-suffix: {undecidable}"
+    )
+    unknown = sorted(s for s in undecidable
+                     if s not in KIND.UNDECIDABLE_SUFFIXES)
+    assert not unknown, (
+        f"{len(unknown)} suffix(es) in the live flow's required_outputs are "
+        f"neither decided by matrix_d3_artefact_kind nor listed in its "
+        f"UNDECIDABLE_SUFFIXES: {unknown}. Decide them or record why they "
+        f"cannot be decided — arriving unlisted is how a kind enters the "
+        f"population unmeasured"
+    )
+    stale = sorted(s for s in KIND.UNDECIDABLE_SUFFIXES
+                   if s not in undecidable)
+    assert not stale, (
+        f"{len(stale)} suffix(es) are pinned UNDECIDABLE but no longer appear "
+        f"in any required_outputs entry: {stale}. A pin that names nothing is "
+        f"a claim nobody can check"
+    )
+    print(f"[d3-kind] denominator: {len(alts)} declared alternatives; "
+          f"decidable {sum(decidable.values())} {decidable}; "
+          f"undecidable {sum(undecidable.values())} {undecidable}")
+
+
+def test_d3_a_present_wrong_kind_artefact_is_not_counted_as_produced():
+    """THE MUTATION. Present, tracked, non-empty, parseable — and not the
+    artefact.
+
+    The reverse control is ``test_d3_a_present_artefact_still_reads_as_produced``
+    which writes the RIGHT body at this same path and requires ``produced is
+    True``. The two together are the discrimination: same step, same entry,
+    same probe root, same commit, one byte-stream apart.
+    """
+    sid, entry = "17", "phase3/stage3/pnr/placed.def"
+    assert entry in F.required_outputs(sid), "control is stale"
+    assert KIND.kind_for(entry) == "DEF", (
+        f"this mutation writes a non-DEF body at {entry}; the kind table no "
+        f"longer calls that path a DEF, so the mutation proves nothing"
+    )
+    good, wrong = _KIND_FIXTURES["DEF"]
+
+    with _probe_run_root("d3_wrongkind_") as (probe, commit):
+        (probe / "reports" / "orchestrator").mkdir(parents=True)
+        target = probe / entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        # ---- the WRONG artefact ------------------------------------
+        target.write_bytes(wrong)
+        commit(entry)
+        # `resolve` is asked directly rather than through `run_roots`, so this
+        # test carries no fixture dependency and states exactly which root it
+        # measured. `check_entry` is exercised by the sibling test below.
+        assert is_tracked(probe, entry), "the probe did not commit the mutant"
+        assert target.stat().st_size > 0, "the mutant is not empty"
+        json.loads(target.read_text())      # PRESENT, and genuinely PARSEABLE
+
+        hit, rej = resolve(probe, entry, sid)
+        assert hit is None, (
+            f"a declared .def output holding a valid JSON document was counted "
+            f"as PRODUCED: {hit}. Every stat-level rule passes on it — it is "
+            f"present, {target.stat().st_size} B, a real file and carried by "
+            f"the commit — so presence alone is what accepted it"
+        )
+        assert len(rej.malformed) == 1 and entry in rej.malformed[0], rej
+        assert "DEF" in rej.malformed[0], rej.malformed
+        assert rej.empty == () and rej.symlinked == () and rej.untracked == (), (
+            f"the mutant was refused for the WRONG reason: {rej}. A content "
+            f"rejection reported as absence would be the same conflation this "
+            f"arm exists to remove"
+        )
+        assert "NOT the kind of artefact" in _rejected_note({"probe": rej}), \
+            _rejected_note({"probe": rej})
+
+        # ---- the RIGHT artefact, same path, same commit -------------
+        target.write_bytes(good)
+        commit(entry)
+        hit, rej = resolve(probe, entry, sid)
+        assert hit is not None and hit.path == entry, (
+            f"the content arm rejected a genuine DEF: {rej}. A rule that "
+            f"refuses the real artefact is worse than the hole it closes"
+        )
+        assert rej.malformed == (), rej
+
+
+def test_d3_the_content_arm_reaches_the_cell_verdict(monkeypatch):
+    """The mutation above proves ``resolve`` refuses. This proves the REFUSAL
+    REACHES ``check_entry`` — the function the parametrized cell calls.
+
+    A rejection that stops inside the resolver would be a finding nobody's
+    verdict ever sees, which is the shape this campaign keeps finding.
+    """
+    sid, entry = "17", "phase3/stage3/pnr/placed.def"
+    rec = dict(step_record(sid)["entries"][entry])
+    good, wrong = _KIND_FIXTURES["DEF"]
+
+    with _probe_run_root("d3_wrongkind_cell_") as (probe, commit):
+        (probe / "reports" / "orchestrator").mkdir(parents=True)
+        target = probe / entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(good)
+        commit(entry)
+        _probe_only(monkeypatch, "probe", probe)
+
+        v = check_entry(sid, entry, rec)
+        assert v.produced is True, (
+            f"the reverse control did not hold: a genuine DEF was not counted "
+            f"as produced ({v}), so the mutation below would prove nothing")
+
+        target.write_bytes(wrong)
+        commit(entry)
+        v = check_entry(sid, entry, rec)
+        assert v.produced is False, (
+            f"step {sid}'s cell still reports {entry} as PRODUCED when the "
+            f"file is a valid JSON document rather than a DEF: {v}")
+        assert "DEF" in v.detail, (
+            f"the cell's own detail does not say what was wrong: {v.detail!r}")
