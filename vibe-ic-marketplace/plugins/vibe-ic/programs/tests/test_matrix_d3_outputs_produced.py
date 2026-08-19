@@ -468,6 +468,7 @@ import fnmatch
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1355,9 +1356,130 @@ class Rejected:
 #: rule is GREEN on every artefact this repository can point at today and is
 #: exercised only by the mutation controls below — which is the state a new
 #: rule has to be in before it can be believed.
+# ── the kind grammar ────────────────────────────────────────────────
+# Each parser RAISES on non-conforming bytes; `kind_conformance` turns the
+# exception into the one-line reason. Every rule below was measured against
+# the published corpus before being added — see `_KIND_PARSERS` for the
+# false-positive count that admitted it, and the three rules the corpus
+# REFUSED are recorded under "WHAT THE CORPUS REFUSES" beneath the table.
+
+
+def _parse_json_document(p: Path):
+    """JSON that is a DOCUMENT — an object or an array.
+
+    `json.loads` alone accepts `1234` and `"PASS"`, which is why the first
+    version of this rule could not tell a report from a scalar. That matters
+    more than any other single decision in this table: 422 of the 611
+    resolvable declared outputs in the published corpus are `.json`, so a
+    predicate that stopped at "it parses" left 69% of the population able to
+    hold a number and read as a report.
+    """
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(doc, (dict, list)):
+        raise ValueError(
+            f"the document is a bare {type(doc).__name__} "
+            f"({json.dumps(doc)[:60]}), not an object or an array")
+    return doc
+
+
+def _parse_gdsii(p: Path):
+    """The first record of a GDSII stream is HEADER: length 6, type 0x00/0x02."""
+    raw = p.read_bytes()[:6]
+    if len(raw) < 6:
+        raise ValueError(f"{p.stat().st_size} B — too short for a HEADER record")
+    length = struct.unpack(">H", raw[0:2])[0]
+    if (length, raw[2], raw[3]) != (6, 0x00, 0x02):
+        raise ValueError(
+            f"first record is length={length} rectype=0x{raw[2]:02x} "
+            f"datatype=0x{raw[3]:02x}, not the HEADER (6, 0x00, 0x02)")
+    return True
+
+
+def _parse_spef(p: Path):
+    raw = p.read_bytes()
+    if raw.lstrip()[:5] != b"*SPEF":
+        raise ValueError(f"does not begin with *SPEF (first bytes: {raw[:24]!r})")
+    return True
+
+
+def _parse_def(p: Path):
+    text = p.read_text(encoding="utf-8", errors="replace")
+    have = [k for k in ("VERSION", "DESIGN") if k in text]
+    if len(have) != 2:
+        raise ValueError(f"carries {have or 'neither'} of the header "
+                         f"statements VERSION / DESIGN")
+    return True
+
+
+def _parse_lef(p: Path):
+    text = p.read_text(encoding="utf-8", errors="replace")
+    if "MACRO" not in text and "END LIBRARY" not in text:
+        raise ValueError("carries neither a MACRO block nor END LIBRARY")
+    return True
+
+
+def _parse_liberty(p: Path):
+    if "library" not in p.read_text(encoding="utf-8", errors="replace").lower():
+        raise ValueError("carries no `library` keyword")
+    return True
+
+
+def _parse_verilog(p: Path):
+    text = p.read_text(encoding="utf-8", errors="replace")
+    if "module" not in text or "endmodule" not in text:
+        raise ValueError("declares no module ... endmodule")
+    return True
+
+
+def _parse_magic(p: Path):
+    raw = p.read_bytes()
+    if raw.lstrip()[:5] != b"magic":
+        raise ValueError(f"does not begin with the magic header token "
+                         f"(first bytes: {raw[:24]!r})")
+    return True
+
+
+#: ``suffix -> (kind name, parser)``. MEASURED over the 611 resolvable
+#: ``(step, run root, entry)`` triples of the published corpus, 2026-08-19:
+#: **472 gradeable, 139 with no gradeable suffix, ZERO false positives.**
+#: Per suffix: `.json` 422, `.v` 28, `.xml` 7, `.gds` 5, `.mag`/`.lef`/`.lib`/
+#: `.spef` 2 each, `.lyrdb`/`.def` 1 each.
+#:
+#: WHAT THE CORPUS REFUSES. Three stronger, SEMANTIC rules were tried against
+#: the same 611 triples first, and each was refused BY THE CORPUS rather than
+#: by argument. They are recorded so the next author does not re-derive them:
+#:
+#:   * "a JSON report must not be an empty document" — **16 false positives**.
+#:     `reports/phase2/lint/rtl_hygiene.json` and
+#:     `reports/phase2/lint/rom_init_lint.json` are legitimately `[]` in all
+#:     eight admissible run roots: a lint report with no findings.
+#:   * "a JSON report must carry the verdict-self-report contract"
+#:     (`verdict`/`status`/`summary`/…) — **190 false positives** over 28
+#:     distinct step/path pairs. More than a quarter of the declared JSON
+#:     outputs are DATA documents and were never verdict reports: every
+#:     `phase1/generated_docs/L*.json`, `phase1/analog/*/spec.json`,
+#:     `phase3/stage3/cts/clock_plan.json`.
+#:   * "a declared output must name the step that wrote it" — the `program`
+#:     field names the WRITER (`lec_run`) while the flow declares the CHECKER
+#:     (`lec_equivalence_check`); 13 of 20 gradeable entries disagree for a
+#:     reason that is not a defect.
+#:
+#: So this table grades WELL-FORMEDNESS and says so. The semantic half is NOT
+#: DETERMINED and stays that way until the flow carries a per-output
+#: declaration to grade against.
 _KIND_PARSERS = {
-    ".json": ("JSON", lambda p: json.loads(p.read_text(encoding="utf-8"))),
+    ".json": ("JSON", _parse_json_document),
     ".xml": ("XML", lambda p: ET.parse(p)),
+    ".lyrdb": ("XML", lambda p: ET.parse(p)),
+    ".gds": ("GDSII", _parse_gdsii),
+    ".gds2": ("GDSII", _parse_gdsii),
+    ".spef": ("SPEF", _parse_spef),
+    ".def": ("DEF", _parse_def),
+    ".lef": ("LEF", _parse_lef),
+    ".lib": ("Liberty", _parse_liberty),
+    ".v": ("Verilog", _parse_verilog),
+    ".sv": ("Verilog", _parse_verilog),
+    ".mag": ("Magic layout", _parse_magic),
 }
 
 
@@ -5139,6 +5261,39 @@ def test_d3_the_cell_reddens_on_a_corrupt_declared_output(monkeypatch):
         assert any("does not parse as JSON" in m for m in missing), (
             f"the cell reddened but the reason does not name the content "
             f"defect, so a reader cannot tell it from an absence: {missing}")
+
+        # ARM D — THE HARD CASE, and the one the first version of this rule
+        # could not see. `json.loads` ACCEPTS `1234`, so an artefact that is
+        # present, non-empty, tracked, and PARSES AS ITS DECLARED KIND still
+        # has to be refused when the document it parses to is not a document.
+        # 422 of the 611 resolvable declared outputs in the published corpus
+        # are `.json`; without this arm 69% of the population could hold a
+        # number and read as a report.
+        target.write_text("1234\n", encoding="utf-8")
+        commit(entry)
+        assert json.loads(target.read_text()) == 1234, (
+            "the fixture must PARSE, or this arm is testing arm C again")
+        assert target.stat().st_size > 0 and is_tracked(probe, entry)
+
+        v = check_entry(sid, entry, rec)
+        assert v.produced is False, (
+            f"step {sid}'s declared output holds parseable JSON that is a bare "
+            f"scalar and the cell still reads it as produced: {v}")
+        missing, _details = audit_step(sid)
+        assert missing and any("bare int" in m for m in missing), (
+            f"the cell did not name WHY a parseable artefact was refused: "
+            f"{missing}")
+
+        # ...and the legitimate empty document is still accepted, because a
+        # lint report with no findings is `[]` in every published run root and
+        # a rule that refused it would redden 16 correct artefacts.
+        target.write_text("[]\n", encoding="utf-8")
+        commit(entry)
+        v = check_entry(sid, entry, rec)
+        assert v.produced is True, (
+            f"an empty JSON ARRAY — the shape `rtl_hygiene.json` and "
+            f"`rom_init_lint.json` legitimately carry in all eight admissible "
+            f"run roots — was refused: {v}")
 
 
 def test_d3_the_kind_table_is_live_and_the_ungraded_remainder_is_published():
