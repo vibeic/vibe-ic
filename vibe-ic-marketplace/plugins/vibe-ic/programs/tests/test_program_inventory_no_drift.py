@@ -321,3 +321,84 @@ def test_declared_non_counts_are_still_present(snippet):
     docs = {rel for rel, _, _ in gen._NOT_A_POPULATION_COUNT}
     assert any(snippet in gen._read_doc(rel) for rel in docs), (
         f"declared not-a-count sentence is gone: {snippet!r}")
+
+
+# ── skills: the population the sweep could not see (2026-08-19) ──────
+#
+# When this file first landed, `skills` was not a population and `skills?` was
+# not in `_POPULATION_WORD`. Six stated skill counts — three in each README —
+# were therefore invisible to the unregistered-claim sweep, and the gate
+# reported "every stated count in the bound documents matches its population"
+# over a claim class it could not read. All six said 60 for a tree shipping 63.
+# One of them was a `## Skills catalog (60)` heading over a list that named
+# exactly 60 skills and omitted three real ones, so the section was internally
+# consistent and externally wrong — which is why the catalogue check below
+# compares NAMES, not the heading number.
+
+
+def test_skills_is_a_population_with_its_own_definition():
+    inv = _load_gen().discover()
+    for key in ("skills", "skills_with_compliance_yaml"):
+        assert key in inv["populations"], f"{key} is not enumerated"
+        assert len(inv["populations"][key]["definition"]) > 60
+
+
+def test_the_sweep_can_see_a_skills_claim(monkeypatch):
+    """The blindness itself, pinned. Without `skills?` in _POPULATION_WORD this
+    sentence is exempt and the gate stays green over it."""
+    gen = _load_gen()
+    real = gen._read_doc
+
+    def _extra(rel):
+        t = real(rel)
+        if rel == "README.md":
+            t += "\n\nThe plugin ships 4242 skills today.\n"
+        return t
+
+    monkeypatch.setattr(gen, "_read_doc", _extra)
+    fails = gen.check_documents(gen.discover())
+    assert any("UNREGISTERED" in f and "4242" in f for f in fails), fails
+
+
+def test_every_skill_the_tree_ships_is_named_in_the_catalogue():
+    gen = _load_gen()
+    assert gen.check_skills_catalog(gen.discover()) == []
+
+
+def test_the_catalogue_check_compares_names_not_just_the_heading(monkeypatch):
+    """The discriminating case for the shape that actually shipped: a heading
+    and subtotals that agree with the tree, over a list missing a real skill.
+    A gate on the number alone reports PASS here."""
+    gen = _load_gen()
+    real_md = (gen.MARKETPLACE / "README.md").read_text()
+    victim = sorted(gen._skill_names_on_disk())[0]
+    holed = real_md.replace(f"`{victim}`, ", "", 1)
+    assert holed != real_md, f"could not remove `{victim}` from the catalogue"
+
+    class _Stub:
+        def exists(self): return True
+        def read_text(self, *a, **k): return holed
+        @property
+        def name(self): return "README.md"
+
+    class _Dir:
+        def __truediv__(self, other): return _Stub()
+
+    monkeypatch.setattr(gen, "MARKETPLACE", _Dir())
+    fails = gen.check_skills_catalog(gen.discover())
+    assert any("does not name" in f and victim in f for f in fails), fails
+    assert not any("states" in f and "catalog" in f for f in fails), (
+        "the heading number is untouched in this mutation; only the name set "
+        f"should complain: {fails}")
+
+
+def test_the_three_layer_denominators_are_bound_to_skills():
+    """The 35 and the 6 are content measurements and stay unbound on purpose;
+    their denominators are the skill count and must not be."""
+    gen = _load_gen()
+    bound = [(rel, key) for rel, key, pat in gen._CLAIMS
+             if "cross_checks" in pat or "mcp_execution_verify" in pat
+             or "compliance\\.yaml`" in pat]
+    assert len(bound) >= 3, bound
+    assert all(key in ("skills", "skills_with_compliance_yaml")
+               for _, key in bound), bound

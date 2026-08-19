@@ -47,6 +47,16 @@
       "definition": "Top-level programs whose filename ends in _check.py, _audit.py or _lint.py.",
       "count": 579,
       "sha256_of_sorted_paths": "301c1aa56ef8e7643c0939543ac5f3ad92994f6d55215a4e9fdb9df8a581f449"
+    },
+    "skills": {
+      "definition": "Every plugins/vibe-ic/skills/*/SKILL.md \u2014 one per shipped skill. NOT a programs/ population: a skill is prose plus a compliance.yaml, and none of it is counted by any other key here. It is owned by this file because it is stated on the same README lines as the program counts and rotted the same way \u2014 see the measurement in this key's history.",
+      "count": 63,
+      "sha256_of_sorted_paths": "764bec67800e4e8db4b19b38b82c4b19220972196e26111feb1f9531ea92727a"
+    },
+    "skills_with_compliance_yaml": {
+      "definition": "Every plugins/vibe-ic/skills/*/compliance.yaml. The L1 numerator of the 3-layer coverage claim. It is a SEPARATE enumeration from `skills`, not an alias: the claim '63/63 ship a compliance.yaml' is only true while these two agree, and stating it as one number twice would make a skill that ships no compliance.yaml invisible.",
+      "count": 63,
+      "sha256_of_sorted_paths": "eabdfaab1f007089b1b59192159ff7be0a1ad5df32351ed41b1b352039d4ed4b"
     }
   }
 }

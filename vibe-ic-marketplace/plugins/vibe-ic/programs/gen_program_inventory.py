@@ -198,6 +198,12 @@ def discover() -> dict:
                        if r.startswith("skills/") and r.count("/") == 3
                        and r.split("/")[2] == "tests"
                        and r.rsplit("/", 1)[1].startswith("test_")]
+        skill_dirs = [PLUGIN / r for r in tracked
+                      if r.startswith("skills/") and r.count("/") == 2
+                      and r.endswith("/SKILL.md")]
+        skill_yaml = [PLUGIN / r for r in tracked
+                      if r.startswith("skills/") and r.count("/") == 2
+                      and r.endswith("/compliance.yaml")]
     else:
         source = "working-tree"
         top = list(PROGRAMS.glob("*.py"))
@@ -205,6 +211,8 @@ def discover() -> dict:
         tests = list((PROGRAMS / "tests").rglob("test_*.py"))
         mcp_tests = list((PLUGIN / "mcp-eda" / "test").glob("test_*.py"))
         skill_tests = list((PLUGIN / "skills").glob("*/tests/test_*.py"))
+        skill_dirs = list((PLUGIN / "skills").glob("*/SKILL.md"))
+        skill_yaml = list((PLUGIN / "skills").glob("*/compliance.yaml"))
 
     catalogued = [p for p in top if not _is_helper(p)]
     check_only = [p for p in top if p.name.endswith("_check.py")]
@@ -272,6 +280,23 @@ def discover() -> dict:
             "Top-level programs whose filename ends in _check.py, _audit.py or "
             "_lint.py.",
             gates),
+        "skills": pop(
+            "skills",
+            "Every plugins/vibe-ic/skills/*/SKILL.md — one per shipped skill. "
+            "NOT a programs/ population: a skill is prose plus a "
+            "compliance.yaml, and none of it is counted by any other key here. "
+            "It is owned by this file because it is stated on the same README "
+            "lines as the program counts and rotted the same way — see the "
+            "measurement in this key's history.",
+            skill_dirs),
+        "skills_with_compliance_yaml": pop(
+            "skills_with_compliance_yaml",
+            "Every plugins/vibe-ic/skills/*/compliance.yaml. The L1 numerator "
+            "of the 3-layer coverage claim. It is a SEPARATE enumeration from "
+            "`skills`, not an alias: the claim '63/63 ship a compliance.yaml' "
+            "is only true while these two agree, and stating it as one number "
+            "twice would make a skill that ships no compliance.yaml invisible.",
+            skill_yaml),
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -339,6 +364,30 @@ _CLAIMS: tuple[tuple[str, str, str], ...] = (
      r"— ([\d,]+) per-skill compliance regression files"),
     ("plugins/vibe-ic/README.md", "programs_top_level",
      r"moved from 41 at v0\.40 to ([\d,]+) top-level programs today"),
+    # ── skills. NOT a programs/ population, and that is exactly why it rotted:
+    # `skills` was outside _POPULATION_WORD, so five of these six sites were
+    # invisible to the sweep and the sixth was carried as a declared deferral.
+    # Measured 2026-08-19: every one of them said 60 for a tree shipping 63.
+    ("README.md", "skills", r"\| Skills \| \*\*([\d,]+)\*\*"),
+    ("README.md", "skills", r"## Skills catalog \(([\d,]+)\)"),
+    ("README.md", "skills", r"← ([\d,]+) skills, each \+ compliance\.yaml"),
+    ("plugins/vibe-ic/README.md", "skills",
+     r"\*\*([\d,]+) skills\*\* that back the programs up"),
+    ("plugins/vibe-ic/README.md", "skills",
+     r"— ([\d,]+) skills, each with SKILL\.md"),
+    ("plugins/vibe-ic/README.md", "skills",
+     r"Measured over the ([\d,]+) skills:"),
+    # The 3-layer coverage line. The L1 NUMERATOR is its own enumeration —
+    # binding both halves of `63/63` to `skills` would make a skill that ships
+    # no compliance.yaml arithmetically invisible.
+    ("plugins/vibe-ic/README.md", "skills_with_compliance_yaml",
+     r"\*\*([\d,]+)/[\d,]+\*\* ship a `compliance\.yaml`"),
+    ("plugins/vibe-ic/README.md", "skills",
+     r"\*\*[\d,]+/([\d,]+)\*\* ship a `compliance\.yaml`"),
+    ("plugins/vibe-ic/README.md", "skills",
+     r"\*\*[\d,]+/([\d,]+)\*\* declare a\nnon-empty `cross_checks:`"),
+    ("plugins/vibe-ic/README.md", "skills",
+     r"\*\*[\d,]+/([\d,]+)\*\* wire `mcp_execution_verify`"),
 )
 
 #: Numbers in the bound documents that sit next to a population word but are
@@ -353,12 +402,14 @@ _NOT_A_POPULATION_COUNT: tuple[tuple[str, str, str], ...] = (
      "63 counts FLOW STEPS, not programs. The flow step count is owned by "
      "flow/phase1_phase2_phase3.yaml and flow_compliance_check.py."),
     ("plugins/vibe-ic/README.md",
-     "**60 skills** that back the programs up",
-     "60 counts SKILLS, not programs, so this gate does not own it — but it "
-     "is STALE: skills/*/SKILL.md measured 63 on 2026-08-19. Left "
-     "unchanged here deliberately rather than silently corrected, "
-     "because a skills inventory is a separate population that needs "
-     "its own generator; recorded so it is not mistaken for verified."),
+     "non-empty `cross_checks:` block (L2)",
+     "The 35 and the 6 in this sentence are CONTENT measurements — how many "
+     "compliance.yaml files parse to a non-empty `cross_checks:` and how many "
+     "name `mcp_execution_verify`. This gate enumerates FILES; it cannot "
+     "measure either without parsing YAML, so both numerators stay unbound "
+     "and are declared here rather than gated by a rule that would have to "
+     "guess what they count. Their DENOMINATORS are bound, to `skills`. "
+     "Re-measured 2026-08-19: 35 and 6."),
     ("plugins/vibe-ic/README.md",
      "**9 agents**, and",
      "9 counts AGENTS, not programs. Out of this gate's scope."),
@@ -384,8 +435,14 @@ _NOT_A_POPULATION_COUNT: tuple[tuple[str, str, str], ...] = (
 #: three characters outside it — the sweep read the document as fully covered.
 #: A population word this gate does not know is a claim it silently exempts, so
 #: the list is deliberately wider than the claims currently bound to it.
+#: MEASURED AGAIN 2026-08-19: `skills?` was absent, and six stated skill counts
+#: — three in each README, including a `## Skills catalog (60)` heading over a
+#: list that was missing three of the skills it claimed to enumerate — sat
+#: outside the sweep entirely. The gate reported "every stated count in the
+#: bound documents matches its population" over a claim class it could not see.
+#: That is the same shape as the note above, one population further out.
 _POPULATION_WORD = (r"(?:programs?|test files?|regression files?|"
-                    r"compliance regressions|\.py files?)")
+                    r"compliance regressions|\.py files?|skills?)")
 #: Plain integer or thousands-grouped integer. `{1,2,3,4}` brace expansions in
 #: paths like `stage{1,2,3,4}_compliance.py` are rejected by the trailing
 #: lookahead, which forbids a comma that is not a thousands separator.
@@ -532,6 +589,78 @@ def check_index_cross(inv: dict) -> list[str]:
     return []
 
 
+def _skill_names_on_disk() -> set[str]:
+    tracked = _tracked_under_plugin()
+    if tracked is not None:
+        return {r.split("/")[1] for r in tracked
+                if r.startswith("skills/") and r.count("/") == 2
+                and r.endswith("/SKILL.md")}
+    return {d.parent.name for d in (PLUGIN / "skills").glob("*/SKILL.md")}
+
+
+def check_skills_catalog(inv: dict) -> list[str]:
+    """The marketplace README's `## Skills catalog` must ENUMERATE every skill.
+
+    WHY A NAME-SET CHECK AND NOT JUST THE HEADING NUMBER
+    ----------------------------------------------------
+    Measured 2026-08-19: the heading said 60 and the list held exactly 60
+    names, so every arithmetic reading of that section was self-consistent —
+    the section was internally perfect and externally three skills short
+    (`flow-change-acceptance`, `fork-gatekeeper-loop`,
+    `layer-contract-doctrine`). A gate on the heading number alone would have
+    been satisfied by editing one digit and would then certify a catalogue
+    that still omitted all three. The number was the symptom; the missing
+    names were the defect, so the names are what is compared.
+
+    The per-category subtotals are summed too: they are six more hand-typed
+    numbers, and a category whose count no longer matches its own list is the
+    next place this rots.
+    """
+    md = MARKETPLACE / "README.md"
+    if not md.exists():
+        return [f"{md.name} missing — cannot cross-check the skills catalogue."]
+    text = md.read_text()
+    m = re.search(r"^## Skills catalog \((\d+)\)\s*$", text, re.M)
+    if not m:
+        return ["README.md has no `## Skills catalog (N)` heading — the "
+                "catalogue cross-check cannot run; restore the heading or "
+                "drop check_skills_catalog."]
+    end = text.find("\n---", m.end())
+    section = text[m.end():end if end > 0 else len(text)]
+
+    fails: list[str] = []
+    want = inv["populations"]["skills"]["count"]
+    if int(m.group(1)) != want:
+        fails.append(f"README.md: `## Skills catalog ({m.group(1)})` states "
+                     f"{m.group(1)}, the tree ships {want}.")
+
+    cats = re.findall(r"^### (.+?) \((\d+)\)\s*$", section, re.M)
+    if not cats:
+        fails.append("README.md: the skills catalogue lists no `### … (N)` "
+                     "category headings — nothing to sum.")
+    else:
+        total = sum(int(n) for _, n in cats)
+        if total != want:
+            fails.append(f"README.md: the skills catalogue's {len(cats)} "
+                         f"category subtotals sum to {total}, the tree ships "
+                         f"{want}.")
+
+    listed = {mm.group(1) for mm in re.finditer(r"`([a-z0-9][a-z0-9-]*)`", section)}
+    on_disk = _skill_names_on_disk()
+    if listed != on_disk:
+        missing = sorted(on_disk - listed)
+        extra = sorted(listed - on_disk)
+        if missing:
+            fails.append(f"README.md: the skills catalogue does not name "
+                         f"{len(missing)} shipped skill(s): {missing}. A "
+                         f"correct heading over an incomplete list is still an "
+                         f"incomplete catalogue.")
+        if extra:
+            fails.append(f"README.md: the skills catalogue names {len(extra)} "
+                         f"skill(s) that are not on disk: {extra}.")
+    return fails
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true",
@@ -567,6 +696,7 @@ def main() -> None:
         fails += msgs
         try:
             fails += check_index_cross(inv)
+            fails += check_skills_catalog(inv)
             fails += check_documents(inv)
         except OSError as exc:
             print(f"NOT CHECKED: cannot read a bound document: {exc}")

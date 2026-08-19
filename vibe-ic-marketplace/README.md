@@ -15,7 +15,7 @@ and the contribution guides for extending it.
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
 | Plugin version | **1.10.86** |
 | Deterministic programs | **1183** top level (`plugins/vibe-ic/programs/*.py`), of which **1116** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
-| Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
+| Skills | **63** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
@@ -397,7 +397,7 @@ Yosys / OpenROAD directly from a prompt and then report a verdict. See
 
 ---
 
-## Skills catalog (60)
+## Skills catalog (63)
 
 Every skill directory carries a `SKILL.md` **and** a `compliance.yaml`
 enumerating the output elements the skill must actually produce — so skill
@@ -428,12 +428,13 @@ output is auditable, not just plausible.
 `fpga-hps-bridge`, `fpga-signaltap`, `fpga-led-probe-allocation`,
 `hw-debug-loop`, `scope-pattern-attestation`
 
-### Gates, governance, and closed loops (13)
+### Gates, governance, and closed loops (16)
 `checkpoint-gate`, `compliance-gate-spot-check`, `full-test-audit`,
+`flow-change-acceptance`, `layer-contract-doctrine`,
 `regression-manage`, `regression-issue-fix`, `community-backlog-submit`,
 `benchmark-verify`, `benchmark-enhancement-capture`,
 `open-benchmark-methodology`, `core-agent-loop`, `gatekeeper-loop`,
-`field-agent-loop`, `phase1-coverage-loop`
+`fork-gatekeeper-loop`, `field-agent-loop`, `phase1-coverage-loop`
 
 ---
 
@@ -552,7 +553,7 @@ vibe-ic-marketplace/
         │   └── lessons/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
-        ├── skills/                      ← 60 skills, each + compliance.yaml
+        ├── skills/                      ← 63 skills, each + compliance.yaml
         ├── programs/                    ← 3830 *.py at any depth (1183 top level)
         │   ├── flow_compliance_check.py ← final gate
         │   ├── stage{1,2,3,4}_compliance.py
