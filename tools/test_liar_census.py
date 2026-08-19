@@ -2050,10 +2050,19 @@ def test_the_mapping_spelling_is_swept_as_well_as_the_string(tmp_path):
 def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     pop = lc.population_report(lc.FLOW_YAML)
     assert pop["unswept"] == [], pop["unswept"]
-    # 168 -> 169 as the flow gained a clause. The PIN is `swept == declared`;
-    # the literal is only there so a flow that silently SHRINKS is caught too,
-    # and it is meant to move whenever the flow does.
-    assert pop["swept"] == pop["declared"] == 169, pop
+    # 168 -> 169 -> 170 as the flow gained a clause. The PIN is
+    # `swept == declared`; the literal is only there so a flow that silently
+    # SHRINKS is caught too, and it is meant to move whenever the flow does.
+    #
+    # 169 -> 170 at 74b6abbe35 ("feat(lvs): read magic's extraction feedback
+    # channel and gate it at zero, before netgen"), which added exactly ONE
+    # clause -- `program_exit_zero: magic_illegal_overlap_check`. MEASURED over
+    # the flow YAML at each commit: 772c31dcb4 (the commit that last moved this
+    # literal) 169, 74b6abbe35^ 169, 74b6abbe35 170, HEAD 170, with the added
+    # clause set exactly {('program_exit_zero', 'magic_illegal_overlap_check')}
+    # and nothing removed. The literal did not move with it, so the calibration
+    # instrument's own control has been red on main ever since.
+    assert pop["swept"] == pop["declared"] == 170, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 
