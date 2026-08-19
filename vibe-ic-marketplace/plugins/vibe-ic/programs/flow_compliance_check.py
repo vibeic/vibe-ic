@@ -9113,6 +9113,32 @@ def _coverage_selfskip_superseded_by_professional_tb(
     return bool(_NO_TRANSCRIPT_PREMISE_RE.search(reason or ""))
 
 
+#: A declared output whose own machine-readable ``verdict`` field says the
+#: producing run FAILED. Same #433c verdict-self-report contract the
+#: SKIPPED-CONDITION branch below already honours, read off the same field of
+#: the same already-parsed document — only the value differs.
+#:
+#: MEASURED, and this is why it exists (63x9 matrix, dimension 8, 2026-08-19):
+#: over the 16 steps whose REAL gate reaches a PASS tier on a synthesized tree,
+#: rewriting every declared JSON output to self-report SKIPPED-CONDITION moved
+#: the verdict on 3 of the 3 that reach a plain PASS — the channel works — while
+#: rewriting the SAME files, at the SAME field, to self-report FAIL moved
+#: 0 of 16. `check_step` opened the artefact, parsed it, read `verdict`,
+#: compared it against exactly one value and reported the step green on an
+#: output whose own content says the run failed.
+#:
+#: BLOCKING. A step whose declared output self-reports FAIL resolves to FAIL,
+#: which stops a strict flow. It is a DEMOTION rule and can only ever move a
+#: plain PASS downwards: it never creates, promotes or waives a verdict.
+#:
+#: Deliberately NARROW: only the ``verdict`` field (the one this scan already
+#: reads), only on a plain PASS (the tier this scan already guards), only these
+#: three values. `status`, `summary.*` and the wider SELF_SKIP vocabulary that
+#: `test_matrix_d6_skip_discipline.SELF_SKIP_VERDICTS` recognises are NOT read
+#: here, and that limit is stated rather than left to be discovered.
+_SELF_FAIL_VERDICTS = frozenset({"FAIL", "FAILED", "FAILURE"})
+
+
 def _evidence_integrity_scan(project: Path,
                              result: "StepResult") -> "StepResult":
     if result.status != "PASS" or not result.evidence:
@@ -9120,6 +9146,7 @@ def _evidence_integrity_scan(project: Path,
     stub_hits: List[str] = []
     broken: List[str] = []
     self_skipped: List[str] = []
+    self_failed: List[str] = []
     superseded: List[str] = []
     # Computed lazily on the first coverage self-skip encountered.
     _pro_pass: Optional[Dict[str, Any]] = None
@@ -9148,8 +9175,11 @@ def _evidence_integrity_scan(project: Path,
             except ValueError:
                 d = None
             if isinstance(d, dict):
-                if str(d.get("verdict", "")).upper().replace("_", "-") \
-                        == "SKIPPED-CONDITION":
+                _verdict = str(d.get("verdict", "")).upper().replace("_", "-")
+                if _verdict in _SELF_FAIL_VERDICTS:
+                    self_failed.append(f"{rel}: verdict={d.get('verdict')!r}")
+                    continue
+                if _verdict == "SKIPPED-CONDITION":
                     reason = str(d.get("reason", ""))
                     if not _pro_computed:
                         _pro_pass = _srb.find_professional_tb_pass(project)
@@ -9171,12 +9201,24 @@ def _evidence_integrity_scan(project: Path,
                     if not tgt.is_file() or tgt.stat().st_size == 0:
                         broken.append(
                             f"{rel} → evidence '{ev_ptr}' missing/empty")
-    if broken:
+    # Both buckets resolve to FAIL, so they are reported TOGETHER rather than
+    # through an elif: a step can carry a 0-byte artefact AND another whose
+    # verdict says FAIL, and an elif would silently drop one of the two
+    # reasons while the status stayed the same. Nothing about the pre-existing
+    # EVIDENCE_MISSING branch changes when `self_failed` is empty.
+    if self_failed or broken:
         result.status = "FAIL"
-        result.reasons.append(
-            "EVIDENCE_MISSING (#433): verdict artifact(s) reference "
-            "evidence that does not exist or is empty — a PASS nothing "
-            "substantiates is not a PASS: " + "; ".join(broken[:4]))
+        if self_failed:
+            result.reasons.append(
+                "VERDICT_SELF_REPORTS_FAIL (#433c): declared output(s) carry a "
+                "machine-readable verdict saying the run FAILED — a PASS "
+                "contradicted by its own evidence is not a PASS: "
+                + "; ".join(self_failed[:4]))
+        if broken:
+            result.reasons.append(
+                "EVIDENCE_MISSING (#433): verdict artifact(s) reference "
+                "evidence that does not exist or is empty — a PASS nothing "
+                "substantiates is not a PASS: " + "; ".join(broken[:4]))
     elif stub_hits:
         result.status = "WAIVED"
         result.reasons.append(
