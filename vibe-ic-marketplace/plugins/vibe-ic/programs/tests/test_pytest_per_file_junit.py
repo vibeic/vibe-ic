@@ -2120,3 +2120,124 @@ def test_a_caller_that_declared_a_rootdir_keeps_it():
     assert D._declared_rootdir(["-q", "--rootdir=/elsewhere"], "/anchor") == []
     assert D._declared_rootdir(["-q", "--rootdir", "/elsewhere"], "/anchor") == []
     assert D._declared_rootdir(["-q"], "/anchor") == ["--rootdir=/anchor"]
+
+
+# ── a --maxfail prefix is a NAMED truncation, still refused (jnorec, B1) ──────
+#
+# MEASURED at 288dc9fc8, the landing gate's `full:targeted-tests` lane over a
+# 116-file selection, byte-identical in five rounds:
+#
+#     AGGREGATE_NORECORD  aggregate JUnit does not exactly cover the selected
+#                         files (missing=[108 paths]) — cross-file/order
+#                         semantics are UNKNOWN, not clean
+#
+# The truth was `10 failed, 178 passed`, `188/2565` items, `rc=1`, a valid
+# JUnit: pytest stopped inside selected file 8 of 116 because `--maxfail=10`
+# told it to. One reading sends the reader to the harness; the other sends them
+# to ten named tests. Nobody chased it for five rounds, which is what an
+# unknowable-looking refusal costs.
+#
+# The verdict does NOT move — a prefix of a failure set cannot be differenced
+# against another arm, so the landing is still refused. Only the diagnosis moves.
+
+_TWO_RED = ("def test_red_one():\n    assert False\n"
+            "def test_red_two():\n    assert False\n"
+            "def test_green_never_reached():\n    assert True\n")
+
+
+def test_a_maxfail_prefix_is_named_and_still_refused(tmp_path):
+    """POSITIVE CONTROL: the cause is knowable, so it must be named."""
+    corpus = _tree(tmp_path, {"test_aa_red.py": _TWO_RED,
+                              "test_bb_never_ran.py": _PLAIN_GREEN})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED  2 failures reached at file 1/2," in proc.stdout, (
+        proc.stdout)
+    assert "test_aa_red.py::test_red_one" in proc.stdout.replace(
+        "test_aa_red::", "test_aa_red.py::"), proc.stdout
+    # THE REFUSAL IS UNCHANGED. Every consumer keys off this marker.
+    assert "AGGREGATE_NORECORD" in proc.stdout, proc.stdout
+    assert "never launched: ['test_bb_never_ran.py']" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_a_real_stall_is_not_reclassified_as_a_truncation(tmp_path):
+    """NEGATIVE CONTROL 1: a genuine hang must stay an unexplained NORECORD.
+
+    The bound is declared and the session is incomplete, exactly as in the
+    positive case. The one thing that differs is that the supervisor's stall
+    lease fired instead of the process exiting on its own, and that alone must
+    keep the truncation label off.
+    """
+    corpus = _tree(tmp_path, {"test_hangs.py": _HANGS_IN_TEST})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--aggregate-stall-after", str(_STALL),
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED" not in proc.stdout, proc.stdout
+    # The REASON must still be the stall, not a bound. A diagnosis that renames
+    # a hang after the failure bound is the permissive direction: it would send
+    # the reader to ten tests when the harness is what stopped.
+    assert "AGGREGATE_NORECORD  STALLED after" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_a_zero_collecting_file_is_not_reclassified_as_a_truncation(tmp_path):
+    """NEGATIVE CONTROL 2: not-covered must stay not-covered.
+
+    A declared bound plus an incomplete report is not enough to blame the bound:
+    here nothing failed at all, so the refusal must remain the coverage one and
+    must still name the file that produced no testcase.
+    """
+    corpus = _tree(tmp_path, {"test_green.py": _PLAIN_GREEN,
+                              "test_silent.py": _COLLECTS_NOTHING})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED" not in proc.stdout, proc.stdout
+    assert "missing=['test_silent.py'], extra=[]" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_the_bound_is_read_from_this_drivers_own_argv():
+    """Never from the child's output: a test may print `--maxfail` too."""
+    assert D._declared_failure_bound(["-q"]) is None
+    assert D._declared_failure_bound(["-q", "--maxfail=10"]) == 10
+    assert D._declared_failure_bound(["-q", "--maxfail", "4"]) == 4
+    assert D._declared_failure_bound(["-q", "-x"]) == 1
+    assert D._declared_failure_bound(["-qx"]) == 1
+    assert D._declared_failure_bound(["--exitfirst", "--maxfail=9"]) == 1
+    assert D._declared_failure_bound(["-q", "--maxfail=0"]) is None
+    assert D._declared_failure_bound(["-p", "no:cacheprovider"]) is None
+
+
+def test_an_unknown_session_shape_is_never_called_a_truncation():
+    """Every clause is required, and a missing sink key is UNKNOWN."""
+    full = {"natural_exit": True, "leaked": False, "cleanup_ok": True,
+            "protocol_complete": False, "items_finished": 5,
+            "items_declared": 9}
+    assert D._maxfail_truncation(2, 1, 2, full, 1, 3, []) is not None
+    assert D._maxfail_truncation(None, 1, 2, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 0, 2, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 1, 1, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 1, 2, full, 1, 3, ["x.py"]) is None
+    assert D._maxfail_truncation(2, 1, 2, {}, 1, 3, []) is None
+    for key, bad in (("natural_exit", False), ("leaked", True),
+                     ("cleanup_ok", False), ("protocol_complete", True),
+                     ("items_finished", None), ("items_declared", None),
+                     ("items_finished", 9)):
+        broken = dict(full, **{key: bad})
+        assert D._maxfail_truncation(2, 1, 2, broken, 1, 3, []) is None, key
