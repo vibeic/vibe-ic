@@ -166,6 +166,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import plugin_manifest_discovery as _pmd  # noqa: E402
+from _atomic_artefact import write_text as atomic_write_text  # noqa: E402  vibe-ic#1082 (helper from PR #1094)
 
 ATTRIBUTION = "tapeout_readiness_check"
 
@@ -898,7 +899,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     payload = rep.as_dict()
     out_json = args.out_json or (project / READINESS_ARTEFACT)
     out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(out_json, json.dumps(payload, indent=2) + "\n",
+                      encoding="utf-8")
     print(json.dumps(payload, indent=2))
     print(rep.summary_line())
     return 0 if rep.verdict == PASS else 1
