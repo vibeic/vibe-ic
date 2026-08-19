@@ -305,6 +305,100 @@ _COLLECTION_PROGRESS_POLL_S = 0.1
 _collection_invocation = 0
 
 
+# ══════════════════════════════════════════════════════════════════════
+# THE FLOOR EVERY SUB-SECOND SELF-TEST BOUND HAS TO CLEAR
+#
+# Four self-tests below drive the collection and outcome supervisors at a
+# deliberately tiny stall bound, to prove that SEMANTIC progress — and only
+# semantic progress — renews the window. Each used to name that bound as a
+# constant: 0.25, 0.3, 0.45.
+#
+# `_watchdog.supervise` starts the stall clock when the child is SPAWNED
+# (`last_progress = start`). A child cannot emit a lifecycle record before its
+# interpreter has booted, `pytest` has imported and collection has run, so
+# every one of those constants is racing a floor that belongs to the HOST and
+# not to the code under test. MEASURED on this repository's own container image
+# (ghcr.io/vibeic/vibeic-eda:0.3.13, 32 cores), one trivial module through the
+# outcome machinery, three runs each:
+#
+#     idle              0.402, 0.402, 0.402 s
+#     48 busy loops     0.821, 0.821, 0.808 s
+#
+# The largest of the three constants is 0.45 s. On an IDLE host it clears the
+# floor by 48 ms; under load it is beaten by nearly 2x, and the supervisor then
+# does exactly what it is built to do — kills a perfectly healthy child as hung
+# and reports NORECORD. That is a red on an unchanged tree, produced by the
+# machine being busy, which is the one thing this suite must never emit.
+#
+# MEASURED, same image, same tree, with 48 busy loops running:
+#     FAILED ...::test_live_collection_chatty_import_without_events_fails_closed
+#     FAILED ...::test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress
+#
+# So the bound is MEASURED, not named. The historical constant is kept as a
+# floor — a fast host still exercises the same tight window it always did — and
+# the workload each test builds is scaled to its own bound, so what every one
+# of them asserts is unchanged: work still has to cross the bound for the
+# "outlives" tests, and chatter still has to outlast it for the "fails closed"
+# ones.
+_START_FLOOR_PROBE_STALL_S = 120
+_START_FLOOR_PROBE_RUNS = 3
+#: The bound must sit clear of the floor, not next to it. 0.45 s at a measured
+#: 0.402 s floor is the defect; a multiple is what keeps a slower host honest.
+_START_FLOOR_MARGIN = 3.0
+
+
+@lru_cache(maxsize=None)
+def _measured_child_start_floor_s(kind: str) -> float:
+    """Spawn-to-first-lifecycle-record latency THIS host imposes, in seconds.
+
+    Measured with the SAME machinery the caller is about to bound, over a
+    module with one trivial test, so the number carries the interpreter start,
+    the `pytest` import, collection and teardown that no stall bound can see
+    through. The worst of `_START_FLOOR_PROBE_RUNS` is taken: a bound derived
+    from the best sample is a bound that only holds when the host is quiet.
+
+    The probe runs under `_START_FLOOR_PROBE_STALL_S`, restoring whatever the
+    caller had set, so measuring the floor can never be killed by the very
+    bound it exists to compute.
+    """
+    module = sys.modules[__name__]
+    attr = ("_COLLECTION_PROGRESS_STALL_S" if kind == "collection"
+            else "_OUTCOME_PROGRESS_STALL_S")
+    scratch = Path(tempfile.mkdtemp(prefix=f"matrix_start_floor_{kind}_"))
+    previous = getattr(module, attr)
+    try:
+        setattr(module, attr, _START_FLOOR_PROBE_STALL_S)
+        probe = scratch / "test_start_floor_probe.py"
+        probe.write_text("def test_probe():\n    assert True\n",
+                         encoding="utf-8")
+        worst = 0.0
+        for _ in range(_START_FLOOR_PROBE_RUNS):
+            started = time.monotonic()
+            if kind == "collection":
+                _collect_items_from_paths((probe,), scratch)
+            else:
+                _run_outcome_reports((probe,), cwd=scratch)
+            worst = max(worst, time.monotonic() - started)
+        assert worst > 0, (
+            f"the {kind} start-floor probe measured 0 s, which no real child "
+            f"process takes; the bounds derived from it would be meaningless")
+        return worst
+    finally:
+        setattr(module, attr, previous)
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _self_test_stall_bound(kind: str, historical: float) -> float:
+    """The stall bound a self-test may use on THIS host.
+
+    Never below `historical` — the constant the test was written with, so a
+    fast host keeps exercising exactly the window it always did — and never
+    inside the measured floor.
+    """
+    return max(historical, _measured_child_start_floor_s(kind)
+               * _START_FLOOR_MARGIN)
+
+
 def _collect_items_from_paths(paths: Tuple[Path, ...],
                               cwd: Path) -> Tuple[Dict, ...]:
     """Collect paths through the nonce/FSM supervisor and complete manifest."""
@@ -473,20 +567,26 @@ def collect_items() -> Tuple[Dict, ...]:
 def test_live_collection_relays_finite_semantic_progress_past_old_bound(
         monkeypatch, tmp_path):
     """Several completed collections may outlive a former total deadline."""
-    old_fixed_bound = 0.3
+    # The bound is measured, never named: see `_measured_child_start_floor_s`.
+    # 0.3 s is kept as the floor, so a host fast enough for the constant this
+    # test was written with still runs against it.
+    bound = _self_test_stall_bound("collection", 0.3)
+    # Each module's import sleeps well INSIDE the window and the seven of them
+    # together take several times it, so the run can only finish if completed
+    # collections renew the clock.
+    per_module_sleep = bound * 0.4
     seen = []
     monkeypatch.setattr(
         sys.modules[__name__], "_domain_progress",
         lambda scope, completed, total:
         seen.append((scope, completed, total)))
     monkeypatch.setattr(
-        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S",
-        old_fixed_bound)
+        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S", bound)
     paths = []
     for index in range(7):
         path = tmp_path / f"test_collect_progress_{index}.py"
         path.write_text(
-            "import time\ntime.sleep(.14)\n\n"
+            f"import time\ntime.sleep({per_module_sleep!r})\n\n"
             f"def test_{index}(): assert True\n", encoding="utf-8")
         paths.append(path)
 
@@ -494,7 +594,10 @@ def test_live_collection_relays_finite_semantic_progress_past_old_bound(
     rows = _collect_items_from_paths(tuple(paths), tmp_path)
     elapsed = time.monotonic() - started
 
-    assert elapsed > 0.8, elapsed
+    assert elapsed > bound, (
+        f"the collection run lasted {elapsed:.2f}s and never crossed its own "
+        f"{bound:.2f}s stall bound, so it did not prove that completed "
+        f"collections renew the window")
     assert {row["file"] for row in rows} == {path.name for path in paths}
     assert seen[-1] == ("matrix-collection-runs", 1, 1)
     assert seen.count(("matrix-collection-runs", 1, 1)) == 1
@@ -503,13 +606,19 @@ def test_live_collection_relays_finite_semantic_progress_past_old_bound(
 def test_live_collection_chatty_import_without_events_fails_closed(
         monkeypatch, tmp_path):
     """Collection stdout cannot impersonate a nonce-bound FSM transition."""
+    # Measured bound, 0.25 s floor: at 0.25 s the kill landed BEFORE the child
+    # had booted far enough to print anything, so the "chatter cannot
+    # impersonate progress" assertion below had no chatter to judge and the
+    # test went red on a busy host with nothing wrong.
+    bound = _self_test_stall_bound("collection", 0.25)
+    chatter_s = bound * 3
     monkeypatch.setattr(
-        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S", 0.25)
+        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S", bound)
     monkeypatch.setenv("PYTEST_ADDOPTS", "-s")
     path = tmp_path / "test_chatty_collect.py"
     path.write_text(
         "import time\n"
-        "deadline=time.monotonic()+3\n"
+        f"deadline=time.monotonic()+{chatter_s!r}\n"
         "while time.monotonic() < deadline:\n"
         "    print('COLLECT_CHATTER', flush=True)\n"
         "    time.sleep(.02)\n"
@@ -520,7 +629,7 @@ def test_live_collection_chatty_import_without_events_fails_closed(
         _collect_items_from_paths((path,), tmp_path)
     elapsed = time.monotonic() - started
     message = str(caught.value)
-    assert elapsed < 3, elapsed
+    assert elapsed < chatter_s, elapsed
     assert "WATCHDOG_STALLED:" in message
     assert "COLLECT_CHATTER" in message
 
@@ -1649,13 +1758,20 @@ def _run_one_module_outcome(path: Path,
 def test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress(
         monkeypatch, tmp_path):
     """Completed pytest items, not elapsed wall time, keep the child alive."""
+    # 0.45 s is the historical constant and stays the floor; the bound is
+    # measured, because 0.45 s cleared this host's own start floor by 48 ms.
+    # The old body also slept exactly the bound between items, so even in
+    # steady state one late poll was enough to trip it — the interval is now a
+    # fraction of the window, which is what "a completed item renews it" means.
     old_fixed_bound = 0.45
+    bound = _self_test_stall_bound("outcome", old_fixed_bound)
+    step = bound * 0.4
     monkeypatch.setattr(
-        sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S", old_fixed_bound)
+        sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S", bound)
     paths = tuple(tmp_path / f"test_nested_{i}.py" for i in range(4))
     paths[0].write_text(
         "import time\n" + "\n".join(
-            f"def test_progress_{i}():\n    time.sleep(0.45)"
+            f"def test_progress_{i}():\n    time.sleep({step!r})"
             for i in range(12)) + "\n",
         encoding="utf-8",
     )
@@ -1669,6 +1785,10 @@ def test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress(
     reports = _run_outcome_reports(paths, cwd=tmp_path)
     elapsed = time.monotonic() - started
 
+    assert elapsed > bound, (
+        f"the nested run lasted only {elapsed:.2f}s, so it did not cross its "
+        f"own {bound:.2f}s stall bound and proved nothing about work "
+        f"outliving it")
     assert elapsed > old_fixed_bound, (
         f"the nested run lasted only {elapsed:.2f}s, so it did not prove that "
         f"work may cross the old {old_fixed_bound}s wall bound")
@@ -1684,13 +1804,18 @@ def test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress(
 def test_nested_outcome_chatty_import_without_pytest_events_fails_closed(
         monkeypatch, tmp_path):
     """Captured chatter cannot impersonate a completed pytest transition."""
+    # Same shape as its collection-side twin: the chatter has to outlast the
+    # window by a margin the HOST cannot erase, or the kill lands before the
+    # child prints and the sentinel assertion below judges an empty string.
+    bound = _self_test_stall_bound("outcome", 0.45)
+    chatter_s = bound * 6
     monkeypatch.setattr(
-        sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S", 0.45)
+        sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S", bound)
     monkeypatch.setenv("PYTEST_ADDOPTS", "-s")
     path = tmp_path / "test_chatty_import.py"
     path.write_text(
         "import time\n"
-        "deadline = time.monotonic() + 6\n"
+        f"deadline = time.monotonic() + {chatter_s!r}\n"
         "while time.monotonic() < deadline:\n"
         "    print('CHATTY_SENTINEL', flush=True)\n"
         "    time.sleep(0.02)\n\n"
@@ -1704,7 +1829,7 @@ def test_nested_outcome_chatty_import_without_pytest_events_fails_closed(
         _run_one_module_outcome(path, tmp_path)
     elapsed = time.monotonic() - started
     message = str(caught.value)
-    assert elapsed < 6, elapsed
+    assert elapsed < chatter_s, elapsed
     assert "WATCHDOG_STALLED:" in message
     assert "validated pytest lifecycle progress" in message
     assert "CHATTY_SENTINEL" in message
