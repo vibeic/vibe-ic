@@ -109,6 +109,40 @@ cross-reference is exactly the maintenance burden this renumbering removes.
 
 ---
 
+## Existence versus correctness — which dimensions can see CONTENT
+
+A cell reddens when a declared artefact is MISSING. Whether any cell reddens
+when the artefact is **present and wrong** is a different question, and it was
+asked of all eight dimensions on `74ac9fa78`. The full row-by-row answer, with
+the citation and the measurement for each, is in
+`docs/D9_CONTENT_REDDENING_CENSUS.md`. The summary a dimension author needs:
+
+* **1 `wiring`, 4 `criteria_match`, 5 `deps_correct`, 7 `outputs_list_complete`
+  — content-blind BY CONSTRUCTION and correctly so.** Their subject is the flow
+  document, the gate command, the dependency graph and the write record. None
+  of those is a run artefact. Do not "close" these.
+* **2 `falsifiable` — already content-sensitive**, and the model for the rest:
+  `matrix_mutation_ledger.ARTEFACT_MUTATIONS` (8 entries, all `dim=2`, 7
+  `REDDENED` + 1 pinned `STAYED_GREEN`) changes a NUMBER INSIDE a published
+  report and re-runs the real gate.
+* **3 `outputs_produced` — closed.** `resolve` gained `kind_conformance`; see
+  `_KIND_PARSERS` for the grammar, the 611-triple false-positive measurement,
+  and the three SEMANTIC rules the corpus refused.
+* **6 `skip_discipline` — closed for the PASS half** by leg L7 and the
+  `WRONG_CONTENT` fixture; the SKIP half stays NOT DETERMINED, with the reason
+  in the census document.
+* **8 `missing_caught` — not the cell, and the module says so out loud**:
+  `CONTENT_ARM_AS_MEASURED` records absence moving the verdict 16/16 and
+  content 0/16.
+
+**Before adding any content rule anywhere in this matrix, read
+`_KIND_PARSERS`' "WHAT THE CORPUS REFUSES" note first.** Two of the three
+obvious semantic rules manufacture false positives on artefacts that are
+exactly right — 16 and 190 of them — and the counts are the only thing that
+settles it.
+
+---
+
 ## Modules
 
 ### `flowref.py` — live accessors over the flow yaml

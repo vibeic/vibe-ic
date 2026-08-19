@@ -235,6 +235,10 @@ SKIP_TIERS: Tuple[str, ...] = (
     "SKIPPED-SETUP-REQUIRED",
 )
 
+#: The two tiers that read as "this step is fine". L7 asks whether a verdict on
+#: one of them was earned; on any other tier there is nothing to earn.
+PASS_TIERS: Tuple[str, ...] = ("PASS", "VACUOUS_PASS")
+
 #: Normalised gate-report verdict/status values that are a self-declared
 #: inapplicability. Every one of these was OBSERVED being emitted by a gate
 #: program in this tree during a probe run; none is speculative.
@@ -524,7 +528,23 @@ def concretise(pattern: str) -> str:
     return p.replace("*", "x").replace("?", "x")
 
 
-def _seed(project: Path, patterns) -> None:
+#: The WRONG_CONTENT fixture's payload, per kind. Every one of these is a
+#: WELL-FORMED DOCUMENT — it parses — and is the wrong kind of document for the
+#: path it is written to. That is deliberate and it is the whole discriminating
+#: power of the scenario: a gate that rejects binary garbage or a truncated file
+#: is not thereby shown to have READ anything, whereas a gate that cannot tell
+#: `{"verdict": "PASS"}` from a synthesised netlist demonstrably did not.
+_WRONG_JSON = '1234\n'                     # parses; a report is not a scalar
+_WRONG_TEXT = '{"verdict": "PASS", "violations": 0}\n'   # JSON where it is not
+
+
+def _seed(project: Path, patterns, *, wrong: bool = False) -> None:
+    """Materialise every declared path.
+
+    *wrong* switches the CONTENT and nothing else: the same paths, the same
+    count, the same permissions, each holding a well-formed document of the
+    wrong kind. See :func:`_leg7_pass_is_not_awarded_over_unread_content`.
+    """
     pats = list(patterns)
     if any("analog_block_list.json" in p for p in pats):
         pats += [f"{root}/analog_block_list.json" for root in _analog_roots()]
@@ -538,14 +558,22 @@ def _seed(project: Path, patterns) -> None:
                 if target.name == "analog_block_list.json":
                     # _analog_a_check_common.load_block_list's contract; block
                     # named "x" so per-block dirs match the glob concretisation.
+                    # DELIBERATELY NOT corrupted by `wrong`: this file is the
+                    # fixture's own plumbing — it is what makes `phase1/analog/
+                    # */spec.json` resolve to a directory the A-gates look in —
+                    # so corrupting it would move the A-track tiers for a reason
+                    # that is about the seeder, not about the gate.
                     target.write_text('{"blocks": ["x"]}\n', encoding="utf-8")
                 elif target.suffix == ".json":
-                    target.write_text("{}\n", encoding="utf-8")
-                elif target.suffix in (".v", ".sv"):
-                    target.write_text("module stub_top; endmodule\n",
+                    target.write_text(_WRONG_JSON if wrong else "{}\n",
                                       encoding="utf-8")
+                elif target.suffix in (".v", ".sv"):
+                    target.write_text(
+                        _WRONG_TEXT if wrong else "module stub_top; endmodule\n",
+                        encoding="utf-8")
                 else:
-                    target.write_text("stub\n", encoding="utf-8")
+                    target.write_text(_WRONG_TEXT if wrong else "stub\n",
+                                      encoding="utf-8")
             else:
                 target.mkdir(parents=True, exist_ok=True)
         except OSError:  # pragma: no cover - defensive
@@ -786,6 +814,7 @@ def _run_targetless_clauses(step_id, project: Path) -> Tuple[OrphanRun, ...]:
 
 def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
                   safety_rtl: bool = False, flow_complete: bool = False,
+                  wrong: bool = False,
                   waiver: Optional[Dict[str, Any]] = None,
                   role: Optional[str] = None) -> Scenario:
     tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_"))
@@ -795,12 +824,12 @@ def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
         project = tmp / "proj"
         project.mkdir()
         if seeded:
-            _seed(project, declared_paths(step_id))
+            _seed(project, declared_paths(step_id), wrong=wrong)
         if flow_complete:
             # everything the FLOW declares, not only this step's own
             own = set(declared_paths(step_id))
             _seed(project, [p for p in flow_declared_outputs()
-                            if p not in own])
+                            if p not in own], wrong=wrong)
         if rtl:
             rtl_path = project / P0_RTL_FILE
             rtl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -995,6 +1024,30 @@ _DEFERRED_L6_SKIPS: Dict[str, str] = {
           "want of an artefact the flow guarantees",
 }
 
+#: L7's shrink-only register, same contract as :data:`_DEFERRED_L6_SKIPS`: an
+#: ADMISSION, not an exemption, and guarded by the same paired tests below —
+#: an entry that stops describing a live defect reddens until it is deleted,
+#: and the leg is proved to charge exactly this set and nothing else.
+#:
+#: Measured 2026-08-19 on the tree that added the WRONG_CONTENT scenario. Of
+#: the 63 steps, three resolve to a plain PASS with every declared path holding
+#: a well-formed document of the WRONG KIND. Two of them — steps 1 and 35 —
+#: are excluded by the leg itself and not registered here, because their only
+#: BLOCKING clause is `files_exist`: an existence clause is honest about being
+#: an existence check, and whether the flow should have declared more than one
+#: is dimension 4's question, not this one. Step 38 is the residue and the
+#: finding: it runs a BLOCKING checker over its own four declared artefacts and
+#: certifies a PASS whichever bytes are in them.
+_DEFERRED_L7_UNREAD_CONTENT: Dict[str, str] = {
+    "38": "foundry_handoff_package_check is BLOCKING and exits 0 with "
+          "mask_spec.json / wat_plan.json / corner_test_vectors.json holding "
+          "`1234` and scribe_line_layout.gds holding a JSON document. Measured "
+          "asymmetry that localises the gap: the same fixture widened to every "
+          "artefact the FLOW declares (WRONG_CONTENT_FLOW_COMPLETE) DOES fail, "
+          "so the checker reads content — just not the content of the outputs "
+          "this step declares",
+}
+
 
 @dataclass
 class Probe:
@@ -1043,6 +1096,23 @@ def _probe_step(step_id) -> Probe:
     probe.scenarios["SEEDED"] = _run_scenario(step_id, "SEEDED", seeded=True)
     probe.scenarios["FLOW_COMPLETE"] = _run_scenario(
         step_id, "FLOW_COMPLETE", seeded=True, flow_complete=True)
+    # The CONTENT arm. Byte-for-byte the same two fixtures with the same paths
+    # present — only what is INSIDE the files differs. Deliberately kept OUT of
+    # `_STATUS_SCENARIOS`: legs L2/L3/L3b/L3c ask tier questions that a second
+    # seeded fixture would answer identically, and adding it there would change
+    # eight existing legs while measuring nothing new for them.
+    #
+    # RUN ONLY WHERE THERE IS A PASS TO EXPLAIN. L7's question — "was this PASS
+    # earned?" — has no subject on a step that already FAILs or MISSes on stub
+    # content, and building the fixture there doubled this module's wall clock
+    # (77 s -> 155 s measured) to answer a question about nothing. The
+    # condition is on the MEASURED tier, not on a step list, so a step that
+    # starts passing gains the scenario without this file changing.
+    for src, dst, fc in (("SEEDED", "WRONG_CONTENT", False),
+                         ("FLOW_COMPLETE", "WRONG_CONTENT_FLOW_COMPLETE", True)):
+        if probe.scenarios[src].status in PASS_TIERS:
+            probe.scenarios[dst] = _run_scenario(
+                step_id, dst, seeded=True, flow_complete=fc, wrong=True)
     if _reads_an_rtl_directory(step_id):
         # A step that reads RTL CONTENT cannot be shown anything by the
         # path-seeder, which materialises `phase2/stage1/rtl` as a bare
@@ -1548,6 +1618,75 @@ def _leg6_skip_is_keyed_on_something_the_flow_never_promises(
     return problems
 
 
+def _leg7_pass_is_not_awarded_over_unread_content(probe: Probe) -> List[str]:
+    """L7 — WAS THE PASS EARNED?  (not: was the skip disclosed)
+
+    L1-L6 are all about SKIPS. This one is about the other way a gate can be
+    switched off while still counting as run: it PASSES, at the top tier, over
+    artefacts it never opened. That is the same defect wearing the opposite
+    label, and until this leg existed the whole dimension was blind to it —
+    every fixture in this module was CONTENT-FREE, so "present" and "present
+    and correct" were the same input.
+
+    Three fixtures, identical in every respect except the BYTES:
+
+      SEEDED         every declared path present, holding a stub
+                     (``{}`` / ``module stub_top; endmodule`` / ``stub``).
+      WRONG_CONTENT  the same paths, each holding a WELL-FORMED document of
+                     the WRONG KIND — ``1234`` at a ``.json``, a JSON object at
+                     a ``.v`` or a ``.gds``. Present. Parseable. Wrong.
+
+    A step that resolves to a plain ``PASS`` under BOTH ran a gate whose
+    verdict does not depend on what is in its inputs. Measured, and the
+    fixture is not inert: it moves five steps (14, 28, 30, 32, 38 in one arm or
+    the other) from a pass tier to FAIL, so a step that does NOT move is a
+    statement about that step and not about the fixture.
+
+    EXCLUDED BY DECLARATION: a step whose only BLOCKING clause is
+    ``files_exist``. Such a clause IS an existence check and says so in the
+    yaml; charging it here would be charging the flow for a declaration rather
+    than a gate for a lie, and "should this step have more than an existence
+    gate" is dimension 4's question. Steps 1 and 35 are the population that
+    exclusion covers today, and :func:`test_d6_l7_the_exclusion_is_named_not_
+    silent` names them so the exclusion cannot quietly grow.
+    """
+    problems: List[str] = []
+    seeded = probe.scenarios.get("SEEDED")
+    wrong = probe.scenarios.get("WRONG_CONTENT")
+    if not seeded or not wrong:
+        return problems
+    if seeded.status != "PASS" or wrong.status != "PASS":
+        return problems
+    if not _blocking_exec_clauses(probe.step_id):
+        return problems                    # existence gate, honest about it
+    sid = F.normalize_id(probe.step_id)
+    if sid in _DEFERRED_L7_UNREAD_CONTENT:
+        return problems
+    problems.append(
+        f"L7 PASS OVER UNREAD CONTENT: step {sid} resolves to PASS with every "
+        f"declared path holding a stub AND with every declared path holding a "
+        f"well-formed document of the WRONG KIND. Its blocking checker(s) "
+        f"{[c for c in _blocking_exec_clauses(probe.step_id)]} certify the "
+        f"step whatever the bytes are, so the PASS is evidence that the files "
+        f"exist and nothing else. An artefact that exists is not the same fact "
+        f"as an artefact that is what it claims to be."
+    )
+    return problems
+
+
+def _blocking_exec_clauses(step_id) -> Tuple[str, ...]:
+    """Program basenames of the BLOCKING EXECUTABLE clauses of *step_id*.
+
+    Optional and advisory clauses are excluded: neither can hold the step's
+    tier down, so neither is what awarded the PASS.
+    """
+    return tuple(
+        c.command.split()[0]
+        for c in F.gate_clauses(step_id)
+        if c.command and c.kind not in (F.K_ADVISORY, F.K_OPTIONAL)
+    )
+
+
 _LEGS = (
     ("L1 no unconditional pass", _leg1_no_unconditional_pass),
     ("L1b gate alone does not pass on nothing",
@@ -1562,6 +1701,8 @@ _LEGS = (
     ("L5 waiver channel is machine-readable", _leg5_waiver_channel),
     ("L6 skip was allowed, not merely disclosed",
      _leg6_skip_is_keyed_on_something_the_flow_never_promises),
+    ("L7 pass was earned, not awarded over unread content",
+     _leg7_pass_is_not_awarded_over_unread_content),
 )
 
 
@@ -1664,6 +1805,9 @@ def leg_capability(step_id) -> Dict[str, bool]:
         # L6 needs a scenario that lands on a skip tier at all — the same
         # subject L2 needs, asked of a different pair of fixtures.
         "L6": any(sc.status in SKIP_TIERS for sc in probe.scenarios.values()),
+        # L7 needs a BLOCKING EXECUTABLE clause — a files_exist-only step is
+        # excluded by the leg itself, so it has no subject there.
+        "L7": bool(_blocking_exec_clauses(sid)),
         # L4 needs an optional clause or a step-level condition.
         "L4": any(c.kind == F.K_OPTIONAL for c in clauses) or bool(cond),
         # L5 needs an ENV_UNAVAILABLE role binding.
@@ -2214,3 +2358,133 @@ def test_d6_l6_the_register_is_the_only_thing_holding_those_cells_green():
     assert charged == set(_DEFERRED_L6_SKIPS), (
         f"the register and the live measurement disagree: measured "
         f"{sorted(charged)}, registered {sorted(_DEFERRED_L6_SKIPS)}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# L7 — the paired guards. Same contract as L6's, for the same reason: a
+# shrink-only register that can outlive its debt is a permanent amnesty
+# with extra steps.
+# ──────────────────────────────────────────────────────────────────────
+def test_d6_l7_deferred_register_only_shrinks():
+    """Every `_DEFERRED_L7_UNREAD_CONTENT` entry must still describe a live gap.
+
+    The moment the checker learns to read its own declared outputs, the entry
+    stops describing anything and this test reddens until it is deleted.
+    """
+    stale = []
+    for sid in sorted(_DEFERRED_L7_UNREAD_CONTENT):
+        assert F.has_step(sid), f"register names unknown step {sid!r}"
+        probe = probe_for(sid)
+        seeded = probe.scenarios.get("SEEDED")
+        wrong = probe.scenarios.get("WRONG_CONTENT")
+        if seeded is None or seeded.status != "PASS":
+            stale.append(f"{sid} no longer PASSes over stub content "
+                         f"(SEEDED={seeded.status if seeded else None!r})")
+        elif wrong is None or wrong.status != "PASS":
+            stale.append(
+                f"{sid} now MOVES on content: WRONG_CONTENT="
+                f"{wrong.status if wrong else None!r}. The gap is closed — "
+                f"delete the register entry")
+        elif not _blocking_exec_clauses(sid):
+            stale.append(f"{sid} no longer declares a BLOCKING executable "
+                         f"clause, so the leg excludes it and the entry is "
+                         f"describing nothing")
+    assert not stale, (
+        "the L7 register no longer describes live defects — it may only "
+        "SHRINK, and shrinking means deleting the entry: " + "; ".join(stale))
+
+
+def test_d6_l7_the_register_is_the_only_thing_holding_that_cell_green():
+    """Paired control: remove the forgiveness and exactly those cells go red.
+
+    Recomputes the leg's charge WITHOUT consulting the register, so a future
+    edit that quietly stops the leg charging anything cannot leave the register
+    looking like it is still tracking a known hole.
+    """
+    charged = set()
+    for sid in F.step_ids():
+        probe = probe_for(sid)
+        if probe.status("SEEDED") != "PASS":
+            continue
+        if probe.status("WRONG_CONTENT") != "PASS":
+            continue
+        if not _blocking_exec_clauses(sid):
+            continue
+        charged.add(F.normalize_id(sid))
+    assert charged == set(_DEFERRED_L7_UNREAD_CONTENT), (
+        f"the L7 register and the live measurement disagree: measured "
+        f"{sorted(charged)}, registered {sorted(_DEFERRED_L7_UNREAD_CONTENT)}")
+
+
+def test_d6_l7_the_exclusion_is_named_not_silent():
+    """The `files_exist`-only exclusion must be a NAMED, measured population.
+
+    L7 lets a step off when its only BLOCKING clause is `files_exist`. That is
+    defensible — an existence clause declares itself — but it is exactly the
+    shape a hole hides in, so the population is measured here and pinned. A
+    step that LOSES its executable blocking clause would fall into the
+    exclusion silently; this test makes it a named failure instead.
+    """
+    excused = sorted(
+        F.normalize_id(sid) for sid in F.step_ids()
+        if probe_for(sid).status("SEEDED") == "PASS"
+        and probe_for(sid).status("WRONG_CONTENT") == "PASS"
+        and not _blocking_exec_clauses(sid)
+    )
+    assert excused == ["1", "35"], (
+        f"the files_exist-only exclusion covers {excused}, measured "
+        f"['1', '35'] on 2026-08-19. A step that JOINED this set stopped "
+        f"declaring a blocking checker; a step that LEFT it gained one and "
+        f"must now be measured by L7 for real."
+    )
+    for sid in excused:
+        blocking = [c for c in F.gate_clauses(sid)
+                    if c.kind not in (F.K_ADVISORY, F.K_OPTIONAL)]
+        assert blocking, f"step {sid} has no blocking clause at all"
+        assert all(c.command is None for c in blocking), (
+            f"step {sid} is excused as files_exist-only but declares a "
+            f"blocking command: {[c.command for c in blocking]}")
+
+
+def test_d6_l7_the_wrong_content_fixture_is_not_inert():
+    """THE CONTROL. A fixture that changes no verdict proves nothing.
+
+    WRONG_CONTENT differs from SEEDED in the BYTES and in nothing else — same
+    paths, same count, same order. If it moved no step's tier, every L7 green
+    would mean "this fixture is indistinguishable from the stub one", not
+    "this gate read its inputs". Measured 2026-08-19: five steps move.
+    """
+    moved = {}
+    built = 0
+    for sid in F.step_ids():
+        probe = probe_for(sid)
+        pairs = (("SEEDED", "WRONG_CONTENT"),
+                 ("FLOW_COMPLETE", "WRONG_CONTENT_FLOW_COMPLETE"))
+        for a, b in pairs:
+            # An UNBUILT scenario is not a move. The arm is only built where
+            # the baseline landed on a pass tier (see `probe_for`), and reading
+            # a missing scenario as `None != "FAIL"` would count every step
+            # that has no subject as evidence that the fixture discriminates —
+            # the exact inversion this control exists to prevent.
+            if b not in probe.scenarios:
+                continue
+            built += 1
+            if probe.status(a) != probe.status(b):
+                moved.setdefault(F.normalize_id(sid), []).append(
+                    f"{a}={probe.status(a)!r} -> {b}={probe.status(b)!r}")
+    assert built >= 8, (
+        f"the WRONG_CONTENT arm was built for only {built} (step, fixture) "
+        f"pair(s); 17 were built when L7 was accepted. With no subject the "
+        f"control below cannot fail.")
+    assert len(moved) >= 5, (
+        f"the WRONG_CONTENT fixture moved only {len(moved)} step(s) "
+        f"({sorted(moved)}); it moved 5 when L7 was accepted. A fixture that "
+        f"stops discriminating turns every L7 green into a statement about "
+        f"the fixture."
+    )
+    # And it must move them TOWARD failure, not merely differently: a fixture
+    # that shuffled tiers sideways would satisfy the count above.
+    to_fail = [s for s, ms in moved.items() if any("-> " in m and "FAIL" in m.split("-> ")[1] for m in ms)]
+    assert len(to_fail) >= 4, (
+        f"only {len(to_fail)} step(s) moved from a pass tier to FAIL on wrong "
+        f"content: {sorted(moved.items())}")
