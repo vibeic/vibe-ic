@@ -970,10 +970,48 @@ run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate
 # this consolidation at 25 s and 137 s on the same tree -- the mutation
 # probes dominate and vary with machine load, so budget for the high one.
 # Every subprocess this file starts is bounded at 55 s or less, strictly under
-# the 180 s `--timeout-method=thread` session bound below, so a hang fails
-# ONE test here instead of killing the run and losing every other result.
-run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-    python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+# the 180 s per-test bound below, so a hang fails ONE test here instead of
+# killing the run and losing every other result.
+#
+# WHICH BOUND IS AVAILABLE IS ASKED, NOT ASSUMED (main-red, 2026-08-19).
+# `pytest_timeout` is a third-party plugin and it is NOT in the pinned runner
+# image. `-p pytest_timeout` on a pytest that cannot import it does not degrade:
+# it raises `ImportError: Error importing plugin "pytest_timeout"` during
+# pre-parse and exits 1 before collecting a single test. This gate was therefore
+# red on clean main for a reason that had nothing to do with the liar census —
+# and `tools/liar_census.py` named the same plugin for its own mutation arms, so
+# every arm died on arrival, every mutation probe scored N/A, and seven of this
+# file's tests were red too. One missing package, two red gates.
+#
+# THE TWO BOUNDS ARE NOT THE SAME MEASUREMENT and the fallback is not a silent
+# substitution:
+#   * with the plugin, 180 s is PER TEST, and reaching it kills the session
+#     (`--timeout-method=thread`) — one runaway test, and the file's other
+#     results are lost with it;
+#   * without it, the bound can only be on the WHOLE SESSION, so the number
+#     changes units and must change value with it. 180 s is a per-test budget;
+#     as a session budget it is a flake generator, because this file has been
+#     measured at 25 s and at 137 s on the same tree (the mutation probes
+#     dominate and vary with machine load) and a session killed at its bound
+#     reports nothing at all. 900 s is ~6.5x the worst time measured here and
+#     matches `--mutation-timeout`, the census's own per-arm ceiling.
+# The bound is never dropped, and the line below says which one ran so a reader
+# never has to guess which measurement they are looking at.
+if python3 -c 'import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec("pytest_timeout") else 1)' 2>/dev/null; then
+  echo "repo_hygiene_gates: liar census bounded PER TEST at 180 s by pytest_timeout" >&2
+  _LIAR_CENSUS_CMD=(env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+      python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread)
+else
+  echo "repo_hygiene_gates: pytest_timeout is NOT INSTALLED for this python3, so" \
+       "the liar census is bounded as a WHOLE SESSION at 900 s by an external" \
+       "\`timeout\` instead of PER TEST at 180 s. A hang now costs every result" \
+       "in the file rather than one test, and the run FAILS (rc 124) rather" \
+       "than being quietly unbounded." >&2
+  _LIAR_CENSUS_CMD=(timeout --kill-after=60 900
+      env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q)
+fi
+run "liar census controls still fire"   "$ROOT" "${_LIAR_CENSUS_CMD[@]}" \
     "$ROOT/tools/test_liar_census.py"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
