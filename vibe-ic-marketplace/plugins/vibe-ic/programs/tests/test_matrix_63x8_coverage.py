@@ -1020,8 +1020,77 @@ def _module_ast(dim: int) -> ast.Module:
         encoding="utf-8"))
 
 
+#: The ONE skip a cell test may take, and the two things that make it that one.
+#:
+#: A cell that cannot be looked at is not a fourth STATE — the three states
+#: below are about the flow, and this is about the observer. It is the state
+#: this module already models one level down: :func:`enforcement_census` labels
+#: such a cell ``<state>-SKIPPED`` rather than folding it into agreement,
+#: `_UNMEASURED` keeps it out of the measured-red count, and
+#: :func:`test_no_cell_is_counted_enforced_while_its_predicate_is_red` FAILS on
+#: it under the heading "NOT MEASURED — the predicate never returned a verdict".
+#: So a cell taking this skip is still caught, still counted, and still named;
+#: what it is not is silently green.
+#:
+#: Until 2026-08-19 check (3) below forbade the mechanism outright while the
+#: rest of the file went on modelling its result. That was writable while the
+#: published corpus lived in this repository and `corpus_root()` could not be
+#: None; #1723 moved the corpus out, the two dimensions that read published
+#: cells grew the corpus-absent disclosure, and the prohibition started firing
+#: on them:
+#:
+#:     dimension 3: cell test test_d3_required_outputs_are_produced:
+#:       pytest.skip() at line 2309. A cell test may not skip: the three states
+#:       are ENFORCED, WAIVED (strict xfail) and NA (asserted precondition)
+#:     dimension 7: cell test test_d7_required_outputs_list_is_complete:
+#:       pytest.skip() at line 357. …
+#:
+#: The prohibition is therefore NARROWED, not lifted, and narrowed in the
+#: direction that adds requirements. A skip is admissible only if BOTH hold:
+#:
+#:   1. it is CONDITIONAL — lexically inside an ``if`` in the cell test. An
+#:      unconditional skip is silent absence wearing a hat and is exactly what
+#:      the original rule was written against; it is still refused;
+#:   2. its reason is the bare name ``SKIP_REASON``, the ONE wording the suite
+#:      publishes for "could not look" (``_published_corpus.SKIP_REASON``), and
+#:      the module must genuinely import it FROM there — so a local string
+#:      cannot borrow the name, and a cell cannot invent its own excuse.
+#:
+#: Anything else — a different reason, a different import, an unconditional
+#: call — is reported exactly as before.
+_CORPUS_SKIP_REASON_NAME = "SKIP_REASON"
+_CORPUS_SKIP_REASON_MODULE = "_published_corpus"
+
+
+def _imports_the_published_skip_reason(dim: int) -> bool:
+    """Does this dimension module import ``SKIP_REASON`` from the ONE place?
+
+    Asked separately from the call site so that a module which defines its own
+    ``SKIP_REASON = "whatever"`` cannot satisfy the reason check by shadowing
+    the name.
+    """
+    for node in ast.walk(_module_ast(dim)):
+        if isinstance(node, ast.ImportFrom):
+            if node.module != _CORPUS_SKIP_REASON_MODULE:
+                continue
+            if any(a.name == _CORPUS_SKIP_REASON_NAME for a in node.names):
+                return True
+    return False
+
+
+def _is_the_corpus_absent_skip(call: ast.Call, conditional: bool,
+                               imported: bool) -> bool:
+    if not (conditional and imported):
+        return False
+    if len(call.args) != 1 or call.keywords:
+        return False
+    arg = call.args[0]
+    return (isinstance(arg, ast.Name)
+            and arg.id == _CORPUS_SKIP_REASON_NAME)
+
+
 def _calls_pytest_skip(dim: int, func_name: str) -> Optional[str]:
-    """Location of a ``pytest.skip`` / bare ``skip`` call inside *func_name*.
+    """Location of an INADMISSIBLE ``pytest.skip`` / ``skip`` in *func_name*.
 
     An AST walk over THIS repository's own test module — exact by construction,
     with comments and docstrings gone, so the ``# ...pytest.skip()...`` prose in
@@ -1029,21 +1098,64 @@ def _calls_pytest_skip(dim: int, func_name: str) -> Optional[str]:
     campaign's standing rule against text scans is about the PRODUCTION tree's
     dynamic dispatch; here the target is a literal function definition in a file
     this test can parse completely.)
+
+    The one admissible call is described above and is the only thing this
+    returns None for; everything else is reported with its line and the reason
+    it was refused.
     """
+    imported = _imports_the_published_skip_reason(dim)
     for node in ast.walk(_module_ast(dim)):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if node.name != func_name:
             continue
+        # Which skip calls sit under an `if` — computed by descending from the
+        # If nodes rather than by walking upward, because ast carries no parent
+        # pointer and a `.parent` we attached ourselves would be a fact about
+        # this walk instead of about the source.
+        conditional_calls = {
+            id(c)
+            for branch in ast.walk(node) if isinstance(branch, ast.If)
+            for c in ast.walk(branch) if isinstance(c, ast.Call)
+        }
         for call in ast.walk(node):
             if not isinstance(call, ast.Call):
                 continue
             fn = call.func
+            spelling = None
             if isinstance(fn, ast.Attribute) and fn.attr == "skip":
                 if isinstance(fn.value, ast.Name) and fn.value.id == "pytest":
-                    return f"{func_name}: pytest.skip() at line {call.lineno}"
-            if isinstance(fn, ast.Name) and fn.id == "skip":
-                return f"{func_name}: skip() at line {call.lineno}"
+                    spelling = "pytest.skip()"
+            elif isinstance(fn, ast.Name) and fn.id == "skip":
+                spelling = "skip()"
+            if spelling is None:
+                continue
+            conditional = id(call) in conditional_calls
+            if _is_the_corpus_absent_skip(call, conditional, imported):
+                continue
+            why = []
+            if not conditional:
+                why.append("it is UNCONDITIONAL")
+            if not imported:
+                why.append(
+                    f"the module does not import {_CORPUS_SKIP_REASON_NAME} "
+                    f"from {_CORPUS_SKIP_REASON_MODULE}")
+            if not (len(call.args) == 1 and not call.keywords
+                    and isinstance(call.args[0], ast.Name)
+                    and call.args[0].id == _CORPUS_SKIP_REASON_NAME):
+                why.append(
+                    f"its reason is not the bare {_CORPUS_SKIP_REASON_NAME}")
+            # The three clauses above are exhaustive over the ways
+            # `_is_the_corpus_absent_skip` can say no, but an empty reason
+            # would be a refusal with nothing said, which this campaign
+            # refuses on principle rather than on reachability.
+            if not why:
+                why.append("it is not the published corpus-absent skip, and "
+                           "the refusal could not be attributed to one of the "
+                           "named clauses — treat this as a defect in this "
+                           "checker, not a verdict about the cell")
+            return (f"{func_name}: {spelling} at line {call.lineno} — "
+                    + "; ".join(why))
     return None
 
 
@@ -1057,9 +1169,12 @@ def test_every_na_cell_asserts_a_live_precondition():
          holding, the module stops calling the cell NA and this test says so;
       2. pytest collected no ``skip`` / ``skipif`` marker for the item — a
          marker-level skip never enters the test body at all;
-      3. the cell test function's AST contains no ``pytest.skip`` call — a
-         body-level skip would leave the cell reporting "passed" while
-         asserting nothing about the precondition.
+      3. the cell test function's AST contains no INADMISSIBLE ``pytest.skip``
+         call. An unconditional one, or one carrying any reason other than the
+         suite's single published "could not look" wording, would leave the
+         cell out of the census on an excuse of its own invention. The one
+         admissible form, and why permitting it costs nothing, is set out at
+         :func:`_calls_pytest_skip`.
     """
     census = state_census()
     cells = collected_cells()
@@ -1092,12 +1207,112 @@ def test_every_na_cell_asserts_a_live_precondition():
             found = _calls_pytest_skip(dim, func)
             if found:
                 problems.append(
-                    f"dimension {dim}: cell test {found}. A cell test may not "
-                    f"skip: the three states are ENFORCED, WAIVED (strict "
-                    f"xfail) and NA (asserted precondition)")
+                    f"dimension {dim}: cell test {found}. The three states are "
+                    f"ENFORCED, WAIVED (strict xfail) and NA (asserted "
+                    f"precondition); the only skip a cell may take is the "
+                    f"CONDITIONAL corpus-absent one carrying "
+                    f"{_CORPUS_SKIP_REASON_NAME}")
 
     assert not problems, (
         f"{len(problems)} NA problem(s):\n  - " + "\n  - ".join(problems))
+
+
+# ── The control for check (3): prove the narrowed rule still reddens ──
+#: Five cell-test bodies, one admissible and four not. Each is parsed as a
+#: whole module so ``_calls_pytest_skip`` runs on exactly the shape it runs on
+#: in the real files, import statement included.
+_SKIP_PROBE_ADMISSIBLE = """
+from _published_corpus import SKIP_REASON
+import pytest
+def cell(sid):
+    if nothing_to_look_at():
+        pytest.skip(SKIP_REASON)
+    assert ok(sid)
+"""
+
+_SKIP_PROBE_UNCONDITIONAL = """
+from _published_corpus import SKIP_REASON
+import pytest
+def cell(sid):
+    pytest.skip(SKIP_REASON)
+"""
+
+_SKIP_PROBE_OWN_REASON = """
+from _published_corpus import SKIP_REASON
+import pytest
+def cell(sid):
+    if inconvenient():
+        pytest.skip("this one is hard today")
+    assert ok(sid)
+"""
+
+_SKIP_PROBE_SHADOWED_NAME = """
+import pytest
+SKIP_REASON = "looks official, is not"
+def cell(sid):
+    if inconvenient():
+        pytest.skip(SKIP_REASON)
+    assert ok(sid)
+"""
+
+_SKIP_PROBE_BARE_SKIP = """
+import pytest
+from pytest import skip
+def cell(sid):
+    if inconvenient():
+        skip("not today")
+    assert ok(sid)
+"""
+
+
+def _probe(monkeypatch, source: str):
+    monkeypatch.setattr(
+        sys.modules[__name__], "_module_ast",
+        lambda dim, _s=source: ast.parse(_s))
+    return _calls_pytest_skip(0, "cell")
+
+
+def test_the_admissible_skip_is_the_only_one_that_passes(monkeypatch):
+    """THE BIDIRECTIONAL CONTROL for the narrowing landed 2026-08-19.
+
+    Narrowing a prohibition is the move this repository treats with the most
+    suspicion, because "make the check pass by making it check less" looks
+    exactly like it from a distance. So the four shapes the rule still refuses
+    are asserted here, in the same file, and each names why it was refused —
+    if the narrowing ever widened into a hole, four of these five go green.
+    """
+    assert _probe(monkeypatch, _SKIP_PROBE_ADMISSIBLE) is None
+
+    unconditional = _probe(monkeypatch, _SKIP_PROBE_UNCONDITIONAL)
+    assert unconditional and "UNCONDITIONAL" in unconditional, unconditional
+
+    own = _probe(monkeypatch, _SKIP_PROBE_OWN_REASON)
+    assert own and "not the bare SKIP_REASON" in own, own
+
+    shadowed = _probe(monkeypatch, _SKIP_PROBE_SHADOWED_NAME)
+    assert shadowed and "does not import SKIP_REASON" in shadowed, shadowed
+
+    bare = _probe(monkeypatch, _SKIP_PROBE_BARE_SKIP)
+    assert bare and "skip()" in bare, bare
+
+
+def test_a_cell_that_takes_the_admissible_skip_is_still_not_counted_as_covered():
+    """Why permitting the one skip costs no coverage, asserted not assumed.
+
+    ``enforcement_census`` labels a cell whose live outcome is ``skipped`` as
+    ``<state>-SKIPPED`` and never as agreement, and ``_UNMEASURED`` keeps it
+    out of the measured-red count while
+    ``test_no_cell_is_counted_enforced_while_its_predicate_is_red`` still
+    fails on it. That is the whole argument for the narrowing, so it is
+    checked rather than cited.
+    """
+    joined = _join_axes({("X", 3): "ENFORCED"}, {("X", 3): ("skipped",)})
+    verdict = joined[("X", 3)]
+    assert verdict.label == "ENFORCED-SKIPPED", verdict
+    assert not verdict.agrees, verdict
+    # …and the same cell is reported, not swallowed, by the assertion that
+    # decides whether coverage may be claimed for it.
+    assert ("X", 3) in {k for k, v in joined.items() if not v.agrees}
 
 
 def test_na_cells_are_a_minority_and_are_named():
