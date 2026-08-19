@@ -1,0 +1,20 @@
+# Invariants of the GDS-geometry antenna check.
+package: vibe-ic-marketplace/plugins/vibe-ic/programs/gds_antenna
+invariants:
+  - id: antenna-geometry-check-stays-independent-of-the-router
+    rule: >
+      The geometry check must not read the router's antenna report. This
+      package exists to produce a SECOND, INDEPENDENT number -- antenna_check.py
+      reconstructs as-fabricated connectivity from the streamed GDS with
+      KLayout's own LayoutToNetlist engine precisely because the flow already
+      had a router-report consumer and no way to cross-check it
+      (antenna_check.py:12-17). A well-meant change that reads the report to
+      "reconcile" the two leaves every gate green while collapsing the second
+      opinion into a copy of the first, which is the one failure this package
+      cannot detect about itself. xcheck_router.py is excluded because
+      consuming that report to compare the two counts is its entire stated job.
+    applies_to: ["*.py"]
+    excludes: ["xcheck_router.py"]
+    forbid: '(?m)^(?![ \t]*#).*(?:--router\b|check_antennas)'
+    counterexample: |
+      ap.add_argument("--router", required=True, help="OpenROAD antenna report")
