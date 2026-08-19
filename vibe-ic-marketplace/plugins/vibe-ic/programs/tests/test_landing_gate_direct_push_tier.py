@@ -36,8 +36,26 @@ from pathlib import Path
 
 import pytest
 
+import _protected_transition_fixture as protected
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 VERDICT = PROGRAMS / "landing_merge_verdict.py"
+
+# THE FOUR SYNTHETIC IDS THIS FILE JUDGES OVER. They are named once because the
+# protected-landing-transition receipt has to BIND all four: a receipt that
+# described some other (base, candidate) pair is one `validate_receipt_binding`
+# refuses, which is the property `test_a_protected_receipt_for_another_pair_
+# is_refused` exercises.
+# All four are HEX, because they are object ids and every reader of them says
+# so: `protected_landing_transition._oid` refuses a 40-character id that is not
+# lowercase hex, and a fixture that fed it `"t" * 40` would be refused for its
+# own alphabet rather than for anything this file is about.
+BASE_SHA = "a" * 40
+BASE_TREE = "c" * 40
+HEAD_SHA = "b" * 40
+HEAD_TREE = "d" * 40
+#: The tree a caller that got the cross-check wrong would report as verified.
+OTHER_TREE = "e" * 40
 
 # The one land log both arms are given unless a test says otherwise. `FAIL
 # targeted tests` is present on purpose: the test tier's own verdict belongs to
@@ -94,10 +112,20 @@ def _junit(outcome: str | None, *, process_rc: str = "1") -> str:
         '</testsuites>')
 
 
+def _receipt(tmp_path: Path, *, base_commit: str = BASE_SHA,
+             base_tree: str = BASE_TREE, candidate_commit: str = HEAD_SHA,
+             candidate_tree: str = HEAD_TREE) -> Path:
+    """One STEADY protected-landing-transition receipt for these four ids."""
+    return protected.receipt_for(
+        tmp_path / "protected.json", base_commit=base_commit,
+        base_tree=base_tree, candidate_commit=candidate_commit,
+        candidate_tree=candidate_tree)
+
+
 def _run(tmp_path: Path, *, base: str | None, cand: str | None,
          tier: str = "direct-push", base_junit_written: bool = True,
          land_log: str = LAND_LOG, base_land_log: str | None = LAND_LOG,
-         base_selection: bool = True):
+         base_selection: bool = True, receipt: Path | None | str = ""):
     if base_junit_written:
         (tmp_path / "base.xml").write_text(_junit(base))
     (tmp_path / "cand.xml").write_text(_junit(cand))
@@ -109,10 +137,10 @@ def _run(tmp_path: Path, *, base: str | None, cand: str | None,
             # Without it argparse exits before `--json` is ever written and
             # every case here dies on a missing verdict.json — a fixture
             # failure that reads like a program one.
-            "--base-sha", "a" * 40, "--base-tree", "c" * 40,
-            "--head-sha", "b" * 40,
-            "--verified-sha", "b" * 40, "--rebase-status", "ok",
-            "--expected-tree", "t" * 40, "--verified-tree", "t" * 40,
+            "--base-sha", BASE_SHA, "--base-tree", BASE_TREE,
+            "--head-sha", HEAD_SHA,
+            "--verified-sha", HEAD_SHA, "--rebase-status", "ok",
+            "--expected-tree", HEAD_TREE, "--verified-tree", HEAD_TREE,
             "--land-log", str(tmp_path / "land.log"),
             "--selection", str(tmp_path / "sel.txt"),
             "--base-selection", str(tmp_path / "selb.txt"),
@@ -123,6 +151,17 @@ def _run(tmp_path: Path, *, base: str | None, cand: str | None,
     if base_land_log is not None:
         (tmp_path / "base_land.log").write_text(base_land_log)
         argv += ["--base-land-log", str(tmp_path / "base_land.log")]
+    # THE PROTECTED-LANDING-TRANSITION RECEIPT IS AN INPUT HERE, not a subject.
+    # `read_protected_transition_receipt` refuses without one, and that refusal
+    # is UNMEASURABLE — so a file that omitted it would watch every case below
+    # answer rc 2 for the harness's silence rather than for the rule under
+    # test. The subject of this file is `decide()`; the receipt BUILDER is
+    # measured end to end in `tools/test_gatekeeper_land_differential.py`,
+    # against a real repository. `receipt=None` asks for the omission itself,
+    # which is what the paired control at the bottom of this file asserts on.
+    if receipt is not None:
+        argv += ["--protected-transition-receipt",
+                 str(_receipt(tmp_path) if receipt == "" else receipt)]
     cp = subprocess.run(argv, capture_output=True, text=True)
     record = json.loads((tmp_path / "verdict.json").read_text())
     return cp, record
@@ -260,9 +299,10 @@ def test_a_base_arm_that_did_not_finish_is_refused_not_subtracted(tmp_path):
     (tmp_path / "selb.txt").write_text(FILE + "\nprograms/tests/test_other.py\n")
     cp = subprocess.run(
         [sys.executable, str(VERDICT),
-         "--base-sha", "a" * 40, "--head-sha", "b" * 40,
-         "--verified-sha", "b" * 40, "--rebase-status", "ok",
-         "--expected-tree", "t" * 40, "--verified-tree", "t" * 40,
+         "--base-sha", BASE_SHA, "--base-tree", BASE_TREE,
+         "--head-sha", HEAD_SHA,
+         "--verified-sha", HEAD_SHA, "--rebase-status", "ok",
+         "--expected-tree", HEAD_TREE, "--verified-tree", HEAD_TREE,
          "--land-log", str(tmp_path / "land.log"),
          "--base-land-log", str(tmp_path / "base_land.log"),
          "--selection", str(tmp_path / "sel.txt"),
@@ -270,6 +310,7 @@ def test_a_base_arm_that_did_not_finish_is_refused_not_subtracted(tmp_path):
          "--base-junit", str(tmp_path / "base.xml"),
          "--candidate-junit", str(tmp_path / "cand.xml"),
          "--verification-tier", "direct-push",
+         "--protected-transition-receipt", str(_receipt(tmp_path)),
          "--json", str(tmp_path / "verdict.json")],
         capture_output=True, text=True)
     rec = json.loads((tmp_path / "verdict.json").read_text())
@@ -314,15 +355,21 @@ def test_the_cross_tree_refusals_stay_armed_under_the_new_tier(tmp_path):
     (tmp_path / "selb.txt").write_text(FILE + "\n")
     cp = subprocess.run(
         [sys.executable, str(VERDICT),
-         "--base-sha", "a" * 40, "--head-sha", "b" * 40,
-         "--verified-sha", "b" * 40, "--rebase-status", "ok",
-         "--expected-tree", "t" * 40, "--verified-tree", "u" * 40,
+         "--base-sha", BASE_SHA, "--base-tree", BASE_TREE,
+         "--head-sha", HEAD_SHA,
+         "--verified-sha", HEAD_SHA, "--rebase-status", "ok",
+         "--expected-tree", HEAD_TREE, "--verified-tree", OTHER_TREE,
          "--land-log", str(tmp_path / "land.log"),
          "--selection", str(tmp_path / "sel.txt"),
          "--base-selection", str(tmp_path / "selb.txt"),
          "--base-junit", str(tmp_path / "base.xml"),
          "--candidate-junit", str(tmp_path / "cand.xml"),
          "--verification-tier", "direct-push",
+         # The receipt binds the tree the caller says it VERIFIED, so this case
+         # reaches the cross-tree rule instead of stopping at the protected
+         # tier: what is under test is that a wrong tree is still refused.
+         "--protected-transition-receipt",
+         str(_receipt(tmp_path, candidate_tree=OTHER_TREE)),
          "--json", str(tmp_path / "verdict.json")],
         capture_output=True, text=True)
     rec = json.loads((tmp_path / "verdict.json").read_text())
@@ -338,3 +385,40 @@ def test_the_merge_tiers_are_untouched_by_the_addition(tmp_path):
     _, weak = _run(tmp_path, base="failed", cand="failed", tier="rebase-replay")
     assert weak["squash_vs_rebase_cross_check"] == "NOT_PERFORMED"
     assert weak["tier_degraded"] is True
+
+
+# ------------------------------------- the protected tier, in both directions
+# Every case above SUPPLIES a protected-landing-transition receipt, which is
+# what lets them be about `decide()`. These two are the paired controls for
+# that supply: the tier must still refuse when the receipt is absent, and when
+# it describes some other landing. Without them a harness that had quietly
+# stopped passing the receipt — or a judge that had quietly stopped reading it
+# — would leave every test above green.
+
+
+def test_no_protected_receipt_is_unmeasurable_not_a_pass(tmp_path):
+    """An otherwise-clean landing with no receipt is UNKNOWN, and rc 2.
+
+    Not rc 1: "this branch broke something" and "whether this branch moved the
+    protected landing runtime could not be measured" are different events, and
+    a gate that could not tell them apart is the defect this repo exists to
+    hunt.
+    """
+    cp, rec = _run(tmp_path, base="failed", cand="failed", receipt=None)
+    assert cp.returncode == 2
+    assert rec["verdict"] == "REFUSE"
+    assert any("PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED" in r
+               for r in rec["reasons"])
+
+
+def test_a_protected_receipt_for_another_pair_is_refused(tmp_path):
+    """A receipt is evidence about ONE (base, candidate) pair.
+
+    A receipt that measured a different base is not a weaker answer about this
+    landing — it is an answer about a tree nobody is about to create, and it
+    must not be readable as this one's.
+    """
+    other = _receipt(tmp_path, base_commit="f" * 40)
+    cp, rec = _run(tmp_path, base="failed", cand="failed", receipt=other)
+    assert cp.returncode == 2
+    assert any("does not bind the merge verdict" in r for r in rec["reasons"])
