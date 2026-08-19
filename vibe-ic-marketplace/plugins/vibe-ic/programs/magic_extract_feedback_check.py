@@ -62,8 +62,12 @@ runs affected is not, and is not guessed.
 
 WHAT UPSTREAM DOES, AND THE ONE THING IT DOES NOT
 =================================================
-LibreLane (@ bf8cc13c; corroborated line-for-line against the installed
-distribution in the EDA image) counts the string at ``steps/magic.py:642``,
+LibreLane (@ bf8cc13c as cited to this change; the line numbers below were
+re-read against the copy actually installed in the EDA image, ``librelane
+3.1.0.dev1``, and all four match exactly — that is corroboration of the cited
+lines, not proof that the wheel IS bf8cc13c, which was NOT DETERMINED because
+no LibreLane clone is present in this environment) counts the string at
+``steps/magic.py:642``,
 re-counts it from parsed bounding boxes at ``:659-666``, classifies it at
 ``common/drc.py:263-268``, publishes ``magic__illegal_overlap__count``, and
 gates it at threshold 0 with ``Checker.IllegalOverlap``
