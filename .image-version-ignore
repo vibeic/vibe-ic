@@ -178,22 +178,3 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_pdk_registry_asset_half_
 # rewrite it and every anchor bump would otherwise need a hand edit (measured: 0.2.89 ->
 # 0.2.96 -> 0.2.97 in one afternoon).
 vibe-ic-marketplace/plugins/vibe-ic/programs/not_verified_tier.py
-
-# UPSTREAM STUDIES RECORD WHICH IMAGE THEY MEASURED. `librelane_gap_list.md`
-# names an older image tag and reports that the wheel inside it ships
-# librelane-3.1.0.dev1, which is NOT the tree it compared against — an 86-line
-# difference in one file, running the wrong way. That tag is the provenance of a
-# measurement, not a pull command: rewriting it to the current VERSION would make
-# the document describe a comparison that never happened, against an image it
-# never opened.
-#
-# AND NOTE THE TAG IS NOT REPEATED HERE. The first draft of this comment quoted
-# the full pullable string to explain itself, and the drift-net immediately
-# flagged THIS FILE — correctly. A pin-hunting net cannot tell a pin from a
-# sentence about a pin, so the rule is: name the file, never re-type the tag.
-#
-# BOUNDED BY LOCATION, like the RESULT.md globs above. `docs/research/` is where
-# studies of OTHER projects live, and a study's whole value is that it names the
-# revision it read. An install doc must never be filed here to escape the net —
-# if one is, that is the finding, not an exemption.
-docs/research/*.md
