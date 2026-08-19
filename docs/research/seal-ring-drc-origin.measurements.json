@@ -1,0 +1,352 @@
+{
+  "note": "Measured values behind docs/research/seal-ring-drc-origin.md. Nothing here was modified to make a number move.",
+  "die_um": [
+    1936.0,
+    2531.0
+  ],
+  "dbu": 0.001,
+  "def_units_per_um": 2000,
+  "drc_invocation": {
+    "decks": "all,-antenna,-density,-cup",
+    "workers": 1,
+    "note": "identical deck/flags/container across all three runs; only the input GDS differs"
+  },
+  "histogram": {
+    "operator": {
+      "GR.4": 794,
+      "PP.2": 87,
+      "NP.2": 83,
+      "DF.13_MV": 70,
+      "NW.2a_LV": 39,
+      "NW.2b_LV": 35,
+      "DV.5": 28,
+      "GR.2": 19,
+      "NW.2b_MV": 9,
+      "DF.14_MV": 9,
+      "V1.2a": 2,
+      "V3.2a": 2,
+      "TOTAL": 1177
+    },
+    "my_control": {
+      "GR.4": 794,
+      "PP.2": 87,
+      "NP.2": 83,
+      "DF.13_MV": 70,
+      "NW.2a_LV": 39,
+      "NW.2b_LV": 35,
+      "DV.5": 28,
+      "GR.2": 19,
+      "NW.2b_MV": 9,
+      "DF.14_MV": 9,
+      "V1.2a": 2,
+      "V3.2a": 2,
+      "TOTAL": 1177
+    },
+    "unsealed": {
+      "GR.4": 0,
+      "PP.2": 87,
+      "NP.2": 83,
+      "DF.13_MV": 70,
+      "NW.2a_LV": 39,
+      "NW.2b_LV": 35,
+      "DV.5": 28,
+      "GR.2": 0,
+      "NW.2b_MV": 9,
+      "DF.14_MV": 9,
+      "V1.2a": 0,
+      "V3.2a": 0,
+      "TOTAL": 360
+    }
+  },
+  "item_level_diff": {
+    "identical_category_and_geometry_in_both": 360,
+    "only_in_sealed": 817,
+    "only_in_unsealed": 0,
+    "only_in_sealed_by_rule": {
+      "GR.4": 794,
+      "GR.2": 19,
+      "V1.2a": 2,
+      "V3.2a": 2
+    }
+  },
+  "gr4_by_metal_level": {
+    "ring_metal_alone": {
+      "metal1": 0,
+      "metal2": 0,
+      "metal3": 0,
+      "metal4": 0,
+      "metal5": 0,
+      "total": 0
+    },
+    "as_built": {
+      "metal1": 18,
+      "metal2": 766,
+      "metal3": 9,
+      "metal4": 1,
+      "metal5": 0,
+      "total": 794
+    }
+  },
+  "gr2_by_metal_level": {
+    "metal2": 16,
+    "metal3": 3,
+    "total": 19
+  },
+  "band_occupancy_um2": {
+    "band_from_ring_extent_um": {
+      "outer": [
+        0.0,
+        0.0,
+        1936.0,
+        2531.0
+      ],
+      "inner": [
+        16.0,
+        16.0,
+        1920.0,
+        2515.0
+      ]
+    },
+    "ring_inside_band_equals_ring_total": true,
+    "fill_inside_band": {
+      "metal1": 0.0,
+      "metal2": 0.0,
+      "metal3": 0.0,
+      "metal4": 0.0,
+      "metal5": 0.0
+    },
+    "design_inside_16um_band": {
+      "comp": 0.0,
+      "nwell": 0.0,
+      "poly2": 0.0,
+      "metal1": 12.916,
+      "metal2": 324.316,
+      "metal3": 23.624,
+      "metal4": 3.648,
+      "metal5": 0.0,
+      "via1": 0.473,
+      "via2": 0.406,
+      "via3": 0.068,
+      "via4": 0.0
+    },
+    "design_inside_26um_band": {
+      "comp": 0.0,
+      "nwell": 0.0,
+      "poly2": 0.0,
+      "metal1": 19.816,
+      "metal2": 417.001,
+      "metal3": 39.155,
+      "metal4": 6.448,
+      "metal5": 0.0,
+      "via1": 0.473,
+      "via2": 0.541,
+      "via3": 0.068,
+      "via4": 0.0
+    },
+    "design_min_distance_to_die_edge_um": {
+      "comp": 442.58,
+      "nwell": 441.97,
+      "poly2": 443.02,
+      "metal1": 0.45,
+      "metal2": 0.0,
+      "metal3": 0.0,
+      "metal4": 2.97,
+      "metal5": 457.92,
+      "via1": 0.51,
+      "via2": 0.51,
+      "via3": 3.03,
+      "via4": 0.0
+    }
+  },
+  "leak_outside_band_all_design_geometry": {
+    "metal1": {
+      "area_um2": 295.338,
+      "bbox_um": [
+        1489.97,
+        1260.43,
+        1920.0,
+        1275.25
+      ]
+    },
+    "metal2": {
+      "area_um2": 3234.96,
+      "bbox_um": [
+        951.3,
+        16.0,
+        986.3,
+        2515.0
+      ]
+    },
+    "metal3": {
+      "area_um2": 1031.943,
+      "bbox_um": [
+        16.0,
+        1263.78,
+        1920.0,
+        1886.22
+      ]
+    },
+    "metal4": {
+      "area_um2": 131.776,
+      "bbox_um": [
+        955.22,
+        2044.37,
+        955.5,
+        2515.0
+      ]
+    },
+    "metal5": {
+      "area_um2": 0.0,
+      "bbox_um": null
+    }
+  },
+  "pins": {
+    "count": 41,
+    "inside_outer_16um_band": 41,
+    "by_layer": {
+      "Metal2": 33,
+      "Metal3": 8
+    },
+    "port_box_distance_to_die_edge_um": {
+      "min": 0.0,
+      "max": 0.0
+    },
+    "port_area_overlapped_by_seal_ring_metal_on_own_layer": {
+      "pins": 41,
+      "of": 41,
+      "fraction_of_port_area": 1.0
+    }
+  },
+  "via_spacing_attribution": {
+    "via1_space_lt_0.26um": {
+      "union": 1,
+      "ring_alone": 0,
+      "design_alone": 0,
+      "edge_pair_um": [
+        [
+          961.09,
+          2527.15,
+          960.949,
+          2527.15
+        ],
+        [
+          961.02,
+          2526.9,
+          961.161,
+          2526.9
+        ]
+      ]
+    },
+    "via3_space_lt_0.26um": {
+      "union": 1,
+      "ring_alone": 0,
+      "design_alone": 0,
+      "edge_pair_um": [
+        [
+          955.36,
+          2528.08,
+          955.1,
+          2528.08
+        ],
+        [
+          955.23,
+          2527.97,
+          955.49,
+          2527.97
+        ]
+      ]
+    }
+  },
+  "layout_content_delta_sealed_vs_unsealed": {
+    "cells": {
+      "sealed": 53,
+      "unsealed": 37
+    },
+    "top_instances": {
+      "sealed": 3966,
+      "unsealed": 3958
+    },
+    "extra_cells_in_sealed": [
+      "COMP_FILL",
+      "COMP_fill_cell",
+      "METAL1_FILL",
+      "METAL2_FILL",
+      "METAL3_FILL",
+      "METAL4_FILL",
+      "METAL5_FILL",
+      "Metal1_fill_cell",
+      "Metal2_fill_cell",
+      "Metal3_fill_cell",
+      "Metal4_fill_cell",
+      "Metal5_fill_cell",
+      "POLY2_FILL",
+      "Poly2_fill_cell",
+      "sealring",
+      "sealring$1"
+    ],
+    "caveat": "delta is ring + fill, not ring alone; fill measured at 0.000 um^2 inside the band on every metal layer, which is what disambiguates it"
+  },
+  "floorplan": {
+    "std_cell_rows": 419,
+    "row_extent_um": {
+      "x": [
+        442.4,
+        1493.5
+      ],
+      "y": [
+        442.96,
+        2085.4
+      ]
+    },
+    "die_um": [
+      1936.0,
+      2531.0
+    ],
+    "blockages_in_routed_def": 0,
+    "blockages_in_die_finished_def": {
+      "count": 4,
+      "type": "PLACEMENT",
+      "band_um": 16.0,
+      "note": "die_finished.def is derived from routed.def, i.e. written after routing; constrained nothing in this run"
+    }
+  },
+  "not_determined": [
+    "whether the 41 pin/ring merges are netlist shorts (needs LVS/extraction; not run)",
+    "cause of the 360 pre-existing violations (proven ring-independent; not investigated)",
+    "the 3 density + 1 antenna deferrals (those decks were excluded, exactly as the operator stage-14 excluded them)",
+    "the antenna deck was excluded from every run here (as the operator's stage 14 excluded it); the reported antenna 4 -> 1 is unverified by me"
+  ],
+  "ring_footprint_vs_gate_logged_added_area_um2": {
+    "note": "gate's own die_finishing.json added_geometry is (output - input); the shortfall against the ring's actual footprint IS the design geometry the ring was drawn on top of",
+    "metal1": {
+      "ring_drew": 132950.0,
+      "gate_logged": 132937.774,
+      "shortfall": 12.226,
+      "design_in_band": 12.916
+    },
+    "metal2": {
+      "ring_drew": 141758.0,
+      "gate_logged": 141433.684,
+      "shortfall": 324.316,
+      "design_in_band": 324.316
+    },
+    "metal3": {
+      "ring_drew": 132950.0,
+      "gate_logged": 132927.776,
+      "shortfall": 22.224,
+      "design_in_band": 23.624
+    },
+    "metal4": {
+      "ring_drew": 141758.0,
+      "gate_logged": 141754.352,
+      "shortfall": 3.648,
+      "design_in_band": 3.648
+    },
+    "metal5": {
+      "ring_drew": 132950.0,
+      "gate_logged": 132950.0,
+      "shortfall": 0.0,
+      "design_in_band": 0.0
+    }
+  }
+}
