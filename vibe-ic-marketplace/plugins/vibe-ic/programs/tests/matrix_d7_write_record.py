@@ -166,18 +166,42 @@ records instead of artefacts, and it is deliberately the strictest form:
 
     a record is admissible only if THE COMMIT CARRIES IT.
 
-:func:`record_roots` does not search ``$HOME``, does not read an env var, does
-not take an operator-supplied directory, and does not consult a manifest of
+:func:`record_roots` does not search ``$HOME``, does not take an
+operator-supplied directory of loose files, and does not consult a manifest of
 machine paths. It asks ``git ls-tree -r HEAD`` for every tracked
 ``*/reports/write_ledger.json`` and takes the run root to be that file's
-grandparent. MEASURED on this commit: **0 roots** (``git ls-tree -r
---name-only HEAD | grep -c write_ledger.json`` = 0; ``step_write_ledger``
-landed on 2026-08-06 and no run tree has been re-published since). Every cell
-therefore degrades to the pre-binding behaviour, and :data:`RECORD_BOUND_ROOTS`
-pins the empty population so the first published record is a loud, named event
-rather than a discovery — at which point the twelve promotions above must be
-re-measured and each one either DECLARED in the flow yaml or waived with
-evidence.
+grandparent.
+
+WHICH REPOSITORY'S ``HEAD``, since #1723
+----------------------------------------
+The rule above says THE COMMIT CARRIES IT, and until 2026-08-16 there was only
+one commit it could mean: the corpus was tracked inside this repository under
+``benchmark-data/``. #1723 moved ``benchmark-data`` into ``vibeic/benchmark-
+data``, and this function went on asking the PLUGIN checkout — which now tracks
+no run tree at all. MEASURED on origin/main 74ac9fa78: **0 roots**, and the
+published reason was "no run root in this commit carries a tracked
+``reports/write_ledger.json``", which reads as "nobody has published a record
+yet" when the truth is "the records moved and this function did not follow".
+The two pinned roots were carrying 318 live observations the whole time; the
+same probe against the corpus checkout finds both of them and loads both.
+
+So the question is now asked of the repository that TRACKS THE CORPUS, resolved
+by :func:`_record_repo` — the plugin checkout when it still carries the cells
+in-tree (the pre-#1723 shape, and every checkout of a commit before it), and
+otherwise the git checkout named by ``VIBE_IC_BENCHMARK_DATA`` through
+``_published_corpus.corpus_root``. This is the same two-shape resolution
+``_corpus_repo_view.corpus_repo`` performs for the provenance checks, for the
+same reason and with the same precedence.
+
+WHAT THIS DOES NOT RELAX. The pointer names a REPOSITORY, and every rule below
+is then asked of that repository's ``HEAD``: an untracked file under it is
+still inadmissible, ``git clean -xdf`` still cannot change a colour, and two
+checkouts of one corpus commit still agree. What moved is WHICH commit is
+asked, not WHETHER a commit is asked. A pointer at a loose directory of files —
+no git checkout — is refused by name rather than read, because there is no HEAD
+there to make the claim about. A pointer that is set and broken raises out of
+``corpus_root`` rather than degrading to "no corpus": #1723 is exactly the
+event that would otherwise have turned this binding green-by-silence.
 
 FOUR RULES A RECORD MUST PASS, AND WHY EACH ONE EXISTS
 ======================================================
@@ -254,6 +278,7 @@ from typing import Dict, List, Optional, Tuple
 from matrix_63x8 import flowref as F
 
 import _plugin_tree
+import _published_corpus as _pc
 
 if str(F.PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(F.PROGRAMS_DIR))
@@ -383,20 +408,89 @@ def tracked_at_head(root: Path) -> frozenset:
 # ──────────────────────────────────────────────────────────────────────
 # Discovery — from the commit, never from the machine
 # ──────────────────────────────────────────────────────────────────────
+def _git_toplevel(start: Path) -> Optional[Path]:
+    """The work-tree root *start* belongs to, or None if it is not in one."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(start), capture_output=True, text=True,
+            timeout=_LS_TREE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = (proc.stdout or "").strip()
+    return Path(out) if out else None
+
+
+@lru_cache(maxsize=1)
+def _record_repo() -> Tuple[Optional[Path], str, str]:
+    """``(repo, label_prefix, why)`` — whose ``HEAD`` decides the population.
+
+    ``why`` is ALWAYS a sentence, published through :func:`binding_notes`, so
+    a reader of a dimension-7 cell can see which repository was asked. The
+    two shapes are the ones ``_corpus_repo_view.corpus_repo`` names, in the
+    same precedence:
+
+      * a checkout that still carries the cells under ``benchmark-data/`` —
+        asked as itself, so every commit before #1723 answers exactly as it
+        always did, with no prefix to add;
+      * a clone of ``vibeic/benchmark-data``, which tracks the same cells one
+        level up under ``ic/``. Its paths are prefixed with ``benchmark-data/``
+        so a label means the same thing in both shapes — the pin, the notes and
+        every published finding name cells by that path and must not change
+        spelling with the host's checkout layout.
+    """
+    plugin = _plugin_tree.repo_root()
+    if plugin is not None and any(
+            rel.endswith("/" + RECORD_REL) for rel in tracked_at_head(plugin)):
+        return plugin, "", (
+            f"the population was read from this checkout, which still tracks "
+            f"the corpus in-tree (the pre-#1723 shape)")
+
+    corpus = _pc.corpus_root()
+    if corpus is None:
+        return None, "", (
+            f"no corpus was offered: this checkout tracks no "
+            f"{RECORD_REL} and {_pc.CORPUS_ENV} is unset, so W2's producer "
+            f"oracle is the AST alone — exactly as it was before this binding")
+
+    top = _git_toplevel(corpus)
+    if top is None:
+        return None, "", (
+            f"{_pc.CORPUS_ENV} names {corpus}, which is not inside a git work "
+            f"tree. This binding judges what a COMMIT carries, never what a "
+            f"directory happens to hold (#414/#416/#527), and a loose "
+            f"directory has no HEAD to make that claim about — point "
+            f"{_pc.CORPUS_ENV} at a clone")
+
+    if (top / "benchmark-data").resolve() == corpus.resolve():
+        return top, "", (
+            f"the population was read from the corpus checkout at {top}, "
+            f"which tracks the cells under benchmark-data/")
+    return corpus, "benchmark-data/", (
+        f"the population was read from the corpus clone at {corpus}, whose "
+        f"cells are labelled under benchmark-data/ so they name the same "
+        f"thing they do in a checkout that carries them in-tree")
+
+
 @lru_cache(maxsize=1)
 def record_roots() -> Tuple[RecordRoot, ...]:
     """Every run root whose ``reports/write_ledger.json`` is TRACKED AT HEAD.
 
-    Derived from ``git ls-tree``, so the population is a property of the
-    commit and is identical on every checkout. There is no ``$HOME`` search,
-    no env-var override and no manifest of machine paths — #527 removed all
-    three from dimension 3 and re-introducing any of them here would make a
-    dimension-7 cell's colour a property of the host.
+    Derived from ``git ls-tree`` over the repository :func:`_record_repo`
+    resolves, so the population is a property of a COMMIT and is identical on
+    every checkout of it. There is no ``$HOME`` search and no manifest of
+    machine paths — #527 removed both from dimension 3 and re-introducing
+    either here would make a dimension-7 cell's colour a property of the host.
+    The corpus POINTER is not one of those: it names a repository, and the
+    claim is still made about that repository's HEAD.
 
-    Empty on a flattened install cache (no repo root, no git work tree), which
-    is the correct answer there: nothing is admissible, everything degrades.
+    Empty on a flattened install cache (no repo root, no git work tree, no
+    corpus), which is the correct answer there: nothing is admissible,
+    everything degrades — and :func:`_record_repo` says which of those it was.
     """
-    repo = _plugin_tree.repo_root()
+    repo, prefix, _why = _record_repo()
     if repo is None:
         return ()
     out: List[RecordRoot] = []
@@ -408,7 +502,7 @@ def record_roots() -> Tuple[RecordRoot, ...]:
             continue
         cand = repo / root_rel
         if cand.is_dir():
-            out.append(RecordRoot(rel=root_rel, path=cand))
+            out.append(RecordRoot(rel=prefix + root_rel, path=cand))
     return tuple(out)
 
 
@@ -529,13 +623,23 @@ def _index() -> Tuple[Dict[str, Tuple[Observation, ...]],
     notes: List[str] = []
     rejections: Dict[str, Rejected] = {}
 
+    _repo, _prefix, why_repo = _record_repo()
     roots = record_roots()
     if not roots:
+        # WHICH absence it is, in the same breath. Before #1723 there was only
+        # one — "nobody has published a record yet" — and that sentence was
+        # hard-coded here. There are now three (this checkout carries no
+        # corpus and none was offered; the pointer names something that is not
+        # a git checkout; the corpus IS readable and genuinely carries no
+        # record), and they need opposite responses. `_record_repo` returns the
+        # one that applies; a fixed sentence would have described the first
+        # while the second was true, which is how this binding sat inert.
         notes.append(
-            "no run root in this commit carries a tracked "
-            f"{RECORD_REL}, so W2's producer oracle is the AST alone — "
-            "exactly as it was before this binding")
+            f"{why_repo}; no run root carries a tracked {RECORD_REL}, so W2's "
+            f"producer oracle is the AST alone — exactly as it was before "
+            f"this binding")
         return {}, tuple(notes), rejections
+    notes.append(why_repo)
 
     for root in roots:
         doc, note = _load(root)
