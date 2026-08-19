@@ -222,6 +222,61 @@ def test_a_loop_that_converged_is_not_called_illegal(tmp_path):
     assert "PLACER_REPORTED_VIOLATIONS" not in rules
 
 
+def _mk_two_logs(tmp_path, first_name, first, second_name, second):
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True, exist_ok=True)
+    (pnr / "placed.def").write_text(_placed_def())
+    (pnr / first_name).write_text("\n".join(first) + "\n")
+    (pnr / second_name).write_text("\n".join(second) + "\n")
+    return tmp_path
+
+
+@pytest.mark.parametrize("dirty_log,clean_log", [
+    # the dirty log sorts FIRST -- folding every log into one sequence would
+    # let the clean one, which merely sorts last, overwrite the verdict
+    ("a_dirty.log", "z_clean.log"),
+    # ...and the mirror, so the test cannot pass by accident of ordering
+    ("z_dirty.log", "a_clean.log"),
+])
+def test_a_clean_log_does_not_cancel_a_dirty_log_for_the_same_site(
+        tmp_path, dirty_log, clean_log):
+    """"Last reading" is only meaningful WITHIN one log file.
+
+    The logs are walked in FILENAME order, which is not time order. A site
+    read as 7 in one file and 0 in another must be illegal whichever way the
+    two names happen to sort -- otherwise `a.log`=7 with `z.log`=0 passes as
+    legal purely because `z` sorts last, which is a false NEGATIVE and exactly
+    the failure this gate exists to refuse.
+    """
+    _mk_two_logs(
+        tmp_path,
+        dirty_log, ["SHIP_CHECK_PLACEMENT_VIOLATIONS 7",
+                    "SHIP_CHECK_PLACEMENT_WARN: violations=7"],
+        clean_log, ["SHIP_CHECK_PLACEMENT_VIOLATIONS 0",
+                    "SHIP_CHECK_PLACEMENT_PASS"])
+    verdict, rc, rules, summary = _run(tmp_path)
+    assert (verdict, rc) == ("FAIL", 1), (
+        f"{dirty_log}=7 / {clean_log}=0 was called legal")
+    assert summary["check_placement_sites"] == {"SHIP": "7"}
+    assert "PLACER_REPORTED_VIOLATIONS" in rules
+    assert "7" in _msg(tmp_path, "PLACER_REPORTED_VIOLATIONS")
+
+
+def test_two_clean_logs_for_the_same_site_stay_green(tmp_path):
+    """The positive half of the same rule: per-log tracking must not turn a
+    run whose placer was clean in every log into a failure."""
+    _mk_two_logs(
+        tmp_path,
+        "a.log", ["SHIP_CHECK_PLACEMENT_VIOLATIONS 0",
+                  "SHIP_CHECK_PLACEMENT_PASS"],
+        "z.log", ["SHIP_CHECK_PLACEMENT_VIOLATIONS 0",
+                  "SHIP_CHECK_PLACEMENT_PASS"])
+    verdict, rc, rules, summary = _run(tmp_path)
+    assert (verdict, rc) == ("PASS", 0)
+    assert summary["check_placement_sites"] == {"SHIP": "0"}
+    assert "PLACER_REPORTED_VIOLATIONS" not in rules
+
+
 def test_a_recovered_violation_is_disclosed_not_dropped(tmp_path):
     """Not scored is not the same as not recorded. A run that had to converge
     must not read like a run that never objected."""
