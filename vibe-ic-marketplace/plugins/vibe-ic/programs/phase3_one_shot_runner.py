@@ -30874,6 +30874,54 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                       time.time() - t0, detail, written)
 
 
+def step_digital_hardmacro_gen(project: Path) -> StepResult:
+    """Canonical step 37.5ip — the cell/IP path TERMINAL producer.
+
+    WIRED HERE AND NOT INTO THE GATE, for the reason step A8 already records in
+    `flow/phase1_phase2_phase3.yaml`: `flow_compliance_check` is the phase-2+3
+    ACCEPTANCE AUDITOR, and an auditor that writes a declared required_output
+    into the project it is auditing certifies its own output. A8's GDS producer
+    was briefly wired into A8's gate and that was withdrawn on 2026-07-28 after
+    the audit was measured creating the very `.gds` its next two clauses then
+    read. `digital_hardmacro_gen` is declared in step 37.5ip's `programs:` and
+    is invoked from HERE — the path a real run takes — so
+    `digital_hardmacro_check` measures a kit the audit did not touch.
+
+    Runs AFTER `step_canonicalize_artefacts`, which is what stages the sign-off
+    GDS at the canonical `phase3/stage4/gds/` path this producer's declared
+    input names.
+
+    NEVER FAILS THE RUN. A producer refusal (rc 1) and an absent capability
+    (rc 2) are recorded as SKIP / ENV_UNAVAILABLE: the GATE is what fails, and
+    if the kit is incomplete `digital_hardmacro_check` refuses it on its own
+    evidence rather than on this step's exit code.
+    """
+    t0 = time.time()
+    prog = PROGRAMS_DIR / "digital_hardmacro_gen.py"
+    if not prog.is_file():  # pragma: no cover - shipped tree always has it
+        return StepResult("digital_hardmacro_gen", "SKIP", 0.0,
+                          f"{prog.name} not present in this tree")
+    report = project / "reports" / "phase3" / "digital_hardmacro_gen.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [sys.executable, str(prog), str(project), "--json", str(report)]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True,
+                            errors="replace", timeout=1800)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StepResult("digital_hardmacro_gen", "ENV_UNAVAILABLE",
+                          time.time() - t0,
+                          f"producer did not complete: {exc}")
+    detail = (cp.stdout or cp.stderr or "").strip().splitlines()
+    msg = detail[0] if detail else f"rc={cp.returncode}"
+    status = {0: "PASS", 1: "SKIP"}.get(cp.returncode, "ENV_UNAVAILABLE")
+    out: List[str] = []
+    hm = project / "phase3" / "stage4" / "hardmacro"
+    if hm.is_dir():
+        out = [str(f) for f in sorted(hm.iterdir()) if f.is_file()]
+    return StepResult("digital_hardmacro_gen", status, time.time() - t0,
+                      msg, out)
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -39778,6 +39826,13 @@ def main() -> int:
     # Closes the runner-vs-flow drift waivers from the v10634 benchmark.
     plan.append(step_canonicalize_artefacts(
         project, effective_top, pdk, args.container))
+
+    # Canonical step 37.5ip — the cell/IP path terminal. The four-view kit is
+    # what an IP delivery IS, and until this was wired nothing this flow
+    # produced digitally could be placed by anybody: a completed sign-off run
+    # contained no `.lef` anywhere. Immediately after canonicalisation, which
+    # is what puts the sign-off GDS at this producer's declared input path.
+    plan.append(step_digital_hardmacro_gen(project))
 
     # vibe-ic#306 — corroborate a promoted route against the sign-off report,
     # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
