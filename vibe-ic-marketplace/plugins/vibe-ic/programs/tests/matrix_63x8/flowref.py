@@ -67,11 +67,11 @@ OR a sim ``*.log`` OR a ``pass.flag``; a ``drc_clean.flag`` OR a ``.lyrdb``).
 The consumer splits on the literal ``" OR "`` (spaces included) and strips each
 alternative — :func:`split_any_of` reproduces exactly that.
 
-Live entry census — 141<!--figure:required_output_entries--> entries over
+Live entry census — 142<!--figure:required_output_entries--> entries over
 61<!--figure:required_output_steps--> steps, classified by
 :func:`classify_output` (digits derived; see the anchor note in §1):
 
-    FILE          107<!--figure:required_outputs_file-->
+    FILE          108<!--figure:required_outputs_file-->
         plain relative path, no wildcard, no " OR "
     GLOB          12<!--figure:required_outputs_glob-->
         wildcard, no " OR " (e.g. ``phase1/generated_docs/L13_*.json``)
@@ -83,7 +83,7 @@ Live entry census — 141<!--figure:required_output_entries--> entries over
 
 **Contradiction with the brief, reported deliberately**: there is NO
 ``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All
-141<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
+142<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
 That form exists only inside ``gate`` clauses (§3). :data:`PROGRAM_EXIT` is
 still returned by :func:`classify_output` for forward compatibility, but on the
 current yaml it never fires — a sibling that branches on it is writing dead
@@ -119,14 +119,14 @@ replaces a hand-counted table of raw ``all_of`` members: the raw table counted
 a different population from the accessor this module tells you to use, so the
 two could not be reconciled by a reader and only one of them was derived.
 
-    program_exit_zero          104<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
+    program_exit_zero          105<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
     advisory_program_exit_zero 37<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
     files_exist                32<!--figure:gate_clauses_files_exist-->
     optional_program_exit_zero 28<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
-    total                     202<!--figure:gate_clauses_total-->, of which
-                              165<!--figure:blocking_clauses--> block
+    total                     203<!--figure:gate_clauses_total-->, of which
+                              166<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
@@ -141,8 +141,8 @@ Use :func:`gate_clauses` (typed) rather than re-walking the dict.
 4. Program resolution
 --------------------------------------------------------------------
 A gate command's FIRST whitespace token is the program basename. All
-160<!--figure:gate_program_tokens_distinct--> distinct tokens across the
-169<!--figure:gate_commands_total--> gate commands resolve to
+161<!--figure:gate_program_tokens_distinct--> distinct tokens across the
+170<!--figure:gate_commands_total--> gate commands resolve to
 ``programs/<token>.py`` — there are 0<!--figure:gate_programs_unresolved-->
 unresolvable tokens and zero commands
 that shell out via ``python3 <file>``. :func:`gate_programs` returns only
