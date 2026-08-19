@@ -1,0 +1,40 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by
+# vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py.
+schema: 1
+package: vibe-ic-marketplace/plugins/vibe-ic/tools/phase1_engine
+namespace: phase1-engine-plugin
+
+role: >-
+  The SHIPPED copy of the Phase-1 ingest / gap-detect / render engine — the one
+  a user of the plugin actually runs. Its twin at the repo root is where the
+  same code is edited from outside the plugin.
+
+invariants:
+  - id: phase1-engine-plugin.both-copies-are-byte-identical
+    statement: >-
+      Every engine file here is byte-identical to its counterpart at
+      tools/phase1_engine. Stated from BOTH sides on purpose: a contributor
+      arrives in one directory or the other, and a rule that only the other copy
+      declares is a rule this one's reader never sees. The test named below
+      compares ONE of the eleven engine files (`gap_detect.py`); this rule
+      compares all of them.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/tools/phase1_engine/tests/test_typical_scaffolds_retired.py
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py
+    rule:
+      kind: mirror_of
+      package: tools/phase1_engine
+      applies_to: ["*.py", "*.yaml", "*.md"]
+
+  - id: phase1-engine-plugin.its-tests-run-only-through-run-tests-sh
+    statement: >-
+      pytest.ini declares ONE testpath and it is programs/tests, so bare pytest
+      does not collect this tree; run_tests.sh discovers it explicitly and is
+      the only runner that does. Before that discovery existed this tree was
+      collected by NOTHING and carried two failing tests on main that no suite
+      reported.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/single_testpath_guard.py
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/landing_unselectable_pytest_corpus.py

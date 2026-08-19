@@ -1,0 +1,47 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by
+# vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py.
+schema: 1
+package: tools/phase1_engine
+namespace: phase1-engine-repo
+
+role: >-
+  The repo-root copy of the Phase-1 ingest / gap-detect / render engine. It
+  exists TWICE in this repository: here, and shipped inside the plugin at
+  vibe-ic-marketplace/plugins/vibe-ic/tools/phase1_engine. This copy is the one
+  a maintainer edits from the repo root; the other is the one users get.
+
+invariants:
+  - id: phase1-engine-repo.both-copies-are-byte-identical
+    statement: >-
+      Every engine file here is byte-identical to its counterpart in the shipped
+      copy. Two copies that drift are the worst kind of bug this repo can have:
+      the tests would be run against one file and the users would run the other,
+      and every symptom would point at the code that is not the code that ran.
+      The engine files are covered — the tests/ subdirectory deliberately is
+      not, because the two test trees are collected by different runners and
+      have diverged in two files.
+      MEASURED, and the reason this rule is not a duplicate of the test named
+      below: `test_both_engine_copies_agree` compares exactly ONE file,
+      `gap_detect.py` (`_A_REL`/`_B_REL` in that file). The other ten engine
+      files are compared by nothing. Drifting `render.py` leaves that suite at
+      31 passed and turns this gate red.
+    enforced_by:
+      - tools/phase1_engine/tests/test_typical_scaffolds_retired.py
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py
+    rule:
+      kind: mirror_of
+      package: vibe-ic-marketplace/plugins/vibe-ic/tools/phase1_engine
+      applies_to: ["*.py", "*.yaml", "*.md"]
+
+  - id: phase1-engine-repo.this-copy-reaches-no-landing-stage
+    statement: >-
+      The tests under tools/phase1_engine/tests are collected by the plugin's
+      run_tests.sh only through the SHIPPED copy; this repo-root copy is
+      unreachable from that script, which cds into the plugin. It is therefore
+      part of the enumerated unselectable corpus rather than silently assumed to
+      be covered — which is precisely why the byte-identity rule above is
+      load-bearing rather than tidy.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/landing_unselectable_pytest_corpus.py
+      - vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh

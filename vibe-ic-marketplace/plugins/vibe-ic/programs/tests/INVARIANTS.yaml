@@ -1,0 +1,56 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by programs/package_invariants_check.py.
+schema: 1
+package: vibe-ic-marketplace/plugins/vibe-ic/programs/tests
+namespace: tests
+
+role: >-
+  The one declared pytest tree of the plugin, and the only tree the landing
+  selector can emit from. What lands is decided here, so the rules below are
+  about a test being able to FAIL: a suite that cannot go red is not evidence,
+  it is decoration.
+
+invariants:
+  - id: tests.exactly-one-declared-testpath
+    statement: >-
+      pytest.ini declares exactly ONE testpath, and it is this directory. A
+      second tree is the green-local / red-CI footgun: a path-filtered run goes
+      green while bare pytest covers both, so gate-tree regressions ship. Adding
+      one has been measured to redden two tests immediately.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/single_testpath_guard.py
+
+  - id: tests.no-gate-asserts-its-own-pass
+    statement: >-
+      A test may not establish the very fact it then asserts. The
+      anti-fabrication guard owns this rule for the whole tree.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/gate_self_assertion_check.py
+
+  - id: tests.a-test-file-must-be-able-to-fail-the-suite
+    statement: >-
+      Every file named test_*.py directly in this tree must define at least one
+      pytest test (`def test_…`, `async def test_…`, or a `class Test…`). pytest
+      collects zero items from a file that defines none, and zero collected
+      items is reported as a clean run — the exact shape where a file that
+      cannot fail reads as a file that passed. Standing exemptions below are
+      bidirectional CONTROL scripts, driven by hand with an argument; they are
+      named rather than hidden, and this gate reports them on every run.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py
+    rule:
+      kind: require_regex
+      applies_to: ["test_*.py"]
+      pattern: '(?m)^[ \t]*(?:async[ \t]+)?def[ \t]+test_|^[ \t]*class[ \t]+Test'
+      exempt:
+        - file: test_arith_declaration_emit_equals_separator.py
+          because: >-
+            A bidirectional negative control, not a pytest test: it is run as
+            `python3 <file> <path-to-program>` and exits 1 with "NEGATIVE
+            CONTROL HELD" against the pre-fix program, 0 against the post-fix
+            one. Its own docstring states that contract.
+        - file: test_atpg_exit_code_not_signal.py
+          because: >-
+            The same shape — a standalone control script with a main() and an
+            exit-code contract, kept in the test tree because that is where
+            controls live, collected by pytest as zero items.

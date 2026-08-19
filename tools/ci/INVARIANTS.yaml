@@ -1,0 +1,80 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by
+# vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py.
+schema: 1
+package: tools/ci
+namespace: ci
+
+role: >-
+  The landing authority. These scripts and manifests decide whether a change may
+  become main: gate dispatch, the hermetic runner profile, the protected-path
+  transition, the trusted test selection, the completion record. Nothing here is
+  advisory — a defect in this directory does not produce a wrong answer, it
+  produces a confident one.
+
+invariants:
+  - id: ci.protected-paths-move-only-through-a-declared-transition
+    statement: >-
+      The files named in protected_landing_transition.json are the landing
+      authority's own body. They may change only by a declared current -> next
+      transition whose blob OIDs and sha256 are written down first, so an edit
+      to the machine that decides landings cannot ride along inside the change
+      it is judging.
+    enforced_by:
+      - tools/ci/protected_landing_transition.py
+      - tools/ci/test_protected_landing_transition.py
+
+  - id: ci.repo-level-tests-here-actually-run
+    statement: >-
+      The landing pytest is selector-driven and the selector is rooted at the
+      plugin's programs/tests, so nothing under tools/ can reach a selection —
+      measured once at 28 files / 552 tests gating nothing. run_repo_tools_pytest
+      closes that by discovery and unconditionally, and the test that proves it
+      lives HERE, inside the population that gate covers, so removing the gate
+      turns the test red instead of silently retiring it.
+    enforced_by:
+      - tools/ci/test_repo_tools_tests_gate.py
+      - tools/gatekeeper-land.sh
+
+  - id: ci.a-gate-that-could-not-run-is-not-a-gate-that-passed
+    statement: >-
+      Gate dispatch distinguishes PASS, FAIL and NOT_CHECKED, and a gate whose
+      prerequisite is missing reports the third. "I could not look" may never be
+      folded into "I looked and there was nothing" on the way to the roll-up.
+    enforced_by:
+      - tools/ci/repo_hygiene_gates.sh
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/gate_zero_denominator_refuses_check.py
+
+  - id: ci.never-bypass-the-gate-you-are-the-gate
+    statement: >-
+      No code path here may invoke `git push --force`, `git commit --no-verify`
+      or `gh ... --admin`. The prohibition is owned by git_prohibition_guard.py
+      and is bound rather than restated: one rule, one owner.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/git_prohibition_guard.py
+
+  - id: ci.no-host-absolute-path
+    statement: >-
+      Nothing in this directory may hardcode a path under a user's home. These
+      scripts run on the landing host, inside the digest-pinned hermetic
+      container as uid 65534, and inside throwaway worktrees whose location is
+      chosen at runtime; a home-rooted literal is a landing that works on one
+      machine. The plugin-wide portability gate does not reach here: it is
+      wired with the PLUGIN as its root, so a home-rooted literal added to this
+      directory leaves it at rc 0 — measured. Measured when this rule was
+      written: 0 of 40 tracked files here violated it. The systemd units are in scope and EXEMPT rather than out
+      of scope, so the one place a home-rooted path is legitimate stays
+      visible and counted instead of being quietly excluded by the glob.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py
+    rule:
+      kind: forbid_regex
+      applies_to: ["*.py", "*.sh", "*.service", "*.timer"]
+      pattern: '(?:/home/|/Users/)[A-Za-z0-9_.-]+/'
+      exempt:
+        - file: gatekeeper-poller.service
+          because: >-
+            A systemd unit declares WHERE it is installed; WorkingDirectory,
+            ExecStart and the state-dir Environment lines have no portable form.
+            The unit is operator-installed on one host by design and is executed
+            by no gate.

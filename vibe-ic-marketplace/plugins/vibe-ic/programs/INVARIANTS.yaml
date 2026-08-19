@@ -1,0 +1,71 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by programs/package_invariants_check.py — see its module
+# docstring for the schema and for what fails when this file is wrong, missing,
+# or claims an enforcer that is not there.
+schema: 1
+package: vibe-ic-marketplace/plugins/vibe-ic/programs
+namespace: programs
+
+role: >-
+  The deterministic layer. Every gate, checker and emitter the flow runs lives
+  here, in ONE flat namespace on purpose: the audits that keep this repo honest
+  (D1/D2, the denominator gates, the checker-execution wiring audit) all work by
+  grepping a single directory, and per-subsystem subdirectories would buy
+  filesystem adjacency and cost that. A program here computes a verdict that
+  somebody downstream believes, so the rules below are about what a verdict is
+  allowed to be.
+
+invariants:
+  - id: programs.every-program-has-a-test
+    statement: >-
+      Every non-helper program in this directory is referenced by some test
+      under programs/tests/ — a dedicated test_<name>.py, an import, an
+      invocation, or by name. `*_protocol_synth` is covered generically by
+      test_all_protocol_synth_overlay.py and reported separately. This is D1 of
+      the standing three-dimension audit.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/plugin_full_audit.py
+
+  - id: programs.a-pass-must-disclose-its-denominator
+    statement: >-
+      A gate that answers PASS must make it visible how much it looked at — a
+      count, or an explicit statement that there was nothing to examine. A gate
+      that CANNOT tell a clean scan from a scan of nothing must refuse (rc 2)
+      rather than print PASS over an empty population. Four measured walking
+      bugs (cwd shift, absolute-vs-relative skip set, tracked-vs-on-disk,
+      host-dependent counts) were invisible from the output before this bound.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/gate_discloses_denominator_check.py
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/gate_zero_denominator_refuses_check.py
+
+  - id: programs.chip-agnostic-source
+    statement: >-
+      No program here may carry a design, PDK, vendor or process literal. The
+      plugin is the general machine; the specific chip is data that flows
+      through it.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py
+
+  - id: programs.a-checker-must-be-invoked-by-something-other-than-its-own-test
+    statement: >-
+      A checker whose only caller is its own unit test has never seen a
+      production input, and citing it as a fix is citing a program that runs
+      nowhere. The wiring audit reports that coverage; new checkers are expected
+      to be wired into a gate lane, not left orphaned.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/checker_execution_wiring_audit.py
+
+  - id: programs.no-fail-open-bare-except
+    statement: >-
+      No program in this directory may swallow an error with a bare `except:`.
+      This is the verdict layer: an exception caught without a type and without
+      a re-raise turns "the check could not run" into "the check found nothing",
+      which is the fail-open shape every gate here exists to prevent. Measured
+      when this rule was written: 0 of 1185 programs violated it, so the rule is
+      a ratchet, not a cleanup.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py
+    rule:
+      kind: forbid_regex
+      applies_to: ["*.py"]
+      pattern: '^[ \t]*except[ \t]*:'
