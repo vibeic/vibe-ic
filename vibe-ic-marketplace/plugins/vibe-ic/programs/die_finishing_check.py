@@ -78,6 +78,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082
+
 PASS, FAIL, SKIP = 0, 1, 2
 
 _CHECK = "die_finishing"
@@ -228,7 +230,7 @@ def main(argv=None) -> int:
         if not o.is_absolute():
             o = project / o
         o.parent.mkdir(parents=True, exist_ok=True)
-        o.write_text(json.dumps(res, indent=2))
+        atomic_write_json(o, res)
 
     print(json.dumps({k: v for k, v in res.items() if k != "run"}, indent=2))
     if verdict == "DISCLOSED_SKIP":
