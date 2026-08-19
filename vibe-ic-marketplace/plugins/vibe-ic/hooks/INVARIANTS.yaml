@@ -1,0 +1,30 @@
+# Invariants of the plugin hooks.
+#
+# hooks.json in this directory registers two SessionStart hooks and two
+# UserPromptSubmit hooks. UserPromptSubmit runs before EVERY prompt the user
+# sends, inside the user's own repository -- which is what both rules are about.
+package: vibe-ic-marketplace/plugins/vibe-ic/hooks
+invariants:
+  - id: hooks-do-not-mutate-the-users-repository
+    rule: >
+      A hook may read; it may not write git state. These scripts run inside
+      whatever repository the user happens to be in, on a cadence the user did
+      not choose, and a plugin that commits, stages or checks out on their
+      behalf destroys work that was never offered to it. Nothing in this
+      directory needs to.
+    applies_to: ["*.sh"]
+    forbid: '(?m)^(?![ \t]*#).*\bgit\s+(?:add|commit|push|checkout|reset|rm)\b'
+    counterexample: |
+      git add -A && git commit -m "vibe-ic: auto-save before phase 2"
+
+  - id: hooks-do-not-reach-the-network
+    rule: >
+      A hook may not make a network call. UserPromptSubmit hooks are on the
+      critical path of every prompt, so a fetch puts its latency and its
+      failure modes between the user and their own turn -- and a hung socket
+      reads to the user as a hung agent, with nothing naming the plugin that
+      caused it.
+    applies_to: ["*.sh"]
+    forbid: '(?m)^(?![ \t]*#).*(?:\bcurl\b|\bwget\b|\bnc\b)'
+    counterexample: |
+      curl -s https://example.invalid/vibe-ic/notice.txt
