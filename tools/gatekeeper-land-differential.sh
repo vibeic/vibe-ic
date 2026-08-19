@@ -327,7 +327,12 @@ CAND_HYG="$RUN/candidate_hygiene.json"
 : > "$RUN/selection.txt"
 : > "$RUN/selection_base.txt"
 A1_STATUS=unknown
-A1_RC=0; A2_RC=2; B1_RC=0; B2_RC=2
+# NO `B1_RC`. The candidate test arm's process status is not an input to the
+# verdict and must not look like one: the driver's own
+# `whole_selection::process_exit` case carries the attested rc inside the
+# junit, and that is what `landing_merge_verdict` reads. A second, unread copy
+# of it here would read as a backstop that is not wired to anything.
+A1_RC=0; A2_RC=2; B2_RC=2
 BASE_HYG_HOST="$THIS_HOST"
 RUN_BASE_ARMS=1
 [ -n "$BASE_EVIDENCE" ] && RUN_BASE_ARMS=0
@@ -442,7 +447,7 @@ fi
 echo "--- arms launched concurrently: A1=${A1_PID:-none} A2=${A2_PID:-none} B1=${B1_PID:-none} B2=${B2_PID:-none}"
 
 if [ -n "$B1_PID" ]; then
-  wait "$B1_PID"; B1_RC=$?
+  wait "$B1_PID" || true
   B1_STATUS="$(attest_test_worktree "$WT_CAND_TESTS" "$HEAD_SHA" "$HEAD_TREE" candidate_tests)"
 fi
 if [ -n "$B2_PID" ]; then wait "$B2_PID"; B2_RC=$?; fi
