@@ -296,6 +296,22 @@ function dockerExecLogged({ cmd, timeoutMs = 300000, projectDir, tool,
 let _dockerProbeAt = 0;
 let _dockerReachable = null;
 const _PROBE_TTL_MS = 30_000;
+// How much longer the host-side backstop waits than the in-container timeout.
+// Only has to cover `timeout`'s own -k grace plus docker's round trip.
+const _INNER_TIMEOUT_GRACE_MS = 20_000;
+// Cached answer to "does this container have coreutils `timeout`?". Every
+// image we ship does, but the container name is user-overridable
+// (EDA_CONTAINER), so an image without it must degrade to the old behaviour
+// rather than fail every single command with `timeout: not found`.
+let _containerTimeoutOk = null;
+function _containerHasTimeout() {
+  if (_containerTimeoutOk !== null) return _containerTimeoutOk;
+  const r = _spawnSync(
+    "docker", ["exec", CONTAINER, "sh", "-c", "command -v timeout"],
+    { timeout: 10_000, encoding: "utf-8" });
+  _containerTimeoutOk = r.status === 0 && !!(r.stdout || "").trim();
+  return _containerTimeoutOk;
+}
 const _UNREACHABLE_HINTS = [
   "permission denied",
   "Cannot connect",
@@ -367,6 +383,8 @@ function _probeDocker(force = false) {
 function _invalidateDockerProbe() {
   _dockerProbeAt = 0;
   _dockerReachable = null;
+  // The container may be recreated on a different image; re-ask.
+  _containerTimeoutOk = null;
 }
 // v0.1.11: container-visibility pre-flight. Files staged onto the host bind
 // mount via a restricted/sandboxed shell do not always propagate into the
@@ -413,11 +431,48 @@ function dockerExec(cmd, timeoutMs = 300000) {
   // via an argv array. The previous form ran `docker exec C bash -c "..."`
   // through /bin/sh first (and only escaped `"`), so shell metacharacters in
   // tool arguments could break out of the command context.
-  const r = _spawnSync("docker", ["exec", CONTAINER, "bash", "-c", cmd], {
-    timeout: timeoutMs,
+  //
+  // The timeout is enforced INSIDE the container, not by killing the client.
+  // MEASURED 2026-08-19: `timeout 4 docker exec C bash -c 'sleep 90 & wait'`
+  // returns 124 to the caller and leaves TWO processes running in the
+  // container -- a killed `docker exec` client does not stop the process it
+  // started. So every `timeoutMs` we have ever reported was a client-side
+  // give-up: the tool kept running unattended, and nothing in the stack would
+  // ever stop it. That is how a yosys reached 113 GB on a 125 GB host after
+  // the caller had already been told the command timed out, and the machine's
+  // desktop session was OOM-killed. Same command with the timeout moved inside
+  // -- `docker exec C timeout -k 10 4 bash -c ...` -- also returns 124 and
+  // leaves ZERO processes behind.
+  const innerSec = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const useInner = _containerHasTimeout();
+  const argv = useInner
+    ? ["exec", CONTAINER, "timeout", "-k", "10", String(innerSec), "bash", "-c", cmd]
+    : ["exec", CONTAINER, "bash", "-c", cmd];
+  // The host-side timeout stays, demoted to a backstop, and is deliberately
+  // LONGER than the inner one so the inner kill lands first and we return the
+  // tool's own partial output instead of an orphan plus an empty string.
+  const startedAt = Date.now();
+  const r = _spawnSync("docker", argv, {
+    timeout: useInner ? timeoutMs + _INNER_TIMEOUT_GRACE_MS : timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
     encoding: "utf-8",
   });
+  // `timeout` reports 124 on expiry and 137 when it had to escalate to KILL.
+  // A tool is free to exit 124 for its own reasons, so the elapsed clock is
+  // what distinguishes the two -- an exit code alone would mislabel it.
+  if (useInner && (r.status === 124 || r.status === 137)
+      && (Date.now() - startedAt) >= innerSec * 1000) {
+    const stdoutSoFar = r.stdout || "";
+    const msg = `command timed out after ${timeoutMs}ms `
+      + `(killed inside container '${CONTAINER}'`
+      + `${r.status === 137 ? " with SIGKILL after the 10s grace" : ""})`;
+    return {
+      success: false,
+      output: stdoutSoFar + (stdoutSoFar ? "\n" : "") + msg,
+      error: msg,
+      exitCode: r.status,
+    };
+  }
   const stdout = r.stdout || "";
   const stderr = (r.stderr || "") || (r.error ? (r.error.message || String(r.error)) : "");
   if (r.error || r.status === null) {
