@@ -42,6 +42,10 @@ This program parses the REAL OpenROAD/Innovus DEF and verifies SUBSTANCE:
      judged on its LAST reading — the state it left behind — so a loop
      that converged is not called illegal; an earlier non-zero that a
      later pass cleared is DISCLOSED rather than scored or dropped.
+     "Last" is per LOG FILE, because the logs are walked in filename
+     order and that is not time order: a site read non-zero in any one
+     log is illegal, so a clean reading in a file that merely sorts
+     later cannot cancel it.
 
   5. Placement density (occupied-site-area / core-area) is verified to be
      in the universal sanity range (0, 100]% — but ONLY when it is
@@ -293,7 +297,7 @@ def _iter_pnr_log_lines(project: Path):
         try:
             with log.open(errors="replace") as fh:
                 for line in fh:
-                    yield log.name, line
+                    yield str(log.relative_to(pnr_dir)), line
         except OSError:
             continue
 
@@ -340,43 +344,51 @@ def _check_placement_verdicts(lines) -> dict:
     per pass — so a site has a SEQUENCE of readings, and the two useful facts
     about that sequence are different questions:
 
-    * ``count``  the LAST reading. That is the state this site left behind and
-                 it is what the verdict keys on. A loop whose first pass had 3
-                 violations and whose last pass has 0 converged; calling that
+    * ``count``  the reading the site LEFT BEHIND. A loop whose first pass had
+                 3 violations and whose last pass has 0 converged; calling that
                  illegal would be a false alarm about a placement that is legal.
     * ``worst``  the first NON-ZERO reading, when a later one cleared it. It is
                  not scored, and it is not dropped either — it is DISCLOSED, so
                  "the placer objected and the next pass fixed it" never reads
                  the same as "the placer never objected".
 
-    Both are the decimal string the placer returned, or NOT_DETERMINED. Never
+    "LAST" is only meaningful WITHIN ONE LOG FILE. The logs are walked in
+    filename order, which is not time order, so a site's readings are tracked
+    PER LOG and a site is illegal if the last reading in ANY log is non-zero.
+    Folding every log into one sequence instead would let `a.log` reading 7 and
+    `z.log` reading 0 pass as legal purely because `z` sorts last — a false
+    NEGATIVE, measured on a fixture before this was tracked per log. Within a
+    single file the order IS chronological, so a genuinely converged loop still
+    reads as converged.
+
+    Counts are the decimal string the placer returned, or NOT_DETERMINED. Never
     fabricates a count: a site seen only through a bare WARN (a log from a
     runner that predates the count) reads NOT_DETERMINED, which the caller
     treats as illegal-with-unknown-size — never as zero.
     """
-    sites: dict = {}
+    per_log: dict = {}
 
-    def _rec(site):
-        return sites.setdefault(
-            site, {"count": None, "worst": None, "detail": "",
-                   "readings": 0})
+    def _rec(log, site):
+        return per_log.setdefault(
+            (log, site), {"count": None, "worst": None, "detail": "",
+                          "readings": 0})
 
-    for _log, line in lines:
+    for log, line in lines:
         for m in _CP_VIOLATIONS_RE.finditer(line):
-            rec = _rec(m.group(1))
+            rec = _rec(log, m.group(1))
             rec["count"] = m.group(2)
             rec["readings"] += 1
             if m.group(2) != "0" and rec["worst"] is None:
                 rec["worst"] = m.group(2)
         for m in _CP_PASS_RE.finditer(line):
-            rec = _rec(m.group(1))
+            rec = _rec(log, m.group(1))
             # The PASS line accompanies its own VIOLATIONS 0 line; it is only a
             # READING of its own for a log that carries no count at all.
             if rec["readings"] == 0:
                 rec["count"] = "0"
         for m in _CP_WARN_RE.finditer(line):
             site, detail = m.group(1), m.group(2).strip()
-            rec = _rec(site)
+            rec = _rec(log, site)
             # Likewise: the WARN accompanies its own count line. It becomes the
             # reading itself only in a log with no count line for this site.
             if rec["readings"] == 0:
@@ -386,10 +398,23 @@ def _check_placement_verdicts(lines) -> dict:
             if detail and not rec["detail"]:
                 rec["detail"] = detail
 
-    for rec in sites.values():
+    # Fold the per-log verdicts. An illegal last-reading in ANY log wins over a
+    # clean one in another: the two files are not ordered in time, so a clean
+    # reading elsewhere is not evidence that the dirty one was later cleared.
+    sites: dict = {}
+    for (_log, site), rec in per_log.items():
         if rec["count"] is None:
             rec["count"] = _COUNT_NOT_DETERMINED
-        rec.pop("readings", None)
+        agg = sites.setdefault(
+            site, {"count": None, "worst": None, "detail": ""})
+        if agg["count"] is None or (
+                not _count_is_illegal(agg["count"])
+                and _count_is_illegal(rec["count"])):
+            agg["count"] = rec["count"]
+        if agg["worst"] is None and rec["worst"] is not None:
+            agg["worst"] = rec["worst"]
+        if not agg["detail"] and rec["detail"]:
+            agg["detail"] = rec["detail"]
     return sites
 
 
