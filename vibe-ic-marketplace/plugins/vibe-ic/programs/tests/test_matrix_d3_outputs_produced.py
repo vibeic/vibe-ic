@@ -1004,17 +1004,66 @@ def _refuse_an_unanswerable_corpus(corpus: Path) -> None:
     other direction, arriving through the door this change opens. So it is
     refused here, at the seam, with the reason named.
     """
-    if _claims_to_be_a_checkout(corpus):
-        return
-    raise AssertionError(
-        f"{_pc.CORPUS_ENV}={str(corpus)!r} is not a git checkout, so this "
-        f"module cannot ask which of its files the corpus COMMIT carries. "
-        f"Every artefact under it would read as 'not tracked at HEAD — a local "
-        f"build product, not evidence' and every cell would report its declared "
-        f"outputs NOT PRODUCED, which is a confident wrong answer, not a strict "
-        f"one (#527, #1348). Point {_pc.CORPUS_ENV} at a clone of "
-        f"vibeic/benchmark-data rather than at an unpacked copy of one."
-    )
+    if not _claims_to_be_a_checkout(corpus):
+        raise AssertionError(
+            f"{_pc.CORPUS_ENV}={str(corpus)!r} is not a git checkout, so this "
+            f"module cannot ask which of its files the corpus COMMIT carries. "
+            f"Every artefact under it would read as 'not tracked at HEAD — a "
+            f"local build product, not evidence' and every cell would report "
+            f"its declared outputs NOT PRODUCED, which is a confident wrong "
+            f"answer, not a strict one (#527, #1348). Point "
+            f"{_pc.CORPUS_ENV} at a clone of vibeic/benchmark-data rather "
+            f"than at an unpacked copy of one."
+        )
+    # AND IT MUST BE THE CORPUS'S OWN COMMIT THAT ANSWERS.
+    #
+    # `_claims_to_be_a_checkout` walks UP the parents, so a corpus that is a
+    # SUBDIRECTORY of some other repository's work tree satisfies it — and
+    # `tracked_under` then runs `git ls-tree -r HEAD` there and is answered by
+    # THAT repository's HEAD. `run_roots`' own docstring states the invariant
+    # this breaks: "trackedness is still decided by `git ls-tree -r HEAD` in
+    # the tree that holds the root, so it is the CORPUS COMMIT that answers".
+    #
+    # MEASURED, and it is not hypothetical. v1.10.56 (#1723) moved the cells to
+    # vibeic/benchmark-data, and a checkout of THIS repository on any branch
+    # from before that move still carries `benchmark-data/` tracked. Pointing
+    # the corpus at one is a single plausible keystroke, and it passes every
+    # rule above. On this host, with the two spellings side by side:
+    #
+    #   corpus                                   tracked at HEAD   d3 verdict
+    #   vibeic/benchmark-data @146d665 (clone)             8,309   23 failed
+    #   <a vibe-ic checkout>/benchmark-data                17,479    8 failed
+    #
+    # Same commit of this repository, same image, same command: the population
+    # is answered by whichever repository happens to own the directory, and the
+    # richer local tree credits evidence the PUBLISHED corpus does not carry —
+    # `ic/sha256` is 810 files there and 9 in the published corpus. A verdict
+    # taken from it is a verdict about somebody's working tree.
+    #
+    # The rule is exact and needs no repository NAME: a clone's root IS the
+    # corpus. If the work tree answering for this path is rooted anywhere else,
+    # the commit that answers is not the corpus's.
+    work_tree = _corpus_work_tree_root(corpus)
+    if work_tree is None:
+        raise AssertionError(
+            f"{_pc.CORPUS_ENV}={str(corpus)!r} carries git metadata but git "
+            f"could not be asked which work tree it belongs to, so this "
+            f"module cannot tell whose commit would answer for it. Refusing "
+            f"rather than reading one repository's HEAD as another's."
+        )
+    if work_tree != corpus.resolve():
+        raise AssertionError(
+            f"{_pc.CORPUS_ENV}={str(corpus)!r} is not the root of its own "
+            f"checkout — the work tree that answers for it is rooted at "
+            f"{str(work_tree)!r}. Trackedness here would be decided by THAT "
+            f"repository's HEAD, and this module would report its verdicts as "
+            f"facts about the published corpus commit. A checkout of this "
+            f"repository from before v1.10.56 still carries a tracked "
+            f"`benchmark-data/`, and pointing at it is measured to change the "
+            f"answer: 8,309 paths tracked at HEAD in the published corpus "
+            f"against 17,479 in such a tree. Point {_pc.CORPUS_ENV} at the "
+            f"ROOT of a clone of vibeic/benchmark-data."
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1100,6 +1149,27 @@ def _claims_to_be_a_checkout(root: Path) -> bool:
         if (d / ".git").exists():
             return True
     return False
+
+
+def _corpus_work_tree_root(root: Path) -> Optional[Path]:
+    """The work tree *root* belongs to, or None if git could not say.
+
+    A git question, unlike :func:`_claims_to_be_a_checkout`, because the
+    filesystem cannot distinguish "this directory is a clone" from "this
+    directory sits inside one" — and that distinction is which repository's
+    HEAD answers every trackedness verdict below.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):   # noqa: BLE001
+        return None
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout.decode("utf-8", "surrogateescape").strip()
+    return Path(text).resolve() if text else None
 
 
 def is_tracked(root: Path, rel: str) -> bool:
