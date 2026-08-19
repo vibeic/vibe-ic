@@ -417,6 +417,46 @@ def test_the_window_is_exactly_the_six_contiguous_units(land_text):
     assert order[start + len(_WINDOW)] == "full:write-guard-final"
 
 
+def test_no_marker_probe_asks_its_question_through_a_pipe(land_text):
+    """`printf … | grep -q …` under `pipefail` reports a MATCH as a non-match.
+
+    `grep -q` exits on the first match; if the buffer exceeds a pipe, `printf`
+    is still writing, takes SIGPIPE, and `pipefail` makes the pipeline 141. The
+    probes this guards — NORECORD, NOTRUN, AGGREGATE_NORECORD — then MISS a
+    real refusal, which is "I could not look" arriving as "I looked and it was
+    fine". Measured on this shell with a 1.75 MB buffer: match on the first
+    line gave 141 twelve times out of twelve; match on the last line gave 0.
+    """
+    offenders = [
+        line.strip() for line in land_text.splitlines()
+        if "| grep -q" in line and not line.lstrip().startswith("#")]
+    assert offenders == [], (
+        "these probes ask through a pipe, so a match can arrive as 141 and be "
+        f"read as a non-match: {offenders}")
+
+
+def test_the_pipe_form_really_does_lose_a_match(tmp_path):
+    """The negative control, EXECUTED rather than asserted from memory.
+
+    If this ever stops failing, the rewrite above is no longer buying anything
+    and the comment in `gatekeeper-land.sh` has become false.
+    """
+    script = tmp_path / "probe.sh"
+    script.write_text(
+        "set -uo pipefail\n"
+        'big=$(for i in $(seq 1 40000); do echo "pad pad pad pad line $i"; done)\n'
+        'out="AGGREGATE_NORECORD first\n$big"\n'
+        "printf '%s\\n' \"$out\" | grep -qa '^AGGREGATE_NORECORD'; echo \"pipe=$?\"\n"
+        'grep -qa \'^AGGREGATE_NORECORD\' <<<"$out"; echo "here=$?"\n',
+        encoding="utf-8")
+    proc = subprocess.run(["bash", str(script)], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, text=True, timeout=60,
+                          check=False)
+    assert "pipe=141" in proc.stdout, (
+        "the pipe form no longer loses the match on this shell: " + proc.stdout)
+    assert "here=0" in proc.stdout, proc.stdout
+
+
 def test_there_is_no_way_to_opt_IN(land_text):
     """The fast path is the default; the escape hatch only turns it OFF."""
     assert "GATEKEEPER_LANDING_SERIAL" in land_text
