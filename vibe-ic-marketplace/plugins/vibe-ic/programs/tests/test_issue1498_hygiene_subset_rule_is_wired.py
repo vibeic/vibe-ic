@@ -164,9 +164,19 @@ def test_both_arms_are_asked_for_a_hygiene_record():
     """The defect exactly: arm A2 set the variable and arm B did not, so the
     baseline had nothing to be differenced against."""
     src = _VERIFY.read_text(encoding="utf-8")
-    assert 'GATEKEEPER_HYGIENE_REPORT="$BASE_HYG"' in src, \
+    # SPELLING ADAPTED to the hermetic arms 7c376e348 (v1.10.69) introduced. A
+    # land arm no longer writes a host path directly: it is told ONE
+    # container-relative destination, and the parent then seals that arm's
+    # evidence into the arm's own record. What is asserted is unchanged — A2's
+    # record lands in BASE_HYG and B2's in CAND_HYG, so neither side of the
+    # subset rule is a path nothing ever writes.
+    assert "--env GATEKEEPER_HYGIENE_REPORT=/evidence/hygiene.json" in src, \
+        "no land arm is asked for a hygiene record at all"
+    assert ('publish_validated_arm_artifact "$A2_VALIDATION" "$A2_OUTPUT" '
+            'hygiene.json "$BASE_HYG"') in src, \
         "arm A2 must write the BASE record"
-    assert 'GATEKEEPER_HYGIENE_REPORT="$CAND_HYG"' in src, \
+    assert ('publish_validated_arm_artifact "$B2_VALIDATION" "$B2_OUTPUT" '
+            'hygiene.json "$CAND_HYG"') in src, \
         ("arm B must write the CANDIDATE record — without it `CAND_HYG` is a "
          "path nothing ever writes and the subset rule has no candidate side")
 
@@ -199,23 +209,27 @@ def test_the_base_record_is_cached_beside_the_base_log():
     and not the record degrades every queued landing to the coarse comparison —
     in exactly the mode the merge queue runs in."""
     src = _VERIFY.read_text(encoding="utf-8")
-    # SPELLING ADAPTED to the atomic publish this script grew after this test
-    # was written: the entry is copied to a `$CACHE_TMP.*` name and `mv`d into
-    # place with the manifest LAST, so the base record reaches `$CACHED_HYG` in
-    # two steps rather than in one `cp`. What is asserted is unchanged — the
-    # BASE arm's record is what lands under the cached name.
-    assert 'cp "$BASE_HYG" "$CACHE_TMP.hygiene.json"' in src \
-        or 'cp "$BASE_HYG" "$CACHED_HYG"' in src
-    assert 'mv "$CACHE_TMP.hygiene.json" "$CACHED_HYG"' in src \
-        or 'cp "$BASE_HYG" "$CACHED_HYG"' in src
-    assert 'printf \'%s\\n\' "$THIS_HOST" > "$CACHED_HYG_HOST"' in src, \
-        ("the HOST must travel with the cached record — findings are "
-         "host-dependent and a shared cache would otherwise hand one host's "
-         "baseline to another host's candidate")
-    hit = src.split('if [ -n "$CACHED" ] && [ -s "$CACHED" ]', 1)[1].split(
-        "; then", 1)[0]
-    assert "CACHED_HYG" in hit and "CACHED_HYG_HOST" in hit, \
-        "a log-only legacy cache must be a miss, or the new gate never runs"
+    # THE HAZARD WAS REMOVED RATHER THAN FIXED, and that is why this test now
+    # reads the other way round. 7c376e348 (v1.10.69) made the base-gate cache
+    # unconditionally inert: the flag is still accepted, then cleared before it
+    # can be consulted, because "reading or writing a mutable baseline cache
+    # concurrently with that candidate would let it turn introduced failures
+    # into 'pre-existing' ones". With no cache HIT possible, arm A2 always runs
+    # and always writes BASE_HYG, so there is no cached record to store.
+    #
+    # Asserting the disable is not a retreat: it is the tripwire. Re-enabling
+    # the cache re-opens exactly the defect this file exists for — a hit SKIPS
+    # A2 and the differential silently degrades to the coarse comparison — so
+    # whoever re-enables it fails HERE and has to restore the record and the
+    # host alongside it.
+    assert 'BASE_GATE_CACHE=""' in src, \
+        ("the base-gate cache is live again; a hit SKIPS arm A2, so the cached "
+         "entry must carry the base RECORD and the HOST that measured it, and "
+         "this test has to go back to asserting that")
+    disable = src.split('if [ -n "$BASE_GATE_CACHE" ]; then', 1)[1].split(
+        "\nfi\n", 1)[0]
+    assert 'BASE_GATE_CACHE=""' in disable, \
+        "the cache is no longer cleared unconditionally when it is supplied"
 
 
 def test_the_land_script_still_honours_the_variable():
