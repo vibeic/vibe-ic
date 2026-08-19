@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "_comment": "The register of packages that OWE an INVARIANTS.yaml. It lives outside every declared package on purpose: deleting a package's directory must not be able to delete the record that it owes a declaration. Comparison against the tracked declarations is exact-set equality in BOTH directions, and MIN_REGISTERED_PACKAGES in package_invariants_check.py refuses a registry that has shrunk. See docs/PER_PACKAGE_INVARIANTS.md.",
+  "packages": [
+    "tools/ci",
+    "tools/phase1_engine",
+    "vibe-ic-marketplace/plugins/vibe-ic/_shared",
+    "vibe-ic-marketplace/plugins/vibe-ic/commands",
+    "vibe-ic-marketplace/plugins/vibe-ic/hooks",
+    "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/lib",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/gds_antenna"
+  ]
+}
