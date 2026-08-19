@@ -1,0 +1,33 @@
+package: vibe-ic-marketplace/plugins/vibe-ic/_shared
+purpose: >-
+  The skill-compliance library: the driver every generated
+  skills/<name>/tests/test_compliance.py imports, the generators that produce
+  those tests, and the integration fixtures. 63 skill packages depend on this
+  directory; it depends on nothing in the repo.
+owns:
+  - "*.py"
+tests:
+  root: vibe-ic-marketplace/plugins/vibe-ic/_shared
+  collected_by: vibe-ic-marketplace/plugins/vibe-ic/programs/landing_unselectable_pytest_corpus.py
+  collected_by_kind: complement
+  note: >-
+    These 3 files / 283 nodes had NO landing stage until vibe-ic#1424. They are
+    reached by complement — "every tracked test file minus what a stage already
+    runs" — so no runner names this tree and no text match could prove it is
+    covered. The declaration is verified by running the enumerator instead.
+invariants:
+  - id: I_leaf_library_imports_nothing_upward
+    statement: >-
+      Import stdlib and pytest only. Never programs/, tools/ or skills/.
+    rule: forbid_regex
+    pattern: '^\s*(?:from|import)\s+(?:programs|tools|skills)\b'
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      This is the bottom of the plugin's dependency order: skills/*/tests import
+      skill_compliance_check, and programs/ reads what it produces. An import
+      pointing back up closes a cycle, and it does it in the direction that is
+      hardest to see — the generated per-skill tests would start depending on
+      whichever tree the importer happened to make resolvable, so a skill's
+      compliance test could pass or fail on sys.path rather than on the skill.
+      Measured: every import in this package today is stdlib or pytest.
