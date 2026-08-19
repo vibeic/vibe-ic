@@ -1,0 +1,42 @@
+package: vibe-ic-marketplace/plugins/vibe-ic/benchmark
+purpose: >-
+  The open-benchmark harness: CVDP task routing, gating, preflight and export,
+  plus the registry and the blind instructions. This code executes content that
+  came from a THIRD-PARTY benchmark corpus.
+owns:
+  - "*.py"
+tests:
+  root: vibe-ic-marketplace/plugins/vibe-ic/programs/tests
+  collected_by: vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh
+  collected_by_kind: named
+  note: >-
+    test_cvdp_gate_*.py and test_benchmark_entry_doc_command_targets.py drive
+    this package from the plugin's single test tree.
+invariants:
+  - id: I_no_shell_string_for_benchmark_content
+    statement: >-
+      No subprocess call here may use shell=True.
+    rule: forbid_regex
+    pattern: 'shell\s*=\s*True'
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      The values this harness passes to tools — task ids, top-level module
+      names, file paths, prompts — come from a benchmark corpus this repo does
+      not own and does not review. shell=True makes every one of them a shell
+      string, so a task id containing a metacharacter runs as a command on the
+      host that is scoring it, and the resulting score is still reported as a
+      number. Measured 0 occurrences in this package; four remain in programs/,
+      which is why this is declared HERE, where the untrusted input is, rather
+      than repo-wide where it would be false today.
+  - id: I_no_os_system
+    statement: >-
+      No os.system(). Shell out through subprocess with an argument list.
+    rule: forbid_regex
+    pattern: 'os\.system\('
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      Same surface as above, and worse on the return path: os.system() yields a
+      wait-status, so a tool that died on a signal can be read as a clean exit
+      and its task scored as a pass. Measured 0 occurrences.
