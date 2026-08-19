@@ -1,0 +1,56 @@
+# Tool: openroad
+# Stage: detailed_route
+# Producer: OpenROAD detailed_route DRC (router database projection)
+#
+# ---- runner-written summary ------------------------------------------------
+# This block is written by the flow runner AFTER the tool exits. It is a
+# republication of the tool's number, not a measurement of the layout.
+total violations: 0
+violation report: 0
+# ----------------------------------------------------------------------------
+
+[INFO ODB-0227] LEF file: tech.lef, created 13 layers, 25 vias
+[INFO ODB-0128] Design read: 4821 instances, 5210 nets
+[INFO DRT-0149] Reading tech and libs.
+[INFO DRT-0150] Layers: 6, tracks: 41230
+[INFO DRT-0151] Init region query.
+[INFO DRT-0167] List of default vias:
+[INFO DRT-0168]   Layer via1: VIA1_default
+[INFO DRT-0168]   Layer via2: VIA2_default
+[INFO DRT-0168]   Layer via3: VIA3_default
+[INFO DRT-0170] Post processing.
+[INFO DRT-0186] Complete pin access.
+[INFO DRT-0187] Start track assignment.
+[INFO DRT-0188] Complete track assignment.
+[INFO DRT-0179] Post processing: layer met1 guides 937, patches 15
+[INFO DRT-0179] Post processing: layer met2 guides 974, patches 18
+[INFO DRT-0179] Post processing: layer met3 guides 1011, patches 21
+[INFO DRT-0179] Post processing: layer met4 guides 1048, patches 24
+[INFO DRT-0179] Post processing: layer met5 guides 1085, patches 27
+[INFO DRT-0179] Post processing: layer met6 guides 1122, patches 30
+[INFO DRT-0184]   worker 1: routed 423 nets, ripped-up 4 nets
+[INFO DRT-0184]   worker 2: routed 436 nets, ripped-up 5 nets
+[INFO DRT-0184]   worker 3: routed 449 nets, ripped-up 6 nets
+[INFO DRT-0184]   worker 4: routed 462 nets, ripped-up 7 nets
+[INFO DRT-0184]   worker 5: routed 475 nets, ripped-up 8 nets
+[INFO DRT-0184]   worker 6: routed 488 nets, ripped-up 9 nets
+[INFO DRT-0184]   worker 7: routed 501 nets, ripped-up 10 nets
+[INFO DRT-0184]   worker 8: routed 514 nets, ripped-up 11 nets
+[INFO DRT-0195] Start routing data preparation.
+[INFO DRT-0196] Complete routing data preparation.
+[INFO DRT-0195] Start 0th optimization iteration.
+[INFO DRT-0199] design rule errors remaining = 4318
+[INFO DRT-0195] Start 1st optimization iteration.
+[INFO DRT-0199] design rule errors remaining = 1207
+[INFO DRT-0195] Start 2nd optimization iteration.
+[INFO DRT-0199] design rule errors remaining = 342
+[INFO DRT-0195] Start 3rd optimization iteration.
+[INFO DRT-0199] design rule errors remaining = 61
+[INFO DRT-0195] Start 4th optimization iteration.
+[INFO DRT-0199] design rule errors remaining = 12
+[INFO DRT-0198] Complete detail routing.
+[INFO DRT-0267] cpu time = 00:11:42, elapsed time = 00:03:07
+[INFO DRT-0198] Number of nets with routing: 5210
+[INFO DRT-0198] Total wire length = 1284310 um
+[INFO DRT-0198] Total number of vias = 39142
+[INFO ODB-0230] Writing DEF: routed.def

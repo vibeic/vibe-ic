@@ -75,6 +75,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import openroad_metrics as _om  # W5 — ask the tool for its own numbers
+
 _DEFAULT_CONTAINER = "vibeic-eda"
 _TOOLS = "/foss/tools"
 # Dynamic tier default budget (%-of-Vdd). LOOSER than the static tier: a
@@ -577,9 +580,10 @@ def emit(def_file: Path, tech_lef: Path, cell_lef: Path, liberty: Path,
                                metal_prefix)
     tcl_path = out_json.parent / "dynamic_ir_transient.tcl"
     tcl_path.write_text(tcl)
-    cmd = (f"export PATH={_TOOLS}/openroad/bin:{_TOOLS}/bin:$PATH && "
-           f"openroad -no_init -exit {tcl_path} 2>&1 | "
-           f"tee {out_json.parent}/dynamic_ir.log")
+    cmd = _om.with_metrics(
+          f"export PATH={_TOOLS}/openroad/bin:{_TOOLS}/bin:$PATH && "
+          f"openroad -no_init -exit {tcl_path} 2>&1 | "
+          f"tee {out_json.parent}/dynamic_ir.log")
     try:
         proc = subprocess.run(
             ["docker", "exec", container, "bash", "-lc", cmd],

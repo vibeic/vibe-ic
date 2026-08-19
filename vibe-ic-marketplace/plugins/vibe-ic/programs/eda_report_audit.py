@@ -49,6 +49,7 @@ import _signoff_drc_format as _sdf  # the ONE producer/dialect answer
 import sta_corner_record_completeness_check as _sta_slack
 
 import _sta_basis
+import step_metrics as _sm  # W5/#1080 — the tool's own numbers, not its prose
 
 
 # ---------------------------------------------------------------------------
@@ -1063,6 +1064,52 @@ def _drc_tool_final_violation_count(text: str) -> Optional[int]:
     return _sdf.router_iter_last_count(text)
 
 
+# --------------------------------------------------------------------------- #
+# W5 — the TOOL's own DRC number, read from the metrics channel, not from prose
+# --------------------------------------------------------------------------- #
+#: Metric key tails that name "how many DRC violations the tool ended with".
+#: `drc_errors` is OpenROAD's own spelling (`detailedroute__route__drc_errors`);
+#: the other two are this repo's schema names for the same quantity. Declared as
+#: data so adding a tool means adding a name here, not another parser.
+_DRC_METRIC_TAILS = ("drc_errors", "violation_count", "drc_count")
+
+#: A key must also mention the domain, so a `coverage__violation_count` from an
+#: unrelated step cannot be mistaken for a routing DRC count.
+_DRC_METRIC_DOMAIN = ("drc", "route", "detailedroute", "drt")
+
+
+def _drc_metric_violation_total(project_dir: Path):
+    """The tool's own DRC violation count for this run, or ``None``.
+
+    ``None`` means NO STEP EMITTED ONE — which is where 61 of our 62
+    gate-carrying steps still are, and which is emphatically not zero.
+
+    MAXIMUM, not sum, across matching keys, and the reason is the same one the
+    summary-vs-tool reconciliation below already uses: several stages may each
+    publish a terminal violation count for the SAME design, so adding them
+    double-counts, while the maximum is the fail-safe direction — it can only
+    make a dirty design look dirtier, never a dirty one clean. Every key that
+    contributed is returned so the choice is inspectable rather than asserted.
+    """
+    try:
+        merged, _prov = _sm.collect(Path(project_dir))
+    except (OSError, ValueError):
+        return None, []
+    used = []
+    for k, v in sorted(merged.items()):
+        parts = k.split("__")
+        if parts[-1] not in _DRC_METRIC_TAILS:
+            continue
+        if not any(d in parts for d in _DRC_METRIC_DOMAIN):
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        used.append({"key": k, "value": v})
+    if not used:
+        return None, []
+    return max(int(u["value"]) for u in used), used
+
+
 def _check_drc(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:drc", passed=False)
     files = _discover(project_dir, ["*drc*.rpt", "*drc*.log", "*drc*.txt",
@@ -1244,6 +1291,107 @@ def _check_drc(project_dir: Path) -> AuditResult:
                     f"{determined_files} report(s) with a determinable count",
             file=worst_file))
 
+    # --- W5: THE TOOL'S OWN NUMBER, AND THE PARSER DEMOTED TO A WITNESS ----
+    #
+    # Everything above this line reads PROSE. `_drc_real_violation_count` reads
+    # a summary line and `_drc_tool_final_violation_count` reads the router's
+    # transcript; both are regexes over a log, and a regex over a log reports
+    # "found nothing" when the tool changes its WORDING, which the caller then
+    # reads as "found no violations". That is the substitution W5 exists to
+    # end: the number that is gated must be the number the tool computed.
+    #
+    # MEASURED before this change, on the fixture in
+    # `tests/fixtures/w5_drc_wording/`: rewording the router's final iteration
+    # line so neither grammar matches leaves `tool_corroborated == 0` and NO
+    # finding of any severity — the corroboration silently disappears and the
+    # verdict is formed from the summary alone.
+    #
+    # `metric_total` is what OpenROAD wrote through `-metrics`, republished by
+    # `openroad_metrics.ingest` into the one metrics channel. `prose_tool_total`
+    # is the same quantity as re-read from the log, and it is `None` — never 0 —
+    # when no report yielded the tool's own final word, because an absent
+    # measurement and a measured zero are different facts.
+    metric_total, metric_keys = _drc_metric_violation_total(project_dir)
+    prose_tool_total = tool_total if tool_corroborated else None
+    reconciliation = _sm.reconcile("drc__violation_count",
+                                   metric_total, prose_tool_total)
+    metric_contradiction = False
+    if reconciliation["verdict"] == _sm.DISAGREE:
+        # NOT resolved here, in either direction. `_sm.authoritative` refuses to
+        # return a value for this verdict precisely so that no caller can pick a
+        # side quietly; the gate's job is to say the two sources disagree and
+        # certify nothing.
+        metric_contradiction = True
+        result.findings.append(Finding(
+            rule="DRC_METRIC_CONTRADICTS_LOG", severity="ERROR",
+            message=(f"the tool's own emitted metric says {metric_total} DRC "
+                     f"violation(s) and this run's log parser reads "
+                     f"{prose_tool_total} from the same tool's transcript. One "
+                     f"of the two is wrong, nothing here can say which, and "
+                     f"neither may be preferred silently — so nothing is "
+                     f"certified. Metric key(s): "
+                     f"{[u['key'] for u in metric_keys]}"),
+            file=best_file))
+    elif reconciliation["verdict"] == _sm.METRIC_ONLY:
+        # The tool spoke and the parser did not. This is exactly what a WORDING
+        # change looks like, and it is NOT a failure: the measurement is intact
+        # and only the proxy went blind. Disclosed at WARNING so the blindness
+        # is visible and repairable, and non-gating so a tool upgrade does not
+        # redden a clean design.
+        result.findings.append(Finding(
+            rule="DRC_LOG_PARSER_BLIND", severity="WARNING",
+            message=(f"the tool emitted its own DRC violation count "
+                     f"({metric_total}) and no log-parsing grammar in this "
+                     f"program matched the transcript. The metric is "
+                     f"authoritative and the verdict is unaffected; the parser "
+                     f"is recorded as blind here so it can be repaired rather "
+                     f"than silently trusted. Metric key(s): "
+                     f"{[u['key'] for u in metric_keys]}"),
+            file=best_file))
+    elif reconciliation["verdict"] == _sm.PROSE_ONLY:
+        # Where 61 of 62 gate-carrying steps still are. Named, not counted as
+        # agreement, and not fatal — because making it fatal today would redden
+        # every existing run rather than migrate anything.
+        result.findings.append(Finding(
+            rule="DRC_COUNT_UNCORROBORATED_BY_TOOL_METRIC", severity="WARNING",
+            message=("this DRC verdict rests on a log parser alone: the tool "
+                     "was never asked for its own violation count "
+                     "(`-metrics`), so there is nothing to check the parser "
+                     "against. UNCORROBORATED, which is not the same as agreed"),
+            file=best_file))
+    elif reconciliation["verdict"] == _sm.NEITHER:
+        # THE WORST OF THE FOUR, AND IT USED TO BE THE QUIETEST. Neither source
+        # said anything about the tool's terminal count: no `-metrics`, and no
+        # grammar matched the transcript either. Before this branch existed the
+        # case produced NO finding at all — which is how a reworded log on an
+        # unmetricated run reads exactly like a clean one. Found by a test whose
+        # expectation was wrong, which is the only reason it was found.
+        result.findings.append(Finding(
+            rule="DRC_TOOL_COUNT_NOT_MEASURED", severity="WARNING",
+            message=("neither source produced the tool's own terminal "
+                     "violation count: `-metrics` was not on the invocation, "
+                     "and no log grammar matched this transcript either. The "
+                     "verdict below rests on the runner-written summary alone "
+                     "and NOTHING corroborates it — NOT CHECKED, which is not "
+                     "a measurement of zero"),
+            file=best_file))
+
+    # The gating number. `authoritative` RAISES on a disagreement, so this call
+    # is unreachable in that branch by construction rather than by care.
+    metric_gating_total = None
+    if not metric_contradiction:
+        _auth = _sm.authoritative(reconciliation)
+        if reconciliation["verdict"] in (_sm.AGREE, _sm.METRIC_ONLY):
+            metric_gating_total = _auth
+    if metric_gating_total is not None and metric_gating_total > 0:
+        result.findings.append(Finding(
+            rule="DRC_REAL_VIOLATIONS_FOUND_BY_TOOL_METRIC", severity="ERROR",
+            message=(f"the tool's own emitted metric reports "
+                     f"{metric_gating_total} DRC violation(s). This gates "
+                     f"whatever any summary line in the report says, and it "
+                     f"gates whether or not a log grammar still matches"),
+            file=best_file))
+
     # Tool-authenticity check — rejects hand-typed stubs (added 2026-04-22)
     authentic = _check_tool_authenticity(files, "drc", result)
 
@@ -1277,7 +1425,11 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # coincidence would be silently undone by any later change to how the total
     # is formed, and this is the whole decision being added.
     result.passed = (determined_files > 0 and real_total == 0 and authentic
-                     and not unreadable and not contradictions)
+                     and not unreadable and not contradictions
+                     # W5 — the tool's own number gates alongside the prose one,
+                     # and a disagreement between them certifies nothing.
+                     and not metric_contradiction
+                     and not (metric_gating_total or 0) > 0)
     result.summary = {"files_found": len(files), "categories_found": cats_found,
                       "has_count": has_count, "tool_authentic": authentic,
                       "determined_files": determined_files,
@@ -1295,6 +1447,13 @@ def _check_drc(project_dir: Path) -> AuditResult:
                       "tool_uncorroborated_files": (determined_files
                                                     - tool_corroborated),
                       "tool_contradictions": contradictions,
+                      # W5 — the metrics channel, always disclosed, so a reader
+                      # can tell a corroborated verdict from an uncorroborated
+                      # one without inferring it from a silence.
+                      "metric_violation_total": metric_total,
+                      "metric_keys": metric_keys,
+                      "metric_vs_log": reconciliation,
+                      "metric_gating_total": metric_gating_total,
                       "foundry_stdcell_excluded": stdcell_excluded,
                       "producers": producers,
                       "unreadable_files": len(unreadable),

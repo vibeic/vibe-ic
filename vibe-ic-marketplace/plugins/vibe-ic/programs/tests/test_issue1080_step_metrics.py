@@ -270,3 +270,93 @@ def test_the_metrics_sink_cannot_change_the_gate_s_verdict(tmp_path, monkeypatch
                         str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
                        capture_output=True, text=True, timeout=_SUBPROC_S, env=env)
     assert a.returncode == b.returncode, (a.returncode, b.returncode)
+
+
+# ---------------------------------------------------------------------------
+# reconcile — W5. The prose parser is a WITNESS, never a preference.
+#
+# The rule these pin: there is no code path that returns a value after a
+# disagreement. `authoritative` raises, and that is the only exit it has for
+# `disagree` — a flag or a "prefer" argument would put the silent tie-break
+# straight back, which is the whole defect W5 exists to close.
+#
+# The METRIC_ONLY / PROSE_ONLY asymmetry is the substance and is pinned in both
+# directions: a blind parser beside a live tool is FINE (it is what a wording
+# change looks like), and a live parser beside a silent tool is UNCORROBORATED
+# (it is where 61 of 62 gate-carrying steps still are). Collapsing either into
+# "agree" is how a summary comes to overstate what was checked.
+# ---------------------------------------------------------------------------
+def test_two_sources_that_match_agree():
+    r = sm.reconcile("k", 12, 12)
+    assert r["verdict"] == sm.AGREE and r["is_failure"] is False
+
+
+def test_two_sources_that_differ_are_a_failure():
+    r = sm.reconcile("k", 12, 0)
+    assert r["verdict"] == sm.DISAGREE and r["is_failure"] is True
+    assert "neither may be preferred silently" in r["reason"]
+
+
+def test_a_disagreement_has_no_value_to_return():
+    try:
+        sm.authoritative(sm.reconcile("k", 12, 0))
+    except ValueError as exc:
+        assert "step_metrics.authoritative" in str(exc)
+    else:
+        raise AssertionError("a disagreement silently produced a number")
+
+
+def test_a_blind_parser_beside_a_live_tool_is_not_a_failure():
+    """What a tool's WORDING change looks like. The measurement is intact."""
+    r = sm.reconcile("k", 12, None)
+    assert r["verdict"] == sm.METRIC_ONLY and r["is_failure"] is False
+    assert sm.authoritative(r) == 12
+
+
+def test_a_live_parser_beside_a_silent_tool_is_uncorroborated_not_agreed():
+    r = sm.reconcile("k", None, 12)
+    assert r["verdict"] == sm.PROSE_ONLY and r["is_failure"] is False
+    assert "UNCORROBORATED" in r["reason"]
+    assert sm.authoritative(r) == 12
+
+
+def test_neither_side_speaking_is_not_checked_and_not_a_zero():
+    r = sm.reconcile("k", None, None)
+    assert r["verdict"] == sm.NEITHER
+    assert "not a zero" in r["reason"]
+    assert sm.authoritative(r) is None
+
+
+def test_a_boolean_is_not_the_number_one():
+    """`True == 1` in Python, so a pass/fail flag would compare equal to a
+    violation count of one and a real contradiction would read as agreement."""
+    r = sm.reconcile("k", True, 1)
+    assert r["verdict"] == sm.DISAGREE, r
+
+
+def test_tolerance_applies_only_between_two_numbers():
+    assert sm.reconcile("k", 1.0, 1.05, tolerance=0.1)["verdict"] == sm.AGREE
+    assert sm.reconcile("k", 1.0, 1.5, tolerance=0.1)["verdict"] == sm.DISAGREE
+    # strings compare exactly; a tolerance cannot make two names equal
+    assert sm.reconcile("k", "a", "b", tolerance=99)["verdict"] == sm.DISAGREE
+
+
+def test_the_rollup_publishes_uncorroborated_on_its_own():
+    """A summary that folded PROSE_ONLY into `agree` would claim a corroboration
+    that never happened — the single most misreadable number in the report."""
+    rep = sm.reconcile_report([
+        sm.reconcile("a", 1, 1),
+        sm.reconcile("b", None, 3),
+        sm.reconcile("c", 4, None),
+        sm.reconcile("d", None, None),
+    ])
+    assert rep["corroborated"] == 1
+    assert rep["uncorroborated"] == 1
+    assert rep["metric_only"] == 1
+    assert rep["not_checked"] == 1
+    assert rep["passed"] is True and rep["failures"] == []
+
+
+def test_the_rollup_fails_when_any_pair_disagrees():
+    rep = sm.reconcile_report([sm.reconcile("a", 1, 1), sm.reconcile("b", 2, 9)])
+    assert rep["passed"] is False and len(rep["failures"]) == 1

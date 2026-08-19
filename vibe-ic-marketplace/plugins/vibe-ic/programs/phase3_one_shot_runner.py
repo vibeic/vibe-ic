@@ -75,6 +75,7 @@ import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisat
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
 import magic_illegal_overlap_check as _mio  # W2.3 — magic's extraction feedback channel, gated at 0
+import openroad_metrics as _om  # W5 — ask OpenROAD for its own numbers (-metrics), never re-parse its prose
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
@@ -19102,10 +19103,11 @@ def _pnr_resume_after_fatal_signal(*, project: Path, top: str, container: str,
     rec["omitted_stages"] = [stage]
     print(f"[pnr] RESUME: reading {ckpt} and re-running the post-route tail "
           f"with {stage} omitted", file=sys.stderr)
-    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-           f"openroad -no_init -exit {resume_tcl_c} 2>&1 | "
-           f"tee {out_dir_c}/{_PNR_RESUME_LOG}")
+    cmd = _om.with_metrics(
+          f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+          f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+          f"openroad -no_init -exit {resume_tcl_c} 2>&1 | "
+          f"tee {out_dir_c}/{_PNR_RESUME_LOG}")
     r_rc, r_out, r_err = _docker_exec(
         container, cmd, marker=resume_tcl_c,
         log_path=out_dir / _PNR_RESUME_LOG, hard_ceiling_s=hard_ceiling_s)
@@ -20104,10 +20106,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "cts_distance_between_buffers"),
         sizing_limits_block=sizing_limits_block,
         sizing_drv_report_block=sizing_drv_report_block))
-    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-           f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
-           f"tee {out_dir_c}/openroad.log")
+    cmd = _om.with_metrics(
+          f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+          f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+          f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
+          f"tee {out_dir_c}/openroad.log")
     # v1.6.163 (#60 P0-3) — auto-resize retry loop. If OpenROAD
     # reports `[ERROR GPL-0301] Utilization N% exceeds 100%`, rewrite
     # the floorplan line in pnr.tcl with a larger die and retry.
@@ -23348,7 +23351,13 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         # completion and only a genuinely-stalled job is killed (loop-watchdog
         # compliance; matches the other openroad -exit call sites).
         rc, out, err = _docker_exec(
-            container, f"openroad -no_init -exit {tcl_c}", marker=tcl_c)
+            container,
+            _om.with_metrics(
+                f"openroad -no_init -exit {tcl_c}",
+                _om.metrics_path_for_log(
+                    f"{_to_container_path(str(pnr_out), container)}"
+                    f"/signoff_spef_repair.log")),
+            marker=tcl_c)
     except Exception as exc:
         return StepResult("signoff_spef_repair", "PASS", time.time() - t0,
                           f"no-op (base route kept): repair invocation failed: {exc}")
@@ -23876,7 +23885,13 @@ def step_signoff_drv_wire_length_repair(
     tcl_c = _to_container_path(str(tcl_path), container)
     try:
         rc, out, err = _docker_exec(
-            container, f"openroad -no_init -exit {tcl_c}", marker=tcl_c)
+            container,
+            _om.with_metrics(
+                f"openroad -no_init -exit {tcl_c}",
+                _om.metrics_path_for_log(
+                    f"{_to_container_path(str(pnr_out), container)}"
+                    f"/signoff_drv_escalation.log")),
+            marker=tcl_c)
     except Exception as exc:
         return StepResult("signoff_drv_wire_length_repair", "PASS",
                           time.time() - t0,
@@ -33213,10 +33228,11 @@ def _run_eco_repair(project: Path, top: str, container: str,
         return False
     eco_dir_c = _to_container_path(str(eco_out), container)
     tcl_c = _to_container_path(str(eco_tcl_path), container)
-    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-           f"openroad -no_init -exit {tcl_c} 2>&1 | "
-           f"tee {eco_dir_c}/eco_repair.log")
+    cmd = _om.with_metrics(
+          f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+          f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+          f"openroad -no_init -exit {tcl_c} 2>&1 | "
+          f"tee {eco_dir_c}/eco_repair.log")
     try:
         _docker_exec(container, cmd, marker=tcl_c, outputs=[eco_v])
     except Exception as exc:  # pragma: no cover — tool/container failure
@@ -34062,9 +34078,10 @@ exit
 """)
     tcl_c = _to_container_path(str(tcl_path), container)
     cmd = (
-        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/extract.log"
+        _om.with_metrics(
+            f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/extract.log")
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[spef_out])
     if not spef_out.is_file() or spef_out.stat().st_size == 0:
@@ -34256,9 +34273,10 @@ def _emit_spef_corners(project: Path, top: str, pdk: PdkConfig, container: str,
     tcl_c = _to_container_path(str(tcl_path), container)
     out_dir_c = _to_container_path(str(out_dir), container)
     cmd = (
-        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/extract_corners.log"
+        _om.with_metrics(
+            f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/extract_corners.log")
     )
     _docker_exec(container, cmd, marker=tcl_c)
     produced: Dict[str, Path] = {}
@@ -35102,10 +35120,11 @@ read_sdc {sdc_c}
 exit
 """)
     tcl_c = _to_container_path(str(tcl_path), container)
-    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-           f"openroad -no_init -exit {tcl_c} 2>&1 | tee "
-           f"{_to_container_path(str(sdf_out.parent), container)}/sdf.log")
+    cmd = _om.with_metrics(
+          f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+          f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+          f"openroad -no_init -exit {tcl_c} 2>&1 | tee "
+          f"{_to_container_path(str(sdf_out.parent), container)}/sdf.log")
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[sdf_out])
     if not sdf_out.is_file() or sdf_out.stat().st_size == 0:
         # ORGANIC-20260606 #441: NO stub SDF. The old fallback wrote a
@@ -35718,9 +35737,10 @@ catch {{set_wire_rc -clock -layer {mp}5}}
 """)
     tcl_c = _to_container_path(str(tcl_path), container)
     cmd = (
-        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/ir_em.log"
+        _om.with_metrics(
+            f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/ir_em.log")
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[out_dir / "ir_em.log"])
     log = (out or "") + "\n" + (err or "")
@@ -36097,9 +36117,10 @@ exit
 """)
     tcl_c = _to_container_path(str(tcl_path), container)
     cmd = (
-        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/antenna.log"
+        _om.with_metrics(
+            f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/antenna.log")
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
     log = (out or "") + "\n" + (err or "")
@@ -36661,9 +36682,10 @@ exit
 """)
     tcl_c = _to_container_path(str(tcl_path), container)
     cmd = (
-        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/metal_fill.log"
+        _om.with_metrics(
+            f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/metal_fill.log")
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[filled_def])
     log = (out or "") + "\n" + (err or "")
@@ -37515,9 +37537,10 @@ exit
 """)
     tcl_c = _to_container_path(str(tcl_path), container)
     cmd = (
-        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
-        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/erc.log"
+        _om.with_metrics(
+            f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/erc.log")
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[out_dir / "erc.log"])
     log = (out or "") + "\n" + (err or "")

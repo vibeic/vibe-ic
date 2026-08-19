@@ -1,0 +1,22 @@
+{
+ "gate_carrying_steps": 62,
+ "emit_count_direct": 1,
+ "emit_count_reachable": 2,
+ "consume_count_direct": 0,
+ "consume_count_reachable": 8,
+ "steps_emitting_reachable": [
+  "31",
+  "D1"
+ ],
+ "steps_consuming_reachable": [
+  "10",
+  "21",
+  "23",
+  "24",
+  "25",
+  "26",
+  "31",
+  "33"
+ ],
+ "note": "FLOOR, not a target. This file records how far the migration off log-parsing had got. A run measuring FEWER wired steps than this is a regression and fails; a run measuring more is the point, and the baseline is re-taken deliberately, never automatically."
+}

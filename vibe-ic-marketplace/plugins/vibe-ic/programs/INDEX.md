@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1116
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1112)
+- **Total programs (excluding helpers / shims):** 1119
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1119)
 
 ### Per-class applicability counts
 
@@ -15,14 +15,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 |---|---|
 | `aid_class_half_duplex` | 9 |
 | `digital_cmd_driven` | 7 |
-| `gen_program_inventory` | any | — | Generate the program-population inventory; every stated count must be read from it, never hand-typed. |
-| `magic_illegal_overlap_check` | any | — | Read the extraction tool's own feedback channel and gate illegal overlaps at zero, BEFORE the LVS verdict. |
 | `mixed_signal_otp` | 7 |
-| `pdk_revision_resolve` | any | — | Resolve the PDK revision a run actually signed off against, so a sign-off can be re-derived. |
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1103 |
+| `any` | 1110 |
 
 ## Alphabetical listing
 
@@ -700,6 +697,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `open_issue_claim_scan` | any | — | Which open issues carry no CLAIMED comment — with the un-readable ones NAMED. |
 | `open_organic_issue_count` | any | — | Count OPEN issues whose title carries a marker, WITHOUT the search index. |
 | `openroad_hold_repair_tcl_gen` | any | — | emit the OpenROAD `repair_timing -hold` block with the SKILL's hard guardrails baked in. |
+| `openroad_metrics` | any | — | Ask the tool for its own numbers: `-metrics` on every OpenROAD invocation. W5. |
+| `openroad_metrics_wiring_check` | any | — | Every OpenROAD invocation must ask the tool for its own numbers. W5. |
 | `openroad_tcl_deprecation_check` | any | v0.69 | Recursively scan a plugin tree for OpenROAD TCL usages that have been removed or renamed in recent OpenROAD releases, so a skill / progra... |
 | `oracle_dump_required_check` | any | — | Category-B workflow gate. |
 | `oracle_table_synth` | any | — | deterministic SOLVER from a prompt-disclosed oracle. |
@@ -1028,6 +1027,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_input_scope` | any | — | §4.05 as a MECHANISM: a step cannot read the oracle. vibe-ic#1079. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `step_metrics` | any | — | One per-step metrics schema, emitted by whoever computed the number. #1080. |
+| `step_metrics_coverage_check` | any | — | How many gate-carrying steps read the tool's numbers instead of its prose. W5. |
 | `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
 | `step_preflight` | any | — | the ORCHESTRATOR side of `required_inputs`. |
 | `step_repro_bundle` | any | — | everything one step reads, in one file, plus what it ran on. |
@@ -1191,7 +1191,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1103 programs)
+### `any` (1110 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1859,6 +1859,8 @@ _(no programs in this group)_
 - `open_issue_claim_scan` — Which open issues carry no CLAIMED comment — with the un-readable ones NAMED.
 - `open_organic_issue_count` — Count OPEN issues whose title carries a marker, WITHOUT the search index.
 - `openroad_hold_repair_tcl_gen` — emit the OpenROAD `repair_timing -hold` block with the SKILL's hard guardrails baked in.
+- `openroad_metrics` — Ask the tool for its own numbers: `-metrics` on every OpenROAD invocation. W5.
+- `openroad_metrics_wiring_check` — Every OpenROAD invocation must ask the tool for its own numbers. W5.
 - `openroad_tcl_deprecation_check` — Recursively scan a plugin tree for OpenROAD TCL usages that have been removed or renamed in recent OpenROAD releases, so a skill / progra...  _[v0.69]_
 - `oracle_dump_required_check` — Category-B workflow gate.
 - `oracle_table_synth` — deterministic SOLVER from a prompt-disclosed oracle.
@@ -2185,6 +2187,7 @@ _(no programs in this group)_
 - `step_input_scope` — §4.05 as a MECHANISM: a step cannot read the oracle. vibe-ic#1079.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `step_metrics` — One per-step metrics schema, emitted by whoever computed the number. #1080.
+- `step_metrics_coverage_check` — How many gate-carrying steps read the tool's numbers instead of its prose. W5.
 - `step_output_collector` — materialize a per-STEP output subfolder view.
 - `step_preflight` — the ORCHESTRATOR side of `required_inputs`.
 - `step_repro_bundle` — everything one step reads, in one file, plus what it ran on.

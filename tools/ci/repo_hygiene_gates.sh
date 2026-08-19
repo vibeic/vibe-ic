@@ -199,6 +199,21 @@ run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit
 # 7 of 29; widening it reddens every landing. See `_NOT_A_PROJECT_GATE` in
 # flow_compliance_check.py for the measurement.
 run "openroad TCL deprecations"     "$PLUGIN" python3 programs/openroad_tcl_deprecation_check.py
+
+# W5 — a guard nobody runs is decoration, so both W5 gates are wired here, at
+# the same place the other repo-shape rules run.
+#
+# The first holds "no OpenROAD invocation runs unmeasured". It is BLOCKING and
+# it was measured FAILING on this tree before the change (16 sites, 0 wired,
+# 13 unwired), which is the only reason it is known to discriminate.
+#
+# The second is the migration ratchet. It only ever refuses a FALL: the count
+# of gate-carrying steps reading the tool's own numbers may rise freely and may
+# not drop, so a gate that goes back to parsing prose cannot do it quietly.
+run "openroad -metrics on every invocation" "$ROOT" python3 \
+    "$PG/openroad_metrics_wiring_check.py" "$ROOT"
+run "step-metrics coverage ratchet"         "$ROOT" python3 \
+    "$PG/step_metrics_coverage_check.py" "$ROOT"
 run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_specificity_check.py
 
 # A disposition in the P0 registers can assert a home ("driven at the final
