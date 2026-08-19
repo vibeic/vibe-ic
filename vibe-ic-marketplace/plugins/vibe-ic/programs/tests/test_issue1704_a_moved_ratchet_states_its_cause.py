@@ -208,8 +208,34 @@ def test_a_departed_run_that_carried_debt_is_on_the_withdrawal_ledger():
     are the reason the denominator needs its own account at all.
     """
     rec, b = _record(), _block()
-    ledger = {k[3:] if k.startswith("ic/") else k: v
-              for k, v in rec["withdrawn_unexamined"].items()}
+
+    # THE WITHDRAWAL ACCOUNT IS NOW TWO REGISTERS, NOT ONE — and the property
+    # asserted here is unchanged by that. vibe-ic#1704 split the single
+    # `withdrawn_unexamined` bucket in two, because it was answering two different
+    # questions with one number: `withdrawn_unexamined` names run trees the sweep
+    # DID open and found publishing no reports/, while `absent_from_corpus` names
+    # trees the sweep never reached at all. The split conserves every entry and its
+    # count (23 = 16 + 7, entry for entry).
+    #
+    # This test asks "is every departed run that carried debt ON RECORD SOMEWHERE",
+    # and both registers are that record. Reading only the first one would fail a
+    # run that IS accounted for, in the book the fix created for it. Widening the
+    # union is therefore not a weakening: a departed run present in NEITHER register,
+    # or present with the WRONG count, still fails exactly as before.
+    #
+    # And the union cannot hide a double-entry, because that is refused first: a run
+    # on both books would let one register be emptied while the total still balanced.
+    _wu = {k[3:] if k.startswith("ic/") else k: v
+           for k, v in rec["withdrawn_unexamined"].items()}
+    _ab = {k[3:] if k.startswith("ic/") else k: v
+           for k, v in rec.get("absent_from_corpus", {}).items()}
+    _both = sorted(set(_wu) & set(_ab))
+    assert not _both, (
+        f"{_both} are on BOTH withdrawal registers. The two are a partition of one "
+        f"population, so a run on both is counted twice and either book could be "
+        f"emptied without the total moving.")
+    ledger = dict(_wu)
+    ledger.update(_ab)
     wrong = {}
     for run, e in b["runs_that_left"].items():
         if e["findings"] == 0:
@@ -221,7 +247,8 @@ def test_a_departed_run_that_carried_debt_is_on_the_withdrawal_ledger():
         f"{len(wrong)} departed run(s) disagree between `_population_shrink` "
         f"and `withdrawn_unexamined` (stated, on-ledger): {wrong}. A finding "
         f"whose run is accounted for in one register and not the other is "
-        f"debt that can be dropped by consulting the other book.")
+        f"debt that can be dropped by consulting the other book. The registers "
+        f"consulted are `withdrawn_unexamined` and `absent_from_corpus`.")
 
 
 # ------------------------------------------------ falsifiable against the tree
