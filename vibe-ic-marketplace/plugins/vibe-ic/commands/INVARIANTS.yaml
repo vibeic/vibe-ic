@@ -1,0 +1,19 @@
+# Invariants of the slash-command documents.
+package: vibe-ic-marketplace/plugins/vibe-ic/commands
+invariants:
+  - id: command-documents-declare-a-description
+    rule: >
+      Every command document must carry a `description:` in its YAML
+      frontmatter. The description is the only text an agent sees when deciding
+      whether this command is the right one; a command without it is installed,
+      listed, and never routed to -- present in the tree and absent from every
+      decision. Files prefixed `_` are shared includes, not commands, and are
+      excluded by that naming convention rather than by name.
+    applies_to: ["*.md"]
+    excludes: ["_*.md"]
+    require: '(?m)^description:'
+    counterexample: |
+      ---
+      name: vibe-ic-phase9
+      ---
+      # Phase 9
