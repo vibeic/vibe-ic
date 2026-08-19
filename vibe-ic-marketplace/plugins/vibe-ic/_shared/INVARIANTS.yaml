@@ -1,0 +1,15 @@
+# Invariants of the shared skill-compliance harness.
+package: vibe-ic-marketplace/plugins/vibe-ic/_shared
+invariants:
+  - id: shared-harness-names-no-individual-skill
+    rule: >
+      This harness is the GENERIC layer -- TESTING_STRATEGY.md defines it as
+      three layers applied parametrically across every compliance.yaml under
+      skills/. A literal skill directory in a path silently narrows a check that
+      reads as universal: the run still passes, the count still looks like the
+      whole population, and the skills nobody named stop being covered. Compose
+      skill paths from the discovered set, never from a literal.
+    applies_to: ["*.py"]
+    forbid: '(?m)^(?![ \t]*#).*skills/[a-z0-9_][a-z0-9_-]*/'
+    counterexample: |
+      spec = load(root / "skills/spec-to-rtl/compliance.yaml")

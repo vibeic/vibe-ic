@@ -91,6 +91,31 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # by DIRECT PUSH, so the guard had never run on any of it. Measured when first
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
+# W7 — the rule lives in the directory it binds. Each declared package carries
+# an INVARIANTS.yaml stating, in prose a contributor reads and a regex the gate
+# runs, what may not happen in that directory; this checker enforces all of
+# them. Wired HERE, in the one list both CI workflows and `gatekeeper_review`
+# invoke, because a declaration nothing enforces is decoration and
+# `checker_execution_wiring_audit` — a blocking gate in this same list — is
+# right to fail a checker only its own test runs.
+#
+# NO `gate_scope`: this reads seven directories spread across the tree and the
+# registry beside the checker, so the honest scope is "everything" and silence
+# is what makes it always run.
+#
+# Plain `run`, NOT `run_tolerating_uncheckable`: the checker exits 2 when it
+# could not establish a population (no git index, unreadable registry, zero
+# declarations) and that must fail the suite. It is the exact defect measured
+# in the upstream this ports — `scripts/package-invariants.ts:38` discovers
+# owners with a hardcoded glob, an empty root gives zero owners, and
+# `verify-package-invariants.ts:21` prints "0 hand-owned package companion(s)
+# conform." and exits 0.
+#
+# `--min-registered-packages` is deliberately NOT passed. It exists for the
+# test suite's synthetic repositories; passing it here would turn the shrink
+# ratchet off, and `test_the_hygiene_wiring_does_not_lower_the_ratchet` asserts
+# this line never grows one.
+run "package invariants" "$ROOT" python3 "$PG/package_invariants_check.py" "$ROOT"
 # vibe-ic#621 — the JSON manifests were guarded and the PROSE was not: the three
 # READMEs a reader meets first advertised v1.5.12 / v1.4.72 / v1.4.61 against a
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
