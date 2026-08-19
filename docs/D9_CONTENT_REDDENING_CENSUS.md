@@ -64,6 +64,25 @@ PASS-tier verdict on the synthetic tree, so the sweep cannot ask it anything.
 Substituting `PASS_GATE` is what makes the outputs layer answerable for a step
 in that state, and the answer is the same one: PASS on all three bodies.
 
+**SUPERSEDED IN PART, 2026-08-19 — and in the direction this census argued
+for.** While this branch waited to land, `45c188f3d` ("a readable artefact that
+is WRONG must not be worth the same as a right one") landed the missing half on
+main: `CONTENT_ARM_BLIND` in `test_matrix_d8_missing_caught.py`. It separates
+the two readings of UNMOVED that `CONTENT_ARM_AS_MEASURED` could not tell apart
+— a row that did not move because the flow has NO channel to read, from a row
+that did not move because the flow READ the channel and did not act. Of the 16
+PASS-tier steps, **8 are gradable and 5 of those 8 are blind (steps 2, 28, A1,
+A4, D1)**, recorded as a set that may only SHRINK, with both directions of
+change reddening and naming themselves.
+
+That does not contradict the D8 row below; it closes it. The row's finding was
+that D8's own instrument could say "content moved nothing" without anything
+forbidding a human from legitimising a blind gate by pinning it UNMOVED. That
+is now forbidden. **Step 8 remains outside both populations** — it is not among
+the 16, for the reason already given — so the `PASS_GATE`-substitution probe
+above is still the only measurement that reaches the outputs layer for it, and
+its three-bodies-one-verdict result is unchanged at `c33d0dbe2`.
+
 ## What the ninth dimension measures once it can run
 
 `tools/d9_content_census.py`, 63 steps against 91 published runs, one run per
@@ -296,6 +315,36 @@ NEW at head:
 REMOVED at head: (none)
 ```
 
+## Re-verified 2026-08-19 after rebase onto `origin/main` = `c33d0dbe2`
+
+`origin/main` moved **21 commits** past `74ac9fa78` while this branch waited
+(18, then 3 more mid-verification). The branch was rebased twice and the whole
+receipt set re-taken; nothing below is quoted from the previous section.
+
+The rebase is clean for a checkable reason, not a hopeful one: the 21 commits
+touch **49 files and NONE of this branch's seven** (`git diff --name-only
+74ac9fa78..c33d0dbe2` ∩ the branch's file list is empty), and `git merge-tree
+--write-tree` returned 0 before the rebase was attempted.
+
+| run, at `c29088139` on base `c33d0dbe2` | result |
+|---|---|
+| D3, the content predicate and its two mutation controls | `3 passed, 113 deselected in 1.09s` |
+| D9 instrument tests, `tools/test_d9_flow_gate_reality.py` | `18 passed in 0.31s` |
+| D6 module, whole file, no selection | `78 passed, 1 xfailed in 58.49s` |
+| D3 module against the corpus clone, HEAD | `23 failed, 90 passed, 1 skipped, 2 xfailed in 24.22s` |
+| D3 module, SAME command, unmodified base `c33d0dbe2` | `23 failed, 87 passed, 1 skipped, 2 xfailed in 24.17s` |
+
+The D3 reds are still **23 at base and 23 at head, and the FAILED node lists are
+byte-identical** (`diff` empty) — the delta is exactly `+3 passed`, this
+branch's three new tests, with none removed. The base arm was run at the SAME
+commit as the head's parent, not at the older `74ac9fa78`, because a base arm
+measured against a different tree answers a different question.
+
+All three revert-proofs below were **re-run live at the rebased commit**, each
+in its own `git worktree add --detach c29088139` throwaway (a `cp -a` of the
+plugin directory does not work: the container's `/tmp` is not the host's, only
+`/home/reyerchu` is bind-mounted). All three reproduce byte-for-byte.
+
 ### The guards discriminate — three reverts, quoted verbatim
 
 A guard that cannot fail proves nothing, so each was reverted in a throwaway
@@ -342,8 +391,14 @@ FAILED ...::test_d6_skip_discipline[step38]
 FAILED ...::test_d6_l7_the_register_is_the_only_thing_holding_that_cell_green
 ```
 
-`tools/ci/protected_landing_transition.json` lists 47 paths; the intersection
-with this branch's seven changed files is EMPTY, so no protected blob moves.
+`tools/ci/protected_landing_transition.json` lists **47** paths at `74ac9fa78`
+and **47** at `c33d0dbe2`; the intersection with this branch's seven changed
+files is EMPTY under both, so no protected blob moves. The file itself DID
+change between those commits, but only in blob OIDs — the PATH SET is
+byte-identical (`diff` of the two sorted `path` lists is empty), and the OIDs
+moved because main edited protected files such as `tools/ci/repo_hygiene_gates.sh`, not because this branch touched one. The count is re-derived at
+each rebase rather than quoted from the last one; a pinned number here would
+be the same stale-instrument defect this document is about.
 
 ## Reproduce
 
