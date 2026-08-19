@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "_comment": "AUTHORITATIVE program-corpus inventory — generated from the filesystem by programs/gen_program_inventory.py. Do NOT hand-edit. Every stated program count in this repo must be read from `counts` here, never hand-typed; `--check` fails when a doc quotes a different number.",
+  "counts": {
+    "programs_py": 1179,
+    "programs_catalogued": 1112,
+    "programs_py_all": 3819,
+    "program_tests": 2610,
+    "program_tests_all": 2635,
+    "checkers_check_py": 544,
+    "checkers_check_audit_lint": 577,
+    "mcp_eda_tests": 31,
+    "skills": 63,
+    "skill_compliance_tests": 68
+  },
+  "definitions": {
+    "programs_py": "`.py` files directly in `plugins/vibe-ic/programs/` (non-recursive). The programs themselves: tests, sub-packages and helpers under `programs/tests/`, `programs/gds_antenna/`, `programs/metal_fill/` are NOT included.",
+    "programs_catalogued": "Rows in `programs/INDEX.md` — `programs_py` minus private helpers (`_name.py`), `DEPRECATED_*` / `*_shim.py`, deprecation shims, and any file that does not parse. Always <= `programs_py`.",
+    "programs_py_all": "Every `.py` anywhere under `plugins/vibe-ic/programs/`, recursively. This is `programs_py` + `program_tests_all` + the sub-package modules, and it is NOT a count of programs — quoting it as one is the ambiguity this file exists to remove.",
+    "program_tests": "`test_*.py` under `plugins/vibe-ic/programs/tests/`, recursively. The pytest node files; helper modules under `tests/` are excluded.",
+    "program_tests_all": "Every `.py` under `plugins/vibe-ic/programs/tests/`, recursively — `program_tests` plus the shared helpers and fixtures those tests import.",
+    "checkers_check_py": "`programs/*_check.py` — the checker subset of `programs_py` under the narrow `_check.py` naming convention.",
+    "checkers_check_audit_lint": "`programs/*_check.py` + `*_audit.py` + `*_lint.py` — the wider checker subset. This is the number a '~600 checkers' claim is about; it is NOT a correction of `programs_py`, it is a different population.",
+    "mcp_eda_tests": "`test_*.py` under `plugins/vibe-ic/mcp-eda/test/`.",
+    "skills": "`plugins/vibe-ic/skills/*/SKILL.md` — one per shipped skill.",
+    "skill_compliance_tests": "`test_*.py` under `plugins/vibe-ic/skills/*/tests/` — the per-skill compliance regressions. Counted separately from `program_tests`; a bare `pytest` from the plugin root collects `programs/tests/` only."
+  }
+}
