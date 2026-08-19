@@ -1728,16 +1728,58 @@ def _maxfail_truncation(bound: Optional[int], rc: Optional[int], red: int,
             "PREFIX of the failure set, not the failure set; REFUSED")
 
 
+def _sink_protocol_error(sink: Dict[str, object]) -> str:
+    """The lifecycle join's OWN complaint, or "" when it did not make one."""
+    if sink.get("protocol_complete") is not False:
+        return ""
+    detail = sink.get("protocol_error")
+    return detail if isinstance(detail, str) and detail else ""
+
+
 def _norecord_reason(rc: Optional[int], out: str, incomplete: bool,
-                     stall_after: float) -> str:
-    """Explain UNKNOWN without calling every instrumentation refusal a stall."""
-    if "WATCHDOG_STALLED:" in out:
+                     stall_after: float, *, stalled: bool,
+                     protocol_error: str) -> str:
+    """Explain UNKNOWN without calling every instrumentation refusal a stall.
+
+    ``stalled`` IS THE SUPERVISOR'S OWN VERDICT -- ``_watchdog``'s
+    ``outcome == "stalled"``, carried here through the outcome sink -- and it is a
+    REQUIRED argument because what it replaces was a substring test on the CHILD'S
+    OUTPUT, and the child is entitled to print anything at all.
+
+    MEASURED on clean origin/main 49d2b3328, with this driver unchanged,
+    ``programs/tests/test_pytest_per_file_junit.py`` driven one file at a time
+    exactly as the landing gate drives it:
+
+        10 failed, 11 passed in 24.13s
+        PROGRESS_PROTOCOL_INCOMPLETE: m.16.1.jsonl: session finished before every
+                                      selected item completed (21/72)
+        AGGREGATE_NORECORD  STALLED after 300 s with no validated pytest lifecycle
+                            progress
+
+    A 24-second run, a natural exit, truncated by its own ``--maxfail`` bound --
+    reported as a 300-second hang.  The whole 440-line buffer held exactly ONE
+    ``WATCHDOG_STALLED:`` and it sat inside a pytest assertion dump belonging to
+    that file's own test OF THE STALL DETECTOR.  The watchdog never fired.  The
+    label sent two readers hunting a hang that does not exist and hid the real
+    cause, which was a failure bound.
+
+    ``test_protocol_refusal_is_not_mislabeled_as_a_stall`` existed throughout and
+    passed throughout, because it only ever exercised the half where the marker is
+    ABSENT.  The half that matters is pinned now.
+    """
+    if stalled:
         return (f"STALLED after {stall_after:g} s with no validated pytest "
                 "lifecycle progress")
-    marker = "PROGRESS_PROTOCOL_INCOMPLETE:"
-    if marker in out:
-        detail = out.split(marker, 1)[1].splitlines()[0].strip()
-        return f"pytest progress protocol incomplete: {detail}"
+    # THE DETAIL COMES FROM THE PROBE, NOT FROM THE BUFFER, for the same reason
+    # `stalled` does. MEASURED on this file with only the `stalled` half repaired:
+    # the per-file arm reported "no pytest progress stream was produced" for a
+    # session whose OWN probe had just said "session finished before every selected
+    # item completed (29/83)" -- because the first `PROGRESS_PROTOCOL_INCOMPLETE:`
+    # in the buffer belonged to a NESTED driver run this file spawns as its
+    # subject. An empty `protocol_error` means the supervisor did not supply one,
+    # which falls through to the liveness sentence below rather than guessing.
+    if protocol_error:
+        return f"pytest progress protocol incomplete: {protocol_error}"
     if "DESCENDANT_CLEANUP_INCOMPLETE:" in out:
         return "pytest descendant cleanup could not prove a final empty census"
     if "LIVE_DESCENDANTS_CLEANED:" in out:
@@ -1923,6 +1965,10 @@ def _run_progress_supervised(
     if outcome_sink is not None:
         outcome_sink.update({
             "natural_exit": result.outcome == "natural",
+            # `_watchdog` outcome vocabulary: natural | stalled | ceiling |
+            # aborted. "stalled" is the ONLY one that means the forward-progress
+            # lease expired, and it is the fact `_norecord_reason` needs.
+            "stalled": result.outcome == "stalled",
             "leaked": bool(leaked),
             "cleanup_ok": bool(post_exit_cleanup_ok),
             "protocol_complete": bool(protocol_complete),
@@ -1977,6 +2023,7 @@ def _declared_rootdir(pytest_argv: Sequence[str],
 def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
             stall_after: float, cwd: Optional[str], *,
             progress_relay_path: Optional[Path] = None,
+            outcome_sink: Optional[Dict[str, object]] = None,
             ) -> Tuple[Optional[int], str, bool]:
     """One pytest session for one file, supervised by forward progress."""
     cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
@@ -1991,7 +2038,8 @@ def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
         test_file,
     ]
     return _run_progress_supervised(
-        cmd, stall_after, cwd, progress_relay_path=progress_relay_path)
+        cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
+        outcome_sink=outcome_sink)
 
 
 def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
@@ -2017,6 +2065,7 @@ def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
                 stall_after: float, cwd: Optional[str], *,
                 progress_relay_path: Optional[Path] = None,
                 poll_s: Optional[float] = None,
+                outcome_sink: Optional[Dict[str, object]] = None,
                 ) -> Tuple[Optional[int], str, bool]:
     """Run one collect-only session with the strict lifecycle protocol.
 
@@ -2030,7 +2079,7 @@ def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
     ]
     return _run_progress_supervised(
         cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
-        poll_s=poll_s, collect_only=True)
+        poll_s=poll_s, collect_only=True, outcome_sink=outcome_sink)
 
 
 def _write_json_atomic(path: Path, payload: object) -> None:
@@ -2088,11 +2137,12 @@ def _fallback_worker_main(spec_path: Path) -> int:
     suites: Optional[List[ET.Element]] = None
     cases = 0
     red = 0
+    sink: Dict[str, object] = {}
     try:
         rc, out, killed = run_one(
             spec["pytest_argv"], test_file, junit_path,
             float(spec["stall_after"]), spec["cwd"],
-            progress_relay_path=relay)
+            progress_relay_path=relay, outcome_sink=sink)
         sys.stdout.write(out)
         if not out.endswith("\n"):
             sys.stdout.write("\n")
@@ -2113,7 +2163,9 @@ def _fallback_worker_main(spec_path: Path) -> int:
 
     has_record = suites is not None
     reason = ("" if has_record else
-              _norecord_reason(rc, out, killed, float(spec["stall_after"])))
+              _norecord_reason(rc, out, killed, float(spec["stall_after"]),
+                               stalled=sink.get("stalled") is True,
+                               protocol_error=_sink_protocol_error(sink)))
     try:
         _write_json_atomic(meta_path, {
             "schema": 1,
@@ -2174,11 +2226,13 @@ def _collect_worker_main(spec_path: Path) -> int:
     rc: Optional[int] = None
     out = ""
     incomplete = True
+    sink: Dict[str, object] = {}
     try:
         rc, out, incomplete = run_collect(
             spec["pytest_argv"], spec["test_files"],
             float(spec["stall_after"]), spec["cwd"],
-            progress_relay_path=relay, poll_s=float(spec["poll_s"]))
+            progress_relay_path=relay, poll_s=float(spec["poll_s"]),
+            outcome_sink=sink)
         sys.stdout.write(out)
         if out and not out.endswith("\n"):
             sys.stdout.write("\n")
@@ -2190,7 +2244,9 @@ def _collect_worker_main(spec_path: Path) -> int:
 
     reason = ("" if not incomplete else
               _norecord_reason(rc, out, incomplete,
-                               float(spec["stall_after"])))
+                               float(spec["stall_after"]),
+                               stalled=sink.get("stalled") is True,
+                               protocol_error=_sink_protocol_error(sink)))
     try:
         _write_json_atomic(meta_path, {
             "schema": 1,
@@ -2884,13 +2940,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                             "aggregate session stopped at its own declared "
                             "failure bound after "
                             f"{aggregate_sink['items_finished']}"
-                            f"/{aggregate_sink['items_declared']} items, so "
-                            f"{len(aggregate_missing)} of {len(selection)} "
-                            "selected file(s) were never launched: "
-                            f"{aggregate_missing}")
+                            f"/{aggregate_sink['items_declared']} items"
+                            + (f", so {len(aggregate_missing)} of "
+                               f"{len(selection)} selected file(s) were never "
+                               f"launched: {aggregate_missing}"
+                               if aggregate_missing else
+                               " (every selected file was launched)"))
                 why = (aggregate_coverage_problem or _norecord_reason(
                     aggregate_rc, out, aggregate_killed,
-                    a.aggregate_stall_after))
+                    a.aggregate_stall_after,
+                    stalled=aggregate_sink.get("stalled") is True,
+                    protocol_error=_sink_protocol_error(aggregate_sink)))
                 print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
                       "are UNKNOWN, not clean", flush=True)
                 aggregate_suites = None
@@ -3019,11 +3079,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     continue
                 per = tmp / f"{i:05d}.xml"
                 print(f"=== [{i}/{len(selection)}] {test_file}", flush=True)
+                file_sink: Dict[str, object] = {}
                 rc, out, killed = run_one(pytest_argv, test_file, per,
                                           a.stall_after, a.cwd,
                                           progress_relay_path=(
                                               Path(a.progress_relay)
-                                              if a.progress_relay else None))
+                                              if a.progress_relay else None),
+                                          outcome_sink=file_sink)
                 sys.stdout.write(out)
                 if not out.endswith("\n"):
                     sys.stdout.write("\n")
@@ -3044,7 +3106,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 results.append(FileResult(
                     test_file, rc, killed, suites, cases, red,
                     norecord_reason=_norecord_reason(
-                        rc, out, killed, a.stall_after)))
+                        rc, out, killed, a.stall_after,
+                        stalled=file_sink.get("stalled") is True,
+                        protocol_error=_sink_protocol_error(file_sink))))
                 state = ("NORECORD" if suites is None
                          else ("red" if red or rc != 0 else "ok"))
                 print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "
