@@ -1,0 +1,45 @@
+package: tools/ci
+purpose: >-
+  The CI and landing machinery: the one list of repo-wide gates
+  (repo_hygiene_gates.sh), the hermetic candidate/test arms, the protected
+  landing transition, and the pollers. Code here decides whether other code is
+  allowed to land.
+owns:
+  - "*.py"
+  - "*.sh"
+tests:
+  root: tools/ci
+  collected_by: tools/gatekeeper-land.sh
+  collected_by_kind: named
+  note: >-
+    Tests live BESIDE the source here on purpose — tools/ci/test_repo_tools_tests_gate.py
+    says why: it is covered by the very gate it tests, so removing that gate
+    stops the test being run BY it and starts it failing IN it.
+invariants:
+  - id: I_landing_never_bypasses_its_own_gates
+    statement: >-
+      No script here may pass --admin to gh.
+    rule: forbid_regex
+    pattern: '--admin\b'
+    applies_to: ["*.py", "*.sh", "!test_*.py", "!test_*.sh"]
+    severity: BLOCKING
+    why: >-
+      Same rule as tools/, restated where the gate list itself lives. A merge
+      that bypasses required checks makes every gate in repo_hygiene_gates.sh
+      advisory, and this directory is where that would be written. The test
+      files are excluded from the selection rather than the pattern being
+      weakened: a test that drives the guard must be able to spell the flag,
+      and narrowing the pattern instead would stop catching it in real source.
+      Measured 0 occurrences in the selected files when this was written.
+  - id: I_no_os_system
+    statement: >-
+      No os.system(). Shell out through subprocess with an argument list.
+    rule: forbid_regex
+    pattern: 'os\.system\('
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      These scripts run with the repository checked out and with credentials
+      available; a command assembled by string concatenation from a branch name
+      or a PR title is a shell-injection surface, and os.system()'s wait-status
+      return is easy to misread as an exit code. Measured 0 occurrences.

@@ -147,6 +147,14 @@ python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.
 > skill needs `compliance.yaml` + `tests/test_compliance.py`
 > (`_shared/bootstrap_compliance.py` + `_shared/gen_compliance_tests.py`).
 
+> Adding a source DIRECTORY? Once a directory holds four or more tracked source
+> files it becomes a package, and `package_invariants_check` requires an
+> `INVARIANTS.yaml` in it — the rules that bind that code, written beside that
+> code. Read the one already sitting next to whatever you are editing; it is the
+> shortest answer to "what am I not allowed to do here". Missing is a failure,
+> and so is an empty one: a package with nothing to declare has not been thought
+> about yet, and "no declaration" must never read as "no constraints".
+
 ### 6. Commit + push
 
 Conventional commit style preferred but not strictly required:
