@@ -27,6 +27,13 @@ cannot import the runner" TRUE ON EVERY HOST, image included. The positive
 control then names the directory where the runner really is, resolved from the
 NON-isolated interpreter, so it is equally host-independent.
 
+Substituting the interpreter is only half the substitution: `PYTHONPATH` routes
+the runner into ANY interpreter, and the pinned image's own entrypoint exports
+one naming the directory the runner is installed in. So the interpreter-path
+variables are removed from the environment the shim runs under, and the shim is
+then PROVEN runner-less under that exact environment before either direction is
+measured (`_RUNNER_PATH_ENV`, `_shim_env`).
+
 Both directions are asserted. A refusal test that cannot pass against the
 repaired tree, and a recording test that cannot fail against the broken one, are
 each half a control.
@@ -85,7 +92,49 @@ def _first_arm_line() -> int:
                 if line in {"  run_pytest", "run_pytest"})
 
 
-def _runnerless_python(tmp_path: Path) -> Path:
+#: Interpreter-path variables that route a SECOND copy of the runner into any
+#: interpreter, substituted one included. `PYTHONPATH` prepends directories to
+#: `sys.path` before site processing, so a venv with no runner installed still
+#: imports one when the ambient value names the directory the runner lives in —
+#: and that is not hypothetical. MEASURED inside the digest-pinned image, entered
+#: the way this gate's own refusal text tells an operator to enter it
+#: (`docker run … bash tools/gatekeeper-land.sh`), where the image entrypoint
+#: exports::
+#:
+#:     PYTHONPATH=/headless/.local/lib/python3.12/site-packages:…:
+#:                /usr/local/lib/python3.12/dist-packages:…
+#:
+#: and `/usr/local/lib/python3.12/dist-packages` is exactly where the runner is.
+#: `landing_pytest_runtime_preflight.entry_probe` strips the same two names for
+#: the same reason; this file has to strip them too or its substitution is not a
+#: substitution. Under `docker exec`, which does not run the entrypoint, the
+#: value is harmless — which is why the hole stayed invisible.
+_RUNNER_PATH_ENV = ("PYTHONPATH", "PYTHONHOME")
+
+
+def _shim_env(*, lane: str | None) -> dict[str, str]:
+    """The exact environment the substituted interpreter will run under.
+
+    Built once and used for BOTH the runner-less assertion below and the block
+    run, because an interpreter proven runner-less under one environment says
+    nothing about the environment the block actually executes in.
+    """
+    env = {key: value for key, value in os.environ.items()
+           # See the same strip in the program: a nested entry that inherits its
+           # supervisor's progress stream writes the parent's nonce from another
+           # pid, and the parent's session is failed `schema/nonce/pid mismatch`
+           # — this file's own result became UNKNOWN that way on the repo-tools
+           # arm while every test in it passed.
+           if not key.startswith("VIBEIC_PYTEST_PROGRESS")
+           and key not in _RUNNER_PATH_ENV}
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env.pop(_HOST_LANE_ENV, None)
+    if lane is not None:
+        env[_HOST_LANE_ENV] = lane
+    return env
+
+
+def _runnerless_python(tmp_path: Path, env: dict[str, str]) -> Path:
     """An interpreter that genuinely cannot import the test runner, anywhere.
 
     A shell wrapper is not enough here. The block under test invokes bare
@@ -93,11 +142,13 @@ def _runnerless_python(tmp_path: Path) -> Path:
     wrapper's `exec` replaces with the REAL interpreter, so the probe would
     measure the host and this test would invert inside the pinned image. A venv
     IS `sys.executable`: no system site directory, user site disabled, and no
-    runner installed. That is true on every host, image included.
+    runner installed. That is true on every host, image included — PROVIDED the
+    interpreter-path variables above are out of `env`, which is the caller's job
+    and is asserted here rather than assumed.
     """
     home = tmp_path / "runnerless"
     made = subprocess.run(
-        [sys.executable, "-m", "venv", "--without-pip", str(home)],
+        [sys.executable, "-m", "venv", "--without-pip", str(home)], env=env,
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
         timeout=600, check=False)
     if made.returncode != 0:
@@ -106,12 +157,13 @@ def _runnerless_python(tmp_path: Path) -> Path:
                     f"here — not verified: {made.stderr.strip()[:200]}")
     shim = home / "bin" / "python3"
     assert shim.is_file(), made.stdout + made.stderr
-    probe = subprocess.run([str(shim), "-c", "import pytest"],
+    probe = subprocess.run([str(shim), "-c", "import pytest"], env=env,
                            stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, timeout=120, check=False)
     assert probe.returncode != 0, (
-        "the runner-less interpreter can still import the runner, so the "
-        "refusal direction of this test would measure nothing")
+        "the runner-less interpreter can still import the runner under the "
+        "environment the block will run in, so the refusal direction of this "
+        f"test would measure nothing: {probe.stdout}{probe.stderr}")
     return shim
 
 
@@ -137,19 +189,9 @@ def _run_block(block: str, tmp_path: Path, *, lane: str | None) -> subprocess.Co
         + block + "\n"
         'echo "REACHED_THE_FIRST_ARM"\n',
         encoding="utf-8")
-    shim = _runnerless_python(tmp_path)
-    env = {key: value for key, value in os.environ.items()
-           # See the same strip in the program: a nested entry that inherits its
-           # supervisor's progress stream writes the parent's nonce from another
-           # pid, and the parent's session is failed `schema/nonce/pid mismatch`
-           # — this file's own result became UNKNOWN that way on the repo-tools
-           # arm while every test in it passed.
-           if not key.startswith("VIBEIC_PYTEST_PROGRESS")}
+    env = _shim_env(lane=lane)
+    shim = _runnerless_python(tmp_path, env)
     env["PATH"] = f"{shim.parent}{os.pathsep}{env.get('PATH', '')}"
-    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    env.pop(_HOST_LANE_ENV, None)
-    if lane is not None:
-        env[_HOST_LANE_ENV] = lane
     return subprocess.run(["bash", str(script)], env=env, cwd=str(tmp_path),
                           stdin=subprocess.DEVNULL, capture_output=True,
                           text=True, timeout=600, check=False)
