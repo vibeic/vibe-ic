@@ -43,7 +43,11 @@ import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
 from typing import Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import resolves however this is invoked
+import _docker_memory as _dmem  # every `docker run` carries the ceiling
 
 RC_AGREE, RC_DISAGREE, RC_CANNOT_CHECK = 0, 1, 2
 
@@ -98,7 +102,9 @@ def _probe(image: str, entrypoint: str, commands: Tuple[str, ...],
         Path(d, "probe.tcl").write_text(tcl, encoding="utf-8")
         args = (["-no_init", "/w/probe.tcl"] if positional
                 else ["-no_init", "-exit", "/w/probe.tcl"])
-        rc, out, err = _run(["docker", "run", "--rm", "-v", f"{d}:/w",
+        rc, out, err = _run(["docker", "run", "--rm",
+                             *_dmem.docker_memory_flags(),
+                             "-v", f"{d}:/w",
                              "--entrypoint", entrypoint, image, *args],
                             timeout=300)
     if rc == 127:
@@ -165,7 +171,9 @@ def _equivalence(image: str) -> Tuple[Dict[str, str], str]:
         for entry, positional in (("openroad", False), ("sta", True)):
             args = (["-no_init", "/w/eq.tcl"] if positional
                     else ["-no_init", "-exit", "/w/eq.tcl"])
-            rc, so, se = _run(["docker", "run", "--rm", "-v", f"{d}:/w",
+            rc, so, se = _run(["docker", "run", "--rm",
+                               *_dmem.docker_memory_flags(),
+                               "-v", f"{d}:/w",
                                "--entrypoint", entry, image, *args], timeout=300)
             vals = {}
             for line in (so or "").splitlines():

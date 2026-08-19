@@ -166,6 +166,10 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import plugin_manifest_discovery as _pmd  # noqa: E402
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
 
 ATTRIBUTION = "tapeout_readiness_check"
 
@@ -548,7 +552,8 @@ def build_command(
     """
     layout = layout.resolve()
     rundir = rundir.resolve()
-    cmd: List[str] = [docker_bin, "run", "--rm", "--network=none"]
+    cmd: List[str] = [docker_bin, "run", "--rm", "--network=none",
+                      *_dmem.docker_memory_flags()]
     cmd += ["-v", f"{layout.parent}:{_C_DESIGN}:ro"]
     cmd += ["-v", f"{rundir}:{_C_RUNDIR}"]
     cmd += [image]

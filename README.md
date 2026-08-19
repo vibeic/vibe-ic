@@ -65,7 +65,7 @@ export VIBEIC_DESIGNS="/path/to/your/designs"  # ← your project / designs fold
 [ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
 docker pull ghcr.io/vibeic/vibeic-eda:0.3.13   # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
-docker run -d --name vibeic-eda \
+docker run -d --name vibeic-eda --memory 48g --memory-swap 48g \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   ghcr.io/vibeic/vibeic-eda:0.3.13 --skip sleep infinity

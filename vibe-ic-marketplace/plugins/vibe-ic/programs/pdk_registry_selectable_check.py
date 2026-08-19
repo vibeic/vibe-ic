@@ -93,6 +93,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
 from typing import Any, Dict, List
 
 _BASELINE_NAME = "pdk_shipped_unregistered_baseline.json"
@@ -341,7 +343,8 @@ def _sh(target, script: str):
         return subprocess.CompletedProcess([], 1, "", "no target")
     kind, ref = target
     cmd = (["docker", "exec", ref, "bash", "-lc", script] if kind == "exec"
-           else ["docker", "run", "--rm", "--entrypoint", "bash", ref,
+           else ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+                 "--entrypoint", "bash", ref,
                  "-lc", script])
     return subprocess.run(cmd, capture_output=True, text=True)
 

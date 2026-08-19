@@ -67,6 +67,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 HERE = Path(__file__).resolve().parent
@@ -137,7 +138,8 @@ def image_is_readable(image: str, timeout: int = 60) -> Tuple[bool, str]:
     """THE SAME operation the gated tests perform, once."""
     try:
         r = subprocess.run(
-            ["docker", "run", "--rm", "--entrypoint", "cat", image, _PROBE_PATH],
+            ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+             "--entrypoint", "cat", image, _PROBE_PATH],
             capture_output=True, timeout=timeout)
     except FileNotFoundError:
         return False, "no `docker` binary on PATH"

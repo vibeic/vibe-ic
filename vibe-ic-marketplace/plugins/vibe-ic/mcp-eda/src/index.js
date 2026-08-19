@@ -433,6 +433,13 @@ function dockerExec(cmd, timeoutMs = 300000) {
   // tool arguments could break out of the command context.
   //
   // The timeout is enforced INSIDE the container, not by killing the client.
+  // This is the same defect, and the same fix, that
+  // `programs/_container_exec.py` already carries for the PYTHON runners
+  // (ORGANIC #570, measured 2026-07-22: a yosys still running eighteen minutes
+  // after its step was recorded as timed out). Every Python `_docker_exec_raw`
+  // was routed through that helper; this server is a separate implementation in
+  // a different language and was never given the same treatment, so it kept
+  // orphaning tools for another month.
   // MEASURED 2026-08-19: `timeout 4 docker exec C bash -c 'sleep 90 & wait'`
   // returns 124 to the caller and leaves TWO processes running in the
   // container -- a killed `docker exec` client does not stop the process it

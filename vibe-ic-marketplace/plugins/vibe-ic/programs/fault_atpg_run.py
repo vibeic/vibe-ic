@@ -73,6 +73,10 @@ from pathlib import Path
 import _path_layout as _pl
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _container_exec as _CE  # vibe-ic#623 — the deadline goes INSIDE the container
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
 import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
@@ -1271,6 +1275,7 @@ def _run_docker(
     deadline = atpg_container_deadline(timeout, flush_grace_s)
     docker_cmd = [
         "docker", "run", "--rm",
+        *_dmem.docker_memory_flags(),
         "--entrypoint", "bash",
         "-v", f"{project}:/work",
     ]
