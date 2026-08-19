@@ -1258,6 +1258,40 @@ def _f_macro_obs_spanned(p: Path) -> None:
     _write_macro_obs_layout(p, spanning=6)
 
 
+def _f_magic_illegal_overlap(p: Path) -> None:
+    """The extractor filed a rectangle it refused to connect.
+
+    Reddens the Step-31 clause
+    ``magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json``,
+    wired into `gate.all_of` by the extraction-feedback change and shipped with
+    no entry here — so the clause fell back to ``EMPTY`` and reached only a
+    disclosed vacuous skip, which is not a demonstration that it can fail.
+
+    EMPTY cannot reach it, and that is the gate being right rather than a gap:
+    with no extraction in scope there is no question for it to answer, so it
+    reports the repo's disclosed vacuous code instead of a verdict. MEASURED in
+    the container, verbatim:
+
+        EMPTY  rc 2  __VACUOUS_HINT__: magic_illegal_overlap_check …
+        THIS   rc 1  [FAIL] 1 illegal overlap(s) in the extraction feedback
+                     (threshold 0) … extract_feedback.txt:2 box=[20, 20, 35, 40]
+
+    The red is earned by what the dump SAYS, not by anything being absent: the
+    file is present and parseable, and the finding is the marker inside a record
+    the parser read.
+
+    Chip-, PDK- and vendor-AGNOSTIC: `box` + `feedback add` is magic's own
+    `feedback save` format, the two type names are the generic CMOS well/diffusion
+    spellings that appear in the tool's own format string, and no process,
+    vendor or design literal is involved. The message text is not what the gate
+    counts — the marker is — so the fixture states a shape, not a technology.
+    """
+    _w(p, "phase3/stage3/extracted/extract_feedback.txt",
+       "box 20 20 35 40\n"
+       'feedback add "Illegal overlap between nwell and pdiff '
+       '(types do not connect)" pale\n')
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1289,6 +1323,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
+    "MAGIC_ILLEGAL_OVERLAP": _f_magic_illegal_overlap,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1523,6 +1558,15 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
            "reports/manufacturing/final_test.json"): "MFG_BAD",
     ("44", "htol_attestation_check . --json reports/manufacturing/htol.json"):
         "MFG_BAD",
+    # The extraction-feedback change wired this BLOCKING clause into step 31's
+    # `gate.all_of` and added no assignment here, so it fell back to EMPTY and
+    # measured VACUOUS_PASS — a clause that has never been seen to fail. It is
+    # assigned rather than registered in `UNREDDENED` because a fixture DOES
+    # break it, and an `UNREDDENED` entry whose clause reddens fails this suite
+    # by design.
+    ("31", "magic_illegal_overlap_check . --json "
+           "reports/phase3/magic_illegal_overlap.json"):
+        "MAGIC_ILLEGAL_OVERLAP",
 }
 
 #: Blocking clauses this file could NOT drive to a FAIL, with the outcome
@@ -2318,6 +2362,74 @@ def test_d2_the_two_obstruction_gates_redden_and_only_on_content(
         "the same segment count routed clear of the obstruction must PASS, "
         f"else the red above is the macro's presence and not the crossing :: "
         f"{out[-300:]}")
+
+
+#: The extraction-feedback clause, with the fixture that reddens it. Kept beside
+#: its control for the same reason as :data:`_OBSTRUCTION_BLOCKING`: a fixture
+#: that stops reddening because the GATE got stricter is caught here by name,
+#: not only as a cell going red somewhere in the 63-step sweep.
+_EXTRACTION_FEEDBACK_BLOCKING: Tuple[str, str, str] = (
+    "31", "magic_illegal_overlap_check . --json "
+          "reports/phase3/magic_illegal_overlap.json",
+    "MAGIC_ILLEGAL_OVERLAP")
+
+
+def test_d2_the_extraction_feedback_gate_reddens_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """The claim in :func:`_f_magic_illegal_overlap`'s docstring, RUN.
+
+    This clause landed in step 31's ``gate.all_of`` with no entry in
+    :data:`CLAUSE_FIXTURE`, so the matrix measured it on ``EMPTY`` and read
+    ``VACUOUS_PASS`` — the tier that says "I was given nothing", which is not
+    the same fact as "I can say no" and which
+    :func:`test_d2_gate_has_a_reachable_fail` correctly refused to accept.
+
+    Three arms, and the third is what makes the second a verdict rather than a
+    shape:
+
+      EMPTY      -> VACUOUS_PASS  no extraction in scope; the gate discloses it
+      fixture    -> FAIL          the dump names a rectangle the tool refused
+      corrected  -> PASS          the SAME path, still present, emptied
+
+    The corrected arm is the smallest edit that exists here: one file's BYTES,
+    with its path, its name and its directory unchanged. A red that survived
+    that edit would have been earned by the file being there, which is the
+    existence-check-wearing-the-clothes-of-a-correctness-check shape this
+    dimension exists to separate out.
+    """
+    key, command, fixture = _EXTRACTION_FEEDBACK_BLOCKING
+    assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
+        f"step {key}: {command!r} is no longer assigned {fixture!r}; this "
+        f"control and the matrix cell would measure different things")
+
+    red_project = _build_project(tmp_path, f"extfb{key}", fixture)
+    tier, out = _tier(red_project, command)
+    assert tier == RED, (
+        f"step {key}: fixture {fixture} no longer reddens {command!r} -> "
+        f"{tier} :: {out[-300:]}")
+
+    tier, out = _tier(_build_project(tmp_path, f"extfbe{key}", "EMPTY"),
+                      command)
+    assert tier == VACUOUS, (
+        f"step {key}: on a tree with no extraction in scope {command!r} "
+        f"answered {tier}, not {VACUOUS}. If it is FAIL the fixture is "
+        f"measuring nothing the bare tree does not; if it is PASS the gate now "
+        f"certifies a run it could not read :: {out[-300:]}")
+
+    # ── the negative control: the same tree, the same feedback path, emptied.
+    #    `feedback save` writes an EMPTY file when there are no feedback areas,
+    #    so this is a real tree and not a degenerate one.
+    ctl = _build_project(tmp_path, f"extfbctl{key}", fixture)
+    dump = ctl / "phase3/stage3/extracted/extract_feedback.txt"
+    assert dump.is_file(), (
+        f"the control assumes {fixture} writes {dump.name}; it did not, so "
+        f"this arm would prove nothing")
+    dump.write_text("", encoding="utf-8")
+    tier, out = _tier(ctl, command)
+    assert tier == PASS, (
+        "the same dump, same path, emptied, must PASS — else the red above is "
+        f"the file's presence and not what it says :: {out[-300:]}")
+
 
 
 # ─────────────────────────────────────────────────────────────────────
