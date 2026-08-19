@@ -1052,6 +1052,14 @@
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",
           "size_bytes": 1188
+        },
+        "reports/phase3/lvs_verdict.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "MEASURED 2026-08-19 on the same published cell that carries this step's already-declared drc_signoff.rpt / lvs.rpt / erc.rpt. Written by `phase3_one_shot_runner._lvs_verdict` from `_run_extraction_lvs` (#477), NOT by a gate of this step, so unlike lvs.json and erc_density.json above it is not a self-certified copy. Present in exactly the six of ten admissible run roots that carry lvs.rpt and lvs.json, and absent in exactly the four that carry neither.",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/lvs_verdict.json",
+          "path": "reports/phase3/lvs_verdict.json",
+          "size_bytes": 1131
         }
       }
     },

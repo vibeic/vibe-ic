@@ -4150,6 +4150,37 @@ steps:
       # only under `flow_compliance_check --strict-audit-evidence`.
       - "reports/phase3/lvs.json"
       - "reports/phase2/gates/erc_density.json"
+      # The THIRD machine-readable LVS verdict, declared 2026-08-19 under
+      # #1215's W2 rule after the write-record binding was restored to the
+      # corpus repository — while that binding was inert this finding could
+      # not be seen at all.
+      #
+      # PRODUCED BY THIS STEP. `phase3_one_shot_runner._lvs_verdict` writes
+      # `reports/phase3/lvs_verdict.json` from `_run_extraction_lvs` on EVERY
+      # outcome (#477), "so an incomplete / aborted compare is NEVER silent".
+      # READ BY THIS STEP'S GATE: `magic_illegal_overlap_check.
+      # LVS_VERDICT_RELS` names it as one of three interchangeable proofs that
+      # an LVS verdict exists, which is what stops the rc-2 vacuous pass that
+      # deleting the extraction directory would otherwise manufacture.
+      # Producer step == consumer step == 31, so this charges nothing to a
+      # step that only reads it.
+      #
+      # IT IS NOT AN ALTERNATION OF THE TWO ABOVE. `lvs.rpt` and `lvs.json`
+      # stay REQUIRED and are not folded into an `X OR Y` with this entry:
+      # `magic_illegal_overlap_check` accepts any ONE of the three, but this
+      # step declaring all three is a stronger statement than declaring that
+      # one of them exists, and weakening a live declaration to close a
+      # completeness finding would be the shape this flow refuses.
+      #
+      # BLAST RADIUS, MEASURED on the ten admissible run roots this repository
+      # can read: the artefact is present in exactly the six that carry the
+      # already-declared `lvs.rpt`/`lvs.json`, and absent in exactly the four
+      # that carry neither (espi, sha256, u_hawaii_adc and its v-cell). The
+      # correlation is total, so no root's dimension-3 answer for this step
+      # moves — the d7 finding closes without opening a d3 one. Across the
+      # whole published corpus: 9 roots carry lvs_verdict.json and 8 carry
+      # lvs.rpt, and every root carrying lvs.rpt carries it too.
+      - "reports/phase3/lvs_verdict.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.
