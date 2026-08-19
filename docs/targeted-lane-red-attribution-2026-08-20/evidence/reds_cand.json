@@ -1,0 +1,338 @@
+{
+ "label": "CAND jnorec/assembled",
+ "head": "706b14400a54c951320627c731bc04072ccd769f",
+ "files_with_evidence": 49,
+ "files_total": 49,
+ "cases_seen": 1474,
+ "reds": [
+  {
+   "node": "programs/tests/test_ci_harness_timeout_ceiling_check.py::test_a_recorded_advisory_that_stopped_existing_is_deleted",
+   "file": "programs/tests/test_ci_harness_timeout_ceiling_check.py",
+   "kind": "failure",
+   "message": [
+    "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-reyerchu/pytest-17223/test_a_recorded_advisory_that_0/r.json'"
+   ]
+  },
+  {
+   "node": "programs/tests/test_ci_harness_timeout_ceiling_check.py::test_each_root_prints_its_own_file_count",
+   "file": "programs/tests/test_ci_harness_timeout_ceiling_check.py",
+   "kind": "failure",
+   "message": [
+    "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-reyerchu/pytest-17223/test_each_root_prints_its_own_0/r.json'"
+   ]
+  },
+  {
+   "node": "programs/tests/test_ci_harness_timeout_ceiling_check.py::test_semantic_landing_harness_has_no_elapsed_ceiling",
+   "file": "programs/tests/test_ci_harness_timeout_ceiling_check.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: [FAIL] ci_harness_timeout_ceiling_check: the landing gate declares semantic pytest supervision but its contract is incomplete:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_ci_harness_timeout_ceiling_check.py::test_the_advisory_residual_does_not_grow_unreviewed",
+   "file": "programs/tests/test_ci_harness_timeout_ceiling_check.py",
+   "kind": "failure",
+   "message": [
+    "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-reyerchu/pytest-17223/test_the_advisory_residual_doe0/r.json'"
+   ]
+  },
+  {
+   "node": "programs/tests/test_ci_harness_timeout_ceiling_check.py::test_the_json_record_carries_what_the_text_says",
+   "file": "programs/tests/test_ci_harness_timeout_ceiling_check.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: [FAIL] ci_harness_timeout_ceiling_check: the landing gate declares semantic pytest supervision but its contract is incomplete:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_ci_harness_timeout_ceiling_check.py::test_the_shipped_tree_is_clean",
+   "file": "programs/tests/test_ci_harness_timeout_ceiling_check.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: [FAIL] ci_harness_timeout_ceiling_check: the landing gate declares semantic pytest supervision but its contract is incomplete:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step15]",
+   "file": "programs/tests/test_matrix_d3_outputs_produced.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: step 15 (Floorplan + PDN): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not cover them:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step17]",
+   "file": "programs/tests/test_matrix_d3_outputs_produced.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: step 17 (Placement (global + detailed)): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not cover them:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step19]",
+   "file": "programs/tests/test_matrix_d3_outputs_produced.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: step 19 (CTS (Clock Tree Synthesis)): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not cover them:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step20]",
+   "file": "programs/tests/test_matrix_d3_outputs_produced.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: step 20 (\ud83d\udd01 Post-CTS hold fixing): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not cover them:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step30]",
+   "file": "programs/tests/test_matrix_d3_outputs_produced.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: step 30 (Post-Layout SPICE Verification (critical-path correlation + analog)): 2 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not cover them:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step32]",
+   "file": "programs/tests/test_matrix_d3_outputs_produced.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: step 32 (\ud83d\udd01 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)): 1 declared output(s) cite a run root NO corpus can supply, so the corpus-absent skip must not cover them:"
+   ]
+  },
+  {
+   "node": "programs/tests/test_matrix_d7_outputs_list_complete.py::test_d7_required_outputs_list_is_complete[step31]",
+   "file": "programs/tests/test_matrix_d7_outputs_list_complete.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: step 31: required_outputs is INCOMPLETE \u2014 1 load-bearing artefact(s) it never declares."
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_a_red_test_is_a_red_run_not_a_missing_record",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [1/2] test_green_neighbour.py"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_a_session_level_red_is_not_erased_by_green_testcase_xml",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [1/1] test_green_neighbour.py"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_aggregate_canary_preserves_cross_file_process_semantics",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [aggregate] 2 file(s) in one pytest process"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_aggregate_loss_confines_norecord_to_the_hanging_file",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [aggregate] 3 file(s) in one pytest process"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_aggregate_norecord_fallback_ignores_legacy_failure_threshold",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "assert not [\"NORECORD  test_01_red.py  pytest progress protocol incomplete: no pytest progress stream was produced \u2014 this file's ... progress protocol incomplete: no pytest progress stream was produced \u2014 this file's result is UNKNOWN, not clean\", ...]"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_aggregate_norecord_is_named_and_returns_unknown",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: assert [] == ['test_01_mut...t_02_hang.py']"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_aggregate_norecord_runs_diagnostic_fallback_and_stays_unknown",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: assert [] == ['test_01_mut..._05_green.py']"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_aggregate_refuses_a_selected_file_that_collected_no_tests",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "assert 'does not exactly cover the selected files' in '=== [aggregate] 2 file(s) in one pytest process\\nTraceback (most recent call last):\\n  File \"/usr/lib/python3.10/runp...   /tmp/pytest-of-reyerchu/pytest-17275/test_aggregate_refuses_a_selec0/aggregate-missing-file.xml  (0 test case(s))\\n'"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_chatty_import_output_is_diagnostic_not_pytest_progress",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: assert [] == ['test_green_...neighbour.py']"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_complete_aggregate_check_does_not_launch_per_file_sessions",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [aggregate] 2 file(s) in one pytest process"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_cpu_activity_without_pytest_progress_is_still_a_stall",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: assert [] == ['test_green_...neighbour.py']"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_driver_signal_cleanup_reaps_the_active_detached_descendant",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: fixture never launched its detached child"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_files_not_launched_are_named_rather_than_looking_clean",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [1/2] test_red.py"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_natural_exit_reaps_dead_adopted_zombie_without_norecord",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [aggregate] 1 file(s) in one pytest process"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_natural_exit_with_live_descendant_is_norecord_after_cleanup",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "assert 'LIVE_DESCENDANTS_CLEANED:' in '=== [aggregate] 1 file(s) in one pytest process\\nTraceback (most recent call last):\\n  File \"/usr/lib/python3.10/runp...  merged     /tmp/pytest-of-reyerchu/pytest-17275/test_natural_exit_with_live_de0/live-cleaned.xml  (0 test case(s))\\n'"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_nested_collect_progress_is_relayed_to_the_outer_session",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: "
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_nested_validated_progress_is_relayed_to_the_outer_session",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: [INFO] scratch_root_guard: /tmp \u2014 outside any git work tree (or git could not be asked)"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_one_session_loses_the_whole_record_and_per_file_does_not",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: []"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_progress_stall_catches_a_hang_pytest_timeout_cannot_see",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: assert [] == ['test_green_...neighbour.py']"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_signal_during_parallel_fallback_reaps_detached_descendant",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: parallel fallback never launched its escapee"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_stratified_probe_preserves_late_and_early_green_files[eight-local-hangs-first]",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "assert 10 == 8"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_stratified_probe_preserves_late_and_early_green_files[two-green-files-first]",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "assert 10 == 8"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_systemic_import_hang_recovery_is_bounded_parallel_not_serial",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: assert 0 == 9"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_the_file_with_no_record_is_named",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [1/2] test_green_neighbour.py"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_the_landing_harness_declares_semantic_progress_not_elapsed_time",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: {'declared': True, 'errors': ['semantic pytest driver is not the exact reviewed executable (sha256=37d80899488be20df90...JOBS:-32}\" --stop-after-failures 0 -- python3 -I \"$PROGRAMS/trusted_pytest_entry.py\" -q -p no:cacheprovider 2>&1 )\"'}]}"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_the_merged_report_is_xunit1_and_carries_the_file_attribute",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [1/2] test_green_neighbour.py"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_unproved_final_descendant_census_is_norecord",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: Traceback (most recent call last):"
+   ]
+  },
+  {
+   "node": "programs/tests/test_pytest_per_file_junit.py::test_zero_record_probe_still_attempts_the_one_unprobed_green_file",
+   "file": "programs/tests/test_pytest_per_file_junit.py",
+   "kind": "failure",
+   "message": [
+    "AssertionError: === [aggregate] 9 file(s) in one pytest process"
+   ]
+  }
+ ],
+ "blind": []
+}
