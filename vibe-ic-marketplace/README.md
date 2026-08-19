@@ -14,13 +14,13 @@ and the contribution guides for extending it.
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
 | Plugin version | **1.10.96** |
-| Deterministic programs | **1185** top level (`plugins/vibe-ic/programs/*.py`), of which **1117** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
+| Deterministic programs | **1195** top level (`plugins/vibe-ic/programs/*.py`), of which **1125** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 | Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
-| Canonical flow | **63 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) |
-| Test files | **2622** under `plugins/vibe-ic/programs/tests/` + **32** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
+| Canonical flow | **68 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) |
+| Test files | **2630** under `plugins/vibe-ic/programs/tests/` + **32** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
 | License | Apache-2.0 |
 
 Every count above is generated, not typed: `python3 plugins/vibe-ic/programs/gen_program_inventory.py` writes [`PROGRAM_INVENTORY.json`](plugins/vibe-ic/programs/PROGRAM_INVENTORY.json), and `--check` fails when a stated count drifts from the tree. Several of these populations are simultaneously true and count different things — the artefact carries a `definition` for each, so quote the key, not a bare number.
@@ -39,7 +39,7 @@ Design**: the AI agent is the core decision-maker; EDA tools are callable
 execution engines.
 
 It is also **program-first**. The product is the deterministic runner chain
-(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1185 top-level programs
+(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1195 top-level programs
 → MCP-EDA), not a prompt. **60 of the 63 flow steps are gated by a program
 whose exit code is the verdict**; the AI is the fall-through when a program
 cannot decide, never the thing that declares PASS.
@@ -66,7 +66,7 @@ designed in the abstract:
 
 ---
 
-## The canonical flow (63 steps, 8 stages)
+## The canonical flow (68 steps, 8 stages)
 
 **Source of truth**:
 [`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`](plugins/vibe-ic/flow/phase1_phase2_phase3.yaml)
@@ -81,6 +81,16 @@ stage only once real silicon comes back. Every step declares
 `required_outputs` plus a machine `gate` (`files_exist` and/or
 `program_exit_zero`); `↻` marks a close-loop step that re-runs until its gate
 is satisfied.
+
+**68 steps is the whole flow, not the path any one design walks.** Five steps
+are **path-specific** and are skipped for designs on the other path: a chip/IC
+design runs the four `flow_path: ic` steps — Submission Template Ingest
+(`0.5ic`), Pad Ring (`15.5ic`), Die Finishing (`26.5ic`) and Shuttle Precheck
+(`37.5ic`) — while a cell/IP design runs the one `flow_path: ip` step, Digital
+Hardmacro Generation (`37.5ip`), which is where that path terminates: an IP is
+delivered as a hardmacro, never as a die. The remaining **63 steps run for
+every design**, which is what the flow was counted at before the two paths
+were split apart.
 
 Run the whole thing:
 
@@ -357,7 +367,7 @@ claude plugin install vibe-ic
 
 The MCP-EDA server lives **inside** the plugin
 (`plugins/vibe-ic/mcp-eda/`), so one install gets the skills, the agents,
-the 1185 top-level programs, and all 56 EDA/device tools. See
+the 1195 top-level programs, and all 56 EDA/device tools. See
 [`plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md`](plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md)
 for the container prerequisites.
 
@@ -459,7 +469,7 @@ auto-registered on install. Inventory of record:
 
 ---
 
-## Deterministic programs (1185 top level)
+## Deterministic programs (1195 top level)
 
 ```bash
 cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
@@ -471,7 +481,7 @@ cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
 
 | Program | Role |
 |---|---|
-| **`flow_compliance_check.py`** | Strict 63-step gate — reads `flow/phase1_phase2_phase3.yaml`, validates every step's outputs + gate predicate, rejects rubber-stamp waivers. **Exit 0 is the only PASS.** |
+| **`flow_compliance_check.py`** | Strict 68-step gate — reads `flow/phase1_phase2_phase3.yaml`, validates every step's outputs + gate predicate, rejects rubber-stamp waivers. **Exit 0 is the only PASS.** |
 | `stage{1,2,3,4}_compliance.py` | Per-stage interim gates |
 | `analog_flow_compliance_check.py` | A1-A9 analog-stage gate |
 | **`waivers_schema_check.py`** | Rejects placeholder reasons (`TODO`, `n/a`), self-approvers (`agent`, `claude`), duplicate ids |
@@ -544,7 +554,7 @@ vibe-ic-marketplace/
     └── vibe-ic/                         ← the single plugin (v1.10.96)
         ├── .claude-plugin/plugin.json
         ├── flow/
-        │   └── phase1_phase2_phase3.yaml   ← 63-step source of truth
+        │   └── phase1_phase2_phase3.yaml   ← 68-step source of truth
         ├── commands/                    ← 7 slash commands
         ├── agents/
         │   ├── ic-expert-agent.md       ← assembles JSON from answers + defaults
@@ -553,11 +563,11 @@ vibe-ic-marketplace/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
         ├── skills/                      ← 60 skills, each + compliance.yaml
-        ├── programs/                    ← 3838 *.py at any depth (1183 top level)
+        ├── programs/                    ← 3857 *.py at any depth (1195 top level)
         │   ├── flow_compliance_check.py ← final gate
         │   ├── stage{1,2,3,4}_compliance.py
         │   ├── pdk_registry.json, ic_class_registry.json
-        │   └── tests/                   ← 2622 test files
+        │   └── tests/                   ← 2630 test files
         ├── mcp-eda/                     ← bundled MCP server, 56 tools
         ├── ip-catalog/                  ← reusable open-source IP index
         └── hooks/
