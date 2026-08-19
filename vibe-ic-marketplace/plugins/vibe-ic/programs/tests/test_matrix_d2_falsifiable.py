@@ -1402,6 +1402,111 @@ def _correct_derived_clock_sdc(p: Path) -> None:
     _w(p, "phase2/stage2/constraints/top.sdc", _SDC_WITH_GENERATED_CLOCK)
 
 
+#: One timing record, written two ways. The ONLY thing that moves between the
+#: fixture and its control is the SETUP slack at the slow sign-off corner —
+#: everything else (the corner set, the roles, the three distinct corner
+#: libraries, the DRV attestation, the typ corner's +0.420) is identical, so
+#: neither verdict can be decided by the shape of the record.
+_MCORNER_OCV_RPT = """\
+# corner_liberty: SS=/pdk/lib_slow.lib
+# corner_liberty: TT=/pdk/lib_typ.lib
+# corner_liberty: FF=/pdk/lib_fast.lib
+SIGNOFF_CHECK_TYPES_REPORTED max_slew max_capacitance max_fanout
+=== SETUP corner: process=TT liberty=/pdk/lib_typ.lib, SPEF=nom ===
+wns max 0.42
+tns max 0.00
+worst slack max 0.42
+=== SETUP corner: process=SS liberty=/pdk/lib_slow.lib, SPEF=max ===
+wns max {setup}
+tns max {tns}
+worst slack max {setup}
+=== HOLD corner: process=FF liberty=/pdk/lib_fast.lib, SPEF=min ===
+wns min 0.05
+tns min 0.00
+worst slack min 0.05
+"""
+
+_MCORNER_OCV_STANCE = {
+    "setup_process_corner": "SS",
+    "hold_process_corner": "FF",
+    "primary_corner": "TT",
+    "corners_analysed": ["SS", "TT", "FF"],
+    "corner_library_resolution": {
+        "SS": "/pdk/lib_slow.lib",
+        "TT": "/pdk/lib_typ.lib",
+        "FF": "/pdk/lib_fast.lib",
+    },
+}
+
+_PVT_MATRIX = {
+    "primary_corner": "TT",
+    "corners": [{"name": "TT", "label": "TT"},
+                {"name": "SS", "label": "SS"},
+                {"name": "FF", "label": "FF"}],
+}
+
+
+def _write_sta_corner_record(p: Path, setup: str, tns: str) -> None:
+    """The whole timing record, with the slow-corner setup slack as the only
+    argument.
+
+    A builder rather than two sets of literals for the same reason
+    ``_write_perc_signoff`` is one: this gate cross-reads the stance JSON, the
+    pvt matrix and the report, and a control that corrected only the report
+    would leave the other two describing a different run and could come back
+    FAIL for a second reason — which would "pass" the fixture while proving
+    nothing about the rule under test.
+    """
+    _w(p, "reports/phase3/mcorner_ocv_stance.json", _MCORNER_OCV_STANCE)
+    _w(p, "phase2/stage2/constraints/pvt_matrix.json", _PVT_MATRIX)
+    _w(p, "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+       _MCORNER_OCV_RPT.format(setup=setup, tns=tns))
+
+
+def _f_sta_typ_met_signoff_violated(p: Path) -> None:
+    """The misleading pass this gate was written for: typ MET, slow corner NOT.
+
+    ``sta_corner_record_completeness_check`` is a BLOCKING clause of step 23
+    and was registered in :data:`UNREDDENED` — "needs a corner RECORD with
+    holes; absence of the record is not the same input as an incomplete
+    record". That is exactly right, and it is a missing INPUT rather than an
+    unfalsifiable gate: on a bare tree the gate answers, correctly,
+
+        [PASS] NOT_APPLICABLE / VACUOUS_PASS: judged 0 corner(s) —
+        no_corner_declaration: no stance file, pvt_matrix or STA report
+        declares or records any corner (this gate does not invent a sign-off
+        corner set)
+
+    The record this fixture writes is COMPLETE — three corners, three roles,
+    three distinct corner libraries, DRV attested — and it is a failure only
+    because of what the numbers say: the primary corner MET at +0.420 ns while
+    the declared SETUP sign-off corner violated at -0.310 ns (TNS -12.40). That
+    is rule R3, and the shape the gate's own docstring opens with: a campaign
+    whose narrative became "the phase-3 failures were LVS tooling artifacts"
+    while a -4.33 ns setup violation at the slow corner sat unreported.
+
+    MEASURED, verbatim, in the container, through the exact clause command:
+
+        EMPTY  rc 0  VACUOUS_PASS ... no_corner_declaration
+        THIS   rc 1  R3 SIGN-OFF corner 'SS' (process axis, role setup) is
+                     VIOLATED: setup -0.310 ns, TNS -12.40
+                     R3 the primary/typ corner(s) TT (process) MET while
+                     sign-off corner(s) SS VIOLATED — a typ-only 'MET' is a
+                     MISLEADING PASS
+        CTL    rc 0  the SAME record with the slow corner at +0.180
+
+    chip-AGNOSTIC: SS/TT/FF are the universal process-corner roles the gate
+    itself reads from the stance file, the liberty paths are synthetic, and no
+    PDK, node or vendor appears anywhere in the fixture.
+    """
+    _write_sta_corner_record(p, "-0.31", "-12.40")
+
+
+def _correct_sta_corner_record(p: Path) -> None:
+    """The one-variable negative control: the slow corner MEETS."""
+    _write_sta_corner_record(p, "0.18", "0.00")
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1435,6 +1540,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "POWER_OVER_BUDGET": _f_power_over_budget,
     "EXTRACTION_ILLEGAL_OVERLAP": _f_extraction_illegal_overlap,
     "DERIVED_CLOCK_UNCONSTRAINED": _f_derived_clock_unconstrained,
+    "STA_TYP_MET_SIGNOFF_VIOLATED": _f_sta_typ_met_signoff_violated,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1543,6 +1649,17 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
           "phase2/stage2/constraints --json "
           "reports/phase2/gates/derived_clock_sdc.json"):
         "DERIVED_CLOCK_UNCONSTRAINED",
+    # Step 23's `sta_corner_record_completeness_check` was registered in
+    # UNREDDENED ("needs a corner RECORD with holes; absence of the record is
+    # not the same input as an incomplete record"). EMPTY cannot redden it and
+    # says so out loud — rc 0 `VACUOUS_PASS ... no_corner_declaration`, the
+    # gate refusing to invent a sign-off corner set — so the clause needs a
+    # record of its own. Assigned here rather than left registered: a fixture
+    # DOES break it, and an UNREDDENED entry whose clause reddens fails this
+    # suite by design.
+    ("23", "sta_corner_record_completeness_check . --json "
+           "reports/phase3/sta/sta_corner_record_completeness.json"):
+        "STA_TYP_MET_SIGNOFF_VIOLATED",
     ("31", "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"): "SIGNOFF_UNVERIFIABLE",
     ("31", "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"): "SIGNOFF_UNVERIFIABLE",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
@@ -1834,10 +1951,6 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
            "reports/phase3/sta/post_route_signoff_corner.json"):
         "PASS: needs a post-route STA corner set that is missing a signoff "
         "corner — a populated multi-corner report no fixture here produces",
-    ("23", "sta_corner_record_completeness_check . --json "
-           "reports/phase3/sta/sta_corner_record_completeness.json"):
-        "PASS: needs a corner RECORD with holes; absence of the record is not "
-        "the same input as an incomplete record",
     ("23", "drv_promotion_corroboration_check . --json "
            "reports/phase3/sta/drv_promotion_corroboration.json"):
         "PASS: needs an STA report claiming a DRV promotion that a second "
@@ -2855,6 +2968,69 @@ def test_d2_the_derived_clock_fixture_reddens_and_only_on_content(
         f"the SAME RTL with a create_generated_clock on the divider must "
         f"PASS — otherwise the red is the divider and not the missing "
         f"constraint :: {tier} {out[-300:]}")
+
+
+def test_d2_the_sta_corner_record_fixture_reddens_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """Step 23's timing-record clause: three arms, one variable.
+
+    The clause sat in :data:`UNREDDENED` because no fixture in this file wrote
+    a timing record at all. The register entry was precise about why — "absence
+    of the record is not the same input as an incomplete record" — so a fixture
+    that reddened the gate by leaving the record OUT would have satisfied the
+    letter of the register and none of its point.
+
+    Both arms here therefore carry the SAME complete record: three corners,
+    three declared roles, three distinct corner libraries, DRV attested. The
+    only thing that moves is the setup slack at the declared slow sign-off
+    corner. That makes the red a statement about the NUMBERS, which is the one
+    thing this gate exists to read.
+    """
+    command = ("sta_corner_record_completeness_check . --json "
+               "reports/phase3/sta/sta_corner_record_completeness.json")
+    key = "23"
+    live = {_clause_signature(c) for c in F.gate_clauses(key) if c.is_blocking}
+    assert command in live, (
+        f"step {key} no longer declares {command!r} as a blocking clause; this "
+        f"control and the matrix cell would be measuring different things")
+    assert CLAUSE_FIXTURE.get((key, command)) == "STA_TYP_MET_SIGNOFF_VIOLATED", (
+        f"step {key}: {command!r} is no longer assigned "
+        f"'STA_TYP_MET_SIGNOFF_VIOLATED'")
+    assert (key, command) not in UNREDDENED, (
+        f"step {key}: {command!r} is registered UNREDDENED again while a "
+        f"fixture reddens it — the register would be excusing a gap that is "
+        f"closed")
+
+    red_project = _build_project(tmp_path, "sta_red",
+                                 "STA_TYP_MET_SIGNOFF_VIOLATED")
+    tier, out = _tier(red_project, command)
+    assert tier == RED, (
+        f"the fixture no longer reddens {command!r} -> {tier} :: {out[-300:]}")
+    # WHY the red, not just THAT there is one. This gate carries five rules and
+    # one of them (R5, an unqueried DRV table) is DISCLOSED-not-blocking, so a
+    # forward arm that only counted the exit code could be satisfied by a rule
+    # the fixture was not built for. Read from the gate's own JSON rather than
+    # from stdout, which the harness truncates.
+    reasons = json.loads(
+        (red_project / "reports/phase3/sta"
+         / "sta_corner_record_completeness.json").read_text(encoding="utf-8")
+    )["reasons"]
+    assert any("MISLEADING PASS" in r for r in reasons), (
+        f"the fixture reddens {command!r} for some other reason than the "
+        f"typ-MET-while-sign-off-VIOLATED rule it was built for: {reasons}")
+
+    tier, out = _tier(_build_project(tmp_path, "sta_empty", "EMPTY"), command)
+    assert tier != RED, (
+        f"EMPTY now reddens {command!r}, so the dedicated fixture is measuring "
+        f"nothing the bare tree does not :: {out[-300:]}")
+
+    project = _build_project(tmp_path, "sta_ctl", "STA_TYP_MET_SIGNOFF_VIOLATED")
+    _correct_sta_corner_record(project)
+    tier, out = _tier(project, command)
+    assert tier == PASS, (
+        f"the SAME record with the slow corner MEETING must PASS — otherwise "
+        f"the red is the record's shape and not its numbers :: {tier} "
+        f"{out[-400:]}")
 
 
 def test_d2_a_content_earned_program_red_is_still_a_real_red(
