@@ -1151,6 +1151,15 @@ ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("6", "fpga_test_harness_gen"),
     ("9", "synth_wrapper_gen"),
     ("15", "phase3_backend_step"),
+    # 15.5ic's producer. The step's GATE (`pad_ring_check`) is wired and runs;
+    # the PRODUCER is declared in `programs:` and no one-shot runner dispatches
+    # it, which is the same state step 15's own `phase3_backend_step` above is
+    # in — the phase-3 backend producers as a class are not runner-wired here.
+    # Recorded rather than closed on purpose: wiring it means choosing WHERE in
+    # a chip-path run the pad ring is generated and what a SKIP does to the
+    # run's state, and that ordering has to be settled together with the other
+    # `ic`/`ip` steps' producers, not by whichever of them lands first.
+    ("15.5ic", "pad_ring_gen"),
     ("39", "bringup_plan_gen"),
     ("39", "signaltap_recompile_sequence_check"),
     ("39", "signaltap_stp_completeness_check"),

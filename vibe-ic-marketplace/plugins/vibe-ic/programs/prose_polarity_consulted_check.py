@@ -91,6 +91,41 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "_pad_ring::parse_def":
+        "LEF/DEF 5.8 UNITS, DIEAREA, COMPONENTS and PINS sections. The matched "
+        "text is `DIEAREA ( x y ) ( x y ) ;` and `- <inst> <master> + PLACED "
+        "( x y ) <orient> ;` — productions of the DEF grammar, emitted by the "
+        "floorplanner and by this step's own writer, in which there is no form "
+        "that DENIES a placement: DEF gives no way to write 'this component is "
+        "NOT at (x, y)'. Absence is already how the grammar says no, and this "
+        "function reports it that way — an instance the section does not carry "
+        "is simply not in the returned mapping, which is what "
+        "`PAD_INSTANCE_NOT_IN_BLOCK` is derived from. Consulting "
+        "`_prose_polarity` on a COMPONENTS entry would add a branch that can "
+        "never fire, and a call that can never fire reads as a check while "
+        "being a green light. Same grammar and same argument as "
+        "`macro_obs_geometry_intersect_check::parse_via_layers` above.",
+    "_pad_ring::parse_lef_macros":
+        "LEF 5.8 `MACRO <name> ... SIZE <w> BY <h> ; END <name>`. The value "
+        "written back is a cell footprint in microns, read out of the PDK's "
+        "own IO cell library as the vendor packaged it. LEF has no negation "
+        "form for a SIZE: there is no way to write 'this macro is NOT 75 by "
+        "350', and a macro the library does not ship simply has no MACRO "
+        "block — which is exactly how `PAD_MASTER_NOT_IN_PDK_IO_LIBRARY` "
+        "detects it. The two defects this gate was built from both read "
+        "English design documents, where denial is spellable and was spelled; "
+        "a LEF SIZE record is machine-written syntax with no such form.",
+    "_pad_ring::parse_lef_sites":
+        "LEF 5.8 `SITE <name> ... CLASS <class> ; SIZE <w> BY <h> ; END "
+        "<name>`. The values written back are a site's class and its size, "
+        "both read from the PDK's IO cell library. LEF offers no production "
+        "that DENIES either — no way to write 'this site is NOT CLASS PAD' — "
+        "so the polarity question does not arise. Note the direction this "
+        "function is used in: a site whose CLASS is not PAD is refused by "
+        "`PAD_SITE_CLASS_NOT_PAD` and a site that is absent by "
+        "`PAD_SITE_NOT_FOUND`, so the two negative answers are decided by the "
+        "CALLER from what the grammar does or does not declare, never by "
+        "reading a denial out of the surrounding text.",
     "macro_obs_geometry_intersect_check::parse_via_layers":
         "LEF/DEF 5.8 VIAS section. The matched text is `- <viaName> ... "
         "+ LAYERS <lower> <cut> <upper> ;` — a production of the DEF grammar, "
