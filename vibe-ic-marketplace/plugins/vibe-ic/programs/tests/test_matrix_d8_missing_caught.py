@@ -1690,6 +1690,74 @@ CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
 }
 
 
+#: THE BLIND SET — gradable steps whose verdict does NOT move on wrong content.
+#:
+#: A step is GRADABLE when the wrong tree really rewrote something (`rels`), every
+#: alternative still resolves (so the wrong tree is a WRONGNESS and not an ABSENCE),
+#: and at least one rewritten file is of a kind the flow can read at all. For such a
+#: step, UNMOVED is not a neutral fact: it says the flow opened a readable artefact,
+#: found it wrong, and reported the step at the SAME tier as the correct one.
+#:
+#: MEASURED on the seeded tree, 2026-08-19: 8 of the 16 PASS-tier steps are gradable,
+#: and 5 of those 8 are blind. Those five are recorded here rather than asserted away,
+#: because the honest options were to record them or to pretend the arm has no blind
+#: spot, and a census that cannot say "here is what I still cannot see" is the same
+#: instrument this whole module exists to replace.
+#:
+#: A RATCHET, NOT A BASELINE THAT ABSORBS. The set may only SHRINK. A step that
+#: becomes blind is named and reddens; a step that stops being blind is ALSO named and
+#: reddens, so the pin cannot quietly rot into a description of an older tree. Neither
+#: direction can be answered by editing this set alone — the failure message says which
+#: happened and asks for the change that caused it.
+CONTENT_ARM_BLIND: Tuple[str, ...] = ("2", "28", "A1", "A4", "D1")
+
+#: Kinds the flow can read at all. Anything else is not a content channel, so a step
+#: that rewrites only those is NOT gradable and its UNMOVED means nothing about blindness.
+_CONTENT_BEARING_SUFFIXES: Tuple[str, ...] = (".json", ".jsonl")
+
+
+def _gradable(rec) -> bool:
+    """Is this row's UNMOVED/MOVED a judgement about CONTENT at all?"""
+    rels = rec.get("rels") or ()
+    if not rels or rec.get("unresolved_alts"):
+        return False
+    return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES) for r in rels)
+
+
+def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one():
+    """The blind set may shrink and may not grow, and every change is named.
+
+    `CONTENT_ARM_AS_MEASURED` records WHETHER each row moved. It cannot, alone,
+    tell a row that did not move because the flow has no channel to read from a
+    row that did not move because the flow read the channel and did not act. The
+    first is a capability gap; the second is a gate reporting a wrong artefact as
+    good as a right one. Grading only the first would let the second be legitimised
+    by pinning it UNMOVED, which nothing else in this repository forbids.
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm measured ZERO steps — a broken measurement"
+
+    gradable = {k for k, rec in sweep.items() if _gradable(rec)}
+    assert gradable, (
+        "NO step is gradable: every row rewrote only kinds the flow cannot read, so "
+        "the content arm is measuring nothing at all. That is a dead instrument, not "
+        "a clean one."
+    )
+    blind = {k for k in gradable if sweep[k]["state"] == _CONTENT_UNMOVED}
+    pinned = set(CONTENT_ARM_BLIND)
+
+    grew = sorted(blind - pinned)
+    healed = sorted(pinned - blind)
+    assert not grew and not healed, (
+        f"the blind set changed. NEWLY BLIND {grew}: a step now reports a readable "
+        f"artefact that is WRONG at the same tier as one that is right — that is a "
+        f"gate that stopped reading, and it must be fixed, not pinned. "
+        f"NO LONGER BLIND {healed}: a gate learned to read its artefact; record the "
+        f"shrink here and name the change that taught it. "
+        f"gradable={sorted(gradable)} blind={sorted(blind)} pinned={sorted(pinned)}"
+    )
+
+
 def test_the_content_move_names_its_cause():
     """A MOVED row must carry a reason the unmoved arm does not.
 
