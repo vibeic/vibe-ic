@@ -2062,7 +2062,17 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # clause set exactly {('program_exit_zero', 'magic_illegal_overlap_check')}
     # and nothing removed. The literal did not move with it, so the calibration
     # instrument's own control has been red on main ever since.
-    assert pop["swept"] == pop["declared"] == 170, pop
+    # 170 -> 175 at int/tonight. MEASURED with `liar_census.population_report`
+    # over BOTH trees rather than inferred: origin/main declared=170 swept=170
+    # (so the literal was CURRENT on main, not stale as the paragraph above
+    # records for an earlier round), int/tonight declared=175 swept=175. The
+    # five added clauses are the gates of the five half-steps the chip/IP split
+    # introduced -- 0.5ic submission_template_check, 15.5ic pad_ring_check,
+    # 26.5ic die_finishing_check, 37.5ip digital_hardmacro_check, 37.5ic
+    # tapeout_readiness_check -- one `program_exit_zero` each, and nothing was
+    # removed. The PIN `swept == declared` never broke; only the shrink-detector
+    # literal needed to follow the flow, which is what it is for.
+    assert pop["swept"] == pop["declared"] == 175, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 

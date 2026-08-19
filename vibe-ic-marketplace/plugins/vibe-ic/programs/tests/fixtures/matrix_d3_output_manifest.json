@@ -1389,6 +1389,64 @@
     "P0": {
       "verdict": "NA_NO_REQUIRED_OUTPUTS",
       "entries": {}
+    },
+    "0.5ic": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase1/submission_template.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "15.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage3/pnr/padring.def": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/padring.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "26.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/die_finishing.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "37.5ip": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage4/hardmacro/*.lef": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.lib": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.gds": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.v": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "37.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "reports/phase3/shuttle_precheck.json": {
+          "status": "UNPROVEN"
+        }
+      }
     }
   }
 }
