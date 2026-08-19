@@ -2020,3 +2020,103 @@ def test_this_files_final_test_safety_bound_is_inside_the_ceiling():
     assert _T <= ceiling, (_T, ceiling)
     # `_STALL` is deliberately not compared: it measures absence of progress,
     # not healthy runtime, and therefore is not a wall-clock harness bound.
+
+
+# ── the selection and the report must be read in ONE frame (jnorec, C) ───────
+#
+# MEASURED at 49d2b3328, the landing gate's `full:unselectable-tests` lane:
+# `rc=0`, 852 cases, `784 passed, 60 skipped, 5 xfailed, 3 xpassed`, ZERO
+# failures — and REFUSED, `missing=111` of 111 selected with `extra=110`. The
+# corpus program emits repo-root-relative paths and the lane runs with cwd at
+# the repository root, while every one of those files lives under the plugin
+# subtree, which carries its own `pytest.ini` — so pytest's rootdir was the
+# plugin and every `file` attribute came back plugin-relative. The comparison
+# matched nothing in either direction, which means that lane's aggregate arm had
+# never measured anything and nobody could tell: UNKNOWN and broken read alike.
+#
+# Both directions are pinned below. The first fails on the pre-fix driver
+# (a fully green split-frame session is refused); the second fails on it too,
+# for the opposite reason — it names ONE genuinely absent file, and the pre-fix
+# driver names all of them, so a fix that merely stopped comparing would pass
+# the first test and fail this one.
+
+_PLAIN_GREEN = "def test_it_is_green():\n    assert True\n"
+
+#: A module pytest imports and collects ZERO items from. This is the shape the
+#: coverage check exists for and it must stay refused.
+_COLLECTS_NOTHING = "VALUE = 1\n"
+
+
+def _plain_pytest_cmd():
+    """The harness command WITHOUT `-p pytest_timeout`.
+
+    MEASURED in the pinned landing image: `import pytest_timeout` raises
+    `ModuleNotFoundError`, and `-p <missing plugin>` dies in pytest's pre-parse
+    before collection. A coverage test built on that command would exercise the
+    pre-parse failure and prove nothing about coverage.
+    """
+    return [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+
+
+def _split_frame_tree(tmp_path: Path, files: dict) -> Path:
+    """A tree whose selection frame and pytest's rootdir deliberately differ.
+
+    The test files sit in a subdirectory carrying its OWN `pytest.ini`, so
+    pytest infers rootdir there, while the selection is written relative to the
+    OUTER directory the driver runs in. That is exactly the landing gate's
+    unselectable lane: repo root cwd, plugin-subtree files, plugin `pytest.ini`.
+    """
+    root = tmp_path / "outer"
+    inner = root / "inner"
+    inner.mkdir(parents=True, exist_ok=True)
+    (inner / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    for name, body in files.items():
+        (inner / name).write_text(body, encoding="utf-8")
+    (root / "selection.txt").write_text(
+        "".join(f"inner/{n}\n" for n in files), encoding="utf-8")
+    return root
+
+
+def _run_driver_in(root: Path, junit: Path, *extra, pytest_extra=()):
+    return subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(root / "selection.txt"),
+         "--junit", str(junit),
+         "--stall-after", str(_STALL), *extra,
+         "--"] + _plain_pytest_cmd() + list(pytest_extra),
+        cwd=str(root), capture_output=True, text=True, timeout=_T)
+
+
+def test_a_green_session_read_in_another_frame_is_not_refused(tmp_path):
+    """POSITIVE CONTROL: nothing is wrong, so nothing may be reported wrong."""
+    root = _split_frame_tree(tmp_path, {"test_alpha.py": _PLAIN_GREEN,
+                                        "test_beta.py": _PLAIN_GREEN})
+    proc = _run_driver_in(root, tmp_path / "merged.xml", "--aggregate-only")
+    assert "AGGREGATE_COMPLETE" in proc.stdout, proc.stdout
+    assert "AGGREGATE_NORECORD" not in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_OK, proc.stdout
+
+
+def test_a_file_that_collects_nothing_is_still_named_missing(tmp_path):
+    """NEGATIVE CONTROL, and the whole value of the change.
+
+    One selected file contributes no testcase. That is the shape
+    `_aggregate_coverage_problem` exists to catch, and declaring the frame must
+    not blunt it: the refusal must name THAT file and only that file.
+    """
+    root = _split_frame_tree(tmp_path, {"test_alpha.py": _PLAIN_GREEN,
+                                        "test_silent.py": _COLLECTS_NOTHING})
+    proc = _run_driver_in(root, tmp_path / "merged.xml", "--aggregate-only")
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+    assert "AGGREGATE_NORECORD" in proc.stdout, proc.stdout
+    assert "missing=['inner/test_silent.py'], extra=[]" in proc.stdout, (
+        "the refusal must name exactly the file that produced no testcase; "
+        "naming every file (or none) means the frames still disagree\n"
+        + proc.stdout)
+
+
+def test_a_caller_that_declared_a_rootdir_keeps_it():
+    """The frame is ADDED, never overridden — a caller may own it."""
+    assert D._declared_rootdir(["-q", "--rootdir=/elsewhere"], "/anchor") == []
+    assert D._declared_rootdir(["-q", "--rootdir", "/elsewhere"], "/anchor") == []
+    assert D._declared_rootdir(["-q"], "/anchor") == ["--rootdir=/anchor"]
