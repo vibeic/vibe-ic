@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1117
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1117)
+- **Total programs (excluding helpers / shims):** 1125
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1125)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1108 |
+| `any` | 1116 |
 
 ## Alphabetical listing
 
@@ -288,7 +288,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dft_signoff_common` | any | — | shared helper for the DFT sign-off gates. |
 | `dft_test_coverage` | any | — | raw FAULT coverage vs sign-off TEST coverage (#603). |
 | `dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
+| `die_finishing_check` | any | — | the Step 26.5ic gate. |
+| `die_finishing_gen` | any | — | Step 26.5ic producer: the PDK's own seal ring, and the die-identification half's honest state. |
 | `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification (N-version) for blind RTL authoring (ORGANIC #700). |
+| `digital_hardmacro_check` | any | — | the gate of record for flow step 37.5ip. |
+| `digital_hardmacro_gen` | any | — | the PRODUCER for flow step 37.5ip. |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
 | `dispatch_handler_completeness` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.2 plugin gate. |
 | `dispatch_register_default_reset_check` | any | — | Response register reset at frame boundaries. |
@@ -719,6 +723,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3.... |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity checks in any module that dispatches on a received command. |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
+| `pad_ring_check` | any | — | step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe... |
+| `pad_ring_gen` | any | — | step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without. |
 | `pad_side_constraint_check` | any | — | Gate: verify IO pin placements match the L-doc pad-side table (North/South/East/West per signal). |
 | `parametric_spec_extractor` | any | — | deterministic baseline extractors for the PROSE PARAMETRIC element types (the design parameters a spec states in words but in a regular w... |
 | `path_delay_coverage_check` | any | — | REAL at-speed PATH-DELAY-FAULT (PDF) coverage gate for the timing-graded ATPG step (DT2). |
@@ -1032,6 +1038,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_required_inputs_check` | any | — | refuse to run a step that has nothing to read. |
 | `step_write_ledger` | any | — | record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED. |
 | `structured_table_extractor` | any | — | ONE general extractor for the whole TABLE tier. |
+| `submission_template_check` | any | — | Gate the shuttle-template ingest — step 0.5ic's verdict. |
+| `submission_template_ingest` | any | — | Ingest the shuttle operator's published project template — step 0.5ic. |
 | `suite_write_guard` | any | — | a test run must not write into the tree it tests. |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
 | `sv2v_mixed_driver_fixup` | any | — | deterministic post-pass to repair Verilog produced by sv2v when SystemVerilog hw2reg / packed-struct patterns produce MIXED-DRIVER nets (... |
@@ -1189,7 +1197,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1108 programs)
+### `any` (1116 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1450,7 +1458,11 @@ _(no programs in this group)_
 - `dft_signoff_common` — shared helper for the DFT sign-off gates.
 - `dft_test_coverage` — raw FAULT coverage vs sign-off TEST coverage (#603).
 - `dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
+- `die_finishing_check` — the Step 26.5ic gate.
+- `die_finishing_gen` — Step 26.5ic producer: the PDK's own seal ring, and the die-identification half's honest state.
 - `diff_verify_harness` — independent DIFFERENTIAL self-verification (N-version) for blind RTL authoring (ORGANIC #700).
+- `digital_hardmacro_check` — the gate of record for flow step 37.5ip.
+- `digital_hardmacro_gen` — the PRODUCER for flow step 37.5ip.
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.
 - `dispatch_register_default_reset_check` — Response register reset at frame boundaries.
 - `dispatcher_awake_gate_check` — v0.114 (BACKLOG-v7 P2.2).  _[v0.114]_
@@ -1879,6 +1891,8 @@ _(no programs in this group)_
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3....  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity checks in any module that dispatches on a received command.
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
+- `pad_ring_check` — step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe...
+- `pad_ring_gen` — step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without.
 - `pad_side_constraint_check` — Gate: verify IO pin placements match the L-doc pad-side table (North/South/East/West per signal).
 - `parametric_spec_extractor` — deterministic baseline extractors for the PROSE PARAMETRIC element types (the design parameters a spec states in words but in a regular w...
 - `path_delay_coverage_check` — REAL at-speed PATH-DELAY-FAULT (PDF) coverage gate for the timing-graded ATPG step (DT2).
@@ -2190,6 +2204,8 @@ _(no programs in this group)_
 - `step_required_inputs_check` — refuse to run a step that has nothing to read.
 - `step_write_ledger` — record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED.
 - `structured_table_extractor` — ONE general extractor for the whole TABLE tier.
+- `submission_template_check` — Gate the shuttle-template ingest — step 0.5ic's verdict.
+- `submission_template_ingest` — Ingest the shuttle operator's published project template — step 0.5ic.
 - `suite_write_guard` — a test run must not write into the tree it tests.
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
 - `sv2v_mixed_driver_fixup` — deterministic post-pass to repair Verilog produced by sv2v when SystemVerilog hw2reg / packed-struct patterns produce MIXED-DRIVER nets (...
