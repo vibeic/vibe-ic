@@ -1146,7 +1146,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "`\"--cell\", top, \"--in-place\"],` (the last argv element, so "
             "the whole argv is visible and carries no --json), guarded by the "
             "two early returns at "
-            "programs/phase3_one_shot_runner.py:22526-22528 "
+            "programs/phase3_one_shot_runner.py:22600-22602 "
             "(\"no GDS to fill\" / \"metal_fill_density config has no "
             "layers\"). The competing path the gate really reads is "
             "flow/phase1_phase2_phase3.yaml::\"metal_fill_emit . "
