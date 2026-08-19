@@ -217,10 +217,20 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     stats["sparse_die_fill_skip_attested"] = sparse_fill_attested
     # #364 — checked BEFORE the substance ladder and outside it: a byte
     # identical filled.def is not a weak signal to be weighed against others,
-    # it is proof that nothing was emitted. The one exemption is the ATTESTED
+    # it is proof that nothing was emitted. The exemptions are (a) the ATTESTED
     # sparse-die skip (#684), where producing no fill is the recorded
-    # engineering decision rather than a silent failure.
-    if stats.get("filled_byte_identical") and not sparse_fill_attested:
+    # engineering decision, and (b) ROWS ALREADY FULL — when the standard-cell
+    # filler ran DURING PnR (filler_placement runs after detailed_route), the
+    # routed.def baseline already carries every fill cell (row_utilization_pct
+    # >= 95), so a LATER standalone fill step correctly places 0 and emits a
+    # byte-identical filled.def. That is fill DONE, not fill MISSING — the same
+    # rows_already_full signal the FILL_NO_SUBSTANCE ladder below already
+    # accepts as legitimate substance. Without this, every design whose fill is
+    # inserted at PnR-time (the common open-flow shape; measured on spm ×
+    # ihp-sg13g2 = 1257 sg13g2_fill_* instances already in routed.def, rows
+    # 100%) FAILs the completion audit despite being fully filled.
+    if (stats.get("filled_byte_identical") and not sparse_fill_attested
+            and not rows_already_full):
         findings.append(Finding(
             "ERROR", "FILL_NOOP",
             "metal fill emitted NOTHING: filled.def is BYTE-IDENTICAL to "
@@ -228,6 +238,17 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
             "density reading cannot substantiate a fill that produced not "
             "one byte — the deck's floor is per-layer over the whole die "
             "(#364)"))
+    elif (stats.get("filled_byte_identical") and rows_already_full
+            and not sparse_fill_attested):
+        # Transparent disclosure: byte-identical is EXPECTED here (fill already
+        # placed at PnR); recorded so a reader is not left to infer it.
+        findings.append(Finding(
+            "INFO", "FILL_DONE_AT_PNR",
+            f"filled.def is byte-identical to routed.def AND rows are already "
+            f"full (row_utilization_pct={row_util}) — the standard-cell fill "
+            f"was inserted during PnR (filler_placement after detailed_route), "
+            f"so the standalone fill step correctly added nothing. Fill is "
+            f"present in the routed.def baseline, not missing."))
     if placed_fillers and stats["filled_larger"] is False:
         # contradiction: claims fillers but the DEF didn't grow
         findings.append(Finding(

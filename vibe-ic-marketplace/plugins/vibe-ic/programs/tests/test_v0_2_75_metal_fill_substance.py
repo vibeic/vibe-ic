@@ -97,3 +97,47 @@ def test_runner_withholds_done_marker_on_noop():
     window = _P3_SRC[i - 600:i + 1400]
     assert "metal_fill_noop.txt" in window
     assert "#445" in window
+
+
+def test_byte_identical_but_rows_already_full_passes(tmp_path):
+    """#364 regression: when std-cell fill was placed DURING PnR the routed.def
+    baseline already carries every fill cell (row_utilization_pct>=95), so the
+    standalone step correctly emits a BYTE-IDENTICAL filled.def. That is fill
+    DONE, not fill MISSING — it must NOT raise FILL_NOOP, and it must disclose
+    FILL_DONE_AT_PNR so the byte-identity is explained, not silent."""
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    same = "IDENTICAL-ROUTED-AND-FILLED-DEF\n" * 20
+    (pnr / "routed.def").write_text(same)
+    (pnr / "filled.def").write_text(same)          # byte-identical on purpose
+    (pnr / "metal_fill.done").write_text("metal_fill_done\n")
+    rpt = tmp_path / "reports"
+    rpt.mkdir(parents=True, exist_ok=True)
+    (rpt / "density.json").write_text(json.dumps(
+        {"tool": "openroad-filler_placement",
+         "filler_instances": 0, "row_utilization_pct": 100.0}))
+    findings, stats = MF.audit(tmp_path)
+    assert stats["filled_byte_identical"] is True
+    assert stats["rows_already_full"] is True
+    assert not any(f.category == "FILL_NOOP" for f in findings)
+    assert not any(f.severity == "ERROR" for f in findings), \
+        [(f.category, f.severity) for f in findings]
+    assert any(f.category == "FILL_DONE_AT_PNR" for f in findings)
+
+
+def test_byte_identical_rows_not_full_still_fails(tmp_path):
+    """Guard: byte-identical with rows NOT full is still a genuine no-op FAIL."""
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    same = "IDENTICAL\n" * 20
+    (pnr / "routed.def").write_text(same)
+    (pnr / "filled.def").write_text(same)
+    (pnr / "metal_fill.done").write_text("metal_fill_done\n")
+    rpt = tmp_path / "reports"
+    rpt.mkdir(parents=True, exist_ok=True)
+    (rpt / "density.json").write_text(json.dumps(
+        {"tool": "openroad-filler_placement",
+         "filler_instances": 0, "row_utilization_pct": 40.0}))
+    findings, stats = MF.audit(tmp_path)
+    assert any(f.category == "FILL_NOOP" and f.severity == "ERROR"
+               for f in findings)

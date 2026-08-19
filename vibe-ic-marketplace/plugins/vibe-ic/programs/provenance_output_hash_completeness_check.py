@@ -655,6 +655,35 @@ def audit_counted(project: Path, strict_timing: bool = False,
             # possible without paths (that is what the v1.0.74 `outputs` dict
             # adds, verified above when present).
             continue
+        # #365 — a per-invocation COMMAND-AUDIT record (record == "invocation",
+        # written by phase3_one_shot_runner._log_invocation) whose call site
+        # DECLARED no output legitimately carries none. The writer's own
+        # contract: "Declared by the CALL SITE, hashed here. Absent when the
+        # caller declared nothing or nothing it declared was produced — empty is
+        # honest." Such a row makes NO artefact claim, so it cannot hide an
+        # unverified artefact: any invocation row that DOES declare outputs still
+        # falls through to full on-disk hash verification below, and an
+        # ARTEFACT-declaration row (record != "invocation") with empty outputs
+        # still FAILs PROVENANCE_OUTPUTS_MISSING. DISCLOSE it (so a reader sees
+        # these command rows were not artefact-verified) rather than silence or
+        # FAIL. Regression fixed: the #365 invocation records post-date this
+        # gate, which was written for the one-row-per-artefact model, so every
+        # phase-3 run with report/probe tool invocations (sta report runs,
+        # yosys lib-probe / post-layout LEC, klayout grid-snap, tap-geometry
+        # measurement) FAILed the completion audit even with clean sign-off.
+        if (e.get("record") == "invocation"
+                and (not outputs or not isinstance(outputs, dict))):
+            _mk = e.get("marker")
+            _mk = _ellipsis(str(_mk), 80) if _mk else "-"
+            findings.append(ProvenanceFinding(
+                entry_index=i, tool=tool,
+                rule="PROVENANCE_INVOCATION_NO_DECLARED_OUTPUT",
+                severity="DISCLOSED",
+                detail=("command-audit invocation record declared no output "
+                        f"(marker={_mk}) — empty is honest per the "
+                        "_log_invocation writer contract; the row makes no "
+                        "artefact claim to verify")))
+            continue
         if not outputs or not isinstance(outputs, dict):
             findings.append(ProvenanceFinding(
                 entry_index=i, tool=tool,
