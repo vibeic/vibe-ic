@@ -529,7 +529,23 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # roll-up honest.
 _per_published_cell_gates() {
   local _def="$1" _cell
-  _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
+  # `routed_def_corpus.py` emits ABSOLUTE DEF paths -- its own docstring says
+  # "one absolute DEF path per line" -- and the published corpus may sit
+  # OUTSIDE this repository entirely, because $VIBE_IC_BENCHMARK_DATA names a
+  # clone whose root is the published tree. So $ROOT is not this path's parent
+  # and must not be prefixed to it.
+  #
+  # v1.10.69 replaced this loop's producer with that program. The one it
+  # replaced was `git -C "$ROOT" ls-files`, whose output IS repo-relative, so
+  # the prefix below was correct for it and was carried over unchanged. The
+  # result was "$ROOT/$ABSOLUTE" -- a path that cannot exist. Every per-cell
+  # gate then answered rc 2 "I could not look", and `run_tolerating_uncheckable`
+  # absorbed all four under exemptions whose stated reason is FALSE ("this cell
+  # ships no readable macro/OBS geometry", "no parseable layout", "no step
+  # reports", "NO_BASELINE"). The corpus read as CHECKED while nothing in it was
+  # ever opened -- the empty-population refusal above cannot see this, because
+  # the population is 1, not 0.
+  _cell="${_def%/phase3/stage3/pnr/routed.def}"
   uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no readable macro/OBS geometry, so the intersection has no population -- an intersection it CAN compute and finds is rc 1"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
