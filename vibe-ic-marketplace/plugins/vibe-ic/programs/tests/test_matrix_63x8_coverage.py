@@ -97,6 +97,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -1020,30 +1021,98 @@ def _module_ast(dim: int) -> ast.Module:
         encoding="utf-8"))
 
 
-def _calls_pytest_skip(dim: int, func_name: str) -> Optional[str]:
-    """Location of a ``pytest.skip`` / bare ``skip`` call inside *func_name*.
+#: Statements whose bodies MAY NOT execute. A ``pytest.skip`` reached only
+#: through one of these is CONDITIONAL: something had to be true for the cell
+#: to decline. Everything else in a function body is straight-line and always
+#: runs, which is what makes a skip there unconditional.
+#:
+#: ``With`` is deliberately ABSENT. A ``with`` body always executes, so a skip
+#: inside one is as unconditional as a skip beside it.
+_MAY_NOT_RUN = (ast.If, ast.Try, ast.For, ast.AsyncFor, ast.While, ast.IfExp)
+if hasattr(ast, "Match"):                    # py3.10+
+    _MAY_NOT_RUN = _MAY_NOT_RUN + (ast.Match,)
 
-    An AST walk over THIS repository's own test module — exact by construction,
-    with comments and docstrings gone, so the ``# ...pytest.skip()...`` prose in
-    two of the modules' docstrings cannot be mistaken for a call site. (The
-    campaign's standing rule against text scans is about the PRODUCTION tree's
-    dynamic dispatch; here the target is a literal function definition in a file
-    this test can parse completely.)
+
+def _is_skip_call(node: ast.AST) -> bool:
+    """``pytest.skip(...)`` or a bare imported ``skip(...)``."""
+    if not isinstance(node, ast.Call):
+        return False
+    fn = node.func
+    if isinstance(fn, ast.Attribute) and fn.attr == "skip":
+        return isinstance(fn.value, ast.Name) and fn.value.id == "pytest"
+    return isinstance(fn, ast.Name) and fn.id == "skip"
+
+
+def _unconditional_skip(dim: int, func_name: str) -> Optional[str]:
+    """Location of an UNCONDITIONAL ``pytest.skip`` inside *func_name*.
+
+    WHAT CHANGED AND WHY, because the previous rule here banned the CALL.
+
+    This function used to return any ``pytest.skip`` call site at all, on the
+    stated ground that "the three states are ENFORCED, WAIVED (strict xfail)
+    and NA (asserted precondition)". :func:`_join_axes`, in this same file,
+    has since grown a FOURTH label and a paragraph explaining it: a cell whose
+    every observed outcome is ``skipped`` is reported ``<state>-SKIPPED``,
+    counted as NOT-MEASURED, and — the load-bearing half — "NOT folded into
+    agreement either. A skipped cell has not been enforced, and calling it
+    ENFORCED would be the erasure #888 closed."
+
+    So the file said two things at once. Worse, the ban was static: it fired on
+    the PRESENCE of a call, in runs where the corpus was pointed at, both cells
+    ran, and nothing skipped. That is this campaign's own named disease — it
+    measured something adjacent (source text) and reported it as the answer
+    (a cell went silent).
+
+    The doctrine the substrate's README actually states is narrower and is the
+    one implemented here: "An NA that just ``pytest.skip()``s UNCONDITIONALLY
+    is forbidden — that is silent absence wearing a hat." A skip reached only
+    through a condition is not silent absence; it is an inability to look, and
+    :func:`_join_axes` already publishes it as one. What was MISSING was any
+    check that the publishing actually happens, and that gap is closed by
+    :func:`test_a_cell_that_declined_to_run_is_published_as_NOT_MEASURED` and
+    by the ``-SKIPPED`` control below, which had no control of any kind.
     """
-    for node in ast.walk(_module_ast(dim)):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if node.name != func_name:
-            continue
-        for call in ast.walk(node):
-            if not isinstance(call, ast.Call):
+    return _unconditional_skip_in(_module_ast(dim), func_name)
+
+
+def _unconditional_skip_in(tree: ast.AST, func_name: str) -> Optional[str]:
+    """:func:`_unconditional_skip` over an ARBITRARY tree, so it is testable.
+
+    The dimension-keyed wrapper above reads a real module off disk, which
+    cannot be handed a synthetic function. Splitting the search out is what
+    lets ``test_the_skip_rule_still_catches_the_thing_it_was_written_for``
+    drive both sides of the rule.
+    """
+    fn_node = None
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == func_name):
+            fn_node = node
+            break
+    if fn_node is None:
+        return None
+
+    # ANCESTOR WALK, not a body walk. `ast.walk` descends into every child
+    # whatever the parent is, so filtering the yielded nodes would still have
+    # reached a skip nested three `if`s deep and called it unconditional. The
+    # question is about the PATH to the call, so the path is what is recorded.
+    found: List[int] = []
+
+    def descend(node: ast.AST, guarded: bool) -> None:
+        for child in ast.iter_child_nodes(node):
+            if _is_skip_call(child) and not guarded:
+                found.append(child.lineno)
+            # A nested function/lambda is not this cell's straight line: it is
+            # a value until something calls it, and nothing here can say when.
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.Lambda)):
                 continue
-            fn = call.func
-            if isinstance(fn, ast.Attribute) and fn.attr == "skip":
-                if isinstance(fn.value, ast.Name) and fn.value.id == "pytest":
-                    return f"{func_name}: pytest.skip() at line {call.lineno}"
-            if isinstance(fn, ast.Name) and fn.id == "skip":
-                return f"{func_name}: skip() at line {call.lineno}"
+            descend(child, guarded or isinstance(child, _MAY_NOT_RUN))
+
+    descend(fn_node, False)
+    if found:
+        return (f"{func_name}: UNCONDITIONAL pytest.skip() at line "
+                f"{min(found)}")
     return None
 
 
@@ -1089,12 +1158,17 @@ def test_every_na_cell_asserts_a_live_precondition():
     # it has an NA to hide behind.
     for dim, per_dim in funcs.items():
         for func in per_dim:
-            found = _calls_pytest_skip(dim, func)
+            found = _unconditional_skip(dim, func)
             if found:
                 problems.append(
                     f"dimension {dim}: cell test {found}. A cell test may not "
-                    f"skip: the three states are ENFORCED, WAIVED (strict "
-                    f"xfail) and NA (asserted precondition)")
+                    f"skip unconditionally: the configured states are "
+                    f"ENFORCED, WAIVED (strict xfail) and NA (asserted "
+                    f"precondition), and a cell that declines with no "
+                    f"condition asserts none of them. A skip reached through "
+                    f"a condition is permitted and is published as "
+                    f"NOT-MEASURED — see "
+                    f"test_a_cell_that_declined_to_run_is_published_as_NOT_MEASURED")
 
     assert not problems, (
         f"{len(problems)} NA problem(s):\n  - " + "\n  - ".join(problems))
@@ -1123,6 +1197,159 @@ def test_na_cells_are_a_minority_and_are_named():
                 f"{sid}/d{dim}: NA precondition {pre!r} is too short to be "
                 f"checkable by someone who has never seen the cell"
             )
+
+
+def test_the_skip_rule_still_catches_the_thing_it_was_written_for():
+    """THE GUARD ON THE RELAXATION. Both sides, or it is a deletion.
+
+    ``test_every_na_cell_asserts_a_live_precondition`` used to reject any
+    ``pytest.skip`` call in a cell function. It now rejects only an
+    UNCONDITIONAL one. A relaxation is only a fix if the case the old rule
+    existed for still reddens, so this drives both sides of the new boundary
+    over synthetic functions the detector cannot have been tuned to.
+
+    The FORWARD cases are the ones that matter: `silent_absence` is the
+    README's "an NA that just pytest.skip()s unconditionally", `after_work`
+    is the same thing with a statement in front of it, and `in_a_with` is the
+    one an ancestor walk gets wrong if it treats every block as a guard — a
+    ``with`` body always runs.
+    """
+    src = textwrap.dedent('''
+        def silent_absence():
+            pytest.skip("nothing asserted, nothing measured")
+
+        def after_work():
+            x = compute()
+            pytest.skip("still unconditional")
+
+        def in_a_with(tmp):
+            with open(tmp) as fh:
+                pytest.skip("a with body always runs")
+
+        def bare_name_form():
+            skip("the imported spelling")
+
+        def guarded_by_if(corpus):
+            if corpus is None:
+                pytest.skip("could not look")
+            assert corpus.is_dir()
+
+        def guarded_deeply(a, b):
+            if a:
+                if b:
+                    try:
+                        pytest.skip("three deep, still conditional")
+                    except Exception:
+                        pass
+            assert a
+
+        def guarded_by_loop(items):
+            for it in items:
+                pytest.skip(it)
+            assert items is not None
+
+        def only_defines_one(x):
+            def helper():
+                pytest.skip("not this cell's straight line")
+            return helper
+
+        def clean(x):
+            assert x
+    ''')
+    tree = ast.parse(src)
+
+    for name in ("silent_absence", "after_work", "in_a_with",
+                 "bare_name_form"):
+        found = _unconditional_skip_in(tree, name)
+        assert found is not None, (
+            f"{name}: an UNCONDITIONAL skip was not caught — the relaxation "
+            f"deleted the rule instead of narrowing it")
+        assert "UNCONDITIONAL" in found, found
+
+    for name in ("guarded_by_if", "guarded_deeply", "guarded_by_loop",
+                 "only_defines_one", "clean"):
+        assert _unconditional_skip_in(tree, name) is None, (
+            f"{name}: a skip that can only be reached through a condition was "
+            f"reported as unconditional — the false positive this narrowing "
+            f"exists to remove")
+
+    # AND THE REAL SUBJECTS. These are the two cells the old blanket ban
+    # fired on, in runs where the corpus was pointed at and neither skipped.
+    for dim, func in ((3, "test_d3_required_outputs_are_produced"),
+                      (7, "test_d7_required_outputs_list_is_complete")):
+        assert _unconditional_skip(dim, func) is None, (
+            f"d{dim} {func}: reported unconditional; its skip is guarded on an "
+            f"absent corpus")
+
+
+def test_a_cell_that_declined_to_run_is_published_as_NOT_MEASURED():
+    """THE OTHER HALF of permitting a conditional skip, and it was missing.
+
+    Relaxing the ban on `pytest.skip` from "no call anywhere" to "no
+    UNCONDITIONAL call" is only honest if the skips that DO fire are accounted
+    for. This asserts the accounting on the live run: a cell whose every
+    observed outcome is ``skipped`` must be labelled ``<state>-SKIPPED`` — the
+    NOT-MEASURED column — and must never be counted ENFORCED.
+
+    It is an INVARIANT, so on a host where nothing skips it has nothing to
+    range over. That is why the control below exists: the ``-SKIPPED`` branch
+    of :func:`_join_axes` shipped with no test of any kind, so nothing said
+    whether a declining cell was published as unknown or quietly folded into
+    agreement. The invariant states the rule; the control proves the rule is
+    reachable and that the branch does what its comment claims.
+    """
+    census = enforcement_census()
+    wrong = []
+    for key, verdict in census.items():
+        if not verdict.outcomes or not all(
+                o == "skipped" for o in verdict.outcomes):
+            continue
+        if verdict.agrees or not verdict.label.endswith("-SKIPPED"):
+            wrong.append(
+                f"{key[0]}/d{key[1]}: every observed outcome is `skipped` yet "
+                f"the cell is published as {verdict.label!r} "
+                f"(agrees={verdict.agrees}). A check that declined to run has "
+                f"not been enforced; publishing it as anything but "
+                f"NOT-MEASURED is the erasure #888 closed.")
+    assert not wrong, "\n  - ".join([f"{len(wrong)} mis-published cell(s):"]
+                                    + wrong)
+
+
+def test_the_SKIPPED_label_is_reachable_and_is_neither_agreement_nor_defect():
+    """CONTROL for the `-SKIPPED` branch, which had none.
+
+    Three cells through the real :func:`_join_axes`: one that passed, one that
+    declined, one that failed. The declining cell must land in its OWN column —
+    not with the passing one (which would count an unmeasured cell as
+    coverage) and not with the failing one (which would report a defect where
+    there is only an inability to look).
+    """
+    states = {("P", 1): "ENFORCED", ("S", 1): "ENFORCED", ("F", 1): "ENFORCED"}
+    outcomes = {("P", 1): ("passed",),
+                ("S", 1): ("skipped",),
+                ("F", 1): ("failed",)}
+    joined = _join_axes(states, outcomes)
+
+    assert joined[("P", 1)].label == "ENFORCED"
+    assert joined[("P", 1)].agrees is True
+
+    assert joined[("S", 1)].label == "ENFORCED-SKIPPED", joined[("S", 1)]
+    assert joined[("S", 1)].agrees is False, (
+        "a cell that declined to run was folded into agreement — it would be "
+        "counted as coverage it never provided")
+
+    assert joined[("F", 1)].label == "ENFORCED-CONTRADICTED", joined[("F", 1)]
+
+    counts = enforcement_counter(joined)
+    assert counts == {"ENFORCED": 1, "ENFORCED-SKIPPED": 1,
+                      "ENFORCED-CONTRADICTED": 1}, counts
+
+    # A MIXED cell is NOT a declining one. One skipped outcome beside a failing
+    # one is a contradiction that happens to have skipped somewhere, and
+    # calling it NOT-MEASURED would let a red hide behind a skip.
+    mixed = _join_axes({("M", 1): "ENFORCED"},
+                       {("M", 1): ("skipped", "failed")})
+    assert mixed[("M", 1)].label == "ENFORCED-CONTRADICTED", mixed[("M", 1)]
 
 
 # ══════════════════════════════════════════════════════════════════════
