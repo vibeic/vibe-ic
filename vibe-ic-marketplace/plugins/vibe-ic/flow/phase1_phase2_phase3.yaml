@@ -2703,6 +2703,41 @@ steps:
         - program_exit_zero: "macro_obs_load_parity_check . --json reports/phase3/pnr/macro_obs_load_parity.json"
     blocks_on: [13, 14, A8]
 
+  # ── chip/IC path only ────────────────────────────────────────────────
+  # THE FLOW HAS ALWAYS BEEN A cell/IP FLOW AND NEVER SAID SO. Steps 1-38
+  # take RTL to a bare die: no pad ring, no seal ring, no die identification.
+  # That is exactly right for an IP handed to somebody else to place, and it
+  # is not a submittable chip. MEASURED 2026-08-19: wafer.space's own
+  # precheck container, run against our published GDS, refused at stage 3 of
+  # 16 with "Layer 'GUARD_RING_MK' is not used"; stages 4-16 have never run.
+  #
+  # Upstream draws the same line. LibreLane has TWO flows: `Classic`, whose
+  # steps write a LEF because "this is a macro", and `Chip`, which deletes
+  # `Magic.WriteLEF` with the comment "This is not a macro, there's no need
+  # to write a LEF" and adds PadRing / SealRing / Filler / Density. The `ic`
+  # suffix marks the steps that belong only to the chip path; `ip` marks the
+  # one that terminates the cell/IP path.
+  - id: 15.5ic
+    name: "Pad Ring (chip/IC path only)"
+    stage: stage3
+    flow_path: ic
+    required_inputs:
+      - from: 15
+        path: "phase3/stage3/pnr/floorplan.def"
+    # BEFORE ROUTING, NOT AFTER. The pads are the design's BTerms once a pad
+    # ring exists, so routing must already see them. OpenROAD places its pad
+    # ring immediately after the power connections are set, for the same
+    # reason, and LibreLane's Chip flow then deletes IOPlacement outright:
+    # "No pin placement necessary -> pads are the BTerms".
+    programs:
+      - pad_ring_gen
+    required_outputs:
+      - "phase3/stage3/pnr/padring.def"
+      - "reports/phase3/padring.json"
+    gate:
+      program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
+    blocks_on: [15]
+
   - id: 16
     name: "Clock planning"
     stage: stage3
@@ -3781,6 +3816,44 @@ steps:
   # on extracted parasitics. Critical for high-speed designs where
   # coupling capacitance between adjacent nets causes functional
   # failures or timing degradation.
+  # ── chip/IC path only ────────────────────────────────────────────────
+  - id: 26.5ic
+    name: "Die Finishing — seal ring + die identification (chip/IC path only)"
+    stage: stage3
+    flow_path: ic
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
+    # AFTER THE ANTENNA CHECK AND BEFORE PHYSICAL VERIFICATION, and the order
+    # is the whole point. A seal ring is real metal. Adding it after step 31
+    # would mean the die step 31 signed off is not the die that ships — the
+    # ring would reach a foundry having passed no DRC or LVS. That is this
+    # repository's own worst failure shape: the artefact changed after the
+    # evidence. LibreLane places SealRing after Checker.KLayoutAntenna for
+    # the same reason.
+    #
+    # TWO COMPONENTS, TWO SOURCES, REPORTED SEPARATELY. The gate must never
+    # collapse them into one verdict:
+    #   seal ring  the PDK ships its own generator and this step CALLS it,
+    #              never reimplements it — sky130A, gf180mcuD and ihp-sg13g2
+    #              each carry one. A PDK with no generator SKIPS with a
+    #              stated reason (LibreLane does exactly this when
+    #              KLAYOUT_SEALRING_SCRIPT is unset).
+    #   die id     four shuttle-owned cells whose provenance is NOT YET
+    #              DETERMINED — gf180mcu_ws_ip__{qrcode_id,shuttle_id,
+    #              project_id,marker}, at coordinates their generate_id.py
+    #              pins exactly. Until the source is established this half
+    #              reports NOT DETERMINED; it must not report clean, and it
+    #              must not fail the seal ring for its own absence.
+    programs:
+      - die_finishing_gen
+    required_outputs:
+      - "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt"
+      - "reports/phase3/die_finishing.json"
+    gate:
+      program_exit_zero: "die_finishing_check . --json reports/phase3/die_finishing.json"
+    blocks_on: [26]
+
   - id: 27
     name: "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)"
     stage: stage3
@@ -5000,6 +5073,55 @@ steps:
         # then exits 2, which this runner reads as VACUOUS_PASS.
         - program_exit_zero: "provenance_check . --output=phase3/stage4/gds/*.gds --tool=klayout,magic,openroad"
     blocks_on: [34, 36]
+
+  # ── cell/IP path — TERMINAL ──────────────────────────────────────────
+  # Where the two paths part. An IP is delivered, not fabricated: it needs a
+  # LEF so somebody else can place it, a Liberty so they can time it, and a
+  # Verilog view so they can simulate it. It needs no pad ring, no seal ring
+  # and no die id, because it is not a die. It therefore does NOT continue to
+  # step 38 (foundry handoff) or to stage 5 (fabrication onwards).
+  #
+  # The analog path already had this terminal — A8 "Hardmacro Generation
+  # (LEF + Liberty + GDS + Verilog)" — and the digital path never did, which
+  # is why step 15 can place an analog hard macro and nothing this flow
+  # produces digitally can be placed by anyone.
+  - id: 37.5ip
+    name: "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (cell/IP path TERMINAL)"
+    stage: stage4
+    flow_path: ip
+    required_inputs:
+      - from: 37
+        path: "phase3/stage4/gds/*.gds"
+    programs:
+      - digital_hardmacro_gen
+    required_outputs:
+      - "phase3/stage4/hardmacro/*.lef"
+      - "phase3/stage4/hardmacro/*.lib"
+      - "phase3/stage4/hardmacro/*.gds"
+      - "phase3/stage4/hardmacro/*.v"
+    gate:
+      program_exit_zero: "digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json"
+    blocks_on: [37]
+
+  # ── chip/IC path only ────────────────────────────────────────────────
+  # THE ONE INTERFACE WHERE SOMEBODY ELSE'S REFUSAL IS THE VERDICT. Every
+  # other gate in this tree we wrote, and a gate we wrote can be made to pass
+  # by editing it. `tapeout_readiness_check` runs the shuttle operator's own
+  # container and reports its exit code — and until now NOTHING IN THE FLOW
+  # CALLED IT. The program has existed and no step invoked it, so the only
+  # external bar this project has was never applied to a run.
+  - id: 37.5ic
+    name: "Shuttle Precheck — the operator's own refusal (chip/IC path only)"
+    stage: stage4
+    flow_path: ic
+    required_inputs:
+      - from: 37
+        path: "phase3/stage4/gds/*.gds"
+    required_outputs:
+      - "reports/phase3/shuttle_precheck.json"
+    gate:
+      program_exit_zero: "tapeout_readiness_check . --json reports/phase3/shuttle_precheck.json"
+    blocks_on: [37]
 
   - id: 38
     name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"

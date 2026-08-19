@@ -2329,7 +2329,7 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
         f"manifest/flow step-set mismatch: only in flow {sorted(live - recorded)}, "
         f"only in manifest {sorted(recorded - live)}"
     )
-    assert len(cells_for(DIM)) == len(live) == 63
+    assert len(cells_for(DIM)) == len(live) == 67
 
 
 @needs_corpus
@@ -2791,8 +2791,8 @@ def test_d3_waivers_meet_the_registry_bar():
     assert not problems, "\n".join(problems)
 
 
-def test_d3_cell_states_partition_all_63_steps():
-    """ENFORCED + WAIVED + NA == 63, computed live, with no cell in two states."""
+def test_d3_cell_states_partition_all_steps():
+    """ENFORCED + WAIVED + NA == 67, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -2807,7 +2807,7 @@ def test_d3_cell_states_partition_all_63_steps():
         else:
             enforced.append(sid)
             assert rec["verdict"] == "ENFORCED"
-    assert len(enforced) + len(waived) + len(na) == 63, (
+    assert len(enforced) + len(waived) + len(na) == 67, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
@@ -2820,10 +2820,10 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (50, 2, 11), (
+    assert (len(enforced), len(waived), len(na)) == (54, 2, 11), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(50, 2, 11) on 2026-08-12. A step moving between states is a real "
+        f"(54, 2, 11) on 2026-08-20. A step moving between states is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2858,6 +2858,16 @@ def test_d3_cell_states_partition_all_63_steps():
         "test_d3_waived_steps_still_produce_their_unwaived_entries was red on "
         "merge.json. A per-entry waiver cannot express 'this step never ran'. "
         "M1's dimension-7 waiver is untouched."
+        "\n2026-08-20: (50, 2, 11) -> (54, 2, 11). Four steps were ADDED to the "
+        "flow; none moved between states. 15.5ic, 26.5ic, 37.5ip and 37.5ic are "
+        "the path-specific steps of the cell/IP-vs-chip/IC split. Each declares "
+        "required_outputs, carries no step-level condition (so "
+        "NA_DORMANT_CONDITION is not derivable for it) and holds no waiver, "
+        "which is what ENFORCED means here. Every entry is recorded UNPROVEN: "
+        "their producer programs are not written yet, so no admissible run root "
+        "has ever produced these paths. The four cells are RED, and that is the "
+        "honest reading of a flow declaring an output nothing produces \u2014 not "
+        "a state to waive away."
     )
 
 

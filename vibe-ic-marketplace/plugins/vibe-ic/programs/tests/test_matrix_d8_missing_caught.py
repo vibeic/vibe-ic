@@ -811,9 +811,9 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           leaves this fewer-than-two population; retaining it would silently
 #:           disable the partial-evidence shape this pin exists to measure.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
-    "1", "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5",
-    "A7", "A9", "14", "16", "17", "20", "22", "35", "36", "37", "M4",
-    "42", "44", "P0",
+    "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5", "A7", "A9",
+    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37", "37.5ic",
+    "M4", "42", "44", "P0",
 )
 
 
