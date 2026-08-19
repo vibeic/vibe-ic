@@ -7,7 +7,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 ## Stats
 
 - **Total programs (excluding helpers / shims):** 1116
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1112)
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1116)
 
 ### Per-class applicability counts
 
@@ -15,14 +15,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 |---|---|
 | `aid_class_half_duplex` | 9 |
 | `digital_cmd_driven` | 7 |
-| `gen_program_inventory` | any | — | Generate the program-population inventory; every stated count must be read from it, never hand-typed. |
-| `magic_illegal_overlap_check` | any | — | Read the extraction tool's own feedback channel and gate illegal overlaps at zero, BEFORE the LVS verdict. |
 | `mixed_signal_otp` | 7 |
-| `pdk_revision_resolve` | any | — | Resolve the PDK revision a run actually signed off against, so a sign-off can be re-derived. |
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1103 |
+| `any` | 1107 |
 
 ## Alphabetical listing
 
@@ -1191,7 +1188,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1103 programs)
+### `any` (1107 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
