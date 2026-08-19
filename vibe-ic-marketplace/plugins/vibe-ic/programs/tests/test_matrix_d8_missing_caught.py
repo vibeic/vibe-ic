@@ -279,6 +279,74 @@ def fixture_body(rel: str) -> str:
             return body
     return _FIXTURE_BODY
 
+
+# ──────────────────────────────────────────────────────────────────────
+# THE WRONG BODY — present, parseable, and saying the run FAILED
+#
+# `fixture_body` above answers "what does a declared output look like when the
+# step produced one". This answers "...when the step produced a BAD one". The
+# distinction is the whole of the content arm: every body below lands at the
+# SAME path, through the SAME writer, and satisfies the SAME glob as its right
+# counterpart, so an UNMOVED verdict can never be explained by "nothing was
+# there" — which is the failure this dimension's existing arm already covers
+# and must not be allowed to impersonate.
+#
+# Each body is the same KIND as the right one — a `.json` that `json.loads`, a
+# `.v` carrying a matched `module`/`endmodule`, text shaped like a tool report
+# — and each says IN ITS CONTENT that the thing it reports on failed. An
+# unparseable body would be refused on kind and would prove nothing about
+# whether anything reads the content; an absent one is the other arm.
+# ──────────────────────────────────────────────────────────────────────
+_WRONG_JSON = json.dumps(
+    {
+        "d8_fixture": True,
+        "status": "FAIL", "verdict": "FAIL", "result": "FAIL",
+        "passed": False, "ok": False, "clean": False,
+        "violations": 17, "errors": 17, "failures": 17,
+        "violation_count": 17, "error_count": 17,
+    },
+    indent=2, sort_keys=True) + "\n"
+
+_WRONG_JSONL = json.dumps(
+    {"d8_fixture": True, "status": "FAIL", "passed": False, "violations": 17},
+    sort_keys=True) + "\n"
+
+_WRONG_VERILOG = (
+    "// d8 fixture artefact - PRESENT, PARSEABLE, WRONG\n"
+    "module d8_fixture_top (input wire clk, output wire q);\n"
+    "  // `q` is declared an output and is never driven. The module parses and\n"
+    "  // elaborates; what it describes is broken.\n"
+    "endmodule\n"
+)
+
+_WRONG_TEXT = (
+    "d8 fixture artefact\n"
+    "ERROR: 17 violation(s) found\n"
+    "violation report: 17\n"
+    "violation count summary: 17 violation(s) found\n"
+    "RESULT: FAIL\n"
+)
+
+#: Keyed by the SAME suffixes ``_KIND_BODIES`` declares, and iterated through
+#: ``_KIND_BODIES`` below rather than through its own keys, so a kind added to
+#: the right-body table cannot silently fall through to the text default here.
+#: ``test_d8_every_seeded_kind_has_a_wrong_counterpart`` asserts the two agree.
+_WRONG_BY_SUFFIX: Dict[str, str] = {
+    ".jsonl": _WRONG_JSONL,
+    ".json": _WRONG_JSON,
+    ".sv": _WRONG_VERILOG,
+    ".v": _WRONG_VERILOG,
+}
+
+
+def wrong_body(rel: str) -> str:
+    """The body to seed ``rel`` with when it must be PRESENT but WRONG."""
+    lowered = rel.lower()
+    for suffix, _right in _KIND_BODIES:
+        if lowered.endswith(suffix):
+            return _WRONG_BY_SUFFIX[suffix]
+    return _WRONG_TEXT
+
 _GLOB_CHARS = "*?["
 
 
@@ -405,12 +473,20 @@ def _condition_patterns(step: Dict[str, Any]) -> List[str]:
 def _materialize(project: Path, step: Dict[str, Any],
                  drop_entries: Sequence[str] = (),
                  drop_alts: Sequence[Tuple[str, str]] = (),
-                 gate_ok: bool = True) -> Dict[str, List[str]]:
+                 gate_ok: bool = True,
+                 wrong_entries: Sequence[str] = ()) -> Dict[str, List[str]]:
     """Synthesize a run tree for *step*; return ``{entry: [created rel paths]}``.
 
     ``drop_entries``  entries whose artefacts are NOT created (all alternatives).
     ``drop_alts``     individual ``(entry, alternative)`` pairs not created.
     ``gate_ok``       create the PASS gate's control file.
+    ``wrong_entries`` entries created at the SAME paths with :func:`wrong_body`
+                      instead of :func:`fixture_body` — present, parseable, and
+                      saying the run failed. Routed through this one writer on
+                      purpose: a separate materializer for the wrong tree could
+                      drift from the right one, and then a verdict that did not
+                      move would be a fact about two different trees rather
+                      than about the bytes in one file.
     """
     (project / _GATE_DIR).mkdir(parents=True, exist_ok=True)
     if gate_ok:
@@ -427,7 +503,8 @@ def _materialize(project: Path, step: Dict[str, Any],
                 if (entry, alt) in drop_alts:
                     continue
                 rel = concretize(alt)
-                _write(project, rel, fixture_body(rel))
+                _write(project, rel, (wrong_body(rel) if entry in wrong_entries
+                                      else fixture_body(rel)))
                 assert FCC._glob_first(project, alt), (
                     f"fixture defect: wrote {rel!r} for pattern {alt!r} but the "
                     f"real _glob_first does not find it — the synthesized tree "
@@ -1354,6 +1431,410 @@ def test_d8_downgrade_is_reachable_through_each_steps_own_real_gate():
         f"acceptable — FAIL means the gate itself noticed, which is stronger — "
         f"but a PASS tier means the artefact vanished with no consequence."
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE CONTENT ARM — a declared output that is PRESENT, PARSEABLE and WRONG
+#
+# WHY IT EXISTS
+# -------------
+# Everything above this line reddens on ABSENCE. `probe_negative` removes a
+# declared output and requires the verdict to move; `_real_gate_sweep` does the
+# same through each step's own gate. Not one of them asks what happens when the
+# artefact IS there and says the wrong thing, and the consumer gives a reason to
+# expect the answer is "nothing": `required_outputs` is resolved by
+# `flow_compliance_check._glob_first`, which asks whether a path exists and asks
+# nothing else. Dimension 2 measured the same shape from the other side and
+# wrote it down — a `files_exist` clause is satisfied by a ZERO-BYTE file, and
+# step 21's `routed.def` PASSes at 25 bytes of `VERSION 5.8 ; / END DESIGN`.
+#
+# An existence check wearing the clothes of a correctness check is the disease
+# this campaign was opened to find. This arm is the instrument that says, per
+# step and by measurement rather than by reading the source, WHICH it is here.
+#
+# WHAT IT MEASURES
+# ----------------
+# The same population `_real_gate_sweep` uses — the steps whose OWN gate reaches
+# a PASS tier on the seeded fixture, because a step whose gate cannot reach that
+# tier has no verdict for content to move. For each of them, TWO trees that
+# differ in the bytes of ONE file and in nothing else:
+#
+#     right   every declared output present, `fixture_body`
+#     wrong   the same, except entry[0] carries `wrong_body` — same path, same
+#             kind, same glob, content that says the run failed
+#
+# and `check_step`'s full verdict SIGNATURE (status + sorted reasons, project
+# root scrubbed) on each. MOVED when the signature differs; UNMOVED when the
+# flow said exactly the same thing about a good artefact and a bad one.
+#
+# The reasons are part of the signature deliberately. "The status stayed PASS
+# but the flow named the defect" is a materially different finding from "the
+# flow emitted the identical sentence", and folding them together would hide
+# the half that is good news.
+#
+# WHAT IT DOES NOT CLAIM
+# ----------------------
+#   * That an UNMOVED step's gate is wrong. `wrong_body` is a GENERIC corruption
+#     — a JSON object that self-reports failure, an undriven Verilog output, a
+#     report that says 17 violations. A gate can be entirely correct and still
+#     not read the field this body corrupts. What UNMOVED says is narrower and
+#     still worth saying: on the tree this suite can build, this step's declared
+#     output is decided by its PRESENCE alone.
+#   * That the population is the flow. It is 16 of 63 steps, and the reason the
+#     other 45 are absent is recorded above by
+#     `test_d8_downgrade_is_reachable_through_each_steps_own_real_gate`.
+#   * That the corpus was consulted. It was not — this arm is hermetic, and the
+#     published-run channel that DOES mutate real artefacts is
+#     `matrix_mutation_ledger.ARTEFACT_MUTATIONS`, which needs a benchmark-data
+#     clone this checkout does not carry.
+# ══════════════════════════════════════════════════════════════════════
+_CONTENT_MOVED = "MOVED"
+_CONTENT_UNMOVED = "UNMOVED"
+
+
+def _content_state(right_sig, wrong_sig) -> str:
+    """MOVED / UNMOVED from two verdict signatures.
+
+    Shared by the sweep and by the positive control ON PURPOSE. Without that,
+    a sweep that hard-coded UNMOVED would keep every assertion in
+    CONTENT_ARM_AS_MEASURED green — the pinned population is 16 UNMOVED today,
+    so "always UNMOVED" and "correctly UNMOVED" are indistinguishable from the
+    census alone. Routing the control through this same function makes the
+    control the thing that fails when the decision stops deciding.
+    """
+    return _CONTENT_MOVED if right_sig != wrong_sig else _CONTENT_UNMOVED
+
+
+def _verdict_signature(project: Path, result) -> Tuple[str, Tuple[str, ...]]:
+    """``(status, sorted reasons)`` with the scratch root scrubbed.
+
+    The root is scrubbed because it is a different `mkdtemp` on every tree, so
+    leaving it in would make EVERY pair of signatures differ and the arm would
+    report MOVED for all 16 steps without a single gate having read a byte.
+    Sorted because the reason list's order is not part of what the flow says.
+    """
+    root = str(project)
+    return result.status, tuple(sorted(
+        str(r).replace(root, "<project>") for r in result.reasons))
+
+
+@lru_cache(maxsize=1)
+def _content_arm_sweep() -> Dict[str, Dict[str, Any]]:
+    """``{step: record}`` for every step in the real-gate PASS-tier population.
+
+    The record carries the bytes that were actually written, read back off disk
+    BEFORE the tree is removed, so the controls below grade what the gate was
+    handed rather than what this module intended to hand it.
+    """
+    population = _real_gate_sweep()
+    out: Dict[str, Dict[str, Any]] = {}
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        if key not in population:
+            continue
+        step = dict(F.step_by_id(sid))          # the REAL gate, not PASS_GATE
+        entries = list(F.required_outputs(sid))
+        if not entries:
+            continue
+        entry = entries[0]
+        tmp = Path(tempfile.mkdtemp(prefix="d8_content_"))
+        try:
+            right = tmp / "right"
+            right.mkdir(parents=True)
+            made = _materialize(right, step)
+            right_sig = _verdict_signature(
+                right, FCC.check_step(right, step, {}))
+
+            wrong = tmp / "wrong"
+            wrong.mkdir(parents=True)
+            _materialize(wrong, step, wrong_entries=(entry,))
+            wrong_sig = _verdict_signature(
+                wrong, FCC.check_step(wrong, step, {}))
+
+            rels = tuple(made.get(entry, ()))
+            out[key] = {
+                "entry": entry,
+                "rels": rels,
+                "right_bytes": {r: (right / r).read_bytes() for r in rels},
+                "wrong_bytes": {r: (wrong / r).read_bytes() for r in rels},
+                # Asked of the CONSUMER's own resolver, on the wrong tree: the
+                # entry must still be satisfied there, or "the verdict did not
+                # move" would be a statement about an absent file.
+                "unresolved_alts": tuple(
+                    a for a in alternatives(entry)
+                    if not FCC._glob_first(wrong, a)),
+                "right": right_sig,
+                "wrong": wrong_sig,
+                "state": _content_state(right_sig, wrong_sig),
+            }
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+#: THE FINDING, PINNED. What each step in the real-gate PASS-tier population
+#: does when its first declared output is present, parseable and wrong.
+#:
+#: MEASURED 2026-08-19 on `397b3f25f` in the pinned container image:
+#:
+#:     absence moves the verdict   16 of 16     (the arm this file already had)
+#:     content moves the verdict    0 of 16     (this arm)
+#:
+#: The asymmetry is the whole result. Of the 16, twelve answer VACUOUS_PASS —
+#: the gate DISCLOSED that it did not engage, which is the honest tier and not
+#: a false pass — and four (`1`, `32`, `35`, `38`) answer a plain PASS with no
+#: disclosure at all: `check_step` was handed a declared output whose own
+#: content says the run failed, and reported the step green.
+#:
+#: PINNED rather than asserted-to-be-empty, and asserted in BOTH directions:
+#:
+#:   UNMOVED -> MOVED   good news, and it must still be written down. A gate
+#:                      that LEARNS to read its artefact closes a hole, and the
+#:                      diff that closes it is where that gets recorded.
+#:   MOVED -> UNMOVED   a gate stopped reading content. Nothing else in this
+#:                      repository would notice.
+#:   a step JOINS       it arrives unpinned and this reddens by name, so the
+#:                      population can never grow into an unmeasured cell.
+#:
+#: A step LEAVING the population is NOT graded here: that is the shrink guard
+#: `test_d8_downgrade_is_reachable_through_each_steps_own_real_gate` already
+#: owns, and duplicating it would report one defect as two.
+CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
+    "D1": _CONTENT_UNMOVED, "1": _CONTENT_UNMOVED, "2": _CONTENT_UNMOVED,
+    "12": _CONTENT_UNMOVED, "A1": _CONTENT_UNMOVED, "A2": _CONTENT_UNMOVED,
+    "A4": _CONTENT_UNMOVED, "A5": _CONTENT_UNMOVED, "A6": _CONTENT_UNMOVED,
+    "A8": _CONTENT_UNMOVED, "14": _CONTENT_UNMOVED, "28": _CONTENT_UNMOVED,
+    "30": _CONTENT_UNMOVED, "32": _CONTENT_UNMOVED, "35": _CONTENT_UNMOVED,
+    "38": _CONTENT_UNMOVED,
+}
+
+
+def test_d8_a_present_but_wrong_declared_output_is_measured_not_assumed():
+    """Per step: does the flow say anything different about a WRONG artefact?"""
+    sweep = _content_arm_sweep()
+    # The house rule: a zero denominator REFUSES rather than passing over an
+    # empty ledger. With no population there is no measurement, and a green
+    # here would read as "content is fine everywhere".
+    assert sweep, (
+        "the content arm measured ZERO steps: `_real_gate_sweep` returned an "
+        "empty PASS-tier population, so no step's own gate reached a verdict "
+        "for content to move. That is a broken measurement, not a clean one — "
+        "see test_d8_downgrade_is_reachable_through_each_steps_own_real_gate"
+    )
+
+    live = {k: rec["state"] for k, rec in sweep.items()}
+    unpinned = sorted(k for k in live if k not in CONTENT_ARM_AS_MEASURED)
+    assert not unpinned, (
+        f"steps {unpinned!r} entered the real-gate PASS-tier population and "
+        f"have no recorded content-arm state. Measure them and record the "
+        f"result in CONTENT_ARM_AS_MEASURED in the same change: a step that "
+        f"joins the population unmeasured is a cell whose artefact content "
+        f"nothing in this repository has ever asked about. "
+        f"Measured now: { {k: live[k] for k in unpinned} }"
+    )
+
+    changed = {k: (CONTENT_ARM_AS_MEASURED[k], live[k])
+               for k in sorted(live) if CONTENT_ARM_AS_MEASURED[k] != live[k]}
+    if changed:
+        detail = []
+        for k, (was, now) in changed.items():
+            rec = sweep[k]
+            detail.append(
+                f"  step {k}: {was} -> {now}\n"
+                f"      entry   {rec['entry']}\n"
+                f"      right   {rec['right'][0]} :: "
+                f"{list(rec['right'][1])[:2]}\n"
+                f"      wrong   {rec['wrong'][0]} :: "
+                f"{list(rec['wrong'][1])[:2]}")
+        pytest.fail(
+            f"the content arm disagrees with its pin on {len(changed)} of "
+            f"{len(live)} measured step(s):\n"
+            + "\n".join(detail)
+            + "\n\nUNMOVED -> MOVED is a gate that learned to read its own "
+              "artefact: record it in CONTENT_ARM_AS_MEASURED and say which "
+              "change taught it. MOVED -> UNMOVED is a gate that stopped, and "
+              "is the direction nothing else here would catch.")
+
+
+def test_d8_the_wrong_fixture_is_present_parseable_and_still_satisfies_the_entry():
+    """THE CONTROL. Without it, every UNMOVED above could mean "I wrote nothing".
+
+    An UNMOVED verdict is only evidence about content if the wrong tree really
+    differs from the right one in CONTENT and in nothing else. Four ways it
+    could fail to, each of which would turn this whole arm into a green that
+    measured an empty directory — the exact shape dimension 2 named ABSENCE_RED
+    and refused:
+
+      * the file is not there            -> absence, which the other arm owns
+      * the file is 0 bytes              -> ditto, in a thinner disguise
+      * its bytes equal the right body   -> the two trees are the same tree
+      * it no longer satisfies the entry -> `_glob_first` never saw it
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm measured ZERO steps; nothing to control"
+
+    problems: List[str] = []
+    checked = 0
+    for key, rec in sorted(sweep.items()):
+        entry = rec["entry"]
+        if not rec["rels"]:
+            problems.append(
+                f"step {key}: entry {entry!r} produced no files at all")
+            continue
+        if rec["unresolved_alts"]:
+            problems.append(
+                f"step {key}: after corrupting {entry!r} the consumer's own "
+                f"_glob_first no longer resolves {list(rec['unresolved_alts'])}"
+                f" — the wrong tree is an ABSENCE, not a wrong content")
+        for rel in rec["rels"]:
+            checked += 1
+            blob = rec["wrong_bytes"][rel]
+            if not blob:
+                problems.append(f"step {key}: {rel} was written 0 bytes")
+                continue
+            if blob == rec["right_bytes"][rel]:
+                problems.append(
+                    f"step {key}: {rel} — the wrong body is BYTE-IDENTICAL to "
+                    f"the right body, so this step's UNMOVED verdict compares "
+                    f"a tree with itself and means nothing")
+            low = rel.lower()
+            try:
+                if low.endswith(".jsonl"):
+                    for line in blob.decode("utf-8").splitlines():
+                        if line.strip():
+                            json.loads(line)
+                elif low.endswith(".json"):
+                    json.loads(blob.decode("utf-8"))
+                elif low.endswith((".v", ".sv")):
+                    text = blob.decode("utf-8")
+                    assert "module " in text and "endmodule" in text, (
+                        "no module/endmodule pair")
+                else:
+                    blob.decode("utf-8")
+            except Exception as exc:                     # noqa: BLE001
+                problems.append(
+                    f"step {key}: {rel} does not parse as its own kind "
+                    f"({exc}) — an unparseable artefact is refused on KIND and "
+                    f"proves nothing about whether anything reads its content")
+
+    assert not problems, (
+        f"{len(problems)} defect(s) in the wrong fixture, over {checked} "
+        f"corrupted file(s) across {len(sweep)} step(s):\n  - "
+        + "\n  - ".join(problems))
+
+
+def test_d8_every_seeded_kind_has_a_wrong_counterpart():
+    """A kind added to `fixture_body` must not fall through to the text body.
+
+    `wrong_body` iterates `_KIND_BODIES` so the two tables always agree on
+    WHICH suffixes are special; this asserts they also agree on WHAT each one
+    is. Add `.def` to the right table without adding it here and the wrong tree
+    would seed a DEF path with prose, which fails on kind rather than on
+    content and would quietly re-classify that step as unmeasurable.
+    """
+    right_suffixes = {suffix for suffix, _ in _KIND_BODIES}
+    assert right_suffixes == set(_WRONG_BY_SUFFIX), (
+        f"the seeded-kind tables disagree: fixture_body handles "
+        f"{sorted(right_suffixes)}, wrong_body handles "
+        f"{sorted(_WRONG_BY_SUFFIX)}")
+    for suffix, right in _KIND_BODIES:
+        rel = f"probe{suffix}"
+        assert wrong_body(rel) != right, (
+            f"{suffix}: the wrong body equals the right body")
+        assert fixture_body(rel) == right, (
+            f"{suffix}: fixture_body no longer returns the pinned right body")
+    assert wrong_body("probe.rpt") == _WRONG_TEXT
+    assert wrong_body("probe.rpt") != _FIXTURE_BODY
+
+
+#: THE POSITIVE CONTROL's subject, anchored to the flow rather than described.
+#: Step 39 is the ONLY step in the flow whose gate carries a `json_field_true`
+#: clause, i.e. the only place the flow spells out a CONTENT contract for one of
+#: its own declared outputs — the file is both `required_outputs[1]` and the
+#: artefact the clause reads. If that clause moves, the flow can redden on
+#: content; if it stops, the arm above lost its only witness.
+_CONTENT_CONTROL_STEP = 39
+_CONTENT_CONTROL_ARTEFACT = "reports/phase2/fpga/on_board_pass.json"
+_CONTENT_CONTROL_FIELD = "all_scenarios_passed"
+
+
+def test_d8_the_content_arm_can_observe_a_move(tmp_path):
+    """THE POSITIVE CONTROL: a present, parseable, WRONG artefact going red.
+
+    Sixteen UNMOVED verdicts are worth nothing if the instrument cannot report
+    a MOVED one — that is the same "predicate that cannot fail" the matrix
+    README forbids, one level up. So drive the one clause in the whole flow
+    that declares a content contract, through the same `check_step` and the
+    same signature comparison the arm uses, and require the verdict to move
+    BECAUSE OF THE BYTES.
+
+    The two trees differ in exactly one field of one file. Both files are
+    present, non-empty and valid JSON; only the value is wrong. The step's
+    OTHER clause needs hardware evidence no synthesized tree can carry, so the
+    STATUS is FAIL on both sides — which is why this control grades the REASONS
+    and not the status. "The verdict moved" and "the step passed" are different
+    claims, and only the first one is being made here.
+    """
+    sid = _CONTENT_CONTROL_STEP
+    step = dict(F.step_by_id(sid))
+
+    # Anchored, not assumed: if the flow drops or re-points this clause the
+    # control must say so rather than measure some other file.
+    clauses = [c for c in F.gate_clauses(sid) if "json_field_true" in str(c)]
+    gate_text = str(step.get("gate"))
+    assert _CONTENT_CONTROL_ARTEFACT in gate_text, (
+        f"step {sid}'s gate no longer names {_CONTENT_CONTROL_ARTEFACT!r}; the "
+        f"content control has lost its subject. gate={gate_text[:400]}")
+    assert _CONTENT_CONTROL_FIELD in gate_text, (
+        f"step {sid}'s gate no longer reads the field "
+        f"{_CONTENT_CONTROL_FIELD!r}. gate={gate_text[:400]}")
+    assert _CONTENT_CONTROL_ARTEFACT in list(F.required_outputs(sid)), (
+        f"{_CONTENT_CONTROL_ARTEFACT!r} is no longer one of step {sid}'s "
+        f"required_outputs, so it is no longer the same question this arm asks "
+        f"of the other 16 steps: {list(F.required_outputs(sid))}")
+    assert clauses, f"step {sid}: no json_field_true clause resolved"
+
+    right_body = json.dumps(
+        {_CONTENT_CONTROL_FIELD: True,
+         "scenarios": [{"name": "d8", "passed": True}]}, indent=2) + "\n"
+    wrong_body_ = json.dumps(
+        {_CONTENT_CONTROL_FIELD: False,
+         "scenarios": [{"name": "d8", "passed": False}]}, indent=2) + "\n"
+
+    sigs = {}
+    for label, body in (("right", right_body), ("wrong", wrong_body_)):
+        project = tmp_path / label
+        project.mkdir(parents=True)
+        _materialize(project, step)
+        (project / _CONTENT_CONTROL_ARTEFACT).write_text(body)
+        # Both sides are PRESENT and PARSEABLE, asked of the consumer's own
+        # resolver and of json itself, before either verdict is read.
+        assert FCC._glob_first(project, _CONTENT_CONTROL_ARTEFACT), (
+            f"{label}: the consumer's resolver does not find "
+            f"{_CONTENT_CONTROL_ARTEFACT}")
+        assert json.loads(
+            (project / _CONTENT_CONTROL_ARTEFACT).read_text())[
+                _CONTENT_CONTROL_FIELD] is (label == "right")
+        sigs[label] = _verdict_signature(
+            project, FCC.check_step(project, step, {}))
+
+    assert _content_state(sigs["right"], sigs["wrong"]) == _CONTENT_MOVED, (
+        f"step {sid}: the flow said the IDENTICAL thing about "
+        f"{_CONTENT_CONTROL_ARTEFACT} stating {_CONTENT_CONTROL_FIELD}=true "
+        f"and stating it false. This is the arm's only witness that a content "
+        f"red is expressible at all; with it gone, every UNMOVED in "
+        f"CONTENT_ARM_AS_MEASURED is uninformative rather than a finding. "
+        f"signature={sigs['right']}")
+
+    marker = f"{_CONTENT_CONTROL_FIELD} = False"
+    named = [r for r in sigs["wrong"][1] if marker in r]
+    assert named, (
+        f"step {sid}: the verdict moved but no reason names the field that "
+        f"moved it. A content red that cannot say WHICH value was wrong is not "
+        f"actionable. reasons={list(sigs['wrong'][1])}")
+    assert not [r for r in sigs["right"][1] if marker in r], (
+        f"step {sid}: the RIGHT tree also reports {marker!r}, so the reason is "
+        f"not attributable to the corrupted byte. reasons={list(sigs['right'][1])}")
 
 
 def test_d8_platform_capability_gap_table_is_pinned():
