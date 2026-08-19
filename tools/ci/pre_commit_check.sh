@@ -171,6 +171,28 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# 4.6. Stated program-count drift guard
+# --------------------------------------------------------------------------
+# The MCP tool count has been generated + gated since the website claimed 48
+# tools for a server registering 47. The program count was hand-typed and
+# drifted by 261 — `917` was true on 2026-07-20 and was still printed in two
+# READMEs, eight occurrences, long after the tree passed 1,100. This gate makes
+# both halves generated: PROGRAM_INVENTORY.json must match the filesystem, and
+# every registered README line must state the generated number.
+echo ""
+echo "--- Stated program-count drift ---"
+COUNT_GEN="$PROJECT_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/gen_program_inventory.py"
+if [ -f "$COUNT_GEN" ]; then
+    if ! python3 "$COUNT_GEN" --check; then
+        echo "  FAIL: a stated program count no longer matches the tree."
+        echo "        Regenerate: python3 $COUNT_GEN"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "  SKIP: gen_program_inventory.py not present"
+fi
+
+# --------------------------------------------------------------------------
 # 5. Check for accidental secret/credential files
 # --------------------------------------------------------------------------
 echo ""
