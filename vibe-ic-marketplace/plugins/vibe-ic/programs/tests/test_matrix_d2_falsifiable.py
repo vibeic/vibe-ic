@@ -1574,6 +1574,65 @@ def _correct_signoff_corner(p: Path) -> None:
        _MULTICORNER_SPEF_RPT.format(setup="0.36", tns="0.00"))
 
 
+#: One classification table, written two ways. The ONLY value that moves is the
+#: second class's lower bound: 200 makes the chain contiguous, 204 leaves a
+#: four-tick hole between the classes.
+def _threshold_constants(second_min: int) -> Dict[str, object]:
+    return {"constants": [
+        {"name": "H1_MIN", "value_dec": 1},
+        {"name": "H1_MAX", "value_dec": 199},
+        {"name": "H0_MIN", "value_dec": second_min},
+        {"name": "H0_MAX", "value_dec": 639},
+        {"name": "BR_MIN", "value_dec": 640},
+        {"name": "BR_MAX", "value_dec": 1314},
+    ]}
+
+
+def _f_threshold_range_gap(p: Path) -> None:
+    """A populated classification table with a hole between two classes.
+
+    ``threshold_range_contiguity_check`` is a BLOCKING clause of step 2 and was
+    registered in :data:`UNREDDENED` — "needs a populated threshold table with
+    a gap/overlap; a hollow L8_RTL_CONSTANTS has no ranges to be
+    non-contiguous". Exactly right, and a missing INPUT rather than an
+    unfalsifiable gate: with no L8 the gate exits 2 on `file not found`, an
+    argument error this harness classifies tier PASS.
+
+    The class prefixes are the gate's OWN ``DEFAULT_CLASS_ORDER`` (the clause
+    passes no ``--order``), so a table using any other prefix is silently
+    outside the chain and reports zero findings — measured, on the first draft
+    of this fixture, which used neutral prefixes and came back
+    ``total_findings: 0, verdict: PASS`` while looking exactly like a table
+    with a hole in it.
+
+    What the hole costs is in the gate's docstring: a value landing in the gap
+    is classified "reject", so the containing frame is silently dropped, and
+    the symptom surfaces far downstream as a framing error rather than as a
+    constant that is four counts wrong.
+
+    MEASURED, verbatim, in the container, through the exact clause command:
+
+        EMPTY  rc 2  error: file not found:
+                     phase1/generated_docs/L8_RTL_CONSTANTS.json
+                     (harness tier PASS — an argument error is not a judgement)
+        THIS   rc 1  range_gap  H1_MAX -> H0_MIN: "H1_MAX=199, next class
+                     H0_MIN=204. Gap of 4 tick(s) — pulses/values landing in
+                     [200, 203] will be silently rejected."
+        CTL    rc 0  total_findings 0, verdict PASS
+
+    chip-AGNOSTIC: the prefixes come from the program's own default order, the
+    numbers are synthetic, and no PDK, node, vendor or design name appears.
+    """
+    _w(p, "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+       _threshold_constants(204))
+
+
+def _correct_threshold_ranges(p: Path) -> None:
+    """The one-variable negative control: the chain is contiguous."""
+    _w(p, "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+       _threshold_constants(200))
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1609,6 +1668,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "DERIVED_CLOCK_UNCONSTRAINED": _f_derived_clock_unconstrained,
     "STA_TYP_MET_SIGNOFF_VIOLATED": _f_sta_typ_met_signoff_violated,
     "SIGNOFF_CORNER_VIOLATED": _f_signoff_corner_violated,
+    "THRESHOLD_RANGE_GAP": _f_threshold_range_gap,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1738,6 +1798,17 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("23", "post_route_signoff_corner_check . --json "
            "reports/phase3/sta/post_route_signoff_corner.json"):
         "SIGNOFF_CORNER_VIOLATED",
+    # Step 2's `threshold_range_contiguity_check` was registered in UNREDDENED
+    # ("a hollow L8_RTL_CONSTANTS has no ranges to be non-contiguous"). EMPTY
+    # cannot redden it — the gate exits 2 on `file not found`, which this
+    # harness classifies tier PASS — and no other fixture writes a populated
+    # L8 threshold table. Assigned here rather than left registered: a fixture
+    # DOES break it, and an UNREDDENED entry whose clause reddens fails this
+    # suite by design.
+    ("2", "threshold_range_contiguity_check "
+          "phase1/generated_docs/L8_RTL_CONSTANTS.json --json "
+          "reports/phase2/gates/threshold_contiguity.json"):
+        "THRESHOLD_RANGE_GAP",
     ("31", "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"): "SIGNOFF_UNVERIFIABLE",
     ("31", "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"): "SIGNOFF_UNVERIFIABLE",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
@@ -1924,11 +1995,6 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
           "reports/phase2/gates/int_vs_ext_timing.json"):
         "PASS: needs an L8 pair that DISAGREES numerically; a hollow L8 has no "
         "internal/external pair to contradict",
-    ("2", "threshold_range_contiguity_check "
-          "phase1/generated_docs/L8_RTL_CONSTANTS.json --json "
-          "reports/phase2/gates/threshold_contiguity.json"):
-        "PASS: needs a populated threshold table with a gap/overlap; a hollow "
-        "L8_RTL_CONSTANTS has no ranges to be non-contiguous",
     ("2", "spec_response_delay_check phase2/stage1/rtl --spec "
           "phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec "
           "phase1/generated_docs/L8_RTL_CONSTANTS.json --json "
@@ -3158,6 +3224,60 @@ def test_d2_the_signoff_corner_fixture_reddens_and_only_on_content(
         f"the SAME report with every sign-off corner MEETING must PASS — "
         f"otherwise the red is the report's presence and not its slack :: "
         f"{tier} {out[-400:]}")
+
+
+def test_d2_the_threshold_range_fixture_reddens_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """Step 2's threshold-contiguity clause: three arms, one variable.
+
+    The variable is ONE integer — the second class's lower bound. Both arms
+    carry the identical, fully populated table, so neither verdict can be
+    decided by the table's presence, its size or its field names, which is the
+    distinction the UNREDDENED entry drew when it said a HOLLOW L8 has no
+    ranges to be non-contiguous.
+    """
+    command = ("threshold_range_contiguity_check "
+               "phase1/generated_docs/L8_RTL_CONSTANTS.json --json "
+               "reports/phase2/gates/threshold_contiguity.json")
+    key = "2"
+    live = {_clause_signature(c) for c in F.gate_clauses(key) if c.is_blocking}
+    assert command in live, (
+        f"step {key} no longer declares {command!r} as a blocking clause; this "
+        f"control and the matrix cell would be measuring different things")
+    assert CLAUSE_FIXTURE.get((key, command)) == "THRESHOLD_RANGE_GAP", (
+        f"step {key}: {command!r} is no longer assigned 'THRESHOLD_RANGE_GAP'")
+    assert (key, command) not in UNREDDENED, (
+        f"step {key}: {command!r} is registered UNREDDENED again while a "
+        f"fixture reddens it — the register would be excusing a gap that is "
+        f"closed")
+
+    red_project = _build_project(tmp_path, "thr_red", "THRESHOLD_RANGE_GAP")
+    tier, out = _tier(red_project, command)
+    assert tier == RED, (
+        f"the fixture no longer reddens {command!r} -> {tier} :: {out[-300:]}")
+    # WHY the red. A table whose prefixes fall outside the gate's own
+    # DEFAULT_CLASS_ORDER reports `total_findings: 0` and PASSes while LOOKING
+    # like a table with a hole in it — measured, on the first draft — so the
+    # rule that fired is asserted rather than assumed.
+    report = json.loads(
+        (red_project / "reports/phase2/gates/threshold_contiguity.json")
+        .read_text(encoding="utf-8"))
+    assert [f["rule"] for f in report["findings"]] == ["range_gap"], (
+        f"the fixture reddens {command!r} for some other reason than the "
+        f"range gap it was built for: {report}")
+
+    tier, out = _tier(_build_project(tmp_path, "thr_empty", "EMPTY"), command)
+    assert tier != RED, (
+        f"EMPTY now reddens {command!r}, so the dedicated fixture is measuring "
+        f"nothing the bare tree does not :: {out[-300:]}")
+
+    project = _build_project(tmp_path, "thr_ctl", "THRESHOLD_RANGE_GAP")
+    _correct_threshold_ranges(project)
+    tier, out = _tier(project, command)
+    assert tier == PASS, (
+        f"the SAME table with the classes made contiguous must PASS — "
+        f"otherwise the red is the table and not the gap :: {tier} "
+        f"{out[-300:]}")
 
 
 def test_d2_a_content_earned_program_red_is_still_a_real_red(
