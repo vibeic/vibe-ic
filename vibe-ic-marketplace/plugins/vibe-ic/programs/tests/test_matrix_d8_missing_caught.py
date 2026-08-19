@@ -1604,9 +1604,64 @@ CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
     "12": _CONTENT_UNMOVED, "A1": _CONTENT_UNMOVED, "A2": _CONTENT_UNMOVED,
     "A4": _CONTENT_UNMOVED, "A5": _CONTENT_UNMOVED, "A6": _CONTENT_UNMOVED,
     "A8": _CONTENT_UNMOVED, "14": _CONTENT_UNMOVED, "28": _CONTENT_UNMOVED,
-    "30": _CONTENT_UNMOVED, "32": _CONTENT_UNMOVED, "35": _CONTENT_UNMOVED,
-    "38": _CONTENT_UNMOVED,
+    "30": _CONTENT_UNMOVED,
+    # 32 / 35 / 38: UNMOVED -> MOVED, taught by the #433c self-FAIL demotion in
+    # flow_compliance_check.py (_SELF_FAIL_VERDICTS). Before it, a step whose own
+    # declared output carried `"verdict": "FAIL"` was reported green: check_step
+    # opened the artefact, parsed it, read `verdict`, compared it against exactly
+    # one value (SKIPPED-CONDITION) and let every other value through — so a PASS
+    # contradicted by its own evidence stayed a PASS.
+    #
+    # MEASURED on the seeded tree, not assumed. All THREE carry the new reason
+    # verbatim in the wrong arm and not in the right one:
+    #     VERDICT_SELF_REPORTS_FAIL (#433c): declared output(s) carry a
+    #     machine-readable verdict saying the run FAILED — a PASS contradicted by
+    #     its own evidence is not a PASS: <rel>: verdict='FAIL'
+    # naming phase3/stage3/eco/eco_log.json (32), reports/phase3/dfm_screen.json
+    # (35) and phase3/stage4/foundry_handoff/mask_spec.json (38).
+    #
+    # 35 is worth the extra line, because reading it wrongly was one careless
+    # glance away: pytest's own failure report TRUNCATES its reason list, so 35
+    # first appeared to flip PASS -> FAIL with an unchanged list — a verdict that
+    # moved for no stated cause, which is precisely what this file exists to
+    # refuse. Reading the arms directly showed the reason IS there. That is why
+    # `test_the_content_move_names_its_cause` below asserts it mechanically
+    # instead of leaving it to whoever reads the next failure.
+    "32": _CONTENT_MOVED, "35": _CONTENT_MOVED,
+    "38": _CONTENT_MOVED,
 }
+
+
+def test_the_content_move_names_its_cause():
+    """A MOVED row must carry a reason the unmoved arm does not.
+
+    The census records THAT a verdict moved. It cannot, on its own, tell a gate
+    that learned to read its artefact from a gate that became flaky, or from a
+    harness that started failing for an unrelated reason — all three read as
+    UNMOVED -> MOVED. So the wrong arm must name at least one cause the right arm
+    does not, and that named cause is what a later reader has to work with.
+
+    This is not hypothetical bookkeeping. Step 35 was pinned MOVED off a pytest
+    report that TRUNCATED its reason list, so it looked like a verdict that moved
+    with nothing to attribute it to. It was not, but nothing in the file would
+    have caught it if it had been.
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm measured ZERO steps — a broken measurement"
+    unexplained = {}
+    for key, rec in sweep.items():
+        if rec["state"] != _CONTENT_MOVED:
+            continue
+        right, wrong = rec["right"], rec["wrong"]
+        gained = [r for r in wrong[1] if r not in set(right[1])]
+        if not gained:
+            unexplained[key] = (right[0], wrong[0])
+    assert not unexplained, (
+        f"{len(unexplained)} step(s) moved with no reason the unmoved arm did "
+        f"not already carry: {unexplained}. A verdict that changes without "
+        f"naming what changed it cannot be told from one that changed by "
+        f"accident, and the census would record both identically."
+    )
 
 
 def test_d8_a_present_but_wrong_declared_output_is_measured_not_assumed():
