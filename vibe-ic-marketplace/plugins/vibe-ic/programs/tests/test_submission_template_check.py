@@ -246,9 +246,45 @@ def _sub_tree_disagrees(tmp_path):
     return proj
 
 
+def _sub_slot_file_edited(tmp_path):
+    proj, _ = _accepted(tmp_path)
+    f = proj / ST.SLOTS_DIR_REL / "slot_a.yaml"
+    d = json.loads(f.read_text())
+    d["die_area"]["rect"][2] = "1200"          # the die grows after the fact
+    f.write_text(json.dumps(d, indent=2))
+    return proj
+
+
+def _sub_slot_file_unreadable(tmp_path):
+    proj, _ = _accepted(tmp_path)
+    (proj / ST.SLOTS_DIR_REL / "slot_a.yaml").write_text("{ not json")
+    return proj
+
+
+def _sub_pad_list_unread(tmp_path):
+    """A real operator template spells its pad lists PER DIE SIDE. This subject
+    spells one under a name the pattern does not claim, which is the shape that
+    produced a silent `pads: null` the first time this ingester met real input.
+    """
+    proj, tmpl = _accepted(tmp_path)
+    (tmpl / "slots" / "slot_a.yaml").write_text(
+        "DIE_AREA: [0, 0, 1000, 2000]\n"
+        "CORE_AREA: [26, 26, 974, 1974]\n"
+        "FP_SIZING: absolute\n"
+        "PAD_RING: [pad_n0, pad_n1]\n")
+    _ingest(proj, "--template", str(tmpl), "--slot", "slot_a")
+    return proj
+
+
 def _sub_report_absent(tmp_path):
     proj = tmp_path / "design"
     proj.mkdir()
+    return proj
+
+
+def _sub_report_unreadable(tmp_path):
+    proj, _ = _accepted(tmp_path)
+    (proj / ST.REPORT_REL).write_text("{ this is not json")
     return proj
 
 
@@ -291,7 +327,11 @@ SUBJECTS = [
     ("SLOT_NOT_DECLARED", _sub_slot_not_declared),
     ("TREE_SAYS_BOTH", _sub_tree_says_both),
     ("TREE_DISAGREES_WITH_REPORT", _sub_tree_disagrees),
+    ("SLOT_FILE_DISAGREES_WITH_RECORD", _sub_slot_file_edited),
+    ("SLOT_FILE_DISAGREES_WITH_RECORD", _sub_slot_file_unreadable),
+    ("PAD_LIST_UNREAD", _sub_pad_list_unread),
     ("REPORT_ABSENT", _sub_report_absent),
+    ("REPORT_UNREADABLE", _sub_report_unreadable),
     ("REPORT_SCHEMA", _sub_report_schema),
     ("REPORT_SCHEMA", _sub_unknown_status),
 ]
@@ -354,11 +394,12 @@ def test_two_files_agreeing_on_one_slot_name_are_not_refused(clean):
 @pytest.mark.parametrize("rule,build", SUBJECTS, ids=IDS)
 def test_each_refusal_fires_on_the_subject_it_defends(rule, build, tmp_path):
     proj = build(tmp_path)
-    rc, check, _ = _check(proj)
-    assert rc == 1
+    check = _evaluate(CHK, proj)
     assert rule in _rules(check), (
         f"expected {rule}, got {sorted(_rules(check))}")
     assert check["verdict"] == ST.VERDICT_FAIL
+    # and the CLI the flow's gate actually spawns agrees with the evaluation
+    assert CHK.main([str(proj), "--json", ST.REPORT_REL]) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -417,7 +458,7 @@ def test_every_rule_the_gate_can_raise_is_proven_by_a_subject():
     table = doc.split("WHAT IT REFUSES")[1].split("NOT_APPLICABLE IS NOT A PASS")[0]
     declared = {tok for tok in table.replace("/", " ").split()
                 if tok.isupper() and "_" in tok and len(tok) > 6}
-    proven = {rule for rule, _ in SUBJECTS} | {"REPORT_UNREADABLE"}
+    proven = {rule for rule, _ in SUBJECTS}
     assert declared - proven == set(), (
         f"declared but never broken: {sorted(declared - proven)}")
 
@@ -521,6 +562,103 @@ def test_the_program_runs_as_the_flow_spawns_it(prog, clean):
                        timeout=180)
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     assert prog in r.stdout
+
+
+def _routed_conditions():
+    """Every step the FLOW routes on this step's output, read from the flow."""
+    import yaml
+    flow = yaml.safe_load(
+        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
+    out = {}
+    for s in flow["steps"]:
+        cond = s.get("condition")
+        if not isinstance(cond, dict):
+            continue
+        pats = cond.get("files_exist") or []
+        if any("submission_template" in str(x) for x in pats):
+            out[str(s["id"])] = cond
+    return out
+
+
+def _selected(project: Path) -> set:
+    """The routed steps this project's tree makes applicable, by the flow's own
+    predicate — not a re-implementation of it."""
+    import flow_compliance_check as FCC
+    return {sid for sid, cond in _routed_conditions().items()
+            if FCC._check_condition(project, cond)}
+
+
+def test_the_outputs_of_this_step_are_what_the_flow_routes_on():
+    """If nothing routes on them any more, every assertion below is vacuous."""
+    routed = _routed_conditions()
+    assert routed, (
+        "no flow step is conditional on this step's output — either the wiring "
+        "moved or this test has stopped measuring anything")
+    ip = {sid for sid, c in routed.items()
+          if any(str(x).endswith("NO_TEMPLATE.txt") for x in c["files_exist"])}
+    chip = set(routed) - ip
+    assert ip and chip, f"expected both directions, got {routed}"
+
+
+def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
+    """THE ONE THIS STEP EXISTS FOR, now that the outputs are routers.
+
+    MEASURED on the flow at the time this was written: `slots/*.yaml` makes the
+    chip-path steps applicable and `NO_TEMPLATE.txt` makes the IP-path step
+    applicable, on `files_exist` and nothing else. Nothing blocks on this step
+    and nothing takes a required_input from it, so ITS OWN FAIL DOES NOT STOP
+    THE ROUTING — measured too, and it is why the file must not be written.
+
+    A run that searched and found nothing and SAID SO, and a run where nobody
+    looked, produce the same empty directory. If both wrote the router, both
+    would select the IP path and the three states this step keeps apart would
+    be collapsed back to two by the flow, whatever the report said.
+    """
+    routed = _routed_conditions()
+    ip = {sid for sid, c in routed.items()
+          if any(str(x).endswith("NO_TEMPLATE.txt") for x in c["files_exist"])}
+    chip = set(routed) - ip
+    tmpl = _template(tmp_path)
+    reason = ("Delivered as a hardmacro to an integrator and never submitted "
+              "to a shuttle, so this design has no slot.")
+
+    outcomes = {}
+    for name, argv in (
+            ("ingested", ("--template", str(tmpl), "--slot", "slot_a")),
+            ("declared", ("--template", str(tmp_path / "gone"),
+                          "--no-template-reason", reason)),
+            ("undeclared", ("--template", str(tmp_path / "gone"),)),
+            ("never", ())):
+        proj = tmp_path / f"r_{name}"
+        proj.mkdir()
+        _ingest(proj, *argv)
+        outcomes[name] = (_selected(proj), _evaluate(CHK, proj)["verdict"])
+
+    assert outcomes["ingested"] == (chip, ST.VERDICT_PASS)
+    assert outcomes["declared"] == (ip, ST.VERDICT_NOT_APPLICABLE)
+    assert outcomes["undeclared"] == (set(), ST.VERDICT_FAIL)
+    assert outcomes["never"] == (set(), ST.VERDICT_FAIL)
+
+    # and the load-bearing inequality, stated as its own assertion so a future
+    # change that re-collapses them fails HERE with the reason attached
+    assert outcomes["never"][0] != outcomes["declared"][0], (
+        "a run nobody looked at selects the same path as one that searched and "
+        "declared — the router has collapsed the two absences back together")
+
+
+def test_a_router_file_nobody_declared_is_named_in_the_refusal(tmp_path):
+    """The gate cannot delete a stray router, but it must not stay quiet about
+    one: a FAILED ingest does not stop the flow selecting on the file."""
+    proj = tmp_path / "design"
+    proj.mkdir()
+    _ingest(proj)                                   # nobody looked
+    (proj / ST.NO_TEMPLATE_REL).write_text("put here by some other hand\n")
+    check = _evaluate(CHK, proj)
+    assert check["verdict"] == ST.VERDICT_FAIL
+    assert check["examined"]["path_router_on_disk"] is True
+    msg = next(r for r in check["refusals"]
+               if r["rule"] == "NEVER_LOOKED")["message"]
+    assert "currently choosing a delivery path" in msg
 
 
 def test_the_flow_declares_this_gate_exactly_as_it_is_invoked():

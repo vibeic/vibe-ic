@@ -114,8 +114,10 @@ def test_a_slot_is_recorded_verbatim_with_the_file_it_came_from(template, projec
     assert a["die_area"]["raw"] == [0, 0, 1000, 2000]
     assert a["core_area"]["raw"] == [26, 26, 974, 1974]
     assert a["fp_sizing"] == {"key": "FP_SIZING", "raw": "absolute"}
-    assert a["pads"]["raw"] == ["pad_n0", "pad_n1", "pad_s0"]
+    assert a["pads"]["keys_matched"] == ["pads"]
+    assert a["pads"]["lists"][0]["raw"] == ["pad_n0", "pad_n1", "pad_s0"]
     assert a["pads"]["count"] == 3
+    assert a["pads"]["unmatched_list_keys"] == []
     assert a["ring"]["key"] == "SEAL_RING_WIDTH"
     # and traceable to the file it was read out of
     assert a["source_file"] == str(template / "slots" / "slot_a.yaml")
@@ -183,9 +185,32 @@ def test_absent_and_never_looked_for_are_different_records(tmp_path):
     assert a["lookup"]["searched"] == [str(tmp_path / "not_there")]
     assert n["lookup"]["searched"] == [], (
         "a search that never happened must not name a path it did not look at")
+    assert a["lookup"]["path_exists"] is False
+    assert n["lookup"]["path_exists"] is False
     # and the difference survives into the prose half too
-    assert "NOT_ATTEMPTED" in (never / ST.NO_TEMPLATE_REL).read_text()
-    assert "ABSENT" in (absent / ST.NO_TEMPLATE_REL).read_text()
+    assert "NOT_ATTEMPTED" in (never / ST.NO_DECLARATION_REL).read_text()
+    assert "ABSENT" in (absent / ST.NO_DECLARATION_REL).read_text()
+    # NEITHER wrote the router: this absence was searched for but not DECLARED,
+    # and that one was not even searched for
+    assert not (never / ST.NO_TEMPLATE_REL).exists()
+    assert not (absent / ST.NO_TEMPLATE_REL).exists()
+    assert a["path_selector"]["declared"] is False
+    assert n["path_selector"]["declared"] is False
+
+
+def test_a_path_that_exists_but_is_not_a_directory_says_so(tmp_path):
+    """An archive left unextracted at the given path is not "nothing there".
+    This step reads a tree and never extracts, so the two must not share an
+    answer."""
+    proj = tmp_path / "d"
+    proj.mkdir()
+    archive = tmp_path / "template.tar.gz"
+    archive.write_bytes(b"not extracted")
+    rec = _run(proj, "--template", str(archive))
+    assert rec["status"] == ST.STATUS_ABSENT
+    assert rec["lookup"]["path_exists"] is True
+    assert rec["lookup"]["template_present"] is False
+    assert "not a directory" in (proj / ST.NO_DECLARATION_REL).read_text()
 
 
 @pytest.mark.parametrize("argv", [(), ("--template", "__nowhere__"), ("real",)])
@@ -199,22 +224,44 @@ def test_the_report_is_emitted_on_every_path(template, tmp_path, argv):
         ST.STATUS_INGESTED, ST.STATUS_ABSENT, ST.STATUS_NOT_ATTEMPTED)
 
 
-def test_one_of_the_two_declared_outputs_always_exists(template, tmp_path):
-    for args in ((), ("--template", str(tmp_path / "gone")),
-                 ("--template", str(template))):
-        proj = tmp_path / f"p{len(args)}{args[-1] if args else ''}".replace("/", "_")
-        proj.mkdir(parents=True, exist_ok=True)
-        ING.main([str(proj), *args])
-        slots = list((proj / ST.SLOTS_DIR_REL).glob("*.yaml"))
-        marker = (proj / ST.NO_TEMPLATE_REL).is_file()
-        assert bool(slots) != marker, (
-            "exactly one of slots/*.yaml and NO_TEMPLATE.txt must exist — a "
-            "step that silently produces nothing is indistinguishable from one "
-            "that never ran")
+def test_a_router_file_is_written_only_when_a_decision_was_made(template, tmp_path):
+    """THE INVARIANT, SHARPENED BY WHAT THE FLOW DOES WITH THESE FILES.
+
+    `slots/*.yaml` and `NO_TEMPLATE.txt` are not notes, they are ROUTERS: the
+    flow makes its chip-path steps applicable on the first and its IP-path step
+    on the second, by `files_exist` and nothing else. So exactly one of them
+    exists when a DECISION was made, and NEITHER exists when none was — while
+    the step still says out loud what happened, in a file that routes nothing.
+    """
+    reason = ("Delivered as a hardmacro to an integrator and never submitted "
+              "to a shuttle, so this design has no slot.")
+    cases = [
+        ("ingested", ("--template", str(template)), True, False),
+        ("declared", ("--template", str(tmp_path / "gone"),
+                      "--no-template-reason", reason), False, True),
+        ("undeclared", ("--template", str(tmp_path / "gone"),), False, False),
+        ("never", (), False, False),
+    ]
+    for name, args, want_slots, want_no_tmpl in cases:
+        proj = tmp_path / f"p_{name}"
+        proj.mkdir()
+        rec = _run(proj, *args)
+        slots = bool(list((proj / ST.SLOTS_DIR_REL).glob("*.yaml")))
+        no_tmpl = (proj / ST.NO_TEMPLATE_REL).is_file()
+        no_decl = (proj / ST.NO_DECLARATION_REL).is_file()
+        assert (slots, no_tmpl) == (want_slots, want_no_tmpl), (
+            f"{name}: slots={slots} no_template={no_tmpl}")
+        assert rec["path_selector"]["declared"] is (slots or no_tmpl)
+        # a decision writes exactly one router; no decision writes none of them
+        # and says so somewhere that selects nothing
+        assert no_decl is not (slots or no_tmpl)
+        assert (proj / ST.REPORT_REL).is_file(), "the report is written always"
 
 
-def test_a_re_ingest_retires_only_its_own_marker(template, project):
-    _run(project)                                   # NOT_ATTEMPTED -> marker
+def test_a_re_ingest_retires_only_its_own_marker(template, project, tmp_path):
+    _run(project, "--template", str(tmp_path / "gone"), "--no-template-reason",
+         "Delivered as a hardmacro to an integrator and never submitted to a "
+         "shuttle, so this design has no slot.")     # DECLARED -> router file
     assert (project / ST.NO_TEMPLATE_REL).is_file()
     _run(project, "--template", str(template), "--slot", "slot_a")
     assert not (project / ST.NO_TEMPLATE_REL).exists()
@@ -297,6 +344,45 @@ def test_a_container_format_this_program_cannot_parse_says_so(template, project)
 # --------------------------------------------------------------------------- #
 # I9 — the scan is honest about what it could not read
 # --------------------------------------------------------------------------- #
+def test_a_pad_list_per_die_side_is_read_as_one_slots_pads(template, project):
+    """MEASURED on a real operator template: the pad list is not one key, it is
+    one per die side. An ingester that looked for a single singular name found
+    none and recorded a null -- a slot whose pads it had not understood, told
+    apart from a slot with no pads by nothing at all."""
+    (template / "slots" / "slot_a.yaml").write_text(
+        "DIE_AREA: [0, 0, 1000, 2000]\n"
+        "CORE_AREA: [26, 26, 974, 1974]\n"
+        "FP_SIZING: absolute\n"
+        "PAD_SOUTH: [s0, s1]\n"
+        "PAD_EAST: [e0]\n"
+        "PAD_NORTH: [n0, n1, n2]\n"
+        "PAD_WEST: [w0]\n"
+        "VERILOG_DEFINES: [SOME_DEFINE]\n")
+    rec = _run(project, "--template", str(template), "--slot", "slot_a")
+    a = next(s for s in rec["slots"] if s["slot"] == "slot_a")
+    assert a["pads"]["keys_matched"] == ["PAD_SOUTH", "PAD_EAST", "PAD_NORTH",
+                                         "PAD_WEST"]
+    assert a["pads"]["count"] == 7
+    assert [d["raw"] for d in a["pads"]["lists"]] == [
+        ["s0", "s1"], ["e0"], ["n0", "n1", "n2"], ["w0"]]
+    # and the list key that is NOT a pad list is named, not swallowed
+    assert a["pads"]["unmatched_list_keys"] == ["VERILOG_DEFINES"]
+
+
+def test_a_pad_list_under_an_unknown_name_is_recorded_as_unread(
+        template, project):
+    (template / "slots" / "slot_a.yaml").write_text(
+        "DIE_AREA: [0, 0, 1000, 2000]\n"
+        "CORE_AREA: [26, 26, 974, 1974]\n"
+        "PAD_RING: [p0, p1]\n")
+    rec = _run(project, "--template", str(template), "--slot", "slot_a")
+    a = next(s for s in rec["slots"] if s["slot"] == "slot_a")
+    assert a["pads"]["lists"] == []
+    assert a["pads"]["unmatched_list_keys"] == ["PAD_RING"], (
+        "the key the pattern did not claim must be NAMED — that is what makes "
+        "a miss visible on the first run instead of the second")
+
+
 def test_a_config_that_pins_no_die_is_not_a_slot(template, project):
     (template / "tool.yaml").write_text("SOME_TOOL_OPTION: 3\n")
     rec = _run(project, "--template", str(template), "--slot", "slot_a")

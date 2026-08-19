@@ -76,11 +76,28 @@ INGEST_DIR_REL = "input/submission_template"
 SLOTS_DIR_REL = "input/submission_template/slots"
 NO_TEMPLATE_REL = "input/submission_template/NO_TEMPLATE.txt"
 
+#: Written when the step ran and NO decision came out of it. Deliberately NOT
+#: one of the two names any flow condition tests, because it must select
+#: nothing -- see `declares_no_template` below.
+NO_DECLARATION_REL = "input/submission_template/NO_DECLARATION.txt"
+
 # Written as the first line of every NO_TEMPLATE.txt this step emits, so a
 # re-ingest can retire its OWN stale marker and will not touch a file some
 # other hand put there.
 NO_TEMPLATE_MARKER = "# submission_template_ingest: no template record"
 
+#: THE TWO FILES ABOVE ARE ROUTERS, NOT NOTES. Measured on the flow that
+#: consumes them: `slots/*.yaml` makes the chip-path steps applicable and
+#: `NO_TEMPLATE.txt` makes the IP-path step applicable, by `files_exist`
+#: condition and nothing else. No step blocks on 0.5ic and no step takes a
+#: required_input from it, so a FAILED ingest does not stop either path from
+#: being selected -- the file existing is the whole decision.
+#:
+#: That is why an absence has to be BOUGHT before it is written. A run where
+#: nobody looked and a run that searched, found nothing and said so produce the
+#: same empty directory; if both wrote `NO_TEMPLATE.txt`, both would select the
+#: IP path and the three states this module exists to keep apart would be
+#: collapsed back to two by the router, whatever the report said.
 STATUS_INGESTED = "INGESTED"
 STATUS_ABSENT = "ABSENT"
 STATUS_NOT_ATTEMPTED = "NOT_ATTEMPTED"
@@ -88,6 +105,19 @@ STATUS_NOT_ATTEMPTED = "NOT_ATTEMPTED"
 VERDICT_PASS = "PASS"
 VERDICT_FAIL = "FAIL"
 VERDICT_NOT_APPLICABLE = "NOT_APPLICABLE"
+
+def declares_no_template(status: str, reason) -> bool:
+    """True iff this record is a DECLARATION that there is no template.
+
+    Both halves of the step call this, so the producer cannot write a router
+    file the judge would not have accepted. A stated reason shorter than the
+    floor buys nothing here for the same reason it buys nothing at the gate.
+    """
+    if status != STATUS_ABSENT:
+        return False
+    why = reason.strip() if isinstance(reason, str) else ""
+    return len(why) >= MIN_REASON_CHARS
+
 
 # A slot file is discovered by the key that PINS THE DIE, and by nothing else --
 # not by a filename pattern and not by a directory the operator happens to use
@@ -103,9 +133,16 @@ FP_SIZING_KEY = "FP_SIZING"
 #: gives us.
 SLOT_NAME_KEYS = ("SLOT", "SLOT_NAME", "slot", "slot_name", "name")
 
-#: Candidate keys for the per-slot pad list. Recorded verbatim under whichever
-#: one the template actually used, so the record says where the list came from.
-PAD_LIST_KEYS = ("PADS", "PAD_LIST", "pads", "pad_list", "PAD_ORDER", "pad_order")
+#: A per-slot pad list key. MEASURED, and the measurement corrected this: a real
+#: operator template does not carry ONE pad list -- it carries one PER DIE SIDE
+#: (`PAD_SOUTH`, `PAD_EAST`, `PAD_NORTH`, `PAD_WEST`), and a candidate list of
+#: singular names matched none of them and recorded `pads: null`. That is the
+#: exact defect this module is built to refuse: an unmeasured thing reading as a
+#: measured zero. So the key is matched by PATTERN, every match is recorded, and
+#: the list-valued keys that did NOT match are recorded beside them -- which is
+#: what would have made the miss visible on the first run instead of the second.
+PAD_LIST_KEY_RE = re.compile(
+    r"^PAD(?:S|_LIST|_ORDER|_(?:NORTH|SOUTH|EAST|WEST))?$", re.IGNORECASE)
 
 #: Candidate keys for a DECLARED ring width between the core and the die. When
 #: the template states one, `DIE_AREA` must equal `CORE_AREA` grown by it on all
@@ -328,8 +365,10 @@ def slot_record(path: Path, mapping: dict, root: Path) -> dict:
         name_source = "file stem"
 
     fp_key, fp_val = _get_ci(mapping, FP_SIZING_KEY)
-    pad_key, pad_val = _first_key(mapping, PAD_LIST_KEYS)
     ring_k, ring_v = _ring_key(mapping)
+
+    rec_die = _rect_field(mapping, DIE_AREA_KEY)
+    rec_core = _rect_field(mapping, CORE_AREA_KEY)
 
     rec: Dict[str, Any] = {
         "slot": slot,
@@ -337,22 +376,47 @@ def slot_record(path: Path, mapping: dict, root: Path) -> dict:
         "source_file": str(path),
         "source_relpath": str(path.relative_to(root)) if _under(path, root) else None,
         "source_sha256": sha256_file(path),
-        "die_area": _rect_field(mapping, DIE_AREA_KEY),
-        "core_area": _rect_field(mapping, CORE_AREA_KEY),
+        "die_area": rec_die,
+        "core_area": rec_core,
         "fp_sizing": None if fp_key is None else {"key": fp_key, "raw": fp_val},
-        "pads": None,
+        "pads": _pad_lists(mapping, {k for k in (
+            (rec_die or {}).get("key"), (rec_core or {}).get("key"),
+            name_key, fp_key, ring_k) if k}),
         "ring": None,
     }
-    if pad_key is not None:
-        rec["pads"] = {
-            "key": pad_key,
-            "raw": pad_val,
-            "count": len(pad_val) if isinstance(pad_val, (list, tuple)) else None,
-        }
     if ring_k is not None:
         rec["ring"] = {"key": ring_k, "raw": ring_v,
                        "value": dec_str(_dec(ring_v))}
     return rec
+
+
+def _pad_lists(mapping: dict, understood: set) -> dict:
+    """Every pad list this slot declares, and every list key that was NOT one.
+
+    `unmatched_list_keys` is the honest half: it names the list-valued keys the
+    pattern did not claim, so a template that spells its pad lists some third
+    way shows up as something a reader can see rather than as a silent zero.
+    """
+    lists, unmatched = [], []
+    for k, v in mapping.items():
+        if not isinstance(k, str) or not isinstance(v, (list, tuple)):
+            continue
+        if PAD_LIST_KEY_RE.match(k.strip()):
+            lists.append({"key": k, "raw": list(v), "count": len(v)})
+        elif k not in understood:
+            # `understood` holds the list-valued keys this program read
+            # ELSEWHERE -- the die and core rects above all. Counting those as
+            # "keys I did not claim" would make every well-formed slot look
+            # like one whose pads had been missed, which is the false alarm
+            # that hides the true one.
+            unmatched.append(k)
+    return {
+        "pattern": PAD_LIST_KEY_RE.pattern,
+        "lists": lists,
+        "keys_matched": [d["key"] for d in lists],
+        "count": sum(d["count"] for d in lists),
+        "unmatched_list_keys": unmatched,
+    }
 
 
 def _under(path: Path, root: Path) -> bool:
