@@ -686,6 +686,17 @@
         }
       }
     },
+    "15.5ic": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/padring.def": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/padring.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
     "16": {
       "verdict": "ENFORCED",
       "entries": {
@@ -917,6 +928,17 @@
           "path": "reports/phase3/antenna_signoff.json",
           "size_bytes": 188,
           "note": "2026-08-12 - was PRODUCED_LIVE, producer antenna_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        }
+      }
+    },
+    "26.5ic": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/die_finishing.json": {
+          "status": "UNPROVEN"
         }
       }
     },
@@ -1152,6 +1174,31 @@
           "alternative": "phase3/stage4/gds/*.gds",
           "path": "phase3/stage4/gds/spm.gds",
           "size_bytes": 1180456
+        }
+      }
+    },
+    "37.5ip": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage4/hardmacro/*.lef": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.lib": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.gds": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.v": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "37.5ic": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/shuttle_precheck.json": {
+          "status": "UNPROVEN"
         }
       }
     },
