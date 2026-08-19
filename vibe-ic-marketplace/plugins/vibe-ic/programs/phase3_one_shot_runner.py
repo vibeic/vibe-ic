@@ -12858,6 +12858,175 @@ def _l19_declared_die_area(project: Optional[Path]) -> Optional[str]:
     return None
 
 
+#: Step 0.5ic writes one file per slot here; 15.5ic / 26.5ic / 37.5ic already
+#: key their `condition:` off exactly this path.
+_SLOT_DIR_REL = "input/submission_template/slots"
+_SLOT_SUFFIXES = (".yaml", ".yml", ".json")
+#: Where step 0.5ic records WHICH slot was declared (`--slot`).
+_SLOT_REPORT_REL = "reports/phase1/submission_template.json"
+
+
+def _slot_declared_name(project: Path) -> Tuple[Optional[str], str]:
+    """The slot this project DECLARED, and where that declaration came from.
+
+    A slot is bought, not inferred: the operator ships four and the die
+    geometry differs in both dimensions between them. So this reads the
+    declaration and never ranks the candidates — with more than one slot file
+    and no declaration it returns None, because picking one would mean sizing
+    the die against a slot nobody paid for, and the run would still look
+    exactly like a run that had gone right.
+    """
+    rep = project / _SLOT_REPORT_REL
+    if rep.is_file():
+        try:
+            doc = json.loads(rep.read_text(errors="ignore"))
+        except (OSError, ValueError):
+            doc = None
+        # The ingester nests its record under `ingest`; accept the bare form
+        # too, so a schema that flattens later does not stop declaring.
+        for scope, prefix in ((doc.get("ingest"), "ingest."), (doc, "")):
+            if not isinstance(scope, dict):
+                continue
+            val = scope.get("declared_slot")
+            if isinstance(val, str) and val.strip():
+                return (val.strip(),
+                        f"{_SLOT_REPORT_REL}:{prefix}declared_slot")
+    files = _slot_files(project)
+    if len(files) == 1:
+        return files[0].stem, f"{_SLOT_DIR_REL}/ (the only slot ingested)"
+    return None, ""
+
+
+def _slot_files(project: Path) -> List[Path]:
+    d = project / _SLOT_DIR_REL
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.iterdir()
+                  if p.is_file() and p.suffix.lower() in _SLOT_SUFFIXES)
+
+
+def _slot_floorplan_reserve(project: Optional[Path]
+                            ) -> Optional[Dict[str, Any]]:
+    """The declared slot's DIE_AREA/CORE_AREA as a FLOORPLAN RESERVE.
+
+    WHY THIS EXISTS — measured, not theorised. A slot template pins BOTH
+    rectangles, and the difference between them is not decoration: it is the
+    band the seal ring and the pad ring occupy. A floorplan that takes DIE_AREA
+    as its own die hands that band to `place_pins`, which places IO pins on the
+    DIE boundary (OpenROAD `ppl` has no core-boundary mode — measured: with
+    `-core_area` set 442 µm in, all 41 pins still came out flush on the die
+    edge, port-box edge distance 0.000 µm). The seal ring is then drawn on top
+    of them, and the PDK guard-ring rule — `metal.not_outside(guard_ring_mk)
+    .width(...)` — selects any polygon merely TOUCHING the marker band and
+    measures that WHOLE polygon, so one 0.28 µm pin wire touching the band is
+    reported along its entire length.
+
+    So the reserve is not the seal-ring step's to defend. It is the floorplan's
+    to never occupy, and the number for it was ingested by step 0.5ic and then
+    not read.
+
+    Returns None — leaving every existing floorplan byte-identical — unless
+    ALL of the following hold. Each is a REFUSAL, not a fallback: a reserve
+    that is half-understood is worse than none, because it moves the die.
+
+      * a slot template was ingested (`input/submission_template/slots/`);
+      * a slot was DECLARED (step 0.5ic's `--slot`), or only one was ingested;
+      * that slot pins BOTH `DIE_AREA` and `CORE_AREA`, each four numbers;
+      * `CORE_AREA` lies strictly inside `DIE_AREA` on all four sides;
+      * both rectangles have positive area.
+
+    chip-AGNOSTIC: every number comes out of the operator's own template. This
+    function contains no die, no slot, no ring width and no margin.
+    """
+    if project is None:
+        return None
+    files = _slot_files(project)
+    if not files:
+        return None
+    name, name_src = _slot_declared_name(project)
+    if not name:
+        return {"applies": False,
+                "reason": (f"{len(files)} slot(s) ingested and none "
+                           f"declared — the floorplan will not choose one"),
+                "slots_available": [p.stem for p in files]}
+    path = next((p for p in files if p.stem == name), None)
+    if path is None:
+        return {"applies": False,
+                "reason": (f"declared slot {name!r} has no ingested file in "
+                           f"{_SLOT_DIR_REL}/"),
+                "slots_available": [p.stem for p in files]}
+    try:
+        import _submission_template as _ST  # the ingest's own parser
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            import _submission_template as _ST
+        except ImportError as exc:                        # pragma: no cover
+            return {"applies": False,
+                    "reason": f"slot parser unavailable: {exc}"}
+    mapping, why = _ST._load_mapping(path)
+    if mapping is None:
+        return {"applies": False,
+                "reason": f"{path.name}: {why}"}
+    def _rect(key: str):
+        """The rect for `key`, from EITHER shape this path can hold.
+
+        Step 0.5ic writes one file per slot here, and what it writes is its own
+        slot RECORD (`{"die_area": {"key": …, "rect": […]}}`), not the
+        operator's raw config. Both are accepted: the record because it is what
+        the ingester produces, and the raw form because that is what the same
+        key means in the operator's own template, and a reader that understood
+        only one of them would report a slot with no die.
+        """
+        val = _ST._get_ci(mapping, key)[1]
+        if isinstance(val, dict):
+            for sub in ("rect", "raw"):
+                r = _ST.parse_rect(val.get(sub))
+                if r is not None:
+                    return r
+            return None
+        return _ST.parse_rect(val)
+
+    die = _rect(_ST.DIE_AREA_KEY)
+    core = _rect(_ST.CORE_AREA_KEY)
+    if die is None or core is None:
+        missing = [k for k, v in ((_ST.DIE_AREA_KEY, die),
+                                  (_ST.CORE_AREA_KEY, core)) if v is None]
+        return {"applies": False,
+                "reason": (f"{path.name} does not pin {' and '.join(missing)} "
+                           f"as four numbers"),
+                "slot": name}
+    dw, dh = _ST.rect_wh(die)
+    cw, ch = _ST.rect_wh(core)
+    if dw <= 0 or dh <= 0 or cw <= 0 or ch <= 0:
+        return {"applies": False,
+                "reason": f"{path.name}: a rect has non-positive area",
+                "slot": name}
+    left, bottom = core[0] - die[0], core[1] - die[1]
+    right, top = die[2] - core[2], die[3] - core[3]
+    if min(left, bottom, right, top) <= 0:
+        return {"applies": False,
+                "reason": (f"{path.name}: CORE_AREA is not strictly inside "
+                           f"DIE_AREA (reserve per side "
+                           f"L={left} B={bottom} R={right} T={top})"),
+                "slot": name}
+    return {
+        "applies": True,
+        "slot": name,
+        "slot_source": name_src,
+        "source_relpath": f"{_SLOT_DIR_REL}/{path.name}",
+        "source_sha256": _ST.sha256_file(path),
+        "die_area": [_ST.dec_str(c) for c in die],
+        "core_area": [_ST.dec_str(c) for c in core],
+        "slot_die_um": [_ST.dec_str(dw), _ST.dec_str(dh)],
+        "floorplan_rect_um": [_ST.dec_str(c) for c in core],
+        "reserve_um": {"left": _ST.dec_str(left),
+                       "bottom": _ST.dec_str(bottom),
+                       "right": _ST.dec_str(right),
+                       "top": _ST.dec_str(top)},
+    }
+
+
 def _effective_die_um(die_um_flag: str,
                       project: Optional[Path]
                       ) -> Tuple[str, Optional[str]]:
@@ -13233,22 +13402,46 @@ def _compute_loosened_die(die_w: int, die_h: int,
 # downsize / loosen) so the emitted `initialize_floorplan` shape and the
 # rewrite stay in lockstep. Matches only the die/core lines, leaving the
 # trailing `-site …` continuation intact.
+#: Matches the emitted die/core pair. The origin is CAPTURED, not assumed to be
+#: `0 0`: a floorplan that reserves a seal-ring/pad-ring band sits at an offset
+#: inside the slot, and a rewrite that re-anchored it at the origin would move
+#: the die back under the ring without saying so.
 _RE_PNR_FLOORPLAN_DIE = re.compile(
-    r'initialize_floorplan -die_area "0 0 \d+ \d+"\s*\\?\s*\n'
-    r'\s*-core_area "\d+ \d+ \d+ \d+"')
+    r'initialize_floorplan -die_area "-?\d+ -?\d+ -?\d+ -?\d+"\s*\\?\s*\n'
+    r'\s*-core_area "-?\d+ -?\d+ -?\d+ -?\d+"')
+
+
+def _pnr_floorplan_die_block(die_w: int, die_h: int, core_pad: int,
+                             core_w: int, core_h: int,
+                             org_x: int = 0, org_y: int = 0) -> str:
+    """The two `initialize_floorplan` geometry lines, emitted and rewritten.
+
+    ONE producer for both call sites so the retry loop can never write a shape
+    the template does not, which is the defect that let a die be resized into a
+    form the rewrite regex no longer matched.
+
+    `org_x`/`org_y` default to the origin, so a design with no declared reserve
+    gets a byte-identical block to the one this flow has always emitted.
+    """
+    return (f'initialize_floorplan -die_area '
+            f'"{org_x} {org_y} {org_x + die_w} {org_y + die_h}" \\\n'
+            f'                      -core_area '
+            f'"{org_x + core_pad} {org_y + core_pad} '
+            f'{org_x + core_w} {org_y + core_h}"')
 
 
 def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
-                               core_pad: int, core_w: int, core_h: int) -> str:
+                               core_pad: int, core_w: int, core_h: int,
+                               org_x: int = 0, org_y: int = 0) -> str:
     """Return `tcl_text` with the `initialize_floorplan` die/core geometry
     rewritten to the given dimensions. Pure string transform used by the PnR
-    retry loop after every die resize (upsize / downsize / loosen)."""
-    return _RE_PNR_FLOORPLAN_DIE.sub(
-        (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
-         f'                      -core_area "{core_pad} {core_pad} '
-         f'{core_w} {core_h}"'),
-        tcl_text,
-    )
+    retry loop after every die resize (upsize / downsize / loosen).
+
+    The replacement is a CALLABLE: the block carries a line continuation, and a
+    literal `\\` in a `re.sub` template is an escape the engine interprets."""
+    block = _pnr_floorplan_die_block(die_w, die_h, core_pad, core_w, core_h,
+                                     org_x, org_y)
+    return _RE_PNR_FLOORPLAN_DIE.sub(lambda _m: block, tcl_text)
 
 
 def _loosen_ladder_util(idx: int,
@@ -18609,6 +18802,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         metal_prefix: str, die_w: int, die_h: int,
                         core_pad: int, core_w: int, core_h: int,
                         site: str, out_dir_c: str, tapcell_block: str,
+                        fp_org_x: int = 0, fp_org_y: int = 0,
                         pdn_block: str, util: float,
                         spare_protection_tcl: str,
                         spare_postfix_tcl: str, clk_buf: str,
@@ -18786,6 +18980,11 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     _rd_margin_placement = _repair_design_margin_tcl("repair_design_pl")
     _rd_margin_globalrt = _repair_design_margin_tcl("repair_design_gr")
     min_area_patch_block = _min_area_patch_tcl("MIN_AREA_PATCH")
+    # ONE producer for the die/core pair — the retry loop rewrites it with
+    # the same helper, so the first emit and every resize keep one shape
+    # (and the same origin, which a reserved seal-ring band makes non-zero).
+    _floorplan_die_block = _pnr_floorplan_die_block(
+        die_w, die_h, core_pad, core_w, core_h, fp_org_x, fp_org_y)
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -18820,8 +19019,7 @@ if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{
 # database from the netlist. A resume replaces the whole region with a
 # `read_def` of the last stage checkpoint, so the work is never redone.
 puts "{_PNR_STAGE_MARKER} floorplan"
-initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
-                      -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
+{_floorplan_die_block} \\
                       -site {site}
 make_tracks
 {place_pins_block}
@@ -19599,6 +19797,75 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     core_w = die_w - 2 * core_pad
     core_h = die_h - 2 * core_pad
 
+    # === THE SEAL-RING / PAD-RING RESERVE (0.5ic's CORE_AREA, honoured) ===
+    #
+    # A slot template pins DIE_AREA *and* CORE_AREA, and the band between them
+    # is what the seal ring and the pad ring occupy. Until here the flow read
+    # only the die: `place_pins` then put every top-level pin flush on the die
+    # boundary (OpenROAD `ppl` places on the DIE edge and has no core-boundary
+    # mode), the seal ring was drawn on top of them, and the PDK guard-ring
+    # width rule — which selects any polygon TOUCHING the marker band and
+    # measures that whole polygon — reported every one of them.
+    #
+    # So the die stays the slot's (it is what was bought, and what the
+    # operator's size check measures), and the rectangle OpenROAD floorplans
+    # becomes the CORE_AREA the template already declared. The reserve is not
+    # ours to place into.
+    fp_org_x = fp_org_y = 0
+    slot_reserve = _slot_floorplan_reserve(project)
+    geom_pinned = False
+    if slot_reserve and slot_reserve.get("applies"):
+        _cx0, _cy0, _cx1, _cy1 = (int(float(v))
+                                  for v in slot_reserve["core_area"])
+        _sw, _sh = (int(float(v)) for v in slot_reserve["slot_die_um"])
+        # A die asked for on the command line that is not the slot's is a
+        # CONTRADICTION, not a preference to be silently resolved: whichever
+        # one wins, the other was stated and ignored.
+        if (die_w, die_h) != (_sw, _sh):
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                (f"die {die_w}x{die_h}µm was requested but the declared slot "
+                 f"{slot_reserve['slot']!r} "
+                 f"({slot_reserve['source_relpath']}) pins {_sw}x{_sh}µm. "
+                 f"The slot is the contract the submission is measured "
+                 f"against — declare the slot that matches, or drop the "
+                 f"die request."),
+                extras={"slot_reserve": slot_reserve})
+        fp_org_x, fp_org_y = _cx0, _cy0
+        die_w, die_h = _cx1 - _cx0, _cy1 - _cy0
+        core_w = die_w - 2 * core_pad
+        core_h = die_h - 2 * core_pad
+        # The die is BOUGHT. Every resize path below (upsize / downsize /
+        # loosen) must decline rather than silently deliver a die that is not
+        # the slot — a resized die would still route and still stream out.
+        geom_pinned = True
+        slot_reserve["slot_die_um_int"] = [_sw, _sh]
+        slot_reserve["openroad_die_area"] = [_cx0, _cy0, _cx1, _cy1]
+        print(f"[phase3] slot {slot_reserve['slot']!r} "
+              f"({slot_reserve['slot_source']}): die {_sw}x{_sh}µm, "
+              f"floorplan rect {_cx0} {_cy0} {_cx1} {_cy1}µm — reserving "
+              f"L/B/R/T "
+              f"{slot_reserve['reserve_um']['left']}/"
+              f"{slot_reserve['reserve_um']['bottom']}/"
+              f"{slot_reserve['reserve_um']['right']}/"
+              f"{slot_reserve['reserve_um']['top']}µm for the seal/pad ring; "
+              f"die geometry is PINNED (no resize retry)", file=sys.stderr)
+    elif slot_reserve is not None:
+        print(f"[phase3] slot reserve NOT applied: "
+              f"{slot_reserve.get('reason')}", file=sys.stderr)
+    try:
+        _res_rep = (project / "reports" / "phase3"
+                    / "floorplan_slot_reserve.json")
+        _res_rep.parent.mkdir(parents=True, exist_ok=True)
+        _res_rep.write_text(json.dumps(
+            slot_reserve if slot_reserve is not None else
+            {"applies": False,
+             "reason": "no slot template ingested (step 0.5ic did not run "
+                       "or declared no template)"},
+            indent=2, default=str))
+    except OSError:
+        pass
+
     # Pick clock buffer cells: PdkConfig-carried masters win (every registry
     # PDK carries clk_buf_cell/root); otherwise DISCOVER them from the PDK's own
     # Liberty.
@@ -19839,7 +20106,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _used_masters = _netlist_cell_masters(nl_text_for_count)
     spare_plan = _build_spare_cells_plan(
         placed_cells_est, spare_dens,
-        (core_pad, core_pad, core_w + core_pad, core_h + core_pad),
+        (fp_org_x + core_pad, fp_org_y + core_pad,
+         fp_org_x + core_w + core_pad, fp_org_y + core_h + core_pad),
         liberty_path=pdk.liberty, container=container,
         has_pad_ring=has_pad_ring, used_cells=_used_masters)
     # #563 r2 — discover the PDK tie-low cell for the spare-input tie-off
@@ -20181,6 +20449,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         sdc_c=sdc_c, dont_use_block=dont_use_block,
         metal_prefix=pdk.metal_prefix, die_w=die_w, die_h=die_h,
         core_pad=core_pad, core_w=core_w, core_h=core_h, site=pdk.site,
+        fp_org_x=fp_org_x, fp_org_y=fp_org_y,
         out_dir_c=out_dir_c, tapcell_block=tapcell_block,
         pdn_block=pdn_block, util=util,
         spare_protection_tcl=spare_protection_tcl,
@@ -20290,10 +20559,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             # by the ladder length + the die cap. §4.05: explicit-die exempt,
             # converged-route exempt, floor/cap-guarded, every step disclosed.
             # (See _route_feedback_loosen for the full guard set + honesty note.)
-            _lf, _lf_reason = _route_feedback_loosen_ex(
-                die_w, die_h, _pnr_log, _loosen_idx,
-                _auto_die_requested, _route_completed,
-                residual_history=_loosen_residuals)
+            if geom_pinned:
+                # A slot die is BOUGHT. Loosening it would deliver a die that
+                # is not the slot — and it would still route and still stream
+                # out, which is exactly why this declines out loud.
+                _lf, _lf_reason = None, "slot_die_pinned"
+            else:
+                _lf, _lf_reason = _route_feedback_loosen_ex(
+                    die_w, die_h, _pnr_log, _loosen_idx,
+                    _auto_die_requested, _route_completed,
+                    residual_history=_loosen_residuals)
             if _lf is None:
                 # #307 — the decline path used to have no `else` at all, so the
                 # flow could refuse its OWN rescue with nobody told. The UPSIZE
@@ -20347,7 +20622,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 core_h = die_h - 2 * core_pad
                 pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
                     pnr_tcl.read_text(), die_w, die_h,
-                    core_pad, core_w, core_h))
+                    core_pad, core_w, core_h, fp_org_x, fp_org_y))
                 _loosen_idx += 1
                 continue
             # (b) GAP-E2E-4 FOLLOW-UP — OVER-SPARSE downsize retry (opt-in mirror
@@ -20370,7 +20645,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                          if _sd.get("fill_core_util_pct") is not None
                          else _sd.get("tapcell_core_util_pct"))
                 _dn = (_compute_downsized_die(die_w, die_h, _meas)
-                       if _meas is not None else None)
+                       if _meas is not None and not geom_pinned else None)
                 if _dn is not None:
                     _new_w, _new_h = _dn
                     resize_history.append({
@@ -20387,7 +20662,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     core_h = die_h - 2 * core_pad
                     pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
                         pnr_tcl.read_text(), die_w, die_h,
-                        core_pad, core_w, core_h))
+                        core_pad, core_w, core_h, fp_org_x, fp_org_y))
                     _downsized_once = True
                     continue
             break  # no over-util error → take rc / def_file path
@@ -20397,6 +20672,25 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         # identical to the pre-loosen `range(4)` loop.
         if _upsize_tries >= _PNR_UPSIZE_RETRIES:
             break
+        if geom_pinned:
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                (f"openroad GPL-0301 utilization {actual_util}% exceeds "
+                 f"target {target_util_pct}% on a die PINNED by the declared "
+                 f"slot "
+                 f"({(slot_reserve or {}).get('slot')}: "
+                 f"floorplan rect "
+                 f"{fp_org_x} {fp_org_y} {fp_org_x + die_w} "
+                 f"{fp_org_y + die_h}µm, inside the slot's own CORE_AREA). "
+                 f"The die is bought, so it is NOT grown: the design does not "
+                 f"fit the slot it declared. Declare a larger slot or shrink "
+                 f"the netlist."),
+                [str(out_dir / "openroad.log")],
+                extras={"resize_history": resize_history,
+                        "loosen_declines": loosen_declines,
+                        "final_util_pct": actual_util,
+                        "die_um": f"{die_w}x{die_h}",
+                        "slot_reserve": slot_reserve})
         new_dims = _compute_resized_die(die_w, die_h, actual_util,
                                          target_util_pct)
         if new_dims is None:
@@ -20426,7 +20720,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         core_h = die_h - 2 * core_pad
         # Rewrite the floorplan line in pnr.tcl with the new die.
         pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
-            pnr_tcl.read_text(), die_w, die_h, core_pad, core_w, core_h))
+            pnr_tcl.read_text(), die_w, die_h, core_pad, core_w, core_h,
+            fp_org_x, fp_org_y))
         _upsize_tries += 1
     def_file = out_dir / f"{top}.def"
     sta_file = out_dir / "sta.rpt"
@@ -22671,6 +22966,19 @@ def _die_finishing(project: Path, top: str, pdk: PdkConfig,
             "--gds", str(gds_path), "--in-place",
             "--pdk-root", str(Path(pdk_dir).parent),
             "--pdk", Path(pdk_dir).name]
+    # THE RING IS DRAWN TO THE SLOT, NOT TO THE LAYOUT.
+    #
+    # `die_finishing_gen` otherwise falls back to the floorplan's own DIEAREA,
+    # which is the right answer only while the floorplan IS the whole die. Once
+    # the floorplan reserves the seal-ring / pad-ring band (see
+    # `_slot_floorplan_reserve`), its DIEAREA is the design's rectangle INSIDE
+    # the slot and the ring would be generated at that smaller size — on
+    # top of the design instead of around it. The PDK generator inserts the
+    # ring at the layout origin, so the size given is the die that comes out.
+    _sr = _slot_floorplan_reserve(project)
+    if _sr and _sr.get("applies"):
+        _w, _h = _sr["slot_die_um"]
+        argv += ["--die-width", str(_w), "--die-height", str(_h)]
     # Same reason `_density_metal_fill` passes it: the program resolves its own
     # KLayout runner via `_klayout_launch`, which looks for a container NAMED
     # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run

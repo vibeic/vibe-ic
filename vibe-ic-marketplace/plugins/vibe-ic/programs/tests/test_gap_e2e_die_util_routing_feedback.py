@@ -252,9 +252,28 @@ class TestRewriteFloorplanDie:
 
     def test_matches_the_real_pnr_tcl_emit(self):
         # The rewrite regex must match what _build_pnr_tcl_text actually emits,
-        # or a resize would silently no-op the tcl. Assert against a real emit.
+        # or a resize would silently no-op the tcl.
+        #
+        # This used to assert the template's literal text. That pinned the
+        # SPELLING, not the property: it would have gone on passing if the
+        # regex drifted, and it broke the moment the emit and the rewrite were
+        # given ONE producer — which is a stronger guarantee than it was
+        # testing. So it now asserts the property directly, by round-tripping a
+        # real emit through the rewrite, and it does so for a floorplan at the
+        # origin AND for one offset by a reserved ring band (the case whose
+        # absence let a resize re-anchor a reserved die on top of the ring).
         src = inspect.getsource(mod._build_pnr_tcl_text)
-        assert 'initialize_floorplan -die_area "0 0 {die_w} {die_h}"' in src
+        assert "_floorplan_die_block" in src, \
+            "the emit no longer goes through the producer"
+        for org in ((0, 0), (442, 442)):
+            emitted = mod._pnr_floorplan_die_block(95, 95, 10, 85, 85, *org)
+            tcl = f"foo\n{emitted} \\\n                      -site unithd\n"
+            out = mod._rewrite_pnr_floorplan_die(tcl, 130, 130, 10, 120, 120,
+                                                 *org)
+            assert out != tcl, f"rewrite no-oped at origin {org}"
+            assert mod._pnr_floorplan_die_block(
+                130, 130, 10, 120, 120, *org) in out
+            assert "-site unithd" in out
 
 
 # ---------------------------------------------------------------------------
