@@ -1,0 +1,54 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by
+# vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py.
+schema: 1
+package: vibe-ic-marketplace/plugins/vibe-ic/_shared
+namespace: shared
+
+role: >-
+  The skill-compliance engine. Every skill in this plugin ships a
+  compliance.yaml naming the required elements of its output; the driver here
+  reads that declaration and audits skill output uniformly, so 63 skills are
+  judged by one engine rather than 63 hand-written checks. This directory is the
+  nearest thing the repo already had to a per-package invariant file — the
+  pattern this file belongs to was proven here first, for skills.
+
+invariants:
+  - id: shared.one-engine-reads-every-skill-declaration
+    statement: >-
+      A skill's required elements are declared in its OWN compliance.yaml, next
+      to its SKILL.md, and are read by this one driver. Adding a skill adds a
+      declaration, never a checker; that is what keeps 63 skills auditable by
+      one program.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/_shared/skill_compliance_check.py
+      - vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh
+
+  - id: shared.fixture-quality-is-decoupled-from-gate-correctness
+    statement: >-
+      Compliance testing is three layers, not one. A single
+      test_good_output_passes_all_required per skill forces the generator to
+      both exercise the engine AND synthesise a document satisfying every
+      required regex; those pull in opposite directions and a measured audit
+      found 59 of 64 skills sitting in a silent SKIP. The layering is documented
+      here, in this package, because this is where a contributor changing the
+      generator stands.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/_shared/TESTING_STRATEGY.md
+      - vibe-ic-marketplace/plugins/vibe-ic/_shared/test_compliance_patterns.py
+
+  - id: shared.the-tests-in-this-directory-reach-no-landing-stage
+    statement: >-
+      MEASURED, AND TRUE TODAY: the three test_*.py files here are collected by
+      NO runner. pytest.ini declares one testpath (programs/tests), run_tests.sh
+      discovers programs/tests, tools/phase1_engine/tests, mcp-eda/test and
+      skills/*/tests — and not this directory. The landing selector cannot emit
+      outside programs/tests. So 283 pytest nodes here can never block a
+      landing. That fact is computed centrally by the unselectable-corpus
+      census; it is restated HERE because a contributor adding a test to this
+      directory would otherwise have no way to learn that it will never run.
+      This is the locality gap this file family exists to close, and it is the
+      standing count of what is still wrong in this package.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/landing_unselectable_pytest_corpus.py
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1424_landing_gate_reaches_every_test_tree.py
