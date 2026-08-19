@@ -1,0 +1,60 @@
+# The rules that bind this package, stated where the code they bind lives.
+# Read and enforced by
+# vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py.
+schema: 1
+package: tools
+namespace: repo-tools
+
+role: >-
+  Repo-level tooling that is NOT shipped inside the plugin: the gatekeeper land
+  and verify-merge drivers, the collectors, the report generators, the fork
+  assessment helpers. Everything here runs on a maintainer's machine or in the
+  landing lane, against the repository itself rather than against a design.
+
+invariants:
+  - id: repo-tools.tests-here-are-run-by-the-landing-gate
+    statement: >-
+      The plugin's targeted selector is rooted at programs/tests and cannot emit
+      anything outside it, so a test under tools/ reaches a landing only through
+      run_repo_tools_pytest, which discovers them unconditionally. A test added
+      here is covered the day it is added; a test added under any OTHER
+      unselectable tree is not, and is enumerated by the unselectable-corpus
+      census rather than assumed.
+    enforced_by:
+      - tools/ci/test_repo_tools_tests_gate.py
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/landing_unselectable_pytest_corpus.py
+
+  - id: repo-tools.the-landing-driver-may-not-force-a-landing
+    statement: >-
+      gatekeeper-land.sh and gatekeeper-verify-merge.sh land by MERGE and never
+      with --admin, --force or --no-verify. `worktree remove --force` and
+      `docker rm --force` are a different thing entirely — they discard scratch
+      state, not history or a gate — and the prohibition is expressed on the
+      COMMAND, not on the flag, by the owner of that rule.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/git_prohibition_guard.py
+
+  - id: repo-tools.no-host-absolute-path
+    statement: >-
+      A tool here may not hardcode a path under a user's home. These scripts are
+      run from checkouts and worktrees whose location is chosen at runtime, and
+      by more than one operator. Measured when this rule was written: 1 of 52
+      tracked Python files violated it, named below — the exemption is the
+      standing count of what is still wrong, printed on every run, not an
+      excuse, and it can only be removed by fixing the file.
+    enforced_by:
+      - vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py
+    rule:
+      kind: forbid_regex
+      applies_to: ["*.py", "*.sh"]
+      pattern: '(?:/home/|/Users/)[A-Za-z0-9_.-]+/'
+      exempt:
+        - file: d9_corpus_baseline.py
+          line_matches: 'default=Path\("/home/'
+          because: >-
+            A MEASURED, STANDING DEFECT, not a blessing: an argparse default
+            still carries the scratch directory of the machine the tool was
+            written on, so the flag is unusable anywhere else without being
+            passed explicitly. Narrowed to that one line, so any OTHER
+            home-rooted path added to this file still fails. Delete this entry
+            when the default is fixed — the gate will demand it.
