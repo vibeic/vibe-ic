@@ -49,10 +49,35 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
+
+#: Inner bounds for every subprocess this file launches, in seconds.
+#:
+#: `ci_harness_timeout_ceiling_check` publishes a per-call ceiling (the harness
+#: bound divided by `CEILING_DIVISOR`) and reports any bound above it. This file
+#: landed carrying 600 s and 120 s literals, and MEASURED at 49d2b3328 the
+#: consequence was not local: the checker reported 6 findings across
+#: `tools/ci/test_*.py`, `ci_harness_timeout_ceiling_check`'s own
+#: `test_the_two_trees_use_different_globs_for_a_measured_reason` went red, and
+#: because that file is in `ci_targeted_test_select`'s smoke floor — selected on
+#: EVERY landing regardless of what changed — the `targeted tests` lane refused
+#: every candidate. One bound in a test file made the repository unlandable.
+#:
+#: The values come from measured cost, not from the ceiling. In the pinned image:
+#:     python3 -m venv --without-pip <dir>      0.06 s
+#:     python3 -c "import pytest"               0.35 s
+#:     the whole shell block under test         0.64 s   (slowest call in the file)
+#:     both files, every test, end to end       1.30 s
+#: so `_HEAVY` keeps roughly a hundredfold margin over the slowest call here and
+#: `_QUICK` roughly eightyfold over the quickest. Neither is so low that a
+#: healthy call cannot finish; both are low enough to still FIRE on a hang, which
+#: `test_an_inner_bound_is_a_real_bound` proves rather than assumes.
+_HEAVY = 60
+_QUICK = 30
 
 _ROOT = Path(__file__).resolve().parents[2]
 _LAND = _ROOT / "tools" / "gatekeeper-land.sh"
@@ -150,7 +175,7 @@ def _runnerless_python(tmp_path: Path, env: dict[str, str]) -> Path:
     made = subprocess.run(
         [sys.executable, "-m", "venv", "--without-pip", str(home)], env=env,
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        timeout=600, check=False)
+        timeout=_HEAVY, check=False)
     if made.returncode != 0:
         pytest.skip("this interpreter cannot create a venv, so the "
                     "runner-less interpreter this test needs is UNAVAILABLE "
@@ -159,7 +184,7 @@ def _runnerless_python(tmp_path: Path, env: dict[str, str]) -> Path:
     assert shim.is_file(), made.stdout + made.stderr
     probe = subprocess.run([str(shim), "-c", "import pytest"], env=env,
                            stdin=subprocess.DEVNULL, capture_output=True,
-                           text=True, timeout=120, check=False)
+                           text=True, timeout=_QUICK, check=False)
     assert probe.returncode != 0, (
         "the runner-less interpreter can still import the runner under the "
         "environment the block will run in, so the refusal direction of this "
@@ -176,7 +201,7 @@ def _real_site_dir() -> Path:
     proc = subprocess.run(
         [sys.executable, "-c", "import pytest, sys; sys.stdout.write(pytest.__file__)"],
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        timeout=120, check=False)
+        timeout=_QUICK, check=False)
     assert proc.returncode == 0, "this session has no importable test runner"
     return Path(proc.stdout.strip()).resolve().parents[1]
 
@@ -194,7 +219,7 @@ def _run_block(block: str, tmp_path: Path, *, lane: str | None) -> subprocess.Co
     env["PATH"] = f"{shim.parent}{os.pathsep}{env.get('PATH', '')}"
     return subprocess.run(["bash", str(script)], env=env, cwd=str(tmp_path),
                           stdin=subprocess.DEVNULL, capture_output=True,
-                          text=True, timeout=600, check=False)
+                          text=True, timeout=_HEAVY, check=False)
 
 
 def test_the_full_tier_refuses_once_when_it_cannot_run_the_test_runtime(tmp_path):
@@ -281,3 +306,50 @@ def test_the_preflight_program_owns_the_cause_and_the_remedy():
         assert token not in block, (
             f"gatekeeper-land.sh restates {token!r} instead of delegating the "
             "refusal text to the program that measures it")
+
+
+def test_an_inner_bound_is_a_real_bound():
+    """A bound above the ceiling is a defect; one that never binds is another.
+
+    Three claims, because lowering a number can fail in three directions.
+
+    TOO HIGH: both bounds must sit at or under the ceiling
+    `ci_harness_timeout_ceiling_check` publishes for this tree, read from the
+    program rather than restated here — a constant copied into a test rots the
+    moment the harness bound moves.
+
+    TOO LOW: the slowest call this file makes is measured HERE, in this session,
+    and must finish inside a fraction of the smaller bound. A bound chosen from
+    the ceiling instead of from the work is how a green suite becomes an
+    intermittently red one on a loaded host.
+
+    INERT: the bound must actually stop a child that does not return. Proved on
+    the same `subprocess.run(..., timeout=...)` shape every call above uses, with
+    a deliberately tiny bound so the proof itself is cheap — the shape and the
+    raised `TimeoutExpired` are what is being pinned, not the number.
+    """
+    sys.path.insert(0, str(_PROGRAMS))
+    import ci_harness_timeout_ceiling_check as C
+
+    ceiling = C.inner_timeout_ceiling(_ROOT)
+    assert ceiling is not None, "this tree publishes no harness bound to divide"
+    assert _HEAVY <= ceiling and _QUICK <= ceiling, (
+        f"_HEAVY={_HEAVY} _QUICK={_QUICK} against a published ceiling of "
+        f"{ceiling}: the gate that made this repository unlandable is exactly "
+        "this comparison")
+
+    start = time.monotonic()
+    probe = subprocess.run(
+        [sys.executable, "-c", "import pytest"], stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=_QUICK, check=False)
+    elapsed = time.monotonic() - start
+    assert probe.returncode == 0, probe.stderr
+    assert elapsed < _QUICK / 4, (
+        f"the quickest call this file makes took {elapsed:.2f}s against a "
+        f"{_QUICK}s bound — the bound is no longer generous and will flake")
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        subprocess.run(
+            [sys.executable, "-c", f"import time; time.sleep({_QUICK * 2})"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=1, check=False)
