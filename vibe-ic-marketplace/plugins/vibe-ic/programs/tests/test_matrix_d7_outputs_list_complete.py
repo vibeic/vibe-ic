@@ -1888,6 +1888,26 @@ def matrix_na_precondition(step_id):
     return G.na_precondition(step_id)
 
 
+def matrix_skip_precondition(step_id):
+    """Why this cell DECLINED TO RUN, re-derived LIVE, or ``None`` when it ran.
+
+    The mirror of :func:`matrix_na_precondition` for the other silent outcome,
+    and the four conditions are the SAME four the cell itself applies, in the
+    same order: a waived cell with nothing to show, on a tree whose write
+    record observed nothing and with no corpus to read it from, is
+    UNMEASURABLE rather than healed.
+    """
+    if matrix_na_precondition(step_id) is not None:
+        return None
+    if G.findings_for(step_id):
+        return None
+    if _waiver_for(step_id) is None:
+        return None
+    if R.observed_writes() or corpus_root() is not None:
+        return None
+    return SKIP_REASON
+
+
 def matrix_cell_state(step_id) -> str:
     """``"ENFORCED"`` / ``"WAIVED"`` / ``"NA"`` for one cell of this dimension."""
     if matrix_na_precondition(step_id) is not None:

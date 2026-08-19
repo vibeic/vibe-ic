@@ -1020,8 +1020,18 @@ def _module_ast(dim: int) -> ast.Module:
         encoding="utf-8"))
 
 
-def _calls_pytest_skip(dim: int, func_name: str) -> Optional[str]:
-    """Location of a ``pytest.skip`` / bare ``skip`` call inside *func_name*.
+def _is_skip_call(node: ast.AST) -> bool:
+    """``True`` for a ``pytest.skip(...)`` or bare ``skip(...)`` call node."""
+    if not isinstance(node, ast.Call):
+        return False
+    fn = node.func
+    if isinstance(fn, ast.Attribute) and fn.attr == "skip":
+        return isinstance(fn.value, ast.Name) and fn.value.id == "pytest"
+    return isinstance(fn, ast.Name) and fn.id == "skip"
+
+
+def _skip_calls(dim: int, func_name: str) -> Tuple[Tuple[int, bool], ...]:
+    """``(line, guarded)`` for every skip call inside *func_name*.
 
     An AST walk over THIS repository's own test module — exact by construction,
     with comments and docstrings gone, so the ``# ...pytest.skip()...`` prose in
@@ -1029,22 +1039,45 @@ def _calls_pytest_skip(dim: int, func_name: str) -> Optional[str]:
     campaign's standing rule against text scans is about the PRODUCTION tree's
     dynamic dispatch; here the target is a literal function definition in a file
     this test can parse completely.)
+
+    ``guarded`` is ``True`` when the call sits under an ``if`` inside the
+    function. THE TWO ARE DIFFERENT FINDINGS and used to be one:
+
+    * an UNGUARDED skip runs on every host, so the cell never executes
+      anywhere. That is silent absence wearing a hat and stays forbidden.
+    * a GUARDED skip names a resource this checkout could not reach. The
+      two-axis census has modelled exactly that since ``_join_axes`` grew the
+      ``-SKIPPED`` labels: such a cell is neither folded into ENFORCED nor
+      filed as a CONTRADICTION, it is published in its own column (44
+      ENFORCED-SKIPPED + 3 WAIVED-SKIPPED at the time of writing). A flat ban
+      on the call therefore contradicted this file's own join, and the file
+      failed against itself: the corpus-absent skip landed in the d3 and d7
+      cell predicates on 2026-08-16 (``c8c2ab0f7``) and
+      ``test_every_na_cell_asserts_a_live_precondition`` has been red ever
+      since, while the census next to it published the same cells as a
+      disclosed, named population.
+
+    Narrowing the ban is only honest if the case it stops covering is covered
+    somewhere stricter, so it is: a guarded skip now has to be DECLARED by the
+    owning module through ``matrix_skip_precondition`` and that declaration is
+    checked live, per cell, in both directions by
+    ``test_every_skipping_cell_names_the_resource_it_could_not_reach``.
     """
+    out: List[Tuple[int, bool]] = []
+
+    def walk(node: ast.AST, guarded: bool) -> None:
+        for child in ast.iter_child_nodes(node):
+            if _is_skip_call(child):
+                out.append((child.lineno, guarded))
+            walk(child, guarded or isinstance(child, ast.If))
+
     for node in ast.walk(_module_ast(dim)):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if node.name != func_name:
             continue
-        for call in ast.walk(node):
-            if not isinstance(call, ast.Call):
-                continue
-            fn = call.func
-            if isinstance(fn, ast.Attribute) and fn.attr == "skip":
-                if isinstance(fn.value, ast.Name) and fn.value.id == "pytest":
-                    return f"{func_name}: pytest.skip() at line {call.lineno}"
-            if isinstance(fn, ast.Name) and fn.id == "skip":
-                return f"{func_name}: skip() at line {call.lineno}"
-    return None
+        walk(node, False)
+    return tuple(out)
 
 
 def test_every_na_cell_asserts_a_live_precondition():
@@ -1057,9 +1090,13 @@ def test_every_na_cell_asserts_a_live_precondition():
          holding, the module stops calling the cell NA and this test says so;
       2. pytest collected no ``skip`` / ``skipif`` marker for the item — a
          marker-level skip never enters the test body at all;
-      3. the cell test function's AST contains no ``pytest.skip`` call — a
-         body-level skip would leave the cell reporting "passed" while
-         asserting nothing about the precondition.
+      3. the cell test function's AST contains no UNGUARDED ``pytest.skip``
+         call, and any guarded one is declared by the module through
+         ``matrix_skip_precondition`` — an unconditional body-level skip would
+         leave the cell asserting nothing about the precondition on every
+         host, while a guarded one is the ``-SKIPPED`` outcome ``_join_axes``
+         publishes and is held to its own live, bidirectional check by
+         ``test_every_skipping_cell_names_the_resource_it_could_not_reach``.
     """
     census = state_census()
     cells = collected_cells()
@@ -1088,16 +1125,93 @@ def test_every_na_cell_asserts_a_live_precondition():
     # ones with no NA cell today, so a skip introduced later is caught before
     # it has an NA to hide behind.
     for dim, per_dim in funcs.items():
+        mod = dimension_modules()[dim]
         for func in per_dim:
-            found = _calls_pytest_skip(dim, func)
-            if found:
+            calls = _skip_calls(dim, func)
+            for line, guarded in calls:
+                if not guarded:
+                    problems.append(
+                        f"dimension {dim}: cell test {func}: an UNGUARDED skip "
+                        f"at line {line}. A cell test may not skip "
+                        f"unconditionally: the three states are ENFORCED, "
+                        f"WAIVED (strict xfail) and NA (asserted "
+                        f"precondition), and a skip nothing can switch off "
+                        f"means the cell never runs on any host")
+            if calls and not callable(
+                    getattr(mod, "matrix_skip_precondition", None)):
                 problems.append(
-                    f"dimension {dim}: cell test {found}. A cell test may not "
-                    f"skip: the three states are ENFORCED, WAIVED (strict "
-                    f"xfail) and NA (asserted precondition)")
+                    f"dimension {dim}: cell test {func} skips at line(s) "
+                    f"{[line for line, _ in calls]} but the module exports no "
+                    f"matrix_skip_precondition() — a guarded skip is only "
+                    f"admissible while the module states, live and per cell, "
+                    f"which resource it could not reach")
 
     assert not problems, (
         f"{len(problems)} NA problem(s):\n  - " + "\n  - ".join(problems))
+
+
+def test_every_skipping_cell_names_the_resource_it_could_not_reach():
+    """A ``-SKIPPED`` cell is DECLARED by its own module, live, in both
+    directions.
+
+    This is the guard that lets clause (3) of the test above stop banning the
+    call outright. The ban was a static, blunt "no skip anywhere"; this is a
+    live, per-cell equality between what the run DID and what the module SAYS
+    it would do, so a module cannot satisfy it with a constant:
+
+      * ``matrix_skip_precondition`` that always answers -> reddens on the
+        ~457 cells the run did not skip;
+      * one that never answers -> reddens on the ones it did;
+      * one that answers for the wrong cells -> reddens on both sides.
+
+    A dimension whose cells never skip does not need the function at all, and
+    is not asked for it — the requirement follows the observed behaviour, not
+    a list somebody has to remember to update.
+
+    MEASURED at the time of writing: 47 of 504 cells report ``skipped``, 46 in
+    dimension 3 and 1 in dimension 7, and both of those modules reach their
+    skip through ``corpus_root() is None`` — the published cells left this
+    repository (vibe-ic#1703) and no pointer to a clone was offered here.
+    """
+    census = enforcement_census()
+    problems: List[str] = []
+    skipped_cells, declared_cells = [], []
+    for (sid, dim), verdict in sorted(census.items(), key=lambda kv: kv[0][1]):
+        mod = dimension_modules()[dim]
+        fn = getattr(mod, "matrix_skip_precondition", None)
+        did_skip = bool(verdict.outcomes) and all(
+            o == "skipped" for o in verdict.outcomes)
+        if did_skip:
+            skipped_cells.append(f"{sid}/d{dim}")
+        if not callable(fn):
+            if did_skip:
+                problems.append(
+                    f"{sid}/d{dim}: the live run skipped this cell but "
+                    f"dimension {dim} exports no matrix_skip_precondition() — "
+                    f"a cell that declined to run must name the resource it "
+                    f"could not reach")
+            continue
+        says = (fn(sid) or "").strip()
+        if says:
+            declared_cells.append(f"{sid}/d{dim}")
+        if did_skip and not says:
+            problems.append(
+                f"{sid}/d{dim}: the live run skipped this cell "
+                f"({verdict.label}) but matrix_skip_precondition() returned "
+                f"{says!r} — an undeclared skip is silence, and silence is "
+                f"what the second axis exists to refuse")
+        if says and not did_skip:
+            problems.append(
+                f"{sid}/d{dim}: matrix_skip_precondition() claims this cell "
+                f"declines to run ({says!r}) but the live run reports "
+                f"{verdict.outcomes or ('<never observed>',)} — the module's "
+                f"account of its own silence is wrong in the direction that "
+                f"would let a real skip hide behind a standing excuse")
+    assert not problems, (
+        f"{len(problems)} skip-declaration problem(s) over {len(census)} "
+        f"cells (live-skipped {len(skipped_cells)}: {skipped_cells}; declared "
+        f"{len(declared_cells)}: {declared_cells}):\n  - "
+        + "\n  - ".join(problems))
 
 
 def test_na_cells_are_a_minority_and_are_named():

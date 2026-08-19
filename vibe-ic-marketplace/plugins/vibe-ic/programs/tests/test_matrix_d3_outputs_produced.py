@@ -5796,6 +5796,34 @@ def matrix_na_precondition(step_id):
             "root carries " + ", ".join(wanted))
 
 
+def matrix_skip_precondition(step_id):
+    """Why this cell DECLINED TO RUN, re-derived LIVE, or ``None`` when it ran.
+
+    The mirror of :func:`matrix_na_precondition` for the other silent outcome.
+    NA says "there is nothing to ask here"; this says "there is something to
+    ask and the resource that would answer it is not reachable from this
+    checkout", which is a different claim with a different remedy and must not
+    be read as either enforcement or a defect (``_join_axes`` in
+    ``test_matrix_63x8_coverage.py`` gives it the ``-SKIPPED`` label for
+    exactly that reason).
+
+    The branch order below MIRRORS ``test_d3_required_outputs_are_produced``
+    step for step, because a precondition that answers a different question
+    from the cell it describes is worse than none: the two would disagree the
+    first time either moved.
+    """
+    rec = step_record(step_id)
+    if rec["verdict"] in ("NA_NO_REQUIRED_OUTPUTS", "NA_DORMANT_CONDITION"):
+        return None
+    if run_roots() or corpus_root() is not None:
+        return None
+    # A record citing a root this module searches on no host is REFUSED by
+    # name rather than skipped — the cell fails, so it did run.
+    if unanswerable_citations(step_id):
+        return None
+    return SKIP_REASON
+
+
 def matrix_cell_state(step_id) -> str:
     """``"ENFORCED"`` / ``"WAIVED"`` / ``"NA"`` for one cell of this dimension."""
     if matrix_na_precondition(step_id) is not None:
