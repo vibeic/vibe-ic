@@ -402,3 +402,69 @@ def test_the_three_layer_denominators_are_bound_to_skills():
     assert len(bound) >= 3, bound
     assert all(key in ("skills", "skills_with_compliance_yaml")
                for _, key in bound), bound
+
+
+# ── INDEX.md states THREE counts about itself, not one (2026-08-19) ──
+#
+# On 8e60dd954 the headline said 1116 — correct — while the
+# `_APPLICABLE_CLASSES` denominator still said 1112 and the `any` bucket still
+# said 1103, in two places. One counter refreshed, two carried over, in a file
+# whose first line is "AUTO-GENERATED … DO NOT EDIT BY HAND".
+# `test_programs_index_freshness` was red on that tree and is the authority;
+# check_index_cross read only the headline, so `--check` printed OK beside it.
+
+
+def _index_text(gen) -> str:
+    return gen.INDEX_MD.read_text()
+
+
+def test_index_cross_is_clean_on_the_committed_tree():
+    gen = _load_gen()
+    assert gen.check_index_cross(gen.discover()) == []
+
+
+@pytest.mark.parametrize("counter", ["denominator", "any_bucket"])
+def test_a_single_stale_index_counter_is_caught(monkeypatch, counter):
+    """Each counter alone, with the headline left CORRECT — the shape that
+    shipped. A check that reads only the headline passes both of these."""
+    gen = _load_gen()
+    inv = gen.discover()
+    got = inv["populations"]["programs_catalogued"]["count"]
+    text = _index_text(gen)
+
+    if counter == "denominator":
+        holed = text.replace(f"`_APPLICABLE_CLASSES`:** 9 (of {got})",
+                             f"`_APPLICABLE_CLASSES`:** 9 (of {got - 4})", 1)
+        needle = "denominator"
+    else:
+        any_now = got - 9
+        holed = text.replace(f"| `any` | {any_now} |",
+                             f"| `any` | {any_now - 4} |", 1)
+        needle = "`any` bucket"
+    assert holed != text, f"could not mutate the {counter} counter"
+    assert f"shims):** {got}" in holed, "the headline must stay correct"
+
+    class _Stub:
+        def exists(self): return True
+        def read_text(self, *a, **k): return holed
+        @property
+        def name(self): return "INDEX.md"
+
+    monkeypatch.setattr(gen, "INDEX_MD", _Stub())
+    fails = gen.check_index_cross(inv)
+    assert any(needle in f for f in fails), (needle, fails)
+
+
+def test_a_vanished_index_counter_is_a_failure(monkeypatch):
+    """A counter that stops matching is unchecked, not correct."""
+    gen = _load_gen()
+
+    class _Stub:
+        def exists(self): return True
+        def read_text(self, *a, **k): return "# INDEX\n\nno counters here\n"
+        @property
+        def name(self): return "INDEX.md"
+
+    monkeypatch.setattr(gen, "INDEX_MD", _Stub())
+    fails = gen.check_index_cross(gen.discover())
+    assert len(fails) >= 2 and all("states no" in f for f in fails), fails

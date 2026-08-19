@@ -569,24 +569,66 @@ def compare_committed(inv: dict, committed: dict) -> tuple[str, list[str]]:
     return "MEASURED", fails
 
 
+#: Every counter INDEX.md states ABOUT ITSELF, and the denominator each one is.
+#: MEASURED on 8e60dd954: the headline said 1116 (right) while the
+#: `_APPLICABLE_CLASSES` denominator still said 1112 and the `any` bucket still
+#: said 1103, twice — three counters in one generated file, one refreshed and
+#: two carried over. Reading only the headline is what let this ship: it is the
+#: one this function used to check, and it is the one that was correct.
+_INDEX_SELF_COUNTS: tuple[tuple[str, str], ...] = (
+    (r"\*\*Total programs \(excluding helpers / shims\):\*\* (\d+)",
+     "headline total"),
+    (r"\*\*Programs with explicit `_APPLICABLE_CLASSES`:\*\* \d+ \(of (\d+)\)",
+     "`_APPLICABLE_CLASSES` denominator"),
+)
+
+
 def check_index_cross(inv: dict) -> list[str]:
-    """programs_catalogued must equal the total INDEX.md states for itself."""
+    """Every count INDEX.md states about itself must equal programs_catalogued.
+
+    A generated artefact whose counters disagree with its own rows is not
+    "slightly stale" — it is a file that regeneration would change, shipped as
+    though it would not. `tests/test_programs_index_freshness.py` is the
+    authority (it re-renders and diffs); this is the cheap cross-check a human
+    gets from `--check`, and it exists so the count gate cannot print OK beside
+    a red freshness test.
+    """
     if not INDEX_MD.exists():
         return [f"{INDEX_MD.name} missing — cannot cross-check "
                 f"programs_catalogued against the shipped catalogue."]
-    m = re.search(r"\*\*Total programs \(excluding helpers / shims\):\*\* "
-                  r"(\d+)", INDEX_MD.read_text())
-    if not m:
-        return ["INDEX.md states no total — cannot cross-check "
-                "programs_catalogued. Re-run tools/gen_programs_index.py."]
-    stated = int(m.group(1))
+    text = INDEX_MD.read_text()
     got = inv["populations"]["programs_catalogued"]["count"]
-    if stated != got:
-        return [f"INDEX.md states {stated} catalogued programs, this "
-                f"inventory measures {got}. The two helper predicates have "
-                f"diverged, or one artefact is stale — regenerate BOTH "
-                f"(tools/gen_programs_index.py and this file)."]
-    return []
+    fails: list[str] = []
+    for pattern, what in _INDEX_SELF_COUNTS:
+        m = re.search(pattern, text)
+        if not m:
+            fails.append(f"INDEX.md states no {what} — cannot cross-check "
+                         f"programs_catalogued. Re-run "
+                         f"tools/gen_programs_index.py, or update "
+                         f"_INDEX_SELF_COUNTS if the format changed.")
+            continue
+        stated = int(m.group(1))
+        if stated != got:
+            fails.append(
+                f"INDEX.md's {what} states {stated}, this inventory measures "
+                f"{got}. The two helper predicates have diverged, or INDEX.md "
+                f"is stale — regenerate BOTH (tools/gen_programs_index.py and "
+                f"this file).")
+
+    # The per-class buckets partition the catalogue only in the `any` case:
+    # a program with no explicit _APPLICABLE_CLASSES lands in `any`, so
+    # `any` + (explicitly-classed programs) must be the catalogued total.
+    explicit = re.search(
+        r"\*\*Programs with explicit `_APPLICABLE_CLASSES`:\*\* (\d+)", text)
+    for m in re.finditer(r"`any` \| (\d+)|### `any` \((\d+) programs\)", text):
+        stated = int(m.group(1) or m.group(2))
+        if explicit and stated + int(explicit.group(1)) != got:
+            fails.append(
+                f"INDEX.md's `any` bucket states {stated}; with "
+                f"{explicit.group(1)} explicitly-classed program(s) that "
+                f"totals {stated + int(explicit.group(1))}, not the {got} "
+                f"programs catalogued. Re-run tools/gen_programs_index.py.")
+    return fails
 
 
 def _skill_names_on_disk() -> set[str]:
