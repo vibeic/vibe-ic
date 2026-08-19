@@ -371,6 +371,23 @@ def _iter_pnr_log_lines(project: Path):
 # placer had refused, passed by the gate named for placement legality. Both now
 # read `SPARE=NOT_DETERMINED` and FAIL rc=1.
 #
+# BLAST RADIUS, and it is the other half of the same measurement: a gate that
+# only ever turns MORE things red is not evidence that it discriminates. Swept
+# over EVERY phase-3 run root reachable on the authoring machine that carries a
+# `phase3/stage3/pnr` directory -- 15 of them, both gates run over each:
+#
+#     9  green before, green after   every one reads a MEASURED `SPARE=0`
+#     2  green before, RED after     the two named above; each has a real
+#                                    `[ERROR DPL-0033]` in its own log
+#     4  red before, red after       unchanged, and for reasons unrelated to
+#                                    placement legality (no `placed.def`)
+#
+# ZERO false positives. The 9 that stay green are the load-bearing half: their
+# logs predate the count and carry the BARE `SPARE_CHECK_PLACEMENT_PASS`, so
+# without the rule below that reads a bare PASS as a MEASURED zero, all 9 would
+# have gone red on a legality nothing ever objected to. The rule is not a
+# leniency; it is what keeps this change from reddening every archived run.
+#
 # The runner now emits the measured count at every one of those sites:
 #     <SITE>_CHECK_PLACEMENT_VIOLATIONS <n>     n = integer, or NOT_DETERMINED
 #     <SITE>_CHECK_PLACEMENT_PASS               n == 0
