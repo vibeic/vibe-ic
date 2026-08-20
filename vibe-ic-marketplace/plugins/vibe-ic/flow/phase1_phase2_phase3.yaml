@@ -4494,6 +4494,33 @@ steps:
       # three published spm cells carry it tracked and non-empty (944-1131 B),
       # so declaring it closes the d7 finding and costs dimension 3 nothing.
       - "reports/phase3/lvs_verdict.json"
+      # A FIFTH, and the last one dimension 7 has to say out loud on this step.
+      # `reports/phase3/drc_signoff.json` is the machine-readable half of the
+      # DRC sign-off this step's own `--signoff` clause below produces, and the
+      # `.rpt` half three entries up has been declared all along. Three
+      # programs OTHER than its writer read it:
+      #   `signoff_ladder_run.check_tier_1_drc` discovers it by name and by
+      #       `reports/**/drc_signoff.json` and grades release-gating tier T1
+      #       on it; absent, that tier reports NOT_RUN.
+      #   `final_report_generate` echoes its verdict into the sign-off summary
+      #       a reader treats as the deliverable (see the ORGANIC-20260808
+      #       paragraph there: "nothing in this tree writes drc_signoff.json"
+      #       STOPPED BEING TRUE, and 3 committed cells carry it).
+      #   `macro_obs_geometry_intersect_check` names `passed` / `is_signoff_deck`
+      #       out of it as the geometric-DRC evidence it will not re-derive.
+      # So its absence is exactly the disease dimension 7 exists for: T1 takes
+      # its NOT_RUN branch, the summary prints "(report missing)", and no gate
+      # goes red. Same class as `reports/phase3/lvs.json` five entries up —
+      # a gate `--json` artefact with readers outside its writer — and
+      # undeclared for exactly as long.
+      #
+      # W1 charged it by name and got its NAMED consumer wrong: it reported
+      # `read by program:general_precheck`, and general_precheck does not read
+      # this file, it RE-RUNS `drc_report_check` and WRITES it (see the
+      # separate finding on that clobber). The rule's CONCLUSION is right
+      # anyway — the three readers above are real — so the entry is declared on
+      # their evidence, not on the consumer W1 quoted.
+      - "reports/phase3/drc_signoff.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.
