@@ -387,9 +387,13 @@ def test_the_document_carries_what_its_schema_requires():
     for key in sch["properties"]["activity"]["required"]:
         assert key in doc["activity"], key
     mreq = sch["properties"]["metrics"]["items"]["required"]
+    sreq = (sch["properties"]["metrics"]["items"]["properties"]["scope"]
+            ["required"])
     for rec in doc["metrics"]:
         for key in mreq:
             assert key in rec, (key, rec["metric"])
+        for key in sreq:
+            assert key in rec["scope"], (key, rec["metric"])
 
 
 def test_the_code_and_the_schema_share_one_basis_vocabulary():
@@ -494,3 +498,60 @@ def test_the_same_requirement_stated_twice_is_still_one_authority(tmp_path):
     res = pw.resolve_power_requirement(proj)
     assert res["refusal"] is None
     assert res["requirement"]["max_w"] == 2.0e-03
+
+
+# ── scope is the measurement's conditions, and ALL of it is compared ───────
+def test_the_liberty_is_a_measurement_condition_and_lands_in_scope():
+    """The runner's provenance envelope states the Liberty the figures were
+    computed against. A power number at one corner's library is not the same
+    metric as one at another's, so it is a scope key and not prose."""
+    text = ("# Inputs (provenance):\n#   netlist: phase2/x_synth.v\n"
+            "#   liberty: generic_sc__tt_025C_1v80.lib\n" + _rpt("vectorless_sdc"))
+    rec = pw.total_record(pw.parse_power_report(text),
+                          stage="post_route", scenario="functional")
+    assert rec["scope"]["liberty"] == "generic_sc__tt_025C_1v80.lib"
+    assert rec["source"]["netlist"] == "phase2/x_synth.v"
+
+
+def test_two_liberty_corners_are_two_metrics():
+    a = pw.total_record(pw.parse_power_report(
+        "#   liberty: generic_sc__tt_025C_1v80.lib\n" + _rpt("vectorless_sdc")),
+        stage="post_route", scenario="functional")
+    b = pw.total_record(pw.parse_power_report(
+        "#   liberty: generic_sc__ss_125C_1v62.lib\n" + _rpt("vectorless_sdc")),
+        stage="post_route", scenario="functional")
+    out = pw.compare_total_power(a, b)
+    assert out["verdict"] == pw.V_UNDETERMINED
+    assert "scope.liberty differs" in out["reason"]
+
+
+def test_every_scope_key_is_a_comparability_key_including_new_ones():
+    """§2 says two numbers are comparable only if their SCOPE matches. This
+    asserts the rule is the whole scope and not an enumerated subset, so a key
+    a later author adds is compared without their having to remember to list
+    it. The first draft of this module DID enumerate three keys, and adding
+    `liberty` to scope would silently have been exempt."""
+    a = pw.total_record(pw.parse_power_report(_rpt("vectorless_sdc")),
+                        stage="post_route", scenario="functional",
+                        extra_scope={"a_key_invented_by_a_later_author": 1})
+    b = pw.total_record(pw.parse_power_report(_rpt("vectorless_sdc")),
+                        stage="post_route", scenario="functional",
+                        extra_scope={"a_key_invented_by_a_later_author": 2})
+    out = pw.compare_total_power(a, b)
+    assert out["verdict"] == pw.V_UNDETERMINED
+    assert "a_key_invented_by_a_later_author" in out["reason"]
+
+
+def test_corroboration_is_provenance_and_not_scope():
+    """How well the basis is KNOWN describes confidence in the condition, not
+    the condition. Putting it in scope would make an uncorroborated VCD run and
+    a corroborated one incomparable, which is a different and unmade claim."""
+    a = pw.total_record(pw.parse_power_report(_rpt("vector_vcd",
+                                                   annotated=4211)),
+                        stage="post_route", scenario="functional")
+    b = pw.total_record(pw.parse_power_report(_rpt("vector_vcd")),
+                        stage="post_route", scenario="functional")
+    assert a["provenance"]["activity_corroboration"] == pw.CORROBORATED
+    assert b["provenance"]["activity_corroboration"] == pw.UNCORROBORATED
+    assert "activity_corroboration" not in a["scope"]
+    assert pw.compare_total_power(a, b)["verdict"] != pw.V_UNDETERMINED

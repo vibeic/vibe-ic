@@ -233,6 +233,7 @@ def _disclosure(rep: Dict[str, Any]) -> Dict[str, Any]:
         "declared_mode": act.get("declared_mode"),
         "activity_reason": act.get("reason"),
         "activity_evidence": act.get("evidence"),
+        "liberty": rep.get("liberty"),
         "split_consistency": rep.get("split_consistency"),
         "group_sum_consistency": rep.get("group_sum_consistency"),
     }

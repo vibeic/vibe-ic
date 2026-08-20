@@ -79,7 +79,7 @@ __all__ = [
     "BASIS_CONTRADICTED", "KNOWN_BASES",
     "CORROBORATED", "UNCORROBORATED", "CONTRADICTED", "NO_CORROBORATION_NEEDED",
     "STATUS_MEASURED", "STATUS_NOT_MEASURED", "STATUS_INVALID", "STATUS_DERIVED",
-    "CATEGORIES", "TOTAL_GROUP",
+    "CATEGORIES", "TOTAL_GROUP", "PRIMARY_SCOPE_KEY",
     "activity_provenance", "parse_power_report", "read_power_report",
     "metric_records", "total_record", "comparable", "compare_total_power",
     "V_A_LOWER", "V_B_LOWER", "V_EQUAL", "V_UNDETERMINED",
@@ -145,6 +145,11 @@ _FAIL_RE = re.compile(
     r"^(?P<line>(?:READ_VCD_FAIL|READ_SAIF_FAIL|REPORT_POWER_FAIL):.*)$", re.M)
 #: The tool's own banner, used for `source.tool_version`. Never for a verdict.
 _TOOL_RE = re.compile(r"^(?P<tool>OpenSTA)[ \t]+(?P<version>\S+)", re.M)
+#: The provenance envelope the runner prepends. The LIBERTY is a measurement
+#: CONDITION: a power number at one corner's library is not the same metric as
+#: one at another's, so it belongs in `scope` and not only in prose.
+_LIBERTY_RE = re.compile(r"^#[ \t]*liberty:[ \t]*(?P<liberty>\S+)", re.M)
+_NETLIST_RE = re.compile(r"^#[ \t]*netlist:[ \t]*(?P<netlist>\S+)", re.M)
 
 #: What a declared mode token means. Unrecognised tokens are UNSTATED, not
 #: guessed — a mode this module does not know is a mode it cannot corroborate.
@@ -302,11 +307,15 @@ def parse_power_report(text: str, *, path: Optional[str] = None,
     group_rows = [r for r in rows if r["group"].lower() != TOTAL_GROUP.lower()]
 
     tm = _TOOL_RE.search(text)
+    lm = _LIBERTY_RE.search(text)
+    nm = _NETLIST_RE.search(text)
     out: Dict[str, Any] = {
         "path": path,
         "sha256": sha256,
         "tool": (tm.group("tool").lower() if tm else None),
         "tool_version": (tm.group("version") if tm else None),
+        "liberty": (lm.group("liberty") if lm else None),
+        "netlist": (nm.group("netlist") if nm else None),
         "activity": activity_provenance(text),
         "rows": group_rows,
         "total_row": total_rows[0] if total_rows else None,
@@ -392,7 +401,9 @@ def _parser_sha256() -> str:
 
 def _source(report: Dict[str, Any]) -> Dict[str, Any]:
     return {"path": report.get("path"), "sha256": report.get("sha256"),
-            "tool": report.get("tool"), "tool_version": report.get("tool_version"),
+            "tool": report.get("tool"),
+            "tool_version": report.get("tool_version"),
+            "liberty": report.get("liberty"), "netlist": report.get("netlist"),
             "parser": PARSER, "parser_sha256": _parser_sha256()}
 
 
@@ -428,10 +439,21 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
     act = report.get("activity") or {}
     basis = act.get("basis", BASIS_UNSTATED)
     src = _source(report)
+    # SCOPE IS THE MEASUREMENT'S CONDITIONS, and §2 says two numbers are
+    # comparable only if their scope matches — so everything that makes this a
+    # different measurement goes in, and nothing else does. `tool` is here as
+    # well as in `source` (where §2's example puts it) because for power a
+    # different engine on a different netlist view IS a different condition:
+    # on the run the mutation ledger replays, the STA and IR engines' totals
+    # differ by 4.3x.  The CORROBORATION state is deliberately NOT here: it
+    # describes how well we know the basis, not what was measured.
     base_scope = {"stage": stage, "scenario": scenario,
                   "activity_basis": basis,
-                  "activity_corroboration": act.get("corroboration"),
+                  "liberty": report.get("liberty"),
                   "tool": report.get("tool")}
+    provenance = {"activity_corroboration": act.get("corroboration"),
+                  "activity_reason": act.get("reason"),
+                  "declared_mode": act.get("declared_mode")}
     if extra_scope:
         base_scope.update(extra_scope)
 
@@ -452,11 +474,13 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
     for r in rows:
         scope = dict(base_scope, group=r["group"])
         for c in CATEGORIES:
-            out.append(_record(
+            rec = _record(
                 _METRIC_NAME[c],
                 STATUS_INVALID if invalid else STATUS_MEASURED,
                 r[f"{c}_w"], scope, src, raw=r[f"{c}_raw"],
-                reason=act.get("reason") if invalid else None))
+                reason=act.get("reason") if invalid else None)
+            rec["provenance"] = dict(provenance)
+            out.append(rec)
     return out
 
 
@@ -481,9 +505,12 @@ V_B_LOWER = "B_LOWER"
 V_EQUAL = "EQUAL"
 V_UNDETERMINED = "UNDETERMINED"
 
-#: Scope keys that must MATCH before two power numbers are one comparison.
-#: `activity_basis` is first because it is the one that is easiest to fake.
-COMPARABLE_SCOPE_KEYS: Tuple[str, ...] = ("activity_basis", "stage", "scenario")
+#: The scope key this lane exists for, checked FIRST and by name, because it is
+#: the one that is easiest to fake and the one whose refusal must be legible.
+#: Everything ELSE in scope is compared too — §2 says two numbers are comparable
+#: only if their scope MATCHES, and enumerating a subset here would silently
+#: exempt whatever a later author adds to scope.
+PRIMARY_SCOPE_KEY = "activity_basis"
 
 
 def comparable(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[bool, str]:
@@ -509,14 +536,15 @@ def comparable(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[bool, str]:
             return False, (
                 f"{name} has activity basis {basis!r}; two numbers whose "
                 f"activity models are unknown are not known to share one")
-    for key in COMPARABLE_SCOPE_KEYS:
-        av = (a.get("scope") or {}).get(key)
-        bv = (b.get("scope") or {}).get(key)
+    a_scope = a.get("scope") or {}
+    b_scope = b.get("scope") or {}
+    for key in sorted(set(a_scope) | set(b_scope)):
+        av, bv = a_scope.get(key), b_scope.get(key)
         if av != bv:
             return False, (f"scope.{key} differs: {av!r} vs {bv!r} — these are "
                            f"different metrics, so the comparison is "
                            f"UNDETERMINED and not a winner")
-    return True, "scope matches on " + ", ".join(COMPARABLE_SCOPE_KEYS)
+    return True, "scope matches on " + ", ".join(sorted(a_scope))
 
 
 def compare_total_power(a: Dict[str, Any], b: Dict[str, Any], *,
