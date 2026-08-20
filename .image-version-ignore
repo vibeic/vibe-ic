@@ -205,3 +205,36 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/not_verified_tier.py
 # (This entry was written twice, independently, by two agents that never spoke; they
 #  reached the same verdict and each caught something the other missed. Both kept.)
 docs/research/wafer_space_id_cells.md
+
+# test_ppa_contract.py:689 — a MEASUREMENT RECORD in a docstring, not a live
+# install pointer, and the entry is bounded by its exact path per this file's
+# own rule.
+#
+# The line quotes a `docker image inspect` that was actually run on this host on
+# 2026-08-21 against TWO composed-EDA releases, and records what it returned:
+# two different image ids carrying the SAME
+# `org.opencontainers.image.version` (2026.06), inherited from the upstream base
+# rather than set by the fork. That reading is the whole reason the contract's
+# toolchain identity is built on the image DIGEST and not on the version label,
+# and the test named beside it pins that decision.
+#
+# Two independent reasons it must not be rewritten to the anchor:
+#   * advancing the tag would attribute a `docker image inspect` to an image it
+#     was never run against — the measurement-honesty rule every entry above
+#     restates;
+#   * the record's force comes from the two tags DIFFERING. Collapsing either
+#     onto the anchor deletes the comparison that establishes the label cannot
+#     tell two toolchains apart, which is the defect the test reproduces.
+#
+# Nothing pulls it: the test builds contracts from hand-written declarations and
+# never starts a container.
+#
+# NB: this comment deliberately does NOT spell the full vibeic ghcr ref — the
+# drift-net scans this file too, so a ref written here becomes a pointer itself.
+#
+# TEMPORARY, AND SAID SO RATHER THAN LEFT TO BE DISCOVERED. A separate lane is
+# removing the whole image-version coupling this net polices. When that lands,
+# this entry is dead weight and should be deleted with it; it is registered here
+# only so the coupling that still exists is not silently unpoliced in the
+# meantime.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_contract.py
