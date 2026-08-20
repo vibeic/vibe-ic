@@ -32,7 +32,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_ppa_contract_fixtures import (  # noqa: E402
-    BUILD, CHECK, FAKE_IMAGE, SCHEMA_DIR,
+    BUILD, CHECK, FAKE_IMAGE, INTEGRITY, SCHEMA_DIR,
     base_declaration, build_contract, codes, make_run_tree, run_cli,
     write_json,
 )
@@ -118,13 +118,40 @@ def test_a_floating_verdict_bearing_image_is_refused(tmp_path):
 
 def test_a_floating_image_that_carries_no_verdict_is_not_refused(tmp_path):
     """The green twin. Without it, `PPA-C-002` would also pass for a rule that
-    refuses every tag, which is a different and much less useful rule."""
+    refuses every tag, which is a different and much less useful rule.
+
+    A SECOND, digest-pinned image is present on purpose. Two separate rules
+    apply to a tag and this test is about only one of them: the tag is not
+    REFUSED because it carries no verdict (PPA-C-002), while the toolchain
+    still has to be IDENTIFIABLE from something (a tag contributes no digest,
+    so on its own it leaves the toolchain identity NOT_MEASURED). Keeping the
+    two apart is what makes each of them falsifiable on its own."""
     decl = base_declaration()
-    decl["toolchain"]["images"][0]["ref"] = "ghcr.io/vibeic-test/img:latest"
-    decl["toolchain"]["images"][0]["verdict_bearing"] = False
+    decl["toolchain"]["images"] = [
+        {"role": "docs", "ref": "ghcr.io/vibeic-test/img:latest",
+         "verdict_bearing": False},
+        {"role": "eda", "ref": FAKE_IMAGE, "verdict_bearing": True},
+    ]
     built = build_contract(tmp_path, decl)
     assert built.returncode == 0, built.stdout + built.stderr
     assert "PPA-C-002" not in codes(built)
+
+
+def test_a_toolchain_known_only_by_a_tag_cannot_be_identified(tmp_path):
+    """The other half, split out from the test above.
+
+    A tag contributes no digest, so a run whose only toolchain evidence is a
+    tag has not said WHICH tools ran — even when nothing about that image
+    carries a verdict. rc=2 UNDETERMINED, never 0."""
+    decl = base_declaration()
+    decl["toolchain"]["images"] = [
+        {"role": "docs", "ref": "ghcr.io/vibeic-test/img:latest",
+         "verdict_bearing": False}]
+    built = build_contract(tmp_path, decl, name="tag_only.json")
+    assert built.returncode == 2, built.stdout + built.stderr
+    assert "PPA-C-007" in codes(built)
+    document = json.loads((tmp_path / "tag_only.json").read_text())
+    assert document["identities"]["toolchain"]["status"] == "NOT_MEASURED"
 
 
 def test_an_unread_image_label_is_a_note_and_not_a_verdict(tmp_path):
@@ -819,3 +846,56 @@ def test_an_unreadable_run_manifest_schema_does_not_report_clean(tmp_path):
         f"a missing run-manifest schema reported clean (rc="
         f"{checked.returncode})\n{checked.stdout}\n{checked.stderr}")
     assert "PPA-C-010" in codes(checked)
+
+
+def test_an_identity_with_no_members_is_not_an_identity(tmp_path):
+    """MEASURED before the rule existed: `identity('problem', [], [])` returned
+    MEASURED with a perfectly good digest, and two such identities compared
+    `SAME` — so two runs that had each declared NOTHING about the problem would
+    be reported comparable.
+
+    That is the empty-set-reports-clean defect arriving inside the module
+    written to prevent it, and it is the worst shape here because the output
+    looks like agreement rather than like a gap."""
+    empty = ident.identity("problem", [], [])
+    assert empty["status"] == prov.NOT_MEASURED
+    assert "digest" not in empty
+    assert "no members were declared" in empty["reason"]
+    assert ident.compare(empty, ident.identity("problem", [], []))["verdict"] \
+        == "UNDETERMINED"
+
+
+def test_a_kind_with_nothing_to_say_must_say_so_rather_than_stay_silent(
+        tmp_path):
+    """The green twin, and the doctrine: you cannot get an identity by silence,
+    only by declaration. One declared fact is enough — and it is a fact a
+    reviewer can read, unlike an empty block."""
+    silent = base_declaration()
+    silent["agent_execution"] = {"facts": []}
+    built = build_contract(tmp_path, silent, name="silent.json")
+    assert built.returncode == 2, built.stdout + built.stderr
+    assert "PPA-C-007" in codes(built)
+
+    spoken = base_declaration()
+    spoken["agent_execution"] = {
+        "facts": [{"key": "agent.autonomy", "value": "none",
+                   "source": "declared"}]}
+    ok = build_contract(tmp_path, spoken, name="spoken.json")
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def test_two_runs_that_declared_nothing_are_not_reported_comparable(tmp_path):
+    """The end-to-end consequence, driven through the real CLI. Without the
+    rule this pair exits 0 and a reader is told the arms are comparable."""
+    hollow = base_declaration()
+    hollow["problem"] = {"artefacts": [], "facts": []}
+    a = build_contract(tmp_path, hollow, name="a.json")
+    b = build_contract(tmp_path, hollow, name="b.json")
+    assert a.returncode == 2 and b.returncode == 2
+    verdict = run_cli(INTEGRITY, "--baseline", str(tmp_path / "a.json"),
+                      "--candidate", str(tmp_path / "b.json"))
+    assert verdict.returncode == 2, (
+        f"two runs that declared nothing about the problem were reported "
+        f"comparable (rc={verdict.returncode})\n{verdict.stdout}\n"
+        f"{verdict.stderr}")
+    assert "PPA-C-007" in codes(verdict)

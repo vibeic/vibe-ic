@@ -40,6 +40,21 @@ report a difference on every run that was merely moved. The path is still in
 the contract document -- it is how a human finds the file -- it just does not
 change what the run WAS.
 
+AN EMPTY IDENTITY IS NOT AN IDENTITY
+===================================
+A digest over `{"artefacts": [], "facts": []}` is a perfectly good 64-hex value
+and it means NOTHING about the run. MEASURED before this rule existed: two
+`problem` identities that each declared nothing compared `SAME`, so
+`ppa_problem_integrity_check` would have reported two runs comparable when
+neither had said what problem it was solving. That is the empty-set-reports-
+clean defect arriving inside the very module written to prevent it, and it is
+the most dangerous shape here because the output looks like agreement.
+
+So an identity with no members is `NOT_MEASURED`. A run that genuinely has
+nothing to say about a kind must SAY so — declare a fact
+(`agent.autonomy: "none"`) and the identity has a member. You cannot get an
+identity by silence, only by declaration.
+
 CONFLICTING FACTS DO NOT GET AN IDENTITY
 ========================================
 If two sources declare the same key with different values, this module does not
@@ -142,9 +157,14 @@ def identity(kind: str,
         "members": {"artefacts": artefact_members, "facts": fact_members},
     }
 
-    if unreadable or conflicts:
+    empty = not artefact_members and not fact_members
+
+    if unreadable or conflicts or empty:
         record["status"] = prov.NOT_MEASURED
         reasons: List[str] = []
+        if empty:
+            reasons.append(
+                "no members were declared, so there is nothing to identify")
         if unreadable:
             reasons.append(
                 "%d declared artefact(s) could not be measured: %s"
