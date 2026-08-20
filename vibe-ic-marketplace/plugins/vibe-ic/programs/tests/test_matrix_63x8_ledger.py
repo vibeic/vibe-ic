@@ -599,8 +599,15 @@ def test_output_entries_classify_into_the_four_kinds():
     # a corpus is offered. That is the true statement of the gap, and it is
     # stated here rather than left for a reader to discover from a red cell.
     # = FILE +1 (112 -> 113), GLOB and ANY_OF untouched.
-    assert sum(seen.values()) == 153, seen
-    assert seen[F.FILE] == 113
+    # 2026-08-20 (R12): 153 -> 154, one FILE, step 31 again and for the same
+    # dimension-7 rule — `reports/phase3/lvs_verdict.json`, charged
+    # W2:produced_consumed_undeclared the moment the write-record oracle was
+    # reconnected to the published corpus (R11). This one goes the other way
+    # from R9: all three published spm cells carry it tracked and non-empty, so
+    # the d3 manifest records it PRODUCED_BY_RUN and dimension 3 pays nothing.
+    # = FILE +1 (113 -> 114), GLOB and ANY_OF untouched.
+    assert sum(seen.values()) == 154, seen
+    assert seen[F.FILE] == 114
     assert seen[F.GLOB] == 16
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

@@ -1084,6 +1084,14 @@
         "reports/phase3/magic_illegal_overlap.json": {
           "status": "UNPROVEN",
           "provenance_note": "declared 2026-08-20 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find` over the published corpus (vibeic/benchmark-data @ 146d665) and over every in-repo root returns nothing, and magic_illegal_overlap_check postdates every published cell. The UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
+        },
+        "reports/phase3/lvs_verdict.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "declared 2026-08-20 alongside magic_illegal_overlap.json, and unlike it this one is EVIDENCED. Recorded against the run root and byte size it was MEASURED at in the published corpus (146d665); the other two published spm cells carry it too (v1.10.18_sky130A 1117 B, v1.5.58_ihp-sg13g2 944 B), so the entry resolves rather than moving the d7 finding into d3.",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/lvs_verdict.json",
+          "path": "reports/phase3/lvs_verdict.json",
+          "size_bytes": 1131
         }
       }
     },

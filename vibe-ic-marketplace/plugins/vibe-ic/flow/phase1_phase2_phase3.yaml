@@ -4289,6 +4289,23 @@ steps:
       # will report it unevidenced on any host that offers a corpus. That is
       # the true statement of the gap and it replaces a hidden one.
       - "reports/phase3/magic_illegal_overlap.json"
+      # A FOURTH, and the one nothing in this repository could see until the
+      # dimension-7 write record was reconnected to the published corpus.
+      # `reports/phase3/lvs_verdict.json` is the runner's OWN machine-readable
+      # LVS verdict — `_write_lvs_verdict` emits it, `eda_report_audit`
+      # (:1308, this step's own lvs gate) reads it as the independent
+      # confirmation of PASS/FAIL, and `eco_trigger_decision` lists it in
+      # `_NON_TIMING_SIGNOFF_ARTEFACTS` beside the lvs.json and
+      # erc_density.json above. Exactly the same class as those two, and
+      # undeclared for exactly as long. It was invisible because W2's producer
+      # oracle had degraded to the AST alone; with the record consulted again
+      # it is charged by name:
+      #   [W2:produced_consumed_undeclared] 'reports/phase3/lvs_verdict.json'
+      #   (written by run-record:ambiguous; read by gate:step31)
+      # Unlike magic_illegal_overlap.json above, this one IS evidenced: all
+      # three published spm cells carry it tracked and non-empty (944-1131 B),
+      # so declaring it closes the d7 finding and costs dimension 3 nothing.
+      - "reports/phase3/lvs_verdict.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.
