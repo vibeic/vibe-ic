@@ -316,29 +316,64 @@ def test_no_published_cell_disagrees_with_its_own_ledger():
     assert checked > 0, "no published cell carried a readable ledger entry"
 
 
-@_pc.needs_corpus
-def test_a_real_cells_report_swapped_for_another_real_cells_is_caught():
-    """Driven end to end by checked-in artefacts, not by fixtures authored in
-    this commit. Two published cells, one real report path, one copy."""
+def _corpus_substitution_pair():
+    """A published (target, donor, rel) where the donor really holds different
+    bytes at a path the target's own ledger records. `None` when the corpus
+    cannot supply one."""
     cells = [c for c in _pc.cell_dirs() if reb.load_ledger(c).entries]
     if len(cells) < 2:
-        pytest.skip("fewer than two published cells carry a run-evidence "
-                    "register here; this needs a donor and a target")
+        return None
     target = cells[0]
     led = reb.load_ledger(target)
-    donor = next((c for c in cells[1:]
-                  if any((c / rel).is_file() and
-                         _sha(c / rel) not in led.entries[rel]
-                         for rel in led.entries if (target / rel).is_file())),
-                 None)
-    if donor is None:
-        pytest.skip("no second published cell shares a recorded artefact path "
-                    "with the first")
-    rel = next(rel for rel in led.entries
-               if (target / rel).is_file() and (donor / rel).is_file()
-               and _sha(donor / rel) not in led.entries[rel])
-    a = reb.assess(target, [donor / rel], led)
-    # `assess` keys on the project-relative path, so handing it the donor's
-    # file at the target's recorded relpath is the substitution, without
-    # writing a byte into the published tree.
-    assert a.bindings and a.bindings[0].state in (reb.MISMATCH, reb.UNRECORDED)
+    for donor in cells[1:]:
+        for rel in led.entries:
+            if ((target / rel).is_file() and (donor / rel).is_file()
+                    and _sha(donor / rel) not in led.entries[rel]):
+                return target, donor, rel
+    return None
+
+
+@_pc.needs_corpus
+def test_a_real_cells_report_swapped_for_another_real_cells_is_caught(tmp_path):
+    """Driven end to end by checked-in artefacts, not by fixtures authored in
+    this commit. Two published cells, one real report path, one copy.
+
+    THE SUBSTITUTION IS PERFORMED, NOT SIMULATED BY AN ARGUMENT. This test read
+    `assess(target, [donor / rel], led)` until 2026-08-20 and asserted the state
+    was `MISMATCH` **or** `UNRECORDED`. `assess` derives the key with
+    `Path.relative_to(project_dir)`, and the donor's file is not under the
+    target, so the `ValueError` branch handed back the ABSOLUTE PATH as the key,
+    no ledger entry matched it, and the state was `UNRECORDED` on every run —
+    the arm the assertion also accepted. MEASURED on this corpus:
+    `binding state: UNRECORDED | binding.rel:
+    /home/reyerchu/.../spm/v1.5.58_ihp-sg13g2/phase2/stage2/synth/netlist_yosys.v`.
+    It passed unchanged against a build whose `assess` could not emit `MISMATCH`
+    at all, so it never once measured the defect it is named for.
+
+    The donor's BYTES are now written at the target's recorded relpath inside a
+    tree of this test's own, which is what the attack does, and the accepted
+    verdict is `MISMATCH` alone. The published trees are still never written to.
+    """
+    pair = _corpus_substitution_pair()
+    if pair is None:
+        pytest.skip("this corpus has no second published cell holding "
+                    "different bytes at a path the first one's ledger records")
+    target, donor, rel = pair
+    led = reb.load_ledger(target)
+
+    forged = tmp_path / "forged"
+    (forged / rel).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(donor / rel, forged / rel)
+    a = reb.assess(forged, [forged / rel], led)
+    assert [b.state for b in a.bindings] == [reb.MISMATCH], (
+        f"{rel}: {[(b.rel, b.state) for b in a.bindings]}")
+
+    # The `clears` half over the SAME instrument and the SAME path: the target's
+    # own bytes there are BOUND. Without it, an `assess` that answered MISMATCH
+    # to everything would read as a pass above.
+    honest = tmp_path / "honest"
+    (honest / rel).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(target / rel, honest / rel)
+    b = reb.assess(honest, [honest / rel], led)
+    assert [x.state for x in b.bindings] == [reb.BOUND], (
+        f"{rel}: {[(x.rel, x.state) for x in b.bindings]}")
