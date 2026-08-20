@@ -606,9 +606,22 @@ def test_output_entries_classify_into_the_four_kinds():
     # from R9: all three published spm cells carry it tracked and non-empty, so
     # the d3 manifest records it PRODUCED_BY_RUN and dimension 3 pays nothing.
     # = FILE +1 (113 -> 114), GLOB and ANY_OF untouched.
-    assert sum(seen.values()) == 154, seen
+    # 2026-08-20: 154 -> 156, two GLOB, and FILE does not move at all. Step
+    # 37.5ic became the producer of the release documents, and the pair it emits
+    # is per (design, pdk) -- `SIGNOFF_<design>_<pdk>.html`,
+    # `BRIEF_<design>_<pdk>.html` -- so that two dies built out of one tree
+    # cannot overwrite each other's sign-off. They arrived declared as the bare
+    # `SIGNOFF.html` / `BRIEF.html`, i.e. as two FILEs naming files no producer
+    # in this flow writes, which is how d4/criteria_match reported them: "named
+    # nowhere the gate can reach". Declaring the glob the generator actually
+    # writes is what makes the entry true, and it moves the pair FILE -> GLOB.
+    # Same shape as 37.5ip's four hardmacro views above and for the same reason:
+    # a GLOB because the identifying half of the name is the design's, not the
+    # flow's.
+    # = GLOB +2 (16 -> 18), FILE 114 unchanged, ANY_OF 24 unchanged.
+    assert sum(seen.values()) == 156, seen
     assert seen[F.FILE] == 114
-    assert seen[F.GLOB] == 16
+    assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
     # does NOT exist in required_outputs. It lives only in `gate` clauses. The
