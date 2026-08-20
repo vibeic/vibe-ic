@@ -571,14 +571,38 @@ fi
 # ("PREPARE changed live protected bytes with the manifest") requires the
 # two-commit PREPARE-then-ACTIVATE shape, and this script does not get to
 # invent a third.
+#
+# AND IT SAYS WHICH REFUSAL IT WAS. This used to be a bare `if`, so when the
+# build failed the driver's own log recorded nothing at all: the reader saw the
+# verdict's "PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED" and could not
+# tell "the transition under test is bad" from "this host could not look at
+# it". MEASURED — that ambiguity cost a maintainer a landing: eleven cases in
+# `tools/test_gatekeeper_land_differential.py` refused on their host and passed
+# on two others, and the one line that named the cause
+# ("raw bytes differ from expected blob", a global `core.autocrlf`) was an
+# unlabelled child stderr line in the middle of a long log. The builder's own
+# message is now REPLAYED under a heading a grep can find, on the failure path
+# and on the success path alike.
 PROTECTED_RECEIPT="$RUN/protected-landing-transition.json"
 PROTECTED_ARGS=()
-if python3 "$REPO/tools/ci/protected_landing_transition.py" verify \
+PROTECTED_WHY=""
+if PROTECTED_WHY="$(python3 "$REPO/tools/ci/protected_landing_transition.py" verify \
      --object-repo "$REPO" --base "$BASE_SHA" --candidate "$HEAD_SHA" \
      --candidate-gates "$WT_CAND_GATES" --candidate-tests "$WT_CAND_TESTS" \
-     --receipt "$PROTECTED_RECEIPT" \
+     --receipt "$PROTECTED_RECEIPT" 2>&1)" \
    && [ -s "$PROTECTED_RECEIPT" ]; then
+  printf '%s\n' "$PROTECTED_WHY"
   PROTECTED_ARGS=(--protected-transition-receipt "$PROTECTED_RECEIPT")
+else
+  echo "--- protected-source transition receipt: NOT BUILT. The verdict below"
+  echo "    will refuse it as UNMEASURED, which is correct — and THIS is the"
+  echo "    reason it could not look:"
+  printf '%s\n' "${PROTECTED_WHY:-<the builder printed nothing at all>}" \
+    | sed 's/^/      /'
+  echo "    Nothing is passed to the verdict: a tuple that could not be"
+  echo "    verified must never reach the stamp as one that was. If the reason"
+  echo "    above is about this HOST rather than about the tuple, the tuple is"
+  echo "    still unmeasured and the refusal still stands."
 fi
 
 # -------------------------------------------------------------- the verdict
