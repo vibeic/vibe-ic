@@ -56,6 +56,9 @@ from typing import List, Optional, Tuple
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).parent))
+# AFTER the sys.path guard, so this module still loads when the file is
+# executed through `spec_from_file_location` rather than as a script.
+import _run_evidence_binding as _reb  # noqa: E402  #1119 — whose report is this?
 try:
     import _path_layout as _pl  # noqa: F401  (used for canonical reports dir)
 except Exception:  # pragma: no cover - _path_layout always present in-repo
@@ -198,6 +201,7 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
         return
 
     stats["density_checked"] = True
+    stats["_consumed"].extend(p for p in (djson, drpt) if p is not None)
     data = None
     text = ""
 
@@ -284,6 +288,7 @@ def _check_erc(project_dir: Path, findings: List[Finding], stats: dict) -> None:
         # ERC report genuinely absent → ERC sub-check does not apply here.
         return
     stats["erc_checked"] = True
+    stats["_consumed"].append(erc)
     text = erc.read_text(errors="replace")
     if not text.strip():
         findings.append(Finding("ERROR", "ERC_EMPTY", f"{erc} is empty"))
@@ -367,10 +372,45 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         "density_checked": False, "per_layer_density": False,
         "layers_ok": 0, "layers_bad": 0, "row_utilization_pct": None,
         "erc_checked": False, "erc_floating_nets": None, "erc_clean": False,
+        "_consumed": [],
     }
     _check_density(project_dir, findings, stats)
     _check_erc(project_dir, findings, stats)
+    _bind_consumed_evidence(project_dir, findings, stats)
     return findings, stats
+
+
+# ---------------------------------------------------------------------------
+# WHOSE REPORT IS THIS? (#1119)
+#
+# ENFORCEMENT: BLOCKING. A MISMATCH is an ERROR finding, so `summary.pass` goes
+# False and `main` returns 1 — the same exit code the Step-31 gate already
+# treats as a failed physical-verification sign-off. It is BLOCKING because the
+# state it names is not a quality opinion: the density / ERC artefacts this
+# verdict was computed from are not the ones this run produced.
+#
+# It fires ONLY on a recorded-and-disagreeing artefact; an artefact no register
+# names is UNRECORDED and changes no verdict. See `_run_evidence_binding`.
+# ---------------------------------------------------------------------------
+def _bind_consumed_evidence(project_dir: Path, findings: List[Finding],
+                            stats: dict) -> None:
+    """Attach the run-binding verdict to `stats`/`findings`. Never raises."""
+    try:
+        assessment = _reb.assess(project_dir, stats.get("_consumed") or ())
+    except Exception as exc:  # pragma: no cover - defensive
+        # A binding check that crashed must not read as one that passed.
+        stats["evidence_binding"] = {
+            "error": f"{type(exc).__name__}: {exc}",
+            "disclosure": "the run-evidence binding could not be evaluated, so "
+                          "nothing was verified about which run produced the "
+                          "artefacts behind this verdict",
+        }
+        return
+    summary = assessment.summary()
+    summary["disclosure"] = assessment.disclosure()
+    stats["evidence_binding"] = summary
+    for b in assessment.mismatched:
+        findings.append(Finding("ERROR", _reb.RULE, b.message(), b.rel))
 
 
 def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict:
@@ -387,6 +427,7 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
             "erc_checked": stats["erc_checked"],
             "erc_floating_nets": stats["erc_floating_nets"],
             "erc_clean": stats["erc_clean"],
+            "evidence_binding": stats.get("evidence_binding"),
             "findings_count": len(findings),
             "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
             "pass": all(f.severity != "ERROR" for f in findings),
