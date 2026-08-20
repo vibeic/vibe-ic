@@ -23171,7 +23171,36 @@ def _derive_metal_fill_density(pdk: "PdkConfig",
             metal_prefix=(getattr(pdk, "metal_prefix", None) or "metal"))
     except Exception:
         return None
-    if cfg and chip_die:
+    # === THE KEEP-OUT: THE DECK'S OWN RULE FIRST, THE BAND ONLY AS FALLBACK ===
+    #
+    # `metal_fill.py` has supported two keep-out forms since the fill engine
+    # got one, and its own docstring already says which is which:
+    #
+    #   keepout_layers  "the exact form when the PDK ships a marker for the
+    #                    band ... because it follows the ring the generator
+    #                    actually drew instead of assuming where it went"
+    #   keepout_edge_um "the `fill_all.rb` form, for a PDK that ships no marker"
+    #
+    # Only the fallback was ever populated. `build_metal_fill_config` now
+    # derives the primary from the deck's own separation rules (see
+    # `parse_metal_keepout_layers`), so the band is used for what it was
+    # documented for: a PDK whose deck states no such rule.
+    #
+    # WHY THE ORDER MATTERS, MEASURED. The band is inset from the layout's own
+    # bbox and is claimed on `chip_die`, which is a fact about the DESIGN (it
+    # declared a shuttle slot). Whether a ring is ON the layout is a fact about
+    # the ARTEFACT, and the two come apart: a PDK whose seal-ring generator
+    # cannot load its own PCell library prints an error, exits 0 and writes
+    # nothing, and the flow then carves a full scribe band out of the routed
+    # CORE's edge to protect a ring that is not there. That is the same defect
+    # a 26 um band on a 240x240 um IP macro already produced once; gating on
+    # "declares a slot" moved it, it did not remove it.
+    #
+    # A marker keep-out cannot make that mistake: an absent marker is an EMPTY
+    # region, so it keeps out nothing, and the engine says `EMPTY` rather than
+    # reporting a band it did not need.
+    _ko_layers = list((cfg or {}).get("keepout_layers") or [])
+    if cfg and chip_die and not _ko_layers:
         # ONLY on a full chip die. `space_to_scribe_line` is a clearance from
         # the SAWING STREET, and a sawing street exists only at the chip's own
         # edge. An IP macro's boundary is not a scribe line: it is placed in the
