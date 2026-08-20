@@ -61,9 +61,10 @@ def test_config_id_is_decodable_without_the_record():
 # --------------------------------------------------------------------------
 # which axes actually moved — the disclosure ORFS does not have
 # --------------------------------------------------------------------------
-def _rec(perf, power, area):
+def _rec(perf, power, area, drc_penalty=0.0):
     return {"objective": {"terms": {"performance": perf, "power": power,
-                                    "area": area}}}
+                                    "area": area},
+                          "drc_penalty": drc_penalty}}
 
 
 def test_an_axis_that_took_one_value_is_reported_INERT():
@@ -95,7 +96,8 @@ def test_the_report_says_which_axes_were_inert():
 
 def test_a_fully_discriminating_search_carries_no_inert_warning():
     md = report_md(_search(axis_discrimination=axis_discrimination(
-        [_rec(1.0, 2.0, 3.0), _rec(4.0, 5.0, 6.0)])))
+        [_rec(1.0, 2.0, 3.0, drc_penalty=0.0),
+         _rec(4.0, 5.0, 6.0, drc_penalty=7.5)])))
     assert "INERT" not in md
     assert "contributed nothing to the ranking" not in md
 
@@ -280,3 +282,22 @@ def test_a_search_record_is_not_offered_as_a_head_to_head_arm():
     assert '"score"' in h2h, (
         "premise: the head-to-head checker really does refuse `score`; if it "
         "stops doing so this warning is stale and must be re-read")
+
+
+def test_a_clean_sweep_is_not_offered_as_proof_the_drc_penalty_works():
+    """Every configuration coming back with zero violations means the
+    anti-cheating term never fired. A report that stayed silent would let a
+    clean sweep read as a demonstration of the refusal."""
+    got = axis_discrimination([_rec(0.0, 0.0, 1.0), _rec(0.0, 0.0, 2.0)])
+    assert got["drc_penalty"]["status"] == "INERT"
+    md = report_md(_search(axis_discrimination=got))
+    assert "never fired" in md
+    assert "NOT evidence the" in md
+
+
+def test_a_search_that_did_hit_violations_carries_no_such_disclaimer():
+    recs = [_rec(0.0, 0.0, 1.0), _rec(0.0, 0.0, 2.0)]
+    recs[1]["objective"]["drc_penalty"] = 12.5
+    got = axis_discrimination(recs)
+    assert got["drc_penalty"]["status"] == "DISCRIMINATING"
+    assert "never fired" not in report_md(_search(axis_discrimination=got))

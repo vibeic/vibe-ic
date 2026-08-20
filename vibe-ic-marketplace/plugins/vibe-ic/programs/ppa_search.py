@@ -386,9 +386,16 @@ def axis_discrimination(scored: List[Dict[str, Any]]) -> Dict[str, Any]:
     move" must not read alike, and neither may read as "it was optimised".
     """
     out: Dict[str, Any] = {}
-    for axis in _obj.AXES:
-        vals = [r["objective"]["terms"][axis] for r in scored
-                if r.get("objective")]
+    for axis in list(_obj.AXES) + ["drc_penalty"]:
+        # `drc_penalty` is not a weighted axis, it is the anti-cheating term —
+        # and it is included for exactly the same reason. A search in which
+        # every configuration was clean never EXERCISED the refusal that stops
+        # a configuration winning on violations. That is a good outcome and it
+        # is not evidence the refusal works; the unit tests are. Saying so here
+        # keeps a clean sweep from reading as a demonstration.
+        vals = [(r["objective"]["terms"][axis] if axis in _obj.AXES
+                 else r["objective"]["drc_penalty"])
+                for r in scored if r.get("objective")]
         uniq = sorted({round(v, 9) for v in vals})
         out[axis] = {
             "samples": len(vals),
@@ -455,15 +462,27 @@ def report_md(search: Dict[str, Any]) -> str:
                   "the ranking could have come from.", "",
                   "| axis | weight | status | distinct values | range |",
                   "|---|---:|---|---:|---|"]
-        for axis in _obj.AXES:
+        for axis in list(_obj.AXES) + ["drc_penalty"]:
             a = axes.get(axis) or {}
             rng = ("—" if a.get("min") is None
                    else f"{a['min']:.3f} … {a['max']:.3f}")
+            weight = (f"{w['weights'][axis]:g}" if axis in _obj.AXES
+                      else "anti-cheat")
             lines.append(
-                f"| `{axis}` | {w['weights'][axis]:g} | **{a.get('status')}** "
+                f"| `{axis}` | {weight} | **{a.get('status')}** "
                 f"| {a.get('distinct')} | {rng} |")
+        drc = axes.get("drc_penalty") or {}
+        if drc.get("status") == "INERT" and drc.get("constant_value") == 0:
+            lines += ["",
+                      "> Every scored configuration produced **zero DRC "
+                      "violations**, so the anti-cheating penalty never fired. "
+                      "That is a good outcome and it is NOT evidence the "
+                      "penalty works — this search did not test it. The "
+                      "objective's unit tests do, by scoring a dense-but-dirty "
+                      "configuration against a clean-but-worse one and "
+                      "requiring the dirty one to lose."]
         inert = [ax for ax in _obj.AXES
-                 if (axes.get(ax) or {}).get("status") == "INERT"]
+                 if (axes.get(ax) or {}).get("status") == "INERT"]  # weighted only
         if inert:
             lines += ["",
                       f"> **{', '.join('`'+i+'`' for i in inert)} took ONE "
