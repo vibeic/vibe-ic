@@ -5251,6 +5251,87 @@ steps:
         # measured change; it moves what the gate PASSES, not only what it
         # refuses.
         - program_exit_zero: "declared_pdk_is_the_pdk_used_check ."
+        # vibe-ic#1121 — THIS GATE WAS NEVER WIRED, and it is the third time
+        # this repo has found that shape (step 21's macro_obs geometry check,
+        # step 37.5ic's shuttle precheck, now this). Measured on 46db01866:
+        #     git grep -n "ppa_head_to_head" -- '*flow/*'   ->  ZERO lines
+        # (the pathspec matters: `-- '*/flow/'` also returns zero, and returns
+        # zero WITH the gate wired, because it matches no file in this repo at
+        # all. A zero from a probe that cannot match is not a measurement.)
+        # The program is complete and encodes #1121's four refusals, and no
+        # step invoked it, so nothing it refuses could ever fail a run.
+        #
+        # WIRED HERE because this is the step that OWNS THE CLAIM. A PPA
+        # head-to-head is not a design artefact, it is a SIGN-OFF assertion
+        # ("given an identical spec and PDK, this flow produced better PPA than
+        # theirs"), and this step is the flow's final sign-off confirmation. It
+        # is also the first step whose blocks_on transitively carries all three
+        # axes the record must declare — 31 PV, 32 post-route timing, 33 power,
+        # 34 fill/area — so the triple exists by the time it is judged. And it
+        # is UNCONDITIONAL, so it stands on both the chip and the IP path,
+        # unlike 37.5ic / 37.5ip / 38. A refusal lands BEFORE stream-out,
+        # because step 37 blocks_on 36: a false comparison never reaches a GDS.
+        #
+        # rc 2 SKIPS, AND THAT IS A DECISION, NOT AN OVERSIGHT.
+        # `__check_program_exit_zero` reads rc 2 as VACUOUS_PASS, so a gate that
+        # exits 2 on absence cannot go red — the v1.11.3 `tapeout_docs_gen`
+        # defect. Checked what THIS invocation returns: `--corpus .` walks the
+        # project for the checker's own record glob and exits 2 only when the
+        # walk succeeded and found NOTHING. That skip is deliberate. The record
+        # is a CAMPAIGN artefact, not a per-design one — nearly every design
+        # this flow signs off will never carry one — so blocking on absence
+        # would redden every ordinary tapeout to police a claim nobody made,
+        # which is the "declare an undeclared artefact and relocate the red"
+        # shape. What must NOT skip is a claim that was actually made, and after
+        # the fix that ships with this change it cannot:
+        #   * a record that EXISTS and cannot support itself is rc 1 -> FAIL;
+        #   * a refusal is no longer softened by an undetermined record beside
+        #     it (the aggregator used max(), and rc 2 is the larger integer and
+        #     the weaker verdict, so ONE unmeasured axis defused a real refusal);
+        #   * a corpus that cannot be READ is rc 1 CORPUS_ABSENT, not rc 2 —
+        #     "I could not look" and "I looked and it was empty" are now two
+        #     different answers.
+        # So the only thing that skips here is a run that made no claim, and it
+        # skips loudly: the denominator is printed on every run and the step is
+        # promoted to the VACUOUS_PASS tier, never a bare PASS.
+        #
+        # NOT `advisory_program_exit_zero`: that slot records a finding and can
+        # never fail the step, and a rigged baseline is a defect in a published
+        # claim, so its verdict has to decide this step's.
+        #
+        # `optional_program_exit_zero` AND NOT THE UNCONDITIONAL SLOT, MEASURED.
+        # Wired unconditionally, `--corpus .` returns rc 2 on every run that
+        # files no record, and `check_step` reads ONE vacuous clause beside
+        # substantive ones as "every clause was vacuous" — a substantive
+        # sub-gate appends nothing, so silence and vacuity are the same to it:
+        #     substantive ALONE       -> PASS
+        #     vacuous ALONE           -> VACUOUS_PASS
+        #     substantive + vacuous   -> VACUOUS_PASS
+        # That would demote the TAPEOUT SIGN-OFF itself to VACUOUS_PASS on every
+        # ordinary run, which is the mis-fire that withdrew v1.10.14 (step 2
+        # Lint demoted on 1 vacuous clause out of 10 that ran).
+        #
+        # This is NOT step 21's "orphan with extra steps". That ruling is about
+        # a trigger on an artefact THE FLOW ITSELF PRODUCES, where a
+        # self-disabling glob hides a real defect. The condition below IS the
+        # checker's own record glob over an artefact NO step produces, so
+        # condition-unmet and corpus-empty are the SAME SET by construction and
+        # no record can hide behind it. The skip is bought, not assumed: the
+        # engine FAILs the clause outright unless the wiring site declares why
+        # an absent input is genuinely not-applicable.
+        - optional_program_exit_zero:
+            command: "ppa_head_to_head_check --corpus ."
+            condition_files_exist: ["**/*head_to_head*.json"]
+            absent_condition_reason: >-
+              The subject is a CLAIM, not a result. A PPA head-to-head record is
+              produced by a comparison campaign against another flow -- vibe-ic
+              against LibreLane against ORFS+AutoTuner -- and not by a design
+              run, so nearly every sign-off legitimately files none. The failure
+              this clause exists for, a comparison that cannot support the claim
+              printed on it, REQUIRES the claim to exist. Absence is the normal
+              case here, not the defect. The glob is the checker's OWN record
+              glob, so a record that exists is always judged: there is no state
+              in which a claim was filed and this clause did not look at it.
     blocks_on: [31, 32, 33, 34]
 
   - id: 37
