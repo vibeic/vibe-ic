@@ -419,3 +419,22 @@ def test_a_not_measured_record_carries_no_value_key_the_schema_forbids():
     for rec in doc["metrics"]:
         assert rec["status"] == pw.STATUS_NOT_MEASURED
         assert "value" not in rec and rec["reason"]
+
+
+def test_a_requested_mode_line_is_not_mistaken_for_the_resolved_one():
+    """FORWARD COMPATIBILITY with the runner fix this lane requested.
+
+    `phase3_one_shot_runner` decides `vector_vcd` from the EXISTENCE of a .vcd,
+    before the read is attempted, and the requested fix is to print the request
+    and the outcome as two lines. `POWER_ANALYSIS_MODE_REQUESTED:` must not be
+    read as `POWER_ANALYSIS_MODE:` — a parser that matched the prefix would
+    resolve the basis from the intention again, which is the whole defect.
+    """
+    text = (_BANNER + "POWER_ANALYSIS_MODE_REQUESTED: vector_vcd\n"
+            + "READ_VCD_FAIL: boom\n"
+            + "POWER_ANALYSIS_MODE: vectorless_sdc\n" + _TABLE)
+    act = pw.parse_power_report(text)["activity"]
+    assert act["declared_mode"] == "vectorless_sdc"
+    assert act["basis"] == pw.BASIS_VECTORLESS
+    # The failure is still disclosed, because it is still a fact about the run.
+    assert act["read_failures"] == ["READ_VCD_FAIL: boom"]
