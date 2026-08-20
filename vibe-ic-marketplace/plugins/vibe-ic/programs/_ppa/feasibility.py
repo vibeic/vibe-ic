@@ -1,0 +1,753 @@
+#!/usr/bin/env python3
+"""The hard gate: a beautiful number on one axis does not promote a violation.
+
+WHY THIS MODULE IS SEPARATE FROM THE SEARCH PENALTY (spec 8.2)
+==============================================================
+An optimiser needs a GRADED signal. If every infeasible candidate scored
+"infinitely bad", the search would have no gradient to walk back along and
+would wander. So a graded penalty is not a mistake -- it is how the navigation
+works.
+
+A published claim needs the opposite. "This candidate may be promoted" is a
+statement about silicon, and it is either true or it is not; there is no
+partial credit for a design-rule violation. A candidate whose worst-negative
+slack improved by 40 ps and whose LVS is dirty is not 90% promotable. It is
+refused.
+
+The failure this module exists to prevent is the ONE code path that serves both
+questions: a penalty large enough to lose a search, but finite, and therefore
+capable of being outweighed by a big enough win on another axis. That is how a
+violating candidate wins.
+
+The separation here is STRUCTURAL, not a convention someone has to remember:
+
+  * `promotion_verdict()` takes a `FeasibilityPolicy`. `search_penalty()` takes
+    a `PenaltyWeights`. The two dataclasses share no field name, so there is no
+    threshold both paths can read -- `separation_report()` MEASURES that with
+    `dataclasses.fields`, it is not asserted in prose.
+  * The dependency runs ONE WAY. `search_penalty()` consumes an already
+    adjudicated `FeasibilityResult`; nothing in the gate's call closure
+    references the penalty. `separation_report()` measures that too, over the
+    module's own AST, so an author who wires the penalty into the gate makes
+    this module say so out loud.
+
+WHAT "COULD NOT CHECK" MEANS HERE, AND WHY IT IS NOT A PASS
+===========================================================
+"DRC reported zero violations" and "DRC never ran" both produce the number 0 if
+you only look at a count. This module never reads a bare count. It reads
+canonical metric records (`vibeic.ppa.metric.v1`), and a record only supports a
+proof when its `status` is `MEASURED` and it carries provenance -- an artefact
+path and the sha256 of the artefact that was parsed. A candidate whose DRC
+evidence is a `NOT_MEASURED` record, or a `MEASURED` record with no artefact
+behind it, is UNDETERMINED. It is never FEASIBLE.
+
+For the same reason a waiver cannot rescue an axis that was never measured. A
+waiver is a statement that a KNOWN violation is acceptable to a named owner.
+Applying one to an axis nobody looked at converts an unknown into a pass, which
+is precisely the move this whole contract exists to make impossible.
+
+VERDICT PRECEDENCE, AND WHY IT DIFFERS BETWEEN A CANDIDATE AND A SET
+====================================================================
+Per CANDIDATE, a confirmed violation wins over an unmeasured axis: one measured
+violation is already sufficient and sound grounds to refuse promotion, and
+refusing is the safe direction. So VIOLATED beats UNDETERMINED and the candidate
+is INFEASIBLE.
+
+Per SET -- which is what the CLI's exit code reports -- it is the other way
+round. rc=0 asserts "every candidate was adjudicated and all are feasible", and
+one unadjudicated candidate makes that assertion false; rc=1 asserts a complete
+finding about the design, and a run that could not see all of its evidence must
+not make one. So at set level UNDETERMINED (rc=2) takes precedence over
+INFEASIBLE (rc=1). Nothing is lost: both block, every per-candidate verdict is
+in the JSON, and every finding is printed regardless of which code is returned.
+
+chip-AGNOSTIC: nothing here names an IC, a vendor, an SKU or a process. Every
+threshold in the default axis set is either zero violations, a non-negative
+slack, or a limit the CONTRACT declares -- never a number invented here.
+"""
+from __future__ import annotations
+
+import ast
+import dataclasses
+import inspect
+import pathlib
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+__all__ = [
+    "RC_PASS", "RC_FAIL", "RC_UNDETERMINED", "RC_BAD_INVOCATION",
+    "METRIC_SCHEMA", "FEASIBILITY_SCHEMA",
+    "STATUS_MEASURED", "COMPARABLE_STATUSES", "METRIC_STATUSES",
+    "KIND_SLACK_NONNEG", "KIND_COUNT_ZERO", "KIND_VERDICT_IN", "KIND_LIMIT_MAX",
+    "AXIS_SATISFIED", "AXIS_VIOLATED", "AXIS_WAIVED", "AXIS_UNDETERMINED",
+    "FEASIBLE", "INFEASIBLE", "UNDETERMINED",
+    "Proof", "Axis", "DEFAULT_AXES",
+    "FeasibilityPolicy", "PenaltyWeights",
+    "AxisResult", "FeasibilityResult",
+    "policy_from_document", "promotion_verdict", "adjudicate_set",
+    "search_penalty", "separation_report", "shared_field_names",
+    "set_exit_code",
+]
+
+# --- exit codes (docs/PPA_INTERFACES.md 1) ---------------------------------
+RC_PASS = 0
+RC_FAIL = 1
+RC_UNDETERMINED = 2
+RC_BAD_INVOCATION = 3
+
+METRIC_SCHEMA = "vibeic.ppa.metric.v1"
+FEASIBILITY_SCHEMA = "vibeic.ppa.feasibility.v1"
+
+# --- metric statuses (docs/PPA_INTERFACES.md 2) ----------------------------
+STATUS_MEASURED = "MEASURED"
+#: Only these may enter a numeric comparison. The table in the interface freeze
+#: has exactly one row with "yes" in it, and this is that row.
+COMPARABLE_STATUSES = frozenset({STATUS_MEASURED})
+METRIC_STATUSES = frozenset({
+    "MEASURED", "NOT_MEASURED", "NOT_APPLICABLE",
+    "INVALID", "ESTIMATED", "DERIVED",
+})
+
+# --- proof kinds ------------------------------------------------------------
+#: value >= 0. Sign is invariant under any positive unit scaling, so this kind
+#: deliberately does NOT require a unit match -- 0 ns and 0 ps are the same
+#: boundary and demanding agreement would refuse a correct artefact.
+KIND_SLACK_NONNEG = "slack_nonneg"
+#: value == 0. A negative count is not "very clean", it is a broken parse.
+KIND_COUNT_ZERO = "count_zero"
+#: value is one of an accepted set of literals (e.g. an LVS verdict).
+KIND_VERDICT_IN = "verdict_in"
+#: value <= a limit the CONTRACT declares. There is no built-in number: a limit
+#: this module invented would be a chip-specific constant in agnostic source.
+KIND_LIMIT_MAX = "limit_max"
+
+# --- axis and candidate verdicts -------------------------------------------
+AXIS_SATISFIED = "SATISFIED"
+AXIS_VIOLATED = "VIOLATED"
+AXIS_WAIVED = "WAIVED"
+AXIS_UNDETERMINED = "UNDETERMINED"
+
+FEASIBLE = "FEASIBLE"
+INFEASIBLE = "INFEASIBLE"
+UNDETERMINED = "UNDETERMINED"
+
+# --- verdict codes ----------------------------------------------------------
+# Every verdict carries one of these. A human sentence is not a code: two
+# authors write it two ways and no downstream selector can match on it.
+C_METRIC_ABSENT = "FEAS_METRIC_ABSENT"
+C_BAD_RECORD = "FEAS_BAD_RECORD"
+C_BAD_STATUS = "FEAS_BAD_STATUS"
+C_NOT_MEASURED = "FEAS_NOT_MEASURED"
+C_NOT_MEASURED_CARRIES_VALUE = "FEAS_NOT_MEASURED_CARRIES_VALUE"
+C_NO_PROVENANCE = "FEAS_NO_PROVENANCE"
+C_INCOMPLETE_VIEW_SET = "FEAS_INCOMPLETE_VIEW_SET"
+C_VIEWS_NOT_DECLARED = "FEAS_VIEWS_NOT_DECLARED"
+C_LIMIT_NOT_DECLARED = "FEAS_LIMIT_NOT_DECLARED"
+C_UNIT_MISMATCH = "FEAS_UNIT_MISMATCH"
+C_NEGATIVE_COUNT = "FEAS_NEGATIVE_COUNT"
+C_NON_NUMERIC = "FEAS_NON_NUMERIC_VALUE"
+C_VIOLATION = "FEAS_VIOLATION"
+C_WAIVER_NO_OWNER = "FEAS_WAIVER_NO_OWNER"
+C_WAIVER_NO_JUSTIFICATION = "FEAS_WAIVER_NO_JUSTIFICATION"
+C_WAIVER_NO_AXIS = "FEAS_WAIVER_NO_AXIS"
+C_WAIVER_UNKNOWN_AXIS = "FEAS_WAIVER_UNKNOWN_AXIS"
+C_WAIVER_ON_UNMEASURED = "FEAS_WAIVER_ON_UNMEASURED"
+C_WAIVERS_DISABLED = "FEAS_WAIVERS_DISABLED"
+C_OK = "FEAS_OK"
+
+
+# ---------------------------------------------------------------------------
+# the axis table -- DATA, so that adding an axis is not editing an algorithm
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Proof:
+    """One way of establishing one axis from one canonical metric."""
+    metric: str
+    kind: str
+    accept: Tuple[str, ...] = ()
+    limit_key: str = ""
+
+
+@dataclass(frozen=True)
+class Axis:
+    """A feasibility axis and the alternative ways of proving it.
+
+    `groups` is an OR of ANDs: the axis is satisfied when every proof in at
+    least one group is satisfied. That shape is here because real flows report
+    the same fact two ways -- one rolled-up design-rule-violation count, or the
+    individual max-transition / max-capacitance / max-fanout counts -- and a
+    checker that insisted on one spelling would refuse a correct run.
+
+    A measured failure in ANY group makes the axis VIOLATED even if another
+    group is satisfied: two artefacts that disagree is not permission to
+    believe the flattering one.
+    """
+    name: str
+    groups: Tuple[Tuple[Proof, ...], ...]
+
+
+DEFAULT_AXES: Tuple[Axis, ...] = (
+    Axis("setup", ((Proof("timing.setup.wns_ns", KIND_SLACK_NONNEG),),
+                   (Proof("timing.setup.violations", KIND_COUNT_ZERO),))),
+    Axis("hold", ((Proof("timing.hold.wns_ns", KIND_SLACK_NONNEG),),
+                  (Proof("timing.hold.violations", KIND_COUNT_ZERO),))),
+    Axis("drv", ((Proof("timing.drv.violations", KIND_COUNT_ZERO),),
+                 (Proof("timing.drv.max_tran_violations", KIND_COUNT_ZERO),
+                  Proof("timing.drv.max_cap_violations", KIND_COUNT_ZERO),
+                  Proof("timing.drv.max_fanout_violations", KIND_COUNT_ZERO)))),
+    Axis("drc", ((Proof("physical.drc.violations", KIND_COUNT_ZERO),),)),
+    Axis("lvs", ((Proof("physical.lvs.verdict", KIND_VERDICT_IN,
+                        accept=("CLEAN", "MATCH")),),
+                 (Proof("physical.lvs.violations", KIND_COUNT_ZERO),))),
+    Axis("antenna", ((Proof("physical.antenna.violations", KIND_COUNT_ZERO),),)),
+    Axis("ir", ((Proof("power.ir.violations", KIND_COUNT_ZERO),),
+                (Proof("power.ir.worst_drop_v", KIND_LIMIT_MAX,
+                       limit_key="power.ir.worst_drop_v"),))),
+    Axis("em", ((Proof("reliability.em.violations", KIND_COUNT_ZERO),),
+                (Proof("reliability.em.worst_ratio", KIND_LIMIT_MAX,
+                       limit_key="reliability.em.worst_ratio"),))),
+    Axis("equivalence", ((Proof("equivalence.verdict", KIND_VERDICT_IN,
+                                accept=("PROVEN", "EQUIVALENT")),),)),
+)
+
+
+# ---------------------------------------------------------------------------
+# the two configurations. THEIR FIELD NAMES ARE DISJOINT AND THAT IS CHECKED.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class FeasibilityPolicy:
+    """Everything the HARD gate is allowed to read. No weights, no penalties.
+
+    `required_views` is not optional and has no default that means "any". A
+    setup check is feasible across the views the contract required, and a
+    module that let an undeclared view set mean "whatever was measured is
+    enough" would credit a one-corner run as signoff.
+    """
+    axes: Tuple[Axis, ...] = DEFAULT_AXES
+    required_views: Tuple[Mapping[str, Any], ...] = ()
+    limits: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    allow_waivers: bool = True
+
+
+@dataclass(frozen=True)
+class PenaltyWeights:
+    """Everything the SEARCH penalty is allowed to read. No axis table.
+
+    Deliberately shares NO field name with `FeasibilityPolicy`; that disjointness
+    is what `separation_report` measures, and it is the machine-checkable form
+    of "those are two different code paths and must not share a threshold".
+    """
+    weights: Mapping[str, float] = field(default_factory=dict)
+    undetermined_weight: float = 1.0
+    default_weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class AxisResult:
+    name: str
+    status: str
+    codes: Tuple[str, ...]
+    detail: Tuple[Mapping[str, Any], ...] = ()
+    waiver_ids: Tuple[str, ...] = ()
+
+    def as_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {"axis": self.name, "status": self.status,
+                             "codes": list(self.codes),
+                             "evidence": [dict(x) for x in self.detail]}
+        if self.waiver_ids:
+            d["waiver_ids"] = list(self.waiver_ids)
+        return d
+
+
+@dataclass(frozen=True)
+class FeasibilityResult:
+    candidate_id: str
+    verdict: str
+    axes: Tuple[AxisResult, ...]
+    codes: Tuple[str, ...]
+    waivers: Tuple[Mapping[str, Any], ...] = ()
+
+    @property
+    def eligible_for_promotion(self) -> bool:
+        """The ONE predicate any promoter may use. Not a number, not a margin."""
+        return self.verdict == FEASIBLE
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
+            "verdict": self.verdict,
+            "codes": list(self.codes),
+            "axes": [a.as_dict() for a in self.axes],
+            "waivers": [dict(w) for w in self.waivers],
+        }
+
+
+# ---------------------------------------------------------------------------
+# metric record reading -- defensive, because the record is another lane's
+# ---------------------------------------------------------------------------
+def _is_number(v: Any) -> bool:
+    # bool is an int in Python and a boolean slack is a parse defect, not a 1.
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _record_defect(rec: Any) -> Optional[str]:
+    """None if `rec` may support a proof; otherwise the code saying why not."""
+    if not isinstance(rec, Mapping):
+        return C_BAD_RECORD
+    if rec.get("schema") != METRIC_SCHEMA:
+        return C_BAD_RECORD
+    status = rec.get("status")
+    if status not in METRIC_STATUSES:
+        return C_BAD_STATUS
+    if status not in COMPARABLE_STATUSES:
+        # A NOT_MEASURED record that still carries a value is worse than a
+        # missing one: it looks like evidence to anything that reads `value`
+        # without reading `status`, which is the exact confusion that lets
+        # "DRC never ran" print the same 0 as "DRC found nothing".
+        if status == "NOT_MEASURED" and rec.get("value") is not None:
+            return C_NOT_MEASURED_CARRIES_VALUE
+        return C_NOT_MEASURED
+    if rec.get("value") is None:
+        return C_BAD_RECORD
+    if not isinstance(rec.get("scope"), Mapping):
+        return C_BAD_RECORD
+    src = rec.get("source")
+    if not isinstance(src, Mapping):
+        return C_NO_PROVENANCE
+    if not str(src.get("path") or "").strip():
+        return C_NO_PROVENANCE
+    digest = str(src.get("sha256") or "")
+    if not digest.startswith("sha256:") or len(digest) != len("sha256:") + 64:
+        return C_NO_PROVENANCE
+    return None
+
+
+def _covers(scope: Mapping[str, Any], view: Mapping[str, Any]) -> bool:
+    """True when `scope` satisfies every key/value the required `view` names.
+
+    A view is a SUBSET, so a contract can require "the slow process corner"
+    without also having to restate the clock name and the check type.
+    """
+    return all(k in scope and scope[k] == v for k, v in view.items())
+
+
+def _evaluate_one(rec: Mapping[str, Any], proof: Proof,
+                  policy: FeasibilityPolicy) -> Tuple[str, Tuple[str, ...],
+                                                      Dict[str, Any]]:
+    """Adjudicate one VALID MEASURED record against one proof."""
+    value = rec.get("value")
+    ev: Dict[str, Any] = {"metric": proof.metric, "kind": proof.kind,
+                          "value": value, "unit": rec.get("unit"),
+                          "scope": dict(rec.get("scope") or {}),
+                          "source": dict(rec.get("source") or {})}
+    if proof.kind == KIND_VERDICT_IN:
+        ok = isinstance(value, str) and value.upper() in {
+            a.upper() for a in proof.accept}
+        ev["accept"] = list(proof.accept)
+        return (AXIS_SATISFIED if ok else AXIS_VIOLATED,
+                (C_OK,) if ok else (C_VIOLATION,), ev)
+
+    if not _is_number(value):
+        return AXIS_UNDETERMINED, (C_NON_NUMERIC,), ev
+
+    if proof.kind == KIND_SLACK_NONNEG:
+        ok = value >= 0
+        return (AXIS_SATISFIED if ok else AXIS_VIOLATED,
+                (C_OK,) if ok else (C_VIOLATION,), ev)
+
+    if proof.kind == KIND_COUNT_ZERO:
+        if value < 0:
+            return AXIS_UNDETERMINED, (C_NEGATIVE_COUNT,), ev
+        ok = value == 0
+        return (AXIS_SATISFIED if ok else AXIS_VIOLATED,
+                (C_OK,) if ok else (C_VIOLATION,), ev)
+
+    if proof.kind == KIND_LIMIT_MAX:
+        lim = policy.limits.get(proof.limit_key)
+        if not isinstance(lim, Mapping) or not _is_number(lim.get("max")):
+            # There is no default. A limit this module supplied would be a
+            # design-specific number living in chip-agnostic source.
+            return AXIS_UNDETERMINED, (C_LIMIT_NOT_DECLARED,), ev
+        ev["limit"] = dict(lim)
+        if str(lim.get("unit", "")) != str(rec.get("unit", "")):
+            # Comparing a magnitude to a limit requires the same unit; sign
+            # comparisons do not, which is why only this kind checks it.
+            return AXIS_UNDETERMINED, (C_UNIT_MISMATCH,), ev
+        ok = value <= lim["max"]
+        return (AXIS_SATISFIED if ok else AXIS_VIOLATED,
+                (C_OK,) if ok else (C_VIOLATION,), ev)
+
+    return AXIS_UNDETERMINED, (C_BAD_RECORD,), ev
+
+
+def _evaluate_proof(records: Sequence[Any], proof: Proof,
+                    policy: FeasibilityPolicy
+                    ) -> Tuple[str, Tuple[str, ...], List[Dict[str, Any]]]:
+    named = [r for r in records
+             if isinstance(r, Mapping) and r.get("metric") == proof.metric]
+    if not named:
+        return AXIS_UNDETERMINED, (C_METRIC_ABSENT,), [
+            {"metric": proof.metric, "kind": proof.kind, "absent": True}]
+
+    codes: List[str] = []
+    evidence: List[Dict[str, Any]] = []
+    usable: List[Mapping[str, Any]] = []
+    for rec in named:
+        defect = _record_defect(rec)
+        if defect is not None:
+            codes.append(defect)
+            evidence.append({"metric": proof.metric, "kind": proof.kind,
+                             "rejected": defect,
+                             "status": (rec.get("status")
+                                        if isinstance(rec, Mapping) else None)})
+            continue
+        usable.append(rec)
+
+    if not policy.required_views:
+        # Not declared is not the same as satisfied. Without a declared view
+        # set nothing here can tell a single-corner run from full coverage.
+        codes.append(C_VIEWS_NOT_DECLARED)
+        return AXIS_UNDETERMINED, tuple(dict.fromkeys(codes)), evidence
+
+    verdict = AXIS_SATISFIED
+    uncovered: List[Mapping[str, Any]] = []
+    for view in policy.required_views:
+        hits = [r for r in usable if _covers(r.get("scope") or {}, view)]
+        if not hits:
+            uncovered.append(view)
+            continue
+        for rec in hits:
+            st, cs, ev = _evaluate_one(rec, proof, policy)
+            ev["required_view"] = dict(view)
+            evidence.append(ev)
+            codes.extend(cs)
+            if st == AXIS_VIOLATED:
+                verdict = AXIS_VIOLATED
+            elif st == AXIS_UNDETERMINED and verdict != AXIS_VIOLATED:
+                verdict = AXIS_UNDETERMINED
+
+    if uncovered:
+        codes.append(C_INCOMPLETE_VIEW_SET)
+        evidence.append({"metric": proof.metric,
+                         "uncovered_views": [dict(v) for v in uncovered]})
+        # A measured violation stands even if coverage is partial -- it is a
+        # fact about the design and more views cannot unmake it.
+        if verdict != AXIS_VIOLATED:
+            verdict = AXIS_UNDETERMINED
+
+    codes = [c for c in dict.fromkeys(codes) if c != C_OK] or [C_OK]
+    return verdict, tuple(codes), evidence
+
+
+def _evaluate_axis(records: Sequence[Any], axis: Axis,
+                   policy: FeasibilityPolicy) -> AxisResult:
+    group_status: List[str] = []
+    codes: List[str] = []
+    evidence: List[Dict[str, Any]] = []
+    for group in axis.groups:
+        st = AXIS_SATISFIED
+        for proof in group:
+            pst, pcodes, pev = _evaluate_proof(records, proof, policy)
+            codes.extend(pcodes)
+            evidence.extend(pev)
+            if pst == AXIS_VIOLATED:
+                st = AXIS_VIOLATED
+            elif pst == AXIS_UNDETERMINED and st != AXIS_VIOLATED:
+                st = AXIS_UNDETERMINED
+        group_status.append(st)
+
+    if AXIS_VIOLATED in group_status:
+        status = AXIS_VIOLATED
+    elif AXIS_SATISFIED in group_status:
+        status = AXIS_SATISFIED
+    else:
+        status = AXIS_UNDETERMINED
+
+    keep = [c for c in dict.fromkeys(codes) if c != C_OK]
+    return AxisResult(axis.name, status, tuple(keep) or (C_OK,),
+                      tuple(evidence))
+
+
+# ---------------------------------------------------------------------------
+# waivers
+# ---------------------------------------------------------------------------
+def _waiver_defect(w: Any, axis_names: Iterable[str]) -> Optional[str]:
+    if not isinstance(w, Mapping):
+        return C_WAIVER_NO_AXIS
+    if not str(w.get("axis") or "").strip():
+        return C_WAIVER_NO_AXIS
+    if w["axis"] not in set(axis_names):
+        return C_WAIVER_UNKNOWN_AXIS
+    # An UNOWNED waiver is the named failure. A waiver is one person's signed
+    # acceptance of a known risk; with nobody named there is no acceptance,
+    # only a violation with a note attached, and the violation stands.
+    if not str(w.get("owner") or "").strip():
+        return C_WAIVER_NO_OWNER
+    if not str(w.get("justification") or "").strip():
+        return C_WAIVER_NO_JUSTIFICATION
+    return None
+
+
+def _apply_waivers(axes: Sequence[AxisResult], waivers: Sequence[Any],
+                   policy: FeasibilityPolicy
+                   ) -> Tuple[Tuple[AxisResult, ...], List[Dict[str, Any]]]:
+    names = [a.name for a in axes]
+    adjudicated: List[Dict[str, Any]] = []
+    by_axis: Dict[str, List[str]] = {}
+    for w in waivers:
+        wid = str((w or {}).get("waiver_id") or "") if isinstance(w, Mapping) else ""
+        if not policy.allow_waivers:
+            adjudicated.append({"waiver_id": wid, "applied": False,
+                                "code": C_WAIVERS_DISABLED})
+            continue
+        defect = _waiver_defect(w, names)
+        if defect is not None:
+            adjudicated.append({"waiver_id": wid, "applied": False,
+                                "code": defect,
+                                "axis": (w.get("axis")
+                                         if isinstance(w, Mapping) else None)})
+            continue
+        by_axis.setdefault(w["axis"], []).append(wid)
+        adjudicated.append({"waiver_id": wid, "applied": None,
+                            "axis": w["axis"], "owner": w["owner"]})
+
+    out: List[AxisResult] = []
+    for a in axes:
+        ids = by_axis.get(a.name, [])
+        if not ids:
+            out.append(a)
+            continue
+        if a.status == AXIS_VIOLATED:
+            out.append(AxisResult(a.name, AXIS_WAIVED, a.codes, a.detail,
+                                  tuple(ids)))
+            for rec in adjudicated:
+                if rec.get("waiver_id") in ids and rec.get("applied") is None:
+                    rec["applied"] = True
+            continue
+        # Not violated: either nothing to waive, or -- the dangerous one --
+        # the axis was never measured. A waiver may not turn an unknown into
+        # a pass; that is the whole failure mode this contract removes.
+        code = (C_WAIVER_ON_UNMEASURED if a.status == AXIS_UNDETERMINED
+                else "FEAS_WAIVER_NOT_NEEDED")
+        for rec in adjudicated:
+            if rec.get("waiver_id") in ids and rec.get("applied") is None:
+                rec["applied"] = False
+                rec["code"] = code
+        out.append(a)
+    for rec in adjudicated:
+        if rec.get("applied") is None:
+            rec["applied"] = False
+            rec.setdefault("code", "FEAS_WAIVER_NOT_NEEDED")
+    return tuple(out), adjudicated
+
+
+# ---------------------------------------------------------------------------
+# THE HARD GATE
+# ---------------------------------------------------------------------------
+def promotion_verdict(candidate: Mapping[str, Any],
+                      policy: FeasibilityPolicy) -> FeasibilityResult:
+    """Adjudicate ONE candidate. The only function a promoter may consult.
+
+    It reads canonical metric records and nothing else. It never reads a
+    summary field on the candidate, never reads a penalty, and has no numeric
+    margin of its own -- so there is no quantity a caller could make large
+    enough to buy a pass.
+    """
+    cid = str(candidate.get("candidate_id") or "")
+    records = candidate.get("metrics")
+    if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
+        return FeasibilityResult(cid, UNDETERMINED, (), (C_BAD_RECORD,))
+
+    axes = tuple(_evaluate_axis(records, ax, policy) for ax in policy.axes)
+    waivers_in = candidate.get("waivers") or []
+    if not isinstance(waivers_in, Sequence) or isinstance(waivers_in, (str, bytes)):
+        waivers_in = []
+    axes, waiver_rows = _apply_waivers(axes, waivers_in, policy)
+
+    statuses = {a.status for a in axes}
+    if AXIS_VIOLATED in statuses:
+        verdict = INFEASIBLE
+    elif AXIS_UNDETERMINED in statuses:
+        verdict = UNDETERMINED
+    else:
+        verdict = FEASIBLE
+
+    codes: List[str] = []
+    for a in axes:
+        if a.status in (AXIS_VIOLATED, AXIS_UNDETERMINED, AXIS_WAIVED):
+            codes.extend(f"{a.name}:{c}" for c in a.codes)
+    for row in waiver_rows:
+        if not row.get("applied") and row.get("code"):
+            codes.append(f"waiver:{row['code']}")
+    return FeasibilityResult(cid, verdict, axes,
+                             tuple(dict.fromkeys(codes)) or (C_OK,),
+                             tuple(waiver_rows))
+
+
+def adjudicate_set(candidates: Sequence[Mapping[str, Any]],
+                   policy: FeasibilityPolicy) -> List[FeasibilityResult]:
+    return [promotion_verdict(c, policy) for c in candidates]
+
+
+def set_exit_code(results: Sequence[FeasibilityResult]) -> int:
+    """rc for a whole set. See the module docstring for why 2 beats 1 here."""
+    if not results:
+        return RC_UNDETERMINED
+    verdicts = {r.verdict for r in results}
+    if UNDETERMINED in verdicts:
+        return RC_UNDETERMINED
+    if INFEASIBLE in verdicts:
+        return RC_FAIL
+    return RC_PASS
+
+
+def policy_from_document(doc: Mapping[str, Any]) -> FeasibilityPolicy:
+    """Build a policy from the contract document. Unknown keys are ignored.
+
+    Only `required_views`, `limits` and `allow_waivers` are configurable. The
+    axis table is not caller-supplied: a promotion gate whose axis list came
+    from the same document as the candidate could be handed a set of axes that
+    happens to omit the failing one.
+    """
+    views = doc.get("required_views") or ()
+    if not isinstance(views, Sequence) or isinstance(views, (str, bytes)):
+        views = ()
+    views = tuple(dict(v) for v in views if isinstance(v, Mapping))
+    limits = doc.get("limits") or {}
+    if not isinstance(limits, Mapping):
+        limits = {}
+    allow = doc.get("allow_waivers")
+    return FeasibilityPolicy(
+        axes=DEFAULT_AXES,
+        required_views=views,
+        limits={str(k): dict(v) for k, v in limits.items()
+                if isinstance(v, Mapping)},
+        allow_waivers=True if allow is None else bool(allow),
+    )
+
+
+# ---------------------------------------------------------------------------
+# THE SEARCH PENALTY -- graded, one-way downstream, never consulted above
+# ---------------------------------------------------------------------------
+def search_penalty(result: FeasibilityResult,
+                   weights: PenaltyWeights) -> Dict[str, Any]:
+    """A graded, finite badness for an OPTIMISER to walk down. Not a verdict.
+
+    It consumes an ALREADY adjudicated `FeasibilityResult`, so the dependency
+    runs one way: the search can see the gate, the gate cannot see the search.
+    That is what makes it impossible for a big enough win elsewhere to outweigh
+    a violation in the published claim -- the published claim never reads this
+    number at all.
+
+    The returned document says so in its own payload (`promotable` is always
+    None here, `basis` is SEARCH_ONLY) so that a caller who serialises it into
+    a report cannot pass it off as an eligibility decision.
+    """
+    terms: Dict[str, float] = {}
+    for a in result.axes:
+        if a.status == AXIS_VIOLATED:
+            terms[a.name] = float(weights.weights.get(a.name,
+                                                      weights.default_weight))
+        elif a.status == AXIS_UNDETERMINED:
+            terms[a.name] = float(weights.undetermined_weight)
+    return {
+        "basis": "SEARCH_ONLY",
+        "penalty": float(sum(terms.values())),
+        "terms": terms,
+        "promotable": None,
+        "note": ("graded navigation signal; promotion is decided only by "
+                 "promotion_verdict()"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# the separation, MEASURED
+# ---------------------------------------------------------------------------
+_GATE_ENTRY = "promotion_verdict"
+_SEARCH_ENTRY = "search_penalty"
+#: Names the hard gate's call closure may not mention ANYWHERE in its AST --
+#: not call, not reference, not alias.
+_SEARCH_ONLY_NAMES = frozenset({"search_penalty", "PenaltyWeights"})
+
+
+def _module_source() -> str:
+    return pathlib.Path(inspect.getsourcefile(promotion_verdict)).read_text(
+        encoding="utf-8")
+
+
+def _module_functions(source: Optional[str] = None) -> Dict[str, ast.AST]:
+    tree = ast.parse(_module_source() if source is None else source)
+    return {n.name: n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+
+def shared_field_names(a: Any, b: Any) -> List[str]:
+    """Field names two dataclasses have in common. Empty is the whole rule.
+
+    Extracted so the detector can be exercised against a pair that DOES share a
+    field: a separation check that has never been shown to fire is a check
+    nobody can trust to fire.
+    """
+    fa = {f.name for f in dataclasses.fields(a)}
+    fb = {f.name for f in dataclasses.fields(b)}
+    return sorted(fa & fb)
+
+
+def _closure(entry: str, funcs: Mapping[str, ast.AST]) -> List[str]:
+    seen: List[str] = []
+    stack = [entry]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in funcs:
+            continue
+        seen.append(name)
+        for node in ast.walk(funcs[name]):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                stack.append(node.func.id)
+    return sorted(seen)
+
+
+def separation_report(source: Optional[str] = None) -> Dict[str, Any]:
+    """MEASURE, do not assert, that the two paths cannot share a threshold.
+
+    Returns the two call closures, every name the gate closure mentions that
+    belongs to the search path, and the field names of the two configuration
+    dataclasses. `separated` is True only when the gate mentions nothing from
+    the search path and the two configurations have no field in common.
+
+    This is a measurement over this file's own AST, so it stays true as the
+    file changes -- which is the point. A rule that lives in a docstring is a
+    rule a future author breaks without being told.
+
+    `source` overrides the text analysed. It exists so a test can feed this the
+    same module with the leak PUT BACK IN and watch `separated` go false; a
+    detector that has only ever been run against a clean file has not been shown
+    to detect anything.
+    """
+    funcs = _module_functions(source)
+    gate = _closure(_GATE_ENTRY, funcs)
+    search = _closure(_SEARCH_ENTRY, funcs)
+
+    leaked: List[str] = []
+    for fname in gate:
+        for node in ast.walk(funcs[fname]):
+            if isinstance(node, ast.Name) and node.id in _SEARCH_ONLY_NAMES:
+                leaked.append(f"{fname}->{node.id}")
+            elif isinstance(node, ast.Attribute) and node.attr in _SEARCH_ONLY_NAMES:
+                leaked.append(f"{fname}->{node.attr}")
+
+    gate_fields = sorted(f.name for f in dataclasses.fields(FeasibilityPolicy))
+    search_fields = sorted(f.name for f in dataclasses.fields(PenaltyWeights))
+    shared_fields = shared_field_names(FeasibilityPolicy, PenaltyWeights)
+
+    return {
+        "gate_entry": _GATE_ENTRY,
+        "search_entry": _SEARCH_ENTRY,
+        "gate_closure": gate,
+        "search_closure": search,
+        "search_names_reachable_from_gate": sorted(set(leaked)),
+        "gate_config_fields": gate_fields,
+        "search_config_fields": search_fields,
+        "shared_config_fields": shared_fields,
+        "separated": not leaked and not shared_fields,
+    }
