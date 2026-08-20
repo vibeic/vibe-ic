@@ -6,6 +6,19 @@
     "files_found": 1,
     "violations": 0,
     "clean": true,
-    "tool_authentic": true
+    "tool_authentic": true,
+    "evidence_binding": {
+      "registers_read": 0,
+      "registers_unreadable": 0,
+      "ledger_entries": 0,
+      "consumed": 1,
+      "bound": 0,
+      "unrecorded": 1,
+      "unreadable": 0,
+      "mismatched": 0,
+      "mismatched_paths": [],
+      "ambiguous_ledger_paths": 0,
+      "disclosure": "no run-evidence register was found (neither provenance.jsonl nor steps/**/STEP_RECORD.json), so NOTHING was verified about which run produced the artefacts this verdict rests on"
+    }
   }
 }

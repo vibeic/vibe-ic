@@ -17,67 +17,42 @@
     "",
     "That third case is the one that matters: without it a corpus prune would",
     "silently 'close' every finding and the ratchet would measure the",
-    "publication schedule instead of the gates."
+    "publication schedule instead of the gates.",
+    "",
+    "THE DONOR IS PART OF THE MEASUREMENT. `donor` cannot substitute a",
+    "register (it carries zero steps/**/STEP_RECORD.json), `launderer`",
+    "can. A campaign that ran only the first would report every A8 finding",
+    "below as DEFENDED, so both are named here and the attack that needs",
+    "the second has its own id rather than being averaged into A3."
   ],
-  "measured_on": "eed29f5f2",
+  "measured_on": "e60b0c94e",
   "cell": "spm/v1.9.96_gf180mcuD",
   "donor": "sha256/clean_run_v1427_20260715",
   "older_run": "sha256/clean_run_v1422_20260715",
-  "attempted": 21,
-  "forging": [],
-  "closed_since_previous_generation": "a38902d1",
-  "closed": [
+  "launderer": "spm/v1.10.18_sky130A",
+  "attempted": 28,
+  "forging": [
     {
-      "attack": "A1_TAMPER_DESTRUCTIVE",
-      "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
+      "attack": "A8_LAUNDERED_REGISTER",
       "target": "v1.9.96_gf180mcuD:antenna_report_check"
     },
     {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:drc_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
+      "attack": "A8_LAUNDERED_REGISTER",
       "target": "v1.9.96_gf180mcuD:em_report_check"
     },
     {
-      "attack": "A2_STALE_REPLAY",
+      "attack": "A8_LAUNDERED_REGISTER",
       "target": "v1.9.96_gf180mcuD:erc_density_check"
     },
     {
-      "attack": "A2_STALE_REPLAY",
+      "attack": "A8_LAUNDERED_REGISTER",
       "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
     },
     {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:lvs_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:antenna_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:drc_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:em_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:erc_density_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:lvs_report_check"
+      "attack": "A8_LAUNDERED_REGISTER",
+      "target": "v1.9.96_gf180mcuD:sta_report_check"
     }
-  ]
+  ],
+  "closed_since_previous_generation": "eed29f5f2",
+  "closed": []
 }

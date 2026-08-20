@@ -76,6 +76,39 @@ do not state, and would fire on honest trees. Paths with more than one
 recorded value are counted in the summary as `ambiguous` rather than being
 silently collapsed.
 
+THE LIMIT: THE REGISTER LIVES INSIDE THE TREE IT VOUCHES FOR
+============================================================
+This binds evidence to a record the RUN wrote, and that record is a file in the
+run tree. `steps/**/STEP_RECORD.json` ends in `.json`, so the very substitution
+attack this module defeats will overwrite it too whenever the donor has one at
+the same relative path — and then the donor's reports and the donor's digests
+agree with each other and every gate goes green again.
+
+MEASURED on the published corpus against THIS module, `v1.9.96_gf180mcuD` with
+the sibling cell `v1.10.18_sky130A` as the donor, over the paths whose bytes
+actually changed:
+
+    STEP_RECORDs substituted   BOUND 47   MISMATCH  6   UNRECORDED 208
+    STEP_RECORDs left alone    BOUND  0   MISMATCH 51   UNRECORDED 170
+
+Five sign-off gates forge a green in the first row. It is recorded as
+`A8_LAUNDERED_REGISTER` in `programs/adversarial_findings.json` and pinned by
+`test_adversarial_agent.test_the_donor_that_carries_a_register_LAUNDERS_the_binding`,
+because a limit that lives only in a docstring is a limit nobody re-measures.
+
+`provenance.jsonl` survives that attack only because `.jsonl` is outside the
+attack's suffix list — an accident of the probe, not a property of the register.
+NOTHING INSIDE THE RUN TREE CAN CLOSE THIS: `provenance.jsonl`, every
+`STEP_RECORD.json` and every `written.json` are writable by anyone who can write
+the evidence. Closing it needs an anchor the run cannot write — a digest the
+gatekeeper holds, a signature, or the published tree's git objects — which is a
+design change and is NOT claimed here.
+
+What this module does deliver, exactly: it raises a forgery from "copy a report
+that parses" to "copy a report AND every register in this tree that names it",
+and it turns the first into a red gate. That was thirteen forged greens and is
+now none of them.
+
 ENFORCEMENT: this module decides nothing on its own. It reports states. Each
 call site declares what a MISMATCH does there, from a MEASUREMENT rather than
 an intention — and the answer is not uniform: `flow_gate_enforcement_audit`
