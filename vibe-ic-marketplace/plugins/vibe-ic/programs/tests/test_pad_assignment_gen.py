@@ -581,6 +581,41 @@ def test_the_gate_preserves_the_producers_claim_and_re_runs_cleanly(tmp_path):
     assert _report(root)["producer"]["program"] == GEN.PROGRAM
 
 
+@pytest.mark.parametrize("verdict", ["FAIL", "SKIP"])
+def test_a_refusal_with_its_own_output_still_on_disk_fails(tmp_path, verdict):
+    """The producer deletes its stale config before refusing. If one survives
+    anyway, `pad_ring_gen` reads it next and builds a ring nobody accepted —
+    the artefact outliving the evidence."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    stamped = (root / PR.ASSIGNMENT_REL).read_text()
+    doc = _report(root)
+    doc["verdict"] = verdict
+    doc["reason"] = ("a refusal long enough to clear the disclosure floor the "
+                     "flow applies to every skip a program writes, naming "
+                     + PR.ASSIGNMENT_REL + " and " + ST.REPORT_REL + " and "
+                     + TD.DECLARATION_REL)
+    doc["sources"] = [{"path": PR.ASSIGNMENT_REL, "declared": {}},
+                      {"path": ST.REPORT_REL, "declared": {}},
+                      {"path": TD.DECLARATION_REL, "declared": {}}]
+    (root / GEN.REPORT_REL).write_text(json.dumps(doc))
+    (root / PR.ASSIGNMENT_REL).write_text(stamped)     # it survived
+    assert _chk(root) == 1
+    assert "PAD_ASSIGNMENT_REFUSAL_CONTRADICTED" in _gate_rules(root)
+
+
+def test_an_unstamped_config_is_not_a_contradicted_refusal(tmp_path):
+    """It is somebody else's input and was one of the producer's SOURCES; the
+    ring it produces is audited on its own terms by `pad_ring_check`."""
+    root = tmp_path / "bare"
+    root.mkdir()
+    assert _gen(root) == 2
+    (root / PR.ASSIGNMENT_REL).parent.mkdir(parents=True, exist_ok=True)
+    (root / PR.ASSIGNMENT_REL).write_text(json.dumps({"PAD_SOUTH": ["p0"]}))
+    assert _chk(root) == 2
+    assert "PAD_ASSIGNMENT_REFUSAL_CONTRADICTED" not in _gate_rules(root)
+
+
 def test_a_producer_refusal_is_restated_by_rule_id_not_absorbed(tmp_path):
     """Without this the refusal reaches the reader only as a downstream skip
     saying 'the config is absent', and three different facts arrive wearing the
