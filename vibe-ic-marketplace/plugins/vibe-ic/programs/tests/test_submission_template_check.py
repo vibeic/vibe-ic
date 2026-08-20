@@ -691,69 +691,99 @@ def test_a_die_step_and_an_ip_step_are_never_the_same_step():
         f"router, so it runs on every route and is not conditioned at all")
 
 
+def _write_router(root: Path, suffix: str) -> None:
+    """Put ONE of step 0.5ic's router files on disk, by its suffix."""
+    import _tapeout_declaration as TD
+    if suffix == "*.yaml":
+        (root / ST.SLOTS_DIR_REL).mkdir(parents=True, exist_ok=True)
+        (root / ST.SLOTS_DIR_REL / "slot_a.yaml").write_text(
+            "DIE_AREA: [0, 0, 2000, 2000]\n"
+            "CORE_AREA: [100, 100, 1900, 1900]\nFP_SIZING: absolute\n")
+    elif suffix == "NO_TEMPLATE.txt":
+        (root / ST.NO_TEMPLATE_REL).parent.mkdir(parents=True, exist_ok=True)
+        (root / ST.NO_TEMPLATE_REL).write_text(
+            ST.NO_TEMPLATE_MARKER + "\nfixture\n")
+    elif suffix == "SELF_TAPEOUT.txt":
+        (root / TD.SELF_TAPEOUT_REL).parent.mkdir(parents=True, exist_ok=True)
+        (root / TD.SELF_TAPEOUT_REL).write_text(
+            TD.SELF_TAPEOUT_MARKER + "\nfixture\n")
+    else:                                                   # pragma: no cover
+        raise AssertionError(f"no writer for router file {suffix!r}")
+
+
 def test_two_routers_at_once_is_refused_by_a_PROGRAM_because_the_flow_cannot(
         tmp_path):
     """WHERE THE EXCLUSIVITY ACTUALLY LIVES — measured, not assumed.
 
-    The old assertion here read "no step is selected by more than one router",
-    and the harm its comment names is TWO TERMINALS SELECTED AT ONCE. Those are
-    not the same statement, and the gap between them is the whole point:
+    The assertion this replaces read "no step is selected by more than one
+    router", and the harm its comment names is TWO TERMINALS SELECTED AT ONCE.
+    Those are not the same statement, and the gap between them is the point.
+    MEASURED on the flow as it stood, with both chip routers on disk:
 
-        `flow_compliance_check._check_condition` on a tree carrying BOTH
-        `slots/*.yaml` and `SELF_TAPEOUT.txt`, measured:
-            37.5ic    selected=True   |  TWO TERMINALS
-            37.5self  selected=True   |
-        and each of those steps names EXACTLY ONE router file.
+        flow_compliance_check._check_condition
+            37.5ic    selected=True    |  TWO TERMINALS
+            37.5self  selected=True    |
 
-    So the old assertion is satisfied by construction on the very tree that
-    exhibits the defect it exists to prevent. It could never have caught it. It
-    was measuring step-to-router MULTIPLICITY — adjacent to — rather than
-    terminal-to-terminal COLLISION, which is the claim.
+    and each of those steps named EXACTLY ONE router file — so the old
+    assertion was satisfied by construction on the very tree that exhibits the
+    defect it exists to prevent, while failing on steps that are legitimately
+    on more than one route. It measured step-to-router MULTIPLICITY, adjacent
+    to terminal-to-terminal COLLISION, which is the claim.
 
-    And the flow cannot fix it: `files_exist` has no "and not", so 37.5ic and
-    37.5self select together whenever both files are on disk, whatever any test
-    asserts about how many routers a step names.
+    And the flow cannot hold the property: `files_exist` has no "and not", so
+    two steps on different routers select together whenever both files are on
+    disk, whatever any test asserts about how many routers a step names. This
+    is not a gap in the grammar to be filled; it is a property the flow is the
+    wrong place for.
 
-    What does hold the property is a PROGRAM, wired into step 0.5ic's own gate,
-    which REFUSES that tree rather than resolving it — and this test pins both
-    halves, because a guard that exists and is not wired guards nothing.
+    A PROGRAM holds it, wired into step 0.5ic's own gate, and this pins all
+    three halves — the harm is REACHABLE, the guard REFUSES it by a named rule,
+    and the guard IS WIRED, because one that exists and is not wired guards
+    nothing.
+
+    DERIVED FROM THE FLOW, never a hard-coded pair of step ids: which routers
+    collide is exactly what changes when a route is added or retired, and a
+    test naming them goes stale in the change that matters most.
     """
-    root = tmp_path / "both"
-    (root / ST.SLOTS_DIR_REL).mkdir(parents=True)
-    (root / ST.SLOTS_DIR_REL / "slot_a.yaml").write_text(
-        "DIE_AREA: [0, 0, 2000, 2000]\nCORE_AREA: [100, 100, 1900, 1900]\n"
-        "FP_SIZING: absolute\n")
-    import _tapeout_declaration as TD
-    doc, _ = TD.merge_answers(TD.blank_declaration(), {"deliverable": "DIE"})
-    (root / TD.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
-    (root / TD.SELF_TAPEOUT_REL).write_text(TD.SELF_TAPEOUT_MARKER + "\nboth\n")
-
-    # both terminals really are selected — the harm is reachable
-    import flow_compliance_check as FCC
-    selected = _selected(root)
-    assert {"37.5ic", "37.5self"} <= selected, (
-        "if the flow no longer selects two terminals on this tree the harm "
-        "moved, and the guard below is guarding nothing")
-
-    # ...and a program refuses the tree, by name
+    import itertools
     import tapeout_declaration_check as TDC
-    rc = TDC.main([str(root), "--json",
-                   str(root / "reports/phase1/tapeout_declaration.json")])
-    assert rc != 0, "a tree selecting two delivery paths must not pass"
-    rec = json.loads(
-        (root / "reports/phase1/tapeout_declaration.json").read_text())
-    blob = json.dumps(rec)
-    assert "ROUTER_CONTRADICTION" in blob, (
-        "the refusal must be a named rule, not a bare non-zero exit")
 
-    # ...and that program is a clause of step 0.5ic's own gate, not a checker
-    # somebody has to remember to run.
+    by_file = _routes_by_router_file()
+    routers = sorted(by_file)
+
+    # 1. THE HARM IS REACHABLE — some pair of routers selects steps the other
+    #    does not, i.e. two different terminals at once.
+    harmful = [(a, b) for a, b in itertools.combinations(routers, 2)
+               if (by_file[a] - by_file[b]) and (by_file[b] - by_file[a])]
+    assert harmful, (
+        "no pair of router files selects two different sets of steps any more, "
+        f"so the guard below is guarding nothing. Routes: {by_file}")
+
+    # 2. EVERY pair is refused by the program, by a NAMED rule — not just the
+    #    harmful ones, because which pair is harmful moves with the flow.
+    for a, b in itertools.combinations(routers, 2):
+        root = tmp_path / f"{a}_{b}".replace("*", "star").replace(".", "_")
+        (root / "input/submission_template").mkdir(parents=True)
+        _write_router(root, a)
+        _write_router(root, b)
+        import _tapeout_declaration as TD
+        doc, _ig = TD.merge_answers(TD.blank_declaration(),
+                                    {"deliverable": "DIE"})
+        (root / TD.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
+        rep = root / "reports/phase1/tapeout_declaration.json"
+        assert TDC.main([str(root), "--json", str(rep)]) != 0, (
+            f"a tree carrying {a} AND {b} selects more than one delivery path "
+            f"and must not pass")
+        assert "ROUTER_CONTRADICTION" in rep.read_text(), (
+            f"the refusal for {a}+{b} must be a named rule, not a bare "
+            f"non-zero exit")
+
+    # 3. ...and that program is a CLAUSE OF STEP 0.5ic'S OWN GATE.
     import yaml
     flow = yaml.safe_load(
         (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
     step = next(s for s in flow["steps"] if str(s["id"]) == "0.5ic")
-    clauses = json.dumps(step["gate"])
-    assert "tapeout_declaration_check" in clauses, (
+    assert "tapeout_declaration_check" in json.dumps(step["gate"]), (
         "the only thing that can hold this property is not wired into the "
         "step that writes the router files")
 
