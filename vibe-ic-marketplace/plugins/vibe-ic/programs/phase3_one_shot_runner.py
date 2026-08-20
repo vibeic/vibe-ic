@@ -33244,12 +33244,37 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _pwr_txt = power_rpt.read_text(errors="replace")
             _mode = ("vector_vcd" if "POWER_ANALYSIS_MODE: vector_vcd"
                      in _pwr_txt else "vectorless_sdc")
+            # The NUMBER, declared — not just the verdict. `power.json` used to
+            # carry `verdict`/`analysis_mode` and no measurement, so a consumer
+            # asking "what does this design draw" had nowhere structured to
+            # look and every one of them ended up regexing the report. MEASURED
+            # on a phase-3 run 2026-08-21: `report_power` computed
+            # `Total ... 3.06e-04` into `power.rpt:42` and `power.json` carried
+            # no figure at all. This site ALREADY re-reads `power.rpt` (one
+            # line above, for `analysis_mode`), so declaring the total costs
+            # one more read of text already in hand.
+            #
+            # It is parsed from OpenSTA's own `report_power` TABLE — the fixed
+            # five-column form this runner's envelope documents at
+            # `_emit_power_report` — and never from a tool transcript. When the
+            # table is absent or unparseable the field is `null` and
+            # `total_power_measured` is false WITH a reason: "we could not read
+            # it" and "we read it and it was zero" must not reach a consumer as
+            # the same artefact.
+            _pwr_total, _pwr_reason = _power_total_watts(_pwr_txt)
             _aa.write_text(rpt_phase3 / "power.json", json.dumps({
                 "tool": "opensta",
                 "source": str(power_rpt.relative_to(project)),
                 "analysis_mode": _mode,
                 "verdict": "PASS",
                 "evidence": "report_power output below",
+                "total_power_w": _pwr_total,
+                "total_power_measured": _pwr_total is not None,
+                "total_power_basis": (
+                    "OpenSTA report_power `Total` row, column 4 (Total Power, "
+                    "Watts), single typical corner, "
+                    + _mode),
+                "total_power_unmeasured_reason": _pwr_reason,
             }, indent=2) + "\n")
             written.append(str(rpt_phase3 / "power.json"))
 
@@ -36058,6 +36083,52 @@ exit
         notes.append(f"SDF emit failed (rc={rc}); no stub written (#441)")
         return False
     return True
+
+
+def _power_total_watts(report_text: str) -> Tuple[Optional[float], Optional[str]]:
+    """``(total watts, None)`` from an OpenSTA `report_power` table, or
+    ``(None, reason)``.
+
+    OpenSTA's `report_power` prints a fixed five-column table whose last data
+    row is `Total`::
+
+        Group                  Internal  Switching    Leakage      Total
+                                  Power      Power      Power      Power (Watts)
+        ----------------------------------------------------------------
+        Sequential             2.74e-04   8.71e-06   5.28e-10   2.82e-04  92.2%
+        ...
+        Total                  2.88e-04   1.79e-05   1.04e-09   3.06e-04 100.0%
+
+    Column 4 of the `Total` row is the design total in WATTS — the header says
+    so ("Total Power (Watts)") and this runner's own envelope documents the
+    column order. The LAST such row wins: a report that was appended to twice
+    describes the later run, and silently averaging or taking the first would
+    make two runs indistinguishable.
+
+    Returns a REASON rather than a zero when it cannot read the figure. Zero is
+    a legitimate measurement (a design with no switching activity), so a parse
+    failure that returned 0.0 would be indistinguishable from one — the exact
+    substitution that makes "we did not look" read as "we looked and it was
+    fine". Tool-AGNOSTIC beyond the OpenSTA table shape it names; no design,
+    PDK or vendor literal.
+    """
+    if not report_text:
+        return None, "the power report is empty"
+    rows = [ln for ln in report_text.splitlines()
+            if ln.strip().split()[:1] == ["Total"]]
+    if not rows:
+        return None, ("no `Total` row in the report_power table — the report "
+                      "exists and does not carry a design total")
+    fields = rows[-1].split()
+    if len(fields) < 5:
+        return None, (f"the `Total` row has {len(fields)} field(s), fewer than "
+                      "the five the report_power table declares: "
+                      + rows[-1].strip())
+    try:
+        return float(fields[4]), None
+    except ValueError:
+        return None, (f"column 4 of the `Total` row is {fields[4]!r}, which is "
+                      "not a number: " + rows[-1].strip())
 
 
 def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
