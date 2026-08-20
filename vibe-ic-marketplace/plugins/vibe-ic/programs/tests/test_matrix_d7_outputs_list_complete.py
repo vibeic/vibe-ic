@@ -128,12 +128,24 @@ file is not a produced artefact, and an untracked path is a property of one
 working tree. A record is a claim about the past; it is not evidence about
 today.
 
-MEASURED ON THIS COMMIT: **0 cells change.** No tracked
-``reports/write_ledger.json`` exists anywhere in the repository, so W2's
-oracle is the AST alone, exactly as before — and that is not silent: every
-dimension-7 failure message and every cell's ``record_property`` carries the
-:func:`matrix_d7_write_record.binding_notes` sentence saying so, and
-:data:`RECORD_BOUND_ROOTS` pins the empty population.
+MEASURED ON THIS COMMIT: no tracked ``reports/write_ledger.json`` exists
+anywhere in THIS REPOSITORY, and for a while that sentence was the whole of the
+story — the population was empty, W2's oracle was the AST alone, and this
+paragraph said :data:`RECORD_BOUND_ROOTS` "pins the empty population". Both
+halves stopped being true and the second stopped being true FIRST: the pin
+names two roots, and the records are in the PUBLISHED CORPUS —
+``benchmark-data/ic/spm/v1.10.18_sky130A`` and
+``benchmark-data/ic/spm/v1.9.96_gf180mcuD`` each carry
+``reports/write_ledger.json`` tracked at the corpus's own HEAD. Discovery could
+not see them, because it searched only this repository after the subtree had
+left it, which is exactly the shape vibe-ic#1703 named one dimension over: the
+pointer switched the skip OFF without switching discovery ON.
+:func:`matrix_d7_write_record.record_roots` now reads an EXPLICITLY OFFERED
+corpus as a second tree under the same rule, so the pin is answerable again.
+None of this is silent either way: every dimension-7 failure message and every
+cell's ``record_property`` carries the
+:func:`matrix_d7_write_record.binding_notes` sentence saying which roots
+answered and why each other one did not.
 
 MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
 ``$HOME/_sky130A_r3_run`` and

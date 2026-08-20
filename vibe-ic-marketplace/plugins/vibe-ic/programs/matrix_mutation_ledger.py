@@ -849,6 +849,17 @@ _SWEEP_THEN_ONE = (
     _SWEEP + "   THEN   matrix_mutation_ledger.py --replay {name} --step "
              "{added}   (2026-08-11, the one step this entry gained)")
 
+#: The five PATH-SPECIFIC steps (`0.5ic` `15.5ic` `26.5ic` `37.5ip` `37.5ic`)
+#: arrived after every sweep above, so none of them is in any `applies_to` the
+#: 2026-08-06/08-11 runs produced. Appended rather than folded into
+#: :data:`_SWEEP` for the same reason :data:`_SWEEP_THEN_ONE` is separate: the
+#: bulk of each `applies_to` rests on a 63-step sweep on a 2026-08 tree, and
+#: these five rest on five single-step replays run on 2026-08-20. A reader can
+#: tell which claim rests on which run.
+_THEN_FIVE = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
+              "<each of 0.5ic, 15.5ic, 26.5ic, 37.5ip, 37.5ic>   (2026-08-20, "
+              "the five path-specific steps this entry gained)")
+
 #: A full re-sweep on 2026-08-11 — same shape as :data:`_SWEEP`, later tree.
 _RESWEEP = ("matrix_mutation_ledger.py --replay {name} --jobs 8   "
             "(2026-08-11, every declared step, one pytest run per step)")
@@ -871,14 +882,23 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
             "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
-            "41", "42", "43", "44"),
+            "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=60,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=65,
             stayed_green=(),
             note="3 steps have no executable gate clause at all and are "
                  "structurally out of this entry's reach: 1 and 12 (files_exist "
                  "only) and P0 (no gate key). They are covered by "
-                 "D1-UNREACHABLE-CLAUSE and D1-ORPHAN-UMBRELLA-GATE."),
+                 "D1-UNREACHABLE-CLAUSE and D1-ORPHAN-UMBRELLA-GATE. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D1-BLIND-GATE-PROGRAMS "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D1-UNREACHABLE-CLAUSE",
@@ -945,10 +965,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
-            "41", "42", "43", "44"),
+            "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "12"), reddened=60,
+            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=65,
             stayed_green=("35",),
             note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
                  "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
@@ -964,7 +986,14 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "so the very commit that made 12/d2 ENFORCED also created the "
                  "edit site this mutation needs, and nothing re-ran the sweep. "
                  "Replayed 2026-08-11: `--replay D2-BLIND-GATE-PROGRAMS "
-                 "--step 12` -> REDDENED in 1.5s."),
+                 "--step 12` -> REDDENED in 1.5s. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D2-BLIND-GATE-PROGRAMS "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
 
     # ---------------- dimension 3 — outputs produced -------------------
@@ -1048,13 +1077,22 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             baseline_red=("1",),
             note="the 2 steps not reached declare no required_outputs at all "
                  "(FS1, P0) and are carried by D4-CLI-CONTRACT and "
-                 "D4-PROSE-NAMES-A-GHOST."),
+                 "D4-PROSE-NAMES-A-GHOST. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D4-UNGATED-DELIVERABLE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D4-CLI-CONTRACT",
@@ -1117,10 +1155,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
             "DT2", "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31",
             "32", "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3",
-            "M4", "40", "41", "42", "43", "44", "P0"),
+            "M4", "40", "41", "42", "43", "44", "P0",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "P0"), reddened=63,
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=68,
             note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
                  "sweep, each reddening that cell alone. There is no longer an "
                  "NA cell in this dimension. "
@@ -1133,7 +1173,14 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "re-evaluation. The re-evaluation was done, not waived: "
                  "`d5_problems('P0')` is empty, so P0 runs the full predicate as "
                  "an ENFORCED cell. Replayed 2026-08-11: `--replay "
-                 "D5-PHANTOM-EDGE --step P0` -> REDDENED in 1.6s."),
+                 "D5-PHANTOM-EDGE --step P0` -> REDDENED in 1.6s. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D5-PHANTOM-EDGE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
 
     # ---------------- dimension 6 — skip discipline --------------------
@@ -1153,16 +1200,25 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         params={"command":
                 "clock_plan_check . --json reports/phase2/gates/zzmatrixcanary.json"},
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             stayed_green=("DT2",),
             note="61 red = every ENFORCED dimension-6 cell except P0, which "
                  "declares no gate to append to and is carried by "
                  "D6-UMBRELLA-ALWAYS-SKIPS. DT2 is the one waived cell and its "
-                 "strict xfail correctly held."),
+                 "strict xfail correctly held. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D6-UNCONDITIONAL-OPTIONAL "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D6-ADVISORY-ONLY-GATE",
@@ -1234,12 +1290,21 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34",
             "35", "36", "37", "38", "39", "M2", "M3", "M4", "40", "41", "42",
-            "43", "44"),
+            "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=58,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=63,
             stayed_green=("7", "FS1", "23", "M1"),
             note="58 red = every one of dimension 7's 58 ENFORCED cells, in one "
-                 "sweep. The 4 greens are exactly its 4 waived cells."),
+                 "sweep. The 4 greens are exactly its 4 waived cells. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D7-GATE-PROBES-A-GHOST "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D7-UNDECLARED-KEY",
@@ -1307,12 +1372,21 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             note="61 red = every one of dimension 8's 61 ENFORCED cells, in one "
                  "sweep. The 2 steps not reached (FS1, P0) declare no "
-                 "required_outputs and are dimension 8's 2 NA cells."),
+                 "required_outputs and are dimension 8's 2 NA cells. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D8-EMPTY-PROMISE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
 )
 
@@ -1737,7 +1811,33 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: the same cell. A cell whose mutation had quietly stopped reddening it would
 #: still answer ENFORCED here and would move neither this number nor that list,
 #: which is exactly why the -1 has to arrive with the cell named.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 478)
+#: MOVED (63, 8, 478) -> (68, 8, 514) on 2026-08-20. The flow GREW FIVE STEPS
+#: — `0.5ic` `15.5ic` `26.5ic` `37.5ip` `37.5ic`, the path-specific chip/IC and
+#: cell/IP steps — and this is the first move of this pin that is a shape change
+#: rather than a reclassification, so it is stated as one. 68 x 8 = 544 cells,
+#: 30 of them not ENFORCED (see below), 544 - 30 = 514.
+#:
+#: +36 ENFORCED is NOT the arithmetic 5 x 8 = 40. Four of the five carry a
+#: step-level `condition: {files_exist: [input/submission_template/...]}` with
+#: `condition_kind: design_dependent`, and no admissible run root satisfies it,
+#: so dimension 3 answers NA_DORMANT_CONDITION for 15.5ic, 26.5ic, 37.5ip and
+#: 37.5ic — four NA cells, named below. `0.5ic` carries no condition (it is the
+#: step that WRITES `input/submission_template/slots/*.yaml`, so it cannot be
+#: conditioned on its own output) and its d3 cell is ENFORCED. 40 - 4 = 36.
+#:
+#: EVERY ONE OF THE 36 WAS REPLAYED, NOT COUNTED. 35 of them are covered by a
+#: measured mutation added to `applies_to` above (`--replay <NAME> --step <id>`
+#: -> REDDENED, per-cell times in the commit message). The 36th, `0.5ic/d3`, is
+#: NOT covered and is not pretended to be: the d3 mutation replays
+#: ALREADY_RED there (`--replay D3-UNDECLARED-ARTEFACT --step 0.5ic`,
+#: baseline_rc=1), because step 0.5ic's own dimension-3 cell is red on main —
+#: no published corpus cell ran the chip/IC path, so neither declared output
+#: exists in any admissible run root. A pair that is red before the edit
+#: "proves nothing either way" in this program's own words, and recording it as
+#: covered would be exactly the forgery the ledger exists to refuse. It stays
+#: uncovered and `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
+#: stays red, naming one cell instead of thirty-six.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 514)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -1797,6 +1897,19 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     ("M3", 3, "NA"),
     ("M4", 3, "NA"),
     ("P0", 3, "NA"),
+    # 15.5ic/26.5ic/37.5ip/37.5ic d3: the four path-specific steps that arrived
+    # 2026-08-20 with a step-level `condition: files_exist:
+    # [input/submission_template/...]` and `condition_kind: design_dependent`.
+    # No admissible run root satisfies it, so dimension 3 re-derives
+    # NA_DORMANT_CONDITION live for each. They are NOT "left ENFORCED" — they
+    # were never ENFORCED: they entered the grid in this state, which is why
+    # the +36 above is 36 and not 40. Publish a run tree carrying the condition
+    # file and all four go ENFORCED and this inventory reddens in the other
+    # direction, naming them.
+    ("15.5ic", 3, "NA"),
+    ("26.5ic", 3, "NA"),
+    ("37.5ip", 3, "NA"),
+    ("37.5ic", 3, "NA"),
     # ── dimension 5 ───────────────────────────────────────────────────
     ("12", 5, "WAIVED"),
     # ── dimension 6 ───────────────────────────────────────────────────

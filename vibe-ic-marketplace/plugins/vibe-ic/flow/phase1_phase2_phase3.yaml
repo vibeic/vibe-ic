@@ -4267,6 +4267,45 @@ steps:
       # only under `flow_compliance_check --strict-audit-evidence`.
       - "reports/phase3/lvs.json"
       - "reports/phase2/gates/erc_density.json"
+      # A THIRD machine-readable verdict of the same shape, and the same defect
+      # one step later. `magic_illegal_overlap_check` is a BLOCKING clause of
+      # this step's gate and writes `reports/phase3/magic_illegal_overlap.json`;
+      # `phase3_one_shot_runner` then READS that path by name
+      # (phase3_one_shot_runner.py:28496) and, on a non-zero gate, writes an
+      # LVS FAIL verdict that cites the file in `illegal_overlap_report` and
+      # aborts the step before netgen runs. So it is load-bearing outside its
+      # own writer, which is exactly the class dimension 7 charges — and until
+      # now Step 31 declared it nowhere:
+      #   [W1:gate_output_read_elsewhere]
+      #   'reports/phase3/magic_illegal_overlap.json' (written by
+      #   magic_illegal_overlap_check; read by program:phase3_one_shot_runner)
+      # An extraction that never wrote the file read exactly like one that
+      # cleared the zero-illegal-overlap gate, which is the same failure mode
+      # the lvs.json / erc_density.json paragraph above records.
+      #
+      # WHAT IT DOES NOT DO: no PUBLISHED corpus cell carries this path (`find`
+      # over benchmark-data @ 146d665 returns nothing) — the gate postdates
+      # every published run — so dimension 3 records the entry UNPROVEN and
+      # will report it unevidenced on any host that offers a corpus. That is
+      # the true statement of the gap and it replaces a hidden one.
+      - "reports/phase3/magic_illegal_overlap.json"
+      # A FOURTH, and the one nothing in this repository could see until the
+      # dimension-7 write record was reconnected to the published corpus.
+      # `reports/phase3/lvs_verdict.json` is the runner's OWN machine-readable
+      # LVS verdict — `_write_lvs_verdict` emits it, `eda_report_audit`
+      # (:1308, this step's own lvs gate) reads it as the independent
+      # confirmation of PASS/FAIL, and `eco_trigger_decision` lists it in
+      # `_NON_TIMING_SIGNOFF_ARTEFACTS` beside the lvs.json and
+      # erc_density.json above. Exactly the same class as those two, and
+      # undeclared for exactly as long. It was invisible because W2's producer
+      # oracle had degraded to the AST alone; with the record consulted again
+      # it is charged by name:
+      #   [W2:produced_consumed_undeclared] 'reports/phase3/lvs_verdict.json'
+      #   (written by run-record:ambiguous; read by gate:step31)
+      # Unlike magic_illegal_overlap.json above, this one IS evidenced: all
+      # three published spm cells carry it tracked and non-empty (944-1131 B),
+      # so declaring it closes the d7 finding and costs dimension 3 nothing.
+      - "reports/phase3/lvs_verdict.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.
