@@ -658,6 +658,31 @@ def test_the_outputs_of_this_step_are_what_the_flow_routes_on():
         "37.5ic lists two mutually exclusive router files; without `any_of` "
         "its condition is unsatisfiable and the step is dead for every design")
 
+    # AND EVERY ROUTER MUST STILL SELECT SOMETHING. A route that goes dead is a
+    # quieter failure than a route that collides: the mapping still looks
+    # right, and the steps behind it simply never run.
+    for f, steps in by_file.items():
+        assert steps, f"router file {f} selects no step at all"
+
+
+def test_a_step_on_both_chip_routes_declares_any_of():
+    """Otherwise it is unreachable, and silently so.
+
+    `files_exist` defaults to ALL-of (`flow_compliance_check._check_condition`),
+    and the three router files are mutually exclusive on disk — so a step
+    listing two of them WITHOUT `any_of` demands a tree that cannot exist and
+    can never run for any design. That is indistinguishable from the step
+    having been deleted, and it is the failure this asserts against.
+    """
+    routed = _routed_conditions()
+    for sid, cond in routed.items():
+        pats = [str(x) for x in (cond.get("files_exist") or [])]
+        if len(pats) > 1:
+            assert cond.get("any_of") is True, (
+                f"step {sid} lists {len(pats)} router files {pats} and does "
+                f"not declare `any_of`, so its condition is an AND over files "
+                f"that are mutually exclusive — it can never run")
+
 
 def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
     """THE ONE THIS STEP EXISTS FOR, now that the outputs are routers.
