@@ -214,6 +214,29 @@ def test_the_probe_pins_plugin_autoload_off_on_the_child(program, tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_a_relative_entry_path_is_not_reported_as_a_runtime_that_cannot_report(
+        program, tmp_path, monkeypatch):
+    """"I could not find the entry" is a different finding from "it cannot report".
+
+    The probe runs the child with `cwd` set to a synthetic subject directory, so
+    a relative `entry` that resolved for the CALLER does not resolve for the
+    child. Before the entry was made absolute, that arrived as
+    `probe_returncode 2` and the reason "the trusted entry could not execute and
+    report one synthetic test" — a cause this program did not have, and the
+    exact conflation it exists to prevent everywhere else.
+
+    Driven with a stub entry that reports unconditionally, so the only thing
+    that can fail here is the path resolution.
+    """
+    (tmp_path / "trusted_pytest_entry.py").write_text(
+        "import sys\nsys.stdout.write('1 passed\\n')\nraise SystemExit(0)\n",
+        encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    proc = program.entry_probe(sys.executable, Path("trusted_pytest_entry.py"))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "1 passed" in proc.stdout
+
+
 def test_the_cli_exit_code_is_two_for_refuse_and_zero_for_pass(tmp_path,
                                                                monkeypatch):
     env = dict(os.environ)
