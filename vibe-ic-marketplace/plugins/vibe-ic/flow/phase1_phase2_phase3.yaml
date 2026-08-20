@@ -2794,8 +2794,10 @@ steps:
       - "reports/phase3/padring.json"
     gate:
       program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
-    blocks_on: [15]
-
+    # 0.5ic writes the template this step's condition reads; without the
+    # edge the graph says the pad ring may run before the slot geometry
+    # that decides its size exists (D5-MISSING-EDGE, 2026-08-20).
+    blocks_on: [15, 0.5ic]
   - id: 16
     name: "Clock planning"
     stage: stage3
@@ -3922,8 +3924,8 @@ steps:
       - "reports/phase3/die_finishing.json"
     gate:
       program_exit_zero: "die_finishing_check . --json reports/phase3/die_finishing.json"
-    blocks_on: [26]
-
+    # 0.5ic writes the template this step's condition reads.
+    blocks_on: [26, 0.5ic]
   - id: 27
     name: "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)"
     stage: stage3
@@ -5183,7 +5185,8 @@ steps:
       - "phase3/stage4/hardmacro/*.v"
     gate:
       program_exit_zero: "digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json"
-    blocks_on: [37]
+    # 0.5ic writes the NO_TEMPLATE.txt this step's condition reads.
+    blocks_on: [37, 0.5ic]
 
   # ── chip/IC path only ────────────────────────────────────────────────
   # THE ONE INTERFACE WHERE SOMEBODY ELSE'S REFUSAL IS THE VERDICT. Every
@@ -5215,8 +5218,9 @@ steps:
       - "reports/phase3/shuttle_precheck.json"
     gate:
       program_exit_zero: "tapeout_readiness_check . --json reports/phase3/shuttle_precheck.json"
-    blocks_on: [37]
-
+    # 0.5ic writes the template this step's condition reads, and the
+    # precheck is run against the slot it names.
+    blocks_on: [37, 0.5ic]
   - id: 38
     name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
     stage: stage4

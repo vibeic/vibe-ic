@@ -2329,7 +2329,7 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
         f"manifest/flow step-set mismatch: only in flow {sorted(live - recorded)}, "
         f"only in manifest {sorted(recorded - live)}"
     )
-    assert len(cells_for(DIM)) == len(live) == 67
+    assert len(cells_for(DIM)) == len(live) == 68
 
 
 @needs_corpus
@@ -2792,7 +2792,7 @@ def test_d3_waivers_meet_the_registry_bar():
 
 
 def test_d3_cell_states_partition_all_steps():
-    """ENFORCED + WAIVED + NA == 67, computed live, with no cell in two states."""
+    """ENFORCED + WAIVED + NA == 68, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -2807,7 +2807,7 @@ def test_d3_cell_states_partition_all_steps():
         else:
             enforced.append(sid)
             assert rec["verdict"] == "ENFORCED"
-    assert len(enforced) + len(waived) + len(na) == 67, (
+    assert len(enforced) + len(waived) + len(na) == 68, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
@@ -5759,6 +5759,43 @@ def test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver():
 # from the current tree on every call, so a cell that changes state changes its
 # answer here without anyone editing a table.
 # ══════════════════════════════════════════════════════════════════════
+def _condition_file_present(root, pattern: str) -> bool:
+    """Is a step-level `files_exist` entry satisfied under ``root``?
+
+    A GLOB HAD TO BE ANSWERED WITH A GLOB (measured 2026-08-20)
+    ==========================================================
+    This was ``(root / pattern).is_file()``. Every `condition_files` value in
+    the manifest was a plain path, so the bug was invisible: M1-M4 name
+    `phase1/analog/analog_block_list.json`, steps 40-44 name
+    `phase3/stage5_manufacturing/silicon_received.json`, and a plain path is
+    its own glob.
+
+    The chip/IC steps (15.5ic, 26.5ic, 37.5ic) are gated on
+    `input/submission_template/slots/*.yaml` — the first WILDCARD condition in
+    the flow. `Path("a/*.yaml").is_file()` is False for every tree that has
+    ever existed, so those three cells would have reported NA_DORMANT
+    unconditionally: not "the condition is unmet" but "the question cannot be
+    asked". A cell that can only answer one way is exactly the vacuous pass
+    this dimension exists to catch, and it would have been introduced BY the
+    steps whose dormancy it was meant to measure.
+
+    Directory entries count: `files_exist` is satisfied by presence, and one
+    existing consumer (step 14, `condition_files_exist: [phase2/stage2/synth]`)
+    names a DIRECTORY. `is_file()` was wrong about that too.
+    """
+    from glob import glob as _glob
+    import os
+    if any(ch in pattern for ch in "*?["):
+        # `.exists()` on each hit, not just a non-empty glob: `glob` returns a
+        # DANGLING symlink, and the enforcer this mirrors
+        # (`flow_compliance_check._glob_first`) documents the opposite rule --
+        # "only paths that RESOLVE are returned" -- because leaving a link to
+        # nothing once scored strictly better than deleting the file.
+        return any(os.path.exists(h) for h in _glob(str(root / pattern),
+                                                    recursive=True))
+    return (root / pattern).exists()
+
+
 def matrix_na_precondition(step_id):
     """Why this cell is NA, re-derived LIVE, or ``None`` when it is answerable."""
     # Re-derived live from the flow yaml and the run trees, NOT read off the
@@ -5775,7 +5812,7 @@ def matrix_na_precondition(step_id):
     declared = [str(x) for x in (cond.get("files_exist") or [])]
     if not wanted or any(w not in declared for w in wanted):
         return None
-    if any((rr.path / w).is_file()
+    if any(_condition_file_present(rr.path, w)
            for rr in run_roots().values() for w in wanted):
         return None
     return ("a step-level condition keeps the step dormant: no admissible run "

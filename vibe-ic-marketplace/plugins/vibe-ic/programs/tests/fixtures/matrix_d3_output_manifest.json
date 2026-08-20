@@ -687,7 +687,7 @@
       }
     },
     "15.5ic": {
-      "verdict": "ENFORCED",
+      "verdict": "NA_DORMANT_CONDITION",
       "entries": {
         "phase3/stage3/pnr/padring.def": {
           "status": "UNPROVEN"
@@ -695,7 +695,10 @@
         "reports/phase3/padring.json": {
           "status": "UNPROVEN"
         }
-      }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml"
+      ]
     },
     "16": {
       "verdict": "ENFORCED",
@@ -932,7 +935,7 @@
       }
     },
     "26.5ic": {
-      "verdict": "ENFORCED",
+      "verdict": "NA_DORMANT_CONDITION",
       "entries": {
         "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt": {
           "status": "UNPROVEN"
@@ -940,7 +943,10 @@
         "reports/phase3/die_finishing.json": {
           "status": "UNPROVEN"
         }
-      }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml"
+      ]
     },
     "27": {
       "verdict": "ENFORCED",
@@ -1178,7 +1184,7 @@
       }
     },
     "37.5ip": {
-      "verdict": "ENFORCED",
+      "verdict": "NA_DORMANT_CONDITION",
       "entries": {
         "phase3/stage4/hardmacro/*.lef": {
           "status": "UNPROVEN"
@@ -1192,15 +1198,21 @@
         "phase3/stage4/hardmacro/*.v": {
           "status": "UNPROVEN"
         }
-      }
+      },
+      "condition_files": [
+        "input/submission_template/NO_TEMPLATE.txt"
+      ]
     },
     "37.5ic": {
-      "verdict": "ENFORCED",
+      "verdict": "NA_DORMANT_CONDITION",
       "entries": {
         "reports/phase3/shuttle_precheck.json": {
           "status": "UNPROVEN"
         }
-      }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml"
+      ]
     },
     "38": {
       "verdict": "ENFORCED",
@@ -1444,53 +1456,6 @@
           "status": "UNPROVEN"
         },
         "reports/phase1/submission_template.json": {
-          "status": "UNPROVEN"
-        }
-      }
-    },
-    "15.5ic": {
-      "verdict": "NA_DORMANT_CONDITION",
-      "entries": {
-        "phase3/stage3/pnr/padring.def": {
-          "status": "UNPROVEN"
-        },
-        "reports/phase3/padring.json": {
-          "status": "UNPROVEN"
-        }
-      }
-    },
-    "26.5ic": {
-      "verdict": "NA_DORMANT_CONDITION",
-      "entries": {
-        "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt": {
-          "status": "UNPROVEN"
-        },
-        "reports/phase3/die_finishing.json": {
-          "status": "UNPROVEN"
-        }
-      }
-    },
-    "37.5ip": {
-      "verdict": "NA_DORMANT_CONDITION",
-      "entries": {
-        "phase3/stage4/hardmacro/*.lef": {
-          "status": "UNPROVEN"
-        },
-        "phase3/stage4/hardmacro/*.lib": {
-          "status": "UNPROVEN"
-        },
-        "phase3/stage4/hardmacro/*.gds": {
-          "status": "UNPROVEN"
-        },
-        "phase3/stage4/hardmacro/*.v": {
-          "status": "UNPROVEN"
-        }
-      }
-    },
-    "37.5ic": {
-      "verdict": "NA_DORMANT_CONDITION",
-      "entries": {
-        "reports/phase3/shuttle_precheck.json": {
           "status": "UNPROVEN"
         }
       }

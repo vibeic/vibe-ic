@@ -1122,14 +1122,14 @@ def test_unattributable_findings_are_surfaced_not_dropped():
 
 
 def test_every_cell_lands_in_exactly_one_state():
-    """67 cells; ENFORCED + WAIVED + NA == 67, and no cell is in two states.
+    """68 cells; ENFORCED + WAIVED + NA == 68, and no cell is in two states.
 
     The census is derived live, not written down: a step added to the yaml
     lands here as ENFORCED and this arithmetic keeps holding, while a waiver
     for a step that has stopped failing is caught by its own ``strict=True``.
     """
     cells = cells_for(DIM)
-    assert len(cells) == len(F.step_ids()) == 67
+    assert len(cells) == len(F.step_ids()) == 68
 
     state = Counter()
     for cell in cells:
@@ -1142,7 +1142,7 @@ def test_every_cell_lands_in_exactly_one_state():
         )
         state["NA" if is_na else ("WAIVED" if is_waived else "ENFORCED")] += 1
 
-    assert sum(state.values()) == 67, state
+    assert sum(state.values()) == 68, state
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
     # dimension has stopped enforcing anything and should be redesigned.

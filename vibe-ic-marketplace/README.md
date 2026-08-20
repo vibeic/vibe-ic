@@ -19,7 +19,7 @@ and the contribution guides for extending it.
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
-| Canonical flow | **63 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) |
+| Canonical flow | **68 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) — 26 of them conditional, including the cell/IP vs chip/IC split |
 | Test files | **2630** under `plugins/vibe-ic/programs/tests/` + **32** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
 | License | Apache-2.0 |
 
@@ -66,7 +66,7 @@ designed in the abstract:
 
 ---
 
-## The canonical flow (63 steps, 8 stages)
+## The canonical flow (68 steps, 8 stages)
 
 **Source of truth**:
 [`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`](plugins/vibe-ic/flow/phase1_phase2_phase3.yaml)
@@ -90,13 +90,14 @@ python3 plugins/vibe-ic/programs/flow_compliance_check.py <project_dir> \
 # exit 0 is the only PASS
 ```
 
-#### `stage_phase1` — Phase 1, Spec Extraction (input → L1-L27 structured JSON) — 1 step
+#### `stage_phase1` — Phase 1, Spec Extraction (input → L1-L27 structured JSON) — 2 steps
 
 End-of-stage gate: `phase1_compliance`
 
 | # | Step | Machine gate |
 |---|---|---|
 | `D1` | Phase 1 doc extraction — dialogue **or** existing documents → the L1-L27 layered JSON set | program |
+| `0.5ic` | Submission template ingest — the operator's slot geometry and identity fixtures, **read** rather than computed. Chooses the path: a template present ⇒ chip/IC, `NO_TEMPLATE.txt` ⇒ cell/IP | program |
 
 #### `stage1` — RTL Generation + Verification — 7 steps
 
@@ -149,13 +150,14 @@ is present. End-of-stage gate: `analog_compliance`
 | `A8` | Hardmacro generation (LEF + Liberty + GDS + Verilog) | program |
 | `A9` | ↻ Co-simulation / hardware verification | program |
 
-#### `stage3` — Physical Design + Sign-off — 18 steps
+#### `stage3` — Physical Design + Sign-off — 20 steps
 
 End-of-stage gate: `stage3_compliance` (`stage3_compliance.py`)
 
 | # | Step | Machine gate |
 |---|---|---|
 | `15` | Floorplan + PDN | program |
+| `15.5ic` | Pad ring — the I/O pads, corner cells and filler that form the die's edge *(chip/IC path only)*. Precedes routing because the pads **are** the top-level ports | program |
 | `16` | Clock planning | program |
 | `17` | Placement (global + detailed) | program |
 | `18` | Spare-cell + ECO-prep insertion (Design-for-ECO) | program |
@@ -167,6 +169,7 @@ End-of-stage gate: `stage3_compliance` (`stage3_compliance.py`)
 | `24` | ↻ IR drop (static + dynamic) | program |
 | `25` | ↻ EM check (electromigration lifetime) | program |
 | `26` | ↻ Antenna check (gate-oxide protection) | program |
+| `26.5ic` | Die finishing — seal ring and die identification *(chip/IC path only)* | program |
 | `27` | ↻ Signal integrity (crosstalk / noise / glitch + crosstalk-delay) | program |
 | `28` | ↻ PERC / reliability sign-off (ESD + latch-up + cross-domain) | program |
 | `29` | Post-layout gate-level simulation (post-sim + SDF) | program |
@@ -186,7 +189,7 @@ End-of-stage gate: `mixed_signal_compliance`
 | `M3` | Mixed-signal verification (AMS co-sim + RNM + interface signal integrity) | program |
 | `M4` | Mixed-signal sign-off (top-level PV + final verdict) | program |
 
-#### `stage4` — Output + Validation — 7 steps
+#### `stage4` — Output + Validation — 9 steps
 
 End-of-stage gate: `stage4_compliance` (`stage4_compliance.py`)
 
@@ -197,6 +200,8 @@ End-of-stage gate: `stage4_compliance` (`stage4_compliance.py`)
 | `35` | DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) | program |
 | `36` | Tapeout checklist (final sign-off confirmation) | program |
 | `37` | GDSII output (**only if step 31 PV is fully clean**) | program |
+| `37.5ip` | Digital hardmacro generation — LEF + Liberty + GDS + Verilog, and they must **agree**. The cell/IP path's terminal step | program |
+| `37.5ic` | Shuttle precheck — the operator's own refusal, run before submission *(chip/IC path only)*. The one gate in this flow whose verdict the project does not write | program |
 | `38` | Foundry handoff (mask spec + WAT plan + scribe layout + corner test kit) | program |
 | `39` | FPGA final sign-off (recompile + on-board test) | program |
 
@@ -471,7 +476,7 @@ cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
 
 | Program | Role |
 |---|---|
-| **`flow_compliance_check.py`** | Strict 63-step gate — reads `flow/phase1_phase2_phase3.yaml`, validates every step's outputs + gate predicate, rejects rubber-stamp waivers. **Exit 0 is the only PASS.** |
+| **`flow_compliance_check.py`** | Strict 68-step gate — reads `flow/phase1_phase2_phase3.yaml`, validates every step's outputs + gate predicate, rejects rubber-stamp waivers. **Exit 0 is the only PASS.** |
 | `stage{1,2,3,4}_compliance.py` | Per-stage interim gates |
 | `analog_flow_compliance_check.py` | A1-A9 analog-stage gate |
 | **`waivers_schema_check.py`** | Rejects placeholder reasons (`TODO`, `n/a`), self-approvers (`agent`, `claude`), duplicate ids |
@@ -544,7 +549,7 @@ vibe-ic-marketplace/
     └── vibe-ic/                         ← the single plugin (v1.10.96)
         ├── .claude-plugin/plugin.json
         ├── flow/
-        │   └── phase1_phase2_phase3.yaml   ← 63-step source of truth
+        │   └── phase1_phase2_phase3.yaml   ← 68-step source of truth
         ├── commands/                    ← 7 slash commands
         ├── agents/
         │   ├── ic-expert-agent.md       ← assembles JSON from answers + defaults

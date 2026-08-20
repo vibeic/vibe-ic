@@ -268,6 +268,57 @@ DEFAULT_TOL_UM = 0.01
 
 VIEW_EXTS = (".lef", ".lib", ".gds", ".v")
 
+#: The same four views written as the paths step 37.5ip DECLARES, so the set
+#: this program searches is stated in the vocabulary the flow uses rather than
+#: only as a suffix filter.
+#:
+#: WHY BOTH FORMS EXIST (measured 2026-08-20)
+#: ------------------------------------------
+#: Discovery itself must stay `iterdir()` + `suffix.lower()`: a kit that ships
+#: `CORE.LEF` is a kit, and `Path.glob("*.lef")` is case-SENSITIVE on Linux, so
+#: globbing alone would make an upper-case delivery invisible — the failure
+#: mode where a check reports "no kit" about a kit that is right there.
+#:
+#: But a suffix filter names no path, and dimension 4 asks a fair question of
+#: every gate: does the program actually read what the step declares? It could
+#: resolve `*.lef`, `*.lib` and `*.gds` only from PROSE in this docstring, and
+#: could not resolve `phase3/stage4/hardmacro/*.v` at all. Three of the four
+#: were being credited to a comment. These globs are used below to say which
+#: declared view was searched for and not found, so the answer stops depending
+#: on what the documentation happens to mention.
+#:
+#: WRITTEN OUT, not built with an f-string over ``VIEW_EXTS``: a comprehension
+#: produces the same four strings at runtime and NO literal in the source, so
+#: any reader that works from the text — dimension 4, a grep, a person — still
+#: could not tell which paths this program opens. The assertion below keeps the
+#: two forms from drifting.
+DECLARED_VIEW_GLOBS = (
+    "phase3/stage4/hardmacro/*.lef",
+    "phase3/stage4/hardmacro/*.lib",
+    "phase3/stage4/hardmacro/*.gds",
+    "phase3/stage4/hardmacro/*.v",
+)
+assert tuple(g.rsplit("*", 1)[-1] for g in DECLARED_VIEW_GLOBS) == VIEW_EXTS, (
+    "DECLARED_VIEW_GLOBS and VIEW_EXTS name different view sets")
+
+
+def unmatched_view_globs(project: Path) -> List[str]:
+    """Which declared view path matched NOTHING under `project`.
+
+    Case-insensitive, to agree with `discover_packages`: `*.lef` here also
+    accounts for `CORE.LEF`.
+    """
+    out: List[str] = []
+    for pattern in DECLARED_VIEW_GLOBS:
+        ext = pattern.rsplit("*", 1)[-1].lower()
+        base = project / pattern.rsplit("/", 1)[0]
+        hit = base.is_dir() and any(
+            q.is_file() and q.suffix.lower() == ext for q in base.iterdir())
+        if not hit:
+            out.append(pattern)
+    return out
+
+
 
 def _require(obj, what: str):
     """Return `obj`, or raise if the shared parser it names is unavailable.
@@ -1098,7 +1149,9 @@ def run_audit(project: Path, tol_pct: float = DEFAULT_TOL_PCT,
         result.findings.append(Finding(
             rule="NO_HARDMACRO_PACKAGE", severity="INFO",
             message=(f"`{hm_dir.name}/` under phase3/stage4 holds no "
-                     f"{'/'.join(VIEW_EXTS)} view. Step 37.5ip is the cell/IP "
+                     f"{'/'.join(VIEW_EXTS)} view. Searched and found nothing "
+                     f"for: {', '.join(unmatched_view_globs(project))}. "
+                     f"Step 37.5ip is the cell/IP "
                      f"path TERMINAL: what it delivers is the kit, so with no "
                      f"kit on disk NOTHING about one has been established — "
                      f"this is NOT a statement that the IP is deliverable.")))
@@ -1106,6 +1159,7 @@ def run_audit(project: Path, tol_pct: float = DEFAULT_TOL_PCT,
             "skipped": True, "reason": "no_hardmacro_package",
             "hardmacro_dir": str(hm_dir),
             "hardmacro_dir_exists": hm_dir.is_dir(),
+            "searched_and_absent": unmatched_view_globs(project),
             "packages": [], "verdict_tier": "NOT_DETERMINED",
             "pass": True,
         }
