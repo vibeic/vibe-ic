@@ -188,7 +188,7 @@ def _harness(scheduler: str, work: Path, body: str = _DRIVER) -> str:
 
 
 def _run(scheduler: str, work: Path, env: dict[str, str], *,
-         body: str = _DRIVER, timeout: int = 120) -> subprocess.CompletedProcess:
+         body: str = _DRIVER, timeout: int = 60) -> subprocess.CompletedProcess:
     script = work / "harness.sh"
     script.write_text(_harness(scheduler, work, body), encoding="utf-8")
     programs = work / "programs"
