@@ -331,6 +331,204 @@ def _identity(p: Path):
     return ("inode", st.st_dev, st.st_ino)
 
 
+# ---------------------------------------------------------------------------
+# EVIDENCE BINDING — is this report FROM the run it is being used to certify?
+#
+# THE FINDING THIS CLOSES, measured by `adversarial_agent` against a published
+# cell with a DIFFERENT design's cell as donor:
+#
+#     A3_CROSS_DESIGN   drc_report_check       rc 0 -> 0   SUCCEEDED
+#     A3_CROSS_DESIGN   lvs_report_check       rc 0 -> 0   SUCCEEDED
+#     A2_STALE_REPLAY   drc_report_check       rc 0 -> 0   SUCCEEDED
+#     A2_STALE_REPLAY   lvs_report_check       rc 0 -> 0   SUCCEEDED
+#     ... and the same for antenna / em / erc_density / ir_drop
+#
+# Every mode of this program asks what a report SAYS. None of them asked the
+# prior question — whose report is it, and which run produced it. So copying
+# another design's reports over this one's, or replaying an EARLIER run of the
+# same design, left six of seven sign-off gates green. A2 is the harder half:
+# the artefact genuinely belongs to this design, so nothing keyed on design
+# identity can object, and only something keyed on WHICH RUN wrote it can.
+#
+# THE WITNESS ALREADY EXISTS. A run's own `provenance.jsonl` records, per
+# producing command, `outputs: {run-relative path: "sha256:..."}`. That is the
+# run stating what it wrote and what it hashed to. A report at a path the run
+# claims to have written, whose bytes hash to something else, was not written by
+# this run — whoever else wrote it and whyever.
+#
+# BLOCKING. A mismatch is an ERROR finding and flips the gate's rc to 1. This is
+# a sign-off gate; evidence that provably came from elsewhere is not a defect to
+# note beside a PASS.
+#
+# WHAT IT DELIBERATELY DOES NOT DO — and each of these is a measured false
+# positive it would otherwise have:
+#
+#   * ABSENCE NEVER FIRES. Swept over every run root reachable here, 31 of them:
+#     117 recorded outputs are present and 179 are recorded but absent, because
+#     publishing prunes intermediates (`outputs_pruned_at_publish`). A rule that
+#     failed on a recorded-but-absent output would fire on 179 legitimate files.
+#     Only a PRESENT file whose bytes disagree is refusable.
+#   * IT NEVER INVENTS COVERAGE. A run with no ledger, or a report at a path the
+#     ledger does not mention, is NOT DETERMINED — recorded as such in the
+#     summary, never as a pass. The same 31-root sweep found 0 mismatches among
+#     the 117 covered files, so on legitimate evidence this rule is silent.
+#   * IT DOES NOT READ THIS PROGRAM'S OWN OUTPUT. `_discover` already drops the
+#     audit's verdict documents, so re-running an audit cannot make its own
+#     previous verdict look like tampered evidence.
+#
+# HONEST REACH, because a partial defence published as a whole one is the disease
+# this campaign is about: on the cell the findings ledger names, 5 of the 149
+# substituted artefacts are ledger-covered, and they are the ones `drc` and `lvs`
+# read. `antenna`, `em`, `ir_drop` and `sta` consume no covered path there, so
+# their findings stay OPEN and this rule reports NO_COVERAGE for them rather
+# than a defence it did not mount.
+# ---------------------------------------------------------------------------
+#: Paths the current audit actually opened. `None` when nobody is collecting,
+#: which keeps `_discover` usable from a test or another module unchanged.
+_CONSUMED: Optional[List[Path]] = None
+
+
+class consumed_evidence:  # noqa: N801 — a context manager, used as a verb
+    """Collect every path `_discover` hands out for the duration of the block.
+
+    The collection point is `_discover` and not each mode, for the reason
+    `exclude_name_tokens` lives there too: seven modes filtering their own way
+    is seven chances for one of them to consume a file the binding never sees.
+    """
+
+    def __init__(self):
+        self._prev = None
+
+    def __enter__(self):
+        global _CONSUMED
+        self._prev = _CONSUMED
+        _CONSUMED = []
+        return self
+
+    def paths(self) -> List[Path]:
+        return list(_CONSUMED or ())
+
+    def __exit__(self, *exc):
+        global _CONSUMED
+        self._collected = list(_CONSUMED or ())
+        _CONSUMED = self._prev
+        return False
+
+
+def _note_consumed(paths) -> None:
+    if _CONSUMED is None:
+        return
+    for p in paths:
+        if p not in _CONSUMED:
+            _CONSUMED.append(p)
+
+
+def provenance_outputs(project_dir: Path) -> Dict[str, str]:
+    """`{run-relative path: "sha256:..."}` the RUN recorded for its own outputs.
+
+    Later records win on a repeated path: a step that re-wrote an output is
+    stating the later bytes are the ones it stands behind.
+
+    Unreadable, absent or malformed lines yield `{}` / are skipped rather than
+    raising — a broken ledger must leave the verdict NOT DETERMINED, never turn
+    a sign-off gate red on a defect in the bookkeeping.
+    """
+    led = project_dir / "provenance.jsonl"
+    if not led.is_file():
+        return {}
+    out: Dict[str, str] = {}
+    try:
+        text = led.read_text(errors="replace")
+    except OSError:
+        return {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        for rel, digest in (rec.get("outputs") or {}).items():
+            if isinstance(rel, str) and isinstance(digest, str) \
+                    and digest.startswith("sha256:"):
+                out[rel] = digest
+    return out
+
+
+def _sha256_of(path: Path) -> Optional[str]:
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return "sha256:" + h.hexdigest()
+
+
+def check_evidence_binding(project_dir: Path, consumed: Sequence[Path]):
+    """`(findings, summary)` for "was this evidence written by THIS run?".
+
+    BLOCKING: any returned finding is severity ERROR and the caller must fail
+    the audit on it.
+    """
+    recorded = provenance_outputs(project_dir)
+    summary: Dict[str, object] = {
+        "evidence_consumed": len(consumed),
+        "evidence_binding_covered": 0,
+        "evidence_binding_mismatched": 0,
+    }
+    if not recorded:
+        summary["evidence_binding"] = "NO_LEDGER"
+        summary["evidence_binding_note"] = (
+            "this run records no provenance.jsonl output digests, so whether "
+            "the reports below were produced here is NOT DETERMINED. That is "
+            "not a pass on the question; it is the absence of an answer.")
+        return [], summary
+
+    findings: List[Finding] = []
+    covered = 0
+    for path in consumed:
+        try:
+            rel = path.resolve().relative_to(project_dir.resolve()).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        want = recorded.get(rel)
+        if want is None:
+            continue
+        got = _sha256_of(path)
+        if got is None:
+            continue
+        covered += 1
+        if got != want:
+            findings.append(Finding(
+                rule="EVIDENCE_NOT_FROM_THIS_RUN", severity="ERROR",
+                file=rel,
+                message=(
+                    f"{rel} is not the file this run wrote there. The run's own "
+                    f"provenance.jsonl records {want} for that path; the bytes "
+                    f"present hash to {got}. A sign-off gate reading it would be "
+                    f"certifying this design with evidence produced somewhere "
+                    f"else — another design's run, or an earlier run of this "
+                    f"one. Re-run the producing step, or if the substitution "
+                    f"was intended, say so by re-recording provenance.")))
+    summary["evidence_binding_covered"] = covered
+    summary["evidence_binding_mismatched"] = len(findings)
+    if covered == 0:
+        summary["evidence_binding"] = "NO_COVERAGE"
+        summary["evidence_binding_note"] = (
+            f"the ledger records {len(recorded)} output digest(s) but none for "
+            f"any of the {len(consumed)} report(s) this mode read, so whose "
+            f"reports they are is NOT DETERMINED. Widening the answer needs the "
+            f"PRODUCER to record these paths, not a change here.")
+    else:
+        summary["evidence_binding"] = "CHECKED"
+    return findings, summary
+
+
 def _discover(project_dir: Path, patterns: List[str],
               exclude_name_tokens: Sequence[str] = ()) -> List[Path]:
     """Glob for files matching any of the given patterns recursively,
@@ -391,6 +589,7 @@ def _discover(project_dir: Path, patterns: List[str],
             continue
         seen.add(key)
         unique.append(p)
+    _note_consumed(unique)
     return unique
 
 
@@ -447,6 +646,9 @@ def _companion_docs(project_dir: Path, mode: str):
             and not _is_own_verdict_document(direct)
             and _in_scope(direct)):
         cands.append(direct)
+        # this path did not come through `_discover`, so the binding would
+        # never see the half of the measurement that carries the NUMBERS
+        _note_consumed([direct])
     # `rglob(<basename>)` matches the exact filename only, so a run tree that
     # nests its reports one level deeper is still read and nothing else is.
     for q in _discover(project_dir, [basename]):
@@ -2452,8 +2654,16 @@ def main(argv: list = None) -> int:
         checker = MODE_MAP[args.mode]
         roots = ([project_dir / rel for rel in args.under]
                  if args.under else None)
-        with scoped_discovery(roots):
+        with scoped_discovery(roots), consumed_evidence() as consumed:
             result = checker(project_dir)
+            read = consumed.paths()
+        # EVIDENCE BINDING, for every mode, at the one place all six sign-off
+        # wrappers funnel through. See the section above `_discover`.
+        bind_findings, bind_summary = check_evidence_binding(project_dir, read)
+        result.summary.update(bind_summary)
+        if bind_findings:
+            result.findings.extend(bind_findings)
+            result.passed = False
         if roots:
             # The scope is part of the verdict: a reader must be able to see
             # WHICH artefacts this verdict was reached over.
