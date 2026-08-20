@@ -4267,6 +4267,28 @@ steps:
       # only under `flow_compliance_check --strict-audit-evidence`.
       - "reports/phase3/lvs.json"
       - "reports/phase2/gates/erc_density.json"
+      # A THIRD machine-readable verdict of the same shape, and the same defect
+      # one step later. `magic_illegal_overlap_check` is a BLOCKING clause of
+      # this step's gate and writes `reports/phase3/magic_illegal_overlap.json`;
+      # `phase3_one_shot_runner` then READS that path by name
+      # (phase3_one_shot_runner.py:28496) and, on a non-zero gate, writes an
+      # LVS FAIL verdict that cites the file in `illegal_overlap_report` and
+      # aborts the step before netgen runs. So it is load-bearing outside its
+      # own writer, which is exactly the class dimension 7 charges — and until
+      # now Step 31 declared it nowhere:
+      #   [W1:gate_output_read_elsewhere]
+      #   'reports/phase3/magic_illegal_overlap.json' (written by
+      #   magic_illegal_overlap_check; read by program:phase3_one_shot_runner)
+      # An extraction that never wrote the file read exactly like one that
+      # cleared the zero-illegal-overlap gate, which is the same failure mode
+      # the lvs.json / erc_density.json paragraph above records.
+      #
+      # WHAT IT DOES NOT DO: no PUBLISHED corpus cell carries this path (`find`
+      # over benchmark-data @ 146d665 returns nothing) — the gate postdates
+      # every published run — so dimension 3 records the entry UNPROVEN and
+      # will report it unevidenced on any host that offers a corpus. That is
+      # the true statement of the gap and it replaces a hidden one.
+      - "reports/phase3/magic_illegal_overlap.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.
