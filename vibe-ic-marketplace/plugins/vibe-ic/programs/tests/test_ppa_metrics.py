@@ -520,3 +520,18 @@ def test_records_from_document_accepts_the_three_producer_shapes():
     assert M.records_from_document([rec]) == [rec]
     idx = _idx(rec)
     assert M.records_from_document(M.bundle(idx)) == [rec]
+
+
+def test_the_refusal_NAMES_the_sentinel_it_found():
+    """"0 is not a measurement" and "the empty string is not a unit" are
+    different sentences to whoever has to fix the producer, and a generic
+    "must not carry a value" makes them one."""
+    rec = M.not_measured("power.total_mw", "no VCD", SCOPE_ROUTE)
+    rec["value"] = 0
+    msg = dict(M.validate(rec))["VALUE_ON_A_NON_MEASUREMENT"]
+    assert "sentinel" in msg and "6.1" in msg
+    rec["value"] = 42.5
+    msg = dict(M.validate(rec))["VALUE_ON_A_NON_MEASUREMENT"]
+    assert "sentinel" not in msg, (
+        "42.5 is not a sentinel; calling it one would teach a reader that the "
+        "rule is about three magic numbers rather than about the key existing")

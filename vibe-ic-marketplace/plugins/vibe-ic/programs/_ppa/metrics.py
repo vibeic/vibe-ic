@@ -371,9 +371,20 @@ def validate(rec: Any) -> List[Tuple[str, str]]:
                     "`unit`, so this is a silent order-of-magnitude error.")
     else:
         if has_value:
+            found = rec["value"]
+            # Name the sentinel when it IS one of the three §6.1 names. "0 is
+            # not a measurement" and "the empty string is not a unit" are
+            # different sentences to whoever has to fix the producer, and a
+            # generic "must not carry a value" makes them one.
+            named = ("" if not any(found is s or (type(found) is type(s)
+                                                  and found == s)
+                                   for s in NUMERIC_SENTINELS)
+                     else f" {found!r} is one of the three sentinels §6.1 names,"
+                          " and every one of them reads as a legitimate value"
+                          " to arithmetic downstream.")
             bad("VALUE_ON_A_NON_MEASUREMENT",
                 f"status {status} must not carry a `value` (got "
-                f"{rec['value']!r}). 0, -1 and \"\" never mean 'not measured'; "
+                f"{found!r}).{named} 0, -1 and \"\" never mean 'not measured'; "
                 "the absence is the `reason`, and `value: null` is not an "
                 "absence either — the key survives .get() and re-enters "
                 "arithmetic as `or 0`.")

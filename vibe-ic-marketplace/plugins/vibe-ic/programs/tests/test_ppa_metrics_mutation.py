@@ -92,8 +92,8 @@ def test_mutation_dropping_the_sentinel_guard_lets_zero_mean_not_measured(tmp_pa
                                             M.validate(a_sentinel_record())]
     mut = load_mutant(
         tmp_path,
-        '        if has_value:\n            bad("VALUE_ON_A_NON_MEASUREMENT",',
-        '        if False:\n            bad("VALUE_ON_A_NON_MEASUREMENT",',
+        '        if has_value:\n            found = rec["value"]',
+        '        if False:\n            found = rec["value"]',
         "sentinel")
     # the mutant accepts a NOT_MEASURED row carrying 0 -- an implied zero that
     # every consumer downstream reads as a measurement of zero.
