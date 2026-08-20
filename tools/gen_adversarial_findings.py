@@ -51,10 +51,21 @@ for attack, fn, kwargs in (
     else:
         got = fn(PLUGIN, IC / CELL)
     for a in got:
-        rows.append({"attack": attack, "target": a.target, "verdict": a.verdict})
+        rows.append({"attack": attack, "target": a.target,
+                     "verdict": a.verdict, "detail": a.detail})
 
 forging = sorted({(r["attack"], r["target"]) for r in rows
                   if r["verdict"] == AA.SUCCEEDED})
+
+# UNPROVEN IS RECORDED, NOT DROPPED. `forging` holds only SUCCEEDED, so an
+# attack that stops being attemptable leaves this file by simply not appearing
+# — which reads identically to every one of its findings being fixed. That is
+# the exact failure the ratchet's third case exists to prevent, and the file it
+# guards could not express it. A2_STALE_REPLAY made it concrete: its donor was
+# never an earlier run of the same design, so once the attack started checking
+# its own premise its pairs went UNAVAILABLE, and nothing was fixed.
+unproven = sorted({(r["attack"], r["target"], r["detail"]) for r in rows
+                   if r["verdict"] == AA.UNAVAILABLE})
 doc = {
     "schema": "vibe-ic/adversarial-findings/v1",
     "_comment": [
@@ -75,15 +86,31 @@ doc = {
         "That third case is the one that matters: without it a corpus prune would",
         "silently 'close' every finding and the ratchet would measure the",
         "publication schedule instead of the gates.",
+        "",
+        "`unproven` is that third case WRITTEN DOWN. `forging` holds SUCCEEDED",
+        "only, so an attack that stops being attemptable used to leave this file",
+        "by not appearing -- spelled identically to all of its findings being",
+        "fixed. Each entry names the attack, its subject and the measured reason",
+        "it could not be attempted. A2_STALE_REPLAY is here because its donor was",
+        "never an earlier run of the same design: it was a second FOREIGN design,",
+        "so its verdicts duplicated A3_CROSS_DESIGN and the run-identity property",
+        "it exists to measure has never been measured on this corpus.",
+        "",
+        "An entry leaving `unproven` is adjudicated too: ratchet_diff reports it",
+        "as `newly_attemptable`, because an attack that comes back into range and",
+        "reports nothing is the same silence in the other direction.",
     ],
     "measured_on": MEASURED_ON,
     "cell": CELL,
     "donor": DONOR,
     "older_run": OLDER,
     "forging": [{"attack": a, "target": t} for a, t in forging],
+    "unproven": [{"attack": a, "target": t, "reason": d}
+                 for a, t, d in unproven],
 }
 out = PLUGIN / "programs" / "adversarial_findings.json"
 out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-print(f"wrote {out} with {len(forging)} forging pair(s)")
+print(f"wrote {out} with {len(forging)} forging pair(s) and "
+      f"{len(unproven)} unproven")
 for a, t in forging:
     print(f"  {a:24} {t}")
