@@ -6,8 +6,8 @@ before the code: **a candidate that wins on cell count and loses on post-route
 area must not be reported as smaller.** `test_cell_count_win_cannot_beat_a_core_
 area_loss` is that sentence.
 
-The numbers used here are not invented. They come from one real completed run,
-`/home/reyerchu/_c_cv_spm_run` (spm, gf180mcuD, phase 3 complete):
+The numbers used here are not invented. They come from one completed phase-3
+run (gf180mcuD, a 252-cell design):
 
     synthesis chip area   4703.5296  library area units   phase2/.../stats.json
     post-route core area  12294      um^2                 openroad.log "Design area"

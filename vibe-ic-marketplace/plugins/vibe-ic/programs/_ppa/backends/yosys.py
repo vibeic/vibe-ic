@@ -12,8 +12,8 @@ rule unreachable from here.
 
 WHAT YOSYS ACTUALLY PRINTS, taken from a real run
 -------------------------------------------------
-`/home/reyerchu/_c_cv_spm_run/phase2/stage2/synth/synth.log`, gf180mcuD, spm.
-The GENERIC (pre-techmap) block, line 562:
+Taken from `phase2/stage2/synth/synth.log` of one completed phase-3 run
+(gf180mcuD, a 252-cell design). The GENERIC (pre-techmap) block, at line 562:
 
     6.28. Printing statistics.
 

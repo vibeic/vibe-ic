@@ -2,15 +2,15 @@
 """The yosys backend: parse yosys, decide nothing.
 
 Every transcript in this file is a copy of the shape a real run produced, from
-`/home/reyerchu/_c_cv_spm_run/phase2/stage2/synth/synth.log` (spm, gf180mcuD,
-phase 3 complete). The three numbers that matter are:
+`phase2/stage2/synth/synth.log` of one completed phase-3 run (gf180mcuD, a
+252-cell design). The three numbers that matter are:
 
     generic block, line 562   232 cells, 174 wires, 268 wire bits, NO area
     mapped  block, line 699   252 cells, 226 wires, 288 wire bits
                               Chip area for module '\\spm': 4703.529600
                                 of which used for sequential elements: 1646.568000
 
-The transcript is reproduced here rather than read from that path because a test
+The transcript is reproduced here rather than read from that run tree because a test
 that depends on one host's scratch directory reports "no tests ran" somewhere
 else — and a run that never started prints the same zero as a run with no
 failures. The real file is used in RESULT.md as the provenance for the values.
