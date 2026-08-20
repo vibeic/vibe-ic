@@ -1861,7 +1861,30 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: covered would be exactly the forgery the ledger exists to refuse. It stays
 #: uncovered and `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
 #: stays red, naming one cell instead of thirty-six.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 514)
+#:
+#: MOVED (68, 8, 514) -> (69, 8, 521) at v1.11.5. The flow grew ONE step,
+#: `37.5self` ("General Precheck — the tape-out check for a design with NO
+#: operator"), the third route out of stage 4: 37.5ic is an outside operator's
+#: refusal and 37.5ip is the IP terminal, and a chip taping itself out was
+#: neither, so until this step it passed no submission check at all. Another
+#: shape change, stated as one: 69 x 8 = 552 cells, 31 of them not ENFORCED
+#: (see below), 552 - 31 = 521.
+#:
+#: +7 AND NOT 8, for the reason its three siblings are NA: the step carries
+#: `condition: {files_exist: [input/submission_template/SELF_TAPEOUT.txt]}`
+#: with `condition_kind: design_dependent`, no admissible run root satisfies
+#: it, and dimension 3 therefore re-derives NA_DORMANT_CONDITION for it live.
+#: The cell is NOT "left ENFORCED"; it entered the grid NA, and it is named in
+#: the inventory below rather than only subtracted here.
+#:
+#: The other 7 were NOT counted into coverage on the strength of the +7: each
+#: is covered by a mutation family whose `applies_to` already resolves an edit
+#: site on this step, which the census re-checks live per cell (LOCK 1) rather
+#: than trusting the list — `census()` reports `uncovered == ['0.5ic/d3']` and
+#: nothing else on this tree, so `37.5self` arrived fully covered on those
+#: seven dimensions. `0.5ic/d3` is unchanged by this move and stays the one
+#: uncovered cell, for the reason argued directly above.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (69, 8, 521)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -1934,6 +1957,13 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     ("26.5ic", 3, "NA"),
     ("37.5ip", 3, "NA"),
     ("37.5ic", 3, "NA"),
+    # 37.5self/d3: the self-tape-out route, added at v1.11.5, on exactly the
+    # same reading as the four above — `condition: {files_exist:
+    # [input/submission_template/SELF_TAPEOUT.txt]}`, `condition_kind:
+    # design_dependent`, no admissible run root satisfying it. It entered the
+    # grid NA and was never ENFORCED. Publish a run tree carrying that marker
+    # and it goes ENFORCED, and this inventory reddens naming it.
+    ("37.5self", 3, "NA"),
     # ── dimension 5 ───────────────────────────────────────────────────
     ("12", 5, "WAIVED"),
     # ── dimension 6 ───────────────────────────────────────────────────

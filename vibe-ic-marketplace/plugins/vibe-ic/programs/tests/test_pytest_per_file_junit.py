@@ -259,6 +259,47 @@ def _stream_set_over(tmp_path, shares, *, item_order, declared=None,
     return streams
 
 
+def test_a_stream_that_appears_after_the_first_scan_is_still_admitted(tmp_path):
+    """THE READ SIDE'S OWN BLIND SPOT, and it made every merge verification
+    refuse.
+
+    `_scan` lists a directory FD it holds open for the whole run.
+    `os.listdir(fd)` is `fdopendir(dup(fd))`, and a dup SHARES the file offset,
+    so a second listing resumes wherever the first one stopped. The first scan
+    always happens BEFORE the pytest child has written its stream -- the driver
+    polls immediately after spawning -- so that cursor is already at
+    end-of-directory when the stream finally appears.
+
+    MEASURED in the hermetic candidate container, whose profile mounts `/tmp`
+    as a TMPFS: `os.listdir(self.dir_fd)` returned `[]` at the same instant
+    `os.listdir(self.directory)` returned `['m.7.1.jsonl']`. A 0.02 s GREEN arm
+    was therefore admitted only by `complete()` -- after the last observer
+    sample -- so the hermetic relay emitted no checkpoint and no terminal
+    record, no B1 receipt was written, and `gatekeeper-verify-merge.sh`
+    answered rc=2 to a known-good branch and a known-bad one alike: 22 reds in
+    `test_landing_merge_verdict`, and a merge gate that could not discriminate.
+
+    The cursor position is the whole property, so this test SETS it rather than
+    hoping the host filesystem reproduces tmpfs semantics: on ext4 the kernel
+    re-seeds the readdir cursor and the defect is invisible, which is exactly
+    why it survived. A scan must be a statement about the directory, never
+    about where the previous scan stopped reading it."""
+    streams = D._ProgressStreamSet(tmp_path, "0" * 32, lambda: os.getpid())
+    try:
+        assert streams.sample() == 0
+        assert streams.streams == {}, "nothing was written yet"
+        os.lseek(streams.dir_fd, 0, os.SEEK_END)
+        name = f"m.{os.getpid()}.0.jsonl"
+        (tmp_path / name).write_bytes(b"")
+        streams.sample()
+        assert streams.error == "", streams.error
+        assert list(streams.streams) == [name], (
+            "the stream was invisible to the scan that followed it: a green "
+            "arm and a hung arm are reported identically")
+    finally:
+        streams.close()
+
+
 def test_hermetic_relay_reads_the_object_production_actually_hands_it(tmp_path):
     """THE PAIRING NO TEST ABOVE MEASURES. Every relay test in this file feeds
     `observe()` a hand-written duck type (`_OuterProbe`) that has the four

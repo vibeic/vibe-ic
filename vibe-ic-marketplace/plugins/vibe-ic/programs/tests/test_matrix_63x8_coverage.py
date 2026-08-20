@@ -482,10 +482,26 @@ def test_live_collection_relays_finite_semantic_progress_past_old_bound(
     """Several completed collections may outlive a former total deadline."""
     old_fixed_bound = 0.3
     seen = []
+    # RECORD AND FORWARD, never replace. This test's subject is that a live
+    # collection RELAYS finite semantic progress; a spy that swallows the call
+    # makes the collection silent, which is the opposite of its subject. It
+    # matters outside this file: the enclosing driver test
+    # `test_pytest_per_file_junit.py::
+    #  test_nested_collect_progress_is_relayed_to_the_outer_session`
+    # runs THIS node under a 0.8 s forward-progress lease, and with the emitter
+    # swallowed the seven 0.14 s collections relayed nothing at all, so the
+    # outer session killed a perfectly healthy child as hung --
+    # `WATCHDOG_STALLED … PROGRESS_PROTOCOL_INCOMPLETE: terminal event missing
+    # (stage=running)`. Instrumentation that removes the behaviour it measures
+    # can only ever certify itself.
+    _forward = _domain_progress
+
+    def _record_and_forward(scope, completed, total):
+        seen.append((scope, completed, total))
+        _forward(scope, completed, total)
+
     monkeypatch.setattr(
-        sys.modules[__name__], "_domain_progress",
-        lambda scope, completed, total:
-        seen.append((scope, completed, total)))
+        sys.modules[__name__], "_domain_progress", _record_and_forward)
     monkeypatch.setattr(
         sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S",
         old_fixed_bound)

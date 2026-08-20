@@ -263,7 +263,7 @@ _LANDING_LANE_SHA256 = {
 # the third and final required invocation, so any executable rewrite that can
 # affect reachability must be reviewed together with a new digest.
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "3d844dc8404dd2391fa597a2ad0ecc913e274fb4ba11a00e5e0c8fd742198bf6"
+    "864d02ac0d62f954f790a07edec5f4ec3681b418a71273fed74ed08fb15892f0"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -279,14 +279,37 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # later rewrite cannot erase their verdict (for example ``FAILED=0`` or an
 # early successful exit after the third call).  Gate control-flow changes are
 # intentionally an explicit policy migration, never a heuristic match.
+#
+# RE-PINNED AGAIN at v1.11.5, and this migration is a RATCHET THAT WAS LEFT
+# UNTURNED rather than a new policy. The three pins here had been stale since
+# 0060d835 and kept SIX tests in `test_ci_harness_timeout_ceiling_check.py` red
+# on `main`, plus the hygiene gate "inner timeouts fit the harness" — across six
+# landings, none of which the drift was about. A permanently-red contract check
+# is a contract check nobody reads.
+#
+# WHAT MOVED, reviewed rather than absorbed:
+#   * `tools/gatekeeper-land.sh` (both digests above and below): ONE commit,
+#     eda53573 (v1.11.2), which inserts `landing_tier_checkout_preflight.py`
+#     and a fatal `exit 2` AHEAD of the arms so a full tier refuses to start in
+#     a checkout a third party can unregister mid-run. It adds a refusal in
+#     front of the lanes; it removes, reorders and rewrites none of them — and
+#     the three `_LANDING_LANE_SHA256` bodies did NOT move, which is this
+#     file's own independent witness that the lane bodies are byte-identical.
+#   * the semantic driver: five landed fixes to `pytest_per_file_junit.py`
+#     (3e6c1bfc, f96494b8, 732e0ee3, fe132795, 2b93d872) plus the progress-scan
+#     rewind that ships with this commit. Each was reviewed at its own landing;
+#     what nobody did afterwards was turn this ratchet.
+#
+# Every digest here is DERIVED — this file run over the reviewed tree, and the
+# sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "d07a2e1c46ca82b2fd90e7931e298c8d3302f1a7b6c41f3facf2cf4ff0801497"
+    "282a2e92a59623a656c7f8b730192b693d3d1a59ba221f0430db8d7673dc06fd"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
 # whose functional tests prove selection -> aggregate JUnit coverage.
 _SEMANTIC_DRIVER_SHA256 = (
-    "5d270fa98e8aff656998e3c23a116e3d85ad55ce35d119807cf8e94a263b9cf0"
+    "392d077fcbe629d1fde9e715224d44b84fe93f2a40cad17f47597d317a02ec16"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a

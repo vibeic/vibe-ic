@@ -2830,10 +2830,10 @@ def test_d3_cell_states_partition_all_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (51, 2, 15), (
+    assert (len(enforced), len(waived), len(na)) == (51, 2, 16), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(51, 2, 15) on 2026-08-20. A step moving between states is a real "
+        f"(51, 2, 16) at v1.11.5. A step moving between states is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2904,6 +2904,20 @@ def test_d3_cell_states_partition_all_steps():
         "condition and re-checks every run root for the condition file, so the "
         "day any project ships input/submission_template/ the NA "
         "self-invalidates and the four cells return to the denominator."
+        "\nv1.11.5: (51, 2, 15) -> (51, 2, 16), and this one is +1 STEP with "
+        "NO reclassification \u2014 the triple sums 68 -> 69. 37.5self "
+        "(General Precheck \u2014 the tape-out check for a design with NO "
+        "operator) was added: the chip/IC route for a design that has no "
+        "shuttle operator to refuse it, which until this step passed no "
+        "submission check of any kind. It arrives NA rather than ENFORCED for "
+        "exactly the reason its three siblings did, and the reading is "
+        "re-derived live rather than declared: `condition: {files_exist: "
+        "[input/submission_template/SELF_TAPEOUT.txt]}` with `condition_kind: "
+        "design_dependent`, and no admissible run root carries that marker. "
+        "ENFORCED is unmoved at 51, WAIVED unmoved at 2, NA 15 -> 16. Publish "
+        "a run tree carrying SELF_TAPEOUT.txt and this NA self-invalidates "
+        "through the same live guard, the cell returns to the denominator, "
+        "and this pin reddens naming it."
     )
 
 
