@@ -117,7 +117,7 @@ import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the 
 #: The alternative — naming an image in a comment — is a string nothing
 #: resolves, which is how the first version of this file went red on the
 #: image-version gate.
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.13"
+DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.14"
 
 #: Tech-LEF filename shapes. `*.tlef` alone misses nangate45, whose tech LEF is
 #: `NangateOpenCellLibrary.tech.lef` — it was reported NOT MEASURED for exactly
