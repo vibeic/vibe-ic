@@ -1297,6 +1297,53 @@ def _f_die_unfinished(p: Path) -> None:
                    "reason": "die identification cells placed"}})
 
 
+def _f_hardmacro_kit_incomplete(p: Path) -> None:
+    """An IP delivery kit with the LEF and none of the other three views.
+
+    Reddens the Step-37.5ip clause
+    ``digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json``.
+
+    EMPTY cannot reach it BY DESIGN, and that design is stated in the gate's own
+    docstring: "An absent ``phase3/stage4/hardmacro/`` is NOT a pass. It is rc 2"
+    — NOT_DETERMINED, "no digital hardmacro package exists to examine". A step
+    whose only red were the absence of the delivery would be measuring that
+    nobody delivered, not that a delivery was bad.
+
+    So the fixture DELIVERS. One macro, a real LEF with CLASS BLOCK, SIZE and a
+    pin with a port rectangle, and no ``.lib``, no ``.v``, no ``.gds``. That is
+    the kit's core failure in the gate's own words — placeable, untimeable,
+    unsimulatable, unstreamable.
+
+    MEASURED, verbatim (rc 1, three findings):
+
+        [ERROR] VIEW_MISSING: macro 'core_macro': no `.lib` view. ...
+        [ERROR] VIEW_MISSING: macro 'core_macro': no `.gds` view. ...
+        [ERROR] VIEW_MISSING: macro 'core_macro': no `.v` view. ...
+
+    Chip- and PDK-AGNOSTIC: the macro name is a generic noun, the layer name is
+    LEF's own generic ``met1``, and no branch of the gate reads either.
+    """
+    _w(p, "phase3/stage4/hardmacro/core_macro.lef",
+       'VERSION 5.7 ;\n'
+       'BUSBITCHARS "[]" ;\n'
+       'DIVIDERCHAR "/" ;\n'
+       'MACRO core_macro\n'
+       '  CLASS BLOCK ;\n'
+       '  FOREIGN core_macro 0 0 ;\n'
+       '  ORIGIN 0 0 ;\n'
+       '  SIZE 100.000 BY 80.000 ;\n'
+       '  PIN clk\n'
+       '    DIRECTION INPUT ;\n'
+       '    USE SIGNAL ;\n'
+       '    PORT\n'
+       '      LAYER met1 ;\n'
+       '        RECT 1.000 1.000 1.400 1.400 ;\n'
+       '    END\n'
+       '  END clk\n'
+       'END core_macro\n'
+       'END LIBRARY\n')
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1328,6 +1375,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
+    "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
     "DIE_UNFINISHED": _f_die_unfinished,
 }
 
@@ -1390,6 +1438,9 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # at the tree to reach.
     ("26.5ic", "die_finishing_check . --json "
                "reports/phase3/die_finishing.json"): "DIE_UNFINISHED",
+    ("37.5ip", "digital_hardmacro_check . --json "
+               "reports/phase3/digital_hardmacro.json"):
+        "HARDMACRO_KIT_INCOMPLETE",
     ("25", "em_peak_current_authority_check . --json "
            "reports/phase3/em_current_authority.json"): "EM_PEAK_EXCEEDS_SUPPLY",
     ("33", "power_total_vs_budget_check . --json "
