@@ -827,7 +827,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ppa_contract_build` | any | — | build the measurement contract for one PPA run. |
 | `ppa_contract_check` | any | — | the validator, and what it must REFUSE. |
 | `ppa_feasibility_check` | any | — | the hard promotion gate, as a flow-callable gate. |
-| `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive the four ways such a claim goes wrong. vibe-ic#1121. |
+| `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2. |
 | `ppa_measurement_check` | any | — | The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided. |
 | `ppa_metric_extract` | any | — | Assemble metric records into ONE validated, indexed, canonically-identified bundle — and refuse the record set that cannot be one. |
 | `ppa_pareto_check` | any | — | recompute the frontier and refuse a published lie. |
@@ -2015,7 +2015,7 @@ _(no programs in this group)_
 - `ppa_contract_build` — build the measurement contract for one PPA run.
 - `ppa_contract_check` — the validator, and what it must REFUSE.
 - `ppa_feasibility_check` — the hard promotion gate, as a flow-callable gate.
-- `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive the four ways such a claim goes wrong. vibe-ic#1121.
+- `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2.
 - `ppa_measurement_check` — The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided.
 - `ppa_metric_extract` — Assemble metric records into ONE validated, indexed, canonically-identified bundle — and refuse the record set that cannot be one.
 - `ppa_pareto_check` — recompute the frontier and refuse a published lie.

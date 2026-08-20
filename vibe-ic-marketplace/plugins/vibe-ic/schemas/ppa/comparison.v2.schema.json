@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vibeic.ai/schemas/ppa/comparison.v2.schema.json",
+  "title": "vibeic.ppa.comparison.v2",
+  "description": "A PPA head-to-head record. It carries a claim about silicon -- 'given an identical specification and an identical PDK, this flow produced better PPA than theirs' -- and this schema is the shape that makes such a claim checkable afterwards by somebody who does not trust the author. What the shape is FOR is argued in programs/_ppa/benchmark.py; what is here is only the shape. Validating against this schema is necessary and NOT sufficient: a structurally perfect record can still be refused by ppa_head_to_head_check, because the fairness conditions are relations BETWEEN arms (one contract, one scope per axis, the same feasibility question, an opponent allowed to tune) and JSON Schema cannot express a relation between two array elements. A record that validates here and is refused there is not a contradiction; it is the division of labour.",
+  "type": "object",
+  "required": ["schema", "arms"],
+  "properties": {
+    "schema": {
+      "const": "vibeic.ppa.comparison.v2",
+      "description": "First key of the document, per docs/PPA_INTERFACES.md section 5. Declaring v1 here does not switch the v2 conditions off -- the checker runs them over every record whatever it declares -- so the declaration names the document and never weakens the gate."
+    },
+    "arms": {
+      "type": "array",
+      "minItems": 2,
+      "description": "At least two. One arm is not a head-to-head.",
+      "items": {"$ref": "#/$defs/arm"}
+    },
+    "verdict": {
+      "type": "object",
+      "description": "OPTIONAL, and it may not disagree with the numbers in the same record. Keyed by baseline flow; each value maps an axis to its verdict and may carry `pareto`. The checker DERIVES the verdict from the arms alone and refuses a record whose assertion differs -- that is the one direction of dishonesty a head-to-head has room for and it is cheap to close.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "arm": {
+      "type": "object",
+      "required": ["flow", "role", "design", "contract", "measurement_basis",
+                   "config_source", "tuned_by_this_project", "ppa",
+                   "feasibility", "tuning"],
+      "properties": {
+        "flow": {"type": "string", "minLength": 1,
+                 "description": "The flow this arm ran. Compared as an opaque label and never interpreted."},
+        "role": {"enum": ["subject", "baseline"],
+                 "description": "Exactly one subject; at least one baseline."},
+        "version": {"type": "string"},
+        "design": {"$ref": "#/$defs/design"},
+        "contract": {"$ref": "#/$defs/contract"},
+        "measurement_basis": {
+          "enum": ["signed_off_gds", "post_route_sta", "silicon"],
+          "description": "Simulated is not silicon. An arm claiming `silicon` must carry `silicon_evidence`, and a report over simulated arms says in words that it is not a wafer measurement."
+        },
+        "silicon_evidence": {"type": "string", "minLength": 1},
+        "config_source": {"type": "string", "minLength": 1,
+                          "description": "Where this arm's configuration came from. Without it, 'their defaults' is an assertion."},
+        "tuned_by_this_project": {
+          "type": "boolean",
+          "description": "A baseline must declare false. A baseline we tune is an oracle we wrote. NOTE this is about the arm's CONFIGURATION; whether its own tuner was allowed to run, over whose search space and on what budget, is `tuning` and is a separate question."
+        },
+        "ppa": {"$ref": "#/$defs/ppa"},
+        "feasibility": {"$ref": "#/$defs/feasibility"},
+        "tuning": {"$ref": "#/$defs/tuning"}
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["score"]}, {"required": ["ppa_score"]},
+          {"required": ["overall"]}, {"required": ["figure_of_merit"]},
+          {"required": ["fom"]}, {"required": ["composite"]}
+        ]
+      },
+      "description": "A collapsed figure is refused for EXISTING. Area, timing and power trade against each other, so a single number is a proxy for the property and not the property -- and whatever else the record says, the scalar is the number that gets quoted."
+    },
+    "design": {
+      "type": "object",
+      "required": ["spec_sha256", "pdk", "clock_target_ns", "corners"],
+      "description": "Declared PER ARM and not once at the top level, deliberately: a shared block would ASSERT that both arms ran the same problem, whereas two independent declarations let the checker COMPARE them. Identity has to be evidence, not a heading.",
+      "properties": {
+        "spec_sha256": {"type": "string", "minLength": 1},
+        "pdk": {"type": "string", "minLength": 1,
+                "description": "Compared to the other arm's string. Never interpreted, so this schema is PDK-agnostic."},
+        "clock_target_ns": {"type": "number"},
+        "corners": {"type": "array", "items": {"type": "string"},
+                    "description": "A corner SET: order is not part of identity."}
+      }
+    },
+    "contract": {
+      "type": "object",
+      "required": ["sha256"],
+      "description": "The identity of the whole problem, not only the four fields `design` happens to carry. Every arm's sha256 must be identical or the comparison is UNDETERMINED.",
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$",
+                   "description": "Produced by _ppa/canonical_json.digest_of. Never hand-rolled: two serializations of one object are two identities for one fact."},
+        "body": {"type": "object",
+                 "description": "OPTIONAL. When present, the checker recomputes its digest and refuses a record whose stated identity is not its identity."},
+        "source": {"type": "string"}
+      }
+    },
+    "ppa": {
+      "type": "object",
+      "required": ["area_um2", "timing_wns_ns", "power_mw"],
+      "description": "All three axes, always. An arm with an unmeasured axis is UNDETERMINED, never a win on the axes that were measured.",
+      "properties": {
+        "area_um2": {"$ref": "#/$defs/metric"},
+        "timing_wns_ns": {"$ref": "#/$defs/metric"},
+        "power_mw": {"$ref": "#/$defs/metric"}
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["score"]}, {"required": ["ppa_score"]},
+          {"required": ["overall"]}, {"required": ["figure_of_merit"]},
+          {"required": ["fom"]}, {"required": ["composite"]}
+        ]
+      }
+    },
+    "metric": {
+      "type": "object",
+      "required": ["status", "value", "unit", "scope"],
+      "description": "The canonical metric record of docs/PPA_INTERFACES.md section 2, narrowed to what a comparison needs. THE `scope` IS THE POINT: v1 carried a bare float, and a bare float cannot say which stage, corner, mode or activity basis produced it, so a v1 record could not answer three of the four questions that decide whether two numbers may be compared at all.",
+      "properties": {
+        "status": {
+          "enum": ["MEASURED", "NOT_MEASURED", "NOT_APPLICABLE", "INVALID",
+                   "ESTIMATED", "DERIVED"],
+          "description": "Only MEASURED may enter a numeric comparison. No numeric sentinels: 0, -1 and \"\" never mean 'not measured'."
+        },
+        "value": {"type": "number"},
+        "unit": {"type": "string", "minLength": 1},
+        "reason": {"type": "string",
+                   "description": "Required in spirit for every status but MEASURED: a number that was not measured carries a reason, not a value."},
+        "scope": {"$ref": "#/$defs/scope"},
+        "source": {"$ref": "#/$defs/source"}
+      }
+    },
+    "scope": {
+      "type": "object",
+      "required": ["stage"],
+      "description": "Two numbers are comparable only if their scope MATCHES. The checker compares the whole object rather than a hand-written list of keys, so a scope key added next year is compared the moment it exists instead of becoming a new blind spot. Per axis the checker additionally requires: area -> stage; timing -> stage, mode, process, voltage_v, temperature_c, rc_corner, check; power -> stage, mode, process, voltage_v, temperature_c, activity_basis. Both arms declaring an EMPTY scope must not satisfy equality, which is what those required keys prevent.",
+      "properties": {
+        "stage": {
+          "type": "string",
+          "description": "Where in the flow the number was taken. `rtl`, `elaborated`, `synthesis` and `post_synth` are PROXY stages; `post_place`, `post_cts`, `post_route`, `post_route_extracted`, `signed_off_gds` and `silicon` are physical. An arm whose measurement_basis does not cover its stage is claiming a measurement it did not take."
+        },
+        "mode": {"type": "string"},
+        "process": {"type": "string"},
+        "voltage_v": {"type": "number"},
+        "temperature_c": {"type": "number"},
+        "rc_corner": {"type": "string"},
+        "clock": {"type": "string"},
+        "check": {"type": "string"},
+        "activity_basis": {
+          "type": "string",
+          "description": "How switching activity was obtained -- e.g. `vectorless`, `vcd`, `saif`. VECTORLESS POWER AND VCD POWER ARE DIFFERENT METRICS and comparing one against the other is not a power comparison. Measured 2026-08-21: LibreLane 3.1.0.dev1 contains zero occurrences of read_vcd / set_power_activity / SAIF, and its only power producer is `report_power -corner <c>` with no activity file, so a LibreLane arm's basis is vectorless by construction and not by campaign choice."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "description": "Where the number came from, so a reader can go and look. Hash the value you PARSED, never one you recomputed.",
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "tool": {"type": "string"},
+        "tool_version": {"type": "string"},
+        "parser": {"type": "string"},
+        "parser_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "feasibility": {
+      "type": "object",
+      "required": ["checks"],
+      "description": "SMALLER AREA WITH DRC VIOLATIONS IS NOT SMALLER. An implementation that does not close is not an implementation, so a number taken off it is the cost of a design that does not exist. The checker requires BOTH arms feasible AND both arms checked for the same SET of things -- DRC+LVS+antenna on one arm and DRC alone on the other gives two arms both reporting clean over different questions, and the one asked less looks exactly as good as the one asked more.",
+      "properties": {
+        "verdict": {
+          "enum": ["FEASIBLE", "INFEASIBLE", "NOT_CHECKED"],
+          "description": "OPTIONAL and never trusted: the checker derives this from `checks` and refuses a record whose assertion differs."
+        },
+        "checks": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Check name -> evidence. The floor the checker expects is drc, lvs, antenna, setup, hold, drv; _ppa/feasibility.py owns the fuller list (it adds IR, EM and equivalence) and a campaign that runs more is held to more, because the SET must match across arms.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "violations": {"type": "integer", "minimum": 0},
+              "status": {"enum": ["CLEAN", "VIOLATIONS", "NOT_CHECKED"]},
+              "source": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "tuning": {
+      "type": "object",
+      "required": ["supported"],
+      "description": "A TUNED ARM MUST BE ALLOWED TO TUNE. Publishing a win over a deliberately weakened opponent is the same defect as a gate that cannot fail, and worse in one respect: a gate that cannot fail merely misses defects, while a rigged benchmark publishes a false one. A flow with no tuner is not weakened by not being tuned, so `supported: false` is a complete and honest declaration; what is refused is the ABSENCE of a declaration, because 'we do not know whether the opponent was allowed to tune' is the state this exists to end.",
+      "properties": {
+        "supported": {"type": "boolean",
+                      "description": "Does this flow ship a tuner at all."},
+        "performed": {"type": "boolean",
+                      "description": "Was it run for this arm. A baseline that ships a tuner and was not tuned, while the subject was, is refused."},
+        "budget": {
+          "type": "object",
+          "description": "Named dimensions -- e.g. trials, cpu_hours, wall_hours. The baseline's must be no smaller than the subject's on every dimension they share, because search budget buys PPA directly and a smaller budget is a handicap applied to the opponent.",
+          "additionalProperties": {"type": "number", "minimum": 0}
+        },
+        "search_space": {
+          "type": "object",
+          "description": "A tuner can only find what its search space contains, so a space WE chose is a result we chose. This is the weakening that `tuned_by_this_project: false` does not catch, because that flag is about the arm's configuration and a campaign can answer it truthfully while having authored the opponent's search space.",
+          "properties": {
+            "source": {
+              "enum": ["official", "upstream_default", "authored_for_this_comparison", "unknown"],
+              "description": "A tuned BASELINE must be `official` or `upstream_default`."
+            },
+            "ref": {"type": "string"},
+            "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "authored_by_this_project": {"type": "boolean"}
+          }
+        }
+      }
+    }
+  }
+}
