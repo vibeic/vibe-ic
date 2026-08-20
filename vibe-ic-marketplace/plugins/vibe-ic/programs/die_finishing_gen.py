@@ -127,6 +127,36 @@ except ImportError:                                          # standalone gate
 
 PASS, FAIL, SKIP = 0, 1, 2
 
+#: Lines an EDA container launcher prints before the tool it launched says
+#: anything. They come FIRST, which is the reason the quoting below takes the
+#: last line rather than the first — see `_last_said`.
+_LAUNCHER_NOISE = ("[INFO]", "[WARN]", "[DEBUG]")
+
+
+def _last_said(text: str, limit: int = 200) -> str:
+    """The line of `text` most likely to say what went wrong.
+
+    Quoting the FIRST line was wrong in the one case this reason exists for.
+    Measured: a PDK whose seal-ring PCell library is missing prints
+    `Error: Couldn't load the seal ring library.` and exits 0 — but the
+    container launcher has already printed two banner lines ahead of it, so the
+    diagnosis read "it exited 0 and said: [INFO] Final PATH variable: ...". The
+    banner is not what went wrong, and a reason that quotes it sends the reader
+    to the wrong place.
+
+    A tool says what failed LAST, so this takes the last non-empty line, and
+    skips the launcher banners when the last line is one of them. The full
+    output is carried separately in `generator_output` either way; this only
+    decides which line the human-readable reason quotes.
+    """
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    for ln in reversed(lines):
+        if not ln.startswith(_LAUNCHER_NOISE):
+            return ln[:limit]
+    return lines[-1][:limit]
+
 _CHECK = "die_finishing"
 #: Written by this program on EVERY path; READ (never overwritten in
 #: place) by `die_finishing_check`, which is the step gate.
@@ -797,7 +827,7 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         seal["reason"] = (
             f"the PDK seal-ring generator ({script}) produced no output layout "
             f"at {staged} — it exited {rc}"
-            + (f" and said: {tail.splitlines()[0][:200]}" if tail else "")
+            + (f" and said: {_last_said(tail)}" if tail else "")
             + ". No ring was added; the die is unsealed.")
         return done(seal)
 
