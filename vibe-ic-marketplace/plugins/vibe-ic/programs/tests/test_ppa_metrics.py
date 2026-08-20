@@ -548,3 +548,18 @@ def test_the_whole_bundle_document_has_one_identity_whatever_the_read_order():
     one, two = M.bundle(_idx(a, b)), M.bundle(_idx(b, a))
     assert cj.dumps(one) == cj.dumps(two)
     assert one["records_digest"] == two["records_digest"]
+
+
+def test_a_scope_field_one_side_never_declared_is_not_reported_as_null():
+    """This module's own subject, applied to its own output. `process: None vs
+    'ss'` reads as "one side measured a null process"; it actually means one
+    side never said. The two must not render the same way."""
+    a = M.measured("area.die_um2", 12000.0, "um^2", {"stage": "synthesis"}, SRC)
+    b = M.measured("area.die_um2", 15400.0, "um^2",
+                   {"stage": "synthesis", "process": "ss"}, SRC)
+    out = M.compare(a, b)
+    assert out["verdict"] == M.CMP_DIFFERENT_SCOPE
+    row = [d for d in out["scope_diff"] if d["field"] == "process"][0]
+    assert row["a_declared"] is False and row["b_declared"] is True
+    assert "<not declared>" in out["detail"]
+    assert "None" not in out["detail"]

@@ -924,18 +924,26 @@ def compare(a: Mapping[str, Any], b: Mapping[str, Any],
 
     da, db = scope_digest(a.get("scope") or {}), scope_digest(b.get("scope") or {})
     if da != db:
-        keys = sorted(set(a.get("scope") or {}) | set(b.get("scope") or {}))
+        sa, sb = dict(a.get("scope") or {}), dict(b.get("scope") or {})
+        keys = sorted(set(sa) | set(sb))
+        # A FIELD ONE SIDE DOES NOT DECLARE IS NOT A FIELD WHOSE VALUE IS null,
+        # and the report must not render them the same way -- that is this whole
+        # module's subject, applied to its own output. `a_declared` carries the
+        # distinction machine-readably; the sentence says `<not declared>`.
         diff = [{"field": k,
-                 "a": (a.get("scope") or {}).get(k),
-                 "b": (b.get("scope") or {}).get(k)}
-                for k in keys
-                if (a.get("scope") or {}).get(k) != (b.get("scope") or {}).get(k)]
+                 "a": sa.get(k), "a_declared": k in sa,
+                 "b": sb.get(k), "b_declared": k in sb}
+                for k in keys if sa.get(k) != sb.get(k) or (k in sa) != (k in sb)]
         out["verdict"] = CMP_DIFFERENT_SCOPE
         out["scope_diff"] = diff
+
+        def _shown(d: Dict[str, Any], side: str) -> str:
+            return repr(d[side]) if d[side + "_declared"] else "<not declared>"
+
         out["detail"] = (
             "same metric, different scope, so these are two different facts "
             "and neither bounds the other: "
-            + "; ".join(f"{d['field']}: {d['a']!r} vs {d['b']!r}"
+            + "; ".join(f"{d['field']}: {_shown(d, 'a')} vs {_shown(d, 'b')}"
                         for d in diff))
         return out
 
