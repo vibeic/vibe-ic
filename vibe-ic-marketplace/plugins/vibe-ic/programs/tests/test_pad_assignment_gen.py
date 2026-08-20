@@ -632,6 +632,25 @@ def test_the_gate_runs_as_the_flow_spawns_it(tmp_path):
     assert "pad_assignment_check" in r.stdout
 
 
+def test_this_gate_declares_where_it_is_enforced(tmp_path):
+    """MEASURED: `flow_gate_enforcement_audit` counted this gate as a NEW
+    AUDIT_ONLY gate declaring no intent at all, which vibe-ic#886 reads as an
+    enforcement decision nobody made. The declaration must stay in the first
+    4 kB — `declared_intent` reads only `text[:4000]` — and it must NOT be
+    paid down by an entry in the known-debt register.
+    """
+    audit = pytest.importorskip("flow_gate_enforcement_audit")
+    intent = audit.declared_intent(PROGRAMS, "pad_assignment_check")
+    assert intent in ("blocking", "advisory"), intent
+    assert audit.declared_intent(PROGRAMS, "pad_ring_check") is not None, (
+        "the sibling clause on the same step declares one too; if this ever "
+        "returns None the detector changed, not the gate")
+    reg = json.loads(
+        (PROGRAMS / "flow_gate_enforcement_baseline.json").read_text())
+    assert "pad_assignment_check" not in (reg.get("undeclared_known") or []), (
+        "a declared gate must not also be carried as known debt")
+
+
 def test_the_report_is_a_declared_output_of_the_step():
     yaml = pytest.importorskip("yaml")
     steps = yaml.safe_load(FLOW.read_text())["steps"]
