@@ -265,3 +265,145 @@ def test_the_CLI_REFUSES_a_cell_whose_report_was_swapped(tmp_path):
         f"the gate NAMED the foreign evidence and still exited {rc1}. A gate "
         f"that notices and does not block differs from no gate only in being "
         f"auditable afterwards.")
+
+
+# ===========================================================================
+# THE TOOL'S OWN OUTPUT CANNOT BE STOOD IN FOR BY THE RUNNER'S SUMMARY
+#
+# THE FINDING. `adversarial_agent`'s A1 overwrites every `*.rpt` in a published
+# cell with the single line "TAMPERED BY THE ADVERSARY". Six of seven gates flip
+# rc 0 -> 1 because they need their evidence to pass. Measured on the cell the
+# ledger names, 23 reports overwritten:
+#
+#     ir_drop_report_check   rc=0   passed: True
+#       ERROR IR_DROP_REPORT_TOO_SMALL    reports/phase3/ir_drop.rpt
+#       ERROR IR_DROP_NO_TOOL_SIGNATURE   reports/phase3/ir_drop.rpt
+#
+# It named the destroyed report twice, at ERROR, and signed the step off:
+# "at least one candidate is authentic" was satisfied by the companion JSON the
+# RUNNER wrote.
+# ===========================================================================
+_PAD = "# " + ("=" * 78 + "\n") * 40          # clears the mode's size floor
+_REAL_TOOL_RPT = ("openroad PSM static IR drop\n"
+                  "worst voltage drop: 6.8 mV (0.2% Vdd)\n" + _PAD)
+#: The producer's machine-readable half: legitimately a few hundred bytes.
+_COMPANION = json.dumps({"tool": "openroad-psm", "mode": "static_ir_drop",
+                         "worst_ir_uv": 6800.0, "budget_uv": 180000.0})
+
+
+def _authenticity(tmp_path: Path, **files) -> tuple:
+    proj = tmp_path / "p" / "reports" / "phase3"
+    proj.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for name, body in files.items():
+        q = proj / name.replace("__", ".")
+        q.write_text(body, encoding="utf-8")
+        paths.append(q)
+    res = ERA.AuditResult(program="eda_report_audit:ir_drop", passed=False)
+    ok = ERA._check_tool_authenticity(paths, "ir_drop", res)
+    return ok, sorted({f.rule for f in res.findings})
+
+
+def test_a_DESTROYED_tool_report_is_not_rescued_by_the_runners_summary(tmp_path):
+    """The companion here is padded past the size floor ON PURPOSE.
+
+    The first version used the small one and PASSED against the reverted
+    behaviour -- with both halves unauthentic there was nothing to rescue the
+    report and the test measured nothing. The published cell's companion
+    carries a long `budget_basis` string and clears the floor on its own, which
+    is exactly why it could stand in for the destroyed report there.
+    """
+    ok, rules = _authenticity(
+        tmp_path,
+        ir_drop__rpt="TAMPERED BY THE ADVERSARY\n",
+        ir_drop__json=_COMPANION + "\n" + _PAD)
+    assert ok is False, (
+        "the tool's own report is a line of nonsense and the mode was still "
+        "told its evidence is authentic, on the strength of the JSON summary "
+        "the RUNNER wrote beside it")
+    assert "IR_DROP_NO_TOOL_SIGNATURE" in rules, rules
+
+
+def test_PAIRED_a_REAL_tool_report_beside_a_small_companion_still_passes(tmp_path):
+    """The twin, and the exact false positive that killed the blunter rule.
+
+    "Any ERROR finding fails the audit" was written first and MEASURED: the size
+    floor exists to reject hand-typed prose stubs, and a producer's companion
+    JSON is legitimately a few hundred bytes, so it trips `*_REPORT_TOO_SMALL`
+    on projects that are entirely honest. That rule reddened 11 tests across
+    three modules over legitimate projects and was dropped for this one.
+    """
+    ok, rules = _authenticity(
+        tmp_path,
+        ir_drop__rpt=_REAL_TOOL_RPT,
+        ir_drop__json=_COMPANION)
+    assert ok is True, (
+        f"a real tool report beside a small companion JSON was refused: "
+        f"{rules}. The companion is not a prose report and was never required "
+        f"to look like one.")
+    assert "IR_DROP_REPORT_TOO_SMALL" in rules, (
+        "the size finding must still be RECORDED against the companion — this "
+        "change decides what GATES, not what is disclosed")
+
+
+def test_a_mode_with_no_tool_output_at_all_is_unchanged(tmp_path):
+    """Degrade to the previous behaviour rather than to a refusal.
+
+    A project whose producer wrote only the machine-readable half keeps the
+    verdict it had; `machine_readable_found` in the summary already tells a
+    reader the verdict rests on that alone. The companion here is padded past
+    the size floor, because a SMALL companion alone was never authentic --
+    measured identically on both trees, `False ['IR_DROP_REPORT_TOO_SMALL']` --
+    so using one would assert nothing about this change.
+    """
+    ok, _rules = _authenticity(
+        tmp_path, ir_drop__json=_COMPANION + "\n" + _PAD)
+    assert ok is True, (
+        "a mode that discovered no tool output at all changed verdict; this "
+        "rule is only allowed to decide BETWEEN the two halves, never to "
+        "refuse a project that has only one")
+
+
+def test_a_real_report_alongside_a_destroyed_one_still_counts(tmp_path):
+    """One authentic TOOL output is enough — the rule raises the bar from
+    "any file" to "any tool output", not to "every file"."""
+    ok, _rules = _authenticity(
+        tmp_path,
+        ir_drop__rpt=_REAL_TOOL_RPT,
+        voltage_drop__log="TAMPERED BY THE ADVERSARY\n")
+    assert ok is True
+
+
+@needs_corpus
+def test_the_CLI_REFUSES_a_cell_whose_tool_report_was_DESTROYED(tmp_path):
+    """Prove-by-run for A1, through the gate's own CLI.
+
+    Distinct from the substitution proof above: nothing is swapped in, the
+    tool's own output is replaced with a line of nonsense.
+    """
+    cells = [c for c in cell_dirs()
+             if (c / "reports" / "phase3" / "ir_drop.rpt").is_file()
+             and (c / "reports" / "phase3" / "ir_drop.json").is_file()]
+    if not cells:
+        pytest.skip("no published cell here carries both halves of the "
+                    "ir_drop measurement")
+    src = cells[0]
+    proj = tmp_path / "proj"
+    subprocess.run(["cp", "-r", str(src), str(proj)], check=True)
+
+    rc0, _rules0, _s0 = _run(proj, "ir_drop", tmp_path / "a.json")
+    if rc0 != 0:
+        pytest.skip(f"{src.name} --mode ir_drop is not green pristine "
+                    f"(rc={rc0}); there is no green here to forge")
+    n = 0
+    for f in sorted(proj.rglob("*.rpt")):
+        if f.is_file():
+            f.write_text("TAMPERED BY THE ADVERSARY\n", encoding="utf-8")
+            n += 1
+    assert n > 0, "nothing was overwritten, so this proved nothing"
+
+    rc1, rules1, _s1 = _run(proj, "ir_drop", tmp_path / "b.json")
+    assert rc1 == 1, (
+        f"{n} report(s) replaced with a line of nonsense and the gate still "
+        f"exited {rc1}. Findings were {rules1}. Its PASS rests on the JSON "
+        f"summary the RUNNER wrote, not on the output the TOOL produced.")

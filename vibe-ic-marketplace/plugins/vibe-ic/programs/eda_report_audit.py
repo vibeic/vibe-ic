@@ -832,11 +832,54 @@ def _has_strong_signature(text: str, mode: str) -> bool:
     return False
 
 
+#: Suffixes of the TOOL's own output, as against the machine-readable companion
+#: the RUNNER writes beside it. The flow declares both halves of one
+#: measurement -- `reports/phase3/em.rpt` AND `reports/phase3/em.json` -- and
+#: `_COMPANION_JSON` above is the same distinction, named for the other half.
+_TOOL_OUTPUT_SUFFIXES = (".rpt", ".log", ".txt", ".out")
+
+
 def _check_tool_authenticity(files: List[Path], mode: str,
                               result: AuditResult) -> bool:
     """Append findings for missing tool signature + undersized reports.
-    Returns True only if at least one candidate passed both checks."""
+
+    Returns True only if a candidate passed both checks -- and, WHEN THE MODE
+    DISCOVERED ANY OF THE TOOL'S OWN OUTPUT AT ALL, only if one of THOSE did.
+
+    THE FINDING THIS CLOSES. `adversarial_agent`'s A1 overwrites every `*.rpt`
+    in a published cell with the line "TAMPERED BY THE ADVERSARY" and re-runs
+    each gate. Six of seven flip rc 0 -> 1 because they need their evidence to
+    pass. `ir_drop_report_check` did not -- measured, 23 reports overwritten:
+
+        rc=0   passed: True
+          ERROR IR_DROP_REPORT_TOO_SMALL    reports/phase3/ir_drop.rpt
+          ERROR IR_DROP_NO_TOOL_SIGNATURE   reports/phase3/ir_drop.rpt
+
+    It named the destroyed report, twice, at ERROR, and signed the step off.
+    The cause was here: "at least one candidate" was satisfied by
+    `reports/phase3/ir_drop.json`, the machine-readable summary the RUNNER
+    wrote, so the gate's green was a statement about the runner's own JSON
+    while the TOOL's output was nonsense. That is the shape the matrix README
+    records for steps 9 and 21 -- the gate believed a summary the runner wrote
+    instead of the output the tool wrote.
+
+    WHY THIS SPLIT AND NOT "ANY ERROR FINDING FAILS THE AUDIT". That blunter
+    rule was written first and MEASURED, and it is a false-positive machine:
+    the size floor exists to reject hand-typed prose stubs, and a producer's
+    companion JSON is legitimately a few hundred bytes, so it trips
+    `*_REPORT_TOO_SMALL` on projects that are entirely honest. It reddened 11
+    tests across three modules over synthesized-but-legitimate projects. A gate
+    that fires on a legitimately complete design is a bug in the gate, so the
+    rule was dropped for this one, which distinguishes the two halves the flow
+    itself already distinguishes.
+
+    A mode that discovered NO tool output keeps exactly the previous
+    behaviour -- the companion carries it, and `machine_readable_found` in the
+    summary already tells a reader the verdict rests on that alone.
+    """
     any_authentic = False
+    tool_output_seen = False
+    tool_output_authentic = False
     for fp in files:
         try:
             size = fp.stat().st_size
@@ -849,8 +892,13 @@ def _check_tool_authenticity(files: List[Path], mode: str,
         strong = _has_strong_signature(text, mode)
         ok_size = size >= MIN_REPORT_BYTES.get(mode, 1024) or strong
         ok_sig, matched = _has_tool_signature(text, mode)
+        is_tool_output = fp.suffix.lower() in _TOOL_OUTPUT_SUFFIXES
+        if is_tool_output:
+            tool_output_seen = True
         if ok_size and ok_sig:
             any_authentic = True
+            if is_tool_output:
+                tool_output_authentic = True
             continue
         rel = str(fp)
         if not ok_size:
@@ -870,6 +918,8 @@ def _check_tool_authenticity(files: List[Path], mode: str,
                          f"Hand-typed reports rejected."),
                 file=rel,
             ))
+    if tool_output_seen:
+        return tool_output_authentic
     return any_authentic
 
 
