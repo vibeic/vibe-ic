@@ -37,6 +37,9 @@ Environment:
                 `layers: null` enumerates every layer/datatype carrying shapes.
   DENS_OUT      JSON file to write
   DENS_CELL     top cell name (optional; the layout's own single top otherwise)
+  DENS_COUNT_ONLY  "1" -> report only `shape_census`, a per-(layer, datatype)
+                shape COUNT, and skip every polygon merge. For a caller that
+                needs to know which layers a generator wrote to, not how much.
 """
 import json
 import os
@@ -104,6 +107,28 @@ def main() -> int:
             b.left <= float(die[0]) + eps and b.bottom <= float(die[1]) + eps
             and b.right >= float(die[2]) - eps and b.top >= float(die[3]) - eps)
         res["bbox_area_over_die_area"] = bbox_area / die_area
+
+    # A FAST CENSUS MODE, for the caller that only needs to know WHICH layers a
+    # generator wrote to. Merging every layer's polygons over the whole die is
+    # the expensive part of this script (tens of seconds on a filled die) and it
+    # answers a question a shape COUNT already answers. The caller probing which
+    # of a generator's passes produces which layer runs this once per pass, so
+    # the difference between counting and merging is the difference between a
+    # probe that is worth running and one that is not.
+    if os.environ.get("DENS_COUNT_ONLY") == "1":
+        census = {}
+        for li in ly.layer_indexes():
+            info = ly.get_info(li)
+            if info.layer < 0 or info.datatype < 0:
+                continue
+            n = sum(c.shapes(li).size() for c in ly.each_cell())
+            if n:
+                census["%d/%d" % (info.layer, info.datatype)] = n
+        res["shape_census"] = census
+        res["count_only"] = True
+        with open(out, "w") as fh:
+            json.dump(res, fh, indent=2)
+        return 0
 
     declared = spec.get("layers")
     if declared:

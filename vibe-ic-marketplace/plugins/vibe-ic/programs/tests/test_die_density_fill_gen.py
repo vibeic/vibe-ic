@@ -128,21 +128,29 @@ def test_resolution_order_is_explicit_then_bridge_then_env_then_convention(tmp_p
 # ── the fake runner: everything below drives the real control flow ──────────
 
 class _FakeRunner:
-    """A KLayout runner whose measurements and fill are scripted by the test.
+    """A KLayout runner whose census, measurement and fill are scripted.
 
-    `measurements` is consumed one per `die_density_measure` invocation, so a
-    test states the BEFORE and AFTER layout as data. `fill` decides what the
-    generator does to the output path.
+    `measurements` is consumed one per full `die_density_measure` invocation, so
+    a test states the BEFORE and AFTER layout as data. `censuses` is consumed
+    one per COUNT-ONLY invocation (the one-writer probe). `fill` decides what
+    the generator does to the output path, and `pass_layers` — when given —
+    makes the fake behave like a multi-pass PDK generator whose passes write
+    the layers named there.
     """
 
     kind = "fake"
     detail = "fake"
 
-    def __init__(self, measurements, fill="write", rc=0, output=""):
+    def __init__(self, measurements, fill="write", rc=0, output="",
+                 censuses=None, pass_layers=None, siblings=()):
         self._m = list(measurements)
+        self._c = list(censuses or [])
         self._fill = fill
         self._rc = rc
         self._out = output
+        self._pass_layers = pass_layers or {}
+        self._siblings = list(siblings)
+        self.fill_calls = []
 
     def cpath(self, p):
         return str(p)
@@ -155,15 +163,45 @@ class _FakeRunner:
 
     def run(self, script, env, *, path_keys=(), timeout=1800):
         if Path(str(script)).name == "die_density_measure.py":
+            if env.get("DENS_COUNT_ONLY") == "1":
+                if self._pass_layers:
+                    Path(env["DENS_OUT"]).write_text(json.dumps(
+                        {"shape_census": self._census_for(env["DENS_GDS"])}))
+                else:
+                    Path(env["DENS_OUT"]).write_text(json.dumps(
+                        {"shape_census": self._c.pop(0) if self._c else {}}))
+                return 0, "", ""
             Path(env["DENS_OUT"]).write_text(json.dumps(self._m.pop(0)))
             return 0, "", ""
         # the fill driver
+        skip = [x for x in (env.get("VIBEIC_FILL_SKIP") or "").split(",") if x]
+        self.fill_calls.append(skip)
         if self._fill == "write":
-            Path(env["VIBEIC_FILL_OUT"]).write_bytes(b"filled")
+            Path(env["VIBEIC_FILL_OUT"]).write_text(json.dumps(sorted(skip)))
         return self._rc, self._out, ""
 
+    def _census_for(self, gds):
+        """The census of a layout the fake generator produced: the input's own
+        layers plus whatever the passes that were NOT skipped write."""
+        pth = Path(str(gds))
+        try:
+            skip = set(json.loads(pth.read_text()))
+        except (OSError, ValueError):
+            return dict(self._c[0]) if self._c else {}
+        cen = dict(self._c[0]) if self._c else {}
+        for sib, layers in self._pass_layers.items():
+            if sib in skip:
+                continue
+            for layer in layers:
+                key = "%d/4" % layer
+                cen[key] = cen.get(key, 0) + 1
+        return cen
+
     def run_argv(self, argv, env, *, timeout=1800):
-        raise AssertionError("not used")
+        if argv and argv[0] == "cat":
+            return 0, "\n".join(
+                "require_relative '%s'" % s for s in self._siblings), ""
+        raise AssertionError("unexpected argv %r" % (argv,))
 
 
 def _measurement(bbox, die, layers_area):
@@ -221,7 +259,7 @@ def test_a_fill_whose_frame_does_not_cover_the_die_is_a_named_failure(tmp_path, 
     assert "does NOT cover the declared die" in fill["reason"]
     # The fill that WAS deposited is kept — refusing the claim must not throw
     # away legitimate foundry fill.
-    assert gds.read_bytes() == b"filled"
+    assert gds.read_bytes() != b"unfilled"
 
 
 def test_the_same_fill_on_a_sealed_die_passes(tmp_path, monkeypatch):
@@ -311,8 +349,14 @@ def test_the_step_is_wired_into_both_streamout_paths_after_the_seal_ring():
              if "_die_finishing(project" in l and "def " not in l]
     assert len(calls) == 2, calls                             # both streamout paths
     assert len(seals) == 2, seals
-    for seal, call in zip(seals, calls):
-        assert seal < call, (seal, call)
+    fills = [i for i, l in enumerate(src.splitlines())
+             if "_density_metal_fill(project" in l and "def " not in l]
+    assert len(fills) == 2, fills
+    for seal, fill, call in zip(seals, fills, calls):
+        # seal -> this flow's own metal fill -> the PDK generator. The last of
+        # the three must be last: it is the one that cannot see the others'
+        # output, so it is the one that must be told what is already there.
+        assert seal < fill < call, (seal, fill, call)
 
 
 def test_the_step_reports_its_outcome_in_both_paths_extras():
@@ -346,3 +390,104 @@ def test_the_program_runs_standalone_and_refuses_without_a_project():
                          str(_PROGRAMS / "die_density_fill_gen.py")],
                         capture_output=True, text=True, timeout=120)
     assert cp.returncode != 0
+
+
+# ── ONE WRITER PER DUMMY LAYER ──────────────────────────────────────────────
+
+_SIBLINGS = ("fill_comp.rb", "fill_poly2.rb", "fill_metal.rb")
+#: What each of the generator's passes writes. The program must DISCOVER this
+#: by running them, never be told it: which layer families a PDK ships, what it
+#: calls the scripts and which layers each one writes are all PDK data.
+_PASS_LAYERS = {"fill_comp.rb": [22], "fill_poly2.rb": [30],
+                "fill_metal.rb": [34, 36, 42, 46, 81]}
+
+
+def test_the_pass_that_would_double_write_an_owned_layer_is_discovered_and_left_out(
+        tmp_path, monkeypatch):
+    """THE SECOND DEFECT, and the more dangerous one.
+
+    A layer this flow has already filled must not be filled again by the PDK's
+    generator: the PDK computes its keep-out from the DRAWN datatype alone, so
+    it cannot see fill that is already there. MEASURED on a real die filled by
+    both — 234437 KLayout DRC errors (MT.2a 79226, M3.2a 73590, M4.2a 71714,
+    MT.1 4374, M3.1 2862, M4.1 2671) — where EACH filler alone was DRC-clean.
+
+    The program is told only which LAYER NUMBERS this flow owns. Which of the
+    generator's passes writes them is read from the PDK's own require_relative
+    list and MEASURED by running each one.
+    """
+    gds = _project(tmp_path)
+    before = _measurement(DIE, DIE, {34: 1000.0})
+    after = _measurement(DIE, DIE, {22: 1200.0, 30: 1400.0, 34: 1000.0})
+    # the input already carries dummy on every metal layer this flow owns
+    cen_in = {"%d/4" % layer: 1 for layer in (34, 36, 42, 46, 81)}
+    runner = _FakeRunner([before, after], censuses=[cen_in],
+                         pass_layers=_PASS_LAYERS, siblings=_SIBLINGS)
+    monkeypatch.setattr(DDF._kl, "find_runner", lambda *a, **k: runner)
+    res = DDF.run(tmp_path, str(gds), "/pdk/fill_all.rb", None, "somepdk",
+                  1936, 2531, "spm", 8, False, None, True, None, 60,
+                  owned_layers=[34, 36, 42, 46, 81])
+    fill = res["fill"]
+    assert fill["state"] == "PASS", fill
+    assert fill["contested_layers"] == [34, 36, 42, 46, 81]
+    probe = fill["probe"]
+    assert probe["sibling_passes"] == list(_SIBLINGS)
+    assert probe["layers_per_pass"]["fill_metal.rb"] == [34, 36, 42, 46, 81]
+    assert probe["layers_per_pass"]["fill_comp.rb"] == [22]
+    assert fill["skipped_passes"] == ["fill_metal.rb"]
+    # and the promoted layout is the one produced WITH that pass skipped
+    assert json.loads(gds.read_text()) == ["fill_metal.rb"]
+
+
+def test_no_owned_layer_means_the_whole_generator_runs(tmp_path, monkeypatch):
+    """The other side: a flow with no filler of its own must get the PDK's
+    complete generator, metal included. Without this the test above would be
+    satisfied by a step that always skips."""
+    gds = _project(tmp_path)
+    before = _measurement(DIE, DIE, {34: 1000.0})
+    after = _measurement(DIE, DIE, {22: 1200.0, 34: 900000.0})
+    runner = _FakeRunner([before, after], censuses=[{}],
+                         pass_layers=_PASS_LAYERS, siblings=_SIBLINGS)
+    monkeypatch.setattr(DDF._kl, "find_runner", lambda *a, **k: runner)
+    res = DDF.run(tmp_path, str(gds), "/pdk/fill_all.rb", None, "somepdk",
+                  1936, 2531, "spm", 8, False, None, True, None, 60,
+                  owned_layers=[])
+    fill = res["fill"]
+    assert fill["state"] == "PASS", fill
+    assert fill["skipped_passes"] == []
+    assert runner.fill_calls == [[]], runner.fill_calls
+
+
+def test_an_owned_layer_that_carries_no_fill_yet_is_not_contested(tmp_path, monkeypatch):
+    """`--owned-layer` says which layers this flow's filler is CONFIGURED for;
+    the census says which it actually WROTE. A configured filler that deposited
+    nothing must not cost the die the PDK's fill for that layer."""
+    gds = _project(tmp_path)
+    before = _measurement(DIE, DIE, {34: 1000.0})
+    after = _measurement(DIE, DIE, {22: 1200.0, 34: 900000.0})
+    runner = _FakeRunner([before, after], censuses=[{}],
+                         pass_layers=_PASS_LAYERS, siblings=_SIBLINGS)
+    monkeypatch.setattr(DDF._kl, "find_runner", lambda *a, **k: runner)
+    res = DDF.run(tmp_path, str(gds), "/pdk/fill_all.rb", None, "somepdk",
+                  1936, 2531, "spm", 8, False, None, True, None, 60,
+                  owned_layers=[34, 36, 42, 46, 81])
+    assert res["fill"]["contested_layers"] == []
+    assert res["fill"]["skipped_passes"] == []
+
+
+def test_the_driver_skips_a_pass_through_rubys_own_bookkeeping():
+    """The skip must not edit, copy or re-implement any PDK file: a path already
+    in `$LOADED_FEATURES` is simply not required again."""
+    rb = _DRIVER.read_text()
+    assert "$LOADED_FEATURES" in rb
+    assert "VIBEIC_FILL_SKIP" in rb
+    assert "File.expand_path" in rb
+    # and a name the PDK does not ship must be refused, not silently ignored —
+    # a typo'd skip would otherwise run the pass it was meant to leave out.
+    assert "which the PDK does not ship" in rb
+
+
+def test_the_runner_tells_the_program_which_layers_its_own_filler_owns():
+    src = _RUNNER.read_text()
+    assert 'metal_fill_density_cfg.json' in src
+    assert '"--owned-layer"' in src
