@@ -11,9 +11,11 @@
 - **Phase 3** — 實體 → Tapeout：Stage 3（實體+簽核）・Stage 4（輸出+Tapeout）・Stage 5（製造與測試）
 - **並行** — Analog A1–A9・Mixed-signal M1–M4
 
-**兩條出口路徑。** 編號 1→44 的序列是兩條路徑共用的；另有四個路徑專屬步驟不是，
+**兩條出口路徑。** 編號 1→44 的序列是兩條路徑共用的；另有五個路徑專屬步驟不是，
 它們帶 `ip`／`ic` 後綴而非編號，因為不計入循序步驟數。
 
+- **走哪一條** — 由 **0.5ic**（引入送件樣板）決定：拿到投片方的格位樣板就走
+  chip/IC 路徑；具名的 `NO_TEMPLATE.txt` 則走 cell/IP 路徑。
 - **cell/IP 路徑** — 交付物是別人拿去擺放的區塊，終點在 **37.5ip**（Digital
   Hardmacro Generation：LEF + Liberty + GDS + Verilog），**不會**接到 Step 38，
   也不進入 Stage 5。
@@ -50,6 +52,12 @@
 | D3 | 產生 L14–L27 文件 | 補上協定、時序、power intent（L21）、skeleton 等延伸層。 | L1–L13 | `L14`–`L27` JSON | overlay 萃取器 | — |
 | D4 | 協定類別合成 | 偵測 IC 屬於哪一種協定類別（86 類）並合成對應協定事實。 | 輸入文件全文 | `ic_class` + 協定事實 | is_<proto> + <proto>_synth | — |
 | D5 | Coverage 報告 | 核對輸入文件的內容是否完整落入 L 文件。 | 輸入文件 + L 文件 | parity / coverage 報告 | parity 報告器 | — |
+
+### 流片路徑選擇（決定走 chip/IC 還是 cell/IP）
+
+| # | 步驟 | 做什麼 | 輸入 | 輸出 | 工具 (EDA) | Programs / Skills |
+|---|---|---|---|---|---|---|
+| 0.5ic | Submission template ingest（路徑選擇） | 取得並存放投片方公開的專案樣板 — 格位尺寸、晶粒識別 cell，以及該格位的 pad 清單。這一步決定走哪條路：有格位樣板就走 chip/IC 路徑（15.5ic・26.5ic・37.5ic）；具名的 `NO_TEMPLATE.txt` 則走 cell/IP 路徑（37.5ip）。宣告為外部輸入且不主動探測，因為它是取得的、不是產生的 — 流程因此仍能誠實說出「從未取得」。 | 投片方公開的專案樣板（外部） | `input/submission_template/slots/*.yaml`（或具名的 `NO_TEMPLATE.txt`）・`submission_template.json` | —（讀檔，不需 EDA 工具） | `submission_template_ingest`・`submission_template_check` |
 
 ### 架構探索前端（選用，匯入 Step 1）
 
@@ -190,7 +198,7 @@
 
 **44 個循序步驟**（Stage 1：1–6・Stage 2：7–14・Stage 3：15–32・Stage 4：33–39・
 Stage 5：40–44），外加 Phase 1（Agent 路徑與 doc-gen 路徑 D1–D5）與兩條並行支線
-（Analog A1–A9・Mixed-signal M1–M4）。不計入 1→44 的路徑專屬步驟：15.5ic・26.5ic・37.5ic（僅 chip/IC 路徑）與 37.5ip（cell/IP 路徑終點）；一個設計只走其中一條，不會兩條都走。
+（Analog A1–A9・Mixed-signal M1–M4）。不計入 1→44 的路徑專屬步驟：0.5ic（路徑選擇）・15.5ic・26.5ic・37.5ic（僅 chip/IC 路徑）與 37.5ip（cell/IP 路徑終點）；一個設計只走其中一條，不會兩條都走。
 預檢：P0（環境健檢）。條件式字母步驟：FS1（ISO-26262 FMEDA 診斷覆蓋率，僅安全設計）·
 DT1（轉態延遲故障 ATPG，僅掃描設計）· DT2（路徑延遲故障 at-speed ATPG，掃描設計且繞線完成後）· DT3（小延遲缺陷 at-speed 分級，接 DT2 後）。
 編排器 `vibe_ic_one_shot_runner.py` 依序執行 Phase 1 → Phase 2 → Analog → Phase 3。
