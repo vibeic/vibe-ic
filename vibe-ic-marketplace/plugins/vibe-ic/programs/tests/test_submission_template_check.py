@@ -591,13 +591,19 @@ def _selected(project: Path) -> set:
 def _routes_by_router_file():
     """router-file suffix -> the step ids the FLOW selects with it.
 
-    THERE ARE THREE, and there used to be two. The step's outputs were a
-    binary — `slots/*.yaml` or `NO_TEMPLATE.txt` — which routed a design to
-    the operator's container or to the IP/hardmacro terminal. A CHIP doing its
-    OWN tape-out is neither: it has no operator template, so the container
-    step's condition excludes it, and it is a die rather than an IP, so the
-    hardmacro terminal is the wrong end for it. `SELF_TAPEOUT.txt` is its
-    router and the general precheck is its terminal.
+    THREE ROUTER FILES, TWO TERMINALS. The step's outputs were a binary —
+    `slots/*.yaml` or `NO_TEMPLATE.txt` — which routed a design to the
+    operator's container or to the IP/hardmacro terminal. A CHIP doing its OWN
+    tape-out is neither: it has no operator template, so the container step's
+    condition excluded it, and it is a die rather than an IP, so the hardmacro
+    terminal is the wrong end for it. `SELF_TAPEOUT.txt` is its router.
+
+    2026-08-20 — THE THIRD ROUTER STOPPED BEING A THIRD TERMINAL. It briefly
+    selected a step of its own (`37.5self`, the general precheck). The owner
+    retired that step: the general precheck is a second ARM of `37.5ic`, not an
+    alternative to it. So `slots/*.yaml` and `SELF_TAPEOUT.txt` now BOTH select
+    `37.5ic` — they are the two markers of the one CHIP path — and the file
+    that still selects a terminal of its own is `NO_TEMPLATE.txt`, the IP one.
 
     Read out of the flow rather than listed here, so a route that appears or
     disappears shows up as a change in this mapping instead of quietly
@@ -620,16 +626,37 @@ def test_the_outputs_of_this_step_are_what_the_flow_routes_on():
         "moved or this test has stopped measuring anything")
     by_file = _routes_by_router_file()
     assert set(by_file) == {"*.yaml", "NO_TEMPLATE.txt", "SELF_TAPEOUT.txt"}, (
-        "three router files select three terminals; got "
+        "three router files are still what the flow routes on; got "
         f"{sorted(by_file)}")
-    # MUTUALLY EXCLUSIVE, and that is the load-bearing property: `files_exist`
-    # cannot express "and not", so two routers present at once would select two
-    # terminals. No step may be reachable from more than one of them.
-    for a, sa in by_file.items():
-        for b, sb in by_file.items():
-            if a < b:
-                assert not (sa & sb), (
-                    f"{sorted(sa & sb)} is selected by BOTH {a} and {b}")
+
+    # THE LOAD-BEARING EXCLUSIVITY IS CHIP-vs-IP, and it is the one that has to
+    # hold: `files_exist` cannot express "and not", so a step reachable from
+    # both a chip router and the IP router would be selected on two
+    # incompatible deliveries at once.
+    ip = by_file["NO_TEMPLATE.txt"]
+    for chip_router in ("*.yaml", "SELF_TAPEOUT.txt"):
+        assert not (ip & by_file[chip_router]), (
+            f"{sorted(ip & by_file[chip_router])} is selected by BOTH the IP "
+            f"router and the chip router {chip_router}")
+
+    # THE TWO CHIP ROUTERS DO OVERLAP, AND THAT IS THE POINT. `37.5ic` is
+    # selected by both, because a chip gets that step whether or not there is
+    # an operator — the operator's container is an ARM of it, not a different
+    # route. Asserted rather than tolerated, so re-splitting them into two
+    # terminals fails HERE with the reason attached.
+    assert "37.5ic" in by_file["*.yaml"] & by_file["SELF_TAPEOUT.txt"], (
+        "37.5ic must be reachable from BOTH chip routers; a self tape-out that "
+        "cannot reach it passes no tape-out precheck at all — the exact hole "
+        f"the retired 37.5self was created to plug. Got: {by_file}")
+
+    # AND IT MUST BE `any_of`. With the default ALL-of reading, a condition
+    # listing two MUTUALLY EXCLUSIVE router files can never be satisfied by any
+    # tree — `tapeout_declaration_check` refuses the tree carrying both — so
+    # the step would be silently skipped for every design on the chip path.
+    routed = _routed_conditions()
+    assert routed["37.5ic"].get("any_of") is True, (
+        "37.5ic lists two mutually exclusive router files; without `any_of` "
+        "its condition is unsatisfiable and the step is dead for every design")
 
 
 def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):

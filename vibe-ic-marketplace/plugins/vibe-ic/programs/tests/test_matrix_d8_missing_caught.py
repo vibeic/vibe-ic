@@ -810,36 +810,30 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           crosstalk-delay verdict. It therefore has two ALL-of entries and
 #:           leaves this fewer-than-two population; retaining it would silently
 #:           disable the partial-evidence shape this pin exists to measure.
-#:   - "37.5self"  RE-DERIVED, not appended, 2026-08-20, on this instruction's own
-#:           terms ("re-derive the tuple rather than adding to it — appending is
-#:           how v1.10.38 shipped a 28-entry pin over a 27-step population"). The
-#:           whole population was recomputed from the flow as
-#:           `[id for step in steps if len(step.required_outputs) < 2]`, and the
-#:           result is 27 members with `37.5self` in FLOW order where its sibling
-#:           `37.5ic` used to sit — 37.5ic having left the population in the same
-#:           landing that gave it the release documents. So the re-derivation also
-#:           says, as a by-product, that no member had gone stale. General
-#:           Precheck declares exactly one output, `reports/phase3/
-#:           general_precheck.json`, which is what puts it in this population.
-#:
-#:           RE-DERIVED A THIRD TIME at the merge. The 37.5ic removal and the
-#:           37.5self addition were authored on different bases; each was correct
-#:           for its own, and a hand-united tuple would have carried BOTH claims
-#:           without either being true of this tree. The population was recomputed
-#:           here and the tuple written from that answer, not from the two diffs.
+#:   - "37.5self"  ARRIVED and then LEFT, both times RE-DERIVED. It joined this
+#:           population at v1.11.4 declaring exactly one output, and on
+#:           2026-08-20 the owner retired the STEP: the general precheck was
+#:           never a third route, it is a second ARM of `37.5ic`. So the member
+#:           is gone because the step is gone, and `37.5ic` does NOT come back
+#:           into this population — it now declares five outputs, not one.
+#:           RE-DERIVED A FOURTH TIME rather than deleted by hand:
+#:           `[k for k in step_ids() if len(required_outputs(k)) < 2]` was
+#:           recomputed on this tree and answers 26 members, and the tuple below
+#:           is that answer. The recomputation also says, as a by-product, that
+#:           no other member had gone stale in the meantime.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
-    # 2026-08-20: 27 members. Step 37.5ic LEFT this population when 69ce9260d
-    # made the release documents an output of it (1 entry -> 3); step 37.5self
-    # JOINED it at v1.11.4 declaring exactly one output. The two changes were
-    # authored on different bases and each re-derived correctly for its own; the
-    # merge was RE-DERIVED again rather than hand-united, because a hand-united
-    # tuple is how v1.10.38 shipped a 28-entry pin over a 27-step population.
-    # The tuple below is exactly what
+    # 2026-08-20: 26 members. Step 37.5ic LEFT this population when 69ce9260d
+    # made the release documents an output of it (1 entry -> 3) and is further
+    # out of it now (5 entries); step 37.5self JOINED at v1.11.4 with one output
+    # and LEFT with the step itself when the general precheck became 37.5ic's
+    # second ARM. The tuple below is exactly what
     # `[k for k in steps if len(required_outputs(k)) < 2]` answers on this tree,
-    # in flow order: 27 members, and no member had gone stale.
+    # in flow order: 26 members, re-derived rather than hand-edited, because a
+    # hand-edited tuple is how v1.10.38 shipped a 28-entry pin over a 27-step
+    # population.
     "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5", "A7", "A9",
     "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37",
-    "37.5self", "M4", "42", "44", "P0",
+    "M4", "42", "44", "P0",
 )
 
 
