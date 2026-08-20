@@ -59,21 +59,109 @@ def _info_complete(tcl: str) -> bool:
 
 
 # ── the fill guard ─────────────────────────────────────────────────────
-def test_fill_guard_gates_full_die_filler_on_sparse_util():
+#
+# 2026-08-20 REVISION — the sparse branch BOUNDS the fill, it no longer SKIPS
+# it. Both directions were measured on the 0.5x0.5-slot die:
+#   * SKIPPING the fill left 336 top-level sign-off DRC items that are all
+#     std-cell row-gap geometry (NP.2 82, PP.2 77, DF.13_MV 57, NW.2b_LV 52,
+#     NW.2a_LV 39, DV.5 27) — the same class this module's own header records
+#     for spm x ihp-sg13g2 (FILLER_SKIPPED -> 26x NW.b nwell notches).
+#   * The full-die DECAP-FIRST tiling was worse still: 8317 cells inserted,
+#     7295 of them decaps — devices dropped on silicon whose well-tie taps the
+#     R6 prune had removed — and DRC went 360 -> 11964 (33x WORSE), with
+#     99.5-100% of the new items sitting on a decap.
+# So the sparse branch tiles with the INERT SPACER family only and prunes the
+# spacers that landed over empty silicon. #684's actual invariant — no
+# full-die flood of a large fixed wrapper — is asserted below by the prune,
+# not by the absence of fill.
+def test_fill_guard_bounds_not_skips_fill_on_sparse_util():
     block = r._build_sparse_die_aware_filler_tcl(_MASTERS)
     # The sparse guard machinery must be present.
-    assert "SPARSE_DIE_FILL_SKIPPED" in block
+    assert "SPARSE_DIE_FILL_BOUNDED" in block
+    assert "SPARSE_DIE_FILL_SKIPPED" not in block, \
+        "a PDK WITH spacers must be bounded, never skipped"
     assert "getCoreArea" in block
     assert "getInsts" in block
     # The full-die filler must NOT be emitted unconditionally — it must be
     # inside the (else) branch, guarded by the utilization comparison.
     assert "filler_placement" in block
-    # the bare top-level emission (no guard) is gone: the call is preceded
-    # by the SPARSE_DIE_FILL_SKIPPED conditional in the same block.
-    skip_idx = block.index("SPARSE_DIE_FILL_SKIPPED")
+    # the bare top-level emission (no guard) is gone: the utilization
+    # comparison precedes every filler_placement call in the block.
+    guard_idx = block.index("$_sd_fill_util <")
     fill_idx = block.index("filler_placement")
-    assert skip_idx < fill_idx, "filler_placement must be guarded by the " \
+    assert guard_idx < fill_idx, "filler_placement must be guarded by the " \
         "sparse-die check, not emitted before it"
+
+
+def _sparse_branch(block: str) -> str:
+    """The text of the sparse (util < threshold) branch only. Split on the
+    OUTER `\\n} else {\\n` — a nested if/else lives inside the branch."""
+    return block[:block.index("\n} else {\n")]
+
+
+def test_sparse_branch_tiles_spacers_only_never_a_decap():
+    """The 33x-worse case. On a sparse (tap-pruned) die the branch that runs
+    may name ONLY the inert FILL family; a DECAP/FILLCAP master appearing in
+    the sparse branch is the measured regression."""
+    block = r._build_sparse_die_aware_filler_tcl(_MASTERS)
+    sparse = _sparse_branch(block)
+    decaps = [m for m in _MASTERS if not r._is_spacer_master(m)]
+    spacers = [m for m in _MASTERS if r._is_spacer_master(m)]
+    assert decaps and spacers, "fixture must contain both families"
+    for m in decaps:
+        assert m not in sparse, \
+            f"decap device {m} tiled on a tap-pruned sparse die"
+    assert "filler_placement {" + " ".join(spacers) + "}" in sparse
+
+
+def test_sparse_branch_prunes_fill_over_empty_silicon():
+    """#684's real invariant: the large fixed wrapper is NOT flooded. The
+    spacers that landed away from every pre-existing cell are destroyed."""
+    block = r._build_sparse_die_aware_filler_tcl(_MASTERS)
+    sparse = _sparse_branch(block)
+    assert "odb::dbInst_destroy" in sparse
+    assert "$_f_pruned" in sparse and "$_f_kept" in sparse
+
+
+def test_sparse_branch_bin_tracks_the_tapcell_distance():
+    """The keep-neighbourhood is the latch-up neighbourhood (2x the PDK's own
+    tapcell distance) — a PDK literal, never a hardcoded micron."""
+    b14 = r._build_sparse_die_aware_filler_tcl(_MASTERS,
+                                               tapcell_distance_um=14.0)
+    b20 = r._build_sparse_die_aware_filler_tcl(_MASTERS,
+                                               tapcell_distance_um=20.0)
+    assert "int(28.0 *" in b14
+    assert "int(40.0 *" in b20
+
+
+def test_decap_only_pdk_still_skips_and_discloses():
+    """A PDK that ships NO inert spacer family degrades to the previous
+    DISCLOSED skip — never to a silent decap flood."""
+    decap_only = [m for m in _MASTERS if not r._is_spacer_master(m)]
+    assert decap_only
+    block = r._build_sparse_die_aware_filler_tcl(decap_only)
+    sparse = _sparse_branch(block)
+    assert "SPARSE_DIE_FILL_SKIPPED" in sparse
+    assert "filler_placement" not in sparse
+
+
+def test_bounded_marker_parses_into_the_attestation():
+    att = r._parse_sparse_die_skip(
+        "SPARSE_DIE_FILL_BOUNDED: core_util=1.85% < 5.0% — SPACER-only "
+        "row-gap fill kept=8123 and pruned over empty silicon (pruned=411).")
+    assert att["fill_bounded"] is True
+    assert att["fill_skipped"] is False, \
+        "a bounded fill is NOT a skip — the density gates must measure it"
+    assert att["fill_core_util_pct"] == 1.85
+    assert att["fill_kept"] == 8123 and att["fill_pruned"] == 411
+
+
+def test_skipped_marker_still_parses_as_a_skip():
+    """Negative control for the parser: the old marker must keep its old
+    meaning, so a decap-only PDK's disclosed skip still VACUOUS-PASSes."""
+    att = r._parse_sparse_die_skip(
+        "SPARSE_DIE_FILL_SKIPPED: core_util=0.03% < 5.0% — bounded.")
+    assert att["fill_skipped"] is True and att["fill_bounded"] is False
 
 
 def test_dense_branch_still_fills():

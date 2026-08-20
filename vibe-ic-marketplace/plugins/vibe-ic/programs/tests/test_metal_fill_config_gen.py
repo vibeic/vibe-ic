@@ -159,3 +159,53 @@ def test_no_dummy_datatype_falls_back_to_drawn_disclosed():
 
 def test_no_routing_metal_returns_none():
     assert G.build_metal_fill_config("", "", "", metal_prefix="Metal") is None
+
+
+# ── die-edge (seal / scribe band) fill keep-out ────────────────────────────
+#
+# MEASURED (2026-08-20, 0.5x0.5-slot die): the fill engine's only keep-out was
+# same-layer spacing to drawn metal, which says nothing about the band the seal
+# ring occupies. Filling a SEALED die with no edge keep-out took sign-off DRC
+# 1177 -> 18686 — a guard-ring rule of the form
+# `metal.not_outside(guard_ring_mk).width()` reports the WHOLE polygon of
+# anything merely TOUCHING the marker band, so every dummy square that landed
+# in it was counted. The identical fill on the UNSEALED die (no ring, nothing
+# to intrude on) added ZERO violations. The PDK's own fill script never had the
+# problem: it declares `space_to_scribe_line` and subtracts that band first.
+# So the number is READ from the PDK, not invented here.
+_FILL_SCRIPT = """\
+  tp.var("space_to_FuseTop",      6.0 / $ly.dbu)
+  tp.var("space_to_scribe_line", 26 / $ly.dbu)
+  var scribe_line_ring = _frame - _frame.sized(-space_to_scribe_line);
+"""
+
+
+def test_scribe_keepout_read_from_the_pdk_fill_script():
+    assert G.parse_scribe_keepout_um(_FILL_SCRIPT) == 26.0
+    assert G.parse_scribe_keepout_um("space_to_scribe_line = 12.5") == 12.5
+
+
+def test_no_fill_script_declares_no_keepout():
+    """A PDK whose fill script declares none must keep the previous behaviour
+    (no keep-out) — disclosed, never a silently invented inset."""
+    assert G.parse_scribe_keepout_um("") is None
+    assert G.parse_scribe_keepout_um("nothing relevant in here") is None
+    cfg = _cfg()
+    assert cfg["edge_exclusion_um"] is None
+    assert "not declared" in cfg["_derivation"]["edge_exclusion_source"]
+
+
+def test_keepout_lands_in_the_config_and_is_disclosed():
+    cfg = _cfg(fill_script_text=_FILL_SCRIPT)
+    assert cfg["edge_exclusion_um"] == 26.0
+    assert cfg["_derivation"]["edge_exclusion_um"] == 26.0
+    assert "space_to_scribe_line" in cfg["_derivation"]["edge_exclusion_source"]
+    # §4.05 no-leak: adding the keep-out must not perturb any per-layer number.
+    assert cfg["layers"] == _cfg()["layers"]
+
+
+def test_exclude_layers_passthrough():
+    marker = [{"layer": [167, 5], "space": 2.0}]
+    cfg = _cfg(exclude_layers=marker)
+    assert cfg["exclude_layers"] == marker
+    assert _cfg()["exclude_layers"] == []

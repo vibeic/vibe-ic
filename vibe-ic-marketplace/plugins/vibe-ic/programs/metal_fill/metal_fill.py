@@ -59,6 +59,8 @@ engine's per-window check is identical to the foundry's whole-die coverage rule.
 Config (chip/PDK-AGNOSTIC — every number supplied by the caller / derived from the PDK):
     {
       "boundary_layer": [0, 0],        // optional die-outline layer for the bbox
+      "edge_exclusion_um": 26.0,       // seal/scribe band at the die edge: no fill
+      "exclude_layers": [{"layer":[167,5], "space":2.0}],   // marker keep-outs
       "window_um": null,               // null/0 -> single whole-die window (== rule)
       "max_passes": 8,
       "mfg_grid_um": 0.005,            // manufacturing grid; fill snapped to it
@@ -215,6 +217,48 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
     d_before = metal0.area() / float(bbox.area())
     worst_before = _worst_window_density(metal0, bbox, wd)
 
+    # ── DIE-EDGE / MARKER KEEP-OUT ────────────────────────────────────────
+    # The density rule measures over the WHOLE die, but not every square micron
+    # of the die may be filled. The band at the die edge belongs to the seal /
+    # scribe ring, and a foundry deck checks it with guard-ring rules of the
+    # form `metal.not_outside(guard_ring_mk).width()` — `not_outside` selects
+    # any polygon merely TOUCHING the marker band and then measures that WHOLE
+    # polygon, so a single dummy square landing in the band is reported.
+    #
+    # MEASURED (2026-08-20, 0.5x0.5 slot die): the engine's only keep-out was
+    # `drawn.sized(space_to_metal)` — same-layer spacing — which says nothing
+    # about the ring band. Filling a SEALED die took sign-off DRC 1177 -> 18686;
+    # the identical fill on the UNSEALED die (no ring, so nothing to intrude
+    # on) added ZERO violations and every metal layer reached target. The
+    # difference was entirely fill sitting in the ring band. The PDK's own fill
+    # script solves the same problem the same way — `space_to_scribe_line`,
+    # subtracting `_frame - _frame.sized(-26um)` before it fills anything.
+    #
+    # So: `edge_exclusion_um` insets the fillable area from the measured die
+    # bbox, and `exclude_layers` subtracts declared marker/keep-out geometry
+    # (each with its own `space` margin). Both are CALLER-supplied numbers
+    # derived from the PDK — no vendor, foundry or design literal here. Absent
+    # / 0 -> no keep-out, i.e. byte-identical to the previous behaviour.
+    excl = pya.Region()
+    ee_um = float(spec.get("_edge_exclusion_um") or 0.0)
+    if ee_um > 0:
+        ee = int(round(ee_um / dbu))
+        inner = pya.Box(bbox.left + ee, bbox.bottom + ee,
+                        bbox.right - ee, bbox.top - ee)
+        excl += (pya.Region(bbox) - pya.Region(inner)
+                 if inner.width() > 0 and inner.height() > 0
+                 else pya.Region(bbox))
+    for _ex in (spec.get("_exclude_layers") or []):
+        try:
+            _r = pya.Region(top.begin_shapes_rec(_li(ly, _ex["layer"]))).merged()
+        except Exception:
+            continue
+        _m = float(_ex.get("space") or 0.0)
+        if _m > 0:
+            _r = _r.sized(int(round(_m / dbu)))
+        excl += _r
+    excl.merge()
+
     pitches = []
     reached_target = False
     for si, cur_fwd in enumerate(ladder):
@@ -251,6 +295,8 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
             # in the shared-datatype case `fill_r` now includes it.
             blocked = drawn_block + fill_r.sized(sp)
             fillable = fill_zone - blocked
+            if not excl.is_empty():
+                fillable = fillable - excl
             if fillable.is_empty():
                 break                                   # this size cannot fit -> smaller
             zone_area = float(fill_zone.area())
@@ -292,6 +338,10 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
         "top_width_um": round(top_fwd * dbu, 4),
         "min_width_um": round(floor_fwd * dbu, 4),
         "fill_sizes": len(ladder),
+        "edge_exclusion_um": ee_um,
+        "exclude_layers": [list(_ex.get("layer") or [])
+                           for _ex in (spec.get("_exclude_layers") or [])],
+        "excluded_area_um2": round(excl.area() * dbu * dbu, 3),
     }
 
 
@@ -320,10 +370,21 @@ def run(gds, cfg, out_gds, cell_name=None):
     wu = cfg.get("window_um", None)
     wd = None if wu in (None, 0, 0.0) else int(round(float(wu) / ly.dbu))
 
+    # Die-edge / marker keep-out (see fill_layer). Declared once for the whole
+    # config; a layer may override `edge_exclusion_um` with its own value.
+    edge_excl = cfg.get("edge_exclusion_um")
+    excl_layers = cfg.get("exclude_layers") or []
+
     layers = []
     for spec in cfg["layers"]:
         spec = dict(spec)
         spec["_bbox"] = bbox
+        spec["_edge_exclusion_um"] = (spec.get("edge_exclusion_um")
+                                      if spec.get("edge_exclusion_um")
+                                      is not None else edge_excl)
+        spec["_exclude_layers"] = (spec.get("exclude_layers")
+                                   if spec.get("exclude_layers") is not None
+                                   else excl_layers)
         layers.append(fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu))
 
     # A FILL CELL THAT WAS NEVER PLACED IS A SECOND TOP CELL, AND A SECOND TOP

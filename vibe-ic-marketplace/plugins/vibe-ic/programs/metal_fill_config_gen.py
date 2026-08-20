@@ -254,11 +254,48 @@ def parse_density_floor_pct(text: str) -> Optional[float]:
     return max(vals) if vals else None
 
 
+# The die-edge band the seal / scribe ring occupies is NOT fillable, and the
+# PDK states its own width: its fill scripts declare a `space_to_scribe_line`
+# and subtract `_frame - _frame.sized(-<that>)` before filling anything. Read
+# the number the PDK already wrote rather than inventing one. No vendor,
+# foundry or design literal — only the variable NAME, which is the PDK's.
+_SCRIBE_RE = re.compile(
+    r'space[_ ]to[_ ]scribe[_ ]line\W{1,4}([0-9]+(?:\.[0-9]+)?)', re.I)
+
+
+def parse_scribe_keepout_um(fill_script_text: str) -> Optional[float]:
+    """Return the PDK's own die-edge (scribe/seal) fill keep-out in microns, or
+    None when the PDK's fill script declares none. Pure text parse.
+
+    WHY THIS EXISTS. The engine's only keep-out used to be same-layer spacing
+    to drawn metal, which says nothing about the ring band. MEASURED
+    (2026-08-20): filling a SEALED die with no edge keep-out took sign-off DRC
+    1177 -> 18686 — a guard-ring rule of the form
+    `metal.not_outside(guard_ring_mk).width()` reports the WHOLE polygon of
+    anything merely TOUCHING the marker band, so each dummy square that landed
+    in it was counted. The identical fill on the UNSEALED die added ZERO
+    violations. The PDK's own script never had the problem because it excludes
+    this band."""
+    if not fill_script_text:
+        return None
+    m = _SCRIBE_RE.search(fill_script_text)
+    if not m:
+        return None
+    try:
+        v = float(m.group(1))
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
 def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: str,
                             metal_prefix: Optional[str] = None,
                             margin: float = _DEFAULT_MARGIN,
                             window_um: Optional[float] = None,
-                            max_passes: int = 8) -> Optional[dict]:
+                            max_passes: int = 8,
+                            fill_script_text: str = "",
+                            exclude_layers: Optional[list] = None
+                            ) -> Optional[dict]:
     # `metal_prefix=None` (the new default) means DERIVE IT FROM THE PDK. The old
     # default was the literal "metal", which matches gf180mcuD's `Metal1` and
     # neither sky130A's `met1` nor a `MET1`-style process — on those the parses
@@ -279,6 +316,7 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
     target = round(min(floor + margin, 0.95), 4)
     grid_um = parse_manufacturing_grid_um(techlef_text)
     space_dd, space_dc = parse_dummy_metal_spacings(deck_text)
+    edge_excl = parse_scribe_keepout_um(fill_script_text)
 
     layers = []
     for base in sorted(gds.keys(), key=_metal_order):
@@ -320,6 +358,11 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
         "max_passes": max_passes,
         "mfg_grid_um": grid_um,               # fill snapped to the manufacturing grid
         "fill_datatype": None,
+        # Die-edge keep-out: the seal/scribe band the PDK's own fill script
+        # excludes. None -> no keep-out declared by this PDK (unchanged
+        # behaviour); a number -> the engine insets the fillable area by it.
+        "edge_exclusion_um": edge_excl,
+        "exclude_layers": list(exclude_layers or []),
         "layers": layers,
         "_derivation": {
             "source": "metal_fill_config_gen (chip-AGNOSTIC; PDK-declared files)",
@@ -332,6 +375,11 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
             "mfg_grid_um": grid_um,
             "dummy_space_um": space_dd,
             "dummy_to_circuit_space_um": space_dc,
+            "edge_exclusion_um": edge_excl,
+            "edge_exclusion_source": (
+                "the PDK fill script's own space_to_scribe_line"
+                if edge_excl is not None else
+                "not declared by this PDK's fill script — no die-edge keep-out"),
             "layers_derived": len(layers),
             "dummy_datatype_found": sum(1 for s in layers if "fill_datatype" in s),
         },
@@ -359,13 +407,18 @@ def main(argv=None) -> int:
     ap.add_argument("--window-um", type=float, default=None)
     ap.add_argument("--max-passes", type=int, default=8)
     ap.add_argument("--margin", type=float, default=_DEFAULT_MARGIN)
+    ap.add_argument("--fill-script", default=None,
+                    help="the PDK's own metal-fill script; its "
+                         "`space_to_scribe_line` becomes the die-edge "
+                         "(seal/scribe band) fill keep-out")
     ap.add_argument("--out", default=None)
     ns = ap.parse_args(argv)
 
     cfg = build_metal_fill_config(
         _read(ns.layermap), _read(ns.techlef), _read(ns.deck),
         metal_prefix=ns.metal_prefix, margin=ns.margin,
-        window_um=ns.window_um, max_passes=ns.max_passes)
+        window_um=ns.window_um, max_passes=ns.max_passes,
+        fill_script_text=_read(ns.fill_script))
     if cfg is None:
         sys.stderr.write("metal_fill_config_gen: no routing metal derivable "
                          "from the supplied PDK files\n")

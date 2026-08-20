@@ -291,3 +291,91 @@ def test_live_emitted_block_ties_wells_and_prunes():
     assert att["tapcell_bounded"] is True
     assert att["tap_kept"] and att["tap_kept"] > 0
     assert att["tap_pruned"] and att["tap_pruned"] > att["tap_kept"]
+
+
+# ── 2026-08-20 — the safety lattice must satisfy the PDK's tap-distance RULE
+#
+# MEASURED on the 0.5x0.5-slot die (D = tapcell distance = 14um; the deck's
+# DF.13_MV / DF.14_MV want a well-tie within 15um of every device):
+#
+#   surviving tap lattice            28um x 31um
+#   CTS/repair buffers inserted AFTER the prune, and their nearest kept tap:
+#     clkbuf_8  @(452.5,1270.1)      21.9um
+#     buf_3     @(452.5,1258.3)      28.0um
+#     clkbuf_2  @(452.5,1262.2)      28.3um
+#     buf_3     @(452.5,1274.0)      32.1um
+#     buf_4     @(967.7, 454.7)      52.2um   <- 78um outside the pre-CTS bbox
+#   sign-off DRC                     11 items (DF.13_MV x5 + DF.14_MV x6)
+#
+# Every one of those cells appeared AFTER the prune ran — which is precisely
+# what the safety lattice exists to cover. It missed them for two reasons, and
+# both are fixed here:
+#   (1) the pitch was calibrated to a ~30um PERC SCREEN, not to the PDK's own
+#       rule, and
+#   (2) the covered region was the PRE-CTS occupied bbox, while the placer may
+#       legally use ANY site in the core — and did.
+_ROOT2 = 1.4142135623730951
+
+
+def _lat_pitch_um(tcl: str) -> float:
+    import re as _re
+    m = _re.search(r"set _lat \[expr \{int\(([0-9.]+) \* \$_dbu\)\}\]", tcl)
+    assert m, "the safety-lattice pitch is no longer emitted"
+    return float(m.group(1))
+
+
+def test_lattice_pitch_keeps_every_covered_point_within_the_tap_distance():
+    """Worst case for one-winner-per-node: pitch/sqrt(2) to the nearest node
+    plus pitch/2 of node offset. That must not exceed the PDK's own D."""
+    for d in (14.0, 20.0, 8.0):
+        class _P:
+            tapcell_master = "x__tap"
+            tapcell_distance_um = d
+        pitch = _lat_pitch_um(r._build_tapcell_prune_tcl(_P()))
+        worst = pitch * (1.0 / _ROOT2 + 0.5)
+        assert worst <= d + 1e-9, (
+            f"D={d}um: a covered point can sit {worst:.2f}um from the nearest "
+            f"kept tap — the PDK's own tap-distance budget is {d}um")
+
+
+def test_lattice_pitch_scales_with_the_pdk_not_a_constant():
+    """The number is DERIVED from the PDK, so a different PDK moves it."""
+    class _P14:
+        tapcell_master = "x__tap"; tapcell_distance_um = 14.0
+    class _P20:
+        tapcell_master = "x__tap"; tapcell_distance_um = 20.0
+    assert _lat_pitch_um(r._build_tapcell_prune_tcl(_P14())) < \
+        _lat_pitch_um(r._build_tapcell_prune_tcl(_P20()))
+
+
+def test_the_old_screen_derived_pitch_would_fail_this():
+    """NEGATIVE CONTROL. The pre-fix pitch — min(2D, sqrt(2)*(28 - D/2)),
+    floored at D — leaves a covered point 33.8um from its tap at D=14um. A
+    test that the old code could also pass would prove nothing."""
+    d = 14.0
+    old_pitch = max(min(2.0 * d, _ROOT2 * (28.0 - d / 2.0)), d)
+    assert old_pitch * (1.0 / _ROOT2 + 0.5) > d, \
+        "the negative control is not negative — recheck the old formula"
+
+
+def test_lattice_covers_the_core_not_the_occupied_bbox():
+    """A cell inserted after the prune may land in ANY legal site, so the
+    lattice's covered region is the core box, not the pre-CTS bbox."""
+    class _P:
+        tapcell_master = "x__tap"; tapcell_distance_um = 14.0
+    tcl = r._build_tapcell_prune_tcl(_P())
+    assert "set _lminx [$_tcb xMin]" in tcl and "set _lmaxy [$_tcb yMax]" in tcl
+    # the bbox+pitch form is gone
+    assert "$_omnx - $_lat" not in tcl and "$_omxy + $_lat" not in tcl
+
+
+def test_flood_bound_is_still_declared():
+    """#684 is not abandoned: the kept lattice is still bounded by the pitch
+    (at most core_area/pitch^2 taps, however fine the tap grid is) and the
+    locality prune still removes the rest."""
+    class _P:
+        tapcell_master = "x__tap"; tapcell_distance_um = 14.0
+    tcl = r._build_tapcell_prune_tcl(_P())
+    assert "odb::dbInst_destroy" in tcl
+    assert "SPARSE_DIE_TAPCELL_BOUNDED" in tcl
+    assert "core_area/pitch^2" in tcl

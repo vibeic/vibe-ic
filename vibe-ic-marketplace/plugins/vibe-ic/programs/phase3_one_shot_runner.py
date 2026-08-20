@@ -3392,12 +3392,28 @@ def _build_tapcell_prune_tcl(pdk: "PdkConfig",
     # the OCCUPIED region (where nets — hence inserted buffers — live) keeps one
     # tap per lattice node so EVERY point there is within ~the latch-up
     # neighbourhood of a tap, guaranteeing coverage for any later insertion.
-    # Pitch: <= 2x the tapcell distance (the same neighbourhood the locality
-    # test uses), capped so the worst-case node-diagonal + grid offset stays
-    # within the ~30um PERC tap-spacing screen for any PDK. chip-AGNOSTIC.
-    _lat_um = min(2.0 * pdk.tapcell_distance_um,
-                  1.4142135623730951 * (28.0 - pdk.tapcell_distance_um / 2.0))
-    _lat_um = max(_lat_um, pdk.tapcell_distance_um)
+    # Pitch: derived from the PDK's OWN tap-distance budget D
+    # (`pdk.tapcell_distance_um`, the same number handed to `tapcell
+    # -distance`), so that EVERY point the lattice covers is within D of a
+    # kept tap. Worst case for a one-winner-per-node lattice: a point at the
+    # centre of a lattice cell is pitch/sqrt(2) from the nearest node, and the
+    # winner tap is at most pitch/2 off its node, so the worst distance is
+    # pitch * (1/sqrt(2) + 1/2) = 1.2071 * pitch. Require that <= D:
+    #
+    #     pitch <= D / 1.2071
+    #
+    # MEASURED, and this is why the constant changed. The previous pitch was
+    # `min(2D, sqrt(2)*(28 - D/2))` — calibrated to a ~30um PERC tap-spacing
+    # SCREEN, not to the PDK's own max-tap-distance RULE. On the 0.5x0.5-slot
+    # die (D=14um; the deck's DF.13_MV/DF.14_MV want a tap within 15um) that
+    # gave a 28um pitch, and the surviving tap lattice measured 28um x 31um.
+    # CTS and repair_timing then inserted buffers into it AFTER the prune —
+    # exactly the case this lattice exists for — and they landed 21.9um,
+    # 28.0um, 28.3um and 32.1um from the nearest surviving tap. Result: 11
+    # sign-off DRC items (DF.13_MV x5 / DF.14_MV x6) whose ONLY cause was the
+    # prune; two of them were reported against the PDK cell master itself
+    # (clkbuf_2, buf_3) because every instance of those masters violated.
+    _lat_um = pdk.tapcell_distance_um / (1.4142135623730951 / 2.0 + 0.5)
     return (
         "# === #684 sparse-die anti-flood tap prune (POST-placement, "
         "locality) ===\n"
@@ -3473,10 +3489,19 @@ def _build_tapcell_prune_tcl(pdk: "PdkConfig",
         "    # any anchor; the winner-per-node keeps the lattice sparse.\n"
         "    array unset _latwin; array unset _latd\n"
         "    if {$_omxx >= $_omnx} {\n"
-        "      set _lminx [expr {$_omnx - $_lat}]; set _lmaxx [expr {$_omxx "
-        "+ $_lat}]\n"
-        "      set _lminy [expr {$_omny - $_lat}]; set _lmaxy [expr {$_omxy "
-        "+ $_lat}]\n"
+        # The covered region is the CORE, not the occupied bbox. A cell that
+        # appears after the prune (CTS buffer, repair buffer, antenna diode)
+        # may be placed in ANY legal site, and the placer does exactly that:
+        # MEASURED on the 0.5x0.5-slot die, repair_timing dropped a buf_4 at
+        # (967.7, 454.7) — 78um BELOW the lowest pre-CTS cell, so the
+        # bbox+1-pitch lattice did not reach it and its nearest surviving tap
+        # was 52.18um away (rule: 15um). Bounding to the occupied bbox is
+        # unsound for the very insertions the lattice was added to cover.
+        # #684's anti-flood bound is preserved and is now EXPLICIT: the kept
+        # lattice is at most core_area/pitch^2 taps however fine the tap grid
+        # is, which is the tightest bound that is still SOUND.
+        "      set _lminx [$_tcb xMin]; set _lmaxx [$_tcb xMax]\n"
+        "      set _lminy [$_tcb yMin]; set _lmaxy [$_tcb yMax]\n"
         "      foreach _ti [$_tblk getInsts] {\n"
         "        if {[[$_ti getMaster] getName] ne \"" + tm + "\"} { continue }\n"
         "        set _tbb [$_ti getBBox]\n"
@@ -3528,11 +3553,14 @@ def _build_tapcell_prune_tcl(pdk: "PdkConfig",
         "eq \"" + tm + "\"} { incr _tap_kept } }\n"
         "    puts \"SPARSE_DIE_TAPCELL_BOUNDED: core_util=$_tap_util% < "
         + f"{thr}"
-        + "% — well-tie taps kept near placed cells + a safety lattice over "
-        "the occupied region (kept=$_tap_kept) and pruned over empty silicon "
-        "(pruned=$_tap_pruned); every placed cell AND any later-inserted "
-        "buffer/diode retains a tap within the latch-up neighbourhood "
-        "(R6/locality+lattice).\"\n"
+        + "% — well-tie taps kept near placed cells + a safety lattice at "
+        + f"pitch={round(_lat_um, 3)}um over the CORE (kept=$_tap_kept) and "
+        "pruned over empty silicon (pruned=$_tap_pruned); every placed cell "
+        "AND any later-inserted buffer/diode retains a tap within "
+        + f"{pdk.tapcell_distance_um}um, the PDK's own tap-distance budget "
+        "(R6/locality+lattice). #684 anti-flood bound still holds and is now "
+        "EXPLICIT: the lattice keeps at most core_area/pitch^2 taps however "
+        "fine the inserted tap grid is.\"\n"
         "  } _tap_prune_err]} {\n"
         "    puts \"TAPCELL_PRUNE_NONFATAL: $_tap_prune_err — full-die "
         "well-tie taps retained (every placed cell tied; empty-silicon "
@@ -4848,12 +4876,25 @@ _FILLER_FAMILY_RE = re.compile(
 
 
 def _discover_filler_masters_from_lef(cell_lef: Optional[str],
-                                      container: Optional[str] = None
+                                      container: Optional[str] = None,
+                                      spacers_only: bool = False
                                       ) -> List[str]:
     """Discover decap+fill filler-cell masters from a cell LEF, ordered
     OpenROAD-style (decaps largest→smallest first, then fills largest→smallest
     — greedy tiling packs the big cells first). Returns [] on no LEF / no
     fillers. Name-pattern based (no vendor literal).
+
+    `spacers_only=True` drops the DECAP/DCAP/FILLCAP family and returns the
+    inert SPACER (FILL/FILLER) family alone. A decap is a REAL DEVICE — a
+    gate-oxide capacitor in its own well — and on a die where the #684
+    sparse-die tap prune has removed the well-tie taps over empty silicon,
+    tiling decaps there places devices whose wells are untied. MEASURED on the
+    0.5x0.5 slot die (2026-08-20): the decap-first list inserted 8317 cells of
+    which 7295 were decaps and the sign-off DRC went 360 -> 11964 items (33x
+    WORSE), 99.5-100%% of the new items sitting on a decap. The same die filled
+    with SPACERS ONLY zeroed six rule classes (PP.2 87->0, NP.2 83->0,
+    NW.2a_LV 39->0, NW.2b_LV 35->0, NW.2b_MV 9->0, DV.5 28->0), took NWELL
+    islands 3305->128 and tap-less cells 62->1, and added ZERO new violations.
 
     `cell_lef` is normally a path INSIDE the EDA container (/foss/pdks/...),
     which does not exist on the host filesystem. Reading it with a plain host
@@ -4880,6 +4921,8 @@ def _discover_filler_masters_from_lef(cell_lef: Optional[str],
             fills.append((size, name))
     decaps.sort(reverse=True)
     fills.sort(reverse=True)
+    if spacers_only:
+        return [n for _, n in fills]
     return [n for _, n in decaps] + [n for _, n in fills]
 
 
@@ -4917,7 +4960,18 @@ def _discover_antenna_diode_from_lef(lef_paths: List[Optional[str]],
     return None
 
 
-def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
+def _is_spacer_master(name: str) -> bool:
+    """True when `name` is an inert SPACER (FILL/FILLER family) cell rather
+    than a DECAP/DCAP/FILLCAP device. Same name-pattern classifier the LEF
+    discovery uses, so the hardcoded sky130 list and the discovered list are
+    split identically. chip/PDK-AGNOSTIC."""
+    fam = _FILLER_FAMILY_RE.search(name or "")
+    return bool(fam) and fam.group(1).upper() not in (
+        "DECAP", "DCAP", "FILLCAP")
+
+
+def _filler_masters_for_pdk(pdk: "PdkConfig",
+                            spacers_only: bool = False) -> List[str]:
     """v0.1.48 — return the decap+fill cell-master set for this PDK.
 
     sky130-style cell library (probed by tapcell_master) → SKY130 set.
@@ -4933,8 +4987,11 @@ def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
     the sky130 results stay bit-identical.
     """
     if pdk.tapcell_master and "sky130_fd_sc_hd" in pdk.tapcell_master:
-        return list(_SKY130_FILLER_MASTERS)
-    return _discover_filler_masters_from_lef(pdk.cell_lef)
+        masters = list(_SKY130_FILLER_MASTERS)
+        return ([m for m in masters if _is_spacer_master(m)]
+                if spacers_only else masters)
+    return _discover_filler_masters_from_lef(pdk.cell_lef,
+                                             spacers_only=spacers_only)
 
 
 # ── #684 — sparse-die fill guard ──────────────────────────────────────
@@ -4985,6 +5042,7 @@ def _sparse_die_fill_threshold_pct() -> float:
 _SPARSE_TAP_MARK = "SPARSE_DIE_TAPCELL_SKIPPED"
 _SPARSE_TAP_BOUNDED_MARK = "SPARSE_DIE_TAPCELL_BOUNDED"
 _SPARSE_FILL_MARK = "SPARSE_DIE_FILL_SKIPPED"
+_SPARSE_FILL_BOUNDED_MARK = "SPARSE_DIE_FILL_BOUNDED"
 _SPARSE_UTIL_RE = re.compile(r"core_util=([0-9.]+)%")
 _SPARSE_KEPT_RE = re.compile(r"kept=([0-9]+)")
 _SPARSE_PRUNED_RE = re.compile(r"pruned=([0-9]+)")
@@ -5000,7 +5058,8 @@ def _parse_sparse_die_skip(log_text: str) -> Dict[str, Any]:
     Pure, chip-AGNOSTIC."""
     out: Dict[str, Any] = {
         "tapcell_skipped": False, "fill_skipped": False,
-        "tapcell_bounded": False,
+        "tapcell_bounded": False, "fill_bounded": False,
+        "fill_kept": None, "fill_pruned": None,
         "tapcell_core_util_pct": None, "fill_core_util_pct": None,
         "tap_kept": None, "tap_pruned": None,
         "threshold_pct": _sparse_die_fill_threshold_pct(),
@@ -5024,6 +5083,20 @@ def _parse_sparse_die_skip(log_text: str) -> Dict[str, Any]:
             m = _SPARSE_UTIL_RE.search(line)
             if m:
                 out["tapcell_core_util_pct"] = float(m.group(1))
+        elif _SPARSE_FILL_BOUNDED_MARK in line:
+            # The sparse die DID get its row gaps filled — with inert spacers
+            # only, bounded to the occupied region. NOT a skip: the downstream
+            # density/fill gates must run their normal (measuring) path.
+            out["fill_bounded"] = True
+            m = _SPARSE_UTIL_RE.search(line)
+            if m:
+                out["fill_core_util_pct"] = float(m.group(1))
+            mk = _SPARSE_KEPT_RE.search(line)
+            if mk:
+                out["fill_kept"] = int(mk.group(1))
+            mp = _SPARSE_PRUNED_RE.search(line)
+            if mp:
+                out["fill_pruned"] = int(mp.group(1))
         elif _SPARSE_FILL_MARK in line:
             out["fill_skipped"] = True
             m = _SPARSE_UTIL_RE.search(line)
@@ -5043,7 +5116,7 @@ def _write_sparse_die_skip_attestation(project: Path,
     merged = "\n".join(t for t in log_texts if t)
     att = _parse_sparse_die_skip(merged)
     if not (att["tapcell_skipped"] or att["fill_skipped"]
-            or att["tapcell_bounded"]):
+            or att["tapcell_bounded"] or att["fill_bounded"]):
         return  # no skip/bound → no attestation (gates run their normal path).
     att["program"] = "sparse_die_skip_attestation"
     att["reason"] = (
@@ -5081,29 +5154,70 @@ def _load_sparse_die_skip(project: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
-    """Return a Tcl block that runs `filler_placement {<masters>}` ONLY
-    when post-place CORE utilization ≥ the sparse-die threshold; otherwise
-    SKIP the full-die decap/fill tiling (emitting a SPARSE_DIE_FILL_SKIPPED
-    note with the measured utilization). Pure, chip-AGNOSTIC — the masters
-    are the only chip-specific input and they come from the PDK config.
+def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
+                                       spacer_masters: Optional[
+                                           List[str]] = None,
+                                       tapcell_distance_um: float = 14.0
+                                       ) -> str:
+    """Return a Tcl block that fills the std-cell row gaps.
 
-    Utilization is measured from odb (sum of CORE-class instance master
-    areas / die-block core area) so it does not depend on parsing
+    Dense / normal-util die (post-place CORE util >= the sparse threshold):
+    the full-die `filler_placement {<filler_masters>}` runs exactly as before
+    — the established, benchmarked control path is bit-identical.
+
+    SPARSE die (util < threshold, i.e. a small design in a large FIXED
+    wrapper): the fill is BOUNDED, not skipped. Two measured facts force this:
+
+      * SKIPPING is wrong. `filler_placement` is what closes the nwell/implant
+        notches between adjacent placed cells. With the fill skipped the
+        0.5x0.5 slot die carried 336 top-level sign-off DRC items that are all
+        row-gap geometry (NP.2 82, PP.2 77, DF.13_MV 57, NW.2b_LV 52,
+        NW.2a_LV 39, DV.5 27) — the same failure this comment already records
+        for spm x ihp-sg13g2 (FILLER_SKIPPED -> 26x NW.b nwell notches).
+      * FLOODING is also wrong, and worse. The full-die decap-first tiling on
+        that same die inserted 8317 cells, 7295 of them DECAPS — real devices
+        dropped onto silicon whose well-tie taps the #684 R6 prune had already
+        removed — and DRC went 360 -> 11964 (33x WORSE), 99.5-100%% of the new
+        items on a decap.
+
+    So on a sparse die: use SPACER masters only (inert geometry, no device,
+    `spacer_masters`), and keep only the spacers whose 3x3 bin neighbourhood
+    (bin = 2x the tapcell distance, the same latch-up neighbourhood the R6 tap
+    prune uses) holds a cell that already existed before the fill ran. Empty
+    silicon is not tiled, so the #684 GDS/extraction explosion stays bounded;
+    every kept spacer sits next to a cell that kept its well-tie tap, so the
+    decap/untied-well failure mode cannot recur. A sparse PDK that ships NO
+    spacer family degrades to the previous DISCLOSED skip rather than to a
+    silent decap flood.
+
+    Utilization is measured from odb (sum of CORE-class instance master areas
+    / die-block core area) so it does not depend on parsing
     report_design_area text and works on every OpenROAD generation.
-    Falls back to running the fill when the measurement is unavailable
+    Falls back to running the full fill when the measurement is unavailable
     (fail-safe toward density-rule compliance, never toward the explosion).
+    Pure and chip-AGNOSTIC — the masters are the only chip-specific input and
+    they come from the PDK config.
     """
     if not filler_masters:
         return ("puts \"FILLER_SKIPPED: no decap/fill masters known for "
                 "this PDK; dynamic-IR margin + density-fill rules must be "
                 "handled out-of-band\"\n")
     masters_tcl = " ".join(filler_masters)
+    # Default: split the caller's own master list with the same name-pattern
+    # classifier the LEF discovery uses, so EVERY call site (PnR, the two
+    # re-fill paths, the metal-fill helper) gets the spacer-only sparse branch
+    # without having to thread a second list through.
+    spacers = [m for m in (spacer_masters
+                           if spacer_masters is not None else
+                           [x for x in filler_masters
+                            if _is_spacer_master(x)]) if m]
+    spacers_tcl = " ".join(spacers)
     thr = _sparse_die_fill_threshold_pct()
+    bin_um = max(2.0 * float(tapcell_distance_um), 1.0)
     # NOTE: doubled braces because this string is interpolated by the
     # f-string template in _build_pnr_tcl_text (and emitted verbatim by the
     # metal-fill helper, which also uses an f-string).
-    return (
+    measure = (
         "# === #684 sparse-die fill guard — bound full-die fill on a "
         "sparse fixed wrapper ===\n"
         "set _sd_fill_util NA\n"
@@ -5125,21 +5239,92 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
         "$_coreA}] }\n"
         "} _sd_err]} {\n"
         "  puts \"SPARSE_DIE_FILL_MEASURE_NONFATAL: $_sd_err\"\n"
-        "}\n"
-        f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
-        "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
-        f"{thr}% — full-die decap/fill tiling bounded to avoid filling an "
-        "empty fixed wrapper (would explode GDS/extraction). Density-fill "
-        "for the occupied region is covered by the downstream metal-fill "
-        "gate; empty silicon carries no signals needing decoupling.\"\n"
-        "} else {\n"
+        "}\n")
+    full_fill = (
         f"  if {{[catch {{filler_placement {{{masters_tcl}}}}} _fp_err]}} {{\n"
         "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
         "  } else {\n"
         f"    puts \"FILLER_INSERTED: {len(filler_masters)} masters "
         "(core_util=$_sd_fill_util%)\"\n"
-        "  }\n"
-        "}\n")
+        "  }\n")
+    if not spacers:
+        sparse_branch = (
+            "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
+            f"{thr}% and this PDK declares NO inert spacer (FILL) family — "
+            "only decap devices, which on a tap-pruned sparse die measure 33x "
+            "WORSE than no fill at all. Full-die decap tiling bounded; the "
+            "row-gap density/notch rules for the occupied region are NOT "
+            "closed by this run and are disclosed, not silently passed.\"\n")
+    else:
+        sparse_branch = (
+            "  # Bounded SPACER fill: tile with the inert FILL family only,\n"
+            "  # then keep only the spacers in the latch-up neighbourhood of a\n"
+            "  # cell that existed BEFORE the fill (logic, buffers, spares and\n"
+            "  # the taps R6 kept). Empty silicon stays untiled (#684).\n"
+            "  if {[catch {\n"
+            "    set _fblk [ord::get_db_block]\n"
+            "    array unset _f_pre\n"
+            "    set _fdbu [[ord::get_db_tech] getDbUnitsPerMicron]\n"
+            f"    set _fbin [expr {{int({bin_um} * $_fdbu)}}]\n"
+            "    if {$_fbin < 1} { set _fbin 1 }\n"
+            "    array unset _fanchor\n"
+            "    foreach _fi [$_fblk getInsts] {\n"
+            "      set _f_pre([$_fi getName]) 1\n"
+            "      if {![string match \"CORE*\" [[$_fi getMaster] getType]]} "
+            "{ continue }\n"
+            "      set _fbb [$_fi getBBox]\n"
+            "      set _fcx [expr {([$_fbb xMin] + [$_fbb xMax]) / 2}]\n"
+            "      set _fcy [expr {([$_fbb yMin] + [$_fbb yMax]) / 2}]\n"
+            "      set _fanchor([expr {$_fcx / $_fbin}],[expr {$_fcy / "
+            "$_fbin}]) 1\n"
+            "    }\n"
+            f"    if {{[catch {{filler_placement {{{spacers_tcl}}}}} "
+            "_fp_err]} {\n"
+            "      puts \"FILLER_NONFATAL: $_fp_err\"\n"
+            "    } else {\n"
+            "      set _f_kill {}\n"
+            "      foreach _fi [$_fblk getInsts] {\n"
+            "        if {[info exists _f_pre([$_fi getName])]} { continue }\n"
+            "        set _fbb [$_fi getBBox]\n"
+            "        set _fcx [expr {([$_fbb xMin] + [$_fbb xMax]) / 2}]\n"
+            "        set _fcy [expr {([$_fbb yMin] + [$_fbb yMax]) / 2}]\n"
+            "        set _fi0 [expr {$_fcx / $_fbin}]\n"
+            "        set _fj0 [expr {$_fcy / $_fbin}]\n"
+            "        set _fhit 0\n"
+            "        foreach _fdi {-1 0 1} {\n"
+            "          foreach _fdj {-1 0 1} {\n"
+            "            if {[info exists _fanchor([expr {$_fi0 + $_fdi}],"
+            "[expr {$_fj0 + $_fdj}])]} { set _fhit 1; break }\n"
+            "          }\n"
+            "          if {$_fhit} { break }\n"
+            "        }\n"
+            "        if {!$_fhit} { lappend _f_kill $_fi }\n"
+            "      }\n"
+            "      set _f_pruned 0\n"
+            "      foreach _fi $_f_kill { odb::dbInst_destroy $_fi; incr "
+            "_f_pruned }\n"
+            "      set _f_kept 0\n"
+            "      foreach _fi [$_fblk getInsts] { if {![info exists "
+            "_f_pre([$_fi getName])]} { incr _f_kept } }\n"
+            "      puts \"SPARSE_DIE_FILL_BOUNDED: core_util=$_sd_fill_util% "
+            f"< {thr}% — SPACER-only row-gap fill ({len(spacers)} inert FILL "
+            f"master(s), bin={bin_um}um) kept next to pre-existing tied cells "
+            "(kept=$_f_kept) and pruned over empty silicon (pruned="
+            "$_f_pruned); no decap device is placed on tap-pruned silicon "
+            "(the 33x-worse case), and the full-die flood stays bounded "
+            "(#684).\"\n"
+            "    }\n"
+            "  } _f_bound_err]} {\n"
+            "    puts \"SPARSE_DIE_FILL_BOUND_NONFATAL: $_f_bound_err — "
+            "row-gap fill left as whatever filler_placement produced; no "
+            "prune applied.\"\n"
+            "  }\n")
+    return (measure
+            + f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
+            + sparse_branch
+            + "} else {\n"
+            + full_fill
+            + "}\n")
 
 
 # ── PG global-connect RE-APPLY + audit (post-instance-creation) ──────────────
@@ -20206,7 +20391,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # FIXED wrapper is NOT flooded with 940K decap/fill cells / a 2 GB GDS.
     # A dense / normal-util design (§4.05 negative) still gets the full
     # fill (util ≥ threshold). chip-AGNOSTIC.
-    filler_block = _build_sparse_die_aware_filler_tcl(_filler_masters)
+    filler_block = _build_sparse_die_aware_filler_tcl(
+        _filler_masters, tapcell_distance_um=pdk.tapcell_distance_um)
 
     # PG global-connect RE-APPLY + audit. `global_connect` inside the PDN block
     # runs BEFORE placement, so it can only connect the instances that exist
@@ -22913,10 +23099,20 @@ def _derive_metal_fill_density(pdk: "PdkConfig",
                       deck_dir + "/rule_decks/*.rb", deck_dir + "/generic_layers.rb"])
     if not (layermap_text.strip() and techlef_text.strip() and deck_text.strip()):
         return None
+    # The PDK's OWN metal-fill script declares the die-edge (seal/scribe band)
+    # keep-out it will not fill into; read it so this engine honours the same
+    # band. Located by the PDK's own directory layout (the KLayout tech tree
+    # that also holds the DRC deck), never by a vendor file name — every
+    # `fill*.rb` in that scripts dir is concatenated and the parser takes the
+    # `space_to_scribe_line` any of them declares. Absent -> no keep-out
+    # (previous behaviour, disclosed in `_derivation`).
+    _tech_dir = deck_dir.rsplit("/", 1)[0] if "/" in deck_dir else deck_dir
+    fill_script_text = _cat([_tech_dir + "/scripts/fill*.rb"])
     try:
         return _mfcg.build_metal_fill_config(
             layermap_text, techlef_text, deck_text,
-            metal_prefix=(getattr(pdk, "metal_prefix", None) or "metal"))
+            metal_prefix=(getattr(pdk, "metal_prefix", None) or "metal"),
+            fill_script_text=fill_script_text)
     except Exception:
         return None
 
