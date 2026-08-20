@@ -23026,6 +23026,130 @@ def _die_finishing(project: Path, top: str, pdk: PdkConfig,
     return True, "PDK seal ring inserted and verified around the die"
 
 
+def _die_density_fill(project: Path, top: str, pdk: PdkConfig,
+                      gds_path: Path,
+                      container: Optional[str] = None) -> Tuple[bool, str]:
+    """DIE-WIDE dummy fill by the PDK's OWN density-fill generator.
+
+    Delegates to the `die_density_fill_gen` plugin program, which locates the
+    PDK's filler (`libs.tech/klayout/tech/scripts/fill_all.rb` and the COMP /
+    Poly2 / metal passes it drives) and invokes it the way the PDK ships it.
+    This function contains no fill cell, no pitch, no keep-out and no density
+    target: dummy fill is foundry data and the PDK ships the generator for it.
+
+    WHY IT EXISTS BESIDE `_density_metal_fill`, WHICH ALREADY FILLS. Because
+    they answer different questions, and only one of them is the question a
+    foundry minimum-density rule asks. MEASURED 2026-08-20, gf180mcuD, a
+    0.5x0.5 slot die 1936 x 2531 um whose routed core is 1052 x 1647 um:
+
+        reports/phase3/cmp_fill_emit.json   metal2 0.0036 -> 0.4330 "reached"
+        reports/phase3/metal_density.json   "die_area_um2": 1732693  <- the CORE
+        the operator's own precheck, same GDS, sealed:  8 density errors
+          DCF.1b PL.8 M1.4 M2.4 M3.4 M4.4 M5.4 MT.3, every one reported
+          against the whole die polygon (0,0;1936,2531)
+        the same layers measured over the DIE:
+          COMP 3.04 %  Poly2 0.12 %  M1 8.26 %  M2 18.21 %  M3 17.97 %
+          M4 18.45 %  M5 18.48 %      (floors 25 / 14 / 30 / 30 / 30 / 30 / 30)
+
+    `_density_metal_fill` measures and fills the BOUNDING BOX OF THE STREAMED
+    GEOMETRY. On a slot submission that box is the routed core -- 35.4 % of the
+    die here -- so it reported every layer at target while 64.6 % of the die
+    carried no metal, no COMP and no Poly2 at all. It also fills metal only;
+    DCF.1b and PL.8 are COMP and Poly2 rules that nothing in this flow
+    addressed. Running the PDK's own generator over the finished die closes
+    both gaps at once, and closes them with the foundry's numbers.
+
+    WHY IT RUNS HERE. The PDK generator's fill frame is
+    `$ly.top_cell().dbbox()` and its scribe keep-out is measured inward from
+    that frame, so it must run AFTER the seal ring -- the ring is what makes
+    the bounding box the die -- and BEFORE the density checks and the sign-off
+    DRC/LVS read this GDS. That is LibreLane's own chip-flow order,
+    SealRing -> Filler -> Density. Filling after sign-off would put metal on
+    the die after Step 31 verified it.
+
+    NONFATAL, like its `_die_finishing` / `_density_metal_fill` siblings: any
+    failure leaves the GDS as it was and is DISCLOSED in the step note. A PDK
+    that ships no density filler is a NAMED skip, never a silent "filled". A
+    fill whose frame did not cover the declared die is a NAMED failure, never a
+    fill reported as die-wide.
+    """
+    if not gds_path.is_file():
+        return False, "no GDS to fill"
+    prog = Path(__file__).resolve().parent / "die_density_fill_gen.py"
+    if not prog.is_file():
+        return False, "die_density_fill_gen program not found"
+    pdk_dir = _pdk_dir_of(pdk)
+    if not pdk_dir:
+        return False, ("cannot locate the PDK directory from the tech LEF — "
+                       "no density-fill generator was looked for")
+    argv = [sys.executable, str(prog), str(project),
+            "--gds", str(gds_path), "--in-place", "--cell", top,
+            "--pdk-root", str(Path(pdk_dir).parent),
+            "--pdk", Path(pdk_dir).name]
+    # === ONE WRITER PER DUMMY LAYER =======================================
+    # `_density_metal_fill` ran just above and owns the metal dummy layers. The
+    # PDK's generator fills those too, and its per-layer keep-out is computed
+    # from the DRAWN datatype alone — its design manual assumes its filler is
+    # the only one — so it cannot see, and cannot avoid, fill that is already
+    # there. MEASURED, gf180mcuD, one die filled by both: 234437 KLayout DRC
+    # errors (MT.2a 79226, M3.2a 73590, M4.2a 71714, MT.1 4374, M3.1 2862,
+    # M4.1 2671) where EACH FILLER ALONE was DRC-clean, and the operator's
+    # precheck refused it — a worse refusal than the 8 density errors the fill
+    # was added to clear.
+    #
+    # Telling the program which layers this flow already owns is what lets it
+    # DISCOVER (by running each of the generator's own passes once) which pass
+    # writes them, and leave that one out. The layer numbers come from the
+    # metal-fill config this run itself wrote — no layer literal here, and none
+    # in the program.
+    _mf_cfg = _pl.pnr_dir(project) / "metal_fill_density_cfg.json"
+    try:
+        _owned = sorted({int((lay.get("layer") or [None])[0])
+                         for lay in ((json.loads(_mf_cfg.read_text()) or {})
+                                     .get("layers") or [])
+                         if isinstance(lay.get("layer"), list) and lay["layer"]})
+    except (OSError, ValueError, TypeError, IndexError):
+        _owned = []
+    for _l in _owned:
+        argv += ["--owned-layer", str(_l)]
+    # Same reason `_die_finishing` passes it, and the same trap if it is not:
+    # the streamed GDS's own bbox is the slot's CORE_AREA since the floorplan
+    # fix, so a generator told nothing would fill the CORE, report success, and
+    # ship a die that is 64.6 % bare. The slot pins the die rectangle exactly,
+    # so it is passed explicitly and never guessed.
+    _slot = _slot_geometry(project)
+    if _slot:
+        argv += ["--die-width", str(_slot["die_w"]),
+                 "--die-height", str(_slot["die_h"])]
+    # Same reason `_density_metal_fill` passes it: the program resolves its own
+    # KLayout runner via `_klayout_launch`, which looks for a container NAMED
+    # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run
+    # container has a different generated name, so without this the program
+    # would skip with "no KLayout runner available" while KLayout is right
+    # there in THIS run's own container.
+    run_env = dict(os.environ)
+    if container:
+        run_env["VIBEIC_EDA_CONTAINER"] = container
+    try:
+        cp = subprocess.run(argv, capture_output=True, text=True,
+                            timeout=3600, env=run_env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"die density fill NONFATAL: {exc}"
+    if cp.returncode != 0:
+        # rc 2 is the program's NAMED disclosed skip (this PDK ships no
+        # density filler); rc 1 is a real failure with its measurement in the
+        # report. Both are reported, never hidden.
+        tail = ((cp.stdout or "") + (cp.stderr or "")).strip().splitlines()
+        why = next((ln for ln in reversed(tail)
+                    if ln.startswith(("VACUOUS_PASS:", "die_density_fill_gen:"))),
+                   (tail[-1] if tail else f"rc={cp.returncode}"))
+        return False, f"die-wide density fill did NOT complete: {why[:300]}"
+    note = next((ln for ln in ((cp.stdout or "").strip().splitlines())
+                 if ln.startswith("die_density_fill_gen:")), "")
+    return True, (note[len("die_density_fill_gen: "):] if note else
+                  "the PDK's own density-fill generator filled the declared die")
+
+
 def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
                         gds_path: Path, container: Optional[str] = None) -> Tuple[bool, str]:
     """Per-layer DENSITY-TARGETED metal fill on the streamed GDS.
@@ -24667,6 +24791,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         # Per-layer density fill BEFORE the density checks / sign-off DRC read
         # this GDS. Config-gated + NONFATAL; the note always discloses.
         dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+        # DIE-WIDE fill by the PDK's own generator, LAST of the fill passes
+        # and still before the density checks / sign-off DRC read this GDS.
+        # The pass above measures and fills the streamed geometry's BOUNDING
+        # BOX; a foundry minimum-density rule is written over the entire DIE,
+        # and on a slot submission those are different rectangles. NONFATAL.
+        ddfill_ok, ddfill_note = _die_density_fill(project, top, pdk, gds_out,
+                                                   container)
         # vibe-ic#613 — the port-label restore is a POST-streamout pass over the
         # finished GDS, so it belongs on BOTH engines. Gating it on the KLayout
         # path alone would have made "which streamout ran" decide whether a
@@ -24692,6 +24823,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             f"{'; ' + snap_note if snap_ok else ''}"
             f"{'; ' + seal_note if seal_ok else ''}"
             f"{'; ' + dfill_note if dfill_ok else ''}"
+            f"{'; ' + ddfill_note if ddfill_ok else ''}"
             f"{'; ' + label_note if label_ok else ''})",
             [str(gds_out)],
             extras={"streamout_engine": "magic",
@@ -24699,6 +24831,8 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                     "grid_snap": snap_ok, "grid_snap_note": snap_note,
                     "density_fill": dfill_ok,
                     "density_fill_note": dfill_note,
+                    "die_density_fill": ddfill_ok,
+                    "die_density_fill_note": ddfill_note,
                     "port_label_restore": label_ok,
                     "port_label_restore_note": label_note})
 
@@ -24829,6 +24963,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # PATTERN above and before the density checks / sign-off DRC consume this
     # GDS. Config-gated + NONFATAL; the note always discloses the outcome.
     dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+    # DIE-WIDE fill by the PDK's own generator, LAST of the fill passes and
+    # still before the density checks / sign-off DRC read this GDS. The pass
+    # above measures and fills the streamed geometry's BOUNDING BOX; a foundry
+    # minimum-density rule is written over the entire DIE, and on a slot
+    # submission those are different rectangles. NONFATAL, always disclosed.
+    ddfill_ok, ddfill_note = _die_density_fill(project, top, pdk, gds_out,
+                                               container)
     # v1.3.91 — restore top PORT text labels + VDD/VSS rail markers LAST (after
     # merge/heal/fill so the labels/markers land on the final geometry): makes
     # the KLayout-streamed GDS LVS-able by the geometric extractor. Config-gated
@@ -24900,6 +25041,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                       f"{'; ' + seal_note if seal_ok else ''}"
                       f"{'; ' + fill_note if fill_ok else ''}"
                       f"{'; ' + dfill_note if dfill_ok else ''}"
+                      f"{'; ' + ddfill_note if ddfill_ok else ''}"
                       f"{'; ' + label_note if label_ok else ''})",
                       [str(gds_out)],
                       extras={"streamout_engine": "klayout",
@@ -24907,6 +25049,8 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                               "die_finishing_note": seal_note,
                               "density_fill": dfill_ok,
                               "density_fill_note": dfill_note,
+                              "die_density_fill": ddfill_ok,
+                              "die_density_fill_note": ddfill_note,
                               "grid_snap": snap_ok,
                               "grid_snap_note": snap_note,
                               "layer_merge": merge_ok,
@@ -37524,7 +37668,21 @@ _METAL_DENSITY_LAYER_RE = _mld._METAL_RE.pattern
 # pre-#990 recipe matched on `"NET" in purpose`. #988's reading of the deck was
 # "all datatypes on the metal layer except text and via", which is the same
 # vocabulary and is why those two words are the exclusion.
-_DENSITY_PURPOSE_EXCLUDE = ("VIA", "CUT", "TEXT", "LABEL")
+# THREE MORE WORDS, ADDED WITH THE SECOND DECK BINDING FORM. Reading a deck
+# that registers its layers through a helper recovers every purpose that deck
+# names, not just the two the direct form happened to expose — measured on
+# gf180mcuD: `metal1_drawn/_slot/_dummy/_blk/_label/_res`, of which only
+# `drawn` and `dummy` are what the PDK's own density rule adds up
+# (`metalN = metalN_drawn + metalN_dummy`, generic_layers.rb).
+#   SLOT is a HOLE in the metal, drawn as its own layer — counting it as metal
+#        area is wrong with the sign reversed;
+#   BLK  is a routing blockage marker; no metal is manufactured from it;
+#   RES  is a resistor-marker layer; likewise.
+# Over-counting density is the DANGEROUS direction — it is what lets a sparse
+# die read as dense, which is the whole failure this measurement exists to
+# catch — so a purpose that carries no manufactured metal is excluded rather
+# than left in because it happened to be empty on the die in front of us.
+_DENSITY_PURPOSE_EXCLUDE = ("VIA", "CUT", "TEXT", "LABEL", "SLOT", "BLK", "RES")
 
 
 def density_counted_specs(map_text, deck_texts, metal_re):
@@ -37576,6 +37734,32 @@ def density_counted_specs(map_text, deck_texts, metal_re):
         r"^[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*(?:\w+\.)?"
         r"(?:input|polygons|polygon_layer|layer)[ \t]*\([ \t]*"
         r"(\d+)[ \t]*(?:,[ \t]*(\d+)[ \t]*)?\)", re.MULTILINE)
+    # THE SECOND BINDING FORM, and on the PDK measured below it is the ONLY one.
+    # A deck large enough to be split across files stops writing one
+    # `NAME = input(...)` per layer and registers them through a helper instead,
+    # naming each layer with a symbol:
+    #
+    #     extract_single_layer_from_design.call(:metal1_dummy, <L>, <D>)
+    #
+    # MEASURED (2026, month eight) on an open PDK whose deck is built that way:
+    # forty deck files read, `specs_from_deck` zero, and the DUMMY purpose
+    # therefore never discovered. The consequence was not a missing field — it
+    # was a wrong number nothing could contradict: the producer published a
+    # metal density of three thousandths, and `layers_datatype_delta` of
+    # exactly zero, for a GDS carrying three quarters of a square millimetre of
+    # dummy fill on that layer's dummy purpose. It reported "this layout has no
+    # dummy fill" about a layout THIS FLOW HAD JUST FILLED, and the fill was
+    # forty-three percent of the measured area. #990 fixed the layermap half and
+    # the direct-binding half; this is the residual, and on that PDK it is the
+    # half that decides the answer.
+    #
+    # It stays SAFE the same way the form above does, and the safety is not in
+    # this pattern: a match is only counted when its GDS layer number is one the
+    # layermap already established as a metal layer (`if gl not in
+    # layer_numbers: continue` below), and when the symbol is not an excluded
+    # purpose. A helper call about an unrelated layer contributes nothing.
+    sym_bind_re = re.compile(
+        r"\([ \t]*:([A-Za-z_]\w*)[ \t]*,[ \t]*(\d+)[ \t]*,[ \t]*(\d+)[ \t]*\)")
     layer_numbers = {}
     for key, specs in counted.items():
         for gl, _gd in specs:
@@ -37590,7 +37774,7 @@ def density_counted_specs(map_text, deck_texts, metal_re):
         if not text:
             continue
         decks_read += 1
-        for m in bind_re.finditer(text):
+        for m in list(bind_re.finditer(text)) + list(sym_bind_re.finditer(text)):
             var, gl = m.group(1), int(m.group(2))
             gd = int(m.group(3)) if m.group(3) is not None else 0
             if gl not in layer_numbers:
@@ -37682,7 +37866,34 @@ ly.read(gds_path)
 top = ly.top_cell()
 dbu = ly.dbu
 bb = top.bbox()
-die_um2 = (bb.width() * dbu) * (bb.height() * dbu)
+bbox_um2 = (bb.width() * dbu) * (bb.height() * dbu)
+# THE DENOMINATOR IS THE DIE, AND THE LAYOUT BOUNDING BOX IS NOT ALWAYS IT.
+# A foundry minimum-density rule reads "coverage over the entire die" -- the
+# PDK's own deck computes `chip_area = extent.sized(0.0).area` and divides by
+# it. On a shuttle-slot submission the streamed geometry is the routed CORE
+# sitting inside a much larger die, so the two rectangles differ and this
+# measurement reported the CORE's density under the name `die_area_um2`.
+# MEASURED on gf180mcuD, a 0.5x0.5 shuttle slot (die 1936 x 2531 um, core
+# 1052 x 1647 um): this report read `"die_area_um2": 1732693` -- 35.4 % of the
+# 4900016 um2 die -- and published metal2 at 0.43 while the operator's own
+# precheck failed the same GDS on M2.4 at 18.2 % over the die. Both numbers
+# were arithmetically correct; only one of them answered the rule.
+# When the project declares a slot, the runner passes that rectangle in and it
+# is the denominator. BOTH areas are published either way, so a reader can
+# always see which question a number answers.
+die_rect = globals().get("die", "")
+die_source = "the layout bounding box (no die rectangle was declared)"
+die_um2 = bbox_um2
+if die_rect:
+    try:
+        _x0, _y0, _x1, _y1 = [float(v) for v in str(die_rect).split(",")]
+        _a = (_x1 - _x0) * (_y1 - _y0)
+        if _a > 0:
+            die_um2 = _a
+            die_source = "the declared slot DIE_AREA"
+    except (TypeError, ValueError):
+        die_source = ("a die rectangle was passed but could not be parsed "
+                      "(%r) -- fell back to the layout bounding box" % (die_rect,))
 
 
 def _density_of(specs):
@@ -37728,6 +37939,10 @@ open(out_path, "w").write(json.dumps({
     "pdk": pdk_name,
     "gds": gds_path,
     "die_area_um2": round(die_um2, 3),
+    "die_area_source": die_source,
+    "bbox_area_um2": round(bbox_um2, 3),
+    "bbox_area_over_die_area": (round(bbox_um2 / die_um2, 6)
+                                if die_um2 > 0 else None),
     "layers": layers,
     # THE PRE-#990 NUMBER, PUBLISHED BESIDE THE NEW ONE. A gate whose figures
     # move without saying so is a gate a reader cannot reconcile against an
@@ -37742,7 +37957,11 @@ open(out_path, "w").write(json.dumps({
     "datatype_discovery": spec_prov,
     "disclosure": ("REAL KLayout measurement of the AS-BUILT (post-OpenROAD-"
                    "filler) GDS. Per-layer density = merged drawn metal area / "
-                   "die bbox area. The DATATYPE SET counted per metal layer is "
+                   "DIE area, where the die is " + die_source + "; the layout "
+                   "bounding box is published beside it as `bbox_area_um2`, "
+                   "because on a shuttle-slot submission the two rectangles "
+                   "differ and only the die answers the foundry rule. "
+                   "The DATATYPE SET counted per metal layer is "
                    "DISCOVERED from the PDK's own LEF/DEF layermap (every "
                    "purpose row for that layer, not only routing/NET) and from "
                    "the PDK's own density deck (every binding on that layer's "
@@ -37893,6 +38112,7 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     # counts the datatype set that deck counts. `pdk.drc_deck` is already a
     # container-side path, and an empty one is not fatal: the recipe falls back
     # to the layermap half and RECORDS that the deck contributed nothing.
+    _dens_slot = _slot_geometry(project)
     deck_c = pdk.drc_deck or ""
     if not deck_c:
         notes.append(
@@ -37906,6 +38126,17 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         f"{KLAYOUT_PREFER_FORK_SH}"
         f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"klayout -b -r {script_c} -rd gds={gds_c} -rd map={map_c} "
+        # THE DECLARED DIE, when there is one. Without it this measurement
+        # divides by the streamed geometry's bounding box and calls the result
+        # `die_area_um2`; on a slot submission that is the CORE, and the report
+        # then disagrees with the foundry's own die-wide rule by the ratio
+        # between the two rectangles (measured: 35.4 % on a 0.5x0.5 slot).
+        # OMITTED, not passed empty, for a design that targets no slot — the
+        # recipe treats an absent `die` global as "measure the bounding box"
+        # and says so in `die_area_source`.
+        + (f"-rd die={_dens_slot['die_rect'][0]},{_dens_slot['die_rect'][1]},"
+           f"{_dens_slot['die_rect'][2]},{_dens_slot['die_rect'][3]} "
+           if _dens_slot else "") +
         # OMITTED rather than passed empty: `-rd deck=` with nothing after it is
         # a malformed argument, and the recipe already treats an absent `deck`
         # global as "no deck offered" and says so in the report.
