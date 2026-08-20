@@ -829,3 +829,34 @@ def judge_against_requirement(record: Optional[Dict[str, Any]],
             f"activity basis, so it bounds a {rec_basis} number without "
             f"knowing that is what it bounds")
     return out
+
+
+# ── the instance document ──────────────────────────────────────────────────
+SCHEMA_POWER = "vibeic.ppa.power.v1"
+#: The schema this document is written against. Versioned by filename; a change
+#: is v2, because something has already hashed against v1 by the time anyone
+#: wants to change it.
+SCHEMA_PATH = "schemas/ppa/power.v1.schema.json"
+
+
+def power_document(report: Dict[str, Any], *, stage: str = "unknown",
+                   scenario: str = "default",
+                   extra_scope: Optional[Dict[str, Any]] = None
+                   ) -> Dict[str, Any]:
+    """One `vibeic.ppa.power.v1` document for one power artefact.
+
+    The activity block sits at the top level as well as inside every record's
+    scope, on purpose: a reader who wants to know whether this document may be
+    compared to another one must not have to reach into an array to find out.
+    """
+    return {
+        "schema": SCHEMA_POWER,
+        "scenario": scenario,
+        "stage": stage,
+        "activity": report.get("activity") or {},
+        "metrics": metric_records(report, stage=stage, scenario=scenario,
+                                  extra_scope=extra_scope),
+        "split_consistency": report.get("split_consistency"),
+        "group_sum_consistency": report.get("group_sum_consistency"),
+        "source": _source(report),
+    }

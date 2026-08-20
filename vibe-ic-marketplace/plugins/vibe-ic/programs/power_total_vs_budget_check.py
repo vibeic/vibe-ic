@@ -424,13 +424,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     # paragraph and `_stdout_signals_token` returned False on it.
     print(f"{TOOL}: {scope}.")
     print(_basis_line(rep))
-    print(f"  A power budget is a REQUIREMENT and has to arrive in the "
-          f"design's own input documents. This gate will not derive one from "
-          f"die area, supply voltage or another tool's number, because a "
-          f"threshold nobody declared would turn an unanswered question into "
-          f"an answered one. Nor will it compare a watt figure whose activity "
-          f"model is unknown: vectorless power and VCD power are different "
-          f"metrics.")
+    # Say WHICH refusal this is. A gate that prints the same paragraph for
+    # "nobody declared a budget" and "the number's activity model is a
+    # fabrication" has told the reader nothing about which one to go and fix.
+    code = (rep.get("judgement") or {}).get("code")
+    if code in ("ACTIVITY_BASIS_UNUSABLE", "TOTAL_NOT_MEASURED",
+                "ACTIVITY_BASIS_MISMATCH"):
+        print(f"  A threshold was declared and the gate still will not apply "
+              f"it, because a watt figure is only comparable to something "
+              f"written against the SAME activity model: vectorless power and "
+              f"VCD power are different metrics. Fix the measurement or "
+              f"declare the basis; do not widen the budget.")
+    else:
+        print(f"  A power budget is a REQUIREMENT and has to arrive in the "
+              f"design's own input documents. This gate will not derive one "
+              f"from die area, supply voltage or another tool's number, "
+              f"because a threshold nobody declared would turn an unanswered "
+              f"question into an answered one. Nor will it compare a watt "
+              f"figure whose activity model is unknown: vectorless power and "
+              f"VCD power are different metrics.")
     print(f"INCOMPLETE: total power was NOT compared against anything — "
           f"missing authority: {rep['missing_authority']}.")
     # A REFUSAL EXITS 2, NOT 0 (vibe-ic#1017). See the module docstring.

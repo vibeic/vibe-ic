@@ -370,3 +370,52 @@ def test_the_sum_disclosure_is_a_disclosure_and_not_a_verdict():
 @pytest.mark.parametrize("basis", [pw.BASIS_UNSTATED, pw.BASIS_CONTRADICTED])
 def test_an_unusable_basis_is_never_silently_treated_as_vectorless(basis):
     assert basis not in pw.KNOWN_BASES
+
+
+# ── the document, and the schema it is written against ────────────────────
+def _schema():
+    return json.loads((_HERE.parent.parent / pw.SCHEMA_PATH).read_text())
+
+
+def test_the_document_carries_what_its_schema_requires():
+    doc = pw.power_document(pw.parse_power_report(_rpt("vectorless_sdc")),
+                            stage="post_route", scenario="functional")
+    sch = _schema()
+    assert doc["schema"] == sch["properties"]["schema"]["const"]
+    for key in sch["required"]:
+        assert key in doc, key
+    for key in sch["properties"]["activity"]["required"]:
+        assert key in doc["activity"], key
+    mreq = sch["properties"]["metrics"]["items"]["required"]
+    for rec in doc["metrics"]:
+        for key in mreq:
+            assert key in rec, (key, rec["metric"])
+
+
+def test_the_code_and_the_schema_share_one_basis_vocabulary():
+    """The two would otherwise drift the first time a basis is added, and a
+    document would then validate against a schema that does not know the value
+    it carries."""
+    sch = _schema()
+    declared = set(sch["properties"]["activity"]["properties"]["basis"]["enum"])
+    in_code = {pw.BASIS_VCD, pw.BASIS_SAIF, pw.BASIS_VECTORLESS,
+               pw.BASIS_UNSTATED, pw.BASIS_CONTRADICTED}
+    assert declared == in_code
+    scoped = set(sch["properties"]["metrics"]["items"]["properties"]["scope"]
+                 ["properties"]["activity_basis"]["enum"])
+    assert scoped == in_code
+    corr = set(sch["properties"]["activity"]["properties"]
+               ["corroboration"]["enum"])
+    assert corr == {pw.CORROBORATED, pw.UNCORROBORATED, pw.CONTRADICTED,
+                    pw.NO_CORROBORATION_NEEDED}
+    metrics = set(sch["properties"]["metrics"]["items"]["properties"]
+                  ["metric"]["enum"])
+    assert metrics == {f"power.{c}_w" for c in pw.CATEGORIES}
+
+
+def test_a_not_measured_record_carries_no_value_key_the_schema_forbids():
+    doc = pw.power_document(pw.parse_power_report(""))
+    assert doc["metrics"]
+    for rec in doc["metrics"]:
+        assert rec["status"] == pw.STATUS_NOT_MEASURED
+        assert "value" not in rec and rec["reason"]
