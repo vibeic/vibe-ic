@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "vibeic.ppa.timing_rows.v1",
+  "title": "Per-view timing rows extracted from STA artefacts",
+  "description": "The document _ppa/timing.py emits. Its reason for existing is that a design has a timing MATRIX (mode x corner x check) and not a WNS; every row is one cell of that matrix and carries the full scope needed to compare it with another. See docs/PPA_INTERFACES.md sections 2 and 5.",
+  "type": "object",
+  "required": ["schema", "program", "row_count", "measured_count",
+               "not_measured_count", "invalid_count", "notes", "rows",
+               "row_digests"],
+  "properties": {
+    "schema": {"const": "vibeic.ppa.timing_rows.v1"},
+    "program": {"const": "_ppa.timing"},
+    "project": {"type": "string"},
+    "row_count": {"type": "integer", "minimum": 0},
+    "measured_count": {"type": "integer", "minimum": 0},
+    "not_measured_count": {"type": "integer", "minimum": 0},
+    "invalid_count": {"type": "integer", "minimum": 0},
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "row_digests": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    },
+    "rows": {"type": "array", "items": {"$ref": "#/definitions/metric_row"}}
+  },
+  "definitions": {
+    "metric_row": {
+      "type": "object",
+      "required": ["schema", "metric", "status", "unit", "scope", "source"],
+      "properties": {
+        "schema": {"const": "vibeic.ppa.metric.v1"},
+        "metric": {"type": "string", "pattern": "^timing\\."},
+        "status": {"enum": ["MEASURED", "NOT_MEASURED", "NOT_APPLICABLE",
+                            "INVALID", "ESTIMATED", "DERIVED"]},
+        "value": {"type": "number"},
+        "unit": {"type": "string"},
+        "reason": {"type": "string", "minLength": 1},
+        "scope": {"$ref": "#/definitions/scope"},
+        "scope_gaps": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "source": {"$ref": "#/definitions/source"}
+      },
+      "allOf": [
+        {
+          "description": "A MEASURED row carries the number it measured.",
+          "if": {"properties": {"status": {"const": "MEASURED"}},
+                 "required": ["status"]},
+          "then": {"required": ["value"]}
+        },
+        {
+          "description": "THE NO-SENTINEL RULE, made machine-checkable. A row that is not MEASURED must carry NO value key at all -- not 0, not -1, not null. 0 and 'not measured' are different facts, and a reader that finds a number does not ask which one it was. It carries a reason instead.",
+          "if": {"not": {"properties": {"status": {"const": "MEASURED"}},
+                         "required": ["status"]}},
+          "then": {"required": ["reason"],
+                   "not": {"required": ["value"]}}
+        }
+      ]
+    },
+    "scope": {
+      "description": "All eight keys, always. An omitted key and a null key are different claims to a reader and only one of them is true. null in `clock` means the number is an aggregate over every clock in the view -- never 'unknown clock'.",
+      "type": "object",
+      "required": ["stage", "mode", "process", "voltage_v", "temperature_c",
+                   "rc_corner", "clock", "check"],
+      "additionalProperties": false,
+      "properties": {
+        "stage": {"type": ["string", "null"]},
+        "mode": {"type": ["string", "null"]},
+        "process": {"type": ["string", "null"]},
+        "voltage_v": {"type": ["number", "null"]},
+        "temperature_c": {"type": ["number", "null"]},
+        "rc_corner": {"type": ["string", "null"]},
+        "clock": {"type": ["string", "null"]},
+        "check": {"type": ["string", "null"]}
+      }
+    },
+    "source": {
+      "description": "Where the number came from and what turned text into it. `sha256` is of the ARTEFACT BYTES, so an auditor reproduces it with sha256sum.",
+      "type": "object",
+      "required": ["path", "sha256", "tool", "tool_commit", "parser",
+                   "parser_sha256"],
+      "properties": {
+        "path": {"type": ["string", "null"]},
+        "sha256": {"type": ["string", "null"],
+                   "pattern": "^sha256:[0-9a-f]{64}$"},
+        "tool": {"type": "string"},
+        "tool_commit": {"type": ["string", "null"]},
+        "parser": {"type": "string"},
+        "parser_sha256": {"type": ["string", "null"],
+                          "pattern": "^sha256:[0-9a-f]{64}$"},
+        "line": {"type": ["integer", "null"]},
+        "raw": {"type": ["string", "null"]}
+      }
+    }
+  }
+}
