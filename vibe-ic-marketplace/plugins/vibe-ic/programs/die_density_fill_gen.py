@@ -91,6 +91,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -219,6 +220,66 @@ def measure(runner, engine: Path, gds: Path, out_json: Path,
     return res, ""
 
 
+def census(runner, engine: Path, gds, out_json: Path,
+           cell: Optional[str], timeout: int) -> Optional[Dict[str, int]]:
+    """{"<layer>/<datatype>": shape_count} for `gds`, in the runner's environment.
+
+    A COUNT, not an area: the only question it answers is WHICH layers carry
+    geometry, and merging a filled die's polygons to answer that costs tens of
+    seconds where counting costs two.
+    """
+    env = {"DENS_GDS": str(gds), "DENS_OUT": str(out_json),
+           "DENS_COUNT_ONLY": "1"}
+    if cell:
+        env["DENS_CELL"] = cell
+    runner.run(engine, env, path_keys=("DENS_GDS", "DENS_OUT"), timeout=timeout)
+    if not out_json.is_file():
+        return None
+    try:
+        return (json.loads(out_json.read_text()) or {}).get("shape_census")
+    except (OSError, ValueError):
+        return None
+
+
+def _layers_with_geometry(cen: Dict[str, int]) -> Dict[int, int]:
+    """GDS layer number -> total shape count across its datatypes."""
+    out: Dict[int, int] = {}
+    for spec, n in (cen or {}).items():
+        try:
+            layer = int(str(spec).split("/")[0])
+        except (TypeError, ValueError):
+            continue
+        out[layer] = out.get(layer, 0) + int(n)
+    return out
+
+
+def _grew(before: Dict[str, int], after: Dict[str, int]) -> set:
+    """GDS layer numbers that gained shapes between two censuses."""
+    b, a = _layers_with_geometry(before), _layers_with_geometry(after)
+    return {layer for layer, n in a.items() if n > b.get(layer, 0)}
+
+
+_REQUIRE_RE = re.compile(r"""require_relative\s*\(?\s*['"]([^'"]+)['"]""")
+
+
+def sibling_passes(runner, script: str, timeout: int) -> List[str]:
+    """The per-layer-family scripts the PDK's top-level generator pulls in.
+
+    READ out of the PDK's own file, never listed here: a top-level filler is a
+    sequence of `require_relative` calls, one per family, and which families a
+    PDK ships is PDK data. Returns [] when the file cannot be read or names
+    none, which is the honest answer for a single-file generator.
+    """
+    rc, out, _err = runner.run_argv(["cat", script], {}, timeout=timeout)
+    if rc != 0 or not out:
+        return []
+    seen: List[str] = []
+    for name in _REQUIRE_RE.findall(out):
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
 def _coverage_table(before: Dict[str, Any],
                     after: Dict[str, Any]) -> Dict[str, Any]:
     """Per GDS layer number: coverage over the die before and after, and the
@@ -245,7 +306,9 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         width: Optional[float], height: Optional[float],
         cell: Optional[str], threads: Optional[int], ignore_active: bool,
         out: Optional[str], in_place: bool, report: Optional[str],
-        timeout: int) -> Dict[str, Any]:
+        timeout: int,
+        skip_passes: Optional[List[str]] = None,
+        owned_layers: Optional[List[int]] = None) -> Dict[str, Any]:
     rep = Path(report) if report else (project / _REPORT_REL)
     if not rep.is_absolute():
         rep = project / rep
@@ -320,10 +383,19 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         die = [0.0, 0.0, float(width), float(height)]
         die_source = "--die-width/--die-height"
 
+    skip_passes = [p for p in (skip_passes or []) if p]
+    owned_layers = sorted({int(v) for v in (owned_layers or [])})
     common = {"script": script, "script_source": src,
               "runner": f"{runner.kind}:{runner.detail}",
               "gds_in": str(gds_path),
-              "die_um": die, "die_source": die_source}
+              "die_um": die, "die_source": die_source,
+              "skipped_passes": skip_passes,
+              "skipped_passes_reason": (
+                  "these layer families are filled by this flow's own "
+                  "density-targeted engine; running a second generator over a "
+                  "dummy layer that already carries fill produces geometry "
+                  "neither generator checked against the other's"
+                  if skip_passes else None)}
 
     tmpdir = gds_path.parent
     before_json = tmpdir / (gds_path.stem + ".density_before.json")
@@ -348,25 +420,111 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
     covers = before.get("bbox_covers_die")
     bbox_frac = before.get("bbox_area_over_die_area")
 
-    if filled.exists():
-        try:
-            filled.unlink()
-        except OSError:
-            pass
-    env = {"VIBEIC_FILL_SCRIPT": script,
-           "VIBEIC_FILL_IN": str(gds_path),
-           "VIBEIC_FILL_OUT": str(filled)}
-    if threads:
-        env["VIBEIC_FILL_THREADS"] = str(int(threads))
-    if ignore_active:
-        env["VIBEIC_FILL_IGNORE_ACTIVE"] = "1"
-    rc, sout, serr = runner.run(
-        driver, env,
-        # VIBEIC_FILL_SCRIPT is deliberately NOT translated: a PDK inside the
-        # container has no host counterpart, so rewriting its path would
-        # corrupt a perfectly valid one.
-        path_keys=("VIBEIC_FILL_IN", "VIBEIC_FILL_OUT"), timeout=timeout)
-    transcript = ((sout or "") + ("\n" + serr if serr else "")).strip()
+    def generate(out_gds: Path, skip: List[str]):
+        """Run the PDK generator into `out_gds`, skipping the named passes."""
+        if out_gds.exists():
+            try:
+                out_gds.unlink()
+            except OSError:
+                pass
+        env = {"VIBEIC_FILL_SCRIPT": script,
+               "VIBEIC_FILL_IN": str(gds_path),
+               "VIBEIC_FILL_OUT": str(out_gds)}
+        if threads:
+            env["VIBEIC_FILL_THREADS"] = str(int(threads))
+        if ignore_active:
+            env["VIBEIC_FILL_IGNORE_ACTIVE"] = "1"
+        if skip:
+            env["VIBEIC_FILL_SKIP"] = ",".join(skip)
+        rc, sout, serr = runner.run(
+            driver, env,
+            # VIBEIC_FILL_SCRIPT is deliberately NOT translated: a PDK inside
+            # the container has no host counterpart, so rewriting its path
+            # would corrupt a perfectly valid one.
+            path_keys=("VIBEIC_FILL_IN", "VIBEIC_FILL_OUT"), timeout=timeout)
+        return rc, ((sout or "") + ("\n" + serr if serr else "")).strip()
+
+    # ── ONE WRITER PER DUMMY LAYER ────────────────────────────────────────
+    # A layer this flow has ALREADY filled must not be filled a second time by
+    # the PDK's generator. The PDK's per-layer keep-out is computed from the
+    # DRAWN datatype alone -- its design manual assumes its filler is the only
+    # one -- so it cannot see, and cannot avoid, fill that is already there.
+    # MEASURED on gf180mcuD, one die filled by both: 234437 KLayout DRC errors
+    # (min-space and min-width on the merged metal) where each filler ALONE was
+    # DRC-clean. Neither filler is wrong; running both over one layer is.
+    #
+    # WHICH PASS to leave out is DISCOVERED, not declared: the top-level
+    # generator's own `require_relative` list names its per-family passes, and
+    # running each skip once says which layers that family contributes. A shape
+    # CENSUS answers it in ~2 s per probe, so this costs one extra generator run
+    # per family and nothing is guessed about a PDK's file names.
+    contested: List[int] = []
+    probe_log: Dict[str, Any] = {}
+    cen_in = census(runner, engine, gds_path, tmpdir / (gds_path.stem + ".census_in.json"),
+                    cell, timeout)
+    if owned_layers and cen_in is not None:
+        have = _layers_with_geometry(cen_in)
+        contested = [l for l in owned_layers if have.get(l)]
+    common["owned_layers"] = owned_layers
+    common["contested_layers"] = contested
+
+    rc, transcript = generate(filled, skip_passes)
+    if filled.is_file() and contested and not skip_passes:
+        cen_full = census(runner, engine, filled,
+                          tmpdir / (gds_path.stem + ".census_full.json"),
+                          cell, timeout)
+        touched = _grew(cen_in or {}, cen_full or {}) if cen_full else set()
+        clash = sorted(set(contested) & touched)
+        probe_log["layers_the_whole_generator_writes"] = sorted(touched)
+        probe_log["clash"] = clash
+        if clash:
+            siblings = sibling_passes(runner, script, timeout)
+            probe_log["sibling_passes"] = siblings
+            per_pass: Dict[str, List[int]] = {}
+            probe_out = tmpdir / (gds_path.stem + ".probe.gds")
+            keep_probe = None
+            for sib in siblings:
+                prc, _ptx = generate(probe_out, [sib])
+                if not probe_out.is_file():
+                    continue
+                cen_p = census(runner, engine, probe_out,
+                               tmpdir / (gds_path.stem + ".census_probe.json"),
+                               cell, timeout)
+                without = _grew(cen_in or {}, cen_p or {}) if cen_p else touched
+                per_pass[sib] = sorted(touched - without)
+                if sorted(set(contested) & set(per_pass[sib])) == clash:
+                    keep_probe = (sib, probe_out.read_bytes())
+            probe_log["layers_per_pass"] = per_pass
+            skip_passes = [sib for sib, layers in per_pass.items()
+                           if set(layers) & set(contested)]
+            probe_log["chosen_skip"] = skip_passes
+            if not skip_passes:
+                return done(dict(
+                    common, state="FAIL", probe=probe_log,
+                    reason=("this flow has already filled layer(s) "
+                            + ", ".join(str(l) for l in clash) + ", and the PDK "
+                            "generator writes them too, but no single pass of it "
+                            "could be identified as the one that does. Running "
+                            "both fillers over one dummy layer produces geometry "
+                            "neither checked against the other's, so no fill was "
+                            "promoted. Declare the pass to leave out with "
+                            "--skip-pass (the generator's passes are: "
+                            + ", ".join(siblings or ["<none found>"]) + ")")))
+            if keep_probe and [keep_probe[0]] == skip_passes:
+                filled.write_bytes(keep_probe[1])      # already computed
+                rc, transcript = 0, transcript
+            else:
+                rc, transcript = generate(filled, skip_passes)
+            common["skipped_passes"] = skip_passes
+            common["skipped_passes_reason"] = (
+                "these layer families are already filled by this flow's own "
+                "density-targeted engine (layer(s) "
+                + ", ".join(str(l) for l in clash)
+                + "); a second generator over a dummy layer that already "
+                  "carries fill produces geometry neither generator checked "
+                  "against the other's")
+    if probe_log:
+        common["probe"] = probe_log
     common["generator_rc"] = rc
     common["generator_output"] = transcript[-2000:]
 
@@ -460,6 +618,17 @@ def main(argv=None) -> int:
     ap.add_argument("--die-height", type=float)
     ap.add_argument("--cell")
     ap.add_argument("--threads", type=int)
+    ap.add_argument("--owned-layer", action="append", type=int, default=[],
+                    help="a GDS layer number this flow's own filler already "
+                         "writes (repeatable). When the PDK generator would "
+                         "write it too, the pass that does is DISCOVERED and "
+                         "left out, so no dummy layer has two authors.")
+    ap.add_argument("--skip-pass", action="append", default=[],
+                    help="a sibling script the PDK generator require_relatives "
+                         "and THIS FLOW is providing itself (repeatable). Two "
+                         "generators writing one dummy layer produce fill "
+                         "neither checked against the other; naming the pass "
+                         "the flow already owns is how that is avoided.")
     ap.add_argument("--ignore-active", action="store_true",
                     help="set the PDK generator's own $Metal<N>_ignore_active "
                          "switches (drops its fill-to-adjacent-metal spacing)")
@@ -475,7 +644,8 @@ def main(argv=None) -> int:
     res = run(project, args.gds, args.script, args.pdk_root, args.pdk,
               args.die_width, args.die_height, args.cell, args.threads,
               args.ignore_active, args.out, args.in_place, args.report,
-              args.timeout)
+              args.timeout, skip_passes=args.skip_pass,
+              owned_layers=args.owned_layer)
     if args.json:
         o = Path(args.json)
         if not o.is_absolute():

@@ -23086,6 +23086,32 @@ def _die_density_fill(project: Path, top: str, pdk: PdkConfig,
             "--gds", str(gds_path), "--in-place", "--cell", top,
             "--pdk-root", str(Path(pdk_dir).parent),
             "--pdk", Path(pdk_dir).name]
+    # === ONE WRITER PER DUMMY LAYER =======================================
+    # `_density_metal_fill` ran just above and owns the metal dummy layers. The
+    # PDK's generator fills those too, and its per-layer keep-out is computed
+    # from the DRAWN datatype alone — its design manual assumes its filler is
+    # the only one — so it cannot see, and cannot avoid, fill that is already
+    # there. MEASURED, gf180mcuD, one die filled by both: 234437 KLayout DRC
+    # errors (MT.2a 79226, M3.2a 73590, M4.2a 71714, MT.1 4374, M3.1 2862,
+    # M4.1 2671) where EACH FILLER ALONE was DRC-clean, and the operator's
+    # precheck refused it — a worse refusal than the 8 density errors the fill
+    # was added to clear.
+    #
+    # Telling the program which layers this flow already owns is what lets it
+    # DISCOVER (by running each of the generator's own passes once) which pass
+    # writes them, and leave that one out. The layer numbers come from the
+    # metal-fill config this run itself wrote — no layer literal here, and none
+    # in the program.
+    _mf_cfg = _pl.pnr_dir(project) / "metal_fill_density_cfg.json"
+    try:
+        _owned = sorted({int((lay.get("layer") or [None])[0])
+                         for lay in ((json.loads(_mf_cfg.read_text()) or {})
+                                     .get("layers") or [])
+                         if isinstance(lay.get("layer"), list) and lay["layer"]})
+    except (OSError, ValueError, TypeError, IndexError):
+        _owned = []
+    for _l in _owned:
+        argv += ["--owned-layer", str(_l)]
     # Same reason `_die_finishing` passes it, and the same trap if it is not:
     # the streamed GDS's own bbox is the slot's CORE_AREA since the floorplan
     # fix, so a generator told nothing would fill the CORE, report success, and
