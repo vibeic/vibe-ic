@@ -483,11 +483,18 @@ def format_report(rc: int, report: Dict[str, Any]) -> str:
             lines.append(f"  {v['subject']} vs {flow}:")
             for ax in sorted(a for a in axes if a != "pareto"):
                 d = axes[ax]
-                pct = "n/a" if d["delta_pct"] is None else f"{d['delta_pct']:+.2f}%"
+                # A percentage is printed only where it is meaningful, and
+                # where it is not the REASON is printed instead of "n/a".
+                # "n/a" and "this quantity does not have a percentage" are two
+                # different facts and only one of them is informative.
+                pct = ("no %" if d["delta_pct"] is None
+                       else f"{d['delta_pct']:+.2f}%")
                 lines.append(
                     f"    {ax:<14} subject={d['subject']:<12} "
                     f"baseline={d['baseline']:<12} ({d['better_is']} better) "
-                    f"{pct}  -> {d['verdict']}")
+                    f"delta={d['delta']:<+12.6g} {pct}  -> {d['verdict']}")
+                if d.get("delta_pct_reason"):
+                    lines.append(f"      no percentage: {d['delta_pct_reason']}")
             rel = axes.get("pareto")
             lines.append(f"    {'pareto':<14} {rel}")
             if rel == "INCOMPARABLE":

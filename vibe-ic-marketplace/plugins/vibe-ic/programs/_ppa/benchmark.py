@@ -108,6 +108,37 @@ AXES: Dict[str, str] = {
     "power_mw": "lower",
 }
 
+#: WHICH AXES A PERCENTAGE IS MEANINGFUL FOR, and this is measurement theory
+#: rather than a formatting preference.
+#:
+#: Area and power are RATIO-scale: they have a true zero and cannot be negative,
+#: so "16% smaller" is a statement about the quantity. Worst negative slack is
+#: INTERVAL-scale: it crosses zero, its zero is a threshold and not an absence,
+#: and a ratio built on it is not a fact about timing.
+#:
+#: THIS IS NOT PEDANTRY, AND THE FIRST v2 REPORT SHOWED WHY. Rendering an arm
+#: that improved WNS from -0.30 ns to -0.10 ns, the inherited formula
+#: (s - o) / o printed
+#:
+#:     timing_wns_ns  subject=-0.1  baseline=-0.3  (higher better) -66.67%
+#:                                                          -> SUBJECT_BETTER
+#:
+#: A MINUS SIXTY-SIX PERCENT beside the word BETTER. The number is arithmetically
+#: correct and it is unquotable: its sign is decided by the SIGN OF THE BASELINE,
+#: so the same 0.2 ns improvement prints positive against a positive baseline and
+#: negative against a negative one. Negative slack is the normal case for an arm
+#: that has not closed, which is exactly when a comparison gets published, so
+#: this would have been the common rendering and not the rare one. It is the
+#: kind of figure an opponent quotes back.
+#:
+#: The absolute delta is emitted for every axis, carries a sign that means one
+#: thing, and is the honest answer for an interval-scale quantity.
+AXIS_SCALE: Dict[str, str] = {
+    "area_um2": "ratio",
+    "timing_wns_ns": "interval",
+    "power_mw": "ratio",
+}
+
 
 class Refusal(Exception):
     """A record that cannot support the claim printed on it.
@@ -727,13 +758,28 @@ def score(arms: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
                 verdict = "SUBJECT_BETTER"
             else:
                 verdict = "BASELINE_BETTER"
-            axes[ax] = {
+            row: Dict[str, Any] = {
                 "subject": s, "baseline": o, "better_is": direction,
-                "verdict": verdict,
+                "scale": AXIS_SCALE[ax], "verdict": verdict,
                 "delta": round(s - o, 6),
-                "delta_pct": (round((s - o) / o * 100.0, 4)
-                              if o not in (0, 0.0) else None),
+                "delta_pct": None,
             }
+            # NO NUMERIC SENTINEL: a percentage that is not meaningful is None
+            # WITH A STATED REASON, never a 0 and never a silently omitted key.
+            if AXIS_SCALE[ax] != "ratio":
+                row["delta_pct_reason"] = (
+                    f"{ax} is an interval-scale quantity: it crosses zero and "
+                    "its zero is a threshold, not an absence, so a ratio built "
+                    "on it would take its SIGN from the baseline's sign rather "
+                    "than from the direction of the change. The absolute delta "
+                    "is the honest figure here.")
+            elif o <= 0:
+                row["delta_pct_reason"] = (
+                    f"the baseline's {ax} is {o}, so a relative change has no "
+                    "denominator to be relative to.")
+            else:
+                row["delta_pct"] = round((s - o) / o * 100.0, 4)
+            axes[ax] = row
         axes["pareto"] = pareto_relation(s_triple, o_triple)
         out["per_baseline"][b["flow"]] = axes
     return out

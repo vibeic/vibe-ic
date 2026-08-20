@@ -810,3 +810,69 @@ def test_the_corpus_glob_still_finds_a_v2_record(tmp_path):
                                                 encoding="utf-8")
     assert [p.name for p in C.corpus_records(d)] == ["ppa_head_to_head_v2.json"]
     assert C.check_corpus(d) == C.RC_OK
+
+
+# ---------------------------------------------------------------------------
+# THE UNQUOTABLE PERCENTAGE -- found by reading the first v2 report, not by a
+# test. It is here so it cannot come back.
+# ---------------------------------------------------------------------------
+def test_an_improvement_in_negative_slack_does_not_print_MINUS_66_PERCENT(
+        tmp_path):
+    """The rendering this exists for, verbatim from the first v2 report:
+
+        timing_wns_ns  subject=-0.1  baseline=-0.3  (higher better) -66.67%
+                                                             -> SUBJECT_BETTER
+
+    A minus sixty-six percent beside the word BETTER. The arithmetic is right
+    and the figure is unquotable: (s-o)/o takes its SIGN from the baseline's
+    sign, so one 0.2 ns improvement prints positive against a positive baseline
+    and negative against a negative one. Negative slack is the normal state of
+    an arm that has not closed, which is exactly when a comparison is
+    published, so this was the common rendering and not the rare one.
+    """
+    doc = clean()
+    doc["arms"][0]["ppa"]["timing_wns_ns"]["value"] = -0.10
+    doc["arms"][1]["ppa"]["timing_wns_ns"]["value"] = -0.30
+    rc, rep = run(tmp_path, doc)
+    assert rc == C.RC_OK, rep
+    row = rep["derived_verdict"]["per_baseline"]["baseline-flow"]["timing_wns_ns"]
+    assert row["verdict"] == "SUBJECT_BETTER"
+    assert row["delta"] == pytest.approx(0.2)
+    assert row["delta_pct"] is None
+    assert row["delta_pct_reason"]
+    text = C.format_report(rc, rep)
+    assert "-66.67%" not in text
+    assert "interval-scale" in text
+
+
+def test_the_same_axis_prints_a_percentage_where_one_is_meaningful(tmp_path):
+    """The differential half: area and power ARE ratio-scale -- a true zero and
+    no negative values -- so a percentage is a statement about the quantity and
+    it is printed."""
+    rc, rep = run(tmp_path, clean())
+    per = rep["derived_verdict"]["per_baseline"]["baseline-flow"]
+    assert per["area_um2"]["delta_pct"] == pytest.approx(-16.6667, abs=1e-3)
+    assert per["power_mw"]["delta_pct"] == pytest.approx(-16.6667, abs=1e-3)
+    assert "delta_pct_reason" not in per["area_um2"]
+    assert "-16.67%" in C.format_report(rc, rep)
+
+
+def test_a_zero_or_negative_baseline_on_a_ratio_axis_states_why_not(tmp_path):
+    """No numeric sentinel: a percentage that has no denominator is None WITH A
+    REASON, never a 0 and never an omitted key. A reader must be able to tell
+    "no percentage is meaningful here" from "the percentage is zero"."""
+    doc = clean()
+    doc["arms"][1]["ppa"]["power_mw"]["value"] = 0.0
+    rc, rep = run(tmp_path, doc)
+    assert rc == C.RC_OK, rep
+    row = rep["derived_verdict"]["per_baseline"]["baseline-flow"]["power_mw"]
+    assert row["delta_pct"] is None
+    assert "no denominator" in row["delta_pct_reason"]
+
+
+def test_every_axis_declares_its_measurement_scale():
+    """A new axis added without a scale would silently inherit whichever branch
+    the code happens to fall into. Declaring it is what makes the omission an
+    error rather than a rendering."""
+    assert set(B.AXIS_SCALE) == set(B.AXES)
+    assert set(B.AXIS_SCALE.values()) <= {"ratio", "interval"}
