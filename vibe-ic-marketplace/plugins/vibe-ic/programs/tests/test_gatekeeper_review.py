@@ -619,3 +619,78 @@ def test_a_program_that_finishes_INSIDE_the_bound_still_returns_its_own_rc(
     bad.write_text("import sys\nsys.exit(3)\n")
     rc2, _o, _e = gk._run_program(bad, [], timeout=60.0)
     assert rc2 == 3, rc2
+
+
+# ---------------------------------------------------------------------------
+# landing_enforcement_armed_gate — ADVISORY, and it must stay advisory
+#
+# MERGE_OK reads as "this will land green", and MEASURED 2026-08-21 it could not
+# mean that: `prose_polarity_consulted_check` (always-run, BLOCKING) was red at
+# every one of the 36 commits from v1.11.5 to v1.11.18 and fourteen
+# version-bearing landings went past it, because the chain ends in
+# `tools/git-hooks/pre-push` and `.git/hooks/` is not tracked by git — the hook
+# was installed nowhere. This gate surfaces that at the moment somebody decides
+# to land.
+#
+# NEVER BLOCKING, and the three tests below are what keep it so: a reviewer in a
+# container legitimately has no `.git/hooks`, and the state it reports belongs to
+# the OPERATOR rather than to the branch under review.
+# ---------------------------------------------------------------------------
+def _armed_repo(tmp_path, *, armed: bool):
+    """A checkout carrying the repo's tracked hook, armed or not."""
+    import stat as _stat
+    import subprocess as _sp
+    real_repo = Path(__file__).resolve().parents[5]
+    tracked_rel = "tools/git-hooks/pre-push"
+    r = tmp_path / "repo"
+    (r / "tools" / "git-hooks").mkdir(parents=True)
+    (r / tracked_rel).write_bytes((real_repo / tracked_rel).read_bytes())
+    (r / "f.txt").write_text("x\n")
+    _sp.run(["git", "init", "-q", str(r)], check=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        _sp.run(["git", "-C", str(r), "config", k, v], check=True)
+    _sp.run(["git", "-C", str(r), "add", "-A"], check=True)
+    _sp.run(["git", "-C", str(r), "commit", "-qm", "base"], check=True)
+    hd = r / ".git" / "hooks"
+    hd.mkdir(parents=True, exist_ok=True)
+    if armed:
+        (hd / "pre-push").symlink_to(r / tracked_rel)
+        src = r / tracked_rel
+        src.chmod(src.stat().st_mode | _stat.S_IXUSR)
+    return r
+
+
+def test_the_enforcement_gate_reports_DISARMED_without_blocking(tmp_path):
+    res = gk.landing_enforcement_armed_gate(_armed_repo(tmp_path, armed=False))
+    assert res.rc == 0, (
+        "the enforcement-point gate refused a review. It must not: a reviewer "
+        "in a container has no .git/hooks, and the state it reports belongs to "
+        "the operator, not to the branch under review")
+    assert "DISARMED" in res.summary, res.summary
+
+
+def test_the_enforcement_gate_reports_ARMED_when_it_is(tmp_path):
+    """NEGATIVE CONTROL. A gate that printed DISARMED unconditionally would
+    satisfy the test above and tell a reader nothing."""
+    res = gk.landing_enforcement_armed_gate(_armed_repo(tmp_path, armed=True))
+    assert res.rc == 0 and "ARMED" in res.summary, res.summary
+    assert "DISARMED" not in res.summary, res.summary
+
+
+def test_the_enforcement_gate_SKIPS_where_it_cannot_look(tmp_path):
+    """"I could not look" is its own state (rc -1, "skipped"), never ARMED."""
+    plain = tmp_path / "not-a-checkout"
+    plain.mkdir()
+    res = gk.landing_enforcement_armed_gate(plain)
+    assert res.rc == -1 and res.summary.startswith("skipped"), res.summary
+    assert "ARMED" not in res.summary.replace("DISARMED", ""), res.summary
+
+
+def test_the_enforcement_gate_is_registered_in_the_review():
+    """A gate nothing calls reports nothing. Asserted against the source of
+    `review()` rather than a run, because driving the whole review needs a
+    synthetic plugin root and this is a wiring question."""
+    src = _PROG.read_text(errors="replace")
+    assert "gates.append(landing_enforcement_armed_gate(" in src, (
+        "landing_enforcement_armed_gate is defined but never appended to the "
+        "gate list — it would produce no line in any review")

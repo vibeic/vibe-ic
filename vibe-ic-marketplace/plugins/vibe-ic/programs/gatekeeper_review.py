@@ -504,6 +504,53 @@ def real_artefact_backing_gate(repo: Path, base: str, head: str) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# landing_enforcement_armed_check — ADVISORY. Is the gate this verdict ASSUMES
+# actually there?
+#
+# MERGE_OK reads as "this will land green". It cannot mean that if nothing
+# enforces the landing, and MEASURED 2026-08-21 nothing did:
+# `prose_polarity_consulted_check` — declared in `repo_hygiene_gates.sh` with no
+# `gate_scope` and no exemption, so always-run and BLOCKING — was red at every
+# one of the 36 commits from v1.11.5 to v1.11.18, and fourteen version-bearing
+# landings went past it. Every link of the chain is individually sound; the
+# chain ends in `tools/git-hooks/pre-push`, and `.git/hooks/` is not tracked by
+# git, so the hook was installed nowhere on the machine those landings were made
+# from (0 hits over 54 `.git` directories; 104 worktrees share one hooks dir).
+#
+# It had already been repaired once, by hand, in d6ea46e9c (2026-07-30,
+# "pre-push: the hooks were never installed, and CI is never coming back"), and
+# it came back — because that repair was an ACTION and not a CHECK.
+#
+# NEVER BLOCKING (rc is forced to 0), for two reasons and not one. A reviewer
+# working in a container or a bare export legitimately has no `.git/hooks`, and
+# a refusal there would be a gate the venue cannot pass. And the state this
+# reports is the OPERATOR's to fix, not the branch's — refusing a PR because the
+# reviewer's machine is unarmed would blame the wrong artefact. So it is
+# surfaced at the moment somebody decides to land, which is the moment it is
+# worth knowing, and the fix is one command:
+#
+#     bash tools/install-git-hooks.sh
+#
+# The BLOCKING placement belongs in `gatekeeper-land.sh`, immediately before the
+# stamp is minted — refuse to write a stamp that nothing will read. That file is
+# sha256-pinned in `tools/ci/protected_landing_transition.json`, so it is a
+# request to the flow owner rather than a change taken here.
+# --------------------------------------------------------------------------
+def landing_enforcement_armed_gate(repo: Path) -> GateResult:
+    name = "landing_enforcement_armed_check"
+    prog = _PROGRAMS_DIR.parents[3] / "tools" / "ci" / f"{name}.py"
+    if not prog.is_file():
+        return GateResult(name, -1, f"checker missing at {prog}")
+    rc, out, err = _run_program(prog, ["--repo", str(repo)])
+    body = (err.strip() or out.strip()).splitlines()
+    head = (body[0] if body else "(no output)")[:240]
+    if rc == 2:
+        return GateResult(name, -1, f"skipped — {head}")
+    state = "ARMED" if rc == 0 else "DISARMED"
+    return GateResult(name, 0, f"ADVISORY — {state}: {head}")
+
+
+# --------------------------------------------------------------------------
 # gatekeeper_stale_branch_check — the LANDING-METHOD guard.
 #
 # A PR branch cut from an OLDER base than the current origin/main tip makes a
@@ -1657,6 +1704,7 @@ def review(base: str, head: str, *,
     gates.append(one_commit_gate(repo, base, head, batch=batch))
     gates.append(real_artefact_backing_gate(repo, base, head))
     gates.append(acceptance_control_gate(repo, base, head))
+    gates.append(landing_enforcement_armed_gate(repo))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
