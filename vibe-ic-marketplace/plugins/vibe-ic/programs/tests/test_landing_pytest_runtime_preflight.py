@@ -98,6 +98,46 @@ def _real_site_dir() -> Path:
     return Path(proc.stdout.strip()).resolve().parents[1]
 
 
+def _isolated_site_dirs() -> list[Path]:
+    """The site directories an ISOLATED interpreter keeps on this installation.
+
+    Read from the interpreter, because the answer differs between a host and the
+    pinned image and a literal would be right in only one of them.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c",
+         "import sys" + chr(10) + "for e in sys.path: print(e)"],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return [Path(line) for line in proc.stdout.split()
+            if line and Path(line).is_dir()
+            and Path(line).name in {"site-packages", "dist-packages"}]
+
+
+def _closure_lane() -> str:
+    """A lane value naming the runner's WHOLE import closure, runner dir first.
+
+    `_real_site_dir()` alone is HALF a closure on this fleet. MEASURED on 8HD-d
+    at 46db018669::
+
+        pytest, _pytest, pluggy, iniconfig, packaging
+                                 -> ~/.local/lib/python3.12/site-packages
+        pygments                 -> /usr/lib/python3/dist-packages
+
+    `pytest` imports `pygments` lazily, at terminal-writer time, and the
+    runner-less venv above keeps NO system site directory, so a lane naming only
+    the first directory imports the runner and then dies `No module named
+    'pygments'`. The two positive controls below were measuring THAT host rather
+    than this program until the lane learned to take more than one directory.
+    """
+    seen: list[str] = []
+    for source in [_real_site_dir(), *_isolated_site_dirs()]:
+        item = str(source)
+        if source.is_dir() and item not in seen:
+            seen.append(item)
+    return os.pathsep.join(seen)
+
+
 def test_it_refuses_when_the_isolated_runtime_cannot_import_and_no_lane_is_set(
         program, tmp_path, monkeypatch):
     monkeypatch.delenv(program.HOST_LANE_ENV, raising=False)
@@ -122,7 +162,7 @@ def test_it_refuses_when_the_isolated_runtime_cannot_import_and_no_lane_is_set(
 def test_the_named_lane_makes_the_same_interpreter_report(program, tmp_path,
                                                           monkeypatch):
     """THE REVERT GUARD for the host lane, at the program's own boundary."""
-    monkeypatch.setenv(program.HOST_LANE_ENV, str(_real_site_dir()))
+    monkeypatch.setenv(program.HOST_LANE_ENV, _closure_lane())
     result = program.preflight(programs=PROGRAMS,
                                python=_fleet_shaped_python(tmp_path))
     assert result["ok"] is True, result["reason"]
@@ -186,7 +226,7 @@ def test_the_cli_exit_code_is_two_for_refuse_and_zero_for_pass(tmp_path,
     assert refuse.returncode == 2, refuse.stdout + refuse.stderr
     assert json.loads(refuse.stdout)["ok"] is False
 
-    env["VIBEIC_TRUSTED_PYTEST_SITE"] = str(_real_site_dir())
+    env["VIBEIC_TRUSTED_PYTEST_SITE"] = _closure_lane()
     allow = subprocess.run([str(shim), str(PROGRAM), "--json"], env=env,
                            stdin=subprocess.DEVNULL, capture_output=True,
                            text=True)
