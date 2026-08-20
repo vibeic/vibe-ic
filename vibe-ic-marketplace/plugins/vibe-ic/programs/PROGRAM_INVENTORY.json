@@ -5,23 +5,23 @@
   "populations": {
     "programs_top_level": {
       "definition": "Every *.py directly in plugins/vibe-ic/programs/ (top level, NOT recursive). Helpers (_*.py), DEPRECATED_* and *_shim.py ARE included. This is the population the shell glob `programs/*.py` expands to. NOTE: the git pathspec `programs/*.py` is NOT the same thing \u2014 git's `*` crosses `/`, so `git ls-files 'programs/*.py'` returns the RECURSIVE population instead.",
-      "count": 1205,
-      "sha256_of_sorted_paths": "3cbb7c939096876fc3bd9c3de8fd91a7e29a70b288ab7d62671178b9f3391698"
+      "count": 1209,
+      "sha256_of_sorted_paths": "de5b80a7c7637749daada616ec4e61320a214334695624e7acb1430507aa5dc5"
     },
     "programs_catalogued": {
       "definition": "programs_top_level minus helpers and deprecation shims (_*.py, DEPRECATED_*, *_shim.py, and any file whose first 2000 chars contain 'DEPRECATION SHIM'). This is the population catalogued in programs/INDEX.md by tools/gen_programs_index.py.",
-      "count": 1132,
-      "sha256_of_sorted_paths": "2561e6d2e8009f54c6333c704d4b7e4806f37518e17de747452771141e856c61"
+      "count": 1136,
+      "sha256_of_sorted_paths": "d88c102bff5c69a8a8ff77fe7dde569bf223a3ecbd1366abc926e2d3a7add8cd"
     },
     "programs_tree_all_py": {
       "definition": "Every *.py at ANY depth under plugins/vibe-ic/programs/, including programs/tests/ and the sub-packages. Roughly programs_top_level + test_files + sub-package modules.",
-      "count": 3876,
-      "sha256_of_sorted_paths": "7dafec26581b76c904f6fe99df4b7c22d038d2a6ebf797c6d2e0a7dc1eaad535"
+      "count": 3887,
+      "sha256_of_sorted_paths": "a1921afab65f56e01e6e50bd8c681a776a86480c10c016d7b84729c5be5b409d"
     },
     "test_files": {
       "definition": "Every test_*.py at any depth under plugins/vibe-ic/programs/tests/.",
-      "count": 2638,
-      "sha256_of_sorted_paths": "fa10c7cd458b343248f67c4f16009e9f54b318c640eeef019c42f9ae5398f0b8"
+      "count": 2645,
+      "sha256_of_sorted_paths": "a6590b36740851c495049db8edae96fe13d06572220690fce7c695cc8bec3b11"
     },
     "mcp_eda_test_files": {
       "definition": "Every test_*.py directly under plugins/vibe-ic/mcp-eda/test/.",
@@ -40,13 +40,13 @@
     },
     "gate_programs_check_suffix": {
       "definition": "Top-level programs whose filename ends in _check.py. A SUBSET of gate_programs_check_audit_lint \u2014 quoting one where the other is meant is a different measurement, not a correction.",
-      "count": 552,
-      "sha256_of_sorted_paths": "868750d276d7026cf75a96fcc07dfa3c738b04a09f1c75d63a73ad540b1dd18d"
+      "count": 555,
+      "sha256_of_sorted_paths": "247153640f3f3e6969b650753d89efacf1f738c9efeb555191f332e616bf7c91"
     },
     "gate_programs_check_audit_lint": {
       "definition": "Top-level programs whose filename ends in _check.py, _audit.py or _lint.py.",
-      "count": 585,
-      "sha256_of_sorted_paths": "9214f565275fb17087c7367786acac93f48f5bb8abbf1ae37cdf0d43781b97a9"
+      "count": 588,
+      "sha256_of_sorted_paths": "51ace21909ca6c92473f76bc4add1956b846bc119b88d715300f816fc9a9ff9c"
     }
   }
 }
