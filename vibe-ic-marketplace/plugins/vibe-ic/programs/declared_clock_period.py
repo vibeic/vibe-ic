@@ -62,6 +62,14 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The ONE negation vocabulary (vibe-ic#712). `declared_io_delay_fraction` reads
+# a DERIVATION out of an English/Chinese design document and publishes it as a
+# declared constraint; see its docstring for why the polarity of that sentence
+# is load-bearing here and not a formality.
+from _prose_polarity import (  # type: ignore  # noqa: E402
+    is_denied as _is_denied, sentence_scope as _sentence_scope)
+
 # A markdown table row: starts and ends with '|' after stripping.
 _ROW_RE = re.compile(r"^\s*\|(.*)\|\s*$")
 # The |---|:---:|---| separator that follows a markdown header row.
@@ -292,10 +300,28 @@ def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
     AND the clock period AND one percentage sits inside one window, and every
     such statement across the docs agrees. Two different percentages is a
     REFUSAL, not a vote — the same rule the period table follows.
+
+    A DENIED STATEMENT IS NOT A DECLARATION (vibe-ic#712). "I/O delay is no
+    longer derived from the clock period" and "the 20 % I/O delay default does
+    not apply to this interface" both carry an I/O token, a period token and
+    one percentage inside one window, so without a polarity consult they read
+    as a 0.2 mandate — which is #706 and #711 exactly, in a field that lands in
+    the emitted SDC. The polarity span is `_prose_polarity.sentence_scope`
+    around the I/O token, not this function's own forward-only extraction
+    window: a denial that governs the statement can sit BEFORE the token, and
+    the repo has one rule for how far a sentence reaches.
+
+    A denial SUPPRESSES the statement and is COUNTED. "no statement was made"
+    and "the statement was retracted" are different findings and must not share
+    a verdict, so `denied` carries the citations and `note` says so — the
+    caller then keeps its historical literal knowing why, rather than because
+    the scan silently read less than it found.
     """
     rep: Dict[str, object] = {"fraction": None, "percent": None,
                               "source": None, "line": None,
-                              "ambiguous": False, "note": ""}
+                              "ambiguous": False, "note": "",
+                              "denied": []}
+    denied: List[str] = []
     found: List[Tuple[float, str, int, str]] = []
     for d in docs:
         try:
@@ -318,10 +344,34 @@ def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
             if not (0.0 < pct < 100.0):
                 continue
             line_no = text.count("\n", 0, m.start()) + 1
+            # THE POLARITY SPAN IS THE STATEMENT THE VALUE CAME OUT OF, plus
+            # the sentence reach BEHIND the token. `window` is exactly what
+            # this reader treats as one statement, so it is the forward half;
+            # using `sentence_scope` for BOTH halves instead was measured to
+            # split them apart — a `### 9.1.3 I/O delay` heading ends its
+            # sentence at the `\n- ` that begins the bullet, so the heading hit
+            # read its percentage from a bullet whose denial the polarity span
+            # no longer contained, and the retracted value was published. The
+            # backward half is `sentence_scope`'s, because a denial governing
+            # the statement can sit BEFORE the token and the window is
+            # forward-only.
+            lo, _hi = _sentence_scope(text, m.start(), m.end(),
+                                      before=_IO_WINDOW, after=0)
+            word = _is_denied(text[lo:m.start()] + window)
+            if word:
+                denied.append(f"{d}:{line_no} — '{word}' denies "
+                              f"{window.splitlines()[0].strip()}")
+                continue
             found.append((pct, str(d), line_no,
                           window.splitlines()[0].strip()))
+    rep["denied"] = denied
     if not found:
-        rep["note"] = "no I/O delay stated as a fraction of the clock period"
+        rep["note"] = (
+            "no I/O delay stated as a fraction of the clock period"
+            if not denied else
+            f"{len(denied)} I/O-delay statement(s) READ AND REFUSED: the "
+            f"sentence denies the derivation, so nothing is declared — "
+            + "; ".join(denied))
         return rep
     pcts = sorted({round(f[0], 6) for f in found})
     if len(pcts) > 1:
@@ -333,7 +383,9 @@ def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
     rep.update({"fraction": pct / 100.0, "percent": pct, "source": src,
                 "line": line,
                 "note": (f"the design declares an I/O delay of {pct:g} % of the "
-                         f"clock period at {src}:{line} — {snippet}")})
+                         f"clock period at {src}:{line} — {snippet}"
+                         + (f" [{len(denied)} further statement(s) refused as "
+                            f"denied: {'; '.join(denied)}]" if denied else ""))})
     return rep
 
 

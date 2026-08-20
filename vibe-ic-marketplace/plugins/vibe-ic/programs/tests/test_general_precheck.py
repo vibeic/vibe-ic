@@ -616,3 +616,85 @@ def test_g9_a_malformed_declaration_leaves_every_declared_step_undetermined(tmp_
     assert rep.declaration_refusals, "a declaration with no questions is malformed"
     # Half-reading it would be worse than not reading it.
     assert _step(rep, "KLayout.CheckSize").verdict == GP.NOT_DETERMINED
+
+
+# --------------------------------------------------------------------------- #
+# G10 — THIS LADDER DOES NOT WRITE OVER THE FLOW'S OWN ARTEFACTS
+#
+# Every DELEGATED step re-RUNS an in-tree checker and gives it a `--json`
+# target. Until `DELEGATE_REPORT_DIR` existed those targets WERE the flow's
+# canonical report paths, so a precheck run replaced four sign-off artefacts it
+# does not own with the output of a weaker invocation — MEASURED on
+# `reports/phase3/drc_signoff.json`, where step 31 passes `--signoff --under
+# reports/phase3/drc_signoff.rpt` and this ladder passes neither, and the two
+# JSONs differ (811 B with `summary.scoped_under` vs 308 B without it).
+# `signoff_ladder_run.check_tier_1_drc` grades release-gating tier T1 off that
+# file.
+#
+# Asserted against the LIVE yaml rather than a remembered list, and against
+# BASENAMES as well as full paths, because discovery in this tree is by
+# recursive glob (`reports/**/drc_signoff.json`) — a private directory keeping
+# the canonical NAME would still be found and still be graded as the sign-off.
+# --------------------------------------------------------------------------- #
+FLOW_YAML = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
+
+
+def _flow_owned_report_paths():
+    """Every report path the flow DECLARES or a gate DESIGNATES, from the yaml.
+
+    Deliberately over-broad on the gate side: any `--json`/`--out`/`--output`/
+    `--report` token in any gate command. A false member here costs a delegate
+    one rename; a missing one costs a silently overwritten sign-off.
+    """
+    import re
+    import yaml
+    doc = yaml.safe_load(FLOW_YAML.read_text(encoding="utf-8"))
+    paths = set()
+    flag = re.compile(r"--(?:json|out|output|report)\s+(\S+)")
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "required_outputs" and isinstance(v, list):
+                    paths.update(str(x) for x in v if isinstance(x, str))
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+        elif isinstance(node, str):
+            paths.update(flag.findall(node))
+    walk(doc)
+    return {p for p in paths if p.endswith((".json", ".rpt", ".log", ".txt"))}
+
+
+def test_g10_no_delegate_writes_over_a_flow_owned_report():
+    owned = _flow_owned_report_paths()
+    assert owned, "the flow yaml yielded no report path at all — this guard " \
+                  "cannot see its subject, which is not the same as a clean run"
+    owned_names = {Path(p).name for p in owned}
+    for step in GP.LADDER:
+        if step.delegate is None:
+            continue
+        rel = step.delegate.report_rel
+        assert rel not in owned, (
+            f"{step.step_id} writes {rel!r}, which the flow declares or "
+            f"designates. Re-running a checker into the flow's own path "
+            f"replaces that step's verdict with this ladder's weaker one.")
+        assert Path(rel).name not in owned_names, (
+            f"{step.step_id} writes basename {Path(rel).name!r}, which a "
+            f"flow-owned report also uses. Discovery here is by recursive "
+            f"glob, so a private directory does not save it.")
+        assert rel.startswith(GP.DELEGATE_REPORT_DIR + "/"), (
+            f"{step.step_id} writes {rel!r}, outside this ladder's own "
+            f"{GP.DELEGATE_REPORT_DIR!r}")
+
+
+def test_g10_the_guard_sees_the_collision_it_was_written_for():
+    """NEGATIVE CONTROL. The exact path this ladder used to write must still be
+    recognised as flow-owned — otherwise the guard above is asserting over an
+    empty set and would pass on the very defect it was written for."""
+    owned = _flow_owned_report_paths()
+    assert "reports/phase3/drc_signoff.json" in owned
+    for p in ("reports/phase3/die_finishing.json",
+              "reports/phase3/antenna_signoff.json",
+              "reports/phase3/drc_router.json"):
+        assert p in owned, p
