@@ -1830,8 +1830,28 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
         "protocol-specific structure absent from the generic fixture",
     ("2", "memory_read_pipeline_check phase2/stage1/rtl --json "
           "reports/phase2/gates/memory_read_pipeline.json"):
-        "PASS/VACUOUS: needs an inferred memory with a mis-pipelined read "
-        "path; the fixture declares an array but no read pipeline",
+        "UNFAILABLE BY CONSTRUCTION, not fixture-limited. MEASURED 2026-08-20: "
+        "the mis-pipelined read shape IS detected \u2014 `output reg [7:0] data` "
+        "with `data <= mem[addr];`, no latency doc, no `_valid` port and no "
+        "combinational `assign`, yields rule `registered_read_undocumented` and "
+        "verdict WARN in the JSON \u2014 and the process still exits 0. Both of "
+        "the program\u0027s `Finding` constructions carry severity WARN, so "
+        "`verdict == FAIL` is unreachable and the `return 1` behind it is dead "
+        "code. That is deliberate (v1.6.125 #47 Fix 3 stopped WARN-only "
+        "findings gating the flow; `test_clean_rtl` pins the 0). No project "
+        "content can redden this clause, so no fixture will. The previous "
+        "reason here said it needed a mis-pipelined read path in the fixture, "
+        "which sent the next reader to build a fixture that cannot work. "
+        "OPEN QUESTION, deliberately not decided here: the flow wires this "
+        "program under `optional_program_exit_zero`, which blocks on a "
+        "non-zero exit, so as declared it is a blocking clause that cannot "
+        "block. Making the finding FAIL-severity and dropping the blocking "
+        "declaration pull the flow in opposite directions, and that is the "
+        "owner\u0027s call. "
+        "`test_memory_read_pipeline_check_gate."
+        "test_the_documented_exit_codes_match_the_reachable_ones` binds the "
+        "program\u0027s exit table to its severities in both directions, so "
+        "whichever way it is decided this entry must be revisited",
     ("2", "fpga_wrapper_input_polluter_check --rtl phase2/stage1/rtl --json "
           "reports/phase2/gates/fpga_input_polluter.json"):
         "PASS/VACUOUS: needs an FPGA wrapper module driving a DUT input from "

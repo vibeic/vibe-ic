@@ -55,9 +55,27 @@ Usage
 
 Exit codes
 ----------
-    0 = all memory modules declare their read semantics
-    1 = at least one memory module has undeclared read latency
+    0 = the scan completed. This includes the case this gate was written for:
+        an undocumented registered read is reported as a WARN finding and
+        verdict="WARN" in the JSON, and the process still exits 0.
     2 = IO / argument error
+
+THERE IS NO CONTENT EXIT 1, and this table used to say there was. Every
+`Finding` this program constructs carries severity "WARN" (there are exactly
+two, `mixed_read_semantics` and `registered_read_undocumented`), so
+`verdict == "FAIL"` is unreachable and the `return 1` guarded by it is dead
+code. That is DELIBERATE — v1.6.125 (#47 Fix 3) stopped WARN-only findings
+gating the canonical flow, and `test_clean_rtl` pins the 0 — but the exit table
+was not updated with it, so for the reader this program advertised a blocking
+behaviour it does not have.
+
+That mattered beyond documentation: the flow declares this program under
+`optional_program_exit_zero`, a clause that BLOCKS on a non-zero exit. A clause
+whose program cannot exit non-zero on any content defect cannot block on one.
+`test_the_documented_exit_codes_match_the_reachable_ones` binds this table to
+the severities the code actually constructs, in BOTH directions, so the day a
+FAIL-severity finding is added the table must come back and the blocking
+declaration gets re-decided in the same change.
 """
 from __future__ import annotations
 
