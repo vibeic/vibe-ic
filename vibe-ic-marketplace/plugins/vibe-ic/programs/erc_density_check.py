@@ -191,6 +191,18 @@ def _parse_layers_from_text(text: str) -> List[Tuple[str, float]]:
     return out
 
 
+def _record_consumed(stats: dict, paths) -> None:
+    """Note the artefacts this run actually OPENED, for the run-evidence binding.
+
+    `setdefault`, not `stats["_consumed"]`, because `_check_density` and
+    `_check_erc` are called directly by tests and by other programs with a
+    `stats` dict THEY built. Indexing broke four such callers with a bare
+    `KeyError: '_consumed'` — a sub-check that a caller cannot call is a worse
+    defect than the missing record it was added to keep.
+    """
+    stats.setdefault("_consumed", []).extend(paths)
+
+
 def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> None:
     djson, drpt = _find_density_artefacts(project_dir)
     if djson is None and drpt is None:
@@ -201,7 +213,7 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
         return
 
     stats["density_checked"] = True
-    stats["_consumed"].extend(p for p in (djson, drpt) if p is not None)
+    _record_consumed(stats, [p for p in (djson, drpt) if p is not None])
     data = None
     text = ""
 
@@ -288,7 +300,7 @@ def _check_erc(project_dir: Path, findings: List[Finding], stats: dict) -> None:
         # ERC report genuinely absent → ERC sub-check does not apply here.
         return
     stats["erc_checked"] = True
-    stats["_consumed"].append(erc)
+    _record_consumed(stats, [erc])
     text = erc.read_text(errors="replace")
     if not text.strip():
         findings.append(Finding("ERROR", "ERC_EMPTY", f"{erc} is empty"))
@@ -383,11 +395,17 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
 # ---------------------------------------------------------------------------
 # WHOSE REPORT IS THIS? (#1119)
 #
-# ENFORCEMENT: BLOCKING. A MISMATCH is an ERROR finding, so `summary.pass` goes
-# False and `main` returns 1 — the same exit code the Step-31 gate already
-# treats as a failed physical-verification sign-off. It is BLOCKING because the
-# state it names is not a quality opinion: the density / ERC artefacts this
-# verdict was computed from are not the ones this run produced.
+# ENFORCEMENT: AUDIT_ONLY, and that is a MEASUREMENT, not a preference.
+#
+# A MISMATCH is an ERROR finding, so `summary.pass` goes False and `main`
+# returns 1. But `flow_gate_enforcement_audit` classifies this gate AUDIT_ONLY
+# on this tree — the Step-31 clause records the failure and the run continues.
+# A forged green here becomes an auditable FAIL; it does not halt anything.
+# Promoting it is a separate flow change with its own blast radius, and saying
+# so is the point: an unstated default of "advisory" is how 62 of 72 gates
+# ended up unable to stop anything. The two gates in this campaign that ARE
+# ENFORCED are `sta_report_check` and `em_report_check`; see the same section
+# in `eda_report_audit.py` for the full measured split.
 #
 # It fires ONLY on a recorded-and-disagreeing artefact; an artefact no register
 # names is UNRECORDED and changes no verdict. See `_run_evidence_binding`.
