@@ -1,16 +1,64 @@
-"""Generate programs/adversarial_findings.json from a LIVE campaign. argv: <plugin>"""
+"""Generate programs/adversarial_findings.json from a LIVE campaign. argv: <plugin>
+
+TWO WAYS THIS GENERATOR COULD ERASE THE RATCHET IT MAINTAINS, BOTH MEASURED
+==========================================================================
+1. IT LOOKED WHERE THE CORPUS NO LONGER IS. `PLUGIN.parents[2]/"benchmark-data"`
+   stopped existing at v1.10.56, when the published trees moved to their own
+   repositories, and this script never read `$VIBE_IC_BENCHMARK_DATA`. On a
+   bare checkout it crashed, which is safe. It is now resolved through
+   `_corpus_location`, the repo's one answer to that question.
+
+2. AN EMPTY CORPUS PRINTED SUCCESS. Pointed at a tree whose cells exist but are
+   EMPTY, every attack returns UNAVAILABLE, `forging` computes as the empty set,
+   and the old script wrote the ledger and exited 0:
+
+       wrote .../adversarial_findings.json with 0 forging pair(s)
+
+   That silently erases every recorded finding, and the ratchet then measures
+   the publication schedule instead of the gates — the precise failure the
+   ledger's own `_comment` warns about, available by accident to anyone who ran
+   the generator on a thin clone. It now REFUSES: a recorded pair that comes
+   back UNAVAILABLE is unproven, not closed, and nothing is written.
+
+   The refusal is loud (rc 2 and a named reason), because a generator that
+   declines quietly reads downstream as a generator that found nothing.
+
+`measured_on` was the literal string "a38902d1" regardless of what was measured.
+It is now derived from the checkout, or the words NOT DETERMINED.
+"""
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 PLUGIN = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(PLUGIN / "programs"))
 import adversarial_agent as AA  # noqa: E402
+import _corpus_location as _cl  # noqa: E402
 
-IC = PLUGIN.parents[2] / "benchmark-data" / "ic"
 CELL = "spm/v1.9.96_gf180mcuD"
 DONOR = "sha256/clean_run_v1427_20260715"
 OLDER = "sha256/clean_run_v1422_20260715"
+
+_GATE = "gen_adversarial_findings"
+_named = PLUGIN.parents[2] / "benchmark-data" / "ic"
+IC, _origin = _cl.resolve(_named, subdir="ic", gate=_GATE, announce=True)
+if not IC.is_dir():
+    # `may_be_absent=False`: this generator MAINTAINS the ratchet. "I could not
+    # find the corpus" must never come out as "there are no findings".
+    raise SystemExit(_cl.refuse(_GATE, _named, IC, _origin,
+                                may_be_absent=False,
+                                scanned="published cell(s)"))
+
+
+def _measured_on() -> str:
+    try:
+        r = subprocess.run(["git", "-C", str(PLUGIN), "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "NOT DETERMINED"
+    out = r.stdout.strip()
+    return out if r.returncode == 0 and out else "NOT DETERMINED"
 
 rows = []
 for attack, fn, kwargs in (
@@ -29,6 +77,31 @@ for attack, fn, kwargs in (
 
 forging = sorted({(r["attack"], r["target"]) for r in rows
                   if r["verdict"] == AA.SUCCEEDED})
+
+# ---------------------------------------------------------------------------
+# REFUSE RATHER THAN ERASE. See the module docstring, case 2.
+# ---------------------------------------------------------------------------
+out = PLUGIN / "programs" / "adversarial_findings.json"
+previous = AA.load_findings_ledger(out)
+recorded = {(f["attack"], f["target"]) for f in previous.get("forging", ())}
+live = {(r["attack"], r["target"]): r["verdict"] for r in rows}
+unproven = sorted(k for k in recorded
+                  if live.get(k, AA.UNAVAILABLE) == AA.UNAVAILABLE)
+if unproven:
+    print("[REFUSED] gen_adversarial_findings: "
+          f"{len(unproven)} recorded finding(s) came back UNAVAILABLE, so this "
+          f"campaign could not re-test them. They are UNPROVEN, not closed, and "
+          f"writing the ledger now would erase them:")
+    for a, tgt in unproven:
+        print(f"    {a:24} {tgt}")
+    print("  Point $VIBE_IC_BENCHMARK_DATA at a corpus that carries the cells "
+          "this ledger names, or adjudicate the removal deliberately.")
+    raise SystemExit(2)
+if not rows:
+    print("[REFUSED] gen_adversarial_findings: the campaign attempted nothing, "
+          "so it says nothing about the gates. That is not an empty finding list.")
+    raise SystemExit(2)
+closed = sorted(recorded - set(forging))
 doc = {
     "schema": "vibe-ic/adversarial-findings/v1",
     "_comment": [
@@ -50,14 +123,30 @@ doc = {
         "silently 'close' every finding and the ratchet would measure the",
         "publication schedule instead of the gates.",
     ],
-    "measured_on": "a38902d1",
+    "measured_on": _measured_on(),
     "cell": CELL,
     "donor": DONOR,
     "older_run": OLDER,
+    "attempted": len(rows),
     "forging": [{"attack": a, "target": t} for a, t in forging],
+    # THE CLOSURES, IN THE ARTEFACT. A finding count that fell is not readable
+    # as progress unless the artefact says WHAT fell and against WHICH base, so
+    # the pairs that stopped forging are carried here with the commit the
+    # previous ledger was measured on. `attempted` sits beside them for the same
+    # reason: findings that vanish because fewer attacks RAN are not closures,
+    # and a reader can now see both numbers at once.
+    #
+    # This is a DELTA against the previous generation, not a history — running
+    # the generator twice empties it, and the durable record of what closed is
+    # the ledger's own diff in git. The field is named for what it is.
+    "closed_since_previous_generation": previous.get("measured_on", "NOT DETERMINED"),
+    "closed": [{"attack": a, "target": t} for a, t in closed],
 }
-out = PLUGIN / "programs" / "adversarial_findings.json"
 out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-print(f"wrote {out} with {len(forging)} forging pair(s)")
-for a, t in forging:
-    print(f"  {a:24} {t}")
+print(f"wrote {out} with {len(forging)} forging pair(s) "
+      f"from {len(rows)} attempted attack(s); {len(closed)} recorded "
+      f"finding(s) CLOSED")
+for a, tgt in forging:
+    print(f"  FORGING  {a:24} {tgt}")
+for a, tgt in closed:
+    print(f"  CLOSED   {a:24} {tgt}")
