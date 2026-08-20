@@ -658,8 +658,50 @@ def test_output_entries_classify_into_the_four_kinds():
     # a GLOB because the identifying half of the name is the design's, not the
     # flow's.
     # = GLOB +2 (16 -> 18), FILE 114 unchanged, ANY_OF 24 unchanged.
-    assert sum(seen.values()) == 156, seen
-    assert seen[F.FILE] == 114
+    #
+    # 2026-08-20, CORRECTION — THE LINE ABOVE WAS WRONG WHEN IT WAS WRITTEN,
+    # and the way it was wrong is the finding. "FILE 114 unchanged" was true of
+    # `ff5071caa`, TWO flow-yaml landings earlier. The repair took the last
+    # value this file had ever recorded and added only its OWN change's delta
+    # to it, instead of measuring the tree it was landing on. GLOB came out
+    # right because GLOB genuinely had not moved since; the total and FILE came
+    # out four short, and this test stayed red on main.
+    #
+    # MEASURED, one classification sweep per yaml, `F.classify_output` over
+    # `F.required_outputs` for every `F.step_ids()`, at each of the four
+    # commits (each yaml read via `VIBE_IC_MATRIX_FLOW_YAML` against a scratch
+    # export, so the real yaml was never touched):
+    #
+    #   ff5071caa   total 154   FILE 114   GLOB 16   ANY_OF 24   <- pin correct
+    #   69ce9260d   total 156   FILE 116   GLOB 16   ANY_OF 24   <- pin NOT moved
+    #   00d9dc261   total 160   FILE 120   GLOB 16   ANY_OF 24   <- pin NOT moved
+    #   8e35c6439   total 160   FILE 118   GLOB 18   ANY_OF 24   <- pin -> 156/114/18
+    #
+    # THE SIX ENTRIES THE PIN NEVER SAW, named so the arithmetic is checkable
+    # rather than asserted:
+    #   69ce9260d  +2 FILE  37.5ic `reports/phase3/docs/SIGNOFF.html`
+    #                       37.5ic `reports/phase3/docs/BRIEF.html`
+    #              (the same pair `8e35c6439` then re-declared as GLOBs, which
+    #               is why FILE ends at 118 and not 120 — that -2 is real and
+    #               is the only part of the last repair that was measured)
+    #   00d9dc261  +4 FILE  0.5ic  `input/submission_template/tapeout_declaration.json`
+    #                       0.5ic  `reports/phase1/tapeout_declaration.json`
+    #                       21     `reports/phase3/drc_router.json`
+    #                       37.5self `reports/phase3/general_precheck.json`
+    #
+    # 114 + 2 + 4 - 2 = 118, and 154 + 2 + 4 = 160. Both reconstruct.
+    #
+    # ANY_OF stays 24 even though `00d9dc261` edited an ANY_OF entry: it added a
+    # third alternative (`SELF_TAPEOUT.txt`) INSIDE 0.5ic's existing " OR "
+    # entry, and this counter counts ENTRIES, not alternatives. An entry that
+    # grows an alternative is not a new entry.
+    #
+    # WRITE THE NUMBER YOU MEASURED ON THE TREE YOU ARE LANDING ON. A delta
+    # applied to the last number in this comment block is only correct when
+    # nothing landed in between, and this file has now been wrong that way
+    # twice.
+    assert sum(seen.values()) == 160, seen
+    assert seen[F.FILE] == 118
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
