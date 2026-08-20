@@ -33405,7 +33405,37 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     # sign-off on the ECO netlist (§4.05: honest — a failed ECO
                     # run that produced no netlist is NOT re-verified).
                     "re_verified": bool(_ran and _eco_after.get("measured")),
-                    "affected_steps": [21, 23, 24, 29, 30],
+                    # THE BLAST RADIUS, DERIVED FROM THE FLOW DAG — NOT TYPED.
+                    # This list was `[21, 23, 24, 29, 30]` from 0a9e51577 until
+                    # v1.11.19 and nothing had ever checked it: `eco_loop_audit`
+                    # tests `"affected_steps" not in data` and nothing else, so
+                    # `[]` and `[999]` both passed. The flow's own step-32
+                    # trigger says a THIRD thing ("re-run #21-#28"), and step 32
+                    # `blocks_on` says a fourth ([23,24,25,26,27,29,30,31]).
+                    #
+                    # The repair rewrites the ROUTED implementation (multi-corner
+                    # `repair_design` + `repair_timing -setup` + `detailed_route`,
+                    # then its own re-extraction), i.e. step 21's output. So the
+                    # evidence that no longer describes the design is exactly
+                    #
+                    #     {21} u descendants(21) - descendants(32) - {32}
+                    #
+                    # over the flow's `blocks_on` graph: everything downstream of
+                    # routing that has ALREADY produced evidence, minus what is
+                    # downstream of this step and would consume the result anyway.
+                    # 22 is in it because the repair re-extracts; 31 is in it
+                    # because the repair changes geometry AND netlist, so DRC and
+                    # LVS are both stale — that omission was the dangerous one.
+                    # `test_closed_loop_executable_coverage_affected_steps.py`
+                    # recomputes this set from the shipped flow and asserts this
+                    # literal equals it, so the two can no longer drift.
+                    #
+                    # It is a REQUIREMENT, not a receipt: this runner does not
+                    # re-run any of them, which is why the ECO netlist is not the
+                    # shipped implementation (see _ECO_REROUTE_MAX_DROUTE_ITERS).
+                    # Written in the flow's own declaration order.
+                    "affected_steps": [21, 22, "DT2", "DT3", 23, 24, 25, 26,
+                                       "26.5ic", 27, 28, 29, 30, 31, 33],
                     "eco_before": _eco_decision["eco_before"],
                     "eco_after": _eco_after,
                     "residual_violation": _eco_residual,
