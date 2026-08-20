@@ -50,6 +50,7 @@ design, PDK, foundry or process identifier appears.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -130,10 +131,25 @@ def mixed_tree(tmp_path):
 
 
 def _run(*args, cwd=None):
+    # THE ENVIRONMENT IS PART OF THE FIXTURE. Every case here is about a tree
+    # this test built, and one of them — `test_guard_no_argument_at_all_still
+    # _refuses` — is about the invocation with NO argument at all, where
+    # `$VIBE_IC_BENCHMARK_DATA` is the only thing left to answer and legitimately
+    # does. A developer or a landing with the pointer exported would then be
+    # asking a different question from the one the test's name states, and got a
+    # different answer: MEASURED 2026-08-20, that one case reported
+    # `13/13 conformant` over the real corpus against an expected rc 2.
+    #
+    # Cleared rather than pinned to a fixture corpus: the subject is "what does
+    # this program do when nobody named a tree", and a pointer is somebody
+    # naming one.
+    env = dict(os.environ)
+    env.pop("VIBE_IC_BENCHMARK_DATA", None)
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
     out = subprocess.run(
         [sys.executable, str(_PROGRAMS / "benchmark_evidence_structure_check.py"),
          *args],
-        capture_output=True, text=True, timeout=_TIMEOUT,
+        capture_output=True, text=True, timeout=_TIMEOUT, env=env,
         cwd=str(cwd) if cwd else None)
     return out.returncode, out.stdout + out.stderr
 

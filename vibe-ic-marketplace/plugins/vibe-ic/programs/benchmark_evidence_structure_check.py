@@ -201,7 +201,15 @@ from typing import Dict, List, Optional, Set, Tuple
 #: Spelled the same way `programs/tests/_published_corpus.py` spells it, on purpose:
 #: one name for one thing. A gate and a test suite that disagree about where the
 #: corpus lives will disagree about whether it was checked.
-CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _corpus_location as _cloc  # noqa: E402
+
+CORPUS_ENV = _cloc.CORPUS_ENV
+
+#: The name this gate prints itself under, so the corpus-resolution notes and
+#: refusals it delegates to `_corpus_location` are attributable to it and not to
+#: an anonymous "note:" a reader has to guess the owner of.
+GATE = "benchmark_evidence_structure_check"
 
 _NAME_RE = re.compile(r"^v\d+\.\d+\.\d+_.+$")
 
@@ -977,24 +985,43 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="write a machine-readable summary JSON here")
     args = ap.parse_args(argv)
 
-    # THE POINTER WINS OVER THE PATH. Both shipped call sites pass the literal
-    # `--tree benchmark-data`, a relative path that no longer exists in this repo.
-    # Rewriting both call sites instead would leave every OTHER caller — agents,
-    # local runs, the benchmark-agent skill — still pointed at a directory that is
-    # gone, and each would have to learn the new location separately.
+    # THE POINTER REPLACES A MISSING TREE; IT DOES NOT REPLACE A PRESENT ONE.
     #
-    # The override is announced, because a gate that silently scans a different
-    # tree than the one named on its command line is how `--tree ../../../
-    # benchmark-data` came to report "13/28 conformant" over 9 IC dirs while an
-    # absolute path over the same tree found 8 failing and 93 entries (2026-08-11,
-    # recorded above). Whatever this gate scanned, it says so.
-    _env_tree = os.environ.get(CORPUS_ENV)
-    if _env_tree and args.tree:
-        print(f"note: {CORPUS_ENV} overrides --tree {args.tree} -> {_env_tree}",
+    # Both shipped call sites pass the literal `--tree benchmark-data`, a relative
+    # path that no longer exists in this repo, so the pointer must still be able to
+    # answer for them: rewriting the call sites instead would leave every OTHER
+    # caller — agents, local runs, the benchmark-agent skill — aimed at a directory
+    # that is gone. That is why the pointer exists.
+    #
+    # It used to be spelled `if env and tree: tree = env`, and an environment
+    # default outranking an EXPLICIT command-line argument is backwards. MEASURED
+    # 2026-08-20: 24 targeted tests and one repo-tools gate-fixture test build a
+    # synthetic corpus in a tmpdir, pass it as `--tree <tmpdir>`, and were answered
+    # about the real 265 MB corpus instead — so "bind the corpus" (which the
+    # hygiene tier requires) and "run the targeted tests" were MUTUALLY EXCLUSIVE,
+    # and the landing gate was red in a way that said nothing about the code under
+    # test.
+    #
+    # `_corpus_location.resolve` is the one place that rule lives, and its test is
+    # `named.is_dir()`: a named root that CARRIES a tree wins, an absent literal
+    # falls through to the pointer. Both facts above are satisfied by the same
+    # rule, and both directions are announced — a gate that silently scans a
+    # different tree than the one named on its command line is how
+    # `--tree ../../../benchmark-data` came to report "13/28 conformant" over 9 IC
+    # dirs while an absolute path over the same tree found 8 failing and 93 entries
+    # (2026-08-11, recorded above). Whatever this gate scanned, it says so.
+    _env_tree = _cloc.env_pointer()
+    if args.tree:
+        _resolved, _origin = _cloc.resolve(Path(args.tree), gate=GATE,
+                                           announce=True)
+        if _origin == _cloc.REFUSED:
+            return _cloc.refuse(GATE, Path(args.tree), _resolved, _origin,
+                                args.corpus_may_be_absent,
+                                "published evidence folder(s)")
+        args.tree = str(_resolved)
+    elif _env_tree and not args.paths:
+        print(f"[{GATE}] note: scanning {CORPUS_ENV} -> {_env_tree}",
               file=sys.stderr)
-        args.tree = _env_tree
-    elif _env_tree and not args.tree and not args.paths:
-        print(f"note: scanning {CORPUS_ENV} -> {_env_tree}", file=sys.stderr)
         args.tree = _env_tree
 
     targets: List[Path] = [Path(p) for p in args.paths]

@@ -102,7 +102,13 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _corpus_location as _cloc  # noqa: E402
+
 _DEFAULT_ROOT_REL = "benchmark-data"
+
+#: The name this gate prints itself under.
+GATE = "tracked_symlink_portability_check"
 
 #: Where a caller may point us at a clone of the published corpus.
 #:
@@ -192,13 +198,40 @@ def main(argv=None) -> int:
     here = Path(__file__).resolve()
     named = args.root or _DEFAULT_ROOT_REL
 
-    # THE POINTER WINS OVER THE PATH, AND THE OVERRIDE IS SAID OUT LOUD (#1710).
+    # THE POINTER REPLACES A MISSING TREE; IT DOES NOT REPLACE A PRESENT ONE
+    # (#1710, corrected 2026-08-20).
+    #
     # The shipped call site passes no root at all and the fallback is a literal
-    # directory name that no longer exists in this repository. Rewriting the call
-    # site instead would leave every OTHER caller — agents, local runs, the
-    # benchmark-agent skill — aimed at a directory that is gone, each having to
-    # learn the new location separately.
-    env_tree = os.environ.get(CORPUS_ENV)
+    # directory name that no longer exists in this repository, so the pointer must
+    # still answer for it: rewriting the call site instead would leave every OTHER
+    # caller — agents, local runs, the benchmark-agent skill — aimed at a directory
+    # that is gone.
+    #
+    # But it used to answer for an EXPLICIT `root` argument too, and an environment
+    # default outranking an explicit command-line argument is backwards: a caller
+    # who names a directory that CARRIES a tree has named a readable corpus, and
+    # walking a different one instead is the very substitution the announcement
+    # below exists to prevent. `_corpus_location.resolve` is where that rule lives
+    # and its test is `named.is_dir()` — an absent literal still falls through to
+    # the pointer, a real one does not.
+    env_tree = _cloc.env_pointer()
+    if env_tree and args.root:
+        _named_root = Path(args.root)
+        if _named_root.is_dir():
+            # Declining the pointer is announced too: a reader who has it set
+            # would otherwise have no way to know which tree produced the verdict.
+            print(f"[{GATE}] note: scanning the corpus at the named root "
+                  f"({_named_root}); {CORPUS_ENV}={env_tree} is set and NOT "
+                  f"followed, because the named root carries a tree of its own.",
+                  file=sys.stderr)
+            env_tree = None
+        elif not _cloc.pointer_may_replace(_named_root):
+            print(f"[{GATE}] note: {CORPUS_ENV}={env_tree} is set and NOT "
+                  f"followed: {_named_root} is not the repository-relative "
+                  f"`{_cloc.CANONICAL_CORPUS_NAME}` location the pointer "
+                  f"replaces, so this verdict is about the path you named.",
+                  file=sys.stderr)
+            env_tree = None
     if env_tree:
         print(f"note: {CORPUS_ENV} overrides {named} -> {env_tree}",
               file=sys.stderr)

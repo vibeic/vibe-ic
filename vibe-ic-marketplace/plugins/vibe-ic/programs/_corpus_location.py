@@ -118,6 +118,34 @@ def env_pointer() -> Optional[str]:
     return os.environ.get(CORPUS_ENV) or None
 
 
+def pointer_may_replace(named: Path) -> bool:
+    """May `$VIBE_IC_BENCHMARK_DATA` answer for `named` when `named` is not there?
+
+    ONLY FOR THE LOCATION THE MOVE ORPHANED. The pointer exists because v1.10.56
+    took `benchmark-data/` out of this repository, so every shipped call site
+    still names it and finds nothing:
+
+        gatekeeper-land.sh:229   --tree benchmark-data
+        repo_hygiene_gates.sh:351 (no root; the default is `benchmark-data`)
+        repo_hygiene_gates.sh:356 --root "$ROOT"      (+ --subdir benchmark-data)
+        repo_hygiene_gates.sh:800 --corpus "$ROOT/benchmark-data/ic"
+
+    All four carry `benchmark-data` as a path component, and answering them from
+    the pointer is the whole job. A path that does NOT carry it was never part of
+    that move, so substituting for it is not a relocation — it is answering a
+    different question from the one asked.
+
+    MEASURED 2026-08-20: `test_issue1025_empty_corpus_sweep_blocks` asks
+    `step_internal_fail_bubble_up_check --corpus <tmpdir>/gone` for rc 2 and, with
+    the pointer set, got rc 0 over a full sweep of the real corpus. Its sibling
+    `--corpus <tmpdir>/corpus` (an EMPTY but existing dir) was honoured, so within
+    one file an absent path was substituted and an empty one was not. One rule now
+    covers both: an explicit argument beats an environment default, and the
+    pointer's remit is the orphaned default alone.
+    """
+    return CANONICAL_CORPUS_NAME in Path(named).parts
+
+
 def resolve(named: Path, subdir: Optional[str] = None, gate: str = "",
             announce: bool = False) -> Tuple[Path, str]:
     """``(directory to scan, origin)`` where origin is :data:`NAMED` or :data:`ENV`.
@@ -163,12 +191,23 @@ def resolve(named: Path, subdir: Optional[str] = None, gate: str = "",
                   f"{CORPUS_ENV}={env} is set and NOT followed, because the "
                   f"named root carries a corpus of its own.", file=sys.stderr)
         return named, NAMED
-    if env:
+    if env and pointer_may_replace(named):
         target = Path(env) / subdir if subdir else Path(env)
         if announce:
             print(f"{tag}note: {CORPUS_ENV} overrides {named} -> {target}",
                   file=sys.stderr)
         return target, ENV
+    if env and announce:
+        # AN EXPLICIT ARGUMENT BEATS AN ENVIRONMENT DEFAULT EVEN WHEN IT IS
+        # ABSENT. See `pointer_may_replace`. The caller gets a refusal about the
+        # path they named, and is told the pointer was there and was not used —
+        # a silent redirect is how `--corpus <tmp>/gone` came back rc 0 having
+        # swept the real corpus while the test that asked for rc 2 read the
+        # answer as being about its own tmpdir.
+        print(f"{tag}note: {CORPUS_ENV}={env} is set and NOT followed: {named} "
+              f"is not the repository-relative `{CANONICAL_CORPUS_NAME}` "
+              f"location the pointer replaces, so this verdict is about the "
+              f"path you named and about nothing else.", file=sys.stderr)
     return named, NAMED
 
 
@@ -249,6 +288,19 @@ def refuse(gate: str, named: Path, resolved: Path, origin: str,
               f"about them — point {CORPUS_ENV} at a clone to make this gate "
               f"check something.", file=sys.stderr)
         return 0
+    if env and not pointer_may_replace(named):
+        # THE REMEDY MUST NOT BE ONE THE READER HAS ALREADY CARRIED OUT.
+        # "Point $VIBE_IC_BENCHMARK_DATA at a clone" is a dead end for somebody
+        # who has done exactly that and whose pointer was deliberately not
+        # followed; the actionable sentence is which path this verdict is about.
+        print(f"[{gate}] UNDETERMINED: no corpus at {named}, so this gate "
+              f"scanned nothing and examined 0 {scanned}. A check that could not "
+              f"look has not passed. {CORPUS_ENV}={env} IS set and was NOT "
+              f"followed on purpose — an explicit argument beats an environment "
+              f"default — so fix the path you named, drop the argument to let "
+              f"the pointer answer, or pass --corpus-may-be-absent if this repo "
+              f"need not carry one.", file=sys.stderr)
+        return 2
     print(f"[{gate}] UNDETERMINED: no corpus at {named}, so this gate scanned "
           f"nothing and examined 0 {scanned}. A check that could not look has "
           f"not passed. Point {CORPUS_ENV} at a clone of the published-corpus "

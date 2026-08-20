@@ -332,6 +332,40 @@ def benchmark_data_root() -> Path:
     return Path(override) if override else REPO_ROOT / BENCHMARK_DATA_REL
 
 
+def benchmark_data_repo() -> Optional[Path]:
+    """The git checkout that OWNS the corpus, or None if there is not one.
+
+    WHICH REPOSITORY A CORPUS PATH BELONGS TO STOPPED BEING OBVIOUS in v1.10.56.
+    While the corpus lived here, `REPO_ROOT` answered for both; since the move,
+    `$VIBE_IC_BENCHMARK_DATA` names a DIFFERENT repository and a `git` command
+    aimed at `REPO_ROOT` cannot see those paths at all. MEASURED 2026-08-20, the
+    control that proves a replay did not mutate the published run:
+
+        git -C <plugin repo> status --porcelain -- <corpus>/ic/spm/v1.10.18_sky130A
+        fatal: '<corpus>/ic/spm/v1.10.18_sky130A' is outside repository at '<plugin repo>'
+        rc 128
+
+    rc 128 is the good outcome only because that caller asserts on it. A caller
+    that read `--porcelain`'s empty stdout instead would have concluded THE
+    CORPUS WAS NOT MODIFIED from a command that never looked at it — "I could not
+    read it" and "I read it and it was clean" arriving as the same verdict.
+
+    None, never a fallback to `REPO_ROOT`: a caller must be able to say it could
+    not look.
+    """
+    root = benchmark_data_root()
+    if not root.is_dir():
+        return None
+    try:
+        probe = subprocess.run(["git", "-C", str(root), "rev-parse",
+                                "--show-toplevel"],
+                               capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):      # noqa: BLE001
+        return None
+    top = probe.stdout.strip()
+    return Path(top) if probe.returncode == 0 and top else None
+
+
 def load_flow(path: Optional[Path] = None) -> Dict[str, Any]:
     """The flow document, freshly parsed. Never cached — replays swap the file."""
     if yaml is None:  # pragma: no cover - defensive

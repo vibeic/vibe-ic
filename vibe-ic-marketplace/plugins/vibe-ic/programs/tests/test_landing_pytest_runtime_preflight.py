@@ -207,3 +207,109 @@ def test_the_refusal_goes_to_stderr_and_the_pass_to_stdout(tmp_path):
     assert refuse.returncode == 2
     assert "REFUSE" in refuse.stderr
     assert refuse.stdout.strip() == ""
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE REMEDY MUST RUN AS PRINTED.
+#
+# The refusal used to print
+#
+#     docker run --rm -v "$PWD:$PWD" -w "$PWD" <image> bash tools/gatekeeper-land.sh
+#
+# and that command does not work. The image's ENTRYPOINT is the iic-osic-tools
+# launcher, whose own usage says: "-s, --skip … WARNING: this must be the first
+# parameter to the script or it is ignored!". MEASURED 2026-08-20 against the
+# pinned digest:
+#
+#     … <image> bash -c 'echo HELLO'          -> [ERROR] Unexpected option "bash", rc 1
+#     … <image> --skip bash -c 'echo HELLO'   -> HELLO, rc 0
+#
+# The reader hitting this refusal is already blocked; a remedy that fails is a
+# second failure to debug and no way forward.
+#
+# THE TEST EXECUTES THE PRINTED COMMAND. A text assertion — "the line contains
+# --skip" — would have passed for the entire life of the broken line if it had
+# been written against the old text, and it can only ever pin the mistake
+# somebody thought of. Running it pins the property.
+# ══════════════════════════════════════════════════════════════════════
+
+_MARKER = "vibeic-remedy-ran-as-printed"
+
+
+def _docker_image_available(image: str) -> str:
+    """"" if the image can be run here, else the sentence naming why not.
+
+    A skip and a pass must never be the same verdict (`_published_corpus`'s rule,
+    and `#1357`'s): if this host cannot reach the image the test says which of
+    the two facts it observed, and never reports the remedy as verified.
+    """
+    try:
+        d = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:      # noqa: BLE001
+        return f"docker cannot be run on this host ({exc})"
+    if d.returncode != 0:
+        return ("docker is present but its daemon did not answer: "
+                + (d.stderr or d.stdout).strip()[:200])
+    p = subprocess.run(["docker", "image", "inspect", image],
+                       capture_output=True, text=True, timeout=120)
+    if p.returncode != 0:
+        return (f"the digest-pinned runner image is not present locally and this "
+                f"test does not pull 31 GB: {image}")
+    return ""
+
+
+def test_the_printed_image_remedy_RUNS_as_printed(program, tmp_path):
+    """Execute what the refusal prints. Not what it says — what it builds."""
+    why = _docker_image_available(program.RUNNER_IMAGE)
+    if why:
+        pytest.skip("the image lane could not be exercised here — " + why
+                    + ". THIS IS 'could not look', not 'the remedy works'.")
+    argv = program.image_lane_argv(
+        ("bash", "-c", f"echo {_MARKER}"), workdir=str(tmp_path))
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, (
+        "the remedy the refusal prints did not run\n"
+        + " ".join(argv) + f"\nrc={r.returncode}\n{r.stdout}\n{r.stderr}")
+    assert _MARKER in r.stdout, (
+        "the remedy exited 0 without running the command it was given\n"
+        + r.stdout + r.stderr)
+
+
+def test_the_remedy_would_FAIL_without_the_entrypoint_skip(program, tmp_path):
+    """The negative control. Without it the test above proves only that `docker
+    run` exists — it would pass against an image with no entrypoint at all."""
+    why = _docker_image_available(program.RUNNER_IMAGE)
+    if why:
+        pytest.skip("the image lane could not be exercised here — " + why
+                    + ". THIS IS 'could not look', not 'the control held'.")
+    argv = program.image_lane_argv(
+        ("bash", "-c", f"echo {_MARKER}"), workdir=str(tmp_path))
+    argv.remove(program.IMAGE_ENTRYPOINT_SKIP)
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+    assert r.returncode != 0 and _MARKER not in r.stdout, (
+        "dropping the entrypoint skip changed nothing, so the test above is not "
+        "measuring the entrypoint\n" + r.stdout + r.stderr)
+
+
+def test_the_printed_lines_are_the_argv_and_cannot_drift_from_it(program):
+    """One source for the command. A second copy in the refusal text is how the
+    two disagree, which is what happened."""
+    printed = "\n".join(program._image_lane_lines())
+    argv = program.image_lane_argv()
+    flat = printed.replace("\\\n", " ").replace('"', "")
+    for word in argv:
+        assert word in flat, f"{word!r} is printed nowhere:\n{printed}"
+    assert flat.split().index(program.IMAGE_ENTRYPOINT_SKIP) == \
+        flat.split().index(program.RUNNER_IMAGE) + 1, (
+        "the entrypoint skip is not the FIRST parameter after the image, which "
+        "is the one placement the launcher accepts:\n" + printed)
+
+
+def test_the_refusal_body_carries_the_runnable_remedy(program, tmp_path):
+    """And it reaches the reader — the lines are built, but they must be emitted."""
+    lines = program._refusal_lines(python="/nonexistent/python3", isolated_ok=False,
+                                   resolved="", lane=None, probe=None)
+    body = "\n".join(lines)
+    assert f"{program.RUNNER_IMAGE} \\" in body, body
+    assert program.IMAGE_ENTRYPOINT_SKIP + " bash tools/gatekeeper-land.sh" in body, body
