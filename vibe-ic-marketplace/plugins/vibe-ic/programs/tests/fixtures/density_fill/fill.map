@@ -1,6 +1,0 @@
-# fixture streamout layermap — <lefname> <purpose> <gdslayer> <gdsdatatype>
-met1     LEFPIN,NET,SPNET,PIN       68 20
-met1     FILL                       68 36
-met1     TEXT                       68 5
-met1     LEFOBS                     68 20
-via1     VIA,LEFPIN,PIN             68 44

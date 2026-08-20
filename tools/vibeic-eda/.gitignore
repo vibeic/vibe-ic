@@ -1,3 +1,0 @@
-# never commit the 119MB prebuilt binary or the local-build Dockerfile
-openroad
-Dockerfile.local

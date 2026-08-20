@@ -1,5 +1,0 @@
-Subprocess had a non-zero exit.
-Last 1 line(s):
-[Error]: Layer 'GUARD_RING_MK' is not used. wafers.space requires a seal ring (guard ring) around the die.
-
-Full log file: '../data/rundir/runs/RUN_2026-08-18_21-40-05/03-klayout-checksize/klayout-checksize.log'

@@ -1,6 +1,0 @@
-# Wave 82 (v1.6.2) — root-level vibe-ic-core / vibe-ic-d trees were
-# merged into ./vibe-ic/ at v1.6.0 and the duplicate root copies are
-# permanently retired.  Authoritative archive lives under
-# .deprecated_post_merge/.  Block accidental re-creation here.
-/vibe-ic-core/
-/vibe-ic-d/

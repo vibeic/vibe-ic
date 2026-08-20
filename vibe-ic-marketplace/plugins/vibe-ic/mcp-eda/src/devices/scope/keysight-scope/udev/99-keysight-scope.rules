@@ -1,4 +1,0 @@
-# Keysight DSO-X 3014T (and InfiniiVision 3000T family) — give plugdev
-# group r/w on the usbtmc node so non-root users can run SCPI scripts.
-SUBSYSTEM=="usb", ATTRS{idVendor}=="2a8d", MODE="0660", GROUP="plugdev"
-SUBSYSTEM=="usbmisc", KERNEL=="usbtmc[0-9]*", ATTRS{idVendor}=="2a8d", MODE="0660", GROUP="plugdev"

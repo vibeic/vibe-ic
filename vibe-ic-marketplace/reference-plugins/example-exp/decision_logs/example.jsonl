@@ -1,2 +1,0 @@
-{"step": 8, "step_name": "logic_synthesis", "decision_point": "synth_top_module_chosen", "chosen": "spi_peripheral_top", "rationale": "L9 integration spec names the top module", "context": {"log_type": "yosys"}, "ic_id": "example-spi-001"}
-{"step": 16, "step_name": "global_placement", "decision_point": "global_placement_density", "chosen": 0.7, "rationale": "K3 default for spi-peripheral on gf180mcu", "context": {"pdk": "gf180mcu"}, "ic_id": "example-spi-001"}

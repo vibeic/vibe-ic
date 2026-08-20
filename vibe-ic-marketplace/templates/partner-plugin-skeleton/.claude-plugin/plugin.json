@@ -1,9 +1,0 @@
-{
-  "name": "partner-vendor-topic",
-  "version": "0.1.0",
-  "description": "Partner plugin skeleton — replace this with your contribution. Examples: partner-commercial_foundry-commercial_pdk, community-class-rfic, vendor-tester-acme.",
-  "author": {"name": "Your Name", "email": "you@example.com"},
-  "homepage": "https://example.com",
-  "license": "MIT",
-  "keywords": ["vibe-ic", "partner", "<topic>"]
-}
