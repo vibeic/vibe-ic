@@ -215,10 +215,19 @@ def build(declaration: Mapping[str, Any],
         tools=list(toolchain_decl.get("tools", []) or []),
         artefacts=all_artefacts)
 
-    evidence = prov.evidence_manifest(
-        [r for r in all_artefacts
-         if r.get("role", "") in set(declaration.get("verdict_evidence_roles", [])
-                                     or [])] or all_artefacts)
+    # ABSENT means "everything the run read backs the verdict", which is the
+    # honest default for a declaration that has not narrowed it. PRESENT means
+    # EXACTLY the roles named -- including present-and-matching-nothing, which
+    # yields an EMPTY evidence manifest and makes every metric's citation a
+    # PPA-C-008. A `or all_artefacts` fallback here would turn a filter that
+    # matched nothing into a filter over everything, silently, which is the
+    # same absent/empty collapse this module refuses everywhere else.
+    if "verdict_evidence_roles" in declaration:
+        wanted = set(declaration.get("verdict_evidence_roles") or [])
+        evidence_rows = [r for r in all_artefacts if r.get("role", "") in wanted]
+    else:
+        evidence_rows = all_artefacts
+    evidence = prov.evidence_manifest(evidence_rows)
 
     document: Dict[str, Any] = {
         "schema": CONTRACT_SCHEMA,
@@ -563,7 +572,7 @@ def _check_no_invented_numbers(document: Mapping[str, Any]) -> List[Dict[str, An
 def _check_evidence_backing(document: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """A metric whose source artefact is not in the evidence manifest."""
     evidence = document.get("evidence_manifest", {}) or {}
-    known = {str(r.get("path", "")) for r in evidence.get("artefacts", []) or []}
+    rows = {str(r.get("path", "")): r for r in evidence.get("artefacts", []) or []}
     out: List[Dict[str, Any]] = []
     for metric in document.get("metrics", []) or []:
         if metric.get("status") not in _VALUE_BEARING_STATUSES:
@@ -576,13 +585,25 @@ def _check_evidence_backing(document: Mapping[str, Any]) -> List[Dict[str, Any]]
                 f"source artefact, so its provenance is undeclared",
                 metric=metric.get("metric")))
             continue
-        if path not in known:
+        row = rows.get(path)
+        if row is None:
             out.append(finding(
                 "PPA-C-008", SEV_FAIL,
                 f"metric {metric.get('metric')} cites {path!r}, which is not "
                 f"in the evidence manifest — the contract hashed a different "
                 f"set of artefacts than the numbers were read from",
                 metric=metric.get("metric"), path=path))
+            continue
+        if row.get("status") != prov.MEASURED:
+            out.append(finding(
+                "PPA-C-008", SEV_FAIL,
+                f"metric {metric.get('metric')} carries a value read from "
+                f"{path!r}, and that artefact is NOT_MEASURED "
+                f"({row.get('reason', 'no reason stated')}). The number exists "
+                f"and the file behind it does not hash, so nothing can confirm "
+                f"the number came from this run",
+                metric=metric.get("metric"), path=path,
+                reason=row.get("reason")))
     return out
 
 

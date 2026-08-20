@@ -513,3 +513,46 @@ def test_the_schema_refuses_a_sentinel_on_a_not_measured_metric():
         "contract.v1 accepts a NOT_MEASURED metric carrying a value")
     good = {"metric": "area.core_um2", "status": "NOT_MEASURED", "reason": "x"}
     assert not list(validator.iter_errors(good))
+
+
+# ---------------------------------------------------------------------------
+# the evidence manifest — two ways a citation can be worthless
+# ---------------------------------------------------------------------------
+
+def test_a_declared_evidence_role_set_that_matches_nothing_is_not_everything(
+        tmp_path):
+    """ABSENT means "everything the run read". PRESENT-and-matching-nothing
+    means NOTHING backs the verdict, and every citation is then unbacked.
+
+    A `or all_artefacts` fallback would turn a filter that matched nothing into
+    a filter over everything, silently — the same absent/empty collapse this
+    package refuses at the file and policy layers."""
+    decl = base_declaration()
+    decl["verdict_evidence_roles"] = ["a_role_no_artefact_has"]
+    built = build_contract(tmp_path, decl)
+    assert built.returncode == 1, built.stdout + built.stderr
+    assert "PPA-C-008" in codes(built)
+    document = json.loads((tmp_path / "contract.json").read_text())
+    assert document["evidence_manifest"]["artefacts"] == []
+
+    narrowed = base_declaration()
+    narrowed["verdict_evidence_roles"] = ["sta_setup"]
+    ok = build_contract(tmp_path, narrowed, name="narrowed.json")
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def test_a_metric_read_from_an_unhashable_artefact_is_refused(tmp_path):
+    """The number exists; the file behind it does not hash. Nothing can
+    confirm the number came from this run."""
+    decl = base_declaration()
+    decl["analysis"]["artefacts"].append(
+        {"role": "power_rpt", "path": "sta/power_never_written.rpt"})
+    decl["metrics"].append({
+        "schema": "vibeic.ppa.metric.v1", "metric": "power.total_mw",
+        "status": "MEASURED", "value": 1.2, "unit": "mW",
+        "scope": {"stage": "post_route_extracted", "activity_basis": "vcd"},
+        "source": {"path": "sta/power_never_written.rpt"}})
+    built = build_contract(tmp_path, decl)
+    assert built.returncode == 1, built.stdout + built.stderr
+    assert "PPA-C-008" in codes(built)
+    assert "NOT_MEASURED" in (built.stdout + built.stderr)
