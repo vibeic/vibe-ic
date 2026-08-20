@@ -322,6 +322,27 @@ run "flow-gate enforcement audit"       "$ROOT" python3 "$PG/flow_gate_enforceme
 # also refuses the degenerate repair of deleting the surviving one.
 run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membership_single_declaration_check.py"
 
+# PPA phase 0 — a flow that declares no metric for an axis cannot converge on
+# one. Measured on v1.11.7: the union of step keys over every step entry
+# carried no metric key at all, so the count of steps declaring an AREA figure
+# was zero for the same reason the timing count was — the grammar had nowhere
+# to put one. The numbers were being produced anyway (synthesis area and cell
+# count in stats.json, the OpenSTA power table's four components, DIEAREA in
+# the DEF) and none was named by the step that produced it, so no consumer
+# could ask for one by name and no absence was detectable.
+#
+# GATES ALL THREE AXES, not just the two that were blind. Performance was never
+# blind — 4 closed-loop edges converge on it — but it had no DECLARATION
+# either, and a gate that only guards the axes that were broken on the day it
+# was written is a gate that lets the next one break silently.
+#
+# Repo-level and needs no run: it reads the flow's declarations, not a
+# project's artefacts. The companion `flow_metric_record` answers the other
+# half ("did THIS run produce what it was owed") and takes a run directory, so
+# it belongs to a run and not to this file.
+run "PPA metric declared per axis" "$ROOT" python3 "$PG/flow_metric_coverage_check.py" \
+  --axis performance --axis power --axis area --flow-def "$PLUGIN/flow/phase1_phase2_phase3.yaml"
+
 # vibe-ic#312 family — a checker that reads a field NO document populates sees
 # an empty value, and an empty value is indistinguishable from a clean one.
 # Measured five times in one campaign; three were "the producer never existed".

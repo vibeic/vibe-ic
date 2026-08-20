@@ -1712,6 +1712,32 @@ steps:
       # declared, so a dimension can state which netlist it measured — which is
       # what vibe-ic#984 asked for — without making a stage-2 step
       # unsatisfiable without phase 3.
+    # ── PPA metric declarations ─────────────────────────────────────────
+    # `name` is OpenROAD's / LibreLane's OWN spelling, so this flow can be
+    # cross-checked against ORFS without a translation table. The on-disk key
+    # `step_metrics` writes is the step-qualified `<step>__<name>`; the prefix
+    # is the file's attribution and is added by the emitter, not declared here.
+    # `flow_metric_record` reads `source` with `reader` and writes the literal
+    # NOT_MEASURED for anything a run did not produce — never a default.
+    #
+    # BOTH figures already existed and neither was named. `synth_area_stats_emit`
+    # has been writing `chip_area` and `cell_count` into the stats.json this step
+    # ALREADY declares as a required_output; nothing downstream could ask for
+    # either by name, so an absent area figure was indistinguishable from a
+    # present one. The unit is the cell library's own area unit — the tool prints
+    # the figure without restating the unit and naming a concrete one here would
+    # be an invention (`synth_area_stats_emit` says the same in its `chip_area_unit`).
+    metrics:
+      - name: design__instance__area
+        axis: area
+        source: "phase2/stage2/synth/stats.json"
+        reader: "json:chip_area"
+        unit: "cell-library area unit"
+      - name: design__instance__count
+        axis: area
+        source: "phase2/stage2/synth/stats.json"
+        reader: "json:cell_count"
+        unit: "count"
     # Provenance required (2026-04-22): the netlist MUST appear as a
     # logged `yosys` output in provenance.jsonl with matching hash.
     # To satisfy, wrap Yosys like:
@@ -2893,6 +2919,39 @@ steps:
     mcp_tools: [eda_pnr]
     required_outputs:
       - "phase3/stage3/pnr/placed.def"
+    # ── PPA metric declarations ── see step 9 for what the fields mean ──
+    # THE UTILIZATION SOURCE IS THE TOOL LOG, AND THAT IS STATED RATHER THAN
+    # HIDDEN. `step_metrics` rule 1 is that a metric is emitted by whoever
+    # computed it and never re-parsed from a log; OpenROAD is not run here with
+    # `-metrics`, so the placer's achieved utilization exists ONLY as the
+    # `[INFO DPL-0009] Utilization:` line. `flow_metric_record` records it with
+    # `provenance: log`, which is a WEAKER claim than a tool-emitted metric and
+    # is reported as such — `step_metrics.reconcile` already has the vocabulary
+    # (NO_METRIC / PROSE_BLIND) for a consumer that must not accept a proxy.
+    # Closing this properly means running OpenROAD with `-metrics`; that is a
+    # change to the step's own tool invocation and is not this declaration.
+    #
+    # THE LAST DPL-0009 LINE, NOT THE FIRST. Measured on a completed run
+    # (spm, 2026-08-03): DPL-0009 appears 7 times as detailed placement re-runs
+    # after each optimization, rising 45.6% -> 59.2%. The last is the achieved
+    # placement. Neither IFP-0104 ("Effective utilization", step 15's floorplan
+    # number) nor GPL-0019 (global placement, 44.379% on the same run) is this
+    # step's figure, and `report_design_area`'s utilization is INTEGER-ROUNDED
+    # (it printed "100% utilization" on that run) so it cannot serve either.
+    #
+    # NOT `placement_legality_check`'s `density_pct`: that reads a placer TARGET
+    # density off a config artefact. It is the request, not the result.
+    metrics:
+      - name: design__instance__utilization
+        axis: area
+        source: "phase3/stage3/pnr/openroad.log"
+        reader: "openroad_log:detailed_placement_utilization"
+        unit: "percent"
+      - name: design__core__area
+        axis: area
+        source: "phase3/stage3/pnr/placed.def"
+        reader: "def:core_area"
+        unit: "um^2"
     gate:
       all_of:
         # The DECLARED INVERSE of `openroad_tcl_deprecation_check` (which flags
@@ -3095,6 +3154,26 @@ steps:
       - hold_area_budget_check
     required_outputs:
       - "phase3/stage3/pnr/post_hold.def"
+    # ── PPA metric declaration ── see step 9 for what the fields mean ──
+    # THE ONE METRIC IN THIS FLOW THAT WAS ALREADY DONE RIGHT, and it is
+    # declared so the performance axis reports what it actually has rather than
+    # a zero. `hold_closure_check._emit` already calls
+    # `step_metrics.emit_best_effort(project, "20", {...})` with
+    # `20__timing__hold__ws` taken from the value the gate itself computed — the
+    # emitted-by-the-computer-of-the-number shape the other declarations here
+    # can only approximate. `flow_metric_record` therefore READS it back rather
+    # than re-deriving it.
+    #
+    # This is the whole of the performance axis's declared coverage today.
+    # Steps 10 and 23 produce STA reports whose summary JSONs are AUDITS
+    # (`{program, passed, findings, summary}`) and carry no WNS/TNS figure, so
+    # declaring a metric there would name a number no artefact holds.
+    metrics:
+      - name: timing__hold__ws
+        axis: performance
+        source: "reports/metrics/20.json"
+        reader: "step_metrics:20__timing__hold__ws"
+        unit: "ns"
     gate:
       all_of:
         # The hold-fix SKILL's guardrail #2 — "hold buffers should not exceed
@@ -3229,6 +3308,33 @@ steps:
       # step does not declare is to DECLARE it — not to stop reading it, and
       # not to waive the dimension that caught it.
       - "reports/phase3/drc_router.json"
+    # ── PPA metric declaration ── see step 9 for what the fields mean ──
+    # ROUTE WIRELENGTH HAD NO PRODUCER AT ALL. grep over programs/ for
+    # `wirelength|total_wire_length|report_wire` outside tests returns only
+    # `-max_wire_length` (a resizer ARGUMENT) and `sink_wire_length_um` (step
+    # 19's clock tree). The router prints the figure and nothing ever lifted it.
+    #
+    # LAST OCCURRENCE, and the count is why. Measured on a completed run
+    # (spm, 2026-08-03) `^Total wire length = N um.` appears 5 times as the
+    # router iterates: 13033, ..., 12704, 12704. Taking the first is a 2.6%
+    # error on that run and the sign of the error is not fixed. The reader takes
+    # the last and records the line number it came from.
+    #
+    # Source is the tool LOG for the same reason as step 17's utilization, and
+    # with the same `provenance: log` weakening — see that step's note.
+    #
+    # AXIS CHOICE, stated because it is a decision: wirelength is filed under
+    # `area` because it is the routing-resource consumption a floorplan trades
+    # against, and it is the figure that moves when area is squeezed. ORFS keeps
+    # it as its own reported quantity rather than under one of the three; a
+    # reader who wants it counted under `power` instead has a real argument
+    # (wire capacitance is switching power) and the declaration is one word.
+    metrics:
+      - name: route__wirelength
+        axis: area
+        source: "phase3/stage3/pnr/openroad.log"
+        reader: "openroad_log:route_wirelength"
+        unit: "um"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/routed.def"]
@@ -4753,6 +4859,51 @@ steps:
     required_outputs:
       - "reports/phase3/power.rpt"
       - "reports/phase3/power.json"
+    # ── PPA metric declarations ── see step 9 for what the fields mean ──
+    # SPLIT INTO FOUR, NOT ONE FIGURE. `report_power`'s Total row already
+    # tabulates internal / switching / leakage / total, and the three components
+    # answer different questions: leakage is a PDK-and-corner property, switching
+    # is an activity property, internal is a cell-choice property. A single
+    # "total power" number cannot tell a later loop which of them a change moved.
+    #
+    # THE FOUR FIGURES WERE ALREADY BEING PARSED AND THEN DISCARDED. This step's
+    # own gate runs `power_total_vs_budget_check`, whose `read_totals()` regexes
+    # exactly this row into {internal, switching, leakage, total}_power_W — and
+    # then uses only `total` for a budget comparison that the gate's own note
+    # records as REFUSING on 0 of 17 published runs, because no L19 declares
+    # `power_budget_uw`. The numbers never reached an artefact.
+    #
+    # AND THE DECLARED MACHINE-READABLE HALF CARRIES NO NUMBER. This step
+    # declares `reports/phase3/power.json` as a required_output;
+    # `phase3_one_shot_runner` writes it as
+    # {tool, source, analysis_mode, verdict, evidence} — five strings and not one
+    # figure. So "step 33 measures and feeds nothing" is literally true of the
+    # artefact a consumer would reach for. The figures are declared here against
+    # `power.rpt`, which is where they actually are, rather than by teaching a
+    # second writer to fork them into power.json: `reports/metrics/<step>.json`
+    # is the repo's ONE metrics channel (step_metrics) and a second home for the
+    # same number is how two answers start to disagree.
+    metrics:
+      - name: power__internal__total
+        axis: power
+        source: "reports/phase3/power.rpt"
+        reader: "power_rpt:internal"
+        unit: "W"
+      - name: power__switching__total
+        axis: power
+        source: "reports/phase3/power.rpt"
+        reader: "power_rpt:switching"
+        unit: "W"
+      - name: power__leakage__total
+        axis: power
+        source: "reports/phase3/power.rpt"
+        reader: "power_rpt:leakage"
+        unit: "W"
+      - name: power__total
+        axis: power
+        source: "reports/phase3/power.rpt"
+        reader: "power_rpt:total"
+        unit: "W"
     gate:
       # The audit trail goes to the gates/ directory, NOT to
       # reports/phase3/power.json. That path is this step's declared
@@ -5195,6 +5346,26 @@ steps:
     mcp_tools: [eda_gds]
     required_outputs:
       - "phase3/stage4/gds/*.gds"
+    # ── PPA metric declaration ── see step 9 for what the fields mean ──
+    # DIE AREA IS READ FROM THE DEF THAT WAS STREAMED, NOT FROM THE GDS. The
+    # DEF states `DIEAREA ( x0 y0 ) ( x1 y1 )` against a declared
+    # `UNITS DISTANCE MICRONS <n>`, so the figure is exact and its unit is
+    # carried by the same file; a GDS bounding box would have to be recovered
+    # from geometry and would silently include whatever the streamer added.
+    # `die_finishing_gen` already prefers the floorplan's own DIEAREA over the
+    # GDS bbox for the same reason.
+    #
+    # `filled.def` and not `routed.def`: this step streams out what step 34 left
+    # behind, and the die is whatever the last DEF says it is. On a run where
+    # metal fill was skipped the file is absent and the metric is NOT_MEASURED,
+    # which is the honest answer — silently falling back to an earlier DEF would
+    # report a die that a later step may have changed.
+    metrics:
+      - name: design__die__area
+        axis: area
+        source: "phase3/stage3/pnr/filled.def"
+        reader: "def:die_area"
+        unit: "um^2"
     gate:
       all_of:
         - files_exist: ["phase3/stage4/gds/*.gds"]

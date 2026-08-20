@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1132
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1132)
+- **Total programs (excluding helpers / shims):** 1134
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1134)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1123 |
+| `any` | 1125 |
 
 ## Alphabetical listing
 
@@ -370,6 +370,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_dependency_graph_check` | any | — | recompute the flow-gate's dependency dimension. |
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
+| `flow_metric_coverage_check` | any | — | does the canonical flow DECLARE a metric per PPA axis? |
+| `flow_metric_record` | any | — | record every metric the flow DECLARES, or NOT_MEASURED. |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
 | `flow_stage_membership_single_declaration_check` | any | — | stage membership is declared once. |
 | `flow_step_can_fail_check` | any | — | a step whose gate cannot fail must say so. |
@@ -1204,7 +1206,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1123 programs)
+### `any` (1125 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1546,6 +1548,8 @@ _(no programs in this group)_
 - `flow_dependency_graph_check` — recompute the flow-gate's dependency dimension.
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
+- `flow_metric_coverage_check` — does the canonical flow DECLARE a metric per PPA axis?
+- `flow_metric_record` — record every metric the flow DECLARES, or NOT_MEASURED.
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
 - `flow_stage_membership_single_declaration_check` — stage membership is declared once.
 - `flow_step_can_fail_check` — a step whose gate cannot fail must say so.
