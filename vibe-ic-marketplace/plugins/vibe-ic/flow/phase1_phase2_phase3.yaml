@@ -3028,12 +3028,19 @@ steps:
         #         in, so wiring this clause changes no existing verdict.
         #   rc 1  REFUSE — a source could not be READ, two slot files pin the
         #         same side differently, a slot pad list names no die side, or
-        #         the declaration was STARTED and still owes a field. The
-        #         message NAMES the field. It never guesses a pad site, an edge
-        #         spacing, a rotation or a filler, so every one of
-        #         `pad_ring_gen`'s own refusals (PAD_SITE_NOT_FOUND,
-        #         PAD_SITE_CLASS_NOT_PAD, PAD_CORNER_SPACING_NOT_SITE_MULTIPLE
-        #         and the other three) stays reachable and still fires.
+        #         a source spoke and the contract is still incomplete. That
+        #         last one has two shapes and the message says which: the
+        #         DESIGN answered some of section 2B and not the rest, or the
+        #         OPERATOR's slot pinned the four per-side pad lists while the
+        #         design answered nothing — which is NOT "nobody was asked",
+        #         and a slot file can supply nothing else, so the other nine
+        #         variables are owed by the design whatever the operator
+        #         published. Either way the owed fields are NAMED. It never
+        #         guesses a pad site, an edge spacing, a rotation or a filler,
+        #         so every one of `pad_ring_gen`'s own refusals
+        #         (PAD_SITE_NOT_FOUND, PAD_SITE_CLASS_NOT_PAD,
+        #         PAD_CORNER_SPACING_NOT_SITE_MULTIPLE and the other three)
+        #         stays reachable and still fires.
         - program_exit_zero: "pad_assignment_gen . --json reports/phase3/pad_assignment.json"
         - program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
     # 0.5ic writes the template this step's condition reads; without the
