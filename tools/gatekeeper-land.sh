@@ -387,6 +387,31 @@ fi
 
 echo "--- full tier (minutes; stamps the tree on success) ---"
 
+# ── IS THIS CHECKOUT STILL GOING TO BE A REPOSITORY IN AN HOUR? ───────────
+#
+# A linked worktree's registration lives in a repository this run does not own,
+# and `git worktree prune` there removes it MID-RUN. MEASURED: one tier run lost
+# four gates to pure collateral that way — four verdicts about the accident
+# instead of about the commit, and the run's third measurement lost to something
+# outside the measurement.
+#
+# BEFORE the runtime preflight and before every arm, because it costs
+# milliseconds and because a tier that cannot survive its own hour has nothing
+# to say later. Deliberately AFTER the `--cheap-only` exit: the cheap tier is
+# the pre-push hook's path, it runs in whatever checkout the developer is in,
+# and it finishes in seconds — the failure mode this refuses needs an hour to
+# happen.
+#
+# There is no environment escape hatch, on purpose: a flag that permits a
+# worktree is a flag that gets exported once and forgotten. The refusal text and
+# the remedy belong to the program, so this line and the cause cannot drift.
+if ! python3 "$PROGRAMS/landing_tier_checkout_preflight.py" --root "$ROOT"; then
+  echo "=== REFUSED — the full tier will not start in a checkout something"
+  echo "    outside this run can remove. No arm was run and no stamp was"
+  echo "    written. See the cause and remedy above."
+  exit 2
+fi
+
 # ── CAN THIS HOST LOOK AT ALL? ASKED ONCE, BEFORE THE ARMS ────────────────
 #
 # The three test arms below run their child through the isolated trusted entry.
