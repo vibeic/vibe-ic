@@ -72,11 +72,24 @@ def default_image() -> str:
     """
     img = _img.anchor_image()
     if img is None:
-        raise SystemExit(
-            "no tools/vibeic-eda/VERSION in this checkout and no "
-            "VIBEIC_EDA_IMAGE override; refusing to fall back to a floating "
-            "reference whose bytes a third party controls. Pass --image "
-            "explicitly if that is what you mean.")
+        # RC_CANNOT_CHECK, NOT the bare `SystemExit("...")` this first shipped
+        # with. A string argument exits 1, and 1 is this program's word for
+        # RC_DISAGREE — "the two STA engines do not agree". Nothing had been
+        # looked at. MEASURED on the branch: from a copy of `programs/` with no
+        # repo root (which is exactly how the plugin is INSTALLED, since
+        # `tools/vibeic-eda/VERSION` lives above the plugin directory) the
+        # refusal returned rc=1, so every end user would have read "the engines
+        # disagree" from a run that never opened an image.
+        #
+        # "I could not read it" and "I read it and it was bad" must never
+        # produce the same verdict, and of the two directions this one is worse:
+        # it invents a finding about silicon.
+        print("[CANNOT CHECK] sta_engine_parity_check: no "
+              "tools/vibeic-eda/VERSION in this checkout and no "
+              "VIBEIC_EDA_IMAGE override; refusing to fall back to a floating "
+              "reference whose bytes a third party controls. Pass --image "
+              "explicitly if that is what you mean.", file=sys.stderr)
+        raise SystemExit(RC_CANNOT_CHECK)
     return img
 
 #: Commands that exist ONLY on `vibeic/sta-timing-eco`, taken from its diff
