@@ -325,7 +325,98 @@ This is not one of the six; it is the same rule the six are about — "I could n
 look" must never reach a reader as "I looked". `entry` is now made absolute
 before the probe, with a regression test proven red at 46db018669.
 
-## 6. Summary
+## 6. A seventh red, introduced by this work and caught by another host
+
+The first version of Class H's new test, `test_a_half_closure_lane_is_not_silently_completed`,
+was **host-dependent** — the shape this repository blocks on, and it was mine.
+Measured by the orchestrator on the rebased branch at `88244380f6`:
+
+```
+8HD-7 (192.168.1.102)   programs/tests/test_trusted_pytest_entry.py::test_a_half_closure_lane_is_not_silently_completed   FAILED  assert 0 == 2
+8HD-d (192.168.1.112)   same file                                                                                         12 passed, 2 skipped
+```
+
+The guard asked whether the closure spans **one** directory and treated "more
+than one" as "a refusal is possible". Both hosts have three directories in that
+value, so the guard sent 8HD-7 down the refusal branch — but there the runner's
+own directory already holds everything the session imports, so nothing was
+missing and the entry correctly recorded.
+
+| host | runner directory | verdict it deserves |
+|---|---|---|
+| 8HD-d | `~/.local/lib/python3.12/site-packages` — `pygments` lives in `/usr/lib/python3/dist-packages` | **insufficient** → refuse, rc 2 |
+| 8HD-7 | `~/.local/lib/python3.10/site-packages` — already complete | **sufficient** → record, rc 0 |
+
+**The entry was never at fault**, and that was measured rather than argued.
+Building a runner directory on 8HD-d that holds the whole closure and pointing
+the lane at that alone reproduces 8HD-7 exactly, from the same entry, on this
+host:
+
+```
+lane = <the real, split runner dir>   [NORECORD] trusted pytest entry: No module named 'pygments'   rc 2
+lane = <a self-sufficient dir>        1 passed                                                      rc 0
+```
+
+and the old guard, run verbatim against that self-sufficient directory here,
+fails with the orchestrator's own error. There is also nowhere a silent
+completion could have come from: under `-S -I` the child's `sys.path` is the
+lane plus the stdlib, and the entry only ever *inserts*.
+
+**The property is sufficiency, and sufficiency is measured, not counted.**
+`_session_without_the_entry` runs the same interpreter, subject and environment
+with that one directory on `sys.path` and no entry at all; the test asserts the
+entry's verdict *agrees* with it. That is a real claim in both directions —
+control fails while the entry records means the entry reached past the lane it
+was given (the silent fallback the entry's docstring refuses, and the defect the
+test exists for); control records while the entry refuses means the entry
+refuses a working runtime. Where the runner directory is insufficient it
+additionally pins that the refusal names the *same* cause the control hit.
+
+Proven to still discriminate, by mutation: making `run()` append a host site
+directory the lane never named turns the test red with the message that names
+exactly that. Restored by reverse edit, and the protected file's sha256 and size
+re-checked against the manifest's `next` afterwards.
+
+The same class was then looked for rather than waited for: `_isolated_site_dirs`
+selected the lane's directories by matching the names `site-packages` and
+`dist-packages`, which is a guess about two spellings that returns an incomplete
+lane on any installation using another name or a `.pth`-injected directory.
+`_site_processing_dirs` derives them as a set difference instead — what the
+ordinary interpreter imports from, minus what `-S -I` imports from. On 8HD-d the
+two constructions return the identical three directories, so there it is a change
+of definition and not of behaviour.
+
+**And that replacement was itself wrong on its first run, in the same class
+again — caught by running the whole lane rather than the file.** `-I` implies
+`-E`, so the siteless arm cannot honour `PYTHONPATH` while the ordinary arm can,
+and the difference therefore absorbed every ambient entry as though site
+processing had added it. Under the landing arm that is not hypothetical:
+`pytest_per_file_junit` prepends the plugin's own `programs` directory to
+`PYTHONPATH` for every child it spawns, so the built lane named a directory
+*inside the checkout*:
+
+```
+tools/ci/test_landing_runtime_preflight_gate.py::test_the_host_lane_lets_the_same_tree_record  FAILED
+  lane    ~/.local/lib/python3.12/site-packages:<repo>/vibe-ic-marketplace/plugins/vibe-ic/programs:...
+  stderr  [NORECORD] trusted pytest entry: VIBEIC_TRUSTED_PYTEST_SITE resolved inside the subject checkout
+1 failed, 815 passed, 6 skipped
+```
+
+The entry's own `_under(resolved, subject) / _under(resolved, programs)` refusal
+is what caught it, which is the guard working exactly as its docstring says: a
+runtime the subject can name is a runtime the subject controls. Both probe arms
+now run with `PYTHONPATH`/`PYTHONHOME` removed so the difference is symmetric,
+and anything inside the repository is dropped — a builder obeying the contract it
+builds for, with the entry still the enforcer. Proven both ways under the
+environment the lane actually supplies:
+
+```
+PYTHONPATH=<programs>  at the previous commit   1 failed, 6 passed
+PYTHONPATH=<programs>  fixed                    27 passed, 2 skipped
+PYTHONPATH unset       fixed                    27 passed, 2 skipped
+```
+
+## 7. Summary
 
 | class | reds | fixed |
 |---|---|---|

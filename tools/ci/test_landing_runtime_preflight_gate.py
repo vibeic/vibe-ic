@@ -214,33 +214,50 @@ def _site_processing_dirs() -> list[Path]:
     rather than by matching the names `site-packages` and `dist-packages`. The
     name match was the first shape and it is a guess about two spellings: it
     silently returns an INCOMPLETE lane on any installation that adds a
-    directory under some other name, and on any directory a `.pth` file
-    injected. Both are hosts this fleet does not happen to have, which is the
-    same reason the guard in
-    `test_the_entry_reports_the_runtime_it_was_given_and_never_completes_it`
-    was wrong until another host measured it.
+    directory under some other name, or one a `.pth` file injected.
+
+    BOTH ARMS RUN WITHOUT `PYTHONPATH`/`PYTHONHOME`, and that is load-bearing
+    rather than tidy. `-I` implies `-E`, so the siteless arm cannot honour them
+    and the ordinary arm can -- an asymmetry that puts every ambient entry into
+    the difference as though site processing had added it. MEASURED: under the
+    landing arm, `pytest_per_file_junit` prepends the plugin's own `programs`
+    directory to `PYTHONPATH` for every child it spawns, so the lane came out
+    naming a directory INSIDE the checkout and `trusted_pytest_entry` refused
+    it -- `VIBEIC_TRUSTED_PYTEST_SITE resolved inside the subject checkout`.
+    The entry's guard was right; the lane this helper built was wrong.
+
+    Anything inside the repository is dropped for that same reason. The entry
+    OWNS that refusal and keeps it; this is a builder obeying the contract it
+    builds for, not a second copy of the check. An editable install pointing at
+    the checkout would otherwise reintroduce exactly the failure above on a host
+    that happens to have one.
 
     The difference is also what makes the ordering assertion sound: none of
     these directories is on a siteless interpreter's path by construction, so
     when the lane names them they appear because the lane named them.
-
-    MEASURED on 8HD-d at 88244380f6 -- the two constructions agree here, so this
-    is a change of DEFINITION and not of behaviour on this host:
-        ~/.local/lib/python3.12/site-packages
-        /usr/local/lib/python3.12/dist-packages
-        /usr/lib/python3/dist-packages
     """
+    env = {key: value for key, value in os.environ.items()
+           if key not in {"PYTHONPATH", "PYTHONHOME"}}
+
     def seen(*flags: str) -> list[str]:
         proc = subprocess.run(
             [sys.executable, *flags, "-c",
              "import sys" + chr(10) + "for e in sys.path: print(e)"],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True)
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
         assert proc.returncode == 0, proc.stderr
         return [line for line in proc.stdout.split()
                 if line and Path(line).is_dir()]
 
     siteless = set(seen("-S", "-I"))
-    return [Path(item) for item in seen() if item not in siteless]
+    out: list[Path] = []
+    for item in seen():
+        if item in siteless:
+            continue
+        resolved = Path(item).resolve()
+        if resolved == _ROOT or _ROOT in resolved.parents:
+            continue
+        out.append(resolved)
+    return out
 
 
 def _closure_lane() -> str:
