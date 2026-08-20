@@ -1627,6 +1627,23 @@ steps:
   - id: 9
     name: "Synthesis (Yosys → mapped netlist)"
     stage: stage2
+    # THE AREA AXIS HAD NEITHER A COMPARISON NOR AN EDGE — it had no metric at
+    # all. This step emitted `area.rpt` / `stats.json` and no step in the
+    # canonical flow read the number; the four steps that dominate area (9, 12,
+    # 17, 34) were all terminal.
+    #
+    # 1 is the fallback because a design's synthesised area is a property of its
+    # RTL and of the recipe THIS step runs. Step 9 IS the synthesis step, so
+    # "re-synthesise" is not an upstream move for it — a self-edge here would
+    # re-run the same recipe on the same input and spin. Step 1 is a transitive
+    # blocks_on ancestor, so the edge re-enters this step, and it is the same
+    # target steps 2/3/4/5 already fall back to for the same reason.
+    #
+    # The trigger names the DECLARED ceiling and nothing else. See the gate
+    # clause below for what happens when no design declares one.
+    closed_loop:
+      fallback_to: 1
+      trigger: "design__instance__area above the design's DECLARED ceiling (L19.die_area_budget_um); the structure has to change"
     # prose says lint/sim/formal-clean RTL; the RTL artefact is Step 1's.
     required_inputs:
       - from: 1
@@ -1723,6 +1740,36 @@ steps:
         - files_exist: ["phase2/stage2/synth/netlist.v"]
         - program_exit_zero: "synth_netlist_check --netlist phase2/stage2/synth/netlist.v --json reports/phase2/synth_netlist.json"
         - program_exit_zero: "provenance_check . --output phase2/stage2/synth/netlist.v --tool yosys,yosys-abc"
+        # THE AREA FIGURE WAS NEVER COMPARED TO ANYTHING. The clauses above
+        # establish that the netlist is a real synthesis product and that yosys
+        # produced it; none of them reads the AREA the same invocation reported.
+        # That is the identical shape `power_total_vs_budget_check` was written
+        # for one axis over, and the ledger entry that names it —
+        # ART-POWER-FIGURES-X1000, a 1000x rewrite of every power figure staying
+        # green — applies verbatim to a 1000x area figure here.
+        #
+        # This clause carries the comparison: synthesised cell area against
+        # L19's `die_area_budget_um`. The ONLY bound it applies is
+        # utilisation <= 1.0, which is what the two quantities MEAN and not a
+        # number anybody picked; it deliberately does NOT apply the 40-70% a
+        # real floorplan targets, because no design in this corpus declares one.
+        #
+        # MEASURED over the published corpus (benchmark-data @ 146d665,
+        # 2026-08-20): 177 L19 copies, ONE declaring `die_area_budget_um`, TWO
+        # runs carrying a synth `chip_area`, and ZERO overlap between them. So
+        # on today's corpus this clause REFUSES on every published run: it
+        # prints `INCOMPLETE:` naming the authority it lacks and exits 2, which
+        # `flow_compliance_check` records as VACUOUS_PASS — explicitly not a
+        # clean result. Corpus blast radius: 0 PASS->FAIL, and every run that
+        # PASSes step 9 today moves to VACUOUS_PASS, which is the honest verdict
+        # for a step whose area was never compared to anything.
+        #
+        # It refuses in THREE distinguishable ways — no declared ceiling, no
+        # readable area figure, and a figure whose producing artefact declines
+        # to name its unit as um^2 (`stats.json` says "cell-library area unit",
+        # deliberately). "I could not read it" and "I read it and it was fine"
+        # must not produce the same artefact.
+        - program_exit_zero: "area_total_vs_budget_check . --json reports/phase2/gates/area_budget.json"
     blocks_on: [2, 3, 8]
 
   - id: 10
@@ -4746,6 +4793,26 @@ steps:
   - id: 33
     name: "Power analysis (pre/post-layout)"
     stage: stage4
+    # THE POWER AXIS HAD A COMPARISON AND NO EDGE.
+    # `power_total_vs_budget_check` (below) computes the verdict and, until this
+    # declaration, handed it to nobody: 19 closed_loop edges existed in this
+    # flow and FOUR of them served timing (10->7, 20->19, 23->32, 32->32) while
+    # power had exactly ONE (24->15, IR drop) and area had NONE. Step 33
+    # measured total power and the number was recorded and then dropped.
+    #
+    # 17 is the fallback because PLACEMENT is the first lever that moves total
+    # power: switching power is dominated by the capacitance the placer decides,
+    # and 17 is a transitive blocks_on ancestor of 33, so the edge re-enters
+    # this step (`closed_loop_edge_check.CL-NOT-A-LOOP`).
+    #
+    # The trigger names the DECLARED budget and nothing else. When L19 declares
+    # no `power_budget_uw` the gate below REFUSES (rc 2, INCOMPLETE) and this
+    # edge is not taken — it is not taken on a derived ceiling either, because a
+    # threshold nobody declared is a ruler fitted to the answer
+    # (`matrix_mutation_ledger.ART-POWER-FIGURES-X1000`).
+    closed_loop:
+      fallback_to: 17
+      trigger: "power__total above the design's DECLARED budget (L19.power_budget_uw); re-place to cut switching capacitance"
     required_inputs:
       - from: 22
         path: "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"

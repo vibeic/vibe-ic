@@ -1281,10 +1281,20 @@ def test_a_stub_population_never_escapes_the_test_that_installed_it():
     """
     replay_results.cache_clear()
     with pytest.MonkeyPatch.context() as mp:
-        # Make the `== 24` assertion legitimately false, which is what `all`
-        # mode does in the field.
+        # Make the denominator assertion legitimately false, which is what
+        # `all` mode does in the field.
+        #
+        # DERIVED FROM THE PLAN, not written down. A literal here RACES the pin
+        # in the test below, and on 2026-08-20 it lost that race: adding
+        # `D5-PHANTOM-FALLBACK` moved the frozen plan from 24 to 25, the
+        # hard-coded 25 became EQUAL to it, the inner assertion passed, and
+        # `pytest.raises(AssertionError)` reported this test as broken —
+        # i.e. a guard on the `finally` stopped driving the failing direction
+        # and said so as if the `finally` had regressed. Deriving the wrong
+        # count from the right one cannot go stale.
+        wrong_denominator = len(L.replay_plan()) + 1
         mp.setattr(L, "replay_plan", lambda *a, **k: tuple(
-            (f"M{i}", f"s{i}") for i in range(25)))
+            (f"M{i}", f"s{i}") for i in range(wrong_denominator)))
         with pytest.raises(AssertionError):
             test_witness_replay_relays_the_exact_frozen_plan_denominator(mp)
     assert replay_results.cache_info().currsize == 0, (
@@ -1335,10 +1345,17 @@ def test_witness_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
         seen.append((scope, completed, total)))
     try:
         assert replay_results() == ()
-        assert len(L.replay_plan()) == 24
+        # 24 -> 25: `D5-PHANTOM-FALLBACK` joined the ledger (2026-08-20). It is
+        # the first mutation to reach `closed_loop.fallback_to` — the flow's
+        # CONVERGENCE edges, 19 of which had shipped with no reader in the
+        # repository at all. Witness mode is one pair per entry, so the plan
+        # grows by exactly one. Re-stated by hand rather than derived from
+        # `len(L.MUTATIONS)`, because this pin exists to make a new entry force
+        # a human to say the number.
+        assert len(L.replay_plan()) == 25
         assert seen == [
-            ("matrix-mutation-replays", completed, 24)
-            for completed in range(1, 25)
+            ("matrix-mutation-replays", completed, 25)
+            for completed in range(1, 26)
         ]
     finally:
         replay_results.cache_clear()

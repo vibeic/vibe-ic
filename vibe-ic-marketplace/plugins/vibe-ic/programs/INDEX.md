@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1132
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1132)
+- **Total programs (excluding helpers / shims):** 1134
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1134)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1123 |
+| `any` | 1125 |
 
 ## Alphabetical listing
 
@@ -100,6 +100,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `antenna_report_check` | any | — | Antenna report check — wrapper for eda_report_audit --mode antenna. |
 | `arbiter_starvation_check` | any | v0.116 | Detect fixed-priority arbiters whose high-priority requester is |
 | `arch_dse_pareto` | any | — | arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration. |
+| `area_total_vs_budget_check` | any | — | the synthesised area figure must reach a COMPARISON, or the step must REFUSE and name the authority it lacks. |
 | `argparse_help_format_check` | any | — | pin the bare-% argparse help-string class. |
 | `arinc429_protocol_synth` | any | v0.1.83 | ARINC 429 (Mark 33 DITS) protocol synth helper. |
 | `arith_declaration_emit` | any | — | deterministic declaration emitter. |
@@ -195,6 +196,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `clock_domain_reg_crossing_check` | any | — | RTL-level clock-domain-crossing screen. |
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
 | `clock_scale_consistency_check` | any | — | Catch un-rescaled threshold values. |
+| `closed_loop_edge_check` | any | — | a declared `closed_loop` must be an edge something can actually take, or the declaration is decoration. |
 | `cmd_arg_range_validation_check` | any | — | M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated... |
 | `cmd_argument_validation_present_check` | any | — | every opcode in L3_CMD_PROTOCOL.json that takes ≥2 inbound argument bytes must declare an `argument_validation_predicate` field referenci... |
 | `cmd_buf_index_semantic_consistency_check` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 37 | Wave 37 (v0.119.69). |
@@ -1204,7 +1206,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1123 programs)
+### `any` (1125 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1280,6 +1282,7 @@ _(no programs in this group)_
 - `antenna_report_check` — Antenna report check — wrapper for eda_report_audit --mode antenna.
 - `arbiter_starvation_check` — Detect fixed-priority arbiters whose high-priority requester is  _[v0.116]_
 - `arch_dse_pareto` — arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration.
+- `area_total_vs_budget_check` — the synthesised area figure must reach a COMPARISON, or the step must REFUSE and name the authority it lacks.
 - `argparse_help_format_check` — pin the bare-% argparse help-string class.
 - `arinc429_protocol_synth` — ARINC 429 (Mark 33 DITS) protocol synth helper.  _[v0.1.83]_
 - `arith_declaration_emit` — deterministic declaration emitter.
@@ -1374,6 +1377,7 @@ _(no programs in this group)_
 - `clock_domain_reg_crossing_check` — RTL-level clock-domain-crossing screen.
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
 - `clock_scale_consistency_check` — Catch un-rescaled threshold values.
+- `closed_loop_edge_check` — a declared `closed_loop` must be an edge something can actually take, or the declaration is decoration.
 - `cmd_arg_range_validation_check` — M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated...
 - `cmd_argument_validation_present_check` — every opcode in L3_CMD_PROTOCOL.json that takes ≥2 inbound argument bytes must declare an `argument_validation_predicate` field referenci...
 - `cmd_protocol_byte_exact_check` — gate that catches L3_CMD_PROTOCOL.json with symbolic/abstract entries in fields_tx instead of byte-exact bytes.

@@ -556,6 +556,21 @@ def _k_blocks_on_append_phantom(step: Dict, _p: Dict) -> bool:
     return True
 
 
+def _k_closed_loop_fallback_phantom(step: Dict, _p: Dict) -> bool:
+    """Repoint a `closed_loop.fallback_to` at a step id that does not exist.
+
+    The `blocks_on` sibling of this edit is :func:`_k_blocks_on_append_phantom`;
+    this one reaches the OTHER edge set — the CONVERGENCE edges — which had no
+    mutation at all until 2026-08-20, because nothing in the repository read
+    them.
+    """
+    cl = step.get("closed_loop")
+    if not isinstance(cl, dict) or "fallback_to" not in cl:
+        return False
+    cl["fallback_to"] = "__PHANTOM" + CANARY_SUFFIX + "__"
+    return True
+
+
 def _k_notes_append_ghost_program(step: Dict, _p: Dict) -> bool:
     notes = step.get("notes")
     if not isinstance(notes, str):
@@ -578,6 +593,7 @@ YAML_KINDS: Dict[str, Callable[[Dict, Dict], bool]] = {
     "required_outputs_empty": _k_required_outputs_empty,
     "required_outputs_delete_key": _k_required_outputs_delete_key,
     "blocks_on_append_phantom": _k_blocks_on_append_phantom,
+    "closed_loop_fallback_phantom": _k_closed_loop_fallback_phantom,
     "notes_append_ghost_program": _k_notes_append_ghost_program,
 }
 
@@ -869,6 +885,16 @@ _THEN_FIVE = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
 _THEN_37_5SELF = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
                   "37.5self   (2026-08-20, the one step this entry gained on "
                   "top of the five)")
+
+#: The sweep for the CONVERGENCE-edge entry. It is deliberately NOT
+#: :data:`_SWEEP`: `closed_loop` is declared by a MINORITY of steps, so a
+#: 63-step sweep would report a mostly-NOT_APPLICABLE run and the real
+#: denominator would be buried. This one names its own denominator — every step
+#: that DECLARES a `closed_loop`, derived from the live yaml at replay time, not
+#: from a number written down here.
+_CL_SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each step "
+             "declaring a closed_loop, derived live from the flow yaml>   "
+             "(2026-08-20, one pytest run per step)")
 
 #: A full re-sweep on 2026-08-11 — same shape as :data:`_SWEEP`, later tree.
 _RESWEEP = ("matrix_mutation_ledger.py --replay {name} --jobs 8   "
@@ -1199,6 +1225,58 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "so by name. Each was REPLAYED, not assumed: `--replay D5-PHANTOM-EDGE "
                  "--step <id>` -> REDDENED for all five (times in the "
                  "commit message)."),
+    ),
+
+    # THE OTHER EDGE SET. `D5-PHANTOM-EDGE` above mutates `blocks_on`; this one
+    # mutates `closed_loop.fallback_to`, and the two are not substitutes.
+    # REPLAYED before this entry was written: `--replay D5-PHANTOM-EDGE --step 33`
+    # comes back REDDENED on a tree where step 33 declares NO closed_loop at all,
+    # because step 33 has a `blocks_on` to append a phantom to. A replay of the
+    # blocks_on entry is therefore not evidence about a convergence edge, and
+    # reading it as such is the "adjacent measurement" this campaign exists to
+    # stamp out.
+    Mutation(
+        name="D5-PHANTOM-FALLBACK",
+        dim=5, channel=FLOW_YAML, kind="closed_loop_fallback_phantom",
+        what="repoint the step's `closed_loop.fallback_to` at a step id that "
+             "does not exist",
+        breaks="a CONVERGENCE edge that resolves to nothing — the flow says "
+               "'on this verdict, go back to step K' and there is no step K. "
+               "Until 2026-08-20 that was not a defect anything could see: the "
+               "flow carried NINETEEN `closed_loop` declarations and the "
+               "repository had ZERO readers of the key. The 63x8 substrate even "
+               "shipped the accessor (`flowref.closed_loop`, exported in "
+               "`__all__`) with no caller. Every convergence edge in the flow "
+               "was unfalsifiable as a class.",
+        red_signal="step",
+        witness="24",
+        applies_to=(
+            "2", "3", "4", "5", "8", "9", "10", "13", "A7", "A9", "14",
+            "20", "23", "24", "25", "26", "27", "28", "31", "32", "33"),
+        measured=Measurement(
+            date="2026-08-20",
+            command=_CL_SWEEP.replace("{name}", "D5-PHANTOM-FALLBACK"),
+            reddened=21,
+            note="21 red = every step that declares a `closed_loop`, in one sweep, "
+                 "each reddening that cell alone; UNMEASURABLE 0 of 21. Times in the "
+                 "commit message. THE DENOMINATOR IS THE POINT: 21, not 63 — "
+                 "`closed_loop` is declared by a MINORITY of steps and every other step "
+                 "has no edit site at all, so a whole-flow sweep would have "
+                 "reported the majority NOT_APPLICABLE and buried the real "
+                 "count. TWO OF THE 21 ARE NEW IN "
+                 "THIS CHANGE (steps 9 and 33, the area and power convergence edges) "
+                 "and both reddened, which is the whole reason the entry exists: the "
+                 "brief that asked for those edges named `--replay D5-PHANTOM-EDGE "
+                 "--step 33` as the proof, and that replay comes back REDDENED on a "
+                 "tree where step 33 declares NO closed_loop at all — it reaches "
+                 "`blocks_on`, which step 33 already had. A criterion that cannot "
+                 "distinguish the change from no change is not a proof of the "
+                 "change. BIDIRECTIONAL CONTROL, run by hand before this entry was "
+                 "written: with step 24's fallback repointed at "
+                 "`__PHANTOM_MUTANT__`, "
+                 "`test_d5_blocks_on_covers_the_real_dependency_graph[step24]` fails "
+                 "with `CL-FALLBACK-UNRESOLVED`; on the unmutated flow the same cell "
+                 "passes."),
     ),
 
     # ---------------- dimension 6 — skip discipline --------------------

@@ -935,6 +935,58 @@ def _f_power_over_budget(p: Path) -> None:
         "fields": {"power_budget_uw": 100}})
 
 
+def _f_area_over_ceiling(p: Path) -> None:
+    """Synthesised cell area exceeds the die the design's own L19 declares.
+
+    Reddens the Step-9 clause
+    ``area_total_vs_budget_check . --json reports/phase2/gates/area_budget.json``.
+
+    The AREA sibling of :func:`_f_power_over_budget`, and it needs the same
+    three things present for the same reason. EMPTY cannot reach it, and that
+    is a virtue rather than a gap. MEASURED on an empty tree, verbatim:
+
+        EMPTY   rc 2  INCOMPLETE: synthesised area was NOT compared against
+                      anything — missing authority: L19_CONSTRAINTS_PDK.json
+                      fields.die_area_budget_um ...; a readable chip_area in
+                      any synth stats artefact
+
+    THREE halves are load-bearing here, not two, and the third is the one the
+    power axis does not have:
+
+      * a tree with only the stats and no ceiling is rc 2 (nothing to compare);
+      * a tree with only the ceiling and no stats is rc 2 (nothing to compare);
+      * a tree with BOTH, where `chip_area_unit` does not name um^2, is ALSO
+        rc 2 — because `phase2/stage2/synth/stats.json` as the corpus actually
+        ships it says "cell-library area unit (as declared by the library the
+        synthesis script loaded)", i.e. the PRODUCER declines to name the unit.
+        Asserting it anyway would be `ART-POWER-FIGURES-X1000` one axis over: a
+        figure off by 1000x reading as the same verdict as the true one.
+
+    So the fixture makes the producer look RUN and WRONG rather than absent: it
+    states its unit, states its ceiling, and is 3.0x over it. 6000 um^2 of cells
+    against a declared 40x50 um die = 2000 um^2. The limit is 1.0 because
+    utilisation cannot exceed 1.0 by definition of the two words — no PDK, no
+    guardband and no golden value is consulted, exactly as in
+    `_f_em_peak_exceeds_supply`.
+
+    Chip-, PDK- and vendor-AGNOSTIC by construction: invented numbers, and the
+    rule is the design's own declaration against the design's own measurement.
+    """
+    _w(p, "phase2/stage2/synth/stats.json",
+       {"schema": "vibe-ic/synth-stats/1",
+        "netlist": "phase2/stage2/synth/top_synth.v",
+        "top_module": "top",
+        "chip_area": 6000.0,
+        "chip_area_unit": "um^2",
+        "sequential_area": 2400.0,
+        "cell_count": 512,
+        "includes_submodules": False,
+        "selection": {"rule": "SINGLE_MODULE_NO_HIERARCHY"}})
+    _w(p, "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+       {"doc_id": "L19", "doc_name": "L19_CONSTRAINTS_PDK",
+        "fields": {"die_area_budget_um": "40x50"}})
+
+
 # ── The three fixtures that replaced an empty-directory red with a real one ──
 #
 # Steps 6, 28 and 30 each had exactly one red before 2026-08-06, and each of
@@ -1416,6 +1468,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
+    "AREA_OVER_CEILING": _f_area_over_ceiling,
     "DIE_UNFINISHED": _f_die_unfinished,
     "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
     "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
@@ -1490,6 +1543,12 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
            "reports/phase3/em_current_authority.json"): "EM_PEAK_EXCEEDS_SUPPLY",
     ("33", "power_total_vs_budget_check . --json "
            "reports/phase2/gates/power_budget.json"): "POWER_OVER_BUDGET",
+    # The AREA sibling, wired into step 9 in the same change that gave step 9
+    # its `closed_loop` edge. Registered as an ASSIGNMENT and not in
+    # `UNREDDENED`: a fixture DOES break it, and an `UNREDDENED` entry whose
+    # clause reddens fails this suite by design.
+    ("9", "area_total_vs_budget_check . --json "
+          "reports/phase2/gates/area_budget.json"): "AREA_OVER_CEILING",
     # vibe-ic#704 wired this into D1. EMPTY answers VACUOUS_PASS by design:
     # no generated_docs means phase1 has not run, which is not an incomplete
     # extraction. The docs must exist AND carry a placeholder.

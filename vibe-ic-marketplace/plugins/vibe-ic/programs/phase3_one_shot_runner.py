@@ -9443,6 +9443,45 @@ _ORFS_PNR_KNOB_PARAMS: Dict[str, Tuple[str, ...]] = {
     "PLACE_DENSITY_LB_ADDON": ("place_density",),
     # optimization inside whatever floorplan the flow chose.
     "TNS_END_PERCENT":        ("repair_tns_percent",),
+    # ── the AREA CEILING on what fixing timing may cost (step 32) ────────────
+    # Ported from LibreLane, whose `PL_RESIZER_*_MAX_UTIL_PCT` family is the
+    # timing-versus-area trade made ADJUSTABLE instead of hard-coded. Step 32
+    # repaired timing with NO area ceiling whatsoever before this: OpenROAD's
+    # `repair_timing` accepts `-max_utilization util` and we passed it never.
+    #
+    # MEASURED in the pinned image (`docker run --skip`, OpenROAD
+    # 26Q3-1535-g543c33894f), because the port has to match the TOOL and not a
+    # remembered flag list:
+    #   repair_timing [-setup] [-hold] [-recover_power percent_of_paths_with_slack]
+    #      ... [-max_utilization util] ...
+    #   repair_design [-max_wire_length ...] [-max_utilization util] ...
+    # There is ONE `-max_utilization` in OpenROAD, not two. LibreLane's two
+    # names are its own FLOW-level split — it passes the same tool flag with a
+    # different value to the `-setup` call and to the `-hold` call — so these
+    # two knobs map to two flow parameters that reach two invocations, which is
+    # exactly the shape asked for, arrived at from the tool.
+    #
+    # These are OPTIMIZATION-class knobs, not routing-resource-supply ones: they
+    # BOUND how much area the repair may consume inside whatever floorplan
+    # phase 3 chose for itself. They do not replace a self-calibrated quantity,
+    # so `_RF_ROUTING_SUPPLY_PARAMS` does not withhold them.
+    #
+    # NO DEFAULT IS INVENTED. Undeclared means the repair stays unbounded, i.e.
+    # today's behaviour exactly — and the audit trail then SAYS SO, which it
+    # could not before. A ceiling nobody declared would be a ruler fitted to the
+    # answer, and this repository already carries the worked example of why
+    # (`matrix_mutation_ledger.ART-POWER-FIGURES-X1000`).
+    "PL_RESIZER_SETUP_MAX_UTIL_PCT": ("resizer_setup_max_util_pct",),
+    "PL_RESIZER_HOLD_MAX_UTIL_PCT":  ("resizer_hold_max_util_pct",),
+    # SURPLUS slack spent on power, in the tool. `-recover_power` takes a
+    # PERCENT OF THE PATHS THAT HAVE SLACK, so it acts only where slack already
+    # exists; it is the one PPA move here that is not a trade. It has no
+    # LibreLane spelling, so the knob name is ours and it is declared the same
+    # way — and it stays OFF unless declared, for the reason in the paragraph
+    # above and one more: no full place-and-route run was made to measure its
+    # effect on this flow's own designs, so defaulting it ON would be shipping
+    # an unmeasured behaviour change to every design at once.
+    "RESIZER_RECOVER_POWER_PCT":     ("recover_power_pct",),
     "CTS_CLUSTER_SIZE":       ("cts_cluster_size",),
     "CTS_CLUSTER_DIAMETER":   ("cts_cluster_diameter",),
     "CTS_DISTANCE_BETWEEN_BUFFERS": ("cts_distance_between_buffers",),
@@ -9856,6 +9895,8 @@ def _reference_flow_pnr_mapping(
         "place_density": None, "die_target_util": None,
         "repair_tns_percent": None, "cts_cluster_size": None,
         "cts_cluster_diameter": None, "cts_distance_between_buffers": None,
+        "resizer_setup_max_util_pct": None, "resizer_hold_max_util_pct": None,
+        "recover_power_pct": None,
         "notes": notes,
         "rejected": rejected, "withheld": withheld,
     }
@@ -9925,6 +9966,37 @@ def _reference_flow_pnr_mapping(
         _reject("TNS_END_PERCENT", tns,
                 "outside the valid TNS-endpoint percentage range (0..100)")
 
+    # ── the step-32 area ceiling + the power-recovery move ───────────────
+    # A utilisation PERCENT: 0 is meaningless (nothing may be placed) and
+    # anything above 100 is not a ceiling, so the accepted range is (0, 100].
+    for _knob, _param, _flag in (
+            ("PL_RESIZER_SETUP_MAX_UTIL_PCT", "resizer_setup_max_util_pct",
+             "repair_timing -setup -max_utilization"),
+            ("PL_RESIZER_HOLD_MAX_UTIL_PCT", "resizer_hold_max_util_pct",
+             "repair_timing -hold -max_utilization")):
+        _v = _f(_knob)
+        if _v is not None and 0.0 < _v <= 100.0:
+            out[_param] = _v
+            notes.append(f"{_knob}={_v:g} -> {_flag} {_v:g}"
+                         f"{_src_suffix(_knob)}")
+        elif _v is not None:
+            _reject(_knob, _v,
+                    "outside the valid core-utilisation percentage range "
+                    "(0 < pct <= 100)")
+
+    _rp = _f("RESIZER_RECOVER_POWER_PCT")
+    if _rp is not None and 0.0 < _rp <= 100.0:
+        out["recover_power_pct"] = int(round(_rp))
+        notes.append(
+            f"RESIZER_RECOVER_POWER_PCT={_rp:g} -> repair_timing "
+            f"-recover_power {int(round(_rp))} (percent of paths WITH slack; "
+            f"spends surplus slack on power)"
+            f"{_src_suffix('RESIZER_RECOVER_POWER_PCT')}")
+    elif _rp is not None:
+        _reject("RESIZER_RECOVER_POWER_PCT", _rp,
+                "outside the valid percent-of-paths-with-slack range "
+                "(0 < pct <= 100)")
+
     if cluster_size is not None and cluster_size > 0:
         out["cts_cluster_size"] = int(round(cluster_size))
         notes.append(
@@ -9953,6 +10025,28 @@ def _reference_flow_pnr_mapping(
         _reject("CTS_DISTANCE_BETWEEN_BUFFERS", dist_buf,
                 "CTS inter-buffer distance must be > 0")
     return out
+
+
+def _eco_resizer_bounds(project: Path) -> Dict[str, object]:
+    """The step-32 resizer bounds the design DECLARED — `{}`-shaped kwargs for
+    `_build_eco_repair_tcl`, every value `None` when nothing declared one.
+
+    Single-sourced through `_reference_flow_pnr_mapping`: it does NOT re-read or
+    re-decide anything, so the audit report and the emitted deck can never
+    disagree about which knob was adopted. Never raises — a project with no
+    staged reference flow, or an unreadable one, yields three `None`s and the
+    ECO deck is emitted exactly as it was before this existed.
+    chip-AGNOSTIC."""
+    try:
+        m = _reference_flow_pnr_mapping(_reference_flow_pnr_knobs(project))
+    except Exception:
+        return {"setup_max_util_pct": None, "hold_max_util_pct": None,
+                "recover_power_pct": None}
+    return {
+        "setup_max_util_pct": m.get("resizer_setup_max_util_pct"),
+        "hold_max_util_pct": m.get("resizer_hold_max_util_pct"),
+        "recover_power_pct": m.get("recover_power_pct"),
+    }
 
 
 def _reference_flow_declared_die_util(project: Path) -> Optional[float]:
@@ -10328,10 +10422,17 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         "adopted": adopted,
         "withheld": withheld,
         "rejected": rejected,
-        "applied": {k: mapping[k] for k in
-                    ("place_density", "die_target_util", "repair_tns_percent",
-                     "cts_cluster_size", "cts_cluster_diameter",
-                     "cts_distance_between_buffers")},
+        # DERIVED FROM THE VOCABULARY, not restated. This was a literal tuple
+        # of six parameter names, and `test_withheld_class_is_derived_from_the_
+        # knob_vocabulary` already asserts that every parameter the vocabulary
+        # names is one the audit really reports — so the literal was a second
+        # list that could drift away from the first, which is the failure mode
+        # `_ORFS_PNR_KNOB_PARAMS`' own header warns about. Adding the step-32
+        # resizer knobs made the drift real: the vocabulary grew and this tuple
+        # did not, and a knob would have been adopted with no line in the audit
+        # report. Deriving it makes that unrepresentable.
+        "applied": {k: mapping[k] for k in sorted(
+            {p for params in _ORFS_PNR_KNOB_PARAMS.values() for p in params})},
         "notes": list(mapping["notes"]),         # type: ignore[arg-type]
     }
 
@@ -16880,8 +16981,63 @@ def _routing_integrity_check_tcl(marker_prefix: str = "SHIP") -> str:
     )
 
 
+def _resizer_bound_flag(pct: Optional[float]) -> str:
+    """`" -max_utilization <pct>"`, or `""` when nothing declared one.
+
+    PURE. The EMPTY STRING IS THE POINT: `repair_timing` with no
+    `-max_utilization` is what step 32 has always emitted, so an undeclared
+    ceiling reproduces today's behaviour byte-for-byte instead of substituting a
+    number nobody asked for. A default here would be a ruler fitted to the
+    answer — and it would be an especially bad one, because the right ceiling
+    depends on the die the design declared and the flow does not get to pick
+    that either.
+    """
+    if pct is None:
+        return ""
+    try:
+        v = float(pct)
+    except (TypeError, ValueError):
+        return ""
+    if not (0.0 < v <= 100.0):
+        return ""
+    return f" -max_utilization {v:g}"
+
+
+def _recover_power_tcl(pct: Optional[int], marker: str, var_tag: str = "") -> str:
+    """The SURPLUS-slack-to-power pass, or `""` when nothing declared one.
+
+    PURE. `repair_timing -recover_power N` takes N as a PERCENT OF THE PATHS
+    THAT HAVE SLACK (measured from the tool's own CLI contract in the pinned
+    image, OpenROAD 26Q3-1535-g543c33894f), so it acts only where slack already
+    exists. It is emitted AFTER setup and hold repair and, like every other
+    repair call in this file, inside a `catch` — a resizer that refuses is a
+    note in the log, never a dead run.
+
+    IT IS OFF UNLESS DECLARED, and that is a measured limitation rather than
+    caution for its own sake: no full place-and-route run was made on this
+    change, so whether recovering power costs slack on THIS flow's designs is
+    unmeasured here. Defaulting it on would ship that unmeasured behaviour to
+    every design at once. What makes the opt-in safe to take is step 32's own
+    closed loop: its trigger is "re-run #21-#28 after ECO", so a pass that ate
+    slack is caught by the same STA that fires the loop.
+    """
+    if pct is None:
+        return ""
+    try:
+        n = int(pct)
+    except (TypeError, ValueError):
+        return ""
+    if not (0 < n <= 100):
+        return ""
+    return (f"if {{[catch {{repair_timing -recover_power {n}}} _rrp{var_tag}]}} "
+            f"{{ puts \"{marker}_RECOVER_POWER_NONFATAL: $_rrp{var_tag}\" }}\n")
+
+
 def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
-                              var_tag: str = "") -> str:
+                              var_tag: str = "",
+                              setup_max_util_pct: Optional[float] = None,
+                              hold_max_util_pct: Optional[float] = None,
+                              recover_power_pct: Optional[int] = None) -> str:
     """ORGANIC #561 (b) / #581 round-2 — the ONE post-buffered repair
     command set, shared by every TCL builder that repairs a design whose
     earlier repair passes already inserted buffers (ECO pass-2, post-route
@@ -16895,11 +17051,19 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
     statements per the #581 round-1 Tcl-syntax doctrine.
     Chip-AGNOSTIC: standard OpenROAD commands only."""
     p, s, v = marker_prefix, marker_suffix, var_tag
+    # The AREA CEILING on what fixing timing may cost. Both are `""` unless the
+    # design declared one, so an undeclared run emits exactly what it always
+    # did. See `_resizer_bound_flag`.
+    su, ho = (_resizer_bound_flag(setup_max_util_pct),
+              _resizer_bound_flag(hold_max_util_pct))
     return (
-        f"if {{[catch {{repair_timing -setup}} _rts{v}]}} {{ "
+        f"if {{[catch {{repair_timing -setup{su}}} _rts{v}]}} {{ "
         f"puts \"{p}_REPAIR_TIMING_SETUP{s}_NONFATAL: $_rts{v}\" }}\n"
-        f"if {{[catch {{repair_timing -hold}} _rth{v}]}} {{ "
+        f"if {{[catch {{repair_timing -hold{ho}}} _rth{v}]}} {{ "
         f"puts \"{p}_REPAIR_TIMING_HOLD{s}_NONFATAL: $_rth{v}\" }}\n"
+        # Surplus slack spent on power, AFTER both repairs so it can only see
+        # the slack that survived them. `""` unless declared.
+        + _recover_power_tcl(recover_power_pct, f"{p}{s}", v)
         + _build_escalating_legalize_tcl(f"{p}{s}_REPAIR", v)
     )
 
@@ -17033,7 +17197,10 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                           post_route_start: bool = False,
                           corner_spefs_c: Optional[Dict[str, str]] = None,
                           captables_c: Optional[Dict[str, str]] = None,
-                          filler_masters: Optional[List[str]] = None) -> str:
+                          filler_masters: Optional[List[str]] = None,
+                          setup_max_util_pct: Optional[float] = None,
+                          hold_max_util_pct: Optional[float] = None,
+                          recover_power_pct: Optional[int] = None) -> str:
     """ORGANIC #561 — generate a self-contained OpenROAD ECO timing-repair TCL
     that embeds the 4 proven workarounds discovered during the ibex pilot:
 
@@ -17381,10 +17548,20 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         + "\n"
         "# === ECO pass 1: placement-based repair ===\n"
         + _pass1_parasitics +
-        "if {[catch {repair_design} _rd_err]} {\n"
+        # THE AREA CEILING ON WHAT FIXING TIMING MAY COST. `repair_design` and
+        # `repair_timing` both accept `-max_utilization util` (measured from the
+        # tool's own CLI in the pinned image); step 32 passed it never, so the
+        # ECO could buy timing with unbounded area and nothing said so. The
+        # SETUP ceiling governs `repair_design` too, because that pass is the
+        # setup-repair's own buffer/upsize preparation and bounding one without
+        # the other leaves the ceiling reachable around the side.
+        # Both are "" unless the design declared one — see `_resizer_bound_flag`.
+        f"if {{[catch {{repair_design{_resizer_bound_flag(setup_max_util_pct)}}} "
+        f"_rd_err]}} {{\n"
         "  puts \"ECO_REPAIR_DESIGN_NONFATAL: $_rd_err\"\n"
         "}\n"
-        "if {[catch {repair_timing -setup} _rts_err]} {\n"
+        f"if {{[catch {{repair_timing -setup"
+        f"{_resizer_bound_flag(setup_max_util_pct)}}} _rts_err]}} {{\n"
         "  puts \"ECO_REPAIR_TIMING_SETUP_NONFATAL: $_rts_err\"\n"
         "}\n"
         + _build_escalating_legalize_tcl("ECO_DPL", "_eco")
@@ -17413,7 +17590,11 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "}\n"
         # #581 r2 — the post-buffered command set comes from the ONE shared
         # builder so this site and the SPEF-repair block cannot drift.
-        + _post_buffered_repair_tcl("ECO", "_GR", "2") +
+        + _post_buffered_repair_tcl(
+            "ECO", "_GR", "2",
+            setup_max_util_pct=setup_max_util_pct,
+            hold_max_util_pct=hold_max_util_pct,
+            recover_power_pct=recover_power_pct) +
         # Bounded reroute: -droute_end_iter caps the DRC-optimization iterations
         # so a non-converging ECO reroute (unclosable setup gap over-buffering a
         # small/low-util die) cannot grind its full ~64-iteration budget. The
@@ -32986,6 +33167,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 corner_spefs_c=_eco_spefs_c,
                 captables_c=_eco_captables_c,
                 filler_masters=_filler_masters_for_pdk(pdk),
+                # The step-32 area ceiling and the power-recovery move, taken
+                # from the design's OWN staged reference-flow declaration
+                # through the one ingest that already owns that vocabulary
+                # (`_ORFS_PNR_KNOB_PARAMS`). All three are None when nothing
+                # declared them, which reproduces this deck byte-for-byte.
+                **_eco_resizer_bounds(project),
             )
             eco_tcl_path.write_text(eco_tcl_content)
             written.append(str(eco_tcl_path))
