@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1127
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1127)
+- **Total programs (excluding helpers / shims):** 1129
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1129)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1118 |
+| `any` | 1120 |
 
 ## Alphabetical listing
 
@@ -265,6 +265,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dead_timing_constant_warn` | any | — | Scan all RTL files for `define macros and localparam declarations whose |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `decap_route_short_guard` | any | — | remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ... |
+| `declared_clock_period` | any | — | read the clock period the DESIGN declares for the library this run is actually building against. |
 | `declared_pdk_is_the_pdk_used_check` | any | — | the PDK that ran must be the PDK declared. |
 | `def_gds_port_power_restore` | any | — | restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p... |
 | `def_manufacturing_grid_check` | any | — | ORGANIC #597. |
@@ -1058,6 +1059,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `synth_wrapper_gen` | any | — | auto-generate synthesis wrapper for inout-port designs. |
 | `table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st... |
 | `tapeout_checklist_gen` | any | — | emit Step 36 (v2.3) reports/audit/tapeout_checklist.json. |
+| `tapeout_docs_gen` | any | — | emit the release documents for a tape-out candidate. |
 | `tapeout_readiness_check` | any | — | the EXTERNAL refusal interface, pointed at a shuttle that still exists. |
 | `tapeout_signoff_check` | any | — | Tapeout signoff check — wrapper for signoff_audit --mode tapeout. |
 | `tb_timing_extremes_check` | any | — | LL-6. |
@@ -1199,7 +1201,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1118 programs)
+### `any` (1120 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1437,6 +1439,7 @@ _(no programs in this group)_
 - `dead_timing_constant_warn` — Scan all RTL files for `define macros and localparam declarations whose
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `decap_route_short_guard` — remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ...
+- `declared_clock_period` — read the clock period the DESIGN declares for the library this run is actually building against.
 - `declared_pdk_is_the_pdk_used_check` — the PDK that ran must be the PDK declared.
 - `def_gds_port_power_restore` — restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p...
 - `def_manufacturing_grid_check` — ORGANIC #597.
@@ -2226,6 +2229,7 @@ _(no programs in this group)_
 - `synth_wrapper_gen` — auto-generate synthesis wrapper for inout-port designs.
 - `table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st...
 - `tapeout_checklist_gen` — emit Step 36 (v2.3) reports/audit/tapeout_checklist.json.
+- `tapeout_docs_gen` — emit the release documents for a tape-out candidate.
 - `tapeout_readiness_check` — the EXTERNAL refusal interface, pointed at a shuttle that still exists.
 - `tapeout_signoff_check` — Tapeout signoff check — wrapper for signoff_audit --mode tapeout.
 - `tb_timing_extremes_check` — LL-6.
