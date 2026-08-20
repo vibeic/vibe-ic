@@ -13,12 +13,15 @@ can re-run the attack by hand and get the same answer.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+import _published_corpus as _pc
 
 PLUGIN = Path(__file__).resolve().parents[2]
 REPO = PLUGIN.parents[2]
@@ -27,10 +30,52 @@ PROG = PLUGIN / "programs" / "adversarial_agent.py"
 sys.path.insert(0, str(PLUGIN / "programs"))
 import adversarial_agent as AA  # noqa: E402
 
-IC = REPO / "benchmark-data" / "ic"
-CELL = IC / "spm" / "v1.9.96_gf180mcuD"
-DONOR = IC / "sha256" / "clean_run_v1427_20260715"
-OLDER = IC / "sha256" / "clean_run_v1422_20260715"
+from _published_corpus import CORPUS_ENV, corpus_root  # noqa: E402
+
+
+def _ic_root():
+    """The `ic/` directory of whichever published corpus is offered HERE.
+
+    THIS FUNCTION IS THE FIX, AND ITS ABSENCE IS WHY THE RATCHET WAS DEAD.
+    The module used to spell the corpus as a constant::
+
+        IC = REPO / "benchmark-data" / "ic"
+
+    v1.10.56 moved `benchmark-data/` out of this repository entirely -- `git
+    ls-tree -r HEAD -- benchmark-data` now matches nothing -- so that path has
+    not resolved on any checkout since. It never consulted the pointer every
+    other corpus-backed module in this directory reads, so even a host WITH a
+    clone could not switch the checks on. Measured on `49d2b3328`, both with and
+    without `VIBE_IC_BENCHMARK_DATA` set to a real clone::
+
+        9 passed, 12 skipped in 0.79s
+
+    Twelve of the twenty-one tests here are the corpus-backed ones, and the
+    ratchet that makes a finding a P0 defect rather than a printed line is among
+    them. So for forty versions the thirteen recorded forgeries were guarded by
+    nothing: a fourteenth gate could have started accepting foreign evidence and
+    the suite would have stayed green, which is the precise failure the RATCHET
+    section of `adversarial_agent` was written to prevent.
+
+    `corpus_root()` raises when the pointer is SET and broken, and that is
+    deliberate -- see `_published_corpus.corpus_root`. A named corpus that is not
+    there is a different fact from no corpus at all, and only the second one may
+    skip.
+    """
+    root = corpus_root()
+    return (root / "ic") if root is not None else None
+
+
+IC = _ic_root()
+
+#: The cells the campaign was measured against. Read from the LEDGER rather than
+#: re-typed here: the ledger is the record these tests exist to defend, and a
+#: second spelling of the same cell name is a second thing to keep in step. It
+#: also keeps the process identifiers out of this module (NDA).
+_LEDGER = AA.load_findings_ledger()
+CELL = (IC / _LEDGER["cell"]) if IC else None
+DONOR = (IC / _LEDGER["donor"]) if IC else None
+OLDER = (IC / _LEDGER["older_run"]) if IC else None
 
 #: The gate that NOTICES, measured. Keeping the pair small keeps the test quick
 #: while preserving the only property that matters: one of each colour.
@@ -58,8 +103,10 @@ DEFENDING = ("sta_report_check", (".", "--mode", "sta"))
 _CLI_BOUND_S = 45
 
 _corpus = pytest.mark.skipif(
-    not (CELL.is_dir() and DONOR.is_dir()),
-    reason="published cells absent from this checkout")
+    not (CELL and DONOR and CELL.is_dir() and DONOR.is_dir()),
+    reason=f"published cells absent here; point {CORPUS_ENV} at a clone of "
+           f"vibeic/benchmark-data to run the ratchet. This is 'could not "
+           f"look', not 'nothing was wrong'.")
 
 
 # ===========================================================================
@@ -286,7 +333,10 @@ if __name__ == "__main__":  # pragma: no cover
 def _live_recorded_attacks():
     """Re-run exactly the attacks the ledger records, over the cells it names."""
     led = AA.load_findings_ledger()
-    ic = REPO / "benchmark-data" / "ic"
+    ic = _ic_root()
+    assert ic is not None, (
+        "the corpus vanished between collection and execution; the `_corpus` "
+        "mark should have skipped this test")
     cell = ic / led["cell"]
     donor = ic / led["donor"]
     older = ic / led["older_run"]
@@ -406,3 +456,94 @@ def test_the_unwired_state_is_disclosed_or_gone():
             f"nothing invokes {name}, so it cannot block anything, and the "
             f"docstring does not say so. That is the D9 defect this campaign "
             f"removes, and this author required the same disclosure of #1092.")
+
+
+# ===========================================================================
+# THE RATCHET MUST BE ON, AND THAT IS ITSELF MEASURED
+#
+# Everything above is worth exactly nothing on a host where the corpus does not
+# resolve, and for forty versions that was EVERY host. A skip is the honest
+# rendering of "could not look" and this suite is right to use one -- but a skip
+# nobody can switch OFF is indistinguishable from a check that was deleted, and
+# it reads as a green suite either way.
+#
+# So the resolution itself is now under test, with a SYNTHESIZED corpus, so the
+# guard is decidable on a bare checkout with no clone anywhere near it.
+# ===========================================================================
+def _reimport_with_pointer(root: Path):
+    """This module, re-executed with `CORPUS_ENV` naming `root`.
+
+    Re-execution rather than `importlib.reload` so the probe cannot disturb the
+    module object the running session collected its tests from.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "adversarial_ratchet_probe", Path(__file__).resolve())
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _synthetic_corpus(tmp_path: Path) -> Path:
+    """A corpus shaped like a published one, holding the three cells the ledger
+    names. Empty directories: `_corpus` asks `is_dir()` and nothing more, and
+    the property under test is WHICH ROOT was consulted, not what is in it."""
+    led = AA.load_findings_ledger()
+    root = tmp_path / "benchmark-data"
+    for key in ("cell", "donor", "older_run"):
+        (root / "ic" / led[key]).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_the_corpus_is_resolved_through_the_shared_POINTER(tmp_path, monkeypatch):
+    """Point at a corpus and this module must look in it.
+
+    THE PRE-FIX VALUE THIS OBSERVES: the module resolved `IC` to
+    `<repo>/benchmark-data/ic` -- a path v1.10.56 emptied -- no matter what the
+    caller pointed at, so the assertion below reports two concrete paths that
+    differ rather than something being absent.
+    """
+    root = _synthetic_corpus(tmp_path)
+    monkeypatch.setenv(CORPUS_ENV, str(root))
+    mod = _reimport_with_pointer(root)
+    assert mod.IC == root / "ic", (
+        f"this module resolved its corpus to {mod.IC}, but the caller pointed "
+        f"{CORPUS_ENV} at {root}. A corpus-backed suite that ignores the "
+        f"pointer cannot be switched on, and every check in it reports "
+        f"'skipped' forever -- which is how thirteen recorded forgeries went "
+        f"forty versions with nothing guarding them.")
+
+
+def test_PAIRED_the_corpus_marker_actually_SELECTS_when_a_corpus_is_there(
+        tmp_path, monkeypatch):
+    """The twin, and the half that matters.
+
+    Resolving the root is not the property; SELECTING the tests is. A marker
+    still keyed on something else would satisfy the test above and skip
+    everything anyway, so this one reads the mark's own condition.
+    """
+    root = _synthetic_corpus(tmp_path)
+    monkeypatch.setenv(CORPUS_ENV, str(root))
+    mod = _reimport_with_pointer(root)
+    skipped = mod._corpus.args[0]
+    assert skipped is False, (
+        f"the corpus mark still evaluates to skip={skipped!r} with a corpus "
+        f"present at {root}. Resolving the root is not enough: the mark decides "
+        f"whether a single one of these checks ever runs.")
+
+
+def test_PAIRED_no_corpus_still_SKIPS_rather_than_inventing_one(
+        tmp_path, monkeypatch):
+    """The other direction, so the fix cannot be 'never skip'.
+
+    Making the suite unconditionally run would satisfy both tests above and
+    would fail every corpus check on a plain checkout, which is the error
+    `_published_corpus` exists to prevent: a check that cannot measure must not
+    report that it measured.
+    """
+    monkeypatch.delenv(CORPUS_ENV, raising=False)
+    monkeypatch.setattr(_pc, "_REPO", tmp_path / "no-such-repo")
+    mod = _reimport_with_pointer(tmp_path)
+    assert mod.IC is None, mod.IC
+    assert mod._corpus.args[0] is True, (
+        "with no corpus offered anywhere the mark must skip; a suite that runs "
+        "these checks against nothing reports absence as a defect")
