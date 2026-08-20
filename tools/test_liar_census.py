@@ -2072,7 +2072,26 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # tapeout_readiness_check -- one `program_exit_zero` each, and nothing was
     # removed. The PIN `swept == declared` never broke; only the shrink-detector
     # literal needed to follow the flow, which is what it is for.
-    assert pop["swept"] == pop["declared"] == 175, pop
+    # 175 -> 177 at smrg/retire-37p5self, and the accounting is RE-DERIVED, not
+    # incremented: `discover_clauses` was run over the yaml at `03f7b945d` (the
+    # commit that last moved this literal), at the tip, and on this branch, and
+    # the three clause SETS were diffed. TWO of the four movements predate this
+    # change and had left the shrink detector reading a population that was
+    # already three too small on main:
+    #     + 0.5ic    program_exit_zero  tapeout_declaration_check
+    #     + 37.5ic   program_exit_zero  tapeout_docs_gen
+    #     + 37.5self program_exit_zero  general_precheck   (added, then RETIRED below)
+    # THIS CHANGE retires step 37.5self and folds the general precheck into
+    # 37.5ic as a second ARM, so 37.5ic's gate names ONE program that runs both:
+    #     + 37.5ic   program_exit_zero  tapeout_precheck
+    #     - 37.5ic   program_exit_zero  tapeout_readiness_check   (now an ARM, not a clause)
+    #     - 37.5self program_exit_zero  general_precheck          (now an ARM, not a clause)
+    # 175 + 3 - 1 = 177. THE CLAUSE COUNT GOING DOWN IS THE POINT OF THIS
+    # LITERAL, and it is exactly the direction a shrink detector must not
+    # sleep through: two gates stopped being flow clauses without stopping
+    # being run. `flow_gate_enforcement_audit` is the venue that now proves
+    # they are still reached (its fourth, dispatch-closure venue).
+    assert pop["swept"] == pop["declared"] == 177, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 
