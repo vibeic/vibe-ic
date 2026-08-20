@@ -117,7 +117,15 @@ import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the 
 #: The alternative — naming an image in a comment — is a string nothing
 #: resolves, which is how the first version of this file went red on the
 #: image-version gate.
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.16"
+# The image is RESOLVED, not remembered — see `_eda_image`. This used to
+# be a pinned literal kept in step by `sync_image_version.py`; the version it
+# pinned claimed to be "what the plugin was verified against", and nothing
+# ever verified that. vibeic-eda's own release gate does.
+import _eda_image as _img
+
+
+def default_image() -> str:
+    return _img.resolve()
 
 #: Tech-LEF filename shapes. `*.tlef` alone misses nangate45, whose tech LEF is
 #: `NangateOpenCellLibrary.tech.lef` — it was reported NOT MEASURED for exactly
@@ -299,8 +307,9 @@ def main(argv=None) -> int:
                          "(repeatable); default is the last "
                          f"{_KEY_COMPONENTS} path components")
     ap.add_argument("--from-image", action="store_true",
-                    help=f"read the tech LEFs out of {DEFAULT_IMAGE}")
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+                    help="read the tech LEFs out of the current published image")
+    ap.add_argument("--image", default=None,
+                    help="EDA image; default: the current published one")
     ap.add_argument("--routing-max-layer", default=None,
                     help="highest metal index (or layer name) signals are "
                          "routed on; a finding above it is MITIGATED")
@@ -318,9 +327,12 @@ def main(argv=None) -> int:
     if args.from_image:
         import tempfile
         tmp = tempfile.TemporaryDirectory()
-        got, why = stage_from_image(args.image, Path(tmp.name))
+        # Same reason as the `--help` note on the flag: resolve at use, not
+        # at parse, and reuse the one answer for the message below.
+        image = args.image or default_image()
+        got, why = stage_from_image(image, Path(tmp.name))
         readable += got
-        staged_note = why or f"{len(got)} tech LEF(s) from {args.image}"
+        staged_note = why or f"{len(got)} tech LEF(s) from {image}"
 
     seen, uniq = set(), []
     for p in readable:
