@@ -11,6 +11,8 @@ Both are measured failures, not hypotheticals — on 2026-08-20 the 0p5x0p5 die
 that passed precheck and the 1x1 die that carries the full metrics were both
 "spm on gf180mcuD", and only comparing their bounding boxes caught it.
 """
+import fnmatch
+import importlib.util
 import json
 import subprocess
 import sys
@@ -122,3 +124,170 @@ def test_the_scope_section_is_always_present(tmp_path):
     html = (out / "SIGNOFF_d_pdk.html").read_text(encoding="utf-8")
     assert "未簽核的部分" in html
     assert "矽上量測" in html, "silicon measurement is never covered and must say so"
+
+
+# ---------------------------------------------------------------------------
+# The gate clause step 37.5ic declares must be an invocation this program
+# ACCEPTS, and must write the names the step declares.
+#
+# MEASURED on origin/main 69ce9260d, which landed both the step and this
+# program: the flow declared
+#
+#     program_exit_zero: "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
+#
+# and argparse refused it, because --design and --pdk were required=True:
+#
+#     tapeout_docs_gen.py: error: the following arguments are required: --design, --pdk
+#     RC=2
+#
+# rc==2 is the flow's "input-missing skip" convention, so
+# flow_compliance_check._check_program_exit_zero read the refusal as
+# VACUOUS_PASS. The only declared invocation of this program could therefore
+# never do anything but pass, on every project, forever.
+# ---------------------------------------------------------------------------
+FLOW_YAML = Path(__file__).resolve().parents[2] / "flow" / "phase1_phase2_phase3.yaml"
+
+
+def _declared_clause() -> str:
+    """The gate command the flow yaml actually declares, read live."""
+    text = FLOW_YAML.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        line = line.strip()
+        if "tapeout_docs_gen" in line and line.startswith("- program_exit_zero:"):
+            return line.split(":", 1)[1].strip().strip('"')
+    raise AssertionError("no tapeout_docs_gen gate clause found in the flow yaml")
+
+
+def test_the_invocation_the_flow_declares_is_one_this_program_accepts(tmp_path):
+    """A clause the program's own parser rejects measures nothing."""
+    clause = _declared_clause()
+    argv = clause.split()
+    assert argv[0] == "tapeout_docs_gen"
+    r = subprocess.run([sys.executable, str(PROG), *argv[1:]],
+                       cwd=tmp_path, capture_output=True, text=True)
+    assert "the following arguments are required" not in r.stderr, (
+        "the flow declares an invocation this program refuses, and argparse's "
+        f"rc=2 is the flow's VACUOUS_PASS tier:\n{r.stderr}")
+    assert not (r.returncode == 2 and "error:" in r.stderr), (
+        f"parser rejected the declared clause: {r.stderr}")
+
+
+def test_design_and_pdk_are_read_off_the_project_not_demanded(tmp_path):
+    """They are properties OF the run, which is why `--project .` can be the clause."""
+    (tmp_path / "input").mkdir()
+    (tmp_path / "input" / "project.json").write_text(
+        json.dumps({"design": "widget", "pdk": "openpdk"}), encoding="utf-8")
+    final = tmp_path / "phase3" / "final"
+    final.mkdir(parents=True)
+    (final / "metrics.json").write_text(json.dumps(CLEAN), encoding="utf-8")
+    out = tmp_path / "reports" / "phase3" / "docs"
+    r = subprocess.run(
+        [sys.executable, str(PROG), "--project", str(tmp_path),
+         "--out-dir", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (out / "SIGNOFF_widget_openpdk.html").is_file(), sorted(
+        p.name for p in out.iterdir())
+    assert (out / "BRIEF_widget_openpdk.html").is_file()
+
+
+def test_an_unidentifiable_run_says_so_rather_than_guessing_a_name(tmp_path):
+    """No project.json is a hole, and the hole is visible in the FILENAME."""
+    final = tmp_path / "phase3" / "final"
+    final.mkdir(parents=True)
+    (final / "metrics.json").write_text(json.dumps(CLEAN), encoding="utf-8")
+    out = tmp_path / "out"
+    r = subprocess.run(
+        [sys.executable, str(PROG), "--project", str(tmp_path),
+         "--out-dir", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    names = sorted(p.name for p in out.iterdir())
+    assert any("NOT_MEASURED" in n for n in names), names
+
+
+def test_the_step_declares_the_names_this_program_writes(tmp_path):
+    """d4/criteria_match caught these two disagreeing; keep them agreeing here."""
+    (tmp_path / "input").mkdir()
+    (tmp_path / "input" / "project.json").write_text(
+        json.dumps({"design": "widget", "pdk": "openpdk"}), encoding="utf-8")
+    final = tmp_path / "phase3" / "final"
+    final.mkdir(parents=True)
+    (final / "metrics.json").write_text(json.dumps(CLEAN), encoding="utf-8")
+    out = tmp_path / "reports" / "phase3" / "docs"
+    subprocess.run([sys.executable, str(PROG), "--project", str(tmp_path),
+                    "--out-dir", str(out)], capture_output=True, text=True)
+    written = {p.name for p in out.iterdir()} if out.is_dir() else set()
+
+    text = FLOW_YAML.read_text(encoding="utf-8").splitlines()
+    declared = [l.strip().lstrip("- ").strip('"') for l in text
+                if "reports/phase3/docs/" in l and l.strip().startswith('- "')]
+    assert declared, "step 37.5ic declares no document output any more"
+    for d in declared:
+        pat = d.rsplit("/", 1)[-1]
+        assert any(fnmatch.fnmatch(w, pat) for w in written), (
+            f"the flow declares {d!r} and this program wrote {sorted(written)} "
+            f"— a declared output no producer writes can never be produced")
+
+
+# ---------------------------------------------------------------------------
+# A run this program REFUSES to document must not be scored as a gate pass.
+#
+# MEASURED on origin/main 69ce9260d: `NOT RELEASABLE` exited 2, and rc==2 is the
+# flow's input-missing-skip convention. Driving the flow's own evaluator over a
+# project whose only defect was `timing__setup__ws: -1.53`:
+#
+#     ok = True
+#     snippet = __VACUOUS_HINT__: tapeout_docs_gen --project . --out-dir ...
+#
+# The gate passed the run it had just refused to write documents for.
+# ---------------------------------------------------------------------------
+NOT_CLEAN = dict(CLEAN, **{"timing__setup__ws": -1.53, "timing__setup__tns": -40.0})
+
+# rc values `flow_compliance_check` scores as a PASS tier: 0 PASS, 2 VACUOUS_PASS,
+# 3 PASS_WITH_WAIVERS.
+_PASS_TIER_RCS = (0, 2, 3)
+
+
+def _project(tmp_path, metrics):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(exist_ok=True)
+    (tmp_path / "input" / "project.json").write_text(
+        json.dumps({"design": "widget", "pdk": "openpdk"}), encoding="utf-8")
+    final = tmp_path / "phase3" / "final"
+    final.mkdir(parents=True, exist_ok=True)
+    (final / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    return tmp_path
+
+
+def test_a_run_that_is_not_releasable_exits_a_code_the_flow_scores_as_fail(tmp_path):
+    proj = _project(tmp_path, NOT_CLEAN)
+    r = subprocess.run(
+        [sys.executable, str(PROG), "--project", str(proj),
+         "--out-dir", str(proj / "reports" / "phase3" / "docs")],
+        capture_output=True, text=True)
+    assert "NOT RELEASABLE" in r.stderr
+    assert r.returncode not in _PASS_TIER_RCS, (
+        f"rc={r.returncode} is a PASS tier in this flow (0 PASS / 2 VACUOUS_PASS "
+        f"/ 3 PASS_WITH_WAIVERS), so the gate reports a pass on a run this "
+        f"program just refused to document")
+
+
+def test_the_flows_own_evaluator_fails_the_gate_on_a_run_that_is_not_clean(tmp_path):
+    """The composition, not the exit code in isolation -- this is what the gate does."""
+    fcc_path = PROG.parent / "flow_compliance_check.py"
+    spec = importlib.util.spec_from_file_location("_fcc_docs_probe", fcc_path)
+    fcc = importlib.util.module_from_spec(spec)
+    sys.modules["_fcc_docs_probe"] = fcc
+    spec.loader.exec_module(fcc)
+
+    proj = _project(tmp_path, NOT_CLEAN)
+    ok, out = fcc._check_program_exit_zero(
+        proj, "tapeout_docs_gen --project . --out-dir reports/phase3/docs")
+    assert not ok, (
+        f"the flow scored a NOT-RELEASABLE run as a gate pass: {out[:160]!r}")
+
+    clean = _project(tmp_path / "clean", CLEAN)
+    ok_clean, out_clean = fcc._check_program_exit_zero(
+        clean, "tapeout_docs_gen --project . --out-dir reports/phase3/docs")
+    assert ok_clean, (
+        f"a clean run must still PASS, or this gate is red for everyone: "
+        f"{out_clean[:200]!r}")

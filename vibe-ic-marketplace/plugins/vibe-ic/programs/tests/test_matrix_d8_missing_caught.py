@@ -815,14 +815,30 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           how v1.10.38 shipped a 28-entry pin over a 27-step population"). The
 #:           whole population was recomputed from the flow as
 #:           `[id for step in steps if len(step.required_outputs) < 2]`, and the
-#:           result is the previous 27 in their previous order plus `37.5self`
-#:           in FLOW order after its sibling `37.5ic` — so the re-derivation also
+#:           result is 27 members with `37.5self` in FLOW order where its sibling
+#:           `37.5ic` used to sit — 37.5ic having left the population in the same
+#:           landing that gave it the release documents. So the re-derivation also
 #:           says, as a by-product, that no member had gone stale. General
 #:           Precheck declares exactly one output, `reports/phase3/
 #:           general_precheck.json`, which is what puts it in this population.
+#:
+#:           RE-DERIVED A THIRD TIME at the merge. The 37.5ic removal and the
+#:           37.5self addition were authored on different bases; each was correct
+#:           for its own, and a hand-united tuple would have carried BOTH claims
+#:           without either being true of this tree. The population was recomputed
+#:           here and the tuple written from that answer, not from the two diffs.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
+    # 2026-08-20: 27 members. Step 37.5ic LEFT this population when 69ce9260d
+    # made the release documents an output of it (1 entry -> 3); step 37.5self
+    # JOINED it at v1.11.4 declaring exactly one output. The two changes were
+    # authored on different bases and each re-derived correctly for its own; the
+    # merge was RE-DERIVED again rather than hand-united, because a hand-united
+    # tuple is how v1.10.38 shipped a 28-entry pin over a 27-step population.
+    # The tuple below is exactly what
+    # `[k for k in steps if len(required_outputs(k)) < 2]` answers on this tree,
+    # in flow order: 27 members, and no member had gone stale.
     "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5", "A7", "A9",
-    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37", "37.5ic",
+    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37",
     "37.5self", "M4", "42", "44", "P0",
 )
 

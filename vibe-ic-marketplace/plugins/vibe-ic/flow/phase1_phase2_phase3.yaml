@@ -5332,8 +5332,13 @@ steps:
       # The generator computes that verdict FROM the table rather than being
       # told it, and writes NOT_MEASURED where an artefact is missing -- never
       # a default, because a plausible number hides the gap a hole would show.
-      - "reports/phase3/docs/SIGNOFF.html"
-      - "reports/phase3/docs/BRIEF.html"
+      # Named with the glob the generator actually writes: it emits ONE pair per
+      # (design, pdk) -- `SIGNOFF_<design>_<pdk>.html` -- so that two dies built
+      # from the same tree cannot overwrite each other's sign-off. Declaring the
+      # bare `SIGNOFF.html` named a file no producer in this flow writes, and
+      # d4/criteria_match reported it as "named nowhere the gate can reach".
+      - "reports/phase3/docs/SIGNOFF_*.html"
+      - "reports/phase3/docs/BRIEF_*.html"
     gate:
       all_of:
         - program_exit_zero: "tapeout_readiness_check . --json reports/phase3/shuttle_precheck.json"
