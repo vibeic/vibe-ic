@@ -242,9 +242,12 @@ PATH_RULES: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
      "flow-change-acceptance SKILL.md:15 — the blast radius of a flow change "
      "is every design and every future design."),
     ("skill_md", r"(^|/)skills/[^/]+/SKILL\.md$",
-     ("skill", "docs"),
-     "A skill is instructions an agent follows; changing one changes behaviour "
-     "without changing a program."),
+     ("skill", "docs", "agent", "ai"),
+     "A skill is the instructions an agent follows, so changing one changes AI "
+     "behaviour without changing a program — and a prompt surface is exactly "
+     "where question 19's injection lands. `agents/` and `commands/` already "
+     "carry these tokens; skills carrying only `docs` was the inconsistency, "
+     "not this."),
     ("schema_json", r"(^|/)schemas/.*\.schema\.json$",
      ("schema", "contract"),
      "PPA_INTERFACES §5: a schema is the contract an instance document is "
@@ -433,49 +436,62 @@ def diff_text_from_git(repo: Path, base: str, head: str) -> str:
     return out
 
 
-_HUNK_RX = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_HUNK_RX = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
-def added_lines(diff_text: str) -> List[Tuple[str, int, str]]:
-    """(path, POST-CHANGE line number, text) for every line a unified diff ADDS.
+def changed_lines(diff_text: str) -> Tuple[List[Tuple[str, int, str]],
+                                           List[Tuple[str, int, str]]]:
+    """(added, removed), each as (path, line number in ITS OWN version, text).
 
-    Deliberately keyed on `+++ b/<path>`: a rename or a copy still names the
-    destination there, so code that MOVED into a new file is attributed to the
-    file it moved into. That is the case this arm exists for.
+    Both sides, and the removed side is not an afterthought. A PR that DELETES
+    the allow-list check adds no line at all: an added-lines-only detector sees
+    an empty change and reports the security question N/A. Deleting the guard is
+    the cheapest way to defeat a detector that only reads what was written.
 
-    The line number is the real one in the post-change file, taken from the hunk
-    header, because the masking pass below has to line a match up against the
-    tokens of that file. A hunk-relative index would have been enough to REPORT
-    a hit and not enough to decide whether it is inside a string.
+    The added side is keyed on `+++ b/<path>` and the removed side on
+    `--- a/<path>`, so a rename attributes each side to the name it had there.
+    Line numbers come from the hunk header because the masking pass has to line
+    a match up against the tokens of the corresponding file version.
     """
-    out: List[Tuple[str, int, str]] = []
-    current: Optional[str] = None
-    lineno = 0
+    adds: List[Tuple[str, int, str]] = []
+    removes: List[Tuple[str, int, str]] = []
+    old_path: Optional[str] = None
+    new_path: Optional[str] = None
+    old_no = new_no = 0
+
+    def _strip(target: str) -> Optional[str]:
+        if target == "/dev/null":
+            return None
+        return target[2:] if target.startswith(("a/", "b/")) else target
+
     for line in diff_text.splitlines():
-        if line.startswith("+++ "):
-            target = line[4:].strip()
-            if target == "/dev/null":
-                current = None
-            else:
-                current = target[2:] if target.startswith(("a/", "b/")) else target
-            lineno = 0
+        if line.startswith("diff --git"):
+            old_path = new_path = None
             continue
-        if line.startswith("--- ") or line.startswith("diff --git"):
+        if line.startswith("--- "):
+            old_path = _strip(line[4:].strip())
+            continue
+        if line.startswith("+++ "):
+            new_path = _strip(line[4:].strip())
             continue
         m = _HUNK_RX.match(line)
         if m:
-            lineno = int(m.group(1))
+            old_no, new_no = int(m.group(1)), int(m.group(2))
             continue
-        if not current:
+        if line.startswith("\\"):          # "\ No newline at end of file"
             continue
         if line.startswith("+"):
-            out.append((current, lineno, line[1:]))
-            lineno += 1
-        elif line.startswith("-") or line.startswith("\\"):
-            continue
+            if new_path:
+                adds.append((new_path, new_no, line[1:]))
+            new_no += 1
+        elif line.startswith("-"):
+            if old_path:
+                removes.append((old_path, old_no, line[1:]))
+            old_no += 1
         else:
-            lineno += 1
-    return out
+            old_no += 1
+            new_no += 1
+    return adds, removes
 
 
 #: `tokenize` token types whose text is data, not executable code. A rule match
@@ -543,12 +559,15 @@ def detect_path_surfaces(paths: Sequence[str]) -> List[Dict[str, Any]]:
 
 def detect_content_surfaces(
         adds: Sequence[Tuple[str, int, str]],
+        removes: Sequence[Tuple[str, int, str]] = (),
         source_of: Optional[Any] = None,
+        base_source_of: Optional[Any] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Scan the added lines, and report how each file was masked.
+    """Scan both sides of the diff, and report how each file was masked.
 
-    `source_of(path)` returns the POST-CHANGE text of a `.py` file, or None. It
-    is what makes masking possible; when it cannot supply a file, that file is
+    `source_of(path)` returns the POST-CHANGE text of a `.py` file and
+    `base_source_of(path)` the PRE-CHANGE text; each is what makes masking
+    possible on its own side. When one cannot supply a file, that file is
     scanned unmasked and says so in the returned masking map. The second return
     value exists so the report can never imply a precision the run did not have.
     """
@@ -558,37 +577,51 @@ def detect_content_surfaces(
                 for rid, pat, tok, why, klasses in CONTENT_RULES]
     by_class = {k: [r for r in compiled if k in r[4]]
                 for k in (CLASS_CODE, CLASS_CONFIG, CLASS_PROSE)}
-    spans_cache: Dict[str, Optional[Dict[int, List[Tuple[int, int]]]]] = {}
+    spans_cache: Dict[Tuple[str, str], Optional[Dict[int, List[Tuple[int, int]]]]] = {}
 
-    def spans_for(path: str) -> Optional[Dict[int, List[Tuple[int, int]]]]:
-        if path in spans_cache:
-            return spans_cache[path]
+    def spans_for(path: str, side: str) -> Optional[Dict[int, List[Tuple[int, int]]]]:
+        key = (path, side)
+        if key in spans_cache:
+            return spans_cache[key]
+        reader = source_of if side == "added" else base_source_of
         result: Optional[Dict[int, List[Tuple[int, int]]]] = None
-        if Path(path).suffix.lower() == ".py" and source_of is not None:
-            src = source_of(path)
+        if Path(path).suffix.lower() != ".py":
+            state = "NOT_APPLICABLE_NOT_PYTHON"
+        elif reader is None:
+            state = "NOT_APPLIED_SOURCE_UNAVAILABLE"
+        else:
+            src = reader(path)
             if src is None:
-                masking[path] = "NOT_APPLIED_SOURCE_UNAVAILABLE"
+                state = "NOT_APPLIED_SOURCE_UNAVAILABLE"
             else:
                 result = data_spans(src)
-                masking[path] = ("APPLIED" if result is not None
-                                 else "NOT_APPLIED_UNTOKENIZABLE")
-        else:
-            masking[path] = "NOT_APPLICABLE_NOT_PYTHON"
-        spans_cache[path] = result
+                state = ("APPLIED" if result is not None
+                         else "NOT_APPLIED_UNTOKENIZABLE")
+        # A file scanned on both sides records the WEAKER of the two states.
+        # If masking worked on the post-change text but the base text could not
+        # be read, saying "APPLIED" would advertise a precision only half the
+        # scan had — and "I could not read it" must never look like "I read it".
+        prior = masking.get(path)
+        if prior is None or (state.startswith("NOT_APPLIED")
+                             and not prior.startswith("NOT_APPLIED")):
+            masking[path] = state
+        spans_cache[key] = result
         return result
 
-    for path, lineno, text in adds:
-        rules = by_class[file_class(path)]
-        spans = spans_for(path)
-        for rule_id, rx, tokens, why, _klasses in rules:
-            for m in rx.finditer(text):
-                if _is_masked(spans, lineno, m.start()):
-                    continue
-                hits.append({"arm": "content", "rule": rule_id, "path": path,
-                             "line": lineno,
-                             "evidence_line": text.strip()[:200],
-                             "tokens": list(tokens), "why": why})
-                break
+    for side, stream in (("added", adds), ("removed", removes)):
+        for path, lineno, text in stream:
+            rules = by_class[file_class(path)]
+            spans = spans_for(path, side)
+            for rule_id, rx, tokens, why, _klasses in rules:
+                for m in rx.finditer(text):
+                    if _is_masked(spans, lineno, m.start()):
+                        continue
+                    hits.append({"arm": "content", "side": side,
+                                 "rule": rule_id, "path": path,
+                                 "line": lineno,
+                                 "evidence_line": text.strip()[:200],
+                                 "tokens": list(tokens), "why": why})
+                    break
     return hits, masking
 
 
@@ -1103,7 +1136,8 @@ def _find_repo_root(start: Path) -> Path:
     return start
 
 
-def _source_reader(repo: Path, head_ref: Optional[str]) -> Any:
+def _source_reader(repo: Path, head_ref: Optional[str],
+                   base_side: bool = False) -> Any:
     """A reader for the POST-CHANGE text of a file, for the masking pass.
 
     Preference order, and the order is the point: the HEAD revision first,
@@ -1122,7 +1156,7 @@ def _source_reader(repo: Path, head_ref: Optional[str]) -> Any:
             rc, out, _ = _git(repo, "show", f"{head_ref}:{path}")
             if rc == 0:
                 text = out
-        if text is None:
+        if text is None and not base_side:
             candidate = repo / path
             if candidate.is_file():
                 try:
@@ -1244,9 +1278,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     content_arm_ran = diff_text is not None
     path_hits = detect_path_surfaces(paths)
     if content_arm_ran:
+        adds, removes = changed_lines(diff_text)
         content_hits, masking = detect_content_surfaces(
-            added_lines(diff_text),
-            source_of=_source_reader(repo, args.head))
+            adds, removes,
+            source_of=_source_reader(repo, args.head),
+            base_source_of=_source_reader(repo, args.base, base_side=True))
     else:
         content_hits, masking = [], {}
 

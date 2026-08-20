@@ -748,3 +748,104 @@ class TestChangeSetChannels:
         capsys.readouterr()
         report = json.loads(out.read_text(encoding="utf-8"))
         assert report["change_set"]["path_count"] == 1
+
+
+# --------------------------------------------------------------------------
+# The two other ways a one-sided detector is routed around.
+# --------------------------------------------------------------------------
+class TestDeletingTheGuard:
+    def test_deleting_a_security_check_is_seen_even_though_nothing_was_added(
+            self, tmp_path):
+        """MUTATION TARGET, and the cheapest attack on an added-lines detector.
+
+        The PR REMOVES the allow-list enforcement and adds nothing. A detector
+        that only reads what a diff wrote sees an empty change here and reports
+        the security question N/A — which is how the guard gets deleted.
+        """
+        before = ('ALLOWLIST = ("remeasure",)\n\n\n'
+                  'def apply(step):\n'
+                  '    if step["cmd"] not in ALLOWLIST:\n'
+                  '        raise SystemExit(2)\n'
+                  '    return step\n')
+        after = ('def apply(step):\n'
+                 '    return step\n')
+        repo = make_repo(tmp_path, base={UNWATCHED: before},
+                         head={UNWATCHED: after})
+        _, report = run(repo, {"schema": mod.ANSWERS_SCHEMA, "answers": []})
+        added = [h for h in report["detector"]["content_hits"]
+                 if h.get("side") == "added"]
+        removed = [h for h in report["detector"]["content_hits"]
+                   if h.get("side") == "removed"]
+        assert added == [], "nothing carrying a surface was added, by construction"
+        assert any(h["rule"] == "action_registry_surface" for h in removed)
+        assert applicability_of(report, 15) == "APPLICABLE"
+        assert "action_registry" in report["detector"]["detected_tokens"]
+
+    def test_both_sides_are_labelled_so_a_reader_can_tell_them_apart(
+            self, tmp_path):
+        """A surface that arrived and a surface that left are different facts
+        about a PR, and a report that merged them would be unreadable."""
+        repo = make_repo(
+            tmp_path,
+            base={UNWATCHED: 'import subprocess\n\n\n'
+                             'def a(c):\n    subprocess.run(c, shell=True)\n'},
+            head={UNWATCHED: 'ALLOWLIST = ("x",)\n'})
+        _, report = run(repo, {"schema": mod.ANSWERS_SCHEMA, "answers": []})
+        sides = {h["rule"]: h["side"] for h in report["detector"]["content_hits"]}
+        assert sides.get("shell_true") == "removed"
+        assert sides.get("action_registry_surface") == "added"
+
+    def test_a_pure_deletion_of_a_file_still_reports_its_surface(self, tmp_path):
+        """`+++ /dev/null` — the added side has no path at all. The removed side
+        must still be attributed, from `--- a/<path>`."""
+        repo = make_repo(
+            tmp_path,
+            base={UNWATCHED: 'import subprocess\n\n\n'
+                             'def a(c):\n    subprocess.run(c, shell=True)\n'},
+            head={"placeholder.txt": "x\n"})
+        _git(repo, "rm", "-q", UNWATCHED)
+        _git(repo, "commit", "-q", "-m", "delete")
+        _, report = run(repo, {"schema": mod.ANSWERS_SCHEMA, "answers": []},
+                        base="HEAD~1", head="HEAD")
+        hits = [h for h in report["detector"]["content_hits"]
+                if h["rule"] == "shell_true"]
+        assert hits and hits[0]["side"] == "removed"
+        assert hits[0]["path"] == UNWATCHED
+
+
+class TestPromptSurfaces:
+    def test_a_skill_document_is_an_ai_surface_not_merely_a_document(
+            self, tmp_path):
+        """A skill is the instructions an agent follows, so it is where a prompt
+        injection lands. `agents/` and `commands/` already carried these tokens;
+        skills carrying only `docs` was the inconsistency."""
+        skill = "vibe-ic-marketplace/plugins/vibe-ic/skills/thing/SKILL.md"
+        repo = make_repo(tmp_path, base={},
+                         head={skill: "Run the tool, then report.\n"})
+        _, report = run(repo, {"schema": mod.ANSWERS_SCHEMA, "answers": []})
+        tokens = report["detector"]["detected_tokens"]
+        assert "skill" in tokens and "agent" in tokens and "ai" in tokens
+        assert applicability_of(report, 19) == "APPLICABLE"
+        assert applicability_of(report, 16) == "APPLICABLE"
+
+    def test_an_agent_facing_document_that_names_a_tool_dispatch_is_a_surface(
+            self, tmp_path):
+        """The content arm reaches prose for exactly this rule: a document that
+        tells an agent to reach a tool has granted that reach."""
+        skill = "vibe-ic-marketplace/plugins/vibe-ic/skills/thing/SKILL.md"
+        repo = make_repo(tmp_path, base={skill: "Report.\n"},
+                         head={skill: "Report, then call_tool with the path.\n"})
+        _, report = run(repo, {"schema": mod.ANSWERS_SCHEMA, "answers": []})
+        rules = {h["rule"] for h in report["detector"]["content_hits"]}
+        assert "mcp_dispatch" in rules
+
+    def test_prose_still_does_not_acquire_a_shell(self, tmp_path):
+        """The paired half. Widening prose to the tool rule must not widen it to
+        every code rule: a document that quotes `shell=True` is still a
+        document."""
+        doc = "vibe-ic-marketplace/plugins/vibe-ic/docs/howto.md"
+        repo = make_repo(tmp_path, base={},
+                         head={doc: "Never write `shell=True` in a program.\n"})
+        _, report = run(repo, {"schema": mod.ANSWERS_SCHEMA, "answers": []})
+        rules = {h["rule"] for h in report["detector"]["content_hits"]}
+        assert "shell_true" not in rules
