@@ -719,3 +719,48 @@ def test_a_tag_is_refused_before_any_registry_is_consulted(tmp_path):
         "hold on a host with no network at all")
     assert record["floating"] is True
     assert record["version"]["status"] == "NOT_MEASURED"
+
+
+def test_a_symlink_out_of_the_declared_root_is_not_followed(tmp_path):
+    """`provenance._relative_within` checks the declared text AND the resolved
+    path, and the docstring claims the second catches what the first cannot.
+
+    A claim in a docstring that no test drives is prose. This drives it: the
+    declaration reads as an innocent relative path and the FILESYSTEM is what
+    leaves the root."""
+    root = tmp_path / "run"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("content nobody else can reproduce\n")
+    (root / "innocent.rpt").symlink_to(outside)
+
+    row = prov.artefact_ref(root, "innocent.rpt", "sneaky")
+    assert row["status"] == prov.NOT_MEASURED, (
+        "a symlink leaving the declared root was hashed; the reference is not "
+        "reproducible by anyone who does not also have that file")
+    assert "escapes" in row["reason"]
+    assert "sha256" not in row
+
+    # The green twin: the same shape, staying inside the root, IS measured.
+    inside = root / "real.txt"
+    inside.write_text("content nobody else can reproduce\n")
+    (root / "fine.rpt").symlink_to(inside)
+    ok = prov.artefact_ref(root, "fine.rpt", "fine")
+    assert ok["status"] == prov.MEASURED
+    assert ok["sha256"].startswith("sha256:")
+
+
+def test_a_dangling_symlink_is_not_the_same_as_an_absent_file(tmp_path):
+    """Both are unreadable and they fail for different reasons, so they say
+    different things. A reader chasing 'absent' looks for a producer that never
+    ran; a reader chasing 'dangling symlink' looks for one that ran and was
+    cleaned up underneath them."""
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "dangling.rpt").symlink_to(root / "never_existed.rpt")
+    dangling = prov.artefact_ref(root, "dangling.rpt", "r")
+    absent = prov.artefact_ref(root, "not_there.rpt", "r")
+    assert dangling["status"] == prov.NOT_MEASURED
+    assert absent["status"] == prov.NOT_MEASURED
+    assert dangling["reason"] != absent["reason"]
+    assert dangling["reason"] == "dangling symlink"
