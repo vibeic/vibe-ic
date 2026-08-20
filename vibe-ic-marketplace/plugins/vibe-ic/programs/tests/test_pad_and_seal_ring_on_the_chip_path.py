@@ -479,6 +479,39 @@ def test_the_slot_geometry_beats_the_declaration_for_the_per_side_lists(tmp_path
     assert _chk(root) == 0
 
 
+def test_a_slot_that_pins_the_pads_while_the_design_says_nothing_refuses(tmp_path):
+    """THE CASE THAT IS NOT `NOT_ASKED`, and the distinction is the point.
+
+    A real operator template pins the per-side pad lists. That is a source
+    being asked and answering, so reporting "nobody was asked" would be false
+    about the tree. It is also ALL an operator template can supply — a slot
+    file carries no site name, no edge spacing, no rotation, no corner master,
+    no filler and no signal map — so the remaining nine variables are owed by
+    the DESIGN whatever the operator published.
+
+    THIS IS A BEHAVIOUR CHANGE ON THE SHUTTLE PATH and it is stated rather than
+    slipped in: such a tree used to reach `pad_ring_gen`'s SKIP and the step
+    read MISSING; it now refuses one step earlier with the nine owed variables
+    named. Both are non-pass and neither produces a ring, so no green becomes
+    red — what moves is that the reader is told what to answer.
+    """
+    root = _project(tmp_path, answers={}, self_tapeout=False,
+                    slots={"slot_a.yaml": _slot(pads=True)})
+    assert _pag(root) == 1
+    rep = _pag_report(root)
+    assert rep["verdict"] == "REFUSE"
+    assert rep["questions_answered"] == 0
+    owed = rep["findings"][0]["variables_owed"]
+    assert len(owed) == len(PR.REQUIRED_VARS) - 4, owed
+    for var in ("PAD_SITE_NAME", "PAD_CORNER_SITE_NAME", "PAD_EDGE_SPACING",
+                "SIGNAL_MAP"):
+        assert any(o.startswith(var) for o in owed), (var, owed)
+    for var in ("PAD_SOUTH", "PAD_EAST", "PAD_NORTH", "PAD_WEST"):
+        assert not any(o.startswith(var) for o in owed), (var, owed)
+    assert "the operator's slot geometry pinned 4" in rep["reason"], rep["reason"]
+    assert not (root / PR.ASSIGNMENT_REL).exists()
+
+
 def test_two_slot_files_pinning_one_side_differently_refuse(tmp_path):
     """Nothing here can say which slot this design was accepted into, and
     picking one would be choosing a pin-out on the design's behalf."""

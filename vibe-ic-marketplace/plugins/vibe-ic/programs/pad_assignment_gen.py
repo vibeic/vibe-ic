@@ -490,16 +490,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _emit("NOT_ASKED", reason,
                      [_finding("INFO", "PAD_RING_NOT_DECLARED", reason)], 2)
 
-    # ── started and still owing ────────────────────────────────────────────
+    # ── a source spoke, and the contract is still incomplete ───────────────
+    # TWO WAYS TO GET HERE, and the message says which, because the reader's
+    # next move differs:
+    #   the DESIGN answered some of section 2B and not the rest — a
+    #   declaration somebody started and left;
+    #   the OPERATOR's slot pinned the per-side pad lists and the design has
+    #   answered nothing. That is NOT "nobody was asked": a source was asked
+    #   and answered, and reporting NOT_ASKED would be false about the tree.
+    #   It is also the ONLY thing an operator template can supply — a slot
+    #   file carries no site name, no spacing, no rotation, no corner master,
+    #   no filler and no signal map — so the remaining nine are owed by the
+    #   design whatever the operator published.
     if owed:
         named = "; ".join(owed)
+        if answered:
+            started = (f"declaration section {TD.SECTION_PAD_RING} was STARTED "
+                       f"({len(answered)} of {len(_2B_KEYS)} question(s) "
+                       f"answered)")
+            note = ""
+        else:
+            started = (f"the operator's slot geometry pinned "
+                       f"{len(slot_vars)} of the {len(PR.REQUIRED_VARS)} "
+                       f"variables while declaration section "
+                       f"{TD.SECTION_PAD_RING} answers none of its "
+                       f"{len(_2B_KEYS)} questions")
+            note = (" A slot file cannot supply the rest — it carries no site "
+                    "name, no edge spacing, no rotation, no corner master, no "
+                    "filler and no signal map — so these are owed by the "
+                    "design whatever the operator published.")
         return _emit(
             "REFUSE",
-            f"declaration section {TD.SECTION_PAD_RING} was STARTED "
-            f"({len(answered)} of {len(_2B_KEYS)} question(s) answered) and "
-            f"still owes {len(owed)} of the {len(PR.REQUIRED_VARS)} variables "
-            f"`pad_ring_gen` requires. No value is guessed for any of them — "
-            f"a pad site, an edge spacing or a filler invented here would be "
+            f"{started} and still owes {len(owed)} of the "
+            f"{len(PR.REQUIRED_VARS)} variables `pad_ring_gen` requires."
+            f"{note} No value is guessed for any of them — a pad site, an "
+            f"edge spacing or a filler invented here would be "
             f"indistinguishable in the artefact from a real pin-out. Still "
             f"owed: {named}",
             [_finding("ERROR", "PAD_CONFIG_VARIABLE_ABSENT", named,
