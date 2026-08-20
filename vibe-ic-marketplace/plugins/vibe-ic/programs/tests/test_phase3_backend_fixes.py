@@ -11,6 +11,7 @@ violation must still be classified user-routing (→ FAIL), and a vacuous
 Magic 0-count must never be reported as a clean pass.
 """
 import importlib
+import json
 import pathlib
 
 import pytest
@@ -476,20 +477,57 @@ class TestSiliconCriticalPnrBlocks:
         assert "VNB" in tcl
 
     # ---- v0.1.48 filler_placement --------------------------------------
-    def test_filler_masters_sky130_full_set(self):
+    def test_filler_masters_keep_the_decaps_for_a_normal_die(self):
+        """The MASTER LIST is unchanged, and that is deliberate.
+
+        An earlier revision of this fix dropped the decap family globally. It
+        should not, and the reason is a measurement on the reference die: the
+        published gf180mcuD `spm` cell that passes the shuttle operator's
+        precheck end-to-end carries **968 `fillcap_*` decap instances** among
+        9115 spacers (counted from its own shipped GDS). That die is dense, the
+        #684 tap prune never fired on it, its decaps are fully tied, and they
+        are the dynamic-IR decoupling it was signed off with. Deleting them
+        globally would change a known-good result to buy nothing.
+
+        The decap exclusion belongs to the ONE arm where it was measured -- a
+        sparse die whose ties the prune has removed -- and it is applied there,
+        in `_build_sparse_die_aware_filler_tcl`, not here.
+        """
         masters = mod._filler_masters_for_pdk(self._sky130_pdk())
-        # Both decap-family and fill-family must be present. Decap is
-        # the dynamic-IR margin; fill is density-rule compliance.
-        decap = [m for m in masters if "decap" in m]
+        decap = [m for m in masters if "decap" in m or "dcap" in m]
         fill = [m for m in masters if m.startswith("sky130_fd_sc_hd__fill_")]
-        assert len(decap) >= 3, f"decap variants too few: {decap}"
+        assert len(decap) >= 3, f"decap variants must survive: {decap}"
         assert len(fill) >= 3, f"fill variants too few: {fill}"
-        # Largest-first ordering (OpenROAD convention) for the largest
-        # decap variant and largest fill variant.
+        # Largest-first ordering (OpenROAD convention), unchanged.
         assert masters.index("sky130_fd_sc_hd__decap_12") < masters.index(
             "sky130_fd_sc_hd__decap_3")
         assert masters.index("sky130_fd_sc_hd__fill_8") < masters.index(
             "sky130_fd_sc_hd__fill_1")
+
+    def test_spacer_filter_drops_devices_and_keeps_order(self):
+        """`_spacer_masters_of` is the device-free projection of that list."""
+        masters = mod._filler_masters_for_pdk(self._sky130_pdk())
+        spacers = mod._spacer_masters_of(masters)
+        assert spacers, "a PDK with fill cells must yield spacers"
+        assert not [m for m in spacers if "decap" in m or "dcap" in m]
+        assert spacers == [m for m in masters if m in spacers], "order kept"
+
+    def test_filler_masters_exclusion_is_pdk_agnostic(self):
+        """The exclusion is by name SEGMENT, so it holds for any PDK's naming.
+
+        The four families below are exactly the four the shuttle operator's own
+        per-run `resolved.json` names: `FILL_CELLS` = `*__fill_*`,
+        `DECAP_CELLS` = `*__fillcap_*`, `WELLTAP_CELL` = `*__filltie`,
+        `ENDCAP_CELL` = `*__endcap`. A classifier that disagreed with the
+        operator about which cells are fill would be wrong by their definition,
+        not just by ours.
+        """
+        for name in ("DECAP8", "lib__decap_12", "sg13g2_dcap_4",
+                     "gf_fd_sc__fillcap_64"):
+            assert mod._FILLER_DECAP_RE.search(name), name
+        for name in ("lib__fill_8", "sg13g2_fill_1", "FILL64",
+                     "lib__filltie", "lib__endcap"):
+            assert not mod._FILLER_DECAP_RE.search(name), name
 
     def test_filler_masters_empty_when_unknown_pdk(self):
         masters = mod._filler_masters_for_pdk(self._no_tapcell_pdk())
@@ -754,3 +792,203 @@ class TestShipSignoffSpefRepairPromotion:
         p = mod._parse_ship_repair_log(self._CLEAN)
         assert mod._ship_repair_should_promote(p, False, True) is False
         assert mod._ship_repair_should_promote(p, True, False) is False
+
+
+# ---------------------------------------------------------------------------
+# THE SLOT CONTRACT'S FLOORPLAN RECTANGLE, AND WHAT IT RESERVES AT THE DIE EDGE
+#
+# The three fixes below all decide what geometry lands at the die edge, so they
+# are tested together. Each test states the RED it discriminates against — the
+# behaviour on the revision before the fix — because a gate that cannot fail is
+# not a gate.
+# ---------------------------------------------------------------------------
+class TestSlotPinnedFloorplanRectangle:
+    #: The operator's own template shape, reduced to what `_slot_geometry`
+    #: reads. Two slots, so a test can prove the DECLARED one is picked and not
+    #: merely the first. Numbers are an open shuttle template's, and the point
+    #: of them is only that die != core.
+    @staticmethod
+    def _template(declared="slot_A"):
+        return {"ingest": {"declared_slot": declared, "slots": [
+            {"slot": "slot_B",
+             "die_area":  {"raw": [0, 0, 1936, 5122]},
+             "core_area": {"raw": [442, 442, 1494, 4680]}},
+            {"slot": "slot_A",
+             "die_area":  {"raw": [0, 0, 1936, 2531]},
+             "core_area": {"raw": [442, 442, 1494, 2089]},
+             "source_relpath": "librelane/slots/slot_A.yaml",
+             "source_sha256": "deadbeef"},
+        ]}}
+
+    @staticmethod
+    def _write(tmp_path, doc):
+        d = tmp_path / "reports" / "phase1"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "submission_template.json").write_text(json.dumps(doc))
+        return tmp_path
+
+    # ---- the declaration is READ, and it is the declared slot's ------------
+    def test_reads_the_declared_slot_not_the_first_one(self, tmp_path):
+        p = self._write(tmp_path, self._template())
+        g = mod._slot_geometry(p)
+        assert g is not None
+        assert g["slot"] == "slot_A"
+        assert g["core_rect"] == [442, 442, 1494, 2089]
+        assert (g["die_w"], g["die_h"]) == (1936, 2531)
+        # the reserved band is what the ring/pads stand in, on every side
+        assert g["core_rect"][0] - g["die_rect"][0] == 442
+        assert g["die_rect"][3] - g["core_rect"][3] == 442
+
+    def test_absent_declaration_is_inert(self, tmp_path):
+        """No template, no declared slot, and an unknown slot name must ALL
+        return None — that is what keeps every non-shuttle design byte-for-byte
+        on the historical `--die-um` + fixed-inset floorplan."""
+        assert mod._slot_geometry(tmp_path) is None            # no file at all
+        p = self._write(tmp_path, self._template(declared=None))
+        assert mod._slot_geometry(p) is None                   # nothing declared
+        p2 = self._write(tmp_path, self._template(declared="slot_MISSING"))
+        assert mod._slot_geometry(p2) is None                  # declared, not present
+
+    def test_degenerate_core_rect_is_refused(self, tmp_path):
+        """An inverted / zero-area CORE_AREA must not become a floorplan. A
+        silently-accepted empty rectangle would hand OpenROAD a die with no
+        placeable area, which fails much later and much less legibly."""
+        doc = self._template()
+        doc["ingest"]["slots"][1]["core_area"] = {"raw": [1494, 2089, 442, 442]}
+        assert mod._slot_geometry(self._write(tmp_path, doc)) is None
+
+    # ---- the rectangle reaches BOTH initialize_floorplan arguments ---------
+    def test_slot_rect_becomes_die_AND_core(self):
+        """`ppl place_pins` puts pins on the DIE boundary and has no
+        core-boundary mode, so `-core_area` alone leaves every pin on the saw
+        street with the seal ring on top of it. Both arguments must move."""
+        tcl = mod._floorplan_geometry_tcl(1936, 2531, 10, 1916, 2511,
+                                          [442, 442, 1494, 2089])
+        assert '-die_area "442 442 1494 2089"' in tcl
+        assert '-core_area "442 442 1494 2089"' in tcl
+        assert '"0 0 1936 2531"' not in tcl
+
+    def test_without_a_slot_the_historical_geometry_is_unchanged(self):
+        tcl = mod._floorplan_geometry_tcl(1936, 2531, 10, 1916, 2511, None)
+        assert '-die_area "0 0 1936 2531"' in tcl
+        assert '-core_area "10 10 1916 2511"' in tcl
+
+    # ---- the retry loop may not undo it -----------------------------------
+    def test_resize_retry_reinstates_the_pinned_rect(self):
+        """The PnR retry loop rewrites the floorplan line after every upsize /
+        downsize / loosen. A slot die cannot be grown, so the rewrite must put
+        the PINNED rectangle back, not the resized one."""
+        base = mod._floorplan_geometry_tcl(1936, 2531, 10, 1916, 2511,
+                                           [442, 442, 1494, 2089])
+        text = base + "\n                      -site mysite\nmake_tracks\n"
+        out = mod._rewrite_pnr_floorplan_die(text, 2200, 2900, 10, 2180, 2880,
+                                             [442, 442, 1494, 2089])
+        assert '-die_area "442 442 1494 2089"' in out
+        assert "2200" not in out and "2900" not in out
+        assert "-site mysite" in out          # the continuation survives
+        # RED this discriminates: main's `_RE_PNR_FLOORPLAN_DIE` only matched a
+        # die_area starting "0 0", so once the pinned rect is in the script the
+        # substitution silently matches NOTHING and the rewrite is a no-op.
+        # Rewriting twice proves the pattern still matches its own output.
+        again = mod._rewrite_pnr_floorplan_die(out, 3000, 3000, 10, 2980, 2980,
+                                               [442, 442, 1494, 2089])
+        assert '-die_area "442 442 1494 2089"' in again
+        assert "3000" not in again
+
+    def test_resize_retry_without_a_slot_still_resizes(self):
+        """The pinning must not disable the retry loop for everyone else."""
+        text = mod._floorplan_geometry_tcl(1936, 2531, 10, 1916, 2511, None)
+        out = mod._rewrite_pnr_floorplan_die(text, 2200, 2900, 10, 2180, 2880,
+                                             None)
+        assert '-die_area "0 0 2200 2900"' in out
+        assert '-core_area "10 10 2180 2880"' in out
+
+
+class TestSealRingBandKeepOut:
+    """The fill engine's keep-out, and where its number comes from."""
+
+    def test_the_number_is_read_out_of_the_PDK_not_chosen_by_us(self):
+        """gf180mcu's own fill scripts carry
+        `tp.var("space_to_scribe_line", 26 / $ly.dbu)` and then subtract that
+        ring from the fill region. The regex must read exactly that."""
+        m = mod._SCRIBE_KEEPOUT_RE.search(
+            'tp.var("space_to_scribe_line", 26 / $ly.dbu)')
+        assert m and float(m.group(1)) == 26.0
+        # a fractional clearance, and a PDK that declares none
+        assert float(mod._SCRIBE_KEEPOUT_RE.search(
+            'space_to_scribe_line = 25.7').group(1)) == 25.7
+        assert mod._SCRIBE_KEEPOUT_RE.search("no such variable here") is None
+
+    def test_keepout_is_attached_to_the_derived_config(self, monkeypatch):
+        pdk = mod.PdkConfig(
+            name="p", liberty="/l.lib",
+            tech_lef="/pdks/P/libs.ref/x/techlef/t.tlef",
+            cell_lef="/c.lef", cell_gds="/c.gds", site="s",
+            drc_deck="/d.drc", metal_prefix="Metal")
+        monkeypatch.setattr(mod, "_docker_exec", lambda *a, **k: (
+            0, 'tp.var("space_to_scribe_line", 26 / $ly.dbu)', ""))
+        assert mod._pdk_scribe_keepout_um(pdk, "ctr") == 26.0
+        # a PDK that ships no such declaration claims NO keep-out, rather than
+        # inventing one — a wrong margin is worse than none (too small puts the
+        # fill on the ring, too large makes the density target unreachable for
+        # a reason no report explains).
+        monkeypatch.setattr(mod, "_docker_exec", lambda *a, **k: (0, "", ""))
+        assert mod._pdk_scribe_keepout_um(pdk, "ctr") is None
+
+
+class TestSparseDieGuardIsNotApplicableToASlotPinnedCore:
+    #: decaps first, then fills — the historical discovery order.
+    _M = ["fillcap_64", "fillcap_16", "fill_64", "fill_8", "fill_1"]
+
+    def test_sparse_slot_pinned_core_fills_with_SPACERS_ONLY(self):
+        """The one arm whose behaviour changes.
+
+        Below the sparse threshold the #684 tap prune has already removed the
+        ties over this silicon. With the floorplan rectangle equal to the
+        operator's CORE_AREA there is no empty fixed wrapper left INSIDE the die
+        to flood -- the band the guard protects is outside it -- and the
+        operator requires that same rectangle to meet implant / n-well /
+        diffusion density rules. So the fill runs, and it runs DEVICE-FREE.
+        """
+        tcl = mod._build_sparse_die_aware_filler_tcl(self._M,
+                                                     slot_pinned_core=True)
+        below, _, above = tcl.partition("} else {")
+        assert "SPARSE_DIE_FILL_NOT_APPLICABLE" in below
+        assert "filler_placement {fill_64 fill_8 fill_1}" in below
+        assert "fillcap" not in below, "a decap must not reach the sparse arm"
+        # ...and the dense arm still gets the whole list, in the same file.
+        assert "filler_placement {fillcap_64 fillcap_16 fill_64 fill_8 fill_1}" \
+            in above
+
+    def test_dense_arm_is_byte_identical_to_the_unpatched_flow(self):
+        """A die at or above the threshold takes the else-arm, and that arm is
+        the historical one: the same masters in the same order. This is what
+        keeps the published reference die unchanged rather than merely
+        untested."""
+        tcl = mod._build_sparse_die_aware_filler_tcl(self._M,
+                                                     slot_pinned_core=True)
+        above = tcl.split("} else {", 1)[1]
+        assert "filler_placement {" + " ".join(self._M) + "}" in above
+
+    def test_without_a_slot_nothing_changes_at_all(self):
+        """No slot -> the guard skips exactly as before, and the emitted Tcl is
+        the unpatched text. (The byte-for-byte comparison against origin/main
+        itself is in the run record; here we assert the shape.)"""
+        tcl = mod._build_sparse_die_aware_filler_tcl(self._M,
+                                                     slot_pinned_core=False)
+        assert "SPARSE_DIE_FILL_SKIPPED" in tcl
+        assert "SPARSE_DIE_FILL_NOT_APPLICABLE" not in tcl
+        assert "filler_placement {" + " ".join(self._M) + "}" in tcl
+
+    def test_a_pdk_with_no_spacer_family_is_not_silently_emptied(self):
+        """If a PDK ships only decaps, the sparse arm has nothing device-free to
+        place. It must fall back to the documented SKIP, not to an empty
+        `filler_placement` that would look like it did something."""
+        tcl = mod._build_sparse_die_aware_filler_tcl(["fillcap_64", "dcap_8"],
+                                                     slot_pinned_core=True)
+        assert "SPARSE_DIE_FILL_SKIPPED" in tcl
+        assert "SPARSE_DIE_FILL_NOT_APPLICABLE" not in tcl
+
+    def test_no_masters_still_skips_by_name(self):
+        assert "FILLER_SKIPPED" in mod._build_sparse_die_aware_filler_tcl(
+            [], slot_pinned_core=True)

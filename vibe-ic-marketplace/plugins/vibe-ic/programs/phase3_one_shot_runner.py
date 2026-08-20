@@ -4841,6 +4841,11 @@ _SKY130_FILLER_MASTERS = [
 # NW.b1, i.e. nwell notches at the unfilled row gaps. With fillers inserted
 # the same design checks clean.
 _FILLER_MACRO_RE = re.compile(r'^\s*MACRO\s+(\S+)\s*$', re.MULTILINE)
+#: The device-bearing half of the filler families (see
+#: `_FILLER_SPACERS_ONLY_REASON`). Same name-segment matching as
+#: `_FILLER_FAMILY_RE`, so it is PDK-agnostic.
+_FILLER_DECAP_RE = re.compile(r'(?:^|_)(DECAP|DCAP|FILLCAP)(?:_?\d+)?(?:_|$)',
+                              re.IGNORECASE)
 # Family token as a name segment; trailing digits (if any) are the drive/size.
 _FILLER_FAMILY_RE = re.compile(
     r'(?:^|_)(DECAP|DCAP|FILLCAP|FILLER|FILL)(?:_?(\d+))?(?:_|$)',
@@ -4848,12 +4853,20 @@ _FILLER_FAMILY_RE = re.compile(
 
 
 def _discover_filler_masters_from_lef(cell_lef: Optional[str],
-                                      container: Optional[str] = None
+                                      container: Optional[str] = None,
+                                      spacers_only: bool = False
                                       ) -> List[str]:
-    """Discover decap+fill filler-cell masters from a cell LEF, ordered
-    OpenROAD-style (decaps largest→smallest first, then fills largest→smallest
-    — greedy tiling packs the big cells first). Returns [] on no LEF / no
-    fillers. Name-pattern based (no vendor literal).
+    """Discover filler-cell masters from a cell LEF, largest→smallest (greedy
+    tiling packs the big cells first). Returns [] on no LEF / no fillers.
+    Name-pattern based (no vendor literal).
+
+    `spacers_only` returns the fill family ALONE — the list `filler_placement`
+    is given on a die whose ties the #684 tap prune has already removed (see
+    `_FILLER_SPACERS_ONLY_REASON` for the measurement). It is deliberately NOT
+    the default: where the prune did not fire the decaps are tied, and they are
+    the dynamic-IR decoupling the design is signed off with. WHICH list a run
+    gets is decided at fill time by the SAME utilization test that decides the
+    prune — see `_build_sparse_die_aware_filler_tcl`.
 
     `cell_lef` is normally a path INSIDE the EDA container (/foss/pdks/...),
     which does not exist on the host filesystem. Reading it with a plain host
@@ -4880,7 +4893,31 @@ def _discover_filler_masters_from_lef(cell_lef: Optional[str],
             fills.append((size, name))
     decaps.sort(reverse=True)
     fills.sort(reverse=True)
+    if spacers_only:
+        return [n for _, n in fills]
     return [n for _, n in decaps] + [n for _, n in fills]
+
+
+#: A decap is a DEVICE. Measured (agent g360, spm x this PDK, 2026-08-20) on a
+#: die whose taps the #684 sparse-die prune had removed: run with this
+#: function's own decaps-first order, 7295 of the 8317 inserted cells were
+#: decaps and the die went 360 -> 11964 sign-off DRC violations, 33x WORSE,
+#: with 99.5-100% of every new violation sitting on a decap instance
+#: (DF.13_MV 8124 at 99.8%, DF.14_MV 1971 at 99.5%, M1.2a 1787 at 100%,
+#: M1.1 82 at 100%). The same 8317 sites filled with SPACERS ONLY gave
+#: 360 -> 19, and all 19 were already present before the fill: zero new
+#: violations. Measured contents of the two families: fill_* carries NWELL /
+#: PPLUS / NPLUS / DUALGATE and the two rails and has 0.000 um^2 of gate area;
+#: fillcap_* carries real COMP, POLY2, contacts and extra metal1.
+#:
+#: The two halves of #684 are mutually inconsistent: it prunes taps because
+#: empty silicon carries no devices, and then fills that same silicon with
+#: devices. Until decap insertion and tap pruning are decided TOGETHER — decap
+#: only where tap coverage is retained — `filler_placement` gets spacers.
+_FILLER_SPACERS_ONLY_REASON = (
+    "spacers only: a decap is a device, and the sparse-die tap prune has "
+    "already removed the taps that would tie it (measured 360 -> 11964 with "
+    "decaps, 360 -> 19 with spacers, same 8317 sites)")
 
 
 # v1.3.93 — an antenna-diode cell is marked in LEF with `CLASS CORE ANTENNACELL`
@@ -4935,6 +4972,17 @@ def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
     if pdk.tapcell_master and "sky130_fd_sc_hd" in pdk.tapcell_master:
         return list(_SKY130_FILLER_MASTERS)
     return _discover_filler_masters_from_lef(pdk.cell_lef)
+
+
+def _spacer_masters_of(masters: Sequence[str]) -> List[str]:
+    """The device-free half of a filler master list, order preserved.
+
+    Same name-segment matching as the discovery, so it is PDK-agnostic — and
+    it agrees with the shuttle operator's own per-run `resolved.json`, which
+    likewise separates `FILL_CELLS` (`*__fill_*`) from `DECAP_CELLS`
+    (`*__fillcap_*`) and treats `filltie` / `endcap` as neither.
+    """
+    return [m for m in masters if not _FILLER_DECAP_RE.search(m)]
 
 
 # ── #684 — sparse-die fill guard ──────────────────────────────────────
@@ -5081,7 +5129,8 @@ def _load_sparse_die_skip(project: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
+def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
+                                       slot_pinned_core: bool = False) -> str:
     """Return a Tcl block that runs `filler_placement {<masters>}` ONLY
     when post-place CORE utilization ≥ the sparse-die threshold; otherwise
     SKIP the full-die decap/fill tiling (emitting a SPARSE_DIE_FILL_SKIPPED
@@ -5099,7 +5148,79 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
                 "this PDK; dynamic-IR margin + density-fill rules must be "
                 "handled out-of-band\"\n")
     masters_tcl = " ".join(filler_masters)
+    spacers = _spacer_masters_of(filler_masters)
+    spacers_tcl = " ".join(spacers)
     thr = _sparse_die_fill_threshold_pct()
+    # === fix 2's precondition — A SLOT-PINNED CORE IS NOT AN EMPTY WRAPPER ===
+    # #684 guards against tiling silicon that is not the design's placeable
+    # area: a small design hardened into a much larger MANDATED die, where the
+    # fill buys nothing and explodes the GDS. That shape needs the wrapper to be
+    # INSIDE the die OpenROAD is filling.
+    #
+    # With the shuttle slot's CORE_AREA as the floorplan rectangle (fix 1) it no
+    # longer is. The band between CORE_AREA and DIE_AREA — where the ring, the
+    # pads and the identification cells go — is outside the die the router and
+    # the filler see, so there is no empty wrapper left to flood. What remains
+    # inside is the rectangle the OPERATOR pinned as placeable, and the same
+    # foundry whose template pinned it also requires that rectangle to meet
+    # implant, n-well and diffusion density rules.
+    #
+    # So the utilization skip has nothing left to protect here, and firing it
+    # costs the six rules the fill exists to satisfy. MEASURED (agent g360, this
+    # design, this PDK): with the fill withheld, PP.2 87, NP.2 83, NW.2a_LV 39,
+    # NW.2b_LV 35, NW.2b_MV 9, DV.5 28 — all six go to ZERO once spacers are
+    # placed over the same silicon, and NWELL islands go 3305 -> 128.
+    #
+    # This is why the fixes are ORDERED. Without fix 1 this exemption would hand
+    # `filler_placement` the whole 1936x2531 slot and reinstate the explosion;
+    # with it, the die being filled is the operator's own core rectangle.
+    #
+    # WHAT THE BELOW-THRESHOLD ARM IS GIVEN, AND WHY IT IS NOT THE WHOLE LIST.
+    # `_discover_filler_masters_from_lef` orders decaps largest-first and fills
+    # after them, so greedy tiling consumes the empty sites with DECAPS. A decap
+    # is a device, and this arm is BY DEFINITION the arm in which the #684 tap
+    # prune has just removed the ties over that same silicon: the two halves of
+    # #684 contradict each other. MEASURED (agent g360, 2026-08-20, spm on an
+    # open PDK, one die): with the decaps-first list 7295 of the 8317 inserted
+    # cells were decaps and sign-off DRC went 360 -> 11964, 33x WORSE, with
+    # 99.5-100% of every new violation sitting on a decap instance. The
+    # identical 8317 sites filled with SPACERS gave 360 -> 19, all 19 of which
+    # pre-dated the fill. Re-measured end-to-end through this flow: 145 -> 2,
+    # seven rules to zero, zero new violations.
+    #
+    # The exclusion is scoped to THIS arm on purpose. Above the threshold the
+    # prune did not fire, the decaps are tied, and they are the dynamic-IR
+    # decoupling the design was signed off with — the published gf180mcuD
+    # reference die carries 968 of them and passes the operator's precheck. The
+    # else-arm below therefore keeps the historical list verbatim, so that
+    # reference is not merely "probably fine", it is unchanged.
+    #
+    # DISCLOSED COST: on a sparse slot-pinned die there is now no decoupling
+    # capacitance from the filler at all. Recovering it needs decap insertion
+    # and tap pruning to be decided TOGETHER — decap only where tap coverage was
+    # retained — which is a change to the placement step, not to this list.
+    if slot_pinned_core and spacers:
+        below_arm = (
+            "  puts \"SPARSE_DIE_FILL_NOT_APPLICABLE: core_util="
+            "$_sd_fill_util% is below the threshold, but the floorplan "
+            "rectangle is the shuttle slot's own CORE_AREA, so the die being "
+            "filled IS the operator's placeable area and there is no empty "
+            "fixed wrapper inside it to flood; the utilization skip is "
+            "withheld and a DEVICE-FREE fill runs.\"\n"
+            f"  if {{[catch {{filler_placement {{{spacers_tcl}}}}} _fp_err]}} {{\n"
+            "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
+            "  } else {\n"
+            f"    puts \"FILLER_INSERTED: {len(spacers)} spacer master(s) "
+            "(slot-pinned core; the decap family is withheld because the tap "
+            "prune fired on this die)\"\n"
+            "  }\n")
+    else:
+        below_arm = (
+            "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
+            f"{thr}% — full-die decap/fill tiling bounded to avoid filling an "
+            "empty fixed wrapper (would explode GDS/extraction). Density-fill "
+            "for the occupied region is covered by the downstream metal-fill "
+            "gate; empty silicon carries no signals needing decoupling.\"\n")
     # NOTE: doubled braces because this string is interpolated by the
     # f-string template in _build_pnr_tcl_text (and emitted verbatim by the
     # metal-fill helper, which also uses an f-string).
@@ -5127,11 +5248,7 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
         "  puts \"SPARSE_DIE_FILL_MEASURE_NONFATAL: $_sd_err\"\n"
         "}\n"
         f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
-        "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
-        f"{thr}% — full-die decap/fill tiling bounded to avoid filling an "
-        "empty fixed wrapper (would explode GDS/extraction). Density-fill "
-        "for the occupied region is covered by the downstream metal-fill "
-        "gate; empty silicon carries no signals needing decoupling.\"\n"
+        + below_arm +
         "} else {\n"
         f"  if {{[catch {{filler_placement {{{masters_tcl}}}}} _fp_err]}} {{\n"
         "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
@@ -13233,20 +13350,111 @@ def _compute_loosened_die(die_w: int, die_h: int,
 # downsize / loosen) so the emitted `initialize_floorplan` shape and the
 # rewrite stay in lockstep. Matches only the die/core lines, leaving the
 # trailing `-site …` continuation intact.
+# ============================================================================
+# THE SLOT CONTRACT'S FLOORPLAN RECTANGLE  (agent gfinal, fix 1)
+# ----------------------------------------------------------------------------
+# Step 0.5ic ingests the shuttle operator's template and records, per slot, the
+# two rectangles the operator PINS: `DIE_AREA` (the slot the die is sawn to)
+# and `CORE_AREA` (the area inside it a submitter may place and route in). The
+# ring, the pads and the identification cells live in the band between them.
+#
+# Until now NOTHING downstream read either rectangle: the floorplan sized the
+# die from `--die-um` and inset the core by a fixed 10 um, so the placeable
+# area ran to 10 um of the saw street and OpenROAD's `ppl place_pins` — which
+# places pins on the DIE boundary and has NO core-boundary mode — put every
+# pin flush on it. MEASURED on this design's slot: 41 pins at 0.000, and the
+# seal ring the operator requires then lands on top of them.
+#
+# Setting `-core_area` alone does NOT fix it. MEASURED: rows correctly started
+# at 442.4 um and all 41 pins still came out at 0.000, because `place_pins`
+# never consults the core rectangle.
+#
+# So the floorplan's `-die_area` becomes the slot's CORE_AREA. The slot's
+# DIE_AREA does not disappear — it is what the seal ring is built on and what
+# the operator's size check measures — but it is no longer the rectangle the
+# router and the pin placer treat as "the die".
+def _slot_geometry(project: Path) -> Optional[Dict[str, Any]]:
+    """The declared slot's DIE_AREA and CORE_AREA, as ingested by step 0.5ic.
+
+    Returns None when no template was ingested, when no slot was declared, or
+    when the declared slot carries neither rectangle — every one of which is a
+    design that is NOT targeting a shuttle slot, and which must keep the
+    historical `--die-um` + 10 um-inset behaviour exactly.
+    """
+    rep = project / "reports" / "phase1" / "submission_template.json"
+    try:
+        ing = (json.loads(rep.read_text()) or {}).get("ingest") or {}
+    except Exception:
+        return None
+    declared = ing.get("declared_slot")
+    if not declared:
+        return None
+    for rec in ing.get("slots") or []:
+        if rec.get("slot") != declared:
+            continue
+        die, core = rec.get("die_area") or {}, rec.get("core_area") or {}
+        try:
+            drect = [int(float(v)) for v in (die.get("raw") or die.get("rect"))]
+            crect = [int(float(v)) for v in (core.get("raw") or core.get("rect"))]
+        except Exception:
+            return None
+        if len(drect) != 4 or len(crect) != 4:
+            return None
+        if crect[2] - crect[0] <= 0 or crect[3] - crect[1] <= 0:
+            return None
+        return {"slot": declared,
+                "die_rect": drect, "core_rect": crect,
+                "die_w": drect[2] - drect[0], "die_h": drect[3] - drect[1],
+                "source_file": rec.get("source_relpath"),
+                "source_sha256": rec.get("source_sha256")}
+    return None
+
+
 _RE_PNR_FLOORPLAN_DIE = re.compile(
-    r'initialize_floorplan -die_area "0 0 \d+ \d+"\s*\\?\s*\n'
+    r'initialize_floorplan -die_area "\d+ \d+ \d+ \d+"\s*\\?\s*\n'
     r'\s*-core_area "\d+ \d+ \d+ \d+"')
 
 
+def _floorplan_geometry_tcl(die_w: int, die_h: int, core_pad: int,
+                            core_w: int, core_h: int,
+                            fp_rect: Optional[Sequence[int]] = None) -> str:
+    """The two `initialize_floorplan` geometry lines, from ONE builder.
+
+    `fp_rect` is the shuttle slot's CORE_AREA (fix 1). When it is present it
+    becomes BOTH rectangles: `-die_area`, because `ppl place_pins` places pins
+    on the die boundary and has no core-boundary mode, so the only way to keep
+    pins out of the seal-ring band is to make that band lie outside the die
+    OpenROAD is told about; and `-core_area`, because the rows must fill the
+    rectangle the operator says is placeable, no more and no less.
+
+    Emitted from one function so the initial build and every retry-loop rewrite
+    cannot drift apart — the failure mode the `-core_area`-only attempt had,
+    where the rows moved and the pins did not.
+    """
+    if fp_rect is not None:
+        llx, lly, urx, ury = (int(v) for v in fp_rect)
+        return (f'initialize_floorplan -die_area "{llx} {lly} {urx} {ury}" \\\n'
+                f'                      -core_area "{llx} {lly} {urx} {ury}"')
+    return (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
+            f'                      -core_area "{core_pad} {core_pad} '
+            f'{core_w} {core_h}"')
+
+
 def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
-                               core_pad: int, core_w: int, core_h: int) -> str:
+                               core_pad: int, core_w: int, core_h: int,
+                               fp_rect: Optional[Sequence[int]] = None) -> str:
     """Return `tcl_text` with the `initialize_floorplan` die/core geometry
     rewritten to the given dimensions. Pure string transform used by the PnR
-    retry loop after every die resize (upsize / downsize / loosen)."""
+    retry loop after every die resize (upsize / downsize / loosen).
+
+    With `fp_rect` in force the geometry is CONTRACTUAL — the operator pins both
+    rectangles per slot — so the rewrite reinstates the pinned rect rather than
+    the resized one. A slot die cannot be grown or shrunk; the flow's remedy for
+    an unroutable slot die is a different slot, not a different die.
+    """
     return _RE_PNR_FLOORPLAN_DIE.sub(
-        (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
-         f'                      -core_area "{core_pad} {core_pad} '
-         f'{core_w} {core_h}"'),
+        _floorplan_geometry_tcl(die_w, die_h, core_pad, core_w, core_h,
+                                fp_rect).replace('\\', '\\\\'),
         tcl_text,
     )
 
@@ -18608,6 +18816,9 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         sdc_c: str, dont_use_block: str,
                         metal_prefix: str, die_w: int, die_h: int,
                         core_pad: int, core_w: int, core_h: int,
+                        # No slot declared -> None -> the historical
+                        # `--die-um` + 10um-inset geometry, unchanged.
+                        fp_rect: Optional[Sequence[int]] = None,
                         site: str, out_dir_c: str, tapcell_block: str,
                         pdn_block: str, util: float,
                         spare_protection_tcl: str,
@@ -18786,6 +18997,11 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     _rd_margin_placement = _repair_design_margin_tcl("repair_design_pl")
     _rd_margin_globalrt = _repair_design_margin_tcl("repair_design_gr")
     min_area_patch_block = _min_area_patch_tcl("MIN_AREA_PATCH")
+    # fix 1 — the floorplan rectangle. ONE builder, shared with the retry
+    # loop's rewrite, so the initial script and every resized one carry the
+    # same geometry.
+    _fp_geometry_block = _floorplan_geometry_tcl(
+        die_w, die_h, core_pad, core_w, core_h, fp_rect)
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -18820,8 +19036,7 @@ if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{
 # database from the netlist. A resume replaces the whole region with a
 # `read_def` of the last stage checkpoint, so the work is never redone.
 puts "{_PNR_STAGE_MARKER} floorplan"
-initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
-                      -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
+{_fp_geometry_block} \\
                       -site {site}
 make_tracks
 {place_pins_block}
@@ -19599,6 +19814,31 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     core_w = die_w - 2 * core_pad
     core_h = die_h - 2 * core_pad
 
+    # === fix 1 — THE SLOT CONTRACT DECIDES THE FLOORPLAN RECTANGLE ==========
+    # A design that declared a shuttle slot is not free to choose its die: the
+    # operator pins DIE_AREA and CORE_AREA per slot and the submission is
+    # measured against both. So the ingested slot, when there is one, wins over
+    # `--die-um` for the die AND supplies the rectangle the floorplan is built
+    # on. Absent a slot every line below is inert and the historical `--die-um`
+    # + 10 um inset stands unchanged.
+    _slot = _slot_geometry(project)
+    fp_rect = None
+    if _slot:
+        fp_rect = _slot["core_rect"]
+        if (die_w, die_h) != (_slot["die_w"], _slot["die_h"]):
+            print(f"[phase3] slot {_slot['slot']} pins the die at "
+                  f"{_slot['die_w']}x{_slot['die_h']} um "
+                  f"({_slot['source_file']}); --die-um said "
+                  f"{die_w}x{die_h} and does not decide a slot die",
+                  file=sys.stderr)
+        die_w, die_h = _slot["die_w"], _slot["die_h"]
+        core_w = die_w - 2 * core_pad
+        core_h = die_h - 2 * core_pad
+        print(f"[phase3] floorplan rectangle := slot CORE_AREA "
+              f"{fp_rect} (die/core both), so `ppl place_pins` — which has no "
+              f"core-boundary mode — cannot put a pin in the seal-ring band",
+              file=sys.stderr)
+
     # Pick clock buffer cells: PdkConfig-carried masters win (every registry
     # PDK carries clk_buf_cell/root); otherwise DISCOVER them from the PDK's own
     # Liberty.
@@ -19839,7 +20079,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _used_masters = _netlist_cell_masters(nl_text_for_count)
     spare_plan = _build_spare_cells_plan(
         placed_cells_est, spare_dens,
-        (core_pad, core_pad, core_w + core_pad, core_h + core_pad),
+        # fix 1 — spares must land in the rectangle the floorplan actually
+        # built. With a slot in force that is the operator's CORE_AREA; the
+        # historical (core_pad .. die-core_pad) box is OUTSIDE the die
+        # OpenROAD was given and every spare in it would be illegal.
+        (tuple(fp_rect) if fp_rect is not None
+         else (core_pad, core_pad, core_w + core_pad, core_h + core_pad)),
         liberty_path=pdk.liberty, container=container,
         has_pad_ring=has_pad_ring, used_cells=_used_masters)
     # #563 r2 — discover the PDK tie-low cell for the spare-input tie-off
@@ -19938,7 +20183,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # FIXED wrapper is NOT flooded with 940K decap/fill cells / a 2 GB GDS.
     # A dense / normal-util design (§4.05 negative) still gets the full
     # fill (util ≥ threshold). chip-AGNOSTIC.
-    filler_block = _build_sparse_die_aware_filler_tcl(_filler_masters)
+    filler_block = _build_sparse_die_aware_filler_tcl(
+        _filler_masters, slot_pinned_core=fp_rect is not None)
 
     # PG global-connect RE-APPLY + audit. `global_connect` inside the PDN block
     # runs BEFORE placement, so it can only connect the instances that exist
@@ -20180,7 +20426,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         macro_libs_tcl=macro_libs_tcl, netlist_c=netlist_c, top=top,
         sdc_c=sdc_c, dont_use_block=dont_use_block,
         metal_prefix=pdk.metal_prefix, die_w=die_w, die_h=die_h,
-        core_pad=core_pad, core_w=core_w, core_h=core_h, site=pdk.site,
+        core_pad=core_pad, core_w=core_w, core_h=core_h,
+        fp_rect=fp_rect, site=pdk.site,
         out_dir_c=out_dir_c, tapcell_block=tapcell_block,
         pdn_block=pdn_block, util=util,
         spare_protection_tcl=spare_protection_tcl,
@@ -20347,7 +20594,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 core_h = die_h - 2 * core_pad
                 pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
                     pnr_tcl.read_text(), die_w, die_h,
-                    core_pad, core_w, core_h))
+                    core_pad, core_w, core_h, fp_rect))
                 _loosen_idx += 1
                 continue
             # (b) GAP-E2E-4 FOLLOW-UP — OVER-SPARSE downsize retry (opt-in mirror
@@ -20387,7 +20634,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     core_h = die_h - 2 * core_pad
                     pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
                         pnr_tcl.read_text(), die_w, die_h,
-                        core_pad, core_w, core_h))
+                        core_pad, core_w, core_h, fp_rect))
                     _downsized_once = True
                     continue
             break  # no over-util error → take rc / def_file path
@@ -20426,7 +20673,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         core_h = die_h - 2 * core_pad
         # Rewrite the floorplan line in pnr.tcl with the new die.
         pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
-            pnr_tcl.read_text(), die_w, die_h, core_pad, core_w, core_h))
+            pnr_tcl.read_text(), die_w, die_h, core_pad, core_w, core_h,
+            fp_rect))
         _upsize_tries += 1
     def_file = out_dir / f"{top}.def"
     sta_file = out_dir / "sta.rpt"
@@ -22619,11 +22867,58 @@ def _derive_metal_fill_density(pdk: "PdkConfig",
     if not (layermap_text.strip() and techlef_text.strip() and deck_text.strip()):
         return None
     try:
-        return _mfcg.build_metal_fill_config(
+        cfg = _mfcg.build_metal_fill_config(
             layermap_text, techlef_text, deck_text,
             metal_prefix=(getattr(pdk, "metal_prefix", None) or "metal"))
     except Exception:
         return None
+    if cfg:
+        _ko = _pdk_scribe_keepout_um(pdk, container)
+        if _ko is not None:
+            cfg["keepout_edge_um"] = _ko
+    return cfg
+
+
+#: The PDK's own fill scripts state the clearance dummy metal must keep from the
+#: scribe line, e.g. `tp.var("space_to_scribe_line", 26 / $ly.dbu)` followed by
+#: `scribe_line_ring = _frame - _frame.sized(-space_to_scribe_line)` which is
+#: then SUBTRACTED from the fill region. That band is exactly where the seal ring
+#: is: the operator's own size arithmetic uses the same figure as its seal-ring
+#: width. So this is not a margin this flow chose — it is the PDK's, read out of
+#: the PDK.
+_SCRIBE_KEEPOUT_RE = re.compile(
+    r"space_to_scribe_line\W+([0-9]+(?:\.[0-9]+)?)")
+#: Where a PDK laid out the standard way keeps those scripts.
+_PDK_FILL_SCRIPTS_REL = "libs.tech/klayout/tech/scripts"
+
+
+def _pdk_scribe_keepout_um(pdk: "PdkConfig",
+                           container: Optional[str]) -> Optional[float]:
+    """The dummy-fill-to-scribe-line clearance THIS PDK declares, in um.
+
+    None when the PDK ships no fill script or declares no such clearance — in
+    which case no keep-out is claimed and the fill behaves exactly as before.
+    A wrong guess here would be worse than none: too small and the fill lands on
+    the seal ring, too large and the density target becomes unreachable for a
+    reason no report explains.
+    """
+    root = _pdk_dir_of(pdk)
+    if not root:
+        return None
+    try:
+        rc, out, err = _docker_exec(
+            container,
+            f"cat {root}/{_PDK_FILL_SCRIPTS_REL}/*.rb 2>/dev/null")
+    except Exception:
+        return None
+    m = _SCRIBE_KEEPOUT_RE.search(out or "")
+    if not m:
+        return None
+    try:
+        v = float(m.group(1))
+    except Exception:
+        return None
+    return v if v > 0 else None
 
 
 def _pdk_dir_of(pdk: "PdkConfig") -> str:
@@ -22671,6 +22966,22 @@ def _die_finishing(project: Path, top: str, pdk: PdkConfig,
             "--gds", str(gds_path), "--in-place",
             "--pdk-root", str(Path(pdk_dir).parent),
             "--pdk", Path(pdk_dir).name]
+    # === fix 3a — SEAL THE SLOT RECTANGLE, NOT THE ROUTED DIE ===============
+    # `die_finishing_gen` falls back to the streamed GDS's own DIEAREA when it
+    # is told no size. Since fix 1 that bbox is the slot's CORE_AREA — the
+    # 1052x1647 rectangle the logic was placed in — so an un-told generator
+    # would build the ring around the CORE, return PASS, and ship a die whose
+    # seal ring is 442 um inside the saw street on every side. It would look
+    # like a clean run: the ring exists, it is verified, and it is in the wrong
+    # place. Nothing downstream would contradict it until the operator's size
+    # check measured the layout and found it 1052x1647 instead of 1936x2531.
+    #
+    # The slot pins both rectangles precisely so this cannot be guessed. Pass
+    # the DIE_AREA explicitly whenever there is one.
+    _slot = _slot_geometry(project)
+    if _slot:
+        argv += ["--die-width", str(_slot["die_w"]),
+                 "--die-height", str(_slot["die_h"])]
     # Same reason `_density_metal_fill` passes it: the program resolves its own
     # KLayout runner via `_klayout_launch`, which looks for a container NAMED
     # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run
@@ -36941,7 +37252,8 @@ def _emit_metal_fill(project: Path, top: str, pdk: PdkConfig,
     # full `filler_placement` for dense/normal designs (§4.05 negative) and
     # SKIPs the full-die tiling when post-place CORE utilization is below
     # the sparse threshold. chip-AGNOSTIC.
-    sparse_fill_block = _build_sparse_die_aware_filler_tcl(fillers)
+    sparse_fill_block = _build_sparse_die_aware_filler_tcl(
+        fillers, slot_pinned_core=_slot_geometry(project) is not None)
     tcl_path = out_dir / f"metal_fill_{top}.tcl"
     tcl_path.write_text(f"""
 read_lef {tech_lef_c}
