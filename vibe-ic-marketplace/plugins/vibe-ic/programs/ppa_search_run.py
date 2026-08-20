@@ -245,7 +245,8 @@ def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
                            toolchain={"feasibility_source": "STUB",
                                       "feasibility_note":
                                           S.stub_feasibility(
-                                              S.Candidate({})).reason})
+                                              S.Candidate({})).reason},
+                           is_plan=trials_path is None)
 
     n_full = ledger.full_pnr_trials()
     if n_full > budget.max_full_pnr_trials:
