@@ -2461,18 +2461,34 @@ MODE_MAP = {
 # ---------------------------------------------------------------------------
 # WHOSE REPORT IS THIS? (#1119)
 #
-# ENFORCEMENT: BLOCKING. A MISMATCH is an ERROR finding, `passed` goes False
-# and `main` returns 1, which is the same exit code every caller of these seven
-# wrappers already treats as a failed sign-off. It is BLOCKING and not advisory
-# because the state it names is not a quality opinion: the bytes this verdict
-# was computed from are not the bytes this run produced, so the verdict is
-# about some other run and continuing would publish it as this one's.
+# ENFORCEMENT — DECLARED FROM A MEASUREMENT, NOT FROM AN INTENTION.
 #
-# It fires ONLY on a recorded-and-disagreeing artefact. An artefact no register
-# names is UNRECORDED and changes no verdict — see `_run_evidence_binding` for
-# the corpus measurement behind that choice (200 of 200 present ledger entries
-# agree across 22 published cells, so the failing state is empty on every
-# honest tree available to measure).
+# A MISMATCH is an ERROR finding: the mode's verdict goes `passed: false` and
+# the program exits 1. That part is uniform and certain.
+#
+# Whether exit 1 STOPS THE FLOW is the gate's PRE-EXISTING wiring, which this
+# change does not alter and which is NOT the same for all seven wrappers.
+# Measured with `flow_gate_enforcement_audit` on this tree:
+#
+#     ENFORCED    sta_report_check, em_report_check
+#                 (`phase3_one_shot_runner._DECLARED_SIGNOFF_GATES` runs them
+#                  inline and a non-zero exit fails the run)
+#     AUDIT_ONLY  drc_report_check, lvs_report_check, ir_drop_report_check,
+#                 antenna_report_check, erc_density_check
+#                 (the finding is recorded and the run continues)
+#
+# So: for two of the seven, a forged green now stops the flow. For the other
+# five it becomes a recorded, auditable FAIL and nothing halts. Promoting them
+# is a separate flow change with its own blast radius and its own acceptance —
+# it is NOT smuggled in here, and it is stated rather than implied, because an
+# unstated default of "advisory" is how 62 of 72 gates ended up unable to stop
+# anything.
+#
+# The finding fires ONLY on a recorded-and-disagreeing artefact. An artefact no
+# register names is UNRECORDED and changes no verdict — see
+# `_run_evidence_binding` for the corpus measurement behind that choice (200 of
+# 200 present ledger entries agree across 22 published cells, so the failing
+# state is empty on every honest tree available to measure).
 # ---------------------------------------------------------------------------
 def _bind_consumed_evidence(project_dir: Path, consumed, result: AuditResult) -> None:
     """Attach the run-binding verdict to `result`. Never raises."""

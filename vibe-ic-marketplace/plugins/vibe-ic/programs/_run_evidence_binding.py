@@ -76,10 +76,13 @@ do not state, and would fire on honest trees. Paths with more than one
 recorded value are counted in the summary as `ambiguous` rather than being
 silently collapsed.
 
-ENFORCEMENT: this module decides nothing on its own. It reports states. The
-call site declares blocking-or-advisory; both current call sites
-(`eda_report_audit.main`, `erc_density_check.main`) treat MISMATCH as
-BLOCKING and say so in their own docstrings.
+ENFORCEMENT: this module decides nothing on its own. It reports states. Each
+call site declares what a MISMATCH does there, from a MEASUREMENT rather than
+an intention — and the answer is not uniform: `flow_gate_enforcement_audit`
+classifies `sta_report_check` and `em_report_check` ENFORCED and the other five
+sign-off wrappers, plus `erc_density_check`, AUDIT_ONLY. A MISMATCH always
+turns the gate's own verdict red and its exit code 1; for five of seven that is
+recorded and the run continues. Both call sites say which they are.
 
 chip-AGNOSTIC: no design, PDK, vendor or cell literal appears here or can. The
 only inputs are relative paths, sha256 digests and the two register formats.

@@ -243,6 +243,55 @@ def test_the_gate_does_not_fail_on_its_OWN_verdict_document(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# §5 — the enforcement DECLARATION is a claim, so it is checked against the
+# program that measures it.
+# --------------------------------------------------------------------------- #
+#: What each call site's own comment block says a MISMATCH does there. Derived
+#: from `flow_gate_enforcement_audit`, never from what the author hoped.
+_DECLARED_ENFORCEMENT = {
+    "sta_report_check": "ENFORCED",
+    "em_report_check": "ENFORCED",
+    "drc_report_check": "AUDIT_ONLY",
+    "lvs_report_check": "AUDIT_ONLY",
+    "ir_drop_report_check": "AUDIT_ONLY",
+    "antenna_report_check": "AUDIT_ONLY",
+    "erc_density_check": "AUDIT_ONLY",
+}
+
+
+def test_the_declared_enforcement_matches_what_the_audit_MEASURES(tmp_path):
+    """A gate that says BLOCKING while wired advisory is the #306 defect.
+
+    The binding makes a forged green an ERROR finding and exit 1 in all seven
+    gates. Whether exit 1 STOPS THE FLOW is pre-existing wiring and is NOT
+    uniform, so both call sites state the measured split — and this test fails
+    the moment the statement and the measurement disagree, in either direction.
+    """
+    prog = PROGRAMS / "flow_gate_enforcement_audit.py"
+    if not prog.is_file():
+        pytest.skip("flow_gate_enforcement_audit is not in this tree")
+    out = tmp_path / "enf.json"
+    r = subprocess.run([sys.executable, str(prog), "--json", str(out)],
+                       capture_output=True, text=True, timeout=600)
+    assert out.is_file(), (r.returncode, r.stdout[-1500:], r.stderr[-800:])
+    measured = {}
+    for row in json.loads(out.read_text()).get("gates") or []:
+        if row.get("gate") in _DECLARED_ENFORCEMENT:
+            measured[row["gate"]] = row.get("enforcement")
+    missing = sorted(set(_DECLARED_ENFORCEMENT) - set(measured))
+    assert not missing, (
+        f"the audit does not classify {missing}; the declaration in the call "
+        f"sites cannot be checked and must not be trusted")
+    assert measured == _DECLARED_ENFORCEMENT, (
+        f"the call sites declare {_DECLARED_ENFORCEMENT} and the audit "
+        f"measures {measured}. One of them is wrong, and a gate that claims to "
+        f"block while wired advisory is the defect this repo counted at 62 of "
+        f"72 gates.")
+    # ...and the split is real, not a constant: both colours are present.
+    assert set(measured.values()) == {"ENFORCED", "AUDIT_ONLY"}, measured
+
+
+# --------------------------------------------------------------------------- #
 # REAL ARTEFACTS — §4: a suite made only of its own fixtures cannot tell itself
 # from its own absence.
 # --------------------------------------------------------------------------- #
