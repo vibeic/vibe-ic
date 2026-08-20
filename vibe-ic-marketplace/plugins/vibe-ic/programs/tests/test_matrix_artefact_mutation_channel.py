@@ -546,11 +546,24 @@ def test_the_replay_never_mutates_the_published_run():
     runs = sorted({m.run_dir for m in L.ARTEFACT_MUTATIONS})
     assert runs, "no runs named; this control is measuring nothing"
     replay_results()          # force the replays before looking
+    # ASK THE REPOSITORY THAT OWNS THE PATHS. Since v1.10.56 the corpus is a
+    # DIFFERENT checkout from this one, so `cwd=REPO_ROOT` made git refuse the
+    # paths outright — `fatal: … is outside repository at …`, rc 128 — and this
+    # control could not run at all with the pointer bound. It failed loudly,
+    # which is the only reason it is a fixed bug and not a false certificate.
+    owner = L.benchmark_data_repo()
+    if owner is None:
+        pytest.skip(
+            "the corpus is not a git checkout here, so git's index cannot be "
+            "asked whether the replay moved it. THIS IS 'could not look', not "
+            "'the corpus was not modified'.")
     paths = [str((L.benchmark_data_root() / r)) for r in runs]
     proc = subprocess.run(["git", "status", "--porcelain", "--", *paths],
-                          cwd=str(L.REPO_ROOT), capture_output=True, text=True,
+                          cwd=str(owner), capture_output=True, text=True,
                           timeout=_GIT_TIMEOUT_S)
-    assert proc.returncode == 0, proc.stderr[-800:]
+    assert proc.returncode == 0, (
+        "git could not be asked about the published runs, so this control "
+        "measured NOTHING — it is not a pass:\n" + proc.stderr[-800:])
     assert not proc.stdout.strip(), (
         f"replaying the artefact ledger modified the PUBLISHED corpus:\n"
         f"{proc.stdout}\n"
