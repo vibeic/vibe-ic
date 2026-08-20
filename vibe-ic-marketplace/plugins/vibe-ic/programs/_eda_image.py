@@ -174,8 +174,8 @@ def resolve(env=None, *, repo: str = IMAGE_REPO) -> str:
     """A runnable image reference for the vibeic-eda toolchain.
 
     Order: explicit override → the registry's current `latest`, by digest →
-    the newest locally-present tag (announced) → the legacy upstream image
-    (announced). Never returns a bare `:latest`, which is the one answer that
+    the newest locally-present tag → the anchor this checkout names → the
+    legacy upstream image. Every step past the registry is announced. Never returns a bare `:latest`, which is the one answer that
     can silently mean "whatever this machine happened to pull months ago".
     """
     env = os.environ if env is None else env
@@ -194,8 +194,21 @@ def resolve(env=None, *, repo: str = IMAGE_REPO) -> str:
               f"({tags[0]}). It may be older than what is published.")
         return f"{repo}:{tags[0]}"
 
-    _note(f"registry unreachable and no local {repo} image; falling back to "
-          f"{LEGACY_IMAGE}, which does NOT carry the forked tools.")
+    # THE ANCHOR BEFORE THE LEGACY IMAGE. Dropping straight to upstream here
+    # was a regression I shipped and a test caught: with docker unavailable the
+    # old resolver still named the vibeic-eda tag this checkout knows, while
+    # mine named an image that does NOT carry the forked tools — so a DFT step
+    # would run against a toolchain missing Fault and the patched yosys. Being
+    # unable to ASK which image is current is not a reason to forget which one
+    # this tree names.
+    anchored = anchor_image(env)
+    if anchored:
+        _note(f"registry unreachable and no local {repo} image; using the "
+              f"anchor this checkout names ({anchored}).")
+        return anchored
+
+    _note(f"registry unreachable, no local {repo} image and no anchor; falling "
+          f"back to {LEGACY_IMAGE}, which does NOT carry the forked tools.")
     return LEGACY_IMAGE
 
 

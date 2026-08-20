@@ -116,9 +116,26 @@ def test_an_unreachable_registry_says_so_instead_of_pretending(monkeypatch, caps
     assert "registry unreachable" in capsys.readouterr().err
 
 
-def test_with_nothing_at_all_it_names_the_legacy_image_and_warns(monkeypatch, capsys):
+def test_an_offline_run_still_prefers_the_anchor_over_upstream(monkeypatch, capsys):
+    """A REGRESSION I SHIPPED, caught by
+    `test_scan_chain_insert_image_follows_the_anchor`. Dropping straight to the
+    legacy image when the registry is unreachable hands a DFT step a toolchain
+    with no Fault and no patched yosys. Being unable to ASK which image is
+    current is not a reason to forget which one this tree names."""
     monkeypatch.setattr(M, "registry_digest", lambda *a, **k: None)
     monkeypatch.setattr(M, "local_tags", lambda *a, **k: [])
+    monkeypatch.setattr(M, "anchor_image",
+                        lambda *a, **k: f"{M.IMAGE_REPO}:0.3.16")
+    got = M.resolve(env={})
+    assert got == f"{M.IMAGE_REPO}:0.3.16"
+    assert "using the anchor this checkout names" in capsys.readouterr().err
+
+
+def test_with_nothing_at_all_it_names_the_legacy_image_and_warns(monkeypatch, capsys):
+    """Only when there is no registry, no local image AND no anchor."""
+    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: None)
+    monkeypatch.setattr(M, "local_tags", lambda *a, **k: [])
+    monkeypatch.setattr(M, "anchor_image", lambda *a, **k: None)
     got = M.resolve(env={})
     assert got == M.LEGACY_IMAGE
     assert "does NOT carry the forked tools" in capsys.readouterr().err
