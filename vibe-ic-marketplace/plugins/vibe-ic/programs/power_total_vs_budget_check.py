@@ -11,8 +11,8 @@ permission to defang the gate:
   * VERDICT SEVERITY — unchanged. rc 1 when a declared limit is exceeded,
     rc 2 on INCOMPLETE. The rc-2 half is vibe-ic#1022's repair, landed in
     #1026: on the whole published corpus this gate's honest answer is
-    INCOMPLETE (17 runs carry a power report, 0 carry a declared power
-    budget), and while INCOMPLETE exited 0 the refusal was indistinguishable
+    INCOMPLETE (17 published power reports across 15 run roots, 0 of
+    those roots carrying a declared power budget), and while INCOMPLETE exited 0 the refusal was indistinguishable
     from a pass — which is the exact defect the gate was written to remove,
     one floor down.
   * FLOW SLOT — unchanged and BLOCKING. Step 33 wires this gate in
@@ -89,8 +89,8 @@ MEASURED over the published corpus, by CONTENT rather than by reputation
     L19*.json copies in benchmark-data/       193
       with power_budget_uw set                  3   (all three are copies of
                                                     ONE design's L19)
-    published runs carrying reports/**/power.rpt 17
-      of those, with a declared power budget      0
+    published power reports (17 files, 15 run roots)  17
+      run roots with a declared power budget            0
 
 So there is not one published run in which this comparison could have been made.
 The budget is absent everywhere the power report exists, and the L19 of the run
@@ -247,7 +247,7 @@ def _disclosure(rep: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
-def _worst_record(project: Path, reports: List[Dict[str, Any]],
+def _worst_record(reports: List[Dict[str, Any]],
                   requirement: Optional[Dict[str, Any]]
                   ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]],
                              Optional[str]]:
@@ -341,8 +341,7 @@ def evaluate(project: Path, budget_override: Optional[float]
                               if requirement and requirement.get("max_w")
                               else None)
 
-    record, source_rep, basis_conflict = _worst_record(
-        project, reports, requirement)
+    record, source_rep, basis_conflict = _worst_record(reports, requirement)
     rep["selected_total"] = (
         {"file": source_rep["file"], "record": record} if record else None)
     rep["activity_basis_conflict"] = basis_conflict
