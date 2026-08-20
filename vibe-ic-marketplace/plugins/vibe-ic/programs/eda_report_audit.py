@@ -49,6 +49,7 @@ import _signoff_drc_format as _sdf  # the ONE producer/dialect answer
 import sta_corner_record_completeness_check as _sta_slack
 
 import _sta_basis
+import _run_evidence_binding as _reb  # #1119 — whose report is this?
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +262,38 @@ class scoped_discovery:  # noqa: N801 — a context manager, used as a verb
         return False
 
 
+#: Artefacts this audit actually OPENED, or None when nobody is recording.
+#: `_discover` is the single funnel every mode's report discovery goes through,
+#: so recording here measures what the verdict RESTS ON rather than what
+#: happens to be on disk — the distinction `flow-change-acceptance` calls
+#: "presence where it is consumed".
+_CONSUMED: Optional[List[Path]] = None
+
+
+class consumption_record:  # noqa: N801 — a context manager, used as a verb
+    """Collect every artefact `_discover` hands to a mode, for the block."""
+
+    def __init__(self):
+        self._prev = None
+        self.files: List[Path] = []
+
+    def __enter__(self):
+        global _CONSUMED
+        self._prev = _CONSUMED
+        _CONSUMED = self.files
+        return self
+
+    def __exit__(self, *exc):
+        global _CONSUMED
+        _CONSUMED = self._prev
+        return False
+
+
+def _record_consumed(paths) -> None:
+    if _CONSUMED is not None:
+        _CONSUMED.extend(paths)
+
+
 def _in_scope(p: Path) -> bool:
     """Is this path inside an active `--under` scope?
 
@@ -391,6 +424,7 @@ def _discover(project_dir: Path, patterns: List[str],
             continue
         seen.add(key)
         unique.append(p)
+    _record_consumed(unique)
     return unique
 
 
@@ -453,6 +487,7 @@ def _companion_docs(project_dir: Path, mode: str):
         if q not in cands:
             cands.append(q)
     out = []
+    _record_consumed(cands)
     for q in cands:
         try:
             doc = json.loads(q.read_text(errors="replace"))
@@ -2424,6 +2459,47 @@ MODE_MAP = {
 
 
 # ---------------------------------------------------------------------------
+# WHOSE REPORT IS THIS? (#1119)
+#
+# ENFORCEMENT: BLOCKING. A MISMATCH is an ERROR finding, `passed` goes False
+# and `main` returns 1, which is the same exit code every caller of these seven
+# wrappers already treats as a failed sign-off. It is BLOCKING and not advisory
+# because the state it names is not a quality opinion: the bytes this verdict
+# was computed from are not the bytes this run produced, so the verdict is
+# about some other run and continuing would publish it as this one's.
+#
+# It fires ONLY on a recorded-and-disagreeing artefact. An artefact no register
+# names is UNRECORDED and changes no verdict — see `_run_evidence_binding` for
+# the corpus measurement behind that choice (200 of 200 present ledger entries
+# agree across 22 published cells, so the failing state is empty on every
+# honest tree available to measure).
+# ---------------------------------------------------------------------------
+def _bind_consumed_evidence(project_dir: Path, consumed, result: AuditResult) -> None:
+    """Attach the run-binding verdict to `result`. Never raises."""
+    try:
+        assessment = _reb.assess(project_dir, consumed)
+    except Exception as exc:  # pragma: no cover - defensive
+        # A binding check that crashes must not be readable as a binding check
+        # that passed. Degrade LOUDLY: the summary says the question was not
+        # answered, and the mode's own verdict is left untouched.
+        result.summary["evidence_binding"] = {
+            "error": f"{type(exc).__name__}: {exc}",
+            "disclosure": "the run-evidence binding could not be evaluated, so "
+                          "nothing was verified about which run produced the "
+                          "artefacts behind this verdict",
+        }
+        return
+    summary = assessment.summary()
+    summary["disclosure"] = assessment.disclosure()
+    result.summary["evidence_binding"] = summary
+    for b in assessment.mismatched:
+        result.findings.append(Finding(
+            rule=_reb.RULE, severity="ERROR", message=b.message(), file=b.rel))
+    if assessment.mismatched:
+        result.passed = False
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main(argv: list = None) -> int:
@@ -2452,8 +2528,9 @@ def main(argv: list = None) -> int:
         checker = MODE_MAP[args.mode]
         roots = ([project_dir / rel for rel in args.under]
                  if args.under else None)
-        with scoped_discovery(roots):
+        with scoped_discovery(roots), consumption_record() as consumed:
             result = checker(project_dir)
+        _bind_consumed_evidence(project_dir, consumed.files, result)
         if roots:
             # The scope is part of the verdict: a reader must be able to see
             # WHICH artefacts this verdict was reached over.
