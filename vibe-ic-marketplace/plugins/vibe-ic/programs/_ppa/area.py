@@ -46,6 +46,13 @@ smaller, and a candidate that wins on cell count with no post-route evidence at
 all is UNDETERMINED. `area_verdict` implements exactly that and its negative
 fixture is that first sentence.
 
+One more line runs alongside it, and it is not the same line: EXTENT vs RATIO.
+`area.physical.utilization_pct` is PHYSICAL, post-route and measured, and it
+still must not vote — a candidate at 40% where the baseline achieved 59.2% is
+not a smaller chip, it is the same core with more empty space in it. So only
+metrics that measure HOW BIG enter the verdict; the ones that measure WHAT
+FRACTION are reported beside it and counted by nobody.
+
 EXIT CODES (PPA_INTERFACES.md §1)
 ---------------------------------
     0 the physical evidence supports the smaller-area claim
