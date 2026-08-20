@@ -47,8 +47,11 @@ SELECTED = "programs/tests/test_subject.py"
 
 
 def _git(cwd, *args):
+    # `protected.scrubbed_env` — the harness's own environment must not be able
+    # to change the bytes of the repository the harness is building.
     return subprocess.run(["git", *args], cwd=str(cwd), check=True,
-                          capture_output=True, text=True).stdout.strip()
+                          capture_output=True, text=True,
+                          env=protected.scrubbed_env()).stdout.strip()
 
 
 def _junit_stub(outcome: str) -> str:
@@ -237,6 +240,14 @@ def synthetic():
     _git(root, "init", "-q", "-b", "main")
     _git(root, "config", "user.email", "t@example.invalid")
     _git(root, "config", "user.name", "t")
+    # THE HOST DOES NOT GET A VOTE ON THE BYTES. `trusted_worktree_attest`
+    # compares the worktree's raw bytes against the blob, so a global
+    # `core.autocrlf`/`core.eol`/attributes-file on the machine running this
+    # test would make every case below refuse as UNMEASURED — about the
+    # harness's own checkout filters rather than about the tuple under test.
+    # Same reason this fixture is not under `tmp_path`. See
+    # `_protected_transition_fixture.BYTE_TRANSFORM_OFF` for the measurement.
+    protected.harden(root)
     _write_stub_tree(root)
     # THE PROTECTED TUPLE BELONGS TO THE BASE COMMIT, because the manifest is
     # BASE-owned policy: `protected_landing_transition.build_receipt` reads it
@@ -263,7 +274,8 @@ def synthetic():
 
 def _run(root: Path, base: str, *, cand_test="passed", base_test="passed",
          gate_line=None, a2_gate_line=None, a2_range_line=None, dwell=0.0,
-         hygiene_state=None, probe: Path | None = None, extra=()):
+         hygiene_state=None, probe: Path | None = None, extra=(),
+         env_extra: dict | None = None):
     env = dict(os.environ)
     env["BASE_JUNIT_TEXT"] = _junit_stub(base_test)
     env["CAND_JUNIT_TEXT"] = _junit_stub(cand_test)
@@ -281,6 +293,9 @@ def _run(root: Path, base: str, *, cand_test="passed", base_test="passed",
     if probe:
         probe.mkdir(exist_ok=True)
         env["ARM_PROBE_DIR"] = str(probe)
+    if env_extra:
+        env.update(env_extra)
+    env = protected.scrubbed_env(env)
     started = time.time()
     cp = subprocess.run(
         ["bash", str(DIFFERENTIAL), "--repo", str(root), "--base", base, *extra],
@@ -289,6 +304,91 @@ def _run(root: Path, base: str, *, cand_test="passed", base_test="passed",
 
 
 # ------------------------------------------------------------- the deadlock
+
+
+@pytest.mark.parametrize("mechanism", ["global-config-file",
+                                       "env-injected-config"])
+def test_a_host_that_rewrites_checked_out_bytes_cannot_unmeasure_the_tuple(
+        synthetic, mechanism):
+    """NEGATIVE CONTROL FOR THE FIXTURE, not a relaxation of the gate.
+
+    `trusted_worktree_attest` compares the worktree's RAW BYTES against the
+    blob, deliberately, so that a clean/smudge filter cannot swap the
+    population out from under an attestation. A host whose GLOBAL git config
+    transforms bytes on checkout therefore breaks the receipt for every case in
+    this file — and the failure reads "PROTECTED LANDING SOURCE TRANSITION IS
+    UNMEASURED", which says nothing about the host.
+
+    MEASURED: eleven of this file's cases were red on a maintainer's host and
+    all twenty-five green on two others (an interactive shell at git 2.55.0 and
+    the pinned landing image at git 2.43.0, the second also under
+    --read-only with a noexec /tmp). The whole difference was one line of
+    `~/.gitconfig`, and `core.autocrlf = true` reproduces it first try.
+
+    So this drives the real driver with exactly that hostile config exported,
+    and requires the receipt to be built anyway. It FAILS against the fixture
+    as it was, because `harden()` did not exist. It does not make any assertion
+    tolerant of a REFUSE: the run must still pass, for the ordinary reason, and
+    the receipt must still be REAL — built by the shipped builder out of the
+    shipped validator.
+    """
+    root, base = synthetic
+    # NOT under `tmp_path`, for the reason the `synthetic` fixture documents:
+    # in the landing image `$USER` carries an embedded newline, and a
+    # `GIT_CONFIG_GLOBAL` path with a newline in it is its own separate bug.
+    if mechanism == "global-config-file":
+        # `--global`, which the repository's LOCAL config outranks.
+        hostile = root.parent / "hostile-gitconfig.ini"
+        hostile.write_text("[core]\n\tautocrlf = true\n\teol = crlf\n",
+                           encoding="utf-8")
+        env_extra = {"GIT_CONFIG_GLOBAL": str(hostile)}
+    else:
+        # COMMAND-LINE precedence, which no config file can outrank — so this
+        # one is answered by removing it from the harness's environment, not by
+        # out-ranking it. Both mechanisms, one property.
+        env_extra = {"GIT_CONFIG_COUNT": "1",
+                     "GIT_CONFIG_KEY_0": "core.autocrlf",
+                     "GIT_CONFIG_VALUE_0": "true"}
+    cp, _ = _run(root, base, env_extra=env_extra)
+    out = cp.stdout + cp.stderr
+    assert "raw bytes differ from expected blob" not in out, out
+    assert "PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED" not in out, out
+    assert "protected landing transition: STEADY" in out, out
+    assert cp.returncode == 0, out
+
+
+def test_a_receipt_that_cannot_be_built_is_named_and_not_merely_absent(
+        synthetic):
+    """The DIAGNOSABILITY half, and it is a separate property.
+
+    When the receipt cannot be built the verdict refuses as UNMEASURED — right,
+    and unchanged. But the driver used to decide that in a bare `if`, so its own
+    log carried no statement that a receipt had been ATTEMPTED and refused;
+    "the transition is bad" and "this host could not look at it" reached the
+    reader as the same sentence. That is the one thing this repository refuses
+    to let a check do.
+
+    Driven by taking the manifest away from the base commit, so the builder
+    genuinely cannot answer — no test-only flag in the shipped driver, because
+    a switch that only a test throws proves the switch, not the driver.
+    """
+    root, base = synthetic
+    _git(root, "rm", "-q", "--cached", protected.MANIFEST_REL)
+    (root / protected.MANIFEST_REL).unlink()
+    _git(root, "commit", "-q", "-m", "no manifest")
+    unmeasurable = _git(root, "rev-parse", "HEAD")
+    (root / "after_marker").write_text("y\n")
+    _git(root, "add", "-f", "after_marker")
+    _git(root, "commit", "-q", "-m", "candidate without a measurable base")
+    cp, _ = _run(root, unmeasurable)
+    out = cp.stdout + cp.stderr
+    assert "protected-source transition receipt: NOT BUILT" in out, out
+    # The heading alone would be satisfied by a driver that printed a heading
+    # and swallowed the cause. What must survive is the BUILDER'S OWN sentence,
+    # replayed under it.
+    assert "[NORECORD] protected landing transition:" in out, out
+    assert "PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED" in out, out
+    assert cp.returncode != 0, out
 
 
 def test_a_failure_the_base_also_has_lands_and_is_named_as_inherited(synthetic):
