@@ -27,12 +27,22 @@ The third design has no operator template, so 37.5ic's `files_exist` condition
 excludes it; and it is a die rather than an IP, so 37.5ip is the wrong terminal
 for it. It reached tape-out having passed no submission check of any kind.
 
-This program writes the missing third file, `SELF_TAPEOUT.txt`, which step
-37.5self's condition reads. NEITHER EXISTING CONDITION CHANGES. Routing the
+This program writes the missing third file, `SELF_TAPEOUT.txt`. Routing the
 self-tape-out chip onto `NO_TEMPLATE.txt` instead would have collided with the
 IP path — the two designs want different terminals and `files_exist` cannot
 express "and not" — so the discriminator is its own file. Three router files,
-three routes, mutually exclusive by construction.
+mutually exclusive by construction.
+
+2026-08-20 — THE FILE SURVIVES; THE STEP IT USED TO SELECT DOES NOT. The three
+router files were, for a while, three ROUTES, the third being step `37.5self`.
+The owner retired that step: the general precheck was never an alternative to
+the operator's container, it is a second ARM of `37.5ic` that runs on every
+design reaching that step. So `SELF_TAPEOUT.txt` is now one of the TWO files
+that mark the CHIP path — 37.5ic's condition is `slots/*.yaml` OR
+`SELF_TAPEOUT.txt`, `any_of` — and `NO_TEMPLATE.txt` still marks the IP path
+alone. This program is unchanged in what it writes and why; only what the file
+selects downstream moved, and it moved towards MORE checking: a self tape-out
+now gets the same ladder a shuttle design gets.
 
 Step 37.5ic is untouched, and its verdict stays the shuttle operator's own.
 That property is the whole point of that step and nothing here weakens it:
@@ -97,9 +107,10 @@ def _self_tapeout_text(doc: Dict[str, Any]) -> str:
         TD.SELF_TAPEOUT_MARKER,
         "",
         "This design declares that it is a DIE and that it targets NO shuttle",
-        "operator. It therefore runs the GENERAL tape-out precheck (step",
-        "37.5self) rather than an operator's own container (37.5ic), and it is",
-        "not an IP hardmacro (37.5ip).",
+        "operator. It is on the CHIP path, so it runs step 37.5ic and gets that",
+        "step's general tape-out precheck; the operator's own container is the",
+        "arm it does not get, because there is no operator. It is not an IP",
+        "hardmacro (37.5ip).",
         "",
         f"declaration: {TD.DECLARATION_REL}",
         f"answered:    {audit['answered']} of {audit['questions_total']} "
@@ -177,13 +188,16 @@ def build(project: Path, answers_path: Optional[Path]) -> Dict[str, Any]:
 
 def _route_reason(route: str, has_slots: bool, doc: Dict[str, Any]) -> str:
     if route == TD.ROUTE_SHUTTLE:
-        return ("an operator template was ingested, so the operator's own "
-                "container is the verdict (step 37.5ic). The operator's answer "
-                "wins over anything this design declares about itself")
+        return ("an operator template was ingested, so the chip path (step "
+                "37.5ic) runs BOTH arms: the general precheck and the "
+                "operator's own container. The operator's answer wins over "
+                "anything this design declares about itself, and where the two "
+                "arms disagree the step refuses rather than preferring one")
     if route == TD.ROUTE_SELF_TAPEOUT:
         return ("no operator template, and the design declares deliverable="
                 f"{TD.DELIVERABLE_DIE}: it is a die doing its own tape-out, so "
-                "the general precheck applies (step 37.5self)")
+                "it takes the chip path (step 37.5ic) and is judged by the "
+                "general precheck alone — the operator's arm has no operator")
     if route == TD.ROUTE_IP:
         return ("no operator template, and the design declares deliverable="
                 f"{TD.DELIVERABLE_HARDMACRO}: it is delivered, not fabricated, "
