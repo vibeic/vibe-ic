@@ -897,9 +897,28 @@ def _disclosure_prefixes() -> Tuple[str, ...]:
     _ensure_programs_on_path()
     import flow_compliance_check as _fcc  # type: ignore
 
+    # READ OFF `flow_compliance_check`, never re-spelled here, so a marker the
+    # flow adds cannot go unrecognised by this dimension — which is exactly
+    # what happened to the fourth one below.
+    #
+    # `_JSON_VACUOUS_HINT_PREFIX` (vibe-ic#901) was added to the flow AFTER
+    # this tuple was written and never added here. It is a genuine vacuity
+    # disclosure, deliberately kept in a separate bucket from the legacy one
+    # because it is strictly ONE-DIRECTIONAL — it can only turn what would have
+    # been a BARE PASS into VACUOUS_PASS and can never take a step out of a
+    # tier origin/main gave it. So a gate that records it HAS disclosed, and
+    # the flow's own tier machinery already agrees: measured on step 1.6x, the
+    # tiers are {'EMPTY': 'MISSING', 'SEEDED': 'VACUOUS_PASS',
+    # 'FLOW_COMPLETE': 'VACUOUS_PASS'} — the pass is already outside the plain
+    # PASS bucket, which is precisely what L1b's first escape asks for.
+    #
+    # THIS DOES NOT WEAKEN L1b. An undisclosed pass on nothing still fires; the
+    # leg simply now recognises all four spellings of a disclosure instead of
+    # three, and it recognises them by reading the flow's own constants.
     return (_fcc._VACUOUS_HINT_PREFIX,
             _fcc._SKIP_HINT_PREFIX,
-            _fcc._WAIVER_HINT_PREFIX)
+            _fcc._WAIVER_HINT_PREFIX,
+            _fcc._JSON_VACUOUS_HINT_PREFIX)
 
 
 def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:
@@ -1225,7 +1244,8 @@ def _leg1b_gate_alone_does_not_pass_on_nothing(probe: Probe) -> List[str]:
     and asks whether the gate ALONE says pass. Two answers are legitimate:
 
       * the gate recorded a DISCLOSURE HINT (``__VACUOUS_HINT__`` /
-        ``__SKIP_HINT__`` / ``__WAIVER_HINT__``) — the pass carries a tier that
+        ``__SKIP_HINT__`` / ``__WAIVER_HINT__`` / ``__JSON_VACUOUS_HINT__``)
+        — the pass carries a tier that
         is not the plain PASS bucket, which is exactly what L3 asks for; or
       * every BLOCKING clause is an ``optional_program_exit_zero`` whose
         ``condition_files_exist`` is genuinely unmet on the empty tree — the
@@ -1248,7 +1268,8 @@ def _leg1b_gate_alone_does_not_pass_on_nothing(probe: Probe) -> List[str]:
         f"L1b GATE PASSES ON NOTHING, UNDISCLOSED: the real "
         f"flow_compliance_check._evaluate_gate returns passed=True for this "
         f"step's gate on a project containing NOTHING, and the pass carries no "
-        f"__VACUOUS_HINT__ / __SKIP_HINT__ / __WAIVER_HINT__ reason "
+        f"__VACUOUS_HINT__ / __SKIP_HINT__ / __WAIVER_HINT__ / "
+        f"__JSON_VACUOUS_HINT__ reason "
         f"(reasons={list(ev.reasons)[:3] or '[]'}). "
         + (
             "The gate declares no BLOCKING clause at all "
