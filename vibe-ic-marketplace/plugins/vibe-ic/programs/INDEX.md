@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1126
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1126)
+- **Total programs (excluding helpers / shims):** 1127
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1127)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1117 |
+| `any` | 1118 |
 
 ## Alphabetical listing
 
@@ -288,6 +288,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dft_signoff_common` | any | — | shared helper for the DFT sign-off gates. |
 | `dft_test_coverage` | any | — | raw FAULT coverage vs sign-off TEST coverage (#603). |
 | `dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
+| `die_density_fill_gen` | any | — | DIE-WIDE dummy fill, by the PDK's OWN generator. |
 | `die_finishing_check` | any | — | the Step 26.5ic gate. |
 | `die_finishing_gen` | any | — | Step 26.5ic producer: the PDK's own seal ring, and the die-identification half's honest state. |
 | `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification (N-version) for blind RTL authoring (ORGANIC #700). |
@@ -1198,7 +1199,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1117 programs)
+### `any` (1118 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1459,6 +1460,7 @@ _(no programs in this group)_
 - `dft_signoff_common` — shared helper for the DFT sign-off gates.
 - `dft_test_coverage` — raw FAULT coverage vs sign-off TEST coverage (#603).
 - `dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
+- `die_density_fill_gen` — DIE-WIDE dummy fill, by the PDK's OWN generator.
 - `die_finishing_check` — the Step 26.5ic gate.
 - `die_finishing_gen` — Step 26.5ic producer: the PDK's own seal ring, and the die-identification half's honest state.
 - `diff_verify_harness` — independent DIFFERENTIAL self-verification (N-version) for blind RTL authoring (ORGANIC #700).
