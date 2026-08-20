@@ -7,9 +7,13 @@ finding assertion here is paired with a DEFENDED twin taken from the same run:
 sign-off gates notice none of them. That contrast is the evidence the attack is
 discriminating; either half alone would be worthless.
 
-The findings are backed by COMMITTED artefacts — two published cells this
-repository carries — and not by fixtures authored beside this file, so a reader
-can re-run the attack by hand and get the same answer.
+The findings are backed by PUBLISHED artefacts — two run trees from the corpus —
+and not by fixtures authored beside this file, so a reader can re-run the attack
+by hand and get the same answer. Those trees are no longer IN this repository:
+`c5d7f2d00` moved the published results to `vibeic/benchmark-data`, so the cells
+resolve through `$VIBE_IC_BENCHMARK_DATA` like every other corpus check here.
+This sentence used to read "two published cells this repository carries", and
+went on saying it for the whole span in which the ratchet could not run.
 """
 from __future__ import annotations
 
@@ -25,12 +29,24 @@ REPO = PLUGIN.parents[2]
 PROG = PLUGIN / "programs" / "adversarial_agent.py"
 
 sys.path.insert(0, str(PLUGIN / "programs"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import adversarial_agent as AA  # noqa: E402
+from _published_corpus import SKIP_REASON as CORPUS_SKIP_REASON  # noqa: E402
+from _published_corpus import named_cell as _corpus_cell  # noqa: E402
 
-IC = REPO / "benchmark-data" / "ic"
-CELL = IC / "spm" / "v1.9.96_gf180mcuD"
-DONOR = IC / "sha256" / "clean_run_v1427_20260715"
-OLDER = IC / "sha256" / "clean_run_v1422_20260715"
+# THE RATCHET RESOLVES ITS CORPUS THROUGH THE ONE HELPER, and did not always.
+# These four names were `REPO / "benchmark-data" / "ic" / ...` until the corpus
+# left this repository at `c5d7f2d00`. From that commit every test below skipped
+# on EVERY host, including one with a readable clone at $VIBE_IC_BENCHMARK_DATA,
+# because the path was spelled here instead of asked for. Measured on
+# `053eecd27` before the change, pointer set and readable: `9 passed, 12
+# skipped`. The thirteen recorded findings were adjudicated by nothing for that
+# whole span, in either direction — which is the failure `adversarial_agent`'s
+# own docstring predicted and placed a verdict (UNAVAILABLE) against, one layer
+# below where a pytest skip could act on it.
+CELL = _corpus_cell("spm", "v1.9.96_gf180mcuD")
+DONOR = _corpus_cell("sha256", "clean_run_v1427_20260715")
+OLDER = _corpus_cell("sha256", "clean_run_v1422_20260715")
 
 #: The gate that NOTICES, measured. Keeping the pair small keeps the test quick
 #: while preserving the only property that matters: one of each colour.
@@ -57,9 +73,10 @@ DEFENDING = ("sta_report_check", (".", "--mode", "sta"))
 #: the ceiling is one workflow edit away from being a violation again.
 _CLI_BOUND_S = 45
 
+#: The reason is the SUITE'S one reason, not a private spelling of it. A reader
+#: who greps for why corpus checks are quiet finds this one with the other 54.
 _corpus = pytest.mark.skipif(
-    not (CELL.is_dir() and DONOR.is_dir()),
-    reason="published cells absent from this checkout")
+    CELL is None or DONOR is None, reason=CORPUS_SKIP_REASON)
 
 
 # ===========================================================================
@@ -286,10 +303,16 @@ if __name__ == "__main__":  # pragma: no cover
 def _live_recorded_attacks():
     """Re-run exactly the attacks the ledger records, over the cells it names."""
     led = AA.load_findings_ledger()
-    ic = REPO / "benchmark-data" / "ic"
-    cell = ic / led["cell"]
-    donor = ic / led["donor"]
-    older = ic / led["older_run"]
+    cell = _corpus_cell(led["cell"])
+    donor = _corpus_cell(led["donor"])
+    older = _corpus_cell(led["older_run"])
+    # The ledger names its own subject. A corpus that answers for the CELL but
+    # not for what the ledger named is not the tree these findings were measured
+    # on, and re-running the attacks against a different one would republish the
+    # verdicts under a subject nobody chose.
+    assert cell is not None, (
+        f"the findings ledger names cell {led['cell']!r}; the resolved corpus "
+        f"does not carry it. This is UNPROVEN, not closed.")
     out = []
     out += AA.attack_cross_design(PLUGIN, cell, donor)
     out += AA.attack_stale_replay(PLUGIN, cell, older)
@@ -379,8 +402,14 @@ def test_the_unwired_state_is_disclosed_or_gone():
     forces the section out.
     """
     name = "adversarial_agent"
+    # `own` is the set that may NAME the program without being a caller: the
+    # program, its tests, its finding ledger, and the program index. The
+    # question this test asks is whether the FLOW invokes it — a file that
+    # merely guards the guard has not wired anything, and reading a mention in
+    # one as evidence of wiring would delete a disclosure that is still true.
     own = {"adversarial_agent.py", "test_adversarial_agent.py",
-           "adversarial_findings.json", "INDEX.md"}
+           "adversarial_findings.json", "INDEX.md",
+           "test_the_adversarial_ratchet_follows_the_corpus_pointer.py"}
     callers = []
     for d in (PLUGIN / "flow", PLUGIN / "benchmark", PLUGIN / "programs"):
         if not d.is_dir():

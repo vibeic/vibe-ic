@@ -5,9 +5,23 @@ from pathlib import Path
 
 PLUGIN = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(PLUGIN / "programs"))
+sys.path.insert(0, str(PLUGIN / "programs" / "tests"))
 import adversarial_agent as AA  # noqa: E402
+from _published_corpus import CORPUS_ENV, corpus_root  # noqa: E402
 
-IC = PLUGIN.parents[2] / "benchmark-data" / "ic"
+# `PLUGIN.parents[2] / "benchmark-data" / "ic"` until the corpus left this
+# repository at `c5d7f2d00`. After that this generator could not reach a single
+# cell on any host, so the one supported way to re-measure the ratchet's own
+# finding set was broken for as long as the ratchet was — a finding could not be
+# closed even by a fix that closed it, because closing requires re-generating
+# this file and the generator had nothing to read.
+_ROOT = corpus_root()
+if _ROOT is None:
+    sys.exit(f"[REFUSED] gen_adversarial_findings: no published corpus. Point "
+             f"${CORPUS_ENV} at a clone of vibeic/benchmark-data. Regenerating "
+             f"this file from a corpus that is not there would publish an EMPTY "
+             f"finding set, which reads as 'every finding closed'.")
+IC = _ROOT / "ic"
 CELL = "spm/v1.9.96_gf180mcuD"
 DONOR = "sha256/clean_run_v1427_20260715"
 OLDER = "sha256/clean_run_v1422_20260715"
