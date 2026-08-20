@@ -52,6 +52,13 @@ The exact 35 IDs are in `out92/cluster_1_6x.txt`; the other 57 in
 
 # 2. The buckets — all 92, by TEST ID
 
+**VERDICT, stated rather than left to be inferred from a zero: IMAGE-ONLY = 0
+and HOST-ONLY = 0, so main is genuinely red — none of these is an environment
+artefact of one lane.** Every ID except the two named FLAKY reproduces in BOTH
+the pinned CI image and on this host, serially, without xdist. Nothing on this
+list can be closed by blaming the developer host, and neither of the two agents
+holding it is chasing a phantom.
+
 | bucket | n |
 |---|--:|
 | **BOTH** — red in both lanes, measured SERIALLY: a real property of `867de4289` | **90** |
@@ -61,7 +68,31 @@ The exact 35 IDs are in `out92/cluster_1_6x.txt`; the other 57 in
 | **xdist harness artefact** | **0** |
 | NOT_MEASURED | **0** |
 
-## 2a. Two answers the other two agents can act on immediately
+## 2a. How many observations each verdict rests on
+
+A single observation per lane is not enough to call an ID deterministic — it made
+me wrong twice tonight. So the 57 non-`1.6x` IDs were re-measured INTERLEAVED
+(for each repetition and each file: the IMAGE first, then immediately the HOST,
+so both lanes meet the same contention), 4 repetitions, 96 cycles:
+
+```
+  49 IDs   BOTH    5/5 red image    5/5 red host
+   6 IDs   BOTH    2/2 red image    2/2 red host   (census-bound, own interleaved arm)
+   1 ID    FLAKY   4/13    image   13/13    host   test_a_pinless_abstract_is_never_staged
+   1 ID    FLAKY   1/10    image    0/10    host   test_live_collection_relays_…_past_old_bound
+  ---
+  57 total.   IMAGE-ONLY 0 · HOST-ONLY 0 · NOT_MEASURED 0
+```
+
+The two census-bound files were too expensive for the 96-cycle pass
+(`test_matrix_63x8_census_freshness` 295 s image / 246 s host,
+`test_matrix_63x8_coverage` 445 s / 374 s per session), so they got their own
+interleaved confirm arm — image then host, back to back, per file.
+
+**Neither FLAKY changed bucket as the sample grew; both got sharper**, and no ID
+anywhere moved INTO a lane-only bucket at any sample size.
+
+## 2b. Two answers the other two agents can act on immediately
 
 **HOST-ONLY = 0.** Nothing on the list is a phantom of this developer host.
 Neither of you is chasing an environment red — with the one exception in §3,
@@ -75,7 +106,7 @@ no xdist, in both lanes — and all 92 reproduce.** The harness-artefact bucket
 the brief asked me to keep open is empty, and it is empty because it was
 measured, not because nothing was found.
 
-## 2b. Lanes, stated exactly
+## 2c. Lanes, stated exactly
 
 | lane | runtime | plugin autoload |
 |---|---|---|
@@ -203,7 +234,42 @@ make a red go away.
 
 ---
 
-# 7. A defect in MY OWN runner, caught because the tool said so
+# 6b. Two defects in MY OWN harness, both caught by the tool rather than by luck
+
+**(i) A container cannot see `/tmp`.** The first census-confirm arm read the ID
+list from `/tmp/main_92_fail_ids.txt`, which is outside the `-v` mount:
+`grep: /tmp/main_92_fail_ids.txt: No such file or directory`. `mapfile` produced
+an EMPTY array, and `pytest … "${IDS[@]}"` with no selectors falls back to
+`pytest.ini`'s `testpaths = programs/tests` — **so it started the whole suite**,
+the one thing the brief forbids on this host. Its own log is pages of dots stuck
+at `[ 17%]`.
+
+I then found that container **still up 11 minutes later**, competing with
+repetitions 1-15 of pass 3, and killed it **by recorded container ID**
+(`docker kill 3173a0133b5d`), never by a pattern that could match my own command
+line. Consequence stated rather than hidden: since the flake mechanism at issue
+IS contention, that contamination can only make an ID look MORE flaky, never
+less — a `BOTH` taken under it is conservative, a `FLAKY` ratio from those cycles
+could be inflated. `git -C main92 status --porcelain` is **empty**: across its
+whole 12-minute life it wrote nothing into the subject tree.
+
+**(ii) The host half never ran.** `cd X && (A) & (B) & wait` backgrounds
+`cd X && (A)` as one unit, so `(B)` executed in the original cwd and died on
+`out92/confirm_host.log: No such file or directory`, rc=1, instantly.
+
+Neither half is reported as anything: `rep_bucket.py` globs for junit that does
+not exist, so those IDs simply keep the observation count they actually have.
+The runner now refuses loudly instead of sweeping wide —
+
+```
+if [ "${#IDS[@]}" -eq 0 ]; then
+  echo "REFUSED $1 $base: selector list is EMPTY — refusing rather than running the whole suite"
+```
+
+— because the failure mode was silent breadth, and an empty selector list must
+never be able to mean "everything".
+
+# 7. A third defect in MY OWN runner, caught because the tool said so
 
 `out92/by_file.txt` is TAB-separated but my shell loop did `for n in $rest`,
 which word-splits on any whitespace. Exactly one of the 92 IDs contains spaces:
@@ -225,19 +291,23 @@ in `ABSENT-FROM-RUN`, never in a clean bucket. Re-run with `mapfile` /
 
 # 8. What is NOT settled
 
-1. **The per-ID FLAKY column is complete for 2 of 92, not for 92.** Pass 1 was
-   single-shot, under contention, in both lanes. Two IDs given repeat treatment
-   both moved. The other 90 are `BOTH` on **one** observation per lane, which
-   proves they can be red but not that they are deterministic. Repeat
-   measurement of the remaining 57 non-`1.6x` IDs is **in progress**; the 35 of
-   §1 have a named non-timing cause and are lower risk.
-2. **The two census-bound files** (`test_matrix_63x8_census_freshness`,
-   `test_matrix_63x8_coverage`) cost 403 s and 532 s per lane, so their second
-   serial repeat is still running at the time of writing — `NOT_MEASURED`, never
-   a default.
+1. **The 35 IDs of §1 were NOT given repeat treatment.** They have a named,
+   non-timing cause — a flow step that arrived without its rows — so their risk
+   of being timing flakes is low, but "low" is a judgement and not a
+   measurement. They rest on one observation per lane.
+2. **Six census-bound IDs rest on TWO observations per lane, not five.**
+   `test_matrix_63x8_census_freshness` and `test_matrix_63x8_coverage` cost
+   295-445 s per session, so they were excluded from the 96-cycle repeat pass and
+   given their own interleaved confirm arm instead: 2/2 red in both lanes. That
+   is enough to rule out a one-off, not enough to put a tight bound on a rare
+   flake. Their counts are printed per ID in `TRIAGE57.md`.
 3. **I did not diagnose the 7 `EXTRACTION_FEEDBACK_ABSENT` IDs or the 2 LVS
-   verdict-token IDs** beyond their signature. They are `BOTH` and they belong
-   to the 38-agent.
+   verdict-token IDs** beyond their signature. They are `BOTH` at 5/5 in both
+   lanes and they belong to the 38-agent.
+4. **The `magic` segfault is characterised, not diagnosed.** I know it is
+   `exited -11` on `LEF read, Line 26 (Error): No layer defined for RECT`, at
+   4/13 in the CI lane. I did not determine whether the malformed techfile comes
+   from the fixture or from the generator under test.
 
 ---
 

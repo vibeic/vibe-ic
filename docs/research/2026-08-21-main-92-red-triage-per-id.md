@@ -1,4 +1,7 @@
 ### pass-1 buckets (image lane = pinned image + PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; host lane = this host + -p no:pytest_ethereum)
+### PASS 1 IS ONE OBSERVATION PER LANE, taken while both lanes ran CONCURRENTLY.
+### It is SUPERSEDED by TRIAGE57.md, which states a red RATIO per lane from
+### interleaved repeats. Two IDs moved bucket under that treatment.
 ### files with a junit:  image 32/32   host 32/32
   BOTH             91
   IMAGE-ONLY       1
