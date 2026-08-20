@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """power_total_vs_budget_check.py — the total power figure must reach a
-COMPARISON, or the step must REFUSE and name the budget it lacks.
+COMPARISON, or the step must REFUSE and name what it lacks.
 
 ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
 step 33 while step 33 is running. That is the ONLY axis this token names, and
@@ -8,12 +8,13 @@ it is the one `flow_gate_enforcement_audit` measures. The other two axes are
 unchanged, and are stated here so the declaration can never be read as
 permission to defang the gate:
 
-  * VERDICT SEVERITY — unchanged. rc 1 when a declared budget is exceeded,
+  * VERDICT SEVERITY — unchanged. rc 1 when a declared limit is exceeded,
     rc 2 on INCOMPLETE. The rc-2 half is vibe-ic#1022's repair, landed in
     #1026: on the whole published corpus this gate's honest answer is
-    INCOMPLETE (17 runs carry a power report, 0 carry an L19 power budget), and
-    while INCOMPLETE exited 0 the refusal was indistinguishable from a pass —
-    which is the exact defect the gate was written to remove, one floor down.
+    INCOMPLETE (17 runs carry a power report, 0 carry a declared power
+    budget), and while INCOMPLETE exited 0 the refusal was indistinguishable
+    from a pass — which is the exact defect the gate was written to remove,
+    one floor down.
   * FLOW SLOT — unchanged and BLOCKING. Step 33 wires this gate in
     `program_exit_zero`, never `advisory_program_exit_zero`.
 
@@ -23,8 +24,50 @@ same two PRs: being wired into the flow's blocking slot has never been an
 answer to "does this program say where its verdict is consumed", and the audit
 reported both as `undeclared::` throughout, correctly.
 
-THE DEFECT, MEASURED
-====================
+WHAT CHANGED IN THE PPA WORK (spec §7.2, PPA-008)
+=================================================
+Two things, and the second is the one that matters.
+
+1. THE THRESHOLD NOW COMES FROM THE CONTRACT, NOT FROM THIS FILE'S OWN IDEA OF
+   ONE. Through v1.11.18 this gate knew exactly one authority — L19's
+   `power_budget_uw` — because that is what the flow happened to carry. A power
+   requirement is a CONTRACT term: `_ppa/power.resolve_power_requirement` reads
+   a `vibeic.ppa.contract.v1` requirement on `power.total_w` first, falls back
+   to L19 when no contract declares one, and discloses the superseded value
+   rather than discarding it. `--budget-uw` still outranks both, because a
+   caller that states a requirement has taken the authority on itself.
+
+2. A POWER NUMBER IS NOT COMPARABLE TO ANYTHING UNTIL ITS ACTIVITY BASIS IS
+   KNOWN. `PPA_INTERFACES.md` §2: "Vectorless power and VCD power are different
+   metrics." A vectorless estimate and a VCD-driven measurement are both "total
+   power" and they are not the same number, so a threshold written against one
+   cannot judge the other, and a candidate that "beats" a baseline measured on
+   a different activity model has not beaten anything. `_ppa/power.py` derives
+   the basis from EVIDENCE in the artefact rather than from the label on it,
+   and this gate refuses — rc 2, UNDETERMINED — when the basis is unknown,
+   self-contradicted, or different from the one the requirement was written
+   against. That refusal is a REFUSAL, never a FAIL: rc 1 is a claim about the
+   design and "I do not know what activity model produced this watt figure" is
+   not one.
+
+MEASURED, WHICH IS WHY 2 IS NOT PARANOIA (2026-08-21, all 17 published power
+reports in `benchmark-data`):
+
+    POWER_ANALYSIS_MODE absent            6    -> basis UNSTATED
+    POWER_ANALYSIS_MODE: vectorless_sdc   3    -> basis VECTORLESS
+    POWER_ANALYSIS_MODE: vector_vcd       8    -> basis CONTRADICTED, all eight
+
+All eight `vector_vcd` reports are falsified by their own transcript: five carry
+`READ_VCD_FAIL: ...` from the `catch` around `read_power_activities`, three
+carry OpenSTA's own `Annotated 0 pin activities.`. Not one published power
+number in this repository is vector-driven and eight of them say they are. The
+label is written by the runner from the EXISTENCE of a `.vcd` file, before the
+read is attempted; the failure is caught and printed rather than raised. Until
+that is fixed at the source, a gate that trusted the label would be certifying
+a comparison against an activity model that never loaded.
+
+THE DEFECT THIS GATE WAS ORIGINALLY WRITTEN FOR, MEASURED
+=========================================================
 `matrix_mutation_ledger.ARTEFACT_MUTATIONS` carried ART-POWER-FIGURES-X1000
 recording that step 33's dimension-2 cell CANNOT BE REDDENED from artefact
 content. The mutation multiplies every non-zero figure in the OpenSTA power
@@ -38,21 +81,16 @@ leakage plus dynamic categories. It never reads the NUMBERS against anything. A
 1000x power figure is the same PASS as the true one, and a PASS that names no
 threshold is indistinguishable from one that never looked.
 
-THE HONEST ANSWER HERE IS A REFUSAL, AND THAT IS THE DELIVERABLE
-================================================================
-The declared authority for total power in this flow is L19's
-``power_budget_uw``. It is written by `phase1_post_process.py`, and
-`l19_pdk_floorplan_contract_check` already records — as an ADVISORY, correctly —
-that "no program in the flow reads it".
+THE HONEST ANSWER ON TODAY'S CORPUS IS STILL A REFUSAL
+======================================================
+MEASURED over the published corpus, by CONTENT rather than by reputation
+(counts re-run 2026-08-21):
 
-MEASURED over the published corpus on 2026-08-11, by CONTENT rather than by
-reputation:
-
-    L19*.json copies in benchmark-data/       195
+    L19*.json copies in benchmark-data/       193
       with power_budget_uw set                  3   (all three are copies of
                                                     ONE design's L19)
-    published runs carrying reports/**/power.rpt  17
-      of those, with an L19 power budget          0
+    published runs carrying reports/**/power.rpt 17
+      of those, with a declared power budget      0
 
 So there is not one published run in which this comparison could have been made.
 The budget is absent everywhere the power report exists, and the L19 of the run
@@ -60,17 +98,18 @@ the ledger replays states, in its own words, "Spec does not state PDK / timing
 constraints".
 
 **A green cell over a design whose power was never compared to anything is the
-defect. A cell that REFUSES and names the missing budget is not.** This gate
-therefore does not invent an authority. It does not derive a budget from die
-area, supply voltage, or a sibling tool's number, because every one of those
-would be a ruler chosen to fit the corpus — and a threshold nobody declared is
-worse than no threshold, since it turns an unanswered question into an answered
-one.
+defect. A cell that REFUSES and names what it lacks is not.** This gate does not
+invent an authority. It does not derive a budget from die area, supply voltage,
+or a sibling tool's number, because every one of those would be a ruler chosen
+to fit the corpus — and a threshold nobody declared is worse than no threshold,
+since it turns an unanswered question into an answered one.
 
-    budget declared, total <= budget   -> PASS, naming budget and total
-    budget declared, total >  budget   -> FAIL, naming both
-    budget absent                      -> INCOMPLETE, naming L19.power_budget_uw
-    no total power figure readable     -> INCOMPLETE, naming that too
+    limit declared, basis usable, total <= limit   -> PASS, naming both
+    limit declared, basis usable, total >  limit   -> FAIL, naming both
+    limit declared, basis unknown/contradicted     -> INCOMPLETE, naming why
+    limit declared for a DIFFERENT activity basis  -> INCOMPLETE, naming both
+    limit absent                                   -> INCOMPLETE, naming it
+    no total power figure readable                 -> INCOMPLETE, naming that
 
 `INCOMPLETE` is this repository's own tier for "the input WAS applicable and it
 was not audited; someone must come back". `flow_compliance_check` promotes a
@@ -81,31 +120,34 @@ per-step listing stops reporting step 33 as a bare PASS.
 WHAT STEP 33 STILL NEEDS, AND IT DOES NOT COME FROM THIS REPOSITORY
 ===================================================================
 A power budget is a REQUIREMENT, not a measurement: it has to arrive in the
-design's own input documents and be extracted into L19 by Phase 1. Until a
-design states one, this gate can only keep saying so. Nothing in the plugin can
-close that, and closing it by picking a number would be the fabrication the
-whole §4.05 doctrine exists to prevent.
+design's own input documents and be extracted into the contract by Phase 1.
+Until a design states one, this gate can only keep saying so. Nothing in the
+plugin can close that, and closing it by picking a number would be the
+fabrication the whole §4.05 doctrine exists to prevent.
 
 WHAT THIS GATE DOES NOT DO — stated so a reviewer does not have to find it
 =========================================================================
-  * It does not check that the group rows SUM to the Total row. That is a real
-    property and a real check, but it is not this one, and the ledger's mutation
-    was deliberately built to preserve it (the zeros are left alone and the
-    table stays internally consistent), so adding it here would not change the
-    verdict on the entry this gate was written for.
+  * It does not FAIL on the group rows failing to sum to the Total row. The
+    sums are computed and disclosed by `_ppa/power.py`, but the ledger's
+    mutation was deliberately built to preserve them (the zeros are left alone
+    and the table stays internally consistent), so a verdict built on them
+    would not move on the entry this gate exists for. A check the mutation
+    cannot move is not a check that discriminates.
   * It does not compare against any OTHER tool's power figure carried elsewhere
     in the run. The IR analysis states a per-net total power from a different
     engine on a different netlist view; on the run the ledger replays the two
     already differ by 4.3x at baseline, so a cross-tool tolerance would have to
-    be chosen wide enough to admit that — a ruler fitted to the corpus.
-  * It reads the total power figure only. Per-group and per-category figures are
-    parsed for disclosure but are not screened, because L19 declares one budget.
+    be chosen wide enough to admit that — a ruler fitted to the corpus. IR drop
+    is power INTEGRITY and answers a different question; it is not folded in.
+  * It reads the total power figure only. Per-group and per-category figures
+    are parsed for disclosure but are not screened, because the contract
+    declares one total-power limit.
 
-chip-AGNOSTIC: it reads a watt figure and a micro-watt budget. No foundry,
-process or chip token appears anywhere in this file.
+chip-AGNOSTIC: it reads a watt figure and a power limit. No foundry, process or
+chip token appears anywhere in this file.
 
-Exit codes: 0 = PASS, 1 = the total exceeds the declared budget, 2 = the
-question could not be put — INCOMPLETE (the disclosed-skip tier,
+Exit codes: 0 = PASS, 1 = the total exceeds the declared limit, 2 = the question
+could not be put — INCOMPLETE (the disclosed-skip tier,
 `_vacuous_exit.RC_VACUOUS`) or a bad argument.
 
 INCOMPLETE EXITS 2, NOT 0 (vibe-ic#1017)
@@ -117,25 +159,20 @@ was NOT compared against anything``. That is the shape
 `gate_zero_denominator_refuses_check` forbids and the one repaired for
 `declared_pdk_is_the_pdk_used_check` in vibe-ic#1002.
 `test_matrix_d2_falsifiable` had been red on main for five merges saying so.
-
-The refusal itself is unchanged and still correct: this gate will not derive a
-budget from die area or supply voltage, because a threshold nobody declared
-would turn an unanswered question into an answered one. What changes is only
-that the refusal now leaves through the exit code as well as the text —
-`flow_compliance_check` records rc 2 as VACUOUS_PASS, explicitly NOT a clean
-result.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _ppa import power as _pw  # noqa: E402
+
 TOOL = "power_total_vs_budget_check"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 RC_OK, RC_FINDINGS, RC_ARG = 0, 1, 2
 #: INCOMPLETE — the disclosed-skip tier (`_vacuous_exit.RC_VACUOUS`).
@@ -145,93 +182,93 @@ RC_NOT_COMPARED = 2
 
 #: Where a power report may sit. DISCOVERED from the tree, never enumerated.
 _RPT_GLOBS = ("reports/**/power*.rpt", "steps/**/power*.rpt")
-#: Where L19 may sit. Phase 1 publishes the same document into several
-#: directories (ai_docs / generated_docs / merged_docs); all are read and the
-#: budget must not disagree between them.
-_L19_GLOBS = ("phase1/**/L19*.json", "generated_docs/L19*.json",
-              "**/L19_CONSTRAINTS_PDK.json")
-
-_NUM = r"([0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)"
-#: The Total row of the OpenSTA `report_power` table: four figures, the last of
-#: which is the total power in watts, optionally followed by a percentage.
-_TOTAL_ROW_RE = re.compile(
-    r"^\s*Total\s+" + _NUM + r"\s+" + _NUM + r"\s+" + _NUM + r"\s+" + _NUM
-    + r"\b", re.M)
 
 _MICRO = 1e-6
-
-
-def _num(v: Any) -> Optional[float]:
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return None if f != f else f  # reject NaN
 
 
 def _rel(p: Path, project: Path) -> str:
     try:
         return str(p.relative_to(project))
-    except ValueError:  # pragma: no cover - defensive
+    except ValueError:                                 # pragma: no cover
         return str(p)
 
 
-def discover(project: Path, globs: Tuple[str, ...]) -> List[Path]:
+def read_reports(project: Path) -> List[Dict[str, Any]]:
+    """Every power report in the tree, parsed, with its activity provenance.
+
+    A file that cannot be READ is recorded as unreadable rather than dropped.
+    "I could not open it" and "I opened it and it held nothing" are different
+    facts and must not produce the same verdict.
+    """
     seen: Dict[str, Path] = {}
-    for pat in globs:
+    for pat in _RPT_GLOBS:
         for p in project.glob(pat):
             if p.is_file():
                 seen[str(p.resolve())] = p
-    return [seen[k] for k in sorted(seen)]
-
-
-def read_totals(project: Path) -> List[Dict[str, Any]]:
-    """Every total-power figure (watts) the power report family states."""
     out: List[Dict[str, Any]] = []
-    for fp in discover(project, _RPT_GLOBS):
-        try:
-            text = fp.read_text(errors="replace")
-        except OSError:
+    for key in sorted(seen):
+        fp = seen[key]
+        rep = _pw.read_power_report(fp)
+        if rep is None:
+            out.append({"file": _rel(fp, project), "unreadable": True})
             continue
-        for m in _TOTAL_ROW_RE.finditer(text):
-            total = _num(m.group(4))
-            if total is None:
-                continue
-            out.append({"file": _rel(fp, project), "total_power_W": total,
-                        "internal_power_W": _num(m.group(1)),
-                        "switching_power_W": _num(m.group(2)),
-                        "leakage_power_W": _num(m.group(3))})
+        rep["file"] = _rel(fp, project)
+        rep["path"] = _rel(fp, project)
+        out.append(rep)
     return out
 
 
-def read_budget(project: Path) -> Tuple[Optional[float], List[Dict[str, Any]]]:
-    """``(budget_uW, sources)`` from L19 ``power_budget_uw``.
+def _disclosure(rep: Dict[str, Any]) -> Dict[str, Any]:
+    """The per-report row that goes into the JSON and drives the summary."""
+    if rep.get("unreadable"):
+        return {"file": rep["file"], "readable": False,
+                "activity_basis": None, "total_power_W": None}
+    act = rep.get("activity") or {}
+    t = rep.get("total_row")
+    row: Dict[str, Any] = {
+        "file": rep["file"], "readable": True,
+        "activity_basis": act.get("basis"),
+        "activity_corroboration": act.get("corroboration"),
+        "declared_mode": act.get("declared_mode"),
+        "activity_reason": act.get("reason"),
+        "activity_evidence": act.get("evidence"),
+        "split_consistency": rep.get("split_consistency"),
+        "group_sum_consistency": rep.get("group_sum_consistency"),
+    }
+    if t:
+        row.update({"total_power_W": t["total_w"],
+                    "internal_power_W": t["internal_w"],
+                    "switching_power_W": t["switching_w"],
+                    "leakage_power_W": t["leakage_w"]})
+    else:
+        row["total_power_W"] = None
+        row["total_not_measured_reason"] = "the artefact states no Total row"
+    return row
 
-    Every published copy is read. When copies DISAGREE the budget is treated as
-    undeclared and the disagreement is reported: an authority two documents
-    state differently is not an authority, and silently taking the first would
-    make the verdict depend on glob order.
+
+def _worst_record(project: Path, reports: List[Dict[str, Any]]
+                  ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """The highest total-power record, and the report it came from.
+
+    Highest, because a limit is an upper bound and the run has to meet it
+    everywhere it states a total. A CONTRADICTED or UNSTATED basis does not
+    disqualify a record from being SELECTED — it disqualifies it from being
+    COMPARED, and those are different steps. Selecting only the records this
+    gate is able to judge would let a run hide an over-budget figure behind an
+    unlabelled report.
     """
-    sources: List[Dict[str, Any]] = []
-    for fp in discover(project, _L19_GLOBS):
-        try:
-            doc = json.loads(fp.read_text(errors="replace"))
-        except (OSError, json.JSONDecodeError):
+    best: Optional[Dict[str, Any]] = None
+    best_rep: Optional[Dict[str, Any]] = None
+    for rep in reports:
+        if rep.get("unreadable") or not rep.get("total_row"):
             continue
-        if not isinstance(doc, dict):
+        rec = _pw.total_record(rep, stage="phase3_signoff",
+                               scenario="default")
+        if rec is None:                                # pragma: no cover
             continue
-        fields = doc.get("fields")
-        raw = fields.get("power_budget_uw") if isinstance(fields, dict) else None
-        if raw is None and "power_budget_uw" in doc:
-            raw = doc.get("power_budget_uw")
-        val = _num(raw)
-        sources.append({"file": _rel(fp, project), "power_budget_uw": val})
-    stated = sorted({s["power_budget_uw"] for s in sources
-                     if s["power_budget_uw"] is not None and
-                     s["power_budget_uw"] > 0})
-    if len(stated) == 1:
-        return stated[0], sources
-    return None, sources
+        if best is None or rec["value"] > best["value"]:
+            best, best_rep = rec, rep
+    return best, best_rep
 
 
 def evaluate(project: Path, budget_override: Optional[float]
@@ -239,56 +276,98 @@ def evaluate(project: Path, budget_override: Optional[float]
     """Return ``(verdict, report)``; verdict in {PASS, FAIL, INCOMPLETE}."""
     rep: Dict[str, Any] = {"program": TOOL, "version": VERSION,
                            "project": str(project), "findings": []}
-    totals = read_totals(project)
+    reports = read_reports(project)
+    disclosures = [_disclosure(r) for r in reports]
+    rep["reports_read"] = disclosures
+    # Kept under its historical name: `totals_read` is the list of readable
+    # total-power figures, which is what the summary line counts.
+    totals = [d for d in disclosures if d.get("total_power_W") is not None]
     rep["totals_read"] = totals
+    rep["unreadable_reports"] = [d["file"] for d in disclosures
+                                 if not d.get("readable")]
 
-    if budget_override is not None:
-        budget, sources = budget_override, [{"file": "--budget-uw",
-                                             "power_budget_uw": budget_override}]
-    else:
-        budget, sources = read_budget(project)
-    rep["budget_sources"] = sources
-    rep["power_budget_uw"] = budget
+    res = _pw.resolve_power_requirement(project, budget_uw=budget_override)
+    requirement = res["requirement"]
+    rep["requirement"] = requirement
+    rep["requirement_sources"] = res["sources"]
+    rep["requirement_superseded"] = res.get("superseded") or []
+    # Historical key, still the thing a reader looks for first.
+    rep["budget_sources"] = [s for s in res["sources"]
+                             if s.get("authority") == _pw.AUTHORITY_L19]
+    rep["power_budget_uw"] = (requirement["max_w"] / _MICRO
+                              if requirement and requirement.get("max_w")
+                              else None)
 
-    disagreeing = sorted({s["power_budget_uw"] for s in sources
-                          if s["power_budget_uw"] is not None
-                          and s["power_budget_uw"] > 0})
-    if budget is None and len(disagreeing) > 1:
-        rep["budget_disagreement"] = disagreeing
+    record, source_rep = _worst_record(project, reports)
+    rep["selected_total"] = (
+        {"file": source_rep["file"], "record": record} if record else None)
 
-    if budget is None or not totals:
+    judged = _pw.judge_against_requirement(record, requirement)
+    rep["judgement"] = judged
+
+    if judged["verdict"] == _pw.J_UNDETERMINED:
         rep["verdict"] = "INCOMPLETE"
         lacks: List[str] = []
-        if budget is None:
-            lacks.append(
-                "L19_CONSTRAINTS_PDK.json fields.power_budget_uw"
-                + (f" (copies disagree: {disagreeing})" if len(disagreeing) > 1
-                   else " (unset in "
-                        f"{len([s for s in sources if s['power_budget_uw'] is None])}"
-                        f" of {len(sources)} published copy/copies)"))
-        if not totals:
+        code = judged.get("code")
+        if code == "NO_REQUIREMENT":
+            lacks.append(res["refusal"] or
+                         "a declared total-power limit (ppa contract "
+                         "requirement on power.total_w, or "
+                         "L19_CONSTRAINTS_PDK.json fields.power_budget_uw)")
+        elif code == "NO_TOTAL_POWER":
             lacks.append("a readable Total row in any power report")
+        else:
+            lacks.append(judged["reason"])
+        if code != "NO_TOTAL_POWER" and not totals:
+            lacks.append("a readable Total row in any power report")
+        if code != "NO_REQUIREMENT" and res.get("refusal"):
+            lacks.append(res["refusal"])
         rep["missing_authority"] = "; ".join(lacks)
         return "INCOMPLETE", rep
 
-    worst = max(totals, key=lambda d: d["total_power_W"])
-    total_uw = worst["total_power_W"] / _MICRO
-    rep["comparison"] = {"total_power_uw": total_uw,
-                         "power_budget_uw": budget,
-                         "utilization": total_uw / budget if budget else None,
-                         "stated_in": worst["file"],
-                         "over": total_uw > budget}
-    if total_uw > budget:
+    rep["comparison"] = {
+        "total_power_uw": judged["total_power_uw"],
+        "power_budget_uw": judged["limit_uw"],
+        "utilization": judged["utilization"],
+        "stated_in": source_rep["file"],
+        "activity_basis": judged["activity_basis"],
+        "basis_policed": judged["basis_policed"],
+        "authority": judged["authority"],
+        "over": judged["verdict"] == _pw.J_FAIL,
+    }
+    if judged["verdict"] == _pw.J_FAIL:
         rep["findings"].append({
             "severity": "ERROR", "rule": "POWER_TOTAL_OVER_BUDGET",
-            "message": (f"total power {total_uw:.4e} uW ({worst['file']}) "
-                        f"exceeds the declared budget {budget:.4e} uW "
-                        f"(L19.power_budget_uw) by "
-                        f"{total_uw / budget:.4g}x")})
+            "message": (f"total power {judged['total_power_uw']:.4e} uW "
+                        f"({source_rep['file']}, activity basis "
+                        f"{judged['activity_basis']}) exceeds the declared "
+                        f"budget {judged['limit_uw']:.4e} uW "
+                        f"({judged['authority']}) by "
+                        f"{judged['utilization']:.4g}x")})
         rep["verdict"] = "FAIL"
         return "FAIL", rep
     rep["verdict"] = "PASS"
     return "PASS", rep
+
+
+def _scope_line(rep: Dict[str, Any]) -> str:
+    l19 = len(rep["budget_sources"])
+    contract = len([s for s in rep["requirement_sources"]
+                    if s.get("authority") == _pw.AUTHORITY_CONTRACT])
+    extra = f" and {contract} ppa contract requirement(s)" if contract else ""
+    return (f"read {len(rep['totals_read'])} total-power figure(s) from the "
+            f"power report family and {l19} L19 copy/copies{extra}")
+
+
+def _basis_line(rep: Dict[str, Any]) -> str:
+    counts: Dict[str, int] = {}
+    for d in rep["reports_read"]:
+        b = d.get("activity_basis") or "UNREADABLE"
+        counts[b] = counts.get(b, 0) + 1
+    if not counts:
+        return "  Activity basis: no power report was read."
+    inv = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+    return f"  Activity basis of the reports read: {inv}."
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -296,8 +375,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("project", nargs="?", default=".",
                     help="project directory (default: cwd)")
     ap.add_argument("--budget-uw", type=float, default=None,
-                    help="power budget in uW, overriding L19 (for callers that "
-                         "carry the requirement outside the L-doc set)")
+                    help="power budget in uW, overriding the contract (for "
+                         "callers that carry the requirement themselves)")
     ap.add_argument("--json", default=None, help="JSON report output path")
     args = ap.parse_args(argv)
 
@@ -315,12 +394,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n")
 
-    scope = (f"read {len(rep['totals_read'])} total-power figure(s) from the "
-             f"power report family and {len(rep['budget_sources'])} L19 "
-             f"copy/copies")
+    scope = _scope_line(rep)
 
     if verdict == "FAIL":
         print(f"[FAIL] {TOOL}: {scope}")
+        print(_basis_line(rep))
         for f in rep["findings"]:
             print(f"  - {f.get('rule')}: {f.get('message')}")
         return RC_FINDINGS
@@ -330,8 +408,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[PASS] {TOOL}: {scope}. Compared total power "
               f"{c['total_power_uw']:.4e} uW ({c['stated_in']}) against the "
               f"declared budget {c['power_budget_uw']:.4e} uW "
-              f"(L19.power_budget_uw); utilization {c['utilization']:.4f}, "
+              f"({c['authority']}); utilization {c['utilization']:.4f}, "
               f"limit 1.0")
+        print(_basis_line(rep))
+        if not c["basis_policed"]:
+            print(f"  The limit declares no activity basis, so it bounds a "
+                  f"{c['activity_basis']} number without knowing that is what "
+                  f"it bounds.")
         return RC_OK
 
     # The sentinel must START A LINE and survive the consumer's tail cut —
@@ -340,11 +423,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # MEASURED: a first draft printed the token at the head of one long
     # paragraph and `_stdout_signals_token` returned False on it.
     print(f"{TOOL}: {scope}.")
+    print(_basis_line(rep))
     print(f"  A power budget is a REQUIREMENT and has to arrive in the "
           f"design's own input documents. This gate will not derive one from "
           f"die area, supply voltage or another tool's number, because a "
           f"threshold nobody declared would turn an unanswered question into "
-          f"an answered one.")
+          f"an answered one. Nor will it compare a watt figure whose activity "
+          f"model is unknown: vectorless power and VCD power are different "
+          f"metrics.")
     print(f"INCOMPLETE: total power was NOT compared against anything — "
           f"missing authority: {rep['missing_authority']}.")
     # A REFUSAL EXITS 2, NOT 0 (vibe-ic#1017). See the module docstring.
