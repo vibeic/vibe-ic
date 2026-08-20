@@ -459,6 +459,23 @@ def default_image_resolver(image: str, allow_pull: bool,
         return None
     if q.returncode == 0 and q.stdout.strip():
         return image
+    # `docker images -q` answers for a NAME[:TAG] reference and returns EMPTY
+    # (exit 0) for a `repo@sha256:...` one — measured on Docker 29.7.1. So the
+    # MOST precise way to pin the counterparty's tool, by content digest, was
+    # the one form this resolver could not see, and the gate then reported "the
+    # counterparty was never asked" about an image sitting on the host. Ask the
+    # question that does answer for both forms before concluding absence.
+    # `image inspect` exits NON-ZERO for an image that is genuinely not there,
+    # so this widens what resolves, never what passes: an absent image is still
+    # None, and None is still NOT_DETERMINED.
+    try:
+        i = subprocess.run([docker_bin, "image", "inspect",
+                            "--format", "{{.Id}}", image],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if i.returncode == 0 and i.stdout.strip():
+        return image
     if not allow_pull:
         return None
     try:
