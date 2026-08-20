@@ -438,3 +438,30 @@ def test_a_requested_mode_line_is_not_mistaken_for_the_resolved_one():
     assert act["basis"] == pw.BASIS_VECTORLESS
     # The failure is still disclosed, because it is still a fact about the run.
     assert act["read_failures"] == ["READ_VCD_FAIL: boom"]
+
+
+def test_a_requirement_whose_metric_and_unit_disagree_is_unreadable(tmp_path):
+    """`metric: power.total_w` with `unit: uW` is off by a million, and either
+    reading is defensible. A parser that picked one would state a limit nobody
+    wrote; this one says it cannot read the requirement and names why."""
+    proj = _proj(tmp_path, l19=None, contract={
+        "schema": pw.CONTRACT_SCHEMA,
+        "requirements": [{"metric": "power.total_w", "unit": "uW",
+                          "limit": {"max": 1000.0}}]})
+    reqs = pw.contract_power_requirements(proj)
+    assert len(reqs) == 1 and reqs[0]["max_w"] is None
+    assert "imply different scales" in reqs[0]["unreadable"]
+    res = pw.resolve_power_requirement(proj)
+    assert res["requirement"] is None
+    assert "unreadable" in res["refusal"]
+
+
+def test_a_requirement_stated_in_uw_against_the_uw_metric_is_read(tmp_path):
+    """The paired positive, so the rule above cannot pass by refusing every
+    unit that is not Watts."""
+    proj = _proj(tmp_path, l19=None, contract={
+        "schema": pw.CONTRACT_SCHEMA,
+        "requirements": [{"metric": "power.total_uw", "unit": "uW",
+                          "limit": {"max": 1000.0}}]})
+    req = pw.resolve_power_requirement(proj)["requirement"]
+    assert req["max_uw"] == 1000.0 and req["max_w"] == 1000.0 * 1e-6

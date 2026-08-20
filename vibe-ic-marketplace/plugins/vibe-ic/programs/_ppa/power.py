@@ -630,8 +630,16 @@ def contract_power_requirements(project: Path) -> List[Dict[str, Any]]:
             raw_max = limit.get("max") if isinstance(limit, dict) else None
             val = _num(raw_max)
             unit = req.get("unit")
-            factor = _REQ_UNIT_TO_W.get(unit) if unit is not None \
-                else _REQ_METRIC_TO_W[metric]
+            metric_factor = _REQ_METRIC_TO_W[metric]
+            unit_factor = (_REQ_UNIT_TO_W.get(unit) if unit is not None
+                           else metric_factor)
+            # A requirement whose metric NAME and whose `unit` imply different
+            # scales is self-contradictory, and resolving it by preferring one
+            # of them would pick a limit off by a million with nothing in the
+            # output to say which reading was taken.
+            mismatch = (unit_factor is not None
+                        and unit_factor != metric_factor)
+            factor = None if mismatch else unit_factor
             entry: Dict[str, Any] = {
                 "file": _rel(fp, project), "authority": AUTHORITY_CONTRACT,
                 "metric": metric, "unit": unit,
@@ -643,6 +651,8 @@ def contract_power_requirements(project: Path) -> List[Dict[str, Any]]:
                 entry["max_w"] = None
                 entry["max_uw"] = None
                 entry["unreadable"] = (
+                    f"metric={metric!r} and unit={unit!r} imply different "
+                    f"scales" if mismatch else
                     f"limit.max={raw_max!r} unit={unit!r} is not a positive "
                     f"power in a unit this parser knows")
             else:
