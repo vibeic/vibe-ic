@@ -513,6 +513,55 @@ def _f_nba_addr_race(p: Path) -> None:
     _w(p, "phase2/stage1/rtl/cmd_fsm.v", _NBA_ADDR_RACE_RTL)
 
 
+#: RTL carrying the vendor-unsafe ROM initialiser `rom_init_lint` exists for.
+#:
+#: The unsafe shape is the gate's own: an `initial` block whose `for` loop walks
+#: an `integer` index and assigns into a `reg [..] rom [..]` memory. The FPGA
+#: vendor's synthesis flow drops it silently and leaves the ROM all-zero, so
+#: simulation passes and the board does not — which is why the gate is BLOCKING.
+#:
+#: The `.sv` file is not decoration. The clause's arguments are two globs,
+#: `rtl/*.sv` and `rtl/*.v`, and a glob that matches nothing is passed through
+#: literally: with only `.v` present the gate exits 2 ("missing file:
+#: .../*.sv"), which is an IO error tier, NOT a content FAIL. A fixture that
+#: reddened that way would be proving the harness can mis-invoke the gate, not
+#: that the gate can judge RTL. MEASURED 2026-08-20.
+#:
+#: Three arms over ONE variable, the ROM initialiser:
+#:   EMPTY project                     -> VACUOUS (no rtl/ at all)
+#:   `for (i=0;i<32;i=i+1) rom[i]=...` -> rc=1, rule `quartus-unsafe-rom-init`
+#:   `$readmemh("rom.hex", rom);`      -> rc=0
+#: The corrected arm is the gate's own recommended replacement (B).
+_ROM_INIT_UNSAFE_V = """\
+module rom_blk (
+    input  wire [4:0] addr,
+    output reg  [7:0] q
+);
+    reg [7:0] rom [0:31];
+    integer i;
+
+    initial begin
+        for (i = 0; i < 32; i = i + 1)
+            rom[i] = i[7:0];
+    end
+
+    always @(*) q = rom[addr];
+endmodule
+"""
+
+#: Present only so the clause's `*.sv` glob resolves; carries no ROM at all.
+_ROM_INIT_BENIGN_SV = """\
+module pkg_defs #(parameter int WIDTH = 8) (input logic clk, output logic tick);
+    always_ff @(posedge clk) tick <= ~tick;
+endmodule
+"""
+
+
+def _f_rom_init_unsafe(p: Path) -> None:
+    _w(p, "phase2/stage1/rtl/rom_blk.v", _ROM_INIT_UNSAFE_V)
+    _w(p, "phase2/stage1/rtl/pkg_defs.sv", _ROM_INIT_BENIGN_SV)
+
+
 def _analog_partial(p: Path, root: str) -> None:
     """Two blocks declared; only ONE carries any A-step artefact, and every
     artefact it carries is a stub.
@@ -1435,6 +1484,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
     "NBA_ADDR_RACE": _f_nba_addr_race,
+    "ROM_INIT_UNSAFE": _f_rom_init_unsafe,
     "ANALOG_P3": _f_analog_p3,
     "A0_SKIPPED": _f_a0_skipped,
     "LDOC_TODO": _f_ldoc_todo,
@@ -1474,6 +1524,12 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
 #: not redden it) fails loudly rather than silently keeping a stale recipe.
 #: Clauses absent from this table use ``EMPTY``.
 CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
+    # vibe-ic 63x8 d2: registered in UNREDDENED as "needs RTL carrying a
+    # Quartus-unsafe ROM initialiser shape". The gate's docstring carries that
+    # shape verbatim; a fixture built from it reddens the clause on content.
+    # The paired `.sv` file is required — see `_ROM_INIT_UNSAFE_V`.
+    ("2", "rom_init_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json "
+          "reports/phase2/lint/rom_init_lint.json"): "ROM_INIT_UNSAFE",
     # vibe-ic 63x8 d2: this clause sat in UNREDDENED as "needs the specific NBA
     # address-read race shape ... no generic fixture has". That was true of the
     # generic fixture, not of the gate: the gate's own docstring carries the
@@ -1747,10 +1803,6 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
         "rc=2 VACUOUS_PASS under every fixture: the expert-parse track needs a "
         "real Phase-1 extraction run to have happened, and a stubbed "
         "generated_docs/ tree still reads as 'track not attempted'",
-    ("2", "rom_init_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json "
-          "reports/phase2/lint/rom_init_lint.json"):
-        "PASS/VACUOUS: needs RTL carrying a Quartus-unsafe ROM initialiser "
-        "shape, which the generic broken-RTL fixture does not contain",
     ("2", "rtl_bug_report_schema_check . --json "
           "reports/phase2/gates/rtl_bug_schema.json"):
         "VACUOUS under every fixture: requires a real reports/phase2/"
