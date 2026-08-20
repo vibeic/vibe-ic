@@ -154,6 +154,96 @@ def load_json(path: Path) -> Tuple[Optional[Any], Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# authority order
+# ---------------------------------------------------------------------------
+
+def resolve_conflicts(declared_facts: Sequence[Mapping[str, Any]],
+                      policy: Mapping[str, Any]
+                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Pick a winner for the keys a declaration OPTED IN, and say who lost.
+
+    Returns `(resolutions, unrankable)`.
+
+    A resolution is never silent. `PPA-C-015` prints it as a NOTE naming the
+    winning source, its value, and every value it overrode -- because "the SDC
+    won and the spec layer said something else" is precisely the fact a reader
+    needs and precisely the fact a silent resolution destroys. That is why the
+    DEFAULT is refusal and this runs only for keys named in
+    `policy.resolvable_fact_keys`.
+
+    A key whose claims name a source absent from the authority order cannot be
+    resolved: nothing ranks it, so there is no winner to pick. It comes back in
+    `unrankable` and becomes an UNDETERMINED finding rather than an arbitrary
+    choice of whichever claim happened to be first.
+    """
+    resolvable = set(policy.get("resolvable_fact_keys", []) or [])
+    order = list(policy.get("authority_order", DEFAULT_AUTHORITY_ORDER))
+    by_key: Dict[str, List[Mapping[str, Any]]] = {}
+    for row in declared_facts:
+        by_key.setdefault(str(row.get("key", "")), []).append(row)
+
+    resolutions: List[Dict[str, Any]] = []
+    unrankable: List[Dict[str, Any]] = []
+    for key in sorted(by_key):
+        if key not in resolvable:
+            continue
+        claims = by_key[key]
+        if len({digest_of(c.get("value")) for c in claims}) < 2:
+            continue
+        ranks = [str(c.get("source", "")) for c in claims]
+        missing = sorted({r for r in ranks if r not in order})
+        if missing:
+            unrankable.append({"key": key, "sources": missing,
+                               "authority_order": order})
+            continue
+        ordered = sorted(claims, key=lambda c: (order.index(str(c.get("source", ""))),
+                                                digest_of(c.get("value"))))
+        winner, losers = ordered[0], ordered[1:]
+        resolutions.append({
+            "key": key,
+            "authority_order": order,
+            "winner": {"source": str(winner.get("source", "")),
+                       "value": winner.get("value"),
+                       "source_path": winner.get("source_path")},
+            "overridden": [{"source": str(c.get("source", "")),
+                            "value": c.get("value"),
+                            "source_path": c.get("source_path")}
+                           for c in losers],
+        })
+    return resolutions, unrankable
+
+
+def _apply_resolutions(blocks: Dict[str, Dict[str, Any]],
+                       resolutions: Sequence[Mapping[str, Any]]) -> None:
+    """Collapse each resolved key to its winning value BEFORE the identities.
+
+    The authority order exists so an identity has ONE value for a key. Leaving
+    the losing claims in would make `identity` refuse to hash the key it was
+    just told how to settle, and the opt-in would do nothing.
+    """
+    winners = {r["key"]: r["winner"]["value"] for r in resolutions}
+    if not winners:
+        return
+    for block in blocks.values():
+        facts = list(block.get("facts", []) or [])
+        kept: List[Dict[str, Any]] = []
+        seen: set = set()
+        for fact in facts:
+            key = str(fact.get("key", ""))
+            if key not in winners:
+                kept.append(fact)
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            settled = dict(fact)
+            settled["value"] = winners[key]
+            settled["source"] = "authority_resolved"
+            kept.append(settled)
+        block["facts"] = kept
+
+
+# ---------------------------------------------------------------------------
 # build
 # ---------------------------------------------------------------------------
 
@@ -207,6 +297,11 @@ def build(declaration: Mapping[str, Any],
     tc_block = blocks.setdefault("toolchain", {"artefacts": [], "facts": []})
     tc_block["facts"] = list(tc_block.get("facts", [])) + image_facts
 
+    declared_facts = _declared_facts(declaration)
+    resolutions, _unrankable = resolve_conflicts(
+        declared_facts, declaration.get("policy", {}) or {})
+    _apply_resolutions(blocks, resolutions)
+
     ids = ident.identities(blocks)
 
     manifest = prov.run_manifest(
@@ -236,7 +331,8 @@ def build(declaration: Mapping[str, Any],
         "run_manifest": manifest,
         "evidence_manifest": evidence,
         "policy": declaration.get("policy", {}) or {},
-        "declared_facts": _declared_facts(declaration),
+        "declared_facts": declared_facts,
+        "resolutions": resolutions,
         "candidate": declaration.get("candidate", {}) or {},
         "metrics": list(declaration.get("metrics", []) or []),
     }
@@ -359,6 +455,29 @@ def _check_conflicts(document: Mapping[str, Any]) -> List[Dict[str, Any]]:
                 f"declared authority order {order}, so no source can be "
                 f"ranked above another and the winner is unknown",
                 key=key, claims=claims, authority_order=order))
+            continue
+        recorded = next((r for r in document.get("resolutions", []) or []
+                         if r.get("key") == key), None)
+        if recorded is None:
+            out.append(finding(
+                "PPA-C-009", SEV_UNDETERMINED,
+                f"{key} has conflicting claims and is opted into authority "
+                f"resolution, but the contract records NO resolution for it — "
+                f"a winner was applied somewhere without being written down, "
+                f"or none was applied at all",
+                key=key, claims=claims))
+            continue
+        out.append(finding(
+            "PPA-C-015", SEV_NOTE,
+            f"{key} was resolved by authority: "
+            f"{recorded['winner']['source']}="
+            f"{json.dumps(recorded['winner']['value'])} wins over "
+            + "; ".join(f"{o['source']}={json.dumps(o['value'])}"
+                        for o in recorded["overridden"])
+            + ". A resolution is printed rather than applied silently: which "
+              "source won, and what the others said, is exactly the fact a "
+              "silent resolution destroys",
+            key=key, resolution=recorded))
     return out
 
 

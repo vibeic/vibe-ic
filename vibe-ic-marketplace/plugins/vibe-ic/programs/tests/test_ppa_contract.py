@@ -556,3 +556,99 @@ def test_a_metric_read_from_an_unhashable_artefact_is_refused(tmp_path):
     assert built.returncode == 1, built.stdout + built.stderr
     assert "PPA-C-008" in codes(built)
     assert "NOT_MEASURED" in (built.stdout + built.stderr)
+
+
+# ---------------------------------------------------------------------------
+# authority order — opt-in, and never silent
+# ---------------------------------------------------------------------------
+
+def test_an_opted_in_key_is_resolved_by_authority_and_the_loser_is_NAMED(
+        tmp_path):
+    """The default is refusal. Opting a key in buys a winner, and the price is
+    that the resolution is PRINTED: which source won, what it said, and what
+    every overridden source said. A resolution applied silently destroys the
+    one fact a reader needs."""
+    decl = base_declaration()
+    decl["problem"]["facts"][1]["value"] = 8.0      # l19_spec disagrees
+    decl["policy"]["resolvable_fact_keys"] = ["constraints.clk.period_ns"]
+    built = build_contract(tmp_path, decl)
+    assert built.returncode == 0, built.stdout + built.stderr
+    text = built.stdout + built.stderr
+    assert "PPA-C-015" in text
+    assert "PPA-C-003" not in text
+    for token in ("sdc=10.0", "l19_spec=8.0"):
+        assert token in text, f"the resolution does not name {token!r}:\n{text}"
+
+    document = json.loads((tmp_path / "contract.json").read_text())
+    resolution = document["resolutions"][0]
+    assert resolution["key"] == "constraints.clk.period_ns"
+    assert resolution["winner"]["source"] == "sdc"
+    assert resolution["winner"]["value"] == 10.0
+    assert resolution["overridden"][0]["value"] == 8.0
+
+
+def test_a_resolved_key_lets_its_identity_be_measured_again(tmp_path):
+    """The authority order exists so an identity has ONE value for a key. If
+    the losing claims stayed in the fact list, `identity` would refuse to hash
+    the key it had just been told how to settle and the opt-in would do
+    nothing."""
+    decl = base_declaration()
+    decl["problem"]["facts"][1]["value"] = 8.0
+    decl["policy"]["resolvable_fact_keys"] = ["constraints.clk.period_ns"]
+    build_contract(tmp_path, decl)
+    document = json.loads((tmp_path / "contract.json").read_text())
+    problem = document["identities"]["problem"]
+    assert problem["status"] == "MEASURED"
+    facts = {f["key"]: f["value"] for f in problem["members"]["facts"]}
+    assert facts["constraints.clk.period_ns"] == 10.0, (
+        "the identity took the losing value, or took neither")
+
+
+def test_the_resolved_identity_differs_from_the_unconflicted_one(tmp_path):
+    """A resolution is not a no-op: settling a disputed key to the SDC's value
+    must not silently produce the same identity as a run where nobody ever
+    disagreed, because those are different runs and one of them has a spec
+    that says something else."""
+    clean = build_contract(tmp_path, base_declaration(), name="clean.json")
+    assert clean.returncode == 0
+    decl = base_declaration()
+    decl["problem"]["facts"][1]["value"] = 8.0
+    decl["policy"]["resolvable_fact_keys"] = ["constraints.clk.period_ns"]
+    build_contract(tmp_path, decl, name="resolved.json")
+    a = json.loads((tmp_path / "clean.json").read_text())
+    b = json.loads((tmp_path / "resolved.json").read_text())
+    assert a["identities"]["problem"]["digest"] == \
+        b["identities"]["problem"]["digest"], (
+        "the resolved value IS the problem, so the problem identity should "
+        "match; if this ever needs to differ it is a v2 decision, not a drift")
+    assert a["contract_digest"] != b["contract_digest"], (
+        "the contract as a whole must still record that a source was "
+        "overridden — otherwise the override is invisible downstream")
+
+
+def test_an_unrankable_source_is_not_resolved_arbitrarily(tmp_path):
+    """No winner can be picked, so none is. The alternative is whichever claim
+    happened to be first, which is a coin toss wearing a policy's clothes."""
+    decl = base_declaration()
+    decl["problem"]["facts"][1]["value"] = 8.0
+    decl["problem"]["facts"][1]["source"] = "a_source_nobody_ranked"
+    decl["policy"]["resolvable_fact_keys"] = ["constraints.clk.period_ns"]
+    built = build_contract(tmp_path, decl)
+    assert built.returncode == 2, built.stdout + built.stderr
+    assert "PPA-C-009" in codes(built)
+    document = json.loads((tmp_path / "contract.json").read_text())
+    assert document["resolutions"] == []
+    assert document["identities"]["problem"]["status"] == "NOT_MEASURED"
+
+
+def test_a_declared_authority_order_overrides_the_default(tmp_path):
+    """The order is data, not a constant nothing reads."""
+    decl = base_declaration()
+    decl["problem"]["facts"][1]["value"] = 8.0
+    decl["policy"]["resolvable_fact_keys"] = ["constraints.clk.period_ns"]
+    decl["policy"]["authority_order"] = ["l19_spec", "sdc"]   # reversed
+    built = build_contract(tmp_path, decl)
+    assert built.returncode == 0, built.stdout + built.stderr
+    document = json.loads((tmp_path / "contract.json").read_text())
+    assert document["resolutions"][0]["winner"]["source"] == "l19_spec"
+    assert document["resolutions"][0]["winner"]["value"] == 8.0

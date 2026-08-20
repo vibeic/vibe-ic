@@ -4,7 +4,7 @@
   "title": "vibeic.ppa.contract.v1",
   "description": "The answer to 'were these two runs even solving the same problem?'. Five identities over declared inputs, the provenance that backs them, the policy that says what may move, and the document's own digest. A PPA comparison is legitimate exactly when problem, analysis and toolchain match and implementation differs.",
   "type": "object",
-  "required": ["schema", "identities", "run_manifest", "evidence_manifest", "policy", "declared_facts", "candidate", "metrics", "contract_digest"],
+  "required": ["schema", "identities", "run_manifest", "evidence_manifest", "policy", "declared_facts", "resolutions", "candidate", "metrics", "contract_digest"],
   "additionalProperties": false,
   "properties": {
     "schema": {"const": "vibeic.ppa.contract.v1"},
@@ -25,6 +25,11 @@
     "evidence_manifest": {"type": "object"},
     "policy": {"$ref": "#/$defs/policy"},
     "declared_facts": {"type": "array", "items": {"$ref": "#/$defs/declared_fact"}},
+    "resolutions": {
+      "type": "array",
+      "description": "Keys where two sources disagreed AND the declaration opted the key into authority resolution. Every entry names the winner and everything it overrode: a resolution that is applied without being written down destroys the one fact a reader needs.",
+      "items": {"$ref": "#/$defs/resolution"}
+    },
     "candidate": {"$ref": "#/$defs/candidate"},
     "metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}},
     "contract_digest": {"$ref": "#/$defs/digest"}
@@ -115,6 +120,27 @@
           "items": {"type": "string"},
           "description": "Any entry is a refusal. A default is a number nobody measured, and in a comparison it is indistinguishable from one somebody did."
         }
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "required": ["key", "authority_order", "winner", "overridden"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "authority_order": {"type": "array", "items": {"type": "string"}},
+        "winner": {"$ref": "#/$defs/claim"},
+        "overridden": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/claim"}}
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": ["source", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {"type": "string"},
+        "value": {},
+        "source_path": {"type": ["string", "null"]}
       }
     },
     "declared_fact": {
