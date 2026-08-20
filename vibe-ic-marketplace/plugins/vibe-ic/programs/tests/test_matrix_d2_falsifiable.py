@@ -924,8 +924,32 @@ def _f_power_over_budget(p: Path) -> None:
     330 uW against a declared 100 uW: 3.3x over. Chip- and PDK-AGNOSTIC — a
     watt figure, a micro-watt budget, and the design's own number as the only
     authority.
+
+    A THIRD HALF BECAME LOAD-BEARING IN v1.11.22 AND THIS FIXTURE DID NOT SAY SO
+    ----------------------------------------------------------------------------
+    `POWER_ANALYSIS_MODE: vectorless_sdc` is not decoration on the report above.
+    Until v1.11.22 the gate compared any watt figure to the budget; it now
+    refuses — rc 2, INCOMPLETE — a figure whose ACTIVITY BASIS it cannot derive,
+    because a vectorless estimate and a VCD-driven measurement are both "total
+    power" and are not the same number. MEASURED on this fixture with the mode
+    line removed, verbatim:
+
+        rc 2  INCOMPLETE: total power was NOT compared against anything —
+              missing authority: the total-power record's activity basis is
+              'UNSTATED' ...
+
+    and rc 2 is a VACUOUS_PASS to `check_step`, so the blocking Step-33 clause
+    became one no input could redden — silently, because the fixture still
+    "worked" in the sense of being read. `test_d2_gate_has_a_reachable_fail`
+    [step33] is the mutation arm: delete the mode line and it goes red naming
+    this clause. `vectorless_sdc` and NOT a vector mode deliberately — a
+    declared vector basis is CONTRADICTED unless the transcript corroborates it
+    (`_ppa/power.py`: zero published vector report in this repository does), and
+    a fixture that has to fake a corroborating annotation count would be
+    asserting an activity model it never ran.
     """
     _w(p, "reports/phase2/power.rpt",
+       "POWER_ANALYSIS_MODE: vectorless_sdc\n"
        "Group                  Internal  Switching    Leakage      Total\n"
        "                          Power      Power      Power      Power (Watts)\n"
        "-----------------------------------------------------------------\n"
