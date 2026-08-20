@@ -1,0 +1,120 @@
+# Testability level (v0.50 hybrid strategy - see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Compliance spec for skill 'ppa-benchmark'.
+# Declares arms and fairness conditions. The scorer is a program.
+#
+# Every requirement carries positive_sample / negative_sample so
+# `_shared/test_compliance_patterns.py` checks that the regex BEHAVES,
+# not merely that it compiles.
+skill: ppa-benchmark
+
+requirements:
+  - id: R_summary
+    description: >-
+      Summary section present
+    pattern: '##\s+Summary'
+    positive_sample: '## Summary'
+    negative_sample: '# Summary'
+  - id: R_verdict_authority
+    description: >-
+      Names the deterministic program that owns the pass/fail call, and
+      states that this report makes none
+    pattern: 'Verdict authority:\s*\S'
+    positive_sample: 'Verdict authority: _ppa/feasibility.py - this report states no pass/fail of its own.'
+    negative_sample: 'Verdict authority:'
+  - id: R_evidence_section
+    description: >-
+      Evidence section present
+    pattern: '##\s+Evidence'
+    positive_sample: '## Evidence'
+    negative_sample: 'Evidence: none'
+  - id: R_source_hash
+    description: >-
+      At least one artefact hash, so a claim can be re-derived
+    pattern: 'sha256:[0-9a-f]'
+    positive_sample: '| sta_mcorner_ocv.rpt | sha256:3f9a | opensta |'
+    negative_sample: '| sta_mcorner_ocv.rpt | sha256: not computed | opensta |'
+  - id: R_next_step
+    description: >-
+      Explicit handoff line
+    pattern: 'Next:\s*run\s+/[a-z-]+'
+    positive_sample: 'Next: run /ppa-diagnose'
+    negative_sample: 'Next: whatever seems sensible'
+  - id: R_arms_section
+    description: >-
+      Arms section present
+    pattern: '##\s+Arms'
+    positive_sample: '## Arms'
+    negative_sample: '## Armour'
+  - id: R_arm_id
+    description: >-
+      Every arm has a stable id
+    pattern: '(?i)arm_id:\s*\S'
+    positive_sample: 'arm_id: baseline-orfs-default'
+    negative_sample: 'arm: the good one'
+  - id: R_fairness_conditions
+    description: >-
+      The conditions that make the arms comparable are stated
+    pattern: '(?i)Fairness conditions:\s*\S'
+    positive_sample: 'Fairness conditions: identical RTL sha256, identical PDK, identical SDC'
+    negative_sample: 'Fairness conditions:'
+  - id: R_independent_scorer
+    description: >-
+      Names the independent scorer program; the skill does not score
+    pattern: '(?i)Independent scorer:\s*\S'
+    positive_sample: 'Independent scorer: _ppa/benchmark.py'
+    negative_sample: 'Independent scorer:'
+  - id: R_known_unfairness
+    description: >-
+      States what still makes the comparison unfair, or NONE_KNOWN
+    pattern: '(?i)Known unfairness:\s*\S'
+    positive_sample: 'Known unfairness: arm B ran on an extracted netlist, arm A did not'
+    negative_sample: 'Known unfairness:'
+  - id: R_metric_record_schema
+    description: >-
+      Arm results are canonical metric records, not loose numbers
+    pattern: 'vibeic\.ppa\.metric\.v1'
+    positive_sample: '"schema": "vibeic.ppa.metric.v1"'
+    negative_sample: '"schema": "vibeic.ppa.metric"'
+
+cross_checks:
+  - id: X_verdict_boundary
+    description: >-
+      The section 14.4 boundary, as data rather than as prose. A PPA agent
+      skill emits a structured proposal or an evidence-linked report; the
+      pass/fail call is a deterministic program's output. These are the
+      assertive forms of a verdict, so a report that starts making the
+      call is caught here. The identical list is carried by all six ppa-*
+      skills and tests/test_verdict_boundary.py asserts they stay
+      identical.
+    rule: no_forbidden_patterns
+    patterns:
+      - '(?i)^\s*(?:[-*>]\s*)?(?:\*\*)?(?:verdict|gate verdict|sign-off|signoff)(?:\*\*)?\s*:'
+      - '(?i)\b(?:decide|judge|determine|conclude)\s+(?:for\s+yourself\s+)?whether\s+(?:it|this|that|the\s+\S+)\s+(?:passes|fails|is\s+acceptable|is\s+ready)\b'
+      - '(?i)\b(?:mark|set|declare|record)\s+(?:it|this|the\s+\S+)\s+as\s+(?:pass|fail|passing|failing|green|red)\b'
+      - '(?i)\b(?:tape-?out[- ]ready|ready\s+for\s+tape-?out|clean\s+for\s+sign-?off)\b'
+      - '(?i)\b(?:this|the)\s+design\s+(?:passes|fails|meets\s+sign-?off)\b'
+      - '(?i)^\s*(?:\*\*)?(?:pass|fail)(?:\*\*)?\s*$'
+      - '(?i)\b(?:I|we)\s+(?:hereby\s+)?(?:certify|attest)\b'
+      - '(?i)\byou\s+are\s+the\s+(?:gate|sign-?off\s+authority|final\s+authority)\b'
+  - id: X_no_placeholder_fields
+    description: >-
+      A required field filled with a placeholder is the same fact as an
+      unfilled one, and only one of the two is visible to a regex that
+      asks whether the label is present. This bans the placeholder so the
+      requirement above cannot be satisfied by typing n/a into it.
+    rule: no_forbidden_patterns
+    patterns:
+      - '(?i)^\s*(?:\*\*)?(?:rollback|rollback point|remeasure|actuator|expected effect|budget|baseline scope|blast radius|stop condition|fairness conditions|known unfairness|independent scorer|handoff|design fingerprint|promotion criteria|arm_id|lifecycle|verdict authority)(?:\*\*)?\s*:\s*(?:n/?a|none|tbd|todo|-{1,3}|\?+)\s*$'
+  - id: X_text_only_report
+    description: >-
+      This skill's deliverable is a document, so an RTL post-check header
+      in it would assert a verdict from tools that were never run against
+      it.
+    rule: text_only_report
+  - id: X_no_volatile_paths
+    description: >-
+      A report that names a volatile mount is unreadable by the time
+      anyone re-derives its evidence; every path must be project-relative.
+    rule: no_volatile_paths

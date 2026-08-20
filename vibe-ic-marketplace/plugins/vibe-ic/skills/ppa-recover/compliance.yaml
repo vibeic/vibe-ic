@@ -1,0 +1,114 @@
+# Testability level (v0.50 hybrid strategy - see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Compliance spec for skill 'ppa-recover'.
+# Proposes a bounded recovery from a stalled closure loop.
+#
+# Every requirement carries positive_sample / negative_sample so
+# `_shared/test_compliance_patterns.py` checks that the regex BEHAVES,
+# not merely that it compiles.
+skill: ppa-recover
+
+requirements:
+  - id: R_summary
+    description: >-
+      Summary section present
+    pattern: '##\s+Summary'
+    positive_sample: '## Summary'
+    negative_sample: '# Summary'
+  - id: R_verdict_authority
+    description: >-
+      Names the deterministic program that owns the pass/fail call, and
+      states that this report makes none
+    pattern: 'Verdict authority:\s*\S'
+    positive_sample: 'Verdict authority: _ppa/feasibility.py - this report states no pass/fail of its own.'
+    negative_sample: 'Verdict authority:'
+  - id: R_evidence_section
+    description: >-
+      Evidence section present
+    pattern: '##\s+Evidence'
+    positive_sample: '## Evidence'
+    negative_sample: 'Evidence: none'
+  - id: R_source_hash
+    description: >-
+      At least one artefact hash, so a claim can be re-derived
+    pattern: 'sha256:[0-9a-f]'
+    positive_sample: '| sta_mcorner_ocv.rpt | sha256:3f9a | opensta |'
+    negative_sample: '| sta_mcorner_ocv.rpt | sha256: not computed | opensta |'
+  - id: R_next_step
+    description: >-
+      Explicit handoff line
+    pattern: 'Next:\s*run\s+/[a-z-]+'
+    positive_sample: 'Next: run /ppa-diagnose'
+    negative_sample: 'Next: whatever seems sensible'
+  - id: R_failure_signature_section
+    description: >-
+      The failure is described by its signature, not by a guess
+    pattern: '##\s+Failure signature'
+    positive_sample: '## Failure signature'
+    negative_sample: '## Failure'
+  - id: R_recovery_section
+    description: >-
+      Recovery proposal section present
+    pattern: '##\s+Recovery proposal'
+    positive_sample: '## Recovery proposal'
+    negative_sample: '## Recovery applied'
+  - id: R_rollback_point
+    description: >-
+      The exact state the design returns to if recovery is refused
+    pattern: '(?i)Rollback point:\s*\S'
+    positive_sample: 'Rollback point: run manifest sha256:9c01, before actuator A3 moved'
+    negative_sample: 'Rollback point:'
+  - id: R_blast_radius
+    description: >-
+      What else the proposed recovery can disturb
+    pattern: '(?i)Blast radius:\s*\S'
+    positive_sample: 'Blast radius: PnR config only; RTL and SDC untouched'
+    negative_sample: 'Blast radius:'
+  - id: R_stop_condition
+    description: >-
+      The condition under which recovery stops rather than looping
+    pattern: '(?i)Stop condition:\s*\S'
+    positive_sample: 'Stop condition: 3 consecutive rounds with no WNS improvement'
+    negative_sample: 'Stop condition:'
+
+cross_checks:
+  - id: X_verdict_boundary
+    description: >-
+      The section 14.4 boundary, as data rather than as prose. A PPA agent
+      skill emits a structured proposal or an evidence-linked report; the
+      pass/fail call is a deterministic program's output. These are the
+      assertive forms of a verdict, so a report that starts making the
+      call is caught here. The identical list is carried by all six ppa-*
+      skills and tests/test_verdict_boundary.py asserts they stay
+      identical.
+    rule: no_forbidden_patterns
+    patterns:
+      - '(?i)^\s*(?:[-*>]\s*)?(?:\*\*)?(?:verdict|gate verdict|sign-off|signoff)(?:\*\*)?\s*:'
+      - '(?i)\b(?:decide|judge|determine|conclude)\s+(?:for\s+yourself\s+)?whether\s+(?:it|this|that|the\s+\S+)\s+(?:passes|fails|is\s+acceptable|is\s+ready)\b'
+      - '(?i)\b(?:mark|set|declare|record)\s+(?:it|this|the\s+\S+)\s+as\s+(?:pass|fail|passing|failing|green|red)\b'
+      - '(?i)\b(?:tape-?out[- ]ready|ready\s+for\s+tape-?out|clean\s+for\s+sign-?off)\b'
+      - '(?i)\b(?:this|the)\s+design\s+(?:passes|fails|meets\s+sign-?off)\b'
+      - '(?i)^\s*(?:\*\*)?(?:pass|fail)(?:\*\*)?\s*$'
+      - '(?i)\b(?:I|we)\s+(?:hereby\s+)?(?:certify|attest)\b'
+      - '(?i)\byou\s+are\s+the\s+(?:gate|sign-?off\s+authority|final\s+authority)\b'
+  - id: X_no_placeholder_fields
+    description: >-
+      A required field filled with a placeholder is the same fact as an
+      unfilled one, and only one of the two is visible to a regex that
+      asks whether the label is present. This bans the placeholder so the
+      requirement above cannot be satisfied by typing n/a into it.
+    rule: no_forbidden_patterns
+    patterns:
+      - '(?i)^\s*(?:\*\*)?(?:rollback|rollback point|remeasure|actuator|expected effect|budget|baseline scope|blast radius|stop condition|fairness conditions|known unfairness|independent scorer|handoff|design fingerprint|promotion criteria|arm_id|lifecycle|verdict authority)(?:\*\*)?\s*:\s*(?:n/?a|none|tbd|todo|-{1,3}|\?+)\s*$'
+  - id: X_text_only_report
+    description: >-
+      This skill's deliverable is a document, so an RTL post-check header
+      in it would assert a verdict from tools that were never run against
+      it.
+    rule: text_only_report
+  - id: X_no_volatile_paths
+    description: >-
+      A report that names a volatile mount is unreadable by the time
+      anyone re-derives its evidence; every path must be project-relative.
+    rule: no_volatile_paths
