@@ -135,11 +135,20 @@ def default_image() -> str:
     """
     img = _img.anchor_image()
     if img is None:
-        raise SystemExit(
-            "no tools/vibeic-eda/VERSION in this checkout and no "
-            "VIBEIC_EDA_IMAGE override; refusing to fall back to a floating "
-            "reference whose bytes a third party controls. Pass --image "
-            "explicitly if that is what you mean.")
+        # EXIT 2, this program's [REFUSE] code — the same one `main()` already
+        # returns for "no readable tech LEF", whose comment states the rule this
+        # obeys: "An unchecked PDK is not a clean PDK, so this refuses rather
+        # than reporting 0 findings." A bare `SystemExit("...")` exits 1, and 1
+        # here means a via patch was found NARROWER THAN ITS LAYER'S MINIMUM —
+        # a hard finding about a PDK nothing had read. MEASURED: from a copy of
+        # `programs/` with no repo root above it (how the plugin is installed)
+        # the refusal returned rc=1.
+        print("[REFUSE] pdk_via_patch_meets_layer_min_width_check: no "
+              "tools/vibeic-eda/VERSION in this checkout and no "
+              "VIBEIC_EDA_IMAGE override; refusing to fall back to a floating "
+              "reference whose bytes a third party controls. Pass --image "
+              "explicitly if that is what you mean.", file=sys.stderr)
+        raise SystemExit(2)
     return img
 
 #: Tech-LEF filename shapes. `*.tlef` alone misses nangate45, whose tech LEF is

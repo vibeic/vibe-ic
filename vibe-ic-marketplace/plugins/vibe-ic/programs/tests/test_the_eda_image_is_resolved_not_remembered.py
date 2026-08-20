@@ -243,3 +243,65 @@ def test_an_immutable_override_passes_without_a_warning(monkeypatch, capsys, ref
     monkeypatch.setattr(M.os.path, "isfile", lambda _p: False)
     assert M.anchor_image(env={"VIBEIC_EDA_IMAGE": ref}) == ref
     assert capsys.readouterr().err == ""
+
+
+# ── 5. the refusal must exit the program's OWN "cannot check" code ───────────
+#
+# The two judging programs refuse when `anchor_image()` answers None. That
+# refusal first shipped as `raise SystemExit("<message>")`, and a SystemExit
+# carrying a STRING exits 1 — which is not a neutral number in either file:
+#
+#   sta_engine_parity_check          RC_AGREE, RC_DISAGREE, RC_CANNOT_CHECK = 0, 1, 2
+#   pdk_via_patch_..._width_check    1 = a via patch narrower than its layer's
+#                                        declared minimum; 2 = [REFUSE]
+#
+# So a run that never opened an image reported "the STA engines disagree" and "a
+# via patch is too narrow". MEASURED from a copy of `programs/` with no repo
+# root above it — which is exactly how the plugin is INSTALLED, because
+# `tools/vibeic-eda/VERSION` lives ABOVE the plugin directory and does not ship
+# inside it. Every end user would have read a hard finding about silicon from a
+# run that measured nothing.
+#
+# This is the repository's own rule, in the direction that invents a defect
+# rather than hiding one: "I could not read it" and "I read it and it was bad"
+# must never produce the same verdict.
+
+import os          # noqa: E402
+import shutil      # noqa: E402
+import subprocess  # noqa: E402
+
+_REFUSERS = (
+    # program                                     the code that means "cannot check"
+    ("sta_engine_parity_check.py",                 2, ()),
+    ("pdk_via_patch_meets_layer_min_width_check.py", 2, ("--from-image",)),
+)
+
+
+@pytest.mark.parametrize("prog,cannot_check_rc,argv", _REFUSERS)
+def test_the_anchor_refusal_exits_cannot_check_not_a_finding(
+        prog, cannot_check_rc, argv, tmp_path):
+    """Run it the way an INSTALLED plugin runs it: `programs/` with no repo root.
+
+    Copying the directory is the point of the test. Inside this checkout
+    `anchor_image()` finds `tools/vibeic-eda/VERSION` and the refusal path never
+    executes, so a test that ran in place would assert nothing.
+    """
+    staged = tmp_path / "programs"
+    shutil.copytree(_PROGRAMS, staged,
+                    ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    assert not list(staged.rglob("vibeic-eda/VERSION")), (
+        "the fixture accidentally carries an anchor, so the refusal path is "
+        "not reachable and this test would prove nothing")
+
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE")}
+    r = subprocess.run([sys.executable, str(staged / prog), *argv],
+                       capture_output=True, text=True, env=env, timeout=120)
+
+    assert r.returncode == cannot_check_rc, (
+        f"{prog} refused with rc={r.returncode}; {cannot_check_rc} is its word "
+        f"for 'nothing was measured' and rc=1 is a FINDING about the design. "
+        f"stderr: {r.stderr[-400:]}")
+    assert ("[CANNOT CHECK]" in r.stderr or "[REFUSE]" in r.stderr), (
+        f"{prog} exited {cannot_check_rc} without saying it could not look; a "
+        f"silent 2 is indistinguishable from a skip. stderr: {r.stderr[-400:]}")
