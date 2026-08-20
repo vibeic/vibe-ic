@@ -406,6 +406,63 @@ steps:
         # gate's own docstring; before them it FAILed a file recording
         # `NO_SKIP` and PASSed a real skip excused by a nested run.
         - program_exit_zero: "analog_a0_skip_forbidden_check ."
+        # ppa.html section 03 — a DECLARED `ppa_weights` has to be WELL FORMED,
+        # because the one thing it can be is half-stated.
+        #
+        # ORFS hard-codes its PPA coefficients 10000/100/100; ours are declared
+        # by the design in L19, because a 100:1 preference for speed over power
+        # is a value judgement about a MARKET and belongs to the design. That
+        # makes a PARTIAL declaration the failure mode: `ppa_weights` naming two
+        # of the three axes would be silently completed from the inherited ratio
+        # by any consumer that wanted a number, and the record would then show
+        # three weights of which only some are the design's. `resolve_weights`
+        # refuses that; this clause is what makes the refusal reachable on a run
+        # instead of only in a unit test.
+        #
+        # rc=0 for a design that declares NOTHING (the normal case — it inherits
+        # ORFS's ratio, recorded as "inherited, not chosen") and for a
+        # well-formed declaration; rc!=0 only for a partial, non-numeric,
+        # negative or all-zero one, and rc=2 for an L19 that exists and cannot
+        # be parsed — "we could not tell" must not read as "it declared nothing".
+        #
+        # BLAST RADIUS: 0 of 444. Measured 2026-08-21 by running the clause's
+        # own command against every project root on this host carrying an
+        # L19_CONSTRAINTS_PDK.json (444 roots, 533 documents): rc=0 on all 444,
+        # 0 unreadable. `git grep -l ppa_weights origin/main` returns nothing, so
+        # no design declares one yet — this clause is a fail-close ahead of the
+        # first declaration, not a re-litigation of existing ones.
+        #
+        # PROVED RED, not assumed: the same command against a fixture whose L19
+        # declares `ppa_weights: {performance: 3}` exits 1 (WEIGHTS_PARTIAL);
+        # completed to all three axes it exits 0; with the L19 corrupted it
+        # exits 2.
+        #
+        # WIRED BARE (no `--json`), like every sibling row. Not for the Step-36
+        # reason — measured, this program's verdicts are MEASURED /
+        # NOT_MEASURED / REFUSED and `step_internal_fail_bubble_up_check` only
+        # reads `_FAIL_VERDICTS`, so none of them cascades. Bare because nothing
+        # consumes the file and a gate that writes into `reports/` on every
+        # audit makes a read-only audit stop being one. The refusal message is
+        # already carried into the gate reason from the program's stdout.
+        #
+        # POSITION is among the BLOCKING entries deliberately — `_evaluate_gate`
+        # short-circuits `all_of` at the first failure and re-runs only later
+        # `advisory_` rows, so an advisory placement would make a declared
+        # preference unenforceable. Placed last of the blocking rows: a root
+        # already red on a deeper cause (no generated_docs at all) has no L19 to
+        # judge anyway.
+        - optional_program_exit_zero:
+            command: "ppa_objective . --weights-only"
+            condition_files_exist:
+              - "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+            absent_condition_reason: >-
+              The subject is a DECLARATION that lives in L19. A root with no
+              L19 has declared no PDK/constraint layer at all, which
+              `phase1_all_l_docs_present_check` above is the gate for; this
+              clause would have nothing to read and its silence would say
+              nothing. Absence here means "no L19", never "L19 declares no
+              preference" -- that second case DOES reach this clause, and
+              passes, with the inheritance recorded in words.
         # vibe-ic#306/#312 — ADVISORY. Reports whether the Phase-1 EXPERT
         # track actually ran (the dual-track's second rail). Advisory by its
         # own declaration and by necessity: a project may legitimately run
