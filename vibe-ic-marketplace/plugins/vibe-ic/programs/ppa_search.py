@@ -95,6 +95,26 @@ KNOB_FLAGS: Dict[str, str] = {
     "spare_density": "--spare-density",
 }
 
+#: DELIBERATELY NOT A KNOB, and the reason is a measurement.
+#:
+#: ORFS tunes CLK_PERIOD, and on paper it is the knob this objective most wants:
+#: the performance term is `percent(eff_ref, eff_run)` with
+#: `eff = clk_period - min(0, worst_slack)`, so a run with POSITIVE slack earns
+#: nothing for it, and a design that meets timing everywhere has a FLAT
+#: performance axis however hard the search works. MEASURED on the first six
+#: configurations of this search: `performance` was 0.0 in every one.
+#:
+#: It is still not taken. In ORFS the clock target is FLOW configuration; here
+#: it is the DESIGN'S OWN declared spec — `_resolve_clock_spec` reads it from
+#: the PDK-keyed table in the design's L9 document, and the SDC follows from
+#: that. A search that rewrote L9 per configuration would be tuning the
+#: SPECIFICATION, not the flow, and — worse — rewriting only the staged SDC
+#: would leave `achievable_fmax.json:spec_period_ns` still reporting the L9
+#: figure, so each record would state a clock target its own STA did not use.
+#: An internally inconsistent record is worse than a flat axis.
+#:
+#: The flat axis is DISCLOSED instead, per search, by `axis_discrimination()`.
+
 #: The default space. A 5 x 5 x 2 grid = 50 configurations, which is the
 #: smallest grid that meets the >=50 bar without padding it with repeats.
 #:
@@ -104,15 +124,21 @@ KNOB_FLAGS: Dict[str, str] = {
 #: honest objective has to be able to score badly rather than crash on;
 #: `spare_density` contrasts the runner's 2% design-for-ECO default with none.
 DEFAULT_SPACE: Dict[str, List[Any]] = {
+    # Global placement density — the dominant area/DRC lever, and the knob whose
+    # own default carries a measured DRC history in the runner's `--util` help.
     "util": [0.20, 0.30, 0.40, 0.50, 0.60],
+    # Routing-resource supply: the flow's own auto-sizing, plus fixed dies
+    # spanning "comfortable" to "the design cannot route in this".
     "die_um": ["auto", "80x80", "100x100", "140x140", "200x200"],
+    # Design-for-ECO spare cells: the runner's 2% default against none.
     "spare_density": [0.0, 0.02],
 }
 
 #: The reference configuration — "our own default run". Every knob left at the
 #: runner's own default, so the thing the search has to beat is the flow as it
 #: ships and not a strawman we picked.
-BASELINE: Dict[str, Any] = {"util": 0.30, "die_um": "auto", "spare_density": 0.02}
+BASELINE: Dict[str, Any] = {"util": 0.30, "die_um": "auto",
+                            "spare_density": 0.02}
 
 
 def _expand(space: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
@@ -161,13 +187,20 @@ def step_progress(project: Path) -> Tuple[Optional[int], Optional[int],
 
 
 def run_one(design: Path, out_root: Path, cfg: Dict[str, Any], top: str,
-            runner: Path, container: str,
-            timeout_s: int) -> Dict[str, Any]:
+            runner: Path, container: str, timeout_s: int,
+            dir_prefix: str = "") -> Dict[str, Any]:
     """Materialise one configuration in its OWN tree, run phase 3, and return
     the raw run facts. Scoring happens later and separately, so a run that
-    cannot be scored still leaves a complete account of itself."""
+    cannot be scored still leaves a complete account of itself.
+
+    `dir_prefix` keeps the REFERENCE run in a directory of its own. Without it
+    the reference and the identically-configured member of the search space
+    resolve to the same path, the second run deletes the first, and two records
+    end up naming one tree — the "two artefacts wearing the same name" failure
+    that made one design read as both passing and failing on 2026-08-20.
+    """
     cid = config_id(cfg)
-    run_dir = out_root / "runs" / cid
+    run_dir = out_root / "runs" / (dir_prefix + cid)
     rec: Dict[str, Any] = {"config_id": cid, "knobs": dict(cfg),
                            "run_dir": str(run_dir)}
     if run_dir.exists():
@@ -211,6 +244,11 @@ def score_one(rec: Dict[str, Any], reference_metrics: Dict[str, Any],
               weights: Dict[str, float]) -> Dict[str, Any]:
     """Attach the objective to a run record, or attach the reason there is no
     score. Never both, and never neither."""
+    if rec.get("setup_failed"):
+        rec["verdict"] = "REFUSED"
+        rec["not_scored_because"] = {"code": "CONFIG_NOT_APPLIED",
+                                     "detail": rec["setup_failed"]}
+        return rec
     run_dir = Path(rec["run_dir"])
     read = _obj.read_metrics(run_dir)
     rec["metrics"] = read["metrics"]
@@ -226,15 +264,62 @@ def score_one(rec: Dict[str, Any], reference_metrics: Dict[str, Any],
         rec["not_scored_because"] = {"code": "STEP_UNKNOWN", "detail": why}
         return rec
 
+    pct = _obj.progress_step(passed, total or 0)
+    rec["step_pct"] = pct
     try:
         rec["objective"] = _obj.evaluate(read["metrics"], reference_metrics,
-                                         weights, passed, total)
+                                         weights, pct, total)
+        rec["objective"]["stages_passed"] = passed
         rec["verdict"] = "SCORED"
     except _obj.Refusal as exc:
         rec["verdict"] = ("NOT_MEASURED" if exc.rc == _obj.RC_NOT_MEASURED
                           else "REFUSED")
         rec["not_scored_because"] = {"code": exc.code, "detail": exc.message}
     return rec
+
+
+def axis_discrimination(scored: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """How many DISTINCT values each weighted axis actually took across the
+    search — and therefore which axes contributed to the ranking at all.
+
+    THIS IS THE HONESTY THAT A CONFIGURATION SEARCH MOST NEEDS AND THAT ORFS
+    DOES NOT HAVE. A three-axis objective whose report shows three weights reads
+    as three axes considered. MEASURED here, on a real 50-configuration search:
+
+      * `performance` was 0.0 in EVERY record. Not because the search failed,
+        but because ORFS's own term is `percent(eff_ref, eff_run)` with
+        `eff = clk_period - min(0, worst_slack)` — a run with POSITIVE slack is
+        not rewarded for it, and every configuration met timing at the same
+        declared clock target.
+      * `power` was identical in every record, because the step that computes it
+        times the PRE-PnR synthesis netlist, so no placement choice can move it.
+
+    Two of the three axes were therefore inert, and the ranking came from AREA
+    plus the DRC penalty alone. A reader who was not present cannot deduce that
+    from the score, and would reasonably assume the 10000-weight axis did the
+    work. So it is COMPUTED and stated, per axis, per search.
+
+    An axis with `distinct == 1` is reported `INERT` with its constant value.
+    `INERT` is not a failure — it is a fact about this design and this space —
+    but it must never be silent, which is the same rule as `NOT_MEASURED`
+    applied one level up: "we varied it and it did not move" and "it could not
+    move" must not read alike, and neither may read as "it was optimised".
+    """
+    out: Dict[str, Any] = {}
+    for axis in _obj.AXES:
+        vals = [r["objective"]["terms"][axis] for r in scored
+                if r.get("objective")]
+        uniq = sorted({round(v, 9) for v in vals})
+        out[axis] = {
+            "samples": len(vals),
+            "distinct": len(uniq),
+            "min": min(vals) if vals else None,
+            "max": max(vals) if vals else None,
+            "status": ("NO_SAMPLES" if not vals
+                       else "INERT" if len(uniq) == 1 else "DISCRIMINATING"),
+            "constant_value": uniq[0] if len(uniq) == 1 else None,
+        }
+    return out
 
 
 def _write_record(out_root: Path, rec: Dict[str, Any]) -> str:
@@ -280,6 +365,33 @@ def report_md(search: Dict[str, Any]) -> str:
     ]
     for k, v in (ref.get("metrics") or {}).items():
         lines.append(f"| `{k}` | {v} |")
+    axes = search.get("axis_discrimination") or {}
+    if axes:
+        lines += ["", "## Which axes actually moved", "",
+                  "A three-axis objective whose report shows three weights "
+                  "reads as three axes considered. This table says which ones "
+                  "the ranking could have come from.", "",
+                  "| axis | weight | status | distinct values | range |",
+                  "|---|---:|---|---:|---|"]
+        for axis in _obj.AXES:
+            a = axes.get(axis) or {}
+            rng = ("—" if a.get("min") is None
+                   else f"{a['min']:.3f} … {a['max']:.3f}")
+            lines.append(
+                f"| `{axis}` | {w['weights'][axis]:g} | **{a.get('status')}** "
+                f"| {a.get('distinct')} | {rng} |")
+        inert = [ax for ax in _obj.AXES
+                 if (axes.get(ax) or {}).get("status") == "INERT"]
+        if inert:
+            lines += ["",
+                      f"> **{', '.join('`'+i+'`' for i in inert)} took ONE "
+                      "value across every scored configuration and therefore "
+                      "contributed nothing to the ranking.** The ranking came "
+                      "from the remaining axes and the DRC penalty. This is a "
+                      "fact about this design and this search space, not a "
+                      "failure — but a reader who assumed the heaviest axis "
+                      "did the work would be wrong."]
+
     lines += ["", "## Ranking (scored configurations, best first)", "",
               "| # | config | score | ppa | DRC | penalty | step | wall s |",
               "|---:|---|---:|---:|---:|---:|---:|---:|"]
@@ -288,7 +400,8 @@ def report_md(search: Dict[str, Any]) -> str:
         lines.append(
             f"| {i} | `{r['config_id']}` | {o['score']:.1f} | {o['ppa']:.1f} | "
             f"{o['num_drc']:.0f} | {o['drc_penalty']:.1f} | "
-            f"{o['step']}/{o['stages_total']} | {r['wall_s']:.0f} |")
+            f"{o.get('stages_passed', '?')}/{o['stages_total']}"
+            f" ({o['step']}%) | {r['wall_s']:.0f} |")
     unscored = search.get("unscored") or []
     lines += ["", f"## Not ranked ({len(unscored)}) — named, not dropped", ""]
     if unscored:
@@ -355,7 +468,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # concurrent flows is a different measurement.
     print(f"[ppa_search] reference (our own default run): {BASELINE}")
     ref_rec = run_one(design, out, dict(BASELINE), args.top_name, args.runner,
-                      args.container, args.timeout_s)
+                      args.container, args.timeout_s, dir_prefix="REFERENCE_")
     ref_read = _obj.read_metrics(Path(ref_rec["run_dir"]))
     ref_rec["metrics"] = ref_read["metrics"]
     ref_rec["metric_sources"] = ref_read["sources"]
@@ -363,8 +476,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ref_rec["role"] = "reference"
     r_pass, r_total, r_why = step_progress(Path(ref_rec["run_dir"]))
     ref_rec["step"], ref_rec["stages_total"] = r_pass, r_total
-    _write_record(out, dict(ref_rec, config_id="REFERENCE_" +
-                            ref_rec["config_id"]))
+    ref_rec["config_id"] = "REFERENCE_" + ref_rec["config_id"]
+    _write_record(out, ref_rec)
 
     blocking = sorted(k for k, v in ref_read["unmeasured"].items()
                       if not v.get("non_blocking"))
@@ -413,18 +526,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     unscored = [r for r in records if r["verdict"] != "SCORED"]
     ranking = sorted(scored, key=lambda r: r["objective"]["score"])
 
+    # The reference scored against ITSELF: every percent term is 0, so `ppa` is
+    # the upper bound and the score is that times the reference's own progress
+    # multiplier. Derived from the same code path as every other record — a
+    # hand-written "the default scores X" is exactly the number a search would
+    # be tempted to get wrong.
     ref_score: Optional[float] = None
-    for r in ranking:
-        if r["knobs"] == BASELINE:
-            ref_score = r["objective"]["score"]
-            break
     if ref_score is None:
-        # The reference is scored against itself: every percent term is 0, so
-        # `ppa` is the upper bound. Derived, never assumed.
         try:
-            ref_score = _obj.evaluate(ref_read["metrics"], ref_read["metrics"],
-                                      weights["weights"],
-                                      r_pass or 1, r_total)["score"]
+            ref_score = _obj.evaluate(
+                ref_read["metrics"], ref_read["metrics"], weights["weights"],
+                _obj.progress_step(r_pass or 0, r_total or 0) or 1,
+                r_total)["score"]
         except _obj.Refusal:
             ref_score = None
 
@@ -449,14 +562,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             "the default is not beaten. Reported as the result it is.")
         rc = RC_NO_WINNER
     else:
+        _ax = axis_discrimination(scored)
+        _inert = [a for a in _obj.AXES if _ax[a]["status"] == "INERT"]
         verdict_line = (
             f"**{len(beat)} of {len(records)} configuration(s) beat our own "
             f"default run.** Best: `{winner['config_id']}` at "
             f"{winner['objective']['score']:.1f} vs the default's "
             f"{ref_score:.1f} (lower is better), "
-            f"DRC {winner['objective']['num_drc']:.0f}, "
-            f"step {winner['objective']['step']}/"
-            f"{winner['objective']['stages_total']}.")
+            f"DRC {winner['objective']['num_drc']:.0f}, progress "
+            f"{winner['objective'].get('stages_passed', '?')}/"
+            f"{winner['objective']['stages_total']}."
+            + (f" NOTE: {', '.join(_inert)} took one value across every "
+               "configuration and contributed nothing to this ranking."
+               if _inert else ""))
         rc = RC_OK
 
     search = {
@@ -472,6 +590,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             sum(1 for r in unscored if r["verdict"] == "NOT_MEASURED"),
         "refused": sum(1 for r in unscored if r["verdict"] == "REFUSED"),
         "reference": ref_rec, "reference_score": ref_score,
+        "axis_discrimination": axis_discrimination(scored),
         "ranking": ranking, "unscored": unscored,
         "beat_reference": [r["config_id"] for r in beat],
         "verdict_line": verdict_line,

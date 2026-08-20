@@ -19,8 +19,8 @@ import pytest
 
 from ppa_objective import (AXES, INHERITED_PHRASE, NOT_MEASURED, ORFS_WEIGHTS,
                            REASON_ABSENT, REASON_KEY_ABSENT, REASON_UNREADABLE,
-                           Refusal, evaluate, get_ppa, read_metrics,
-                           resolve_weights)
+                           Refusal, evaluate, get_ppa, progress_step,
+                           read_metrics, resolve_weights)
 
 # A reference and a run that improves on it in every axis. Chosen so the golden
 # numbers below are computable by hand rather than by running the code.
@@ -158,12 +158,43 @@ def test_unmeasured_drc_blocks_rather_than_scoring_zero():
 # Anti-cheating term 2: (step/100)**-1 — scored on how far it got
 # --------------------------------------------------------------------------
 def test_stopping_early_costs_more_than_it_saves():
-    full = evaluate(RUN, REF, dict(ORFS_WEIGHTS), step=14, stages_total=14)
-    early = evaluate(RUN, REF, dict(ORFS_WEIGHTS), step=3, stages_total=14)
+    full = evaluate(RUN, REF, dict(ORFS_WEIGHTS),
+                    step=progress_step(14, 14), stages_total=14)
+    early = evaluate(RUN, REF, dict(ORFS_WEIGHTS),
+                     step=progress_step(3, 14), stages_total=14)
     assert early["score"] > full["score"], (
         "crashing out of an expensive stage must not be a way to look fast")
-    assert full["progress_multiplier"] == pytest.approx(100 / 14)
-    assert early["progress_multiplier"] == pytest.approx(100 / 3)
+    assert full["progress_multiplier"] == pytest.approx(1.0)
+    # 14/3 up to the integer-percent rounding `progress_step` applies.
+    assert early["progress_multiplier"] == pytest.approx(14 / 3, rel=0.05)
+
+
+def test_a_longer_ladder_cannot_buy_a_better_multiplier():
+    """MEASURED: the phase-3 ladder was 14 steps on one run and 20 on another.
+    With the RAW count fed to `(step/100)**-1`, 18-of-20 beats a COMPLETE
+    14-of-14 — the exact inversion the term exists to prevent."""
+    complete = evaluate(RUN, REF, dict(ORFS_WEIGHTS), progress_step(14, 14), 14)
+    longer_but_unfinished = evaluate(RUN, REF, dict(ORFS_WEIGHTS),
+                                     progress_step(18, 20), 20)
+    assert longer_but_unfinished["score"] > complete["score"]
+    # and the raw-count form, which is what goes wrong:
+    assert (100 / 18) < (100 / 14), "premise: raw counts favour the long ladder"
+
+
+def test_progress_step_is_a_percentage_of_the_run_s_own_ladder():
+    assert progress_step(14, 14) == 100
+    assert progress_step(20, 20) == 100
+    assert progress_step(18, 20) == 90
+    assert progress_step(1, 20) == 5
+    assert progress_step(0, 20) == 0
+    assert progress_step(5, 0) == 0
+    assert progress_step(1, 10_000) == 1, "clamped to a finite reciprocal"
+
+
+def test_a_raw_stage_count_is_refused_rather_than_silently_rewarded():
+    with pytest.raises(Refusal) as exc:
+        evaluate(RUN, REF, dict(ORFS_WEIGHTS), step=140, stages_total=200)
+    assert exc.value.code == "STEP_OUT_OF_RANGE"
 
 
 def test_step_zero_is_refused_not_ranked_last():
@@ -174,7 +205,7 @@ def test_step_zero_is_refused_not_ranked_last():
 
 def test_step_semantics_are_stated_in_every_result():
     got = evaluate(RUN, REF, dict(ORFS_WEIGHTS), 14, 14)
-    assert "flow progress" in got["step_semantics"]
+    assert "completed/declared" in got["step_semantics"]
     assert "Ray" in got["step_semantics"], (
         "the deviation from ORFS's own meaning of `step` must be stated where "
         "the number is, not only in a docstring")

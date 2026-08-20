@@ -28,8 +28,9 @@ from pathlib import Path
 import pytest
 
 import ppa_objective as _obj
-from ppa_search import (BASELINE, DEFAULT_SPACE, KNOB_FLAGS, _expand,
-                        config_id, report_md, step_progress)
+from ppa_search import (BASELINE, DEFAULT_SPACE, KNOB_FLAGS,
+                        axis_discrimination, _expand, config_id, report_md,
+                        step_progress)
 
 
 def test_the_default_space_actually_reaches_fifty():
@@ -41,17 +42,62 @@ def test_the_default_space_actually_reaches_fifty():
         "50 records means 50 DISTINCT configurations, not 50 attempts")
 
 
-def test_the_baseline_is_inside_the_space_and_uses_runner_defaults():
+def test_the_baseline_is_inside_the_space():
     assert BASELINE in _expand(DEFAULT_SPACE), (
         "the thing the search has to beat must be one of the things it ran, "
         "or the comparison is against a number from a different measurement")
-    assert set(BASELINE) == set(KNOB_FLAGS)
+    assert set(BASELINE) == set(DEFAULT_SPACE), (
+        "the reference must pin EVERY knob the space varies; a knob left "
+        "unpinned would make the reference a different measurement from the "
+        "configurations it anchors")
 
 
 def test_config_id_is_decodable_without_the_record():
     cid = config_id({"util": 0.4, "die_um": "100x100", "spare_density": 0.02})
     for fragment in ("util-0p4", "die_um-100x100", "spare_density-0p02"):
         assert fragment in cid
+
+
+# --------------------------------------------------------------------------
+# which axes actually moved — the disclosure ORFS does not have
+# --------------------------------------------------------------------------
+def _rec(perf, power, area):
+    return {"objective": {"terms": {"performance": perf, "power": power,
+                                    "area": area}}}
+
+
+def test_an_axis_that_took_one_value_is_reported_INERT():
+    got = axis_discrimination([_rec(0.0, 0.0, -8.9), _rec(0.0, 0.0, -11.5),
+                               _rec(0.0, 0.0, 2.0)])
+    assert got["performance"]["status"] == "INERT"
+    assert got["performance"]["constant_value"] == 0.0
+    assert got["power"]["status"] == "INERT"
+    assert got["area"]["status"] == "DISCRIMINATING"
+    assert got["area"]["distinct"] == 3
+
+
+def test_no_scored_configuration_is_NO_SAMPLES_not_inert():
+    got = axis_discrimination([])
+    for axis in ("performance", "power", "area"):
+        assert got[axis]["status"] == "NO_SAMPLES", (
+            "an axis nobody sampled must not read as an axis that did not "
+            "move — that is the same collapse as ABSENT vs UNREADABLE")
+
+
+def test_the_report_says_which_axes_were_inert():
+    md = report_md(_search(axis_discrimination=axis_discrimination(
+        [_rec(0.0, 0.0, -8.9), _rec(0.0, 0.0, 2.0)])))
+    assert "INERT" in md
+    assert "contributed nothing to the ranking" in md, (
+        "a reader who assumed the 10000-weight axis did the work would be "
+        "wrong, and the report is where they find that out")
+
+
+def test_a_fully_discriminating_search_carries_no_inert_warning():
+    md = report_md(_search(axis_discrimination=axis_discrimination(
+        [_rec(1.0, 2.0, 3.0), _rec(4.0, 5.0, 6.0)])))
+    assert "INERT" not in md
+    assert "contributed nothing to the ranking" not in md
 
 
 def test_every_searched_knob_is_a_flag_the_runner_already_exposes():
@@ -61,6 +107,13 @@ def test_every_searched_knob_is_a_flag_the_runner_already_exposes():
               / "phase3_one_shot_runner.py").read_text(encoding="utf-8")
     for flag in KNOB_FLAGS.values():
         assert f'p.add_argument("{flag}"' in runner, flag
+    # Everything the space varies is either such a flag or the one declared
+    # design-input rewrite. A knob reaching the flow by any other route would
+    # not be reproducible from the record.
+    for knob in DEFAULT_SPACE:
+        assert knob in KNOB_FLAGS, (
+            f"{knob} reaches the flow by some other route, so a record naming "
+            "it cannot be reproduced from the record")
 
 
 # --------------------------------------------------------------------------
@@ -160,7 +213,7 @@ def test_a_declared_ratio_is_not_labelled_inherited():
 
 def test_the_step_semantics_deviation_is_in_the_report():
     md = report_md(_search())
-    assert "Ray" in md and "flow progress" in md
+    assert "Ray" in md and "completed/declared" in md
 
 
 def test_an_empty_ranking_does_not_render_as_a_result():

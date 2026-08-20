@@ -148,9 +148,11 @@ ORFS_SOURCE = ("OpenROAD-flow-scripts tools/AutoTuner/src/autotuner/"
 
 #: What `step` means HERE, printed into every record. See the module docstring.
 STEP_SEMANTICS = (
-    "step = number of declared PnR stages this run COMPLETED (flow progress). "
-    "ORFS binds the same symbol to its Ray tuning-iteration counter; the "
-    "algebra (step/100)**-1 is unchanged, the quantity is ours."
+    "step = round(100 * completed/declared) over this run's OWN phase-3 step "
+    "ladder, so (step/100)**-1 is exactly declared/completed: a complete run "
+    "multiplies its ppa by 1.0 and a half-finished one by 2.0. ORFS binds the "
+    "same symbol to its Ray tuning-iteration counter, which has no denominator; "
+    "the algebra (step/100)**-1 is unchanged, the quantity is ours."
 )
 
 #: The metrics the objective consumes, and where a DECLARED value for each is
@@ -581,11 +583,38 @@ def get_ppa(metrics: Dict[str, Any], reference: Dict[str, Any],
     }
 
 
+def progress_step(completed: int, declared: int) -> int:
+    """The `step` the ORFS term consumes, as a PERCENTAGE of this run's own
+    declared step ladder.
+
+    WHY A PERCENTAGE AND NOT THE RAW COUNT. MEASURED 2026-08-21: the phase-3
+    ladder is not a fixed length — `reports/orchestrator/phase3_one_shot.json`
+    declared 14 steps on one run of a design and 20 on another, because the
+    runner dispatches a different set depending on what the tree already holds.
+    Feeding the raw count into `(step/100)**-1` therefore pays a run for having
+    a LONGER ladder: 18-of-20 multiplies by 100/18 = 5.56 while a COMPLETE
+    14-of-14 multiplies by 100/14 = 7.14, so the unfinished run scores better.
+    That is the exact inversion of what the term exists to prevent.
+
+    Normalised, `(step/100)**-1` is exactly `declared/completed`: 1.0 for a
+    complete run, 2.0 for a half-finished one, and the ladder's length cannot
+    influence the score. ORFS cannot hit this because its `step_` is an
+    iteration counter with no denominator.
+
+    Clamped to at least 1 so the reciprocal stays finite; `completed == 0` is
+    the caller's REFUSAL, not a large multiplier.
+    """
+    if declared <= 0 or completed <= 0:
+        return 0
+    return max(1, min(100, int(round(100 * completed / declared))))
+
+
 def evaluate(metrics: Dict[str, Any], reference: Dict[str, Any],
              weights: Dict[str, float], step: int,
              stages_total: Optional[int] = None) -> Dict[str, Any]:
     """ORFS `PPAImprov.evaluate` (distributed.py:246-256) with `step` bound to
-    flow progress. LOWER score is better.
+    flow progress as a PERCENTAGE of the run's own ladder (`progress_step`).
+    LOWER score is better.
 
         gamma = ppa / 10
         score = ppa * (step/100)**-1 + gamma*num_drc
@@ -597,6 +626,13 @@ def evaluate(metrics: Dict[str, Any], reference: Dict[str, Any],
             "no measurement to score. It is REFUSED rather than given a large "
             "number, because a large number is still a rank and this run has "
             "no place in the ranking.", RC_NOT_MEASURED)
+    if step > 100:
+        raise Refusal(
+            "STEP_OUT_OF_RANGE",
+            f"step={step} exceeds 100. `step` is a PERCENTAGE of this run's own "
+            "declared ladder (see `progress_step`); a raw stage COUNT passed "
+            "here would silently reward a run for having a longer ladder, "
+            "which is the inversion this normalisation exists to remove.")
 
     num_drc = metrics.get("num_drc")
     if num_drc is NOT_MEASURED or num_drc == NOT_MEASURED \
