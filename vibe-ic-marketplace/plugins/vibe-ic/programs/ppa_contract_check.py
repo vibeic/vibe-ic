@@ -37,6 +37,17 @@ looks fine:
     PPA-C-011  a policy the check depends on was not declared. An ABSENT policy
                is not an empty one — this reports UNDETERMINED rather than a
                refusal it has not established                    CANNOT CHECK
+    PPA-C-014  an image pins bytes but its OCI version label could not be read.
+               A NOTE, not a verdict: the digest is what a verdict rests on and
+               it is intact. `policy.missing_image_version: "UNDETERMINED"`
+               promotes it for a caller that needs the label            NOTE
+    PPA-C-015  a key was resolved by the declared authority order. Also a NOTE,
+               and it NAMES the winner and every value it overrode — which
+               source won is exactly the fact a silent resolution destroys NOTE
+
+`_ppa.contract.FINDING_CODES` is the registry these come from; `finding()`
+refuses an unregistered code, so this list cannot fall behind the code that
+emits them the way it already did once.
 
 WHY A MISSING VALIDATOR IS NOT A PASS
 -------------------------------------

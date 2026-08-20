@@ -948,3 +948,49 @@ def test_the_disclosure_is_printed_on_a_refusal_too(tmp_path):
     checked = run_cli(CHECK, "--contract", str(tmp_path / "red.json"))
     assert checked.returncode != 0
     assert "examined:" in checked.stderr, checked.stderr
+
+
+def test_every_finding_code_is_registered_and_documented():
+    """A report carrying an identifier no document explains cannot be acted on.
+
+    MEASURED while this was written: `ppa_contract_check`'s docstring had
+    drifted TWO codes behind the code that emits them (`PPA-C-014`,
+    `PPA-C-015`). Prose that lists codes rots silently, so the registry is the
+    source and this is the check that keeps the prose attached to it."""
+    programs_dir = Path(__file__).resolve().parents[1]
+    docs = "\n".join(
+        (programs_dir / name).read_text()
+        for name in ("ppa_contract_build.py", "ppa_contract_check.py",
+                     "ppa_problem_integrity_check.py"))
+    undocumented = [c for c in sorted(C.FINDING_CODES) if c not in docs]
+    assert not undocumented, (
+        f"finding code(s) {undocumented} are emitted and named in no CLI "
+        f"docstring")
+    for code, meaning in C.FINDING_CODES.items():
+        assert len(meaning) > 20, f"{code} has no usable one-line meaning"
+
+
+def test_an_unregistered_finding_code_is_refused():
+    """The registry only works if it cannot be bypassed. Positive control for
+    the guard itself: the registered code is accepted in the same breath."""
+    with pytest.raises(ValueError, match="unregistered finding code"):
+        C.finding("PPA-C-999", C.SEV_FAIL, "invented out of nowhere")
+    ok = C.finding("PPA-C-001", C.SEV_FAIL, "a registered one still works")
+    assert ok["code"] == "PPA-C-001"
+    with pytest.raises(ValueError, match="unknown severity"):
+        C.finding("PPA-C-001", "PROBABLY_BAD", "severity is a closed set too")
+
+
+def test_every_registered_code_is_actually_reachable():
+    """A registry is also a place for a code nobody emits to hide. Each entry
+    must appear in the source that produces findings, not only in prose."""
+    programs_dir = Path(__file__).resolve().parents[1]
+    emitters = "\n".join(
+        (programs_dir / name).read_text()
+        for name in ("_ppa/contract.py", "ppa_contract_check.py",
+                     "ppa_problem_integrity_check.py"))
+    for code in sorted(C.FINDING_CODES):
+        # the registry entry itself is one occurrence; an emitted code has two
+        assert emitters.count(f'"{code}"') >= 2, (
+            f"{code} is registered but nothing emits it — a dead code in a "
+            f"registry reads as a rule that is in force")

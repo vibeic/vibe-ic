@@ -78,7 +78,7 @@ from .canonical_json import digest_of
 
 __all__ = [
     "CONTRACT_SCHEMA", "DECLARATION_SCHEMA",
-    "SEV_FAIL", "SEV_UNDETERMINED", "SEV_NOTE",
+    "SEV_FAIL", "SEV_UNDETERMINED", "SEV_NOTE", "FINDING_CODES",
     "DEFAULT_AUTHORITY_ORDER", "POWER_BASIS_POLICIES",
     "build", "validate", "rc_from", "contract_digest_of", "load_json",
     "format_findings", "marker_for", "denominators",
@@ -112,6 +112,31 @@ POWER_BASIS_POLICIES = {"REFUSE": SEV_FAIL, "UNDETERMINED": SEV_UNDETERMINED}
 _VALUE_BEARING_STATUSES = {"MEASURED", "DERIVED"}
 
 
+#: Every finding code this package may emit, with the one line that says what
+#: it means. THE REGISTRY IS THE SOURCE, not the docstrings: `finding()`
+#: refuses an unregistered code, so a new refusal cannot be invented without
+#: being written down here, and `test_ppa_contract` asserts every entry is
+#: named in a CLI docstring. Measured while writing this: the check's docstring
+#: had drifted two codes behind the code that emits them, which is how a report
+#: starts carrying identifiers no document explains.
+FINDING_CODES = {
+    "PPA-C-001": "the contract does not hash to its own stated digest",
+    "PPA-C-002": "a verdict-bearing image reference floats",
+    "PPA-C-003": "two sources declare one key with two values",
+    "PPA-C-004": "a power metric carries a value with no declared activity basis",
+    "PPA-C-005": "a candidate mutated something outside the allow-list",
+    "PPA-C-006": "an invented number: a default, an assumption, or a sentinel",
+    "PPA-C-007": "an identity is NOT_MEASURED or absent",
+    "PPA-C-008": "a metric cites an artefact the evidence manifest cannot back",
+    "PPA-C-009": "a conflict names a source no authority order ranks",
+    "PPA-C-010": "the document is not a contract, or a schema could not be applied",
+    "PPA-C-011": "a policy the check depends on was not declared",
+    "PPA-C-012": "the problem, analysis or toolchain identity moved between arms",
+    "PPA-C-013": "the two arms have the same implementation identity",
+    "PPA-C-014": "an image pins bytes but its OCI version label could not be read",
+    "PPA-C-015": "a key was resolved by authority; the overridden values are named",
+}
+
 def finding(code: str, severity: str, message: str, **detail: Any) -> Dict[str, Any]:
     """One machine-readable verdict line.
 
@@ -120,6 +145,13 @@ def finding(code: str, severity: str, message: str, **detail: Any) -> Dict[str, 
     read. `message` is for the human who has to fix it and says what is wrong,
     not merely which rule fired.
     """
+    if code not in FINDING_CODES:
+        raise ValueError(
+            f"unregistered finding code {code!r}. Add it to FINDING_CODES with "
+            f"the one line that says what it means: a report carrying an "
+            f"identifier no document explains cannot be acted on.")
+    if severity not in (SEV_FAIL, SEV_UNDETERMINED, SEV_NOTE):
+        raise ValueError(f"unknown severity {severity!r}")
     row: Dict[str, Any] = {"code": code, "severity": severity, "message": message}
     row.update(detail)
     return row
