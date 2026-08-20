@@ -2094,7 +2094,31 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # PREVIOUS flow blob would catch every shrink with nothing to remember, but
     # it would also leave a DELIBERATE shrink no way to be authorised. That is a
     # call for the flow's owner, so it is written down here rather than taken.
-    assert pop["swept"] == pop["declared"] == 178, pop
+    # 178 -> 177 at smrg/retire-37p5self, and this is the FIRST TIME THIS
+    # LITERAL HAS EVER MOVED DOWN. Re-derived the same way the block above
+    # derives its own: `discover_clauses` over the yaml at `03f7b945d`, at the
+    # tip and on this branch, CLAUSE SETS diffed rather than counts compared.
+    # The three clauses the block above attributes are unchanged by this
+    # measurement, which is why they are left standing rather than restated.
+    # This change retires step `37.5self` and folds the general precheck into
+    # `37.5ic` as a second ARM, so 37.5ic's gate names ONE program that runs
+    # both ladders:
+    #     + 37.5ic   program_exit_zero  tapeout_precheck
+    #     - 37.5ic   program_exit_zero  tapeout_readiness_check
+    #     - 37.5self program_exit_zero  general_precheck
+    # 178 + 1 - 2 = 177. `by_kind` moves 113 -> 112 `program_exit_zero` with
+    # `advisory` 37 and `optional` 28 unchanged; `unswept`/`unrecognised` stay
+    # empty on both trees.
+    #
+    # A SHRINK IS EXACTLY WHAT THIS LITERAL EXISTS FOR, and the block above says
+    # the open question is that a DELIBERATE shrink has no way to be authorised.
+    # This is one, and the authorisation is written here: TWO GATES STOPPED
+    # BEING FLOW CLAUSES WITHOUT STOPPING BEING RUN. The venue that proves they
+    # are still reached is `flow_gate_enforcement_audit`'s FOURTH venue, a
+    # transitive dispatch closure seeded only by the flow definition, added in
+    # the same change — before it, the audit reported both of them
+    # `ORPHANED`, which was false.
+    assert pop["swept"] == pop["declared"] == 177, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 

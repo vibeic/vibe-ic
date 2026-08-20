@@ -876,15 +876,17 @@ _THEN_FIVE = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
               "<each of 0.5ic, 15.5ic, 26.5ic, 37.5ip, 37.5ic>   (2026-08-20, "
               "the five path-specific steps this entry gained)")
 
-#: `37.5self` (the General Precheck — the chip path with NO operator) arrived
-#: after every sweep above AND after the five path-specific steps, so it is in
-#: no `applies_to` any earlier run produced. A THIRD suffix rather than a reuse
-#: of :data:`_THEN_FIVE`, for that constant's own stated reason: this one step
-#: rests on ONE single-step replay run on the rebased tree, and a reader must be
-#: able to tell which claim rests on which run.
-_THEN_37_5SELF = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
-                  "37.5self   (2026-08-20, the one step this entry gained on "
-                  "top of the five)")
+#: `37.5self` (the General Precheck) HAD a suffix of its own here — it arrived
+#: after every sweep above AND after the five path-specific steps, so it rested
+#: on one single-step replay of its own. IT IS GONE, together with the step:
+#: 2026-08-20 the owner retired `37.5self` as a step and folded the general
+#: precheck into `37.5ic` as a SECOND ARM rather than a third route, so the
+#: flow went 69 -> 68 and the cells that replay measured no longer exist. The
+#: replay is not disowned and its result is not re-typed as some other step's;
+#: the CELL it measured was removed, so the claim it supported was removed with
+#: it. Every `reddened` below moves by exactly one for that reason, and by
+#: nothing else — `test_lock3_every_entry_is_arithmetically_consistent_with_
+#: its_own_evidence` re-derives it from `len(applies_to)` on every run.
 
 #: The sweep for the CONVERGENCE-edge entry. It is deliberately NOT
 #: :data:`_SWEEP`: `closed_loop` is declared by a MINORITY of steps, so a
@@ -920,11 +922,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=66,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=65,
             stayed_green=(),
             note="3 steps have no executable gate clause at all and are "
                  "structurally out of this entry's reach: 1 and 12 (files_exist "
@@ -1005,12 +1005,10 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE + _THEN_37_5SELF, reddened=66,
+            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=65,
             stayed_green=("35",),
             note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
                  "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
@@ -1119,11 +1117,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             baseline_red=("1",),
             note="the 2 steps not reached declare no required_outputs at all "
                  "(FS1, P0) and are carried by D4-CLI-CONTRACT and "
@@ -1199,12 +1195,10 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "32", "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3",
             "M4", "40", "41", "42", "43", "44", "P0",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE + _THEN_37_5SELF, reddened=69,
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=68,
             note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
                  "sweep, each reddening that cell alone. There is no longer an "
                  "NA cell in this dimension. "
@@ -1298,13 +1292,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         params={"command":
                 "clock_plan_check . --json reports/phase2/gates/zzmatrixcanary.json"},
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             stayed_green=("DT2",),
             note="61 red = every ENFORCED dimension-6 cell except P0, which "
                  "declares no gate to append to and is carried by "
@@ -1390,11 +1382,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "35", "36", "37", "38", "39", "M2", "M3", "M4", "40", "41", "42",
             "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=64,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=63,
             stayed_green=("7", "FS1", "23", "M1"),
             note="58 red = every one of dimension 7's 58 ENFORCED cells, in one "
                  "sweep. The 4 greens are exactly its 4 waived cells. "
@@ -1474,11 +1464,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             note="61 red = every one of dimension 8's 61 ENFORCED cells, in one "
                  "sweep. The 2 steps not reached (FS1, P0) declare no "
                  "required_outputs and are dimension 8's 2 NA cells. "
