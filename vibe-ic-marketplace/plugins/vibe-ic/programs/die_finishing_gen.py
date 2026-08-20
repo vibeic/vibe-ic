@@ -261,13 +261,21 @@ def _bridge(project: Path) -> Dict[str, Any]:
     return {}
 
 
-#: Section 2C of the tape-out declaration, which is where a design that has no
-#: shuttle operator writes down what an operator's template would otherwise
-#: have pinned. `_tapeout_declaration.py` derived those three questions FROM
-#: this program — its own note on `seal_ring_script` says "Read by
+#: SECTION 2C OF THE TAPE-OUT DECLARATION — where a design that has no shuttle
+#: operator writes down what an operator's template would otherwise have
+#: pinned. `_tapeout_declaration.py` derived these three questions FROM this
+#: program — its own note on `seal_ring_script` says "Read by
 #: `die_finishing_gen`" — and until vibe-ic#1410/cpath nothing here read them
 #: back. A design that had answered all three was driven as though it had
 #: answered none.
+_DECL_REQUIRED = "seal_ring_required"
+_DECL_SCRIPT = "seal_ring_script"
+_DECL_MARKER = "seal_ring_marker_layer"
+#: Section 2A, and the ONE question outside 2C this program reads. See
+#: `die_size` for why it is the LAST source there and not the first.
+_DECL_DIE_AREA = "die_area_um"
+_DECL_SOURCE = f"{_td.DECLARATION_REL}:answers"
+
 #: Appended to a no-generator skip when the design DECLARED a ring is
 #: required. Written once so both branches say the same thing.
 _REQUIRED_AND_ABSENT = (
@@ -277,17 +285,13 @@ _REQUIRED_AND_ABSENT = (
     "`die_finishing.SKIPPED.txt` is written and the step's declared outputs "
     "stay unsatisfied, which is what makes the flow report it")
 
-_DECL_REQUIRED = "seal_ring_required"
-#: Section 2A, and the ONE question outside 2C this program reads. See
-#: `die_size` for why it is the LAST source there and not the first.
-_DECL_DIE_AREA = "die_area_um"
-_DECL_SCRIPT = "seal_ring_script"
-_DECL_MARKER = "seal_ring_marker_layer"
-_DECL_SOURCE = f"{_td.DECLARATION_REL}:answers"
-
 
 def _declaration(project: Path) -> Tuple[Dict[str, Any], Optional[str]]:
-    """(the three section-2C answers, why-the-file-could-not-be-read).
+    """(the answers this program reads, why-the-file-could-not-be-read).
+
+    FOUR keys, not three: section 2C's whole set, plus `die_area_um` from
+    section 2A — see `die_size` for why that one is read here and why it is
+    the LAST source when it is.
 
     An ABSENT declaration is `({}, None)`: this program predates the
     declaration and must keep working on a tree that has none. A declaration
