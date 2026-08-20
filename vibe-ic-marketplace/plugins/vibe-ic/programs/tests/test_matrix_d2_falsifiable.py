@@ -1258,6 +1258,45 @@ def _f_macro_obs_spanned(p: Path) -> None:
     _write_macro_obs_layout(p, spanning=6)
 
 
+def _f_die_unfinished(p: Path) -> None:
+    """The die-finishing report claims a seal ring the run did not leave behind.
+
+    Reddens the Step-26.5ic clause
+    ``die_finishing_check . --json reports/phase3/die_finishing.json``.
+
+    EMPTY cannot reach it and the reason is the gate working correctly: with no
+    producer report, `die_finishing_check.evaluate` returns DISCLOSED_SKIP and
+    main() prints ``VACUOUS_PASS: die_finishing_check judged nothing`` at rc 2.
+    That is "nobody ran the producer", which is not a statement about a seal
+    ring, and it is exactly the tier this suite refuses to count as a red.
+
+    So the fixture has to make the producer look RUN and WRONG. It writes the
+    producer's own report, correctly attributed (``producer:
+    "die_finishing_gen"`` — the gate refuses an unattributed document outright),
+    claiming ``seal_ring.state == "PASS"``, and leaves
+    ``phase3/stage3/pnr/die_finished.def`` absent. The gate's CROSS-CHECK arm
+    then fires: a claim and the thing it claims about are two different facts.
+
+    MEASURED, verbatim:
+
+        rc 1  die_finishing_check: FAIL — the report says the seal ring was
+              inserted, but phase3/stage3/pnr/die_finished.def is not on disk —
+              the finished die the report describes was not left behind
+
+    Chosen over the simpler ``seal_ring.state == "FAIL"`` deliberately: that
+    branch only re-prints a verdict the producer already reached, so a gate that
+    did nothing but echo its input would pass it. This branch is one the gate
+    has to LOOK at the tree to reach. Chip- and PDK-AGNOSTIC: no design, vendor
+    or process literal, and no oracle is consulted.
+    """
+    _w(p, "reports/phase3/die_finishing.json",
+       {"producer": "die_finishing_gen",
+        "seal_ring": {"state": "PASS",
+                      "reason": "seal ring inserted on the four die edges"},
+        "die_id": {"state": "PRESENT",
+                   "reason": "die identification cells placed"}})
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1289,6 +1328,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
+    "DIE_UNFINISHED": _f_die_unfinished,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1337,6 +1377,19 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # carry either cell and each needs an artefact that is WRONG on its own
     # terms -- self-contradiction for EM, an exceeded self-declared budget for
     # power. Neither fixture consults an oracle.
+    # 2026-08-20, R7 — the three clauses this suite could reach no FAIL on.
+    # Each was VACUOUS_PASS (rc 2) under EMPTY and under every other fixture in
+    # the library, and for 26.5ic and 37.5ip that clause is the step's ONLY
+    # blocking clause, so the whole cell was unfalsifiable: the gate could not
+    # fail on anything a project DID. UNREDDENED is not available for those two
+    # -- it is explicitly "NOT a waiver of the CELL" and presumes a sibling
+    # clause already proven falsifiable -- so a real fixture was the only
+    # honest close. Each new fixture makes the producer look RUN and WRONG
+    # rather than absent; see each `_f_*` docstring for the measured rc and
+    # message, and for why the chosen FAIL branch is one the gate has to look
+    # at the tree to reach.
+    ("26.5ic", "die_finishing_check . --json "
+               "reports/phase3/die_finishing.json"): "DIE_UNFINISHED",
     ("25", "em_peak_current_authority_check . --json "
            "reports/phase3/em_current_authority.json"): "EM_PEAK_EXCEEDS_SUPPLY",
     ("33", "power_total_vs_budget_check . --json "
