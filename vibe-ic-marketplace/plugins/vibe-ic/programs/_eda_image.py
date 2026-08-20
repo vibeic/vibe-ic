@@ -56,6 +56,8 @@ LEGACY_IMAGE = "hpretl/iic-osic-tools:latest"
 _ENV_KEYS = ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE")
 _SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _TIMEOUT_S = 20
+#: A reference nobody else can move: a digest, or an X.Y.Z tag.
+_IMMUTABLE_REF = re.compile(r"(@sha256:[0-9a-f]{64}$|:\d+\.\d+\.\d+$)")
 
 
 def _run(*argv: str, timeout: int = _TIMEOUT_S):
@@ -119,6 +121,49 @@ def local_image(repo: str = IMAGE_REPO, env=None) -> Optional[str]:
     except (OSError, subprocess.SubprocessError):
         return None
     return LEGACY_IMAGE if r.returncode == 0 else None
+
+
+def anchor_image(env=None) -> Optional[str]:
+    """The image THIS CHECKOUT names — for gates whose verdict must not be
+    changeable by somebody else's push.
+
+    THE THIRD QUESTION, and the one I got wrong first (vibe-ic#927 got it right
+    long before). `resolve()` asks the registry, so what it returns changes when
+    anyone publishes. That is exactly right for RUNNING a tool and exactly wrong
+    for a gate that reports FAIL about the image's contents: a third party's push
+    would then change a blocking verdict with no commit in this tree.
+
+    So a verdict-bearing caller asks this. The answer comes from
+    `tools/vibeic-eda/VERSION`, which moves only by a commit here, and when that
+    file is absent the answer is None — the caller reports nothing-to-look-at.
+    It does NOT fall back to a floating tag, because that is the failure mode.
+
+    An explicit override is honoured, with a warning when it is mutable: the
+    caller asked for it, but they should know their gate can now move under them.
+
+    NOTE: `pdk_registry_selectable_check` carries the original of this logic and
+    still has its own copy; folding it into this one is a follow-up. Two copies
+    of a rule is the drift this module exists to end.
+    """
+    env = os.environ if env is None else env
+    for key in _ENV_KEYS:
+        override = (env.get(key) or "").strip()
+        if override:
+            if not _IMMUTABLE_REF.search(override):
+                _note(f"{override} is a floating reference: what a gate using "
+                      f"it reports can change without any commit in this tree.")
+            return override
+    here = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        candidate = os.path.join(here, "tools", "vibeic-eda", "VERSION")
+        if os.path.isfile(candidate):
+            with open(candidate, encoding="utf-8") as fh:
+                version = fh.read().strip()
+            return f"{IMAGE_REPO}:{version}" if version else None
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        here = parent
 
 
 def _note(message: str) -> None:

@@ -117,7 +117,8 @@ import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the 
 #: The alternative — naming an image in a comment — is a string nothing
 #: resolves, which is how the first version of this file went red on the
 #: image-version gate.
-# The image is RESOLVED, not remembered — see `_eda_image`. This used to
+# The image comes from THIS CHECKOUT's anchor — see `_eda_image.anchor_image`.
+# It used to
 # be a pinned literal kept in step by `sync_image_version.py`; the version it
 # pinned claimed to be "what the plugin was verified against", and nothing
 # ever verified that. vibeic-eda's own release gate does.
@@ -125,7 +126,21 @@ import _eda_image as _img
 
 
 def default_image() -> str:
-    return _img.resolve()
+    """The image THIS CHECKOUT names.
+
+    NOT `resolve()`. This program reports FAIL about the image's CONTENTS, so
+    asking the registry would let a third party's push change a blocking
+    verdict with no commit in this tree — the failure vibe-ic#927 exists to
+    prevent, and the one I reintroduced here before catching it.
+    """
+    img = _img.anchor_image()
+    if img is None:
+        raise SystemExit(
+            "no tools/vibeic-eda/VERSION in this checkout and no "
+            "VIBEIC_EDA_IMAGE override; refusing to fall back to a floating "
+            "reference whose bytes a third party controls. Pass --image "
+            "explicitly if that is what you mean.")
+    return img
 
 #: Tech-LEF filename shapes. `*.tlef` alone misses nangate45, whose tech LEF is
 #: `NangateOpenCellLibrary.tech.lef` — it was reported NOT MEASURED for exactly

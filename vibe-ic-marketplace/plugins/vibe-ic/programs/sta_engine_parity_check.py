@@ -51,7 +51,8 @@ import _docker_memory as _dmem  # every `docker run` carries the ceiling
 
 RC_AGREE, RC_DISAGREE, RC_CANNOT_CHECK = 0, 1, 2
 
-# The image is RESOLVED, not remembered — see `_eda_image`. This used to
+# The image comes from THIS CHECKOUT's anchor — see `_eda_image.anchor_image`.
+# It used to
 # be a pinned literal kept in step by `sync_image_version.py`; the version it
 # pinned claimed to be "what the plugin was verified against", and nothing
 # ever verified that. vibeic-eda's own release gate does.
@@ -62,7 +63,21 @@ import _eda_image as _img
 
 
 def default_image() -> str:
-    return _img.resolve()
+    """The image THIS CHECKOUT names.
+
+    NOT `resolve()`. This program reports FAIL about the image's CONTENTS, so
+    asking the registry would let a third party's push change a blocking
+    verdict with no commit in this tree — the failure vibe-ic#927 exists to
+    prevent, and the one I reintroduced here before catching it.
+    """
+    img = _img.anchor_image()
+    if img is None:
+        raise SystemExit(
+            "no tools/vibeic-eda/VERSION in this checkout and no "
+            "VIBEIC_EDA_IMAGE override; refusing to fall back to a floating "
+            "reference whose bytes a third party controls. Pass --image "
+            "explicitly if that is what you mean.")
+    return img
 
 #: Commands that exist ONLY on `vibeic/sta-timing-eco`, taken from its diff
 #: against upstream master rather than from memory. Every one must be reachable

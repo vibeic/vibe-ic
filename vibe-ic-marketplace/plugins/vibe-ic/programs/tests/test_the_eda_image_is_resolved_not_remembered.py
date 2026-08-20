@@ -153,3 +153,76 @@ def test_local_tags_are_newest_first_and_ignore_non_semver(monkeypatch):
                          "stdout": "latest\n0.3.9\n0.3.10\nedge\n0.4.0\n"})()
     monkeypatch.setattr(M, "_run", lambda *a, **k: out)
     assert M.local_tags() == ["0.4.0", "0.3.10", "0.3.9"]
+
+
+# ── 4. running a tool and judging one are different questions ───────────────
+#
+# THE ONE I GOT WRONG. The first cut of this change sent all six consumers to
+# `resolve()`, which asks the registry. That is right for running a tool and
+# wrong for a gate that reports FAIL about the image's CONTENTS: a third
+# party's push would then change a blocking verdict with no commit in this
+# tree. vibe-ic#927 had already written that down —
+#
+#     falling back to the floating tag would let a third party's push change
+#     this BLOCKING gate's verdict
+#
+# — in `pdk_registry_selectable_check`, which is why that program reads
+# `tools/vibeic-eda/VERSION` and returns None rather than falling back.
+# The question I failed to ask was not "where is a version pinned" but "is this
+# version used to RUN something or to JUDGE something".
+
+_VERDICT_BEARING = (
+    "sta_engine_parity_check.py",                    # FAILs about the engines IN the image
+    "pdk_via_patch_meets_layer_min_width_check.py",  # FAILs about tech LEFs read FROM it
+)
+_TOOL_RUNNING = (
+    "fault_atpg_run.py",
+    "fmeda_fault_injection_coverage.py",
+)
+
+
+@pytest.mark.parametrize("rel", _VERDICT_BEARING)
+def test_a_gate_that_judges_the_image_uses_this_checkouts_anchor(rel):
+    src = (_PROGRAMS / rel).read_text(encoding="utf-8")
+    code = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "anchor_image" in code, (
+        f"{rel} reports a verdict about the image, so it must ask "
+        "_eda_image.anchor_image() — what THIS CHECKOUT names")
+    assert "_img.resolve()" not in code, (
+        f"{rel} asks the registry. Its verdict would then change whenever "
+        "anyone publishes an image, with no commit here (vibe-ic#927)")
+
+
+@pytest.mark.parametrize("rel", _TOOL_RUNNING)
+def test_a_program_that_runs_the_toolchain_takes_the_current_image(rel):
+    """The other half. Pinning these would put them back on a version that only
+    moves when somebody remembers to move it — the thing this change removed."""
+    src = (_PROGRAMS / rel).read_text(encoding="utf-8")
+    code = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "_img.resolve()" in code, f"{rel} should take the current image"
+
+
+def test_the_anchor_refuses_to_invent_an_answer(monkeypatch, tmp_path):
+    """No VERSION and no override is None — NOT a floating tag. Returning one
+    would hand a blocking gate a verdict somebody else can move."""
+    monkeypatch.setattr(M.os.path, "isfile", lambda _p: False)
+    assert M.anchor_image(env={}) is None
+
+
+def test_a_mutable_override_is_announced_not_silently_accepted(monkeypatch, capsys):
+    monkeypatch.setattr(M.os.path, "isfile", lambda _p: False)
+    assert M.anchor_image(env={"VIBEIC_EDA_IMAGE": "ghcr.io/x/y:latest"}) \
+        == "ghcr.io/x/y:latest"
+    assert "floating reference" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("ref", [
+    "ghcr.io/vibeic/vibeic-eda:0.3.16",
+    "ghcr.io/vibeic/vibeic-eda@sha256:" + "b" * 64,
+])
+def test_an_immutable_override_passes_without_a_warning(monkeypatch, capsys, ref):
+    monkeypatch.setattr(M.os.path, "isfile", lambda _p: False)
+    assert M.anchor_image(env={"VIBEIC_EDA_IMAGE": ref}) == ref
+    assert capsys.readouterr().err == ""
