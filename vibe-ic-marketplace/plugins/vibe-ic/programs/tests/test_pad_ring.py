@@ -696,9 +696,13 @@ def test_the_flow_declares_this_step_with_this_producer_and_this_gate():
     yaml = pytest.importorskip("yaml")
     steps = yaml.safe_load(FLOW.read_text())["steps"]
     step = next(s for s in steps if str(s["id"]) == "15.5ic")
-    assert step["programs"] == ["pad_ring_gen"]
-    assert step["gate"]["program_exit_zero"] == (
-        "pad_ring_check . --json reports/phase3/padring.json")
+    # TWO producers, and `pad_assignment_gen` runs FIRST because it writes the
+    # config `pad_ring_gen` reads. Order is asserted, not just membership.
+    assert step["programs"] == ["pad_assignment_gen", "pad_ring_gen"]
+    clauses = [c["program_exit_zero"] for c in step["gate"]["all_of"]]
+    assert clauses == [
+        "pad_assignment_check . --json reports/phase3/pad_assignment.json",
+        "pad_ring_check . --json reports/phase3/padring.json"]
     assert PR.PADRING_DEF_REL in step["required_outputs"]
     assert PR.REPORT_REL in step["required_outputs"]
     assert step["blocks_on"] == [15, "0.5ic"]
@@ -727,6 +731,44 @@ def test_the_step_runs_on_the_CHIP_PATH_and_not_on_the_operators_template():
         "input/submission_template/SELF_TAPEOUT.txt"}
     assert not any("NO_TEMPLATE" in f for f in cond["files_exist"])
     assert step["condition_kind"] == "design_dependent"
+
+
+def test_the_geometry_sources_are_declared_inputs_of_this_step():
+    """Where the config comes from is in the flow, not only in the program.
+
+    Both are step 0.5ic's own outputs and both are written on every route, so
+    the edge costs a design nothing it did not already have.
+    """
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(FLOW.read_text())["steps"]
+    step = next(s for s in steps if str(s["id"]) == "15.5ic")
+    paths = {i.get("path") for i in step["required_inputs"]}
+    assert "input/submission_template/tapeout_declaration.json" in paths
+    assert "reports/phase1/submission_template.json" in paths
+    frm = {str(i.get("from")) for i in step["required_inputs"]
+           if i.get("path", "").startswith(("input/submission_template",
+                                            "reports/phase1"))}
+    assert frm == {"0.5ic"}
+
+
+def test_the_gate_the_flow_names_resolves_to_a_program_that_exists():
+    fcc = pytest.importorskip("flow_compliance_check")
+    argv = fcc._resolve_program_cmd(
+        "pad_ring_check . --json reports/phase3/padring.json")
+    assert argv and Path(argv[1]).name == "pad_ring_check.py"
+    assert (PROGRAMS / "pad_ring_gen.py").is_file()
+
+
+def test_the_gate_runs_as_the_flow_spawns_it(placed):
+    """Driven exactly as `program_exit_zero` drives it: cwd = the project, the
+    report path relative, no PDK flags — so the PDK probe is the one a real
+    run gets."""
+    r = subprocess.run(
+        [sys.executable, str(PROGRAMS / "pad_ring_check.py"), ".",
+         "--json", PR.REPORT_REL],
+        cwd=placed, capture_output=True, text=True)
+    assert r.returncode in (0, 1), r.stdout + r.stderr
+    assert "pad_ring_check" in r.stdout
 
 
 # --------------------------------------------------------------------------- #
