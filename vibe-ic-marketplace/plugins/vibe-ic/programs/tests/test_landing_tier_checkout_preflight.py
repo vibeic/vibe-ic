@@ -25,6 +25,7 @@ chip-AGNOSTIC: pure git/path plumbing. No design, PDK or vendor literal.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -166,8 +167,28 @@ def test_the_full_tier_actually_calls_this_program():
         "the pre-push hook's path, it runs in whatever checkout the developer "
         "is in, and it finishes in seconds — the failure this refuses needs an "
         "hour to happen.")
-    first_arm = next(i for i, line in enumerate(lines)
-                     if line.strip() == "run_pytest")
+    # THE FIRST ARM IS WHERE AN ARM IS CALLED, not where a particular line
+    # shape is. This used to be `line.strip() == "run_pytest"`. The full tier's
+    # independent stages now run at the same time, so the arms are called from
+    # inside the lane bodies the window launches, that generator matched
+    # nothing, and `next` raised StopIteration — "the preflight is too late"
+    # and "I could not find an arm" became the same red.
+    arms = ("run_pytest", "run_repo_tools_pytest", "run_unselectable_pytest")
+    spans = []
+    for name in arms:
+        define = next(i for i, line in enumerate(lines)
+                      if line.startswith(f"{name}() {{"))
+        close = next(i for i in range(define + 1, len(lines))
+                     if lines[i] == "}")
+        spans.append((define, close))
+    arm_calls = [i for i, line in enumerate(lines)
+                 if not any(a <= i <= b for a, b in spans)
+                 and not line.lstrip().startswith("#")
+                 and any(re.search(rf"(?<![\w./-]){name}(?![\w(])", line)
+                         for name in arms)]
+    assert arm_calls, (
+        "gatekeeper-land.sh defines the test arms but calls none of them")
+    first_arm = min(arm_calls)
     assert calls[0] < first_arm, (
         "the checkout preflight runs after an arm has already spent time in a "
         "tree it should never have started in")
