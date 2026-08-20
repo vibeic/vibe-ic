@@ -66,6 +66,7 @@ fitted to the data.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -598,7 +599,6 @@ def _rel(p: Path, project: Path) -> str:
 
 
 def _load_json(p: Path) -> Optional[Any]:
-    import json
     try:
         return json.loads(p.read_text(errors="replace"))
     except (OSError, ValueError):
