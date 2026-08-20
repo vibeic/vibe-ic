@@ -71,12 +71,22 @@ it is recorded here rather than papered over in the gates.
 
 AND THE ATTACK THAT DOES NOT WORK, KEPT BECAUSE IT DOES NOT
 -----------------------------------------------------------
-`A1_TAMPER_DESTRUCTIVE` replaces the reports with nonsense. Measured: all five
-gates tried went rc 0 -> 1. Destroying the evidence is DEFENDED, because the
-gate needs the evidence to pass. It is retained as the control that this
-module's verdicts are not all one colour, and as the statement of why the
-dangerous attacks are the SHAPE-PRESERVING ones — a report that still parses and
-reads better is the forgery; a report that is gone is a failure.
+`A1_TAMPER_DESTRUCTIVE` replaces the reports with nonsense. Measured: 7 of 7
+gates go rc 0 -> 1. Destroying the evidence is DEFENDED, because the gate needs
+the evidence to pass. It is retained as the control that this module's verdicts
+are not all one colour, and as the statement of why the dangerous attacks are
+the SHAPE-PRESERVING ones — a report that still parses and reads better is the
+forgery; a report that is gone is a failure.
+
+IT WAS 6 OF 7, AND THIS DOCSTRING SAID "all five gates tried". `ir_drop` passed
+with every `*.rpt` in the cell overwritten, printing two of its own ERROR
+findings about the 26-byte file while it did so, because `_check_tool_authenticity`
+accepted ANY discovered candidate and the one that passed was
+`reports/phase3/ir_drop.json` — a file the attack does not touch and the RUNNER
+writes. The control attack was being defeated by the control's own blind spot,
+and the sentence claiming otherwise had a count in it that matched no gate list
+in this file. `eda_report_audit` now establishes authenticity only from
+tool-written output.
 
 WHY THE SHIPPED TREE IS NEVER TOUCHED
 =====================================

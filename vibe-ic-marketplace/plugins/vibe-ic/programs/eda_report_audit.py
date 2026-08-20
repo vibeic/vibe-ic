@@ -771,11 +771,70 @@ def _check_report_design_binding(files: List[Path], project_dir: Path,
     return True, (True if own_seen else DESIGN_BINDING_NOT_DETERMINED)
 
 
+#: A RUNNER writes these; a TOOL writes the rest. Authenticity may not be
+#: established from one, and neither may inauthenticity.
+#:
+#: THE DEFECT THIS CLOSES (vibe-ic#1119, attack A1_TAMPER_DESTRUCTIVE).
+#: Overwriting every `*.rpt` in a published cell with the line "TAMPERED BY THE
+#: ADVERSARY" flips six of seven sign-off gates rc 0 -> 1. `ir_drop` stayed at
+#: rc 0, and its own json said why::
+#:
+#:     "passed": true,
+#:     "findings": [
+#:       {"rule": "IR_DROP_REPORT_TOO_SMALL",      "severity": "ERROR", ...},
+#:       {"rule": "IR_DROP_NO_TOOL_SIGNATURE",     "severity": "ERROR", ...}
+#:     ],
+#:     "summary": {"tool_authentic": true, ...}
+#:
+#: Two ERROR findings, naming `reports/phase3/ir_drop.rpt` as a 26-byte
+#: forgery, and a PASS. `_check_tool_authenticity` returns True when ANY
+#: candidate passes, and the candidate that passed was
+#: `reports/phase3/ir_drop.json` — which the attack never touched because it is
+#: not a `.rpt`, and which the RUNNER writes: `step_canonicalize_artefacts` ->
+#: `_emit_ir_em_reports` puts the PSM measurement there. So the gate's statement
+#: that the IR-drop evidence is authentic was a statement about the runner's own
+#: summary of it, and the tool's destroyed output was outvoted by it.
+#:
+#: THAT IS A SHAPE THIS REPOSITORY HAD ALREADY NAMED. `matrix_63x8/README.md`
+#: records two artefact findings that closed for the same reason — "the gate
+#: believed a summary the RUNNER wrote instead of the output the TOOL wrote" —
+#: and says in as many words that it "is the shape to look for next".
+#:
+#: MEASURED before changing it, over the pristine published cell: every one of
+#: the seven modes has at least one authentic NON-json report, so no honest
+#: evidence depends on a json to be believed. Only `ir_drop` and `antenna` had a
+#: json carrying the verdict at all.
+#:
+#: NOTHING IS CHECKED LESS, and the json is not stopped from being CHECKED —
+#: only from OUTVOTING. Every candidate is still judged and still produces its
+#: findings; em's and power's companions still gate through `machine_ok`, and
+#: ir_drop's `worst_ir_uv` / `budget_uv` comparison is untouched.
+#:
+#: A SUMMARY MAY STILL CARRY THE VERDICT WHEN IT IS ALL THERE IS, and that is not
+#: a loophole, it is a measured requirement: `test_ir_drop_compact_report_strong
+#: _signature` records that 16 of 16 authentic `openroad-psm` ir_drop.json in the
+#: corpus are 197-611 B, under the 1024 B floor, and the strong-signature group
+#: exists so those are not called hand-typed stubs. A first version of this fix
+#: skipped every `.json` outright and broke both directions of that file. The
+#: rule is therefore about PRECEDENCE, not about kind: where the tool's own
+#: output is present, it is the thing that has to be genuine.
+_RUNNER_WRITTEN_SUFFIXES = (".json",)
+
+
 def _check_tool_authenticity(files: List[Path], mode: str,
                               result: AuditResult) -> bool:
     """Append findings for missing tool signature + undersized reports.
-    Returns True only if at least one candidate passed both checks."""
+
+    Returns True only if at least one candidate passed both checks — but a
+    RUNNER-written summary counts only when no TOOL-written report was
+    discovered at all. Where the tool's own output is present, that output is
+    what must be genuine, and a summary of it cannot testify on its behalf.
+    """
     any_authentic = False
+    any_runner_authentic = False
+    tool_written_present = any(
+        fp.suffix not in _RUNNER_WRITTEN_SUFFIXES and fp.is_file()
+        for fp in files)
     for fp in files:
         try:
             size = fp.stat().st_size
@@ -789,7 +848,12 @@ def _check_tool_authenticity(files: List[Path], mode: str,
         ok_size = size >= MIN_REPORT_BYTES.get(mode, 1024) or strong
         ok_sig, matched = _has_tool_signature(text, mode)
         if ok_size and ok_sig:
-            any_authentic = True
+            if fp.suffix in _RUNNER_WRITTEN_SUFFIXES and tool_written_present:
+                # Judged, and its findings kept — but it does not get to answer
+                # for the tool report sitting beside it.
+                any_runner_authentic = True
+            else:
+                any_authentic = True
             continue
         rel = str(fp)
         if not ok_size:
@@ -809,7 +873,13 @@ def _check_tool_authenticity(files: List[Path], mode: str,
                          f"Hand-typed reports rejected."),
                 file=rel,
             ))
-    return any_authentic
+    if any_authentic:
+        return True
+    if tool_written_present:
+        # There WAS tool output and none of it was genuine. `any_runner_authentic`
+        # is deliberately not consulted here: that is the A1 finding.
+        return False
+    return any_runner_authentic
 
 
 # ---------------------------------------------------------------------------
