@@ -13,6 +13,7 @@ can re-run the attack by hand and get the same answer.
 """
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import sys
@@ -25,9 +26,28 @@ REPO = PLUGIN.parents[2]
 PROG = PLUGIN / "programs" / "adversarial_agent.py"
 
 sys.path.insert(0, str(PLUGIN / "programs"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import adversarial_agent as AA  # noqa: E402
+import _published_corpus as _pc  # noqa: E402
 
-IC = REPO / "benchmark-data" / "ic"
+# THE RATCHET WAS OFF ON EVERY HOST, AND SAID `skipped`.
+#
+# This module resolved the corpus as `REPO / "benchmark-data" / "ic"`. v1.10.56
+# moved the published cells into their own repository, so that path has not
+# existed since — and the guard below is a `skipif`, so the whole file reported
+# `9 passed, 12 skipped`. MEASURED on clean main, with and without a corpus
+# clone present:
+#
+#     VIBE_IC_BENCHMARK_DATA unset       9 passed, 12 skipped
+#     VIBE_IC_BENCHMARK_DATA=<a clone>   9 passed, 12 skipped
+#
+# Byte-identical. The twelve tests that ARE the ratchet — the ones that would
+# notice a fourteenth gate starting to forge a green, or a thirteenth quietly
+# stopping — could not run anywhere, and their skip was indistinguishable from
+# a pass. `_published_corpus` is the repo's one answer to "where did the corpus
+# go", and it refuses loudly when somebody names a corpus that is not one.
+_CORPUS = _pc.corpus_root()
+IC = (_CORPUS / "ic") if _CORPUS is not None else Path("/nonexistent-corpus")
 CELL = IC / "spm" / "v1.9.96_gf180mcuD"
 DONOR = IC / "sha256" / "clean_run_v1427_20260715"
 OLDER = IC / "sha256" / "clean_run_v1422_20260715"
@@ -58,40 +78,100 @@ DEFENDING = ("sta_report_check", (".", "--mode", "sta"))
 _CLI_BOUND_S = 45
 
 _corpus = pytest.mark.skipif(
-    not (CELL.is_dir() and DONOR.is_dir()),
-    reason="published cells absent from this checkout")
+    not (CELL.is_dir() and DONOR.is_dir()), reason=_pc.SKIP_REASON)
+
+
+# ===========================================================================
+# THE INSTRUMENT MUST STILL BE ABLE TO REPORT SUCCEEDED
+#
+# The thirteen findings this module recorded are CLOSED: the sign-off gates now
+# bind every report they consume to the digest the run recorded producing it
+# (`_run_evidence_binding`). That closure creates a NEW way for this file to
+# become worthless — every verdict going DEFENDED because the attack broke
+# reads exactly like every verdict going DEFENDED because the flow got safe.
+#
+# So the finding assertions below no longer point at the published cell. They
+# point at a run that recorded NOTHING, which is not a contrivance: the binding
+# defends a run that declared its outputs, and a run that declared none is
+# genuinely unprotected — that is the honest limit of the fix, and it is
+# asserted here rather than described. The published cell then supplies the
+# other colour, with the SAME instrument, in the PAIRED tests.
+# ===========================================================================
+_UNBOUND_GATE = ("antenna_report_check", (".", "--mode", "antenna"))
+
+_UNBOUND_RPT = (
+    "# openroad antenna check (gate-oxide protection)\n"
+    "# Tool: openroad / check_antennas (ANT).\n"
+    "# A complete, clean, tool-signed report — the kind a substitution\n"
+    "# attack uses, because a report that is GONE is a failure and a report\n"
+    "# that still parses is the forgery.\n"
+    "antenna check: 0 net violations, 0 pin violations\n"
+    "antenna clean: YES\n"
+    "[INFO ANT-0002] Found 0 net violations.\n"
+    "[INFO ANT-0001] Found 0 pin violations.\n"
+    "# run marker: {marker}\n"
+)
+
+
+def _unbound_cell(root: Path, marker: str) -> Path:
+    """A green cell that recorded NOTHING about what produced its reports.
+
+    No `provenance.jsonl`, no `steps/**/STEP_RECORD.json`. Nothing here can
+    answer "whose report is this", which is the state every published cell was
+    in from the gate's point of view before the binding landed.
+    """
+    d = root / "reports" / "phase3"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "antenna.rpt").write_text(_UNBOUND_RPT.format(marker=marker),
+                                   encoding="utf-8")
+    return root
 
 
 # ===========================================================================
 # THE FINDING, AND ITS DISCRIMINATING TWIN
 # ===========================================================================
-@_corpus
-def test_the_adversary_finds_the_cross_design_forgery():
+def test_the_adversary_finds_the_cross_design_forgery(tmp_path):
     """A gate certifies THIS design using ANOTHER design's reports.
 
-    Measured on v1.10.33: six of seven sign-off gates stay green after 149
-    artefacts are substituted from a different IC. A gate that cannot tell whose
-    report it read is signing a statement about a design it never examined.
+    Measured on v1.10.33 against the published cell: six of seven sign-off
+    gates stayed green after 149 artefacts were substituted from a different
+    IC. Those six are closed. The attack is not: a run that recorded nothing
+    about what produced its reports still has no way to tell, and this asserts
+    the instrument can still SEE that.
     """
-    got = AA.attack_cross_design(PLUGIN, CELL, DONOR, gates=(FORGEABLE,))
+    cell = _unbound_cell(tmp_path / "cell", "A")
+    donor = _unbound_cell(tmp_path / "donor", "B")
+    got = AA.attack_cross_design(PLUGIN, cell, donor, gates=(_UNBOUND_GATE,))
     assert len(got) == 1, got
     a = got[0]
     assert a.verdict == AA.SUCCEEDED, (
-        f"substituting another design's reports did not forge a green: {a}. "
-        f"Either the gate learned to check provenance — in which case this "
-        f"finding closed and the docstring must say so — or the attack broke.")
+        f"substituting another run's report did not forge a green even on a "
+        f"cell that recorded nothing: {a}. The attack itself has broken, and "
+        f"every DEFENDED this file reports is now unfalsifiable.")
     assert a.evidence["rc_before"] == 0 and a.evidence["rc_after"] == 0, a
     assert a.evidence["substituted"] > 0, "nothing was substituted"
 
 
 @_corpus
-def test_PAIRED_a_gate_that_DOES_notice_is_reported_DEFENDED():
-    """THE TWIN. Without it, SUCCEEDED could be a constant.
+def test_PAIRED_the_same_attack_on_a_run_that_RECORDED_its_outputs_is_DEFENDED():
+    """THE TWIN, and the closure. Same attack, same instrument, same gate —
+    the only difference is that the published cell declared the digests of the
+    reports it produced, so the substituted bytes have something to disagree
+    with.
 
-    Same attack, same cell, same donor, one gate apart. `sta_report_check`
-    objects; if this ever reports SUCCEEDED too, the attack has stopped
-    discriminating and its findings are worth nothing.
+    If this ever reports SUCCEEDED, the binding stopped being consulted.
     """
+    got = AA.attack_cross_design(PLUGIN, CELL, DONOR, gates=(FORGEABLE,))
+    assert len(got) == 1, got
+    assert got[0].verdict == AA.DEFENDED, (
+        f"a published cell that records its own outputs was forged again: "
+        f"{got[0]}. Thirteen findings closed on this property.")
+
+
+@_corpus
+def test_PAIRED_a_gate_that_DOES_notice_is_reported_DEFENDED():
+    """The historical twin, kept: `sta_report_check` objected to the
+    cross-design substitution before any binding existed."""
     got = AA.attack_cross_design(PLUGIN, CELL, DONOR, gates=(DEFENDING,))
     assert len(got) == 1, got
     assert got[0].verdict == AA.DEFENDED, (
@@ -99,17 +179,25 @@ def test_PAIRED_a_gate_that_DOES_notice_is_reported_DEFENDED():
         f"An attack that succeeds against everything measures nothing.")
 
 
-@_corpus
-def test_the_stale_replay_is_a_separate_finding_from_cross_design():
+def test_the_stale_replay_is_a_separate_finding_from_cross_design(tmp_path):
     """A2 — an EARLIER run of the same design, which is harder to notice.
 
     Distinct from A3 on purpose: the artefact belongs to this design, so a check
     keyed on design identity still passes and only a check keyed on WHICH RUN
-    produced it can object.
+    produced it can object. Asserted on the unbound cell for the same reason as
+    its A3 sibling above.
     """
-    got = AA.attack_stale_replay(PLUGIN, CELL, OLDER, gates=(FORGEABLE,))
+    cell = _unbound_cell(tmp_path / "cell", "A")
+    older = _unbound_cell(tmp_path / "older", "A-earlier")
+    got = AA.attack_stale_replay(PLUGIN, cell, older, gates=(_UNBOUND_GATE,))
     assert len(got) == 1 and got[0].verdict == AA.SUCCEEDED, got
     assert got[0].evidence["substituted"] > 0, got
+
+
+@_corpus
+def test_PAIRED_the_stale_replay_is_DEFENDED_on_a_run_that_recorded_its_outputs():
+    got = AA.attack_stale_replay(PLUGIN, CELL, OLDER, gates=(FORGEABLE,))
+    assert len(got) == 1 and got[0].verdict == AA.DEFENDED, got
 
 
 # ===========================================================================
@@ -168,16 +256,32 @@ def test_the_container_bound_attacks_are_DECLARED_not_omitted():
         assert "needs" in a.detail.lower(), a.detail
 
 
-@_corpus
-def test_the_report_publishes_the_fraction_that_was_attempted():
-    rc, report = AA.run_campaign(PLUGIN, CELL, DONOR, None,
-                                 gates=(FORGEABLE, DEFENDING))
+def test_the_report_publishes_the_fraction_that_was_attempted(tmp_path):
+    cell = _unbound_cell(tmp_path / "cell", "A")
+    donor = _unbound_cell(tmp_path / "donor", "B")
+    rc, report = AA.run_campaign(PLUGIN, cell, donor, None,
+                                 gates=(_UNBOUND_GATE,))
     cov = report["coverage"]
     assert cov["attacks_declared"] > cov["attacks_with_an_attempt"], (
         "every declared attack was attempted, so the coverage figure is not "
         f"telling a reader anything: {cov}")
     assert rc == 1, "the measured forgery did not make the campaign fail"
     assert report["findings"], report["counts"]
+
+
+@_corpus
+def test_PAIRED_the_campaign_PASSES_on_the_published_cell():
+    """Prove-by-run of the closure, through the same entry point. The campaign
+    that reported thirteen forged greens against this cell now reports none —
+    and `attempted` is unchanged, so nothing was closed by going UNAVAILABLE."""
+    rc, report = AA.run_campaign(PLUGIN, CELL, DONOR, OLDER)
+    assert rc == 0, (rc, report["findings"])
+    assert not report["findings"], report["findings"]
+    assert report["counts"]["attempted"] == 21, (
+        f"the campaign attempted {report['counts']['attempted']} attacks, not "
+        f"the 21 that produced the thirteen findings. A finding count that "
+        f"fell because fewer attacks ran is not progress.")
+    assert report["verdict"] == "ALL_DEFENDED", report["verdict"]
 
 
 # ===========================================================================
@@ -242,11 +346,12 @@ def test_the_adversary_never_writes_into_the_repository():
         f"{[k for k in before if k in after and before[k] != after[k]][:5]} moved")
 
 
-@_corpus
-def test_the_cli_reports_the_forgery_and_exits_1():
+def test_the_cli_reports_the_forgery_and_exits_1(tmp_path):
     """The shipped CLI, in a subprocess, because the exit code is the product."""
+    cell = _unbound_cell(tmp_path / "cell", "A")
+    donor = _unbound_cell(tmp_path / "donor", "B")
     r = subprocess.run(
-        [sys.executable, str(PROG), str(CELL), "--donor", str(DONOR)],
+        [sys.executable, str(PROG), str(cell), "--donor", str(donor)],
         capture_output=True, text=True, timeout=_CLI_BOUND_S)
     assert r.returncode == 1, (r.returncode, r.stdout[-800:], r.stderr[-400:])
     assert "FORGED GREEN" in r.stdout, r.stdout[-800:]
@@ -255,12 +360,12 @@ def test_the_cli_reports_the_forgery_and_exits_1():
     assert "UNAVAILABLE and therefore" in r.stdout, r.stdout[-400:]
 
 
-@_corpus
 def test_the_json_report_round_trips(tmp_path):
     out = tmp_path / "r.json"
-    AA.run_campaign(PLUGIN, CELL, DONOR, None, gates=(FORGEABLE,))
+    cell = _unbound_cell(tmp_path / "cell", "A")
+    donor = _unbound_cell(tmp_path / "donor", "B")
     r = subprocess.run(
-        [sys.executable, str(PROG), str(CELL), "--donor", str(DONOR),
+        [sys.executable, str(PROG), str(cell), "--donor", str(donor),
          "--json", str(out)], capture_output=True, text=True, timeout=_CLI_BOUND_S)
     assert r.returncode == 1, r.stdout[-400:]
     doc = json.loads(out.read_text())
@@ -286,7 +391,7 @@ if __name__ == "__main__":  # pragma: no cover
 def _live_recorded_attacks():
     """Re-run exactly the attacks the ledger records, over the cells it names."""
     led = AA.load_findings_ledger()
-    ic = REPO / "benchmark-data" / "ic"
+    ic = IC
     cell = ic / led["cell"]
     donor = ic / led["donor"]
     older = ic / led["older_run"]
@@ -321,17 +426,30 @@ def test_the_findings_ratchet_holds_in_BOTH_directions():
         f"comparison itself is broken")
 
 
-@_corpus
-def test_PAIRED_the_ratchet_can_SEE_a_new_forgery():
+def test_PAIRED_the_ratchet_can_SEE_a_new_forgery(tmp_path):
     """The twin. A ratchet that reports zero on everything is not one.
 
-    Plants a finding the record does not contain by pretending the ledger is
-    empty, and requires the diff to report every live SUCCEEDED as newly forging.
+    THIS TEST USED TO REQUIRE THE REPO TO STILL BE BROKEN. It re-ran the recorded
+    attacks against the published cell and demanded `>= 6` of them still
+    SUCCEEDED — so the moment the findings closed, the only control proving the
+    ratchet can SEE a forgery became impossible to run. A non-vacuity control
+    that depends on the defect it guards dies with the fix and takes the
+    guarantee with it.
+
+    It now manufactures a REAL forgery instead: a run that recorded nothing about
+    its outputs, attacked with the shipped attack, producing genuine SUCCEEDED
+    attempts. The ratchet must report every one of them as newly forging against
+    an empty record.
     """
-    _led, attempts = _live_recorded_attacks()
-    d = AA.ratchet_diff({"forging": []}, attempts)
+    cell = _unbound_cell(tmp_path / "cell", "A")
+    donor = _unbound_cell(tmp_path / "donor", "B")
+    attempts = AA.attack_cross_design(PLUGIN, cell, donor, gates=(_UNBOUND_GATE,))
     live_succeeded = [a for a in attempts if a.verdict == AA.SUCCEEDED]
-    assert len(d["newly_forging"]) == len(live_succeeded) >= 6, (
+    assert live_succeeded, (
+        "the attack produced no forgery at all, so this control cannot say "
+        "whether the ratchet would see one")
+    d = AA.ratchet_diff({"forging": []}, attempts)
+    assert len(d["newly_forging"]) == len(live_succeeded), (
         f"the ratchet reported {len(d['newly_forging'])} new forgeries against "
         f"an empty record but {len(live_succeeded)} attacks SUCCEEDED; it cannot "
         f"see what it is supposed to catch")
@@ -370,6 +488,82 @@ def test_the_ledger_is_generated_not_hand_written():
         "the ledger claims to be generated and its generator is not in the tree")
 
 
+def _python_references(path: Path, name: str) -> bool:
+    """Does this .py file REFER to `name` in code, as opposed to in prose?
+
+    A RAW SUBSTRING SCAN READ A COMMENT AS A CALL SITE — MEASURED.
+    This predicate used to be `if name in p.read_text()`. Two files that merely
+    DESCRIBE the adversarial campaign in their module docstrings — the shared
+    evidence-binding helper and the sign-off guard written from its findings —
+    were reported as wiring, and the test demanded the honest "NOT WIRED YET"
+    disclosure be deleted on the strength of two prose sentences.
+
+    That is the exact shape `matrix_63x8/README.md` rule 3 forbids: *"If you
+    scan source text: strip comments and strings first — a `# e.g. "foo_check"`
+    comment was once counted as a call site."* The rule was written down in this
+    campaign's own substrate and then violated by this campaign's own test.
+
+    So: parse, and count only what could actually reach the program — an import
+    of it, a name/attribute spelling it, or a NON-docstring string literal that
+    names it (which is how a subprocess argv or a program path is spelled).
+    """
+    try:
+        tree = ast.parse(path.read_text(errors="replace"))
+    except (OSError, SyntaxError, ValueError):
+        return False
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef,
+                             ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None) or []
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docstrings.add(id(body[0].value))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(name in (a.name or "") for a in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if name in (node.module or ""):
+                return True
+        elif isinstance(node, ast.Name) and name in node.id:
+            return True
+        elif isinstance(node, ast.Attribute) and name in node.attr:
+            return True
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstrings:
+                continue
+            if name in node.value:
+                return True
+    return False
+
+
+def test_PAIRED_prose_is_not_wiring_but_a_call_is(tmp_path):
+    """THE TWIN for `_python_references`. Both directions, on the same token.
+
+    A predicate that answered "no" to everything would make the disclosure
+    permanent and unfalsifiable, which is the same silence the raw substring
+    scan produced in the other direction.
+    """
+    name = "adversarial_agent"
+    prose = tmp_path / "prose.py"
+    prose.write_text(
+        '''"""A module docstring that DESCRIBES adversarial_agent findings."""\n'''
+        "# adversarial_agent is named here in a comment only\n"
+        "VALUE = 1\n", encoding="utf-8")
+    assert _python_references(prose, name) is False
+
+    for spelling in (
+            "import adversarial_agent\n",
+            "from adversarial_agent import run_campaign\n",
+            'CMD = ["python3", "adversarial_agent.py"]\n',
+            "def f(mod):\n    return mod.adversarial_agent\n"):
+        code = tmp_path / "code.py"
+        code.write_text(spelling, encoding="utf-8")
+        assert _python_references(code, name) is True, spelling
+
+
 def test_the_unwired_state_is_disclosed_or_gone():
     """Wiring is MEASURED, and the disclosure dies with it.
 
@@ -388,8 +582,16 @@ def test_the_unwired_state_is_disclosed_or_gone():
         for p in d.rglob("*"):
             if not p.is_file() or p.name in own:
                 continue
-            if p.suffix not in (".py", ".yaml", ".yml", ".json", ".md"):
+            # `.md` is dropped entirely: a markdown file cannot invoke a
+            # program, so a mention in one is documentation, never wiring.
+            if p.suffix == ".py":
+                if _python_references(p, name):
+                    callers.append(p.relative_to(PLUGIN).as_posix())
                 continue
+            if p.suffix not in (".yaml", ".yml", ".json"):
+                continue
+            # A declaration file naming the program IS the wiring — that is
+            # what `flow/*.yaml` and `benchmark/CAPTURE_ROUTING.json` are for.
             try:
                 if name in p.read_text(errors="replace"):
                     callers.append(p.relative_to(PLUGIN).as_posix())
