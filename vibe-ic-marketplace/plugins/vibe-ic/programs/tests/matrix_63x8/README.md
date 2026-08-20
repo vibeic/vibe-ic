@@ -1,15 +1,15 @@
 # `matrix_63x8` — shared substrate for the flow-step × dimension coverage matrix
 
-The Vibe-IC flow has **67<!--figure:flow_steps--> steps**. The 2026-07 audit
+The Vibe-IC flow has **68<!--figure:flow_steps--> steps**. The 2026-07 audit
 asked **8<!--figure:matrix_dimensions--> questions** of each one.
-67<!--figure:flow_steps--> × 8<!--figure:matrix_dimensions--> =
-**536<!--figure:ledger_cells--> cells**. This package is the substrate that
+68<!--figure:flow_steps--> × 8<!--figure:matrix_dimensions--> =
+**544<!--figure:ledger_cells--> cells**. This package is the substrate that
 all eight dimension test-modules import so they agree on what a step is, what
 a gate says, and which cells exist.
 
-Four of those steps are PATH-SPECIFIC and do not run for every design: 15.5ic,
-26.5ic and 37.5ic belong to the chip/IC path, 37.5ip is the cell/IP path's
-terminal step. They are cells here like any other — the matrix asks whether a
+Five of those steps are PATH-SPECIFIC and do not run for every design: 0.5ic,
+15.5ic, 26.5ic and 37.5ic belong to the chip/IC path, 37.5ip is the cell/IP
+path's terminal step. They are cells here like any other — the matrix asks whether a
 step is declared, wired and gated, not whether this design runs it. The
 package name keeps its `63x8` spelling: it is the campaign's name, not a count.
 
@@ -53,7 +53,7 @@ Four specific forms of it, all of which an adversarial verifier will catch:
 
 ## The three-state rule
 
-Every one of the 536<!--figure:ledger_cells--> cells must end in **exactly
+Every one of the 544<!--figure:ledger_cells--> cells must end in **exactly
 one** of these, all machine-checkable:
 
 ### `ENFORCED`
@@ -144,8 +144,8 @@ Things that will bite you if you skip the docstring:
 * **`required_outputs` is ALL-of across entries**, but `" OR "` *inside* one
   entry is any-of. It used to be any-of across entries and that was a real
   false-pass bug — see `programs/flow_compliance_check.py` ~line 6150.
-* **`blocks_on` is present on 67<!--figure:blocks_on_declared--> steps but non-empty on only 66<!--figure:blocks_on_nonempty-->.** D1 and A1
-  declare it *empty* because they are the flow's genuine roots. "67<!--figure:blocks_on_declared--> steps have
+* **`blocks_on` is present on 68<!--figure:blocks_on_declared--> steps but non-empty on only 66<!--figure:blocks_on_nonempty-->.** D1 and A1
+  declare it *empty* because they are the flow's genuine roots. "68<!--figure:blocks_on_declared--> steps have
   blocks_on" is a presence count, not a dependency count.
 * **`total_steps: 44`** in the yaml counts the numeric steps only. It is not
   `len(steps)`.
@@ -153,10 +153,10 @@ Things that will bite you if you skip the docstring:
   `advisory_program_exit_zero` does **not**, `optional_program_exit_zero`
   blocks only when its `condition_files_exist` are present. Treating an
   advisory clause as enforcement is measuring something adjacent.
-* **No `program_exit_zero` form exists in `required_outputs`** — all 150<!--figure:required_output_entries-->
+* **No `program_exit_zero` form exists in `required_outputs`** — all 152<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
-### `cells.py` — the 536<!--figure:ledger_cells-->-cell ledger
+### `cells.py` — the 544<!--figure:ledger_cells-->-cell ledger
 `ALL_CELLS` is the cross product of `flowref.step_ids()` × `DIMENSIONS`, built
 **live from the yaml, never from the audit JSON**. Add or delete a step and the
 ledger changes with the repo; `test_matrix_63x8_ledger.py` notices.
@@ -244,7 +244,7 @@ from matrix_63x8 import cells as C, flowref as F, waivers as W
 
 The ledger's unit is a step, but dimensions 2 (falsifiability), 4
 (criteria-match) and 6 (skip discipline) each ask their question of a gate
-CLAUSE — 170<!--figure:blocking_clauses--> blocking clauses over 66<!--figure:gated_steps--> gated steps. A cell-level
+CLAUSE — 171<!--figure:blocking_clauses--> blocking clauses over 67<!--figure:gated_steps--> gated steps. A cell-level
 `xfail(strict=True)` cannot express "5 of this step's 6 clauses are proven and
 the 6th is not", so those modules carry an in-module per-clause register with
 the same both-directions anti-rot semantics (a stale entry reddens; an entry
@@ -287,7 +287,7 @@ thread-parallel test execution.
 Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
 eight modules through pytest's own machinery, asks each module the state of the
 cells it owns, and then RUNS those modules and joins the answer against what
-each cell's predicate actually did. **536<!--figure:ledger_cells--> / 536<!--figure:ledger_cells--> cells present,
+each cell's predicate actually did. **544<!--figure:ledger_cells--> / 544<!--figure:ledger_cells--> cells present,
 exactly once.**
 
 **The census has TWO axes, and the first is not quotable on its own.** A cell's
