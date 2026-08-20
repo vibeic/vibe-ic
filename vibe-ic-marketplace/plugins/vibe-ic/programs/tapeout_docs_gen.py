@@ -369,7 +369,47 @@ def from_project(project: Path):
             run_id = json.loads(pre.read_text()).get("run_id", NOT_MEASURED)
         except Exception:
             pass
-    return m, run_id
+    design, pdk = identity(project)
+    return m, design, pdk, run_id
+
+
+# `input/project.json` is where this flow already records which design and which
+# PDK a run is for -- `pdk_consistency_check` and `declared_pdk_is_the_pdk_used_check`
+# both read exactly these keys. Reading them here is what lets the gate clause be
+# the chip-AGNOSTIC `--project .` the flow yaml declares: the two identities are
+# properties OF the run, so demanding them on the command line made the only
+# declared invocation one this program refuses (rc=2, which
+# `flow_compliance_check` reads as the input-missing skip -- a gate that passes
+# vacuously forever).
+_DESIGN_KEYS = ("design", "design_name", "top", "top_module")
+_PDK_KEYS = ("pdk", "target_pdk", "pdk_target")
+
+
+def identity(project: Path) -> tuple[str, str]:
+    """Read (design, pdk) off the project, or NOT_MEASURED. Never a default.
+
+    A guessed design name is the same failure as a guessed number: it makes a
+    document that names the wrong chip, and nothing in the file says it was a
+    guess.
+    """
+    doc = {}
+    pj = project / "input" / "project.json"
+    if pj.is_file():
+        try:
+            loaded = json.loads(pj.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                doc = loaded
+        except Exception:
+            doc = {}
+
+    def pick(keys):
+        for k in keys:
+            v = doc.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return NOT_MEASURED
+
+    return pick(_DESIGN_KEYS), pick(_PDK_KEYS)
 
 
 def main():
@@ -377,8 +417,10 @@ def main():
     ap.add_argument("--metrics", type=Path)
     ap.add_argument("--project", type=Path,
                     help="resolve metrics + run id from ONE project tree")
-    ap.add_argument("--design", required=True)
-    ap.add_argument("--pdk", required=True)
+    ap.add_argument("--design", default=None,
+                    help="design name; read off --project when not given")
+    ap.add_argument("--pdk", default=None,
+                    help="PDK name; read off --project when not given")
     ap.add_argument("--plugin-version", default=NOT_MEASURED)
     ap.add_argument("--run-id", default=NOT_MEASURED)
     ap.add_argument("--summary", default="")
@@ -391,9 +433,17 @@ def main():
     a = ap.parse_args()
 
     if a.project and not a.metrics:
-        a.metrics, rid = from_project(a.project)
+        a.metrics, design, pdk, rid = from_project(a.project)
         if a.run_id == NOT_MEASURED:
             a.run_id = rid
+        if a.design is None:
+            a.design = design
+        if a.pdk is None:
+            a.pdk = pdk
+    if a.design is None:
+        a.design = NOT_MEASURED
+    if a.pdk is None:
+        a.pdk = NOT_MEASURED
     if not a.metrics:
         raise SystemExit('--metrics or --project is required')
     m = load_metrics(a.metrics)
