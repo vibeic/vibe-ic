@@ -736,11 +736,20 @@ def resolve_power_requirement(project: Path, *,
 
     readable = [r for r in contract_reqs if r.get("max_w") is not None]
     if readable:
-        distinct = sorted({r["max_w"] for r in readable})
+        # Identity of a requirement is (limit, the basis it was written
+        # against) — NOT the limit alone. Two requirements at one limit for two
+        # activity bases are two requirements, and one requirement stated twice
+        # with two limits is not an authority.
+        distinct = sorted({(r["max_w"],
+                            (r.get("scope") or {}).get("activity_basis"))
+                           for r in readable})
         if len(distinct) > 1:
             return {"requirement": None, "sources": sources,
-                    "refusal": (f"{CONTRACT_SCHEMA} copies state different "
-                                f"total-power limits (W): {distinct}"),
+                    "refusal": (
+                        f"{len(distinct)} distinct {CONTRACT_SCHEMA} "
+                        f"total-power requirements (limit_W, activity_basis): "
+                        f"{distinct}. This gate applies ONE limit and will "
+                        f"not choose between them"),
                     "superseded": []}
         return {"requirement": readable[0], "sources": sources,
                 "refusal": None,

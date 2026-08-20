@@ -157,7 +157,8 @@ def test_two_contract_copies_that_disagree_are_not_an_authority(tmp_path):
         json.dumps(_contract(2.0e-03)))
     r = _run(proj)
     assert _refused(r), r.stdout + r.stderr
-    assert "state different total-power limits" in r.stdout
+    assert "2 distinct" in r.stdout
+    assert "will not choose between them" in r.stdout
 
 
 # ── 2. the ACTIVITY BASIS gate ────────────────────────────────────────────

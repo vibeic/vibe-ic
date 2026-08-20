@@ -465,3 +465,32 @@ def test_a_requirement_stated_in_uw_against_the_uw_metric_is_read(tmp_path):
                           "limit": {"max": 1000.0}}]})
     req = pw.resolve_power_requirement(proj)["requirement"]
     assert req["max_uw"] == 1000.0 and req["max_w"] == 1000.0 * 1e-6
+
+
+def test_a_requirements_identity_is_its_limit_AND_its_basis(tmp_path):
+    """Two requirements at the SAME limit written against two activity bases
+    are two requirements, not one stated twice. This gate applies one limit and
+    refuses to choose between them rather than taking whichever the glob
+    happened to yield first."""
+    proj = _proj(tmp_path, l19=None, contract={
+        "schema": pw.CONTRACT_SCHEMA,
+        "requirements": [
+            {"metric": "power.total_w", "unit": "W", "limit": {"max": 2.0e-03},
+             "scope": {"activity_basis": pw.BASIS_VCD}},
+            {"metric": "power.total_w", "unit": "W", "limit": {"max": 2.0e-03},
+             "scope": {"activity_basis": pw.BASIS_VECTORLESS}}]})
+    res = pw.resolve_power_requirement(proj)
+    assert res["requirement"] is None
+    assert "2 distinct" in res["refusal"]
+
+
+def test_the_same_requirement_stated_twice_is_still_one_authority(tmp_path):
+    """The paired positive: Phase 1 publishing one contract into two places
+    must not be mistaken for two requirements."""
+    req = {"metric": "power.total_w", "unit": "W", "limit": {"max": 2.0e-03},
+           "scope": {"activity_basis": pw.BASIS_VECTORLESS}}
+    proj = _proj(tmp_path, l19=None, contract={
+        "schema": pw.CONTRACT_SCHEMA, "requirements": [req, dict(req)]})
+    res = pw.resolve_power_requirement(proj)
+    assert res["refusal"] is None
+    assert res["requirement"]["max_w"] == 2.0e-03
