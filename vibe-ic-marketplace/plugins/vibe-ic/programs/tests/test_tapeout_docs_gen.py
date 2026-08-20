@@ -12,6 +12,7 @@ that passed precheck and the 1x1 die that carries the full metrics were both
 "spm on gf180mcuD", and only comparing their bounding boxes caught it.
 """
 import fnmatch
+import importlib.util
 import json
 import subprocess
 import sys
@@ -225,3 +226,68 @@ def test_the_step_declares_the_names_this_program_writes(tmp_path):
         assert any(fnmatch.fnmatch(w, pat) for w in written), (
             f"the flow declares {d!r} and this program wrote {sorted(written)} "
             f"— a declared output no producer writes can never be produced")
+
+
+# ---------------------------------------------------------------------------
+# A run this program REFUSES to document must not be scored as a gate pass.
+#
+# MEASURED on origin/main 69ce9260d: `NOT RELEASABLE` exited 2, and rc==2 is the
+# flow's input-missing-skip convention. Driving the flow's own evaluator over a
+# project whose only defect was `timing__setup__ws: -1.53`:
+#
+#     ok = True
+#     snippet = __VACUOUS_HINT__: tapeout_docs_gen --project . --out-dir ...
+#
+# The gate passed the run it had just refused to write documents for.
+# ---------------------------------------------------------------------------
+NOT_CLEAN = dict(CLEAN, **{"timing__setup__ws": -1.53, "timing__setup__tns": -40.0})
+
+# rc values `flow_compliance_check` scores as a PASS tier: 0 PASS, 2 VACUOUS_PASS,
+# 3 PASS_WITH_WAIVERS.
+_PASS_TIER_RCS = (0, 2, 3)
+
+
+def _project(tmp_path, metrics):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(exist_ok=True)
+    (tmp_path / "input" / "project.json").write_text(
+        json.dumps({"design": "widget", "pdk": "openpdk"}), encoding="utf-8")
+    final = tmp_path / "phase3" / "final"
+    final.mkdir(parents=True, exist_ok=True)
+    (final / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    return tmp_path
+
+
+def test_a_run_that_is_not_releasable_exits_a_code_the_flow_scores_as_fail(tmp_path):
+    proj = _project(tmp_path, NOT_CLEAN)
+    r = subprocess.run(
+        [sys.executable, str(PROG), "--project", str(proj),
+         "--out-dir", str(proj / "reports" / "phase3" / "docs")],
+        capture_output=True, text=True)
+    assert "NOT RELEASABLE" in r.stderr
+    assert r.returncode not in _PASS_TIER_RCS, (
+        f"rc={r.returncode} is a PASS tier in this flow (0 PASS / 2 VACUOUS_PASS "
+        f"/ 3 PASS_WITH_WAIVERS), so the gate reports a pass on a run this "
+        f"program just refused to document")
+
+
+def test_the_flows_own_evaluator_fails_the_gate_on_a_run_that_is_not_clean(tmp_path):
+    """The composition, not the exit code in isolation -- this is what the gate does."""
+    fcc_path = PROG.parent / "flow_compliance_check.py"
+    spec = importlib.util.spec_from_file_location("_fcc_docs_probe", fcc_path)
+    fcc = importlib.util.module_from_spec(spec)
+    sys.modules["_fcc_docs_probe"] = fcc
+    spec.loader.exec_module(fcc)
+
+    proj = _project(tmp_path, NOT_CLEAN)
+    ok, out = fcc._check_program_exit_zero(
+        proj, "tapeout_docs_gen --project . --out-dir reports/phase3/docs")
+    assert not ok, (
+        f"the flow scored a NOT-RELEASABLE run as a gate pass: {out[:160]!r}")
+
+    clean = _project(tmp_path / "clean", CLEAN)
+    ok_clean, out_clean = fcc._check_program_exit_zero(
+        clean, "tapeout_docs_gen --project . --out-dir reports/phase3/docs")
+    assert ok_clean, (
+        f"a clean run must still PASS, or this gate is red for everyone: "
+        f"{out_clean[:200]!r}")
