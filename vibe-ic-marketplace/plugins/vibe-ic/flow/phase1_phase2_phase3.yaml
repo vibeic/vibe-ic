@@ -2820,18 +2820,42 @@ steps:
   - id: 15.5ic
     name: "Pad Ring (chip/IC path only)"
     stage: stage3
+    # THE CHIP PATH, NOT THE SHUTTLE TEMPLATE. `slots/*.yaml` is the
+    # OPERATOR'S file, and conditioning this step on it meant a chip doing its
+    # OWN tape-out — no shuttle, so no slot file — had this step silently
+    # skipped as "not applicable" and shipped a die with no pad ring — a die that cannot be bonded or probed.. A pad ring is not a property of being on a shuttle; it is a
+    # property of being a DIE.
+    # The operator's template supplies GEOMETRY this step needs; its absence
+    # changes WHERE that geometry comes from — step 0.5ic's
+    # `tapeout_declaration.json`, whose section `2B_pad_ring` (8 questions, every one carrying
+    # `consumer="pad_ring_gen"`) was written for
+    # exactly this consumer — and never WHETHER the step runs.
+    #
+    # `any_of` names the CHIP PATH out of the marker 0.5ic already writes. Of
+    # its three mutually exclusive router files, `slots/*.yaml` and
+    # `SELF_TAPEOUT.txt` are the two chip-path ones; `NO_TEMPLATE.txt` is the
+    # IP terminal, and an IP is delivered as a hardmacro rather than
+    # fabricated as a die, so it correctly has neither. MEASURED on
+    # `flow_compliance_check._check_condition`: `any_of: true` is a MODIFIER on
+    # the `files_exist` block, so the two entries below are an OR; without it
+    # they would be an AND, and 0.5ic's own gate refuses a tree carrying two
+    # router files at once — the step could then never run for any design.
     condition:
-      files_exist: ["input/submission_template/slots/*.yaml"]
+      files_exist:
+        - "input/submission_template/slots/*.yaml"
+        - "input/submission_template/SELF_TAPEOUT.txt"
+      any_of: true
     # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
     # condition tests WHICH PATH the design is on, and step 0.5ic's
-    # required_outputs is the OR of exactly these two artefacts, so on any run
-    # where 0.5ic itself passed, precisely one of them exists. A chip
-    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
-    # seal ring or shuttle precheck — a silent skip is the correct reading. The
-    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
-    # having run, which its own gate refuses as NEVER_LOOKED rather than
-    # leaving to be inferred from a downstream skip. Stated rather than left to
-    # the default so the reading is the step's, not the consumer's fallback.
+    # required_outputs is the OR of exactly three artefacts, so on any run
+    # where 0.5ic itself passed precisely one of them exists — and two of the
+    # three select this step. An IP legitimately has neither a pad ring nor a
+    # seal ring, so for the remaining one a silent skip is the correct
+    # reading. The "someone forgot" case is NOT lost to this default: it is
+    # 0.5ic never having run, which its own gate refuses as NEVER_LOOKED
+    # rather than leaving to be inferred from a downstream skip. Stated rather
+    # than left to the default so the reading is the step's, not the
+    # consumer's fallback.
     condition_kind: design_dependent
     required_inputs:
       - from: 15
@@ -3946,18 +3970,42 @@ steps:
   - id: 26.5ic
     name: "Die Finishing — seal ring + die identification (chip/IC path only)"
     stage: stage3
+    # THE CHIP PATH, NOT THE SHUTTLE TEMPLATE. `slots/*.yaml` is the
+    # OPERATOR'S file, and conditioning this step on it meant a chip doing its
+    # OWN tape-out — no shuttle, so no slot file — had this step silently
+    # skipped as "not applicable" and shipped a die with no seal ring — which is what dicing damage and moisture get
+    # into.. A seal ring is not a property of being on a shuttle; it is a
+    # property of being a DIE.
+    # The operator's template supplies GEOMETRY this step needs; its absence
+    # changes WHERE that geometry comes from — step 0.5ic's
+    # `tapeout_declaration.json`, whose section `2C_seal_ring` (3 questions) was written for
+    # exactly this consumer — and never WHETHER the step runs.
+    #
+    # `any_of` names the CHIP PATH out of the marker 0.5ic already writes. Of
+    # its three mutually exclusive router files, `slots/*.yaml` and
+    # `SELF_TAPEOUT.txt` are the two chip-path ones; `NO_TEMPLATE.txt` is the
+    # IP terminal, and an IP is delivered as a hardmacro rather than
+    # fabricated as a die, so it correctly has neither. MEASURED on
+    # `flow_compliance_check._check_condition`: `any_of: true` is a MODIFIER on
+    # the `files_exist` block, so the two entries below are an OR; without it
+    # they would be an AND, and 0.5ic's own gate refuses a tree carrying two
+    # router files at once — the step could then never run for any design.
     condition:
-      files_exist: ["input/submission_template/slots/*.yaml"]
+      files_exist:
+        - "input/submission_template/slots/*.yaml"
+        - "input/submission_template/SELF_TAPEOUT.txt"
+      any_of: true
     # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
     # condition tests WHICH PATH the design is on, and step 0.5ic's
-    # required_outputs is the OR of exactly these two artefacts, so on any run
-    # where 0.5ic itself passed, precisely one of them exists. A chip
-    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
-    # seal ring or shuttle precheck — a silent skip is the correct reading. The
-    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
-    # having run, which its own gate refuses as NEVER_LOOKED rather than
-    # leaving to be inferred from a downstream skip. Stated rather than left to
-    # the default so the reading is the step's, not the consumer's fallback.
+    # required_outputs is the OR of exactly three artefacts, so on any run
+    # where 0.5ic itself passed precisely one of them exists — and two of the
+    # three select this step. An IP legitimately has neither a pad ring nor a
+    # seal ring, so for the remaining one a silent skip is the correct
+    # reading. The "someone forgot" case is NOT lost to this default: it is
+    # 0.5ic never having run, which its own gate refuses as NEVER_LOOKED
+    # rather than leaving to be inferred from a downstream skip. Stated rather
+    # than left to the default so the reading is the step's, not the
+    # consumer's fallback.
     condition_kind: design_dependent
     required_inputs:
       - from: 21

@@ -76,7 +76,7 @@ def test_the_step_is_declared_between_the_antenna_check_and_pv():
     ids = [str(s["id"]) for s in _steps()]
     assert ids.count(_STEP) == 1
     assert ids.index("26") < ids.index(_STEP) < ids.index("31")
-    assert _step(_STEP)["blocks_on"] == [26]
+    assert _step(_STEP)["blocks_on"] == [26, "0.5ic"]
 
 
 def test_the_two_programs_the_step_names_exist_and_are_split():
@@ -852,3 +852,40 @@ def test_the_signoff_gds_is_preferred_over_the_published_copy():
     only published when it is byte-identical to it. Sealing the published copy
     would seal the die after its evidence."""
     assert DFG._GDS_GLOBS[0].startswith("phase3/stage3/pnr/")
+
+
+# --------------------------------------------------------------------------- #
+# THE CHIP PATH, NOT THE SHUTTLE TEMPLATE
+#
+# The condition used to be `files_exist: [input/submission_template/
+# slots/*.yaml]` — the OPERATOR'S file. A chip doing its own tape-out has no
+# operator and therefore no slot file, so this step was skipped as "not
+# applicable" and the die shipped with no seal ring. A seal ring is not a
+# property of being on a shuttle; it is a property of being a DIE, and it is
+# what dicing damage and moisture get into. The template supplies GEOMETRY this
+# step needs; its absence changes WHERE that comes from, never WHETHER the step
+# runs.
+# --------------------------------------------------------------------------- #
+def test_the_step_runs_on_the_chip_path_and_not_on_the_operators_template():
+    step = _step(_STEP)
+    cond = step["condition"]
+    assert cond["any_of"] is True, (
+        "without `any_of` the two entries are an AND, and 0.5ic's own gate "
+        "refuses a tree carrying two router files at once — the step could "
+        "then never run for any design")
+    assert set(cond["files_exist"]) == {
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"}
+    assert not any("NO_TEMPLATE" in f for f in cond["files_exist"])
+    assert step["condition_kind"] == "design_dependent"
+
+
+def test_the_ip_terminal_is_not_selected_by_the_chip_path_marker():
+    """An IP is delivered as a hardmacro and never fabricated as a die, so it
+    correctly has neither a pad ring nor a seal ring."""
+    ip = _step("37.5ip")
+    assert ip["condition"]["files_exist"] == [
+        "input/submission_template/NO_TEMPLATE.txt"]
+    for sid in ("15.5ic", _STEP):
+        assert "input/submission_template/NO_TEMPLATE.txt" not in \
+            _step(sid)["condition"]["files_exist"]
