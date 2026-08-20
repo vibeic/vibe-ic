@@ -278,6 +278,9 @@ _REQUIRED_AND_ABSENT = (
     "stay unsatisfied, which is what makes the flow report it")
 
 _DECL_REQUIRED = "seal_ring_required"
+#: Section 2A, and the ONE question outside 2C this program reads. See
+#: `die_size` for why it is the LAST source there and not the first.
+_DECL_DIE_AREA = "die_area_um"
 _DECL_SCRIPT = "seal_ring_script"
 _DECL_MARKER = "seal_ring_marker_layer"
 _DECL_SOURCE = f"{_td.DECLARATION_REL}:answers"
@@ -305,7 +308,8 @@ def _declaration(project: Path) -> Tuple[Dict[str, Any], Optional[str]]:
     if not isinstance(doc, dict):
         return {}, f"{_td.DECLARATION_REL}: the top level is not a mapping"
     return {k: _td.answer(doc, k)
-            for k in (_DECL_REQUIRED, _DECL_SCRIPT, _DECL_MARKER)}, None
+            for k in (_DECL_REQUIRED, _DECL_SCRIPT, _DECL_MARKER,
+                      _DECL_DIE_AREA)}, None
 
 
 def _declared(answers: Dict[str, Any], key: str) -> Optional[Any]:
@@ -369,12 +373,29 @@ def resolve_script(project: Path, explicit: Optional[str],
 
 def die_size(project: Path, gds: Path,
              width: Optional[float],
-             height: Optional[float]) -> Tuple[Optional[float], Optional[float], str]:
+             height: Optional[float],
+             declared: Optional[Dict[str, Any]] = None
+             ) -> Tuple[Optional[float], Optional[float], str]:
     """(width_um, height_um, source).
 
     The floorplan's own DIEAREA is preferred over the GDS bounding box: the
     bbox is whatever geometry happens to reach furthest, which on a die with
     an outline marker or an overhanging label is not the die.
+
+    THE DECLARATION IS THE LAST SOURCE, NOT THE FIRST, and the order is the
+    whole reason it can be added at all (vibe-ic#1410/cpath). A DEF's DIEAREA
+    is the die that was BUILT; `die_area_um` is the die that was AGREED. The
+    ring must fit the layout it is being added to, so where both exist the
+    built one wins and this changes nothing for any project that has a DEF —
+    which is every project that has ever reached this step. Where they
+    DISAGREE that is a real defect, and it is 37.5ic's general precheck that
+    owns it: comparing the layout against the declaration is that step's job,
+    and quietly sealing to the declared number here would erase the evidence
+    it reads.
+
+    What it DOES close: a self-tape-out that streamed a GDS and carries no DEF
+    used to reach "no DIEAREA found; caller must pass --die-width/--die-height"
+    and skip, while the number it needed was written down two directories away.
     """
     if width and height:
         return float(width), float(height), "--die-width/--die-height"
@@ -396,7 +417,18 @@ def die_size(project: Path, gds: Path,
             x0, y0, x1, y1 = (int(m.group(i)) for i in (1, 2, 3, 4))
             return ((x1 - x0) / scale, (y1 - y0) / scale,
                     f"DIEAREA of {d.relative_to(project)}")
-    return None, None, "no DIEAREA found; caller must pass --die-width/--die-height"
+    rect = _declared(declared or {}, _DECL_DIE_AREA)
+    if (isinstance(rect, (list, tuple)) and len(rect) == 4
+            and all(isinstance(c, (int, float)) and not isinstance(c, bool)
+                    for c in rect)):
+        w, h = float(rect[2]) - float(rect[0]), float(rect[3]) - float(rect[1])
+        if w > 0 and h > 0:
+            return w, h, (f"{_DECL_SOURCE}.{_DECL_DIE_AREA} {list(rect)} "
+                          "(no DEF DIEAREA on this tree)")
+    return None, None, ("no DIEAREA found in any DEF and "
+                        f"{_DECL_SOURCE}.{_DECL_DIE_AREA} is "
+                        f"{_td.NOT_DETERMINED}; caller must pass "
+                        "--die-width/--die-height")
 
 
 #: What a `pya-cli` script DECLARES. LibreLane's generic caller passes
@@ -872,7 +904,7 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
                 script=script, script_source=src, form=form,
                 form_source=form_why))
 
-    w, h, die_src = die_size(project, gds_path, width, height)
+    w, h, die_src = die_size(project, gds_path, width, height, decl)
     if not w or not h:
         return done(_skip(f"cannot determine the die size: {die_src}",
                           script=script, script_source=src))

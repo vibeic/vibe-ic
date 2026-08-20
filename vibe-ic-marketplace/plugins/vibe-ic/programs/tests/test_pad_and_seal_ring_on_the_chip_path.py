@@ -641,6 +641,90 @@ def test_a_declared_marker_layer_reaches_the_verifier(tmp_path):
         "plausible default")
 
 
+def test_the_declared_die_area_is_the_LAST_die_size_source_never_the_first(tmp_path):
+    """A DEF's DIEAREA is the die that was BUILT; `die_area_um` is the die that
+    was AGREED, and where both exist the built one wins.
+
+    That ordering is what makes the new source safe to add at all: every
+    project that has ever reached this step carries a DEF, so none of them
+    moves. Where the two DISAGREE it is 37.5ic's general precheck that owns the
+    finding — quietly sealing to the declared number here would erase the
+    evidence it reads. What it closes is the OTHER case, measured live in the
+    pinned EDA image: a self-tape-out that streamed a GDS and carries no DEF
+    reached "no DIEAREA found; caller must pass --die-width/--die-height" and
+    skipped, while the number it needed was written down two directories away.
+    """
+    root = tmp_path / "d"
+    (root / "phase3/stage3/pnr").mkdir(parents=True)
+    gds = root / "phase3/stage3/pnr/x.gds"
+    gds.write_bytes(b"")
+    _declaration(root, {"seal_ring_required": True,
+                        "die_area_um": [0, 0, 1000, 500]})
+    decl, _ = DFG._declaration(root)
+
+    # no DEF anywhere -> the declaration answers, and SAYS it did
+    w, h, src = DFG.die_size(root, gds, None, None, decl)
+    assert (w, h) == (1000.0, 500.0), (w, h, src)
+    assert TD.DECLARATION_REL in src and "die_area_um" in src
+
+    # a DEF exists -> the DEF wins and the declaration is not consulted
+    (root / "phase3/stage3/pnr/routed.def").write_text(
+        "UNITS DISTANCE MICRONS 1000 ;\nDIEAREA ( 0 0 ) ( 7000 3000 ) ;\n")
+    w, h, src = DFG.die_size(root, gds, None, None, decl)
+    assert (w, h) == (7.0, 3.0), (w, h, src)
+    assert "DIEAREA of" in src, src
+
+    # explicit flags still outrank both
+    w, h, src = DFG.die_size(root, gds, 11.0, 12.0, decl)
+    assert (w, h, src) == (11.0, 12.0, "--die-width/--die-height")
+
+
+def test_an_unanswered_die_area_says_so_rather_than_defaulting(tmp_path):
+    """The absence message must name BOTH places it looked. "Unset" is only
+    checkable if the reader is told where the search happened."""
+    root = tmp_path / "n"
+    (root / "phase3/stage3/pnr").mkdir(parents=True)
+    gds = root / "phase3/stage3/pnr/x.gds"
+    gds.write_bytes(b"")
+    _declaration(root, {})
+    decl, _ = DFG._declaration(root)
+    w, h, src = DFG.die_size(root, gds, None, None, decl)
+    assert (w, h) == (None, None)
+    assert "no DIEAREA found in any DEF" in src
+    assert "die_area_um" in src and TD.NOT_DETERMINED in src
+
+
+def test_a_degenerate_declared_die_area_is_not_taken(tmp_path):
+    """`validate` already refuses an inverted rectangle at the declaration's
+    own gate; this is the second half of the same rule, at the point of use.
+    A zero-area die must not become a zero-by-zero seal ring."""
+    root = tmp_path / "z"
+    (root / "phase3/stage3/pnr").mkdir(parents=True)
+    gds = root / "phase3/stage3/pnr/x.gds"
+    gds.write_bytes(b"")
+    _declaration(root, {})
+    # written past `merge_answers`, because the declaration's own validator
+    # would refuse this shape — which is the point: the reader must not rely
+    # on the writer having been the one that ran.
+    doc = json.loads((root / TD.DECLARATION_REL).read_text())
+    doc["answers"]["die_area_um"] = [10, 10, 10, 10]
+    (root / TD.DECLARATION_REL).write_text(json.dumps(doc))
+    decl, _ = DFG._declaration(root)
+    w, h, _src = DFG.die_size(root, gds, None, None, decl)
+    assert (w, h) == (None, None)
+
+
+def test_answering_the_die_area_does_not_make_the_seal_section_look_started(tmp_path):
+    """`die_area_um` is section 2A. Answering it must not trip the 2C
+    "started and still owes `seal_ring_required`" refusal, or every design that
+    stated its die size would be charged for a seal-ring question nobody
+    asked it."""
+    seal, marker = _seal(tmp_path, {"die_area_um": [0, 0, 100, 100]})
+    assert seal["state"] == "DISCLOSED_SKIP"
+    assert seal["marker"] is True
+    assert marker.is_file()
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 9. WIRING — this cannot be satisfied by adding a file nobody calls
 # ══════════════════════════════════════════════════════════════════════════
