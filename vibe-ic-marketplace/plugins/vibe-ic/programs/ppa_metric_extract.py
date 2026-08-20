@@ -231,6 +231,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     doc = M.bundle(index, expected=expected)
     report["records_digest"] = doc["records_digest"]
     report["rc"] = rc
+    # PPA_INTERFACES §1: a machine-readable code on every verdict, including
+    # the ones a caller most needs to tell apart without parsing English.
+    report["code"] = {RC_OK: "BUNDLE_WRITTEN",
+                      RC_REFUSED: "RECORD_REFUSED",
+                      RC_UNDETERMINED: ("NOTHING_TO_READ" if n_docs == 0
+                                        else "INPUT_UNREADABLE")}[rc]
     if args.out and rc != RC_REFUSED:
         # A bundle is written for rc 0 and rc 2 (the second is a real, honest,
         # partial set) and NEVER for rc 1: a refused record set must not leave

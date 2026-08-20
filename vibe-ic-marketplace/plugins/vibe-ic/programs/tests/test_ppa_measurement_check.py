@@ -314,3 +314,51 @@ def test_the_json_report_is_written_for_the_vacuous_arm_too(tmp_path):
     report = json.loads(out.read_text())
     assert report["rc"] == 2
     assert report["cannot_check"]
+
+
+# --------------------------------------- PPA_INTERFACES §1: a code on every verdict
+
+@pytest.mark.parametrize("what,expect_rc,expect_code", [
+    ("complete", 0, "COVERAGE_COMPLETE"),
+    ("omitted", 1, "COVERAGE_ABSENT"),
+    ("declared", 2, "COVERAGE_INCOMPLETE"),
+])
+def test_every_coverage_verdict_carries_a_machine_readable_code(
+        tmp_path, what, expect_rc, expect_code):
+    """A caller must be able to tell two rc=2s apart without parsing English:
+    'the bundle is not there' and 'the bundle is there and two rows are
+    declared absent' are the same exit code and different problems."""
+    records = {
+        "complete": ALL_THREE,
+        "omitted": ALL_THREE[:2],
+        "declared": ALL_THREE[:2] + [M.not_measured(
+            "timing.setup.wns_ns", "STA did not run", SCOPE_ROUTE)],
+    }[what]
+    out = tmp_path / "r.json"
+    p = run("--coverage", bundle_of(tmp_path, records), "--json", str(out))
+    assert p.returncode == expect_rc, (p.stdout, p.stderr)
+    assert json.loads(out.read_text())["code"] == expect_code
+
+
+def test_the_vacuous_arm_distinguishes_its_two_reasons(tmp_path):
+    absent = tmp_path / "a.json"
+    p = run("--coverage", str(tmp_path / "nope.json"), "--json", str(absent))
+    assert p.returncode == 2
+    assert json.loads(absent.read_text())["code"] == "INPUT_ABSENT"
+
+    nodenom = tmp_path / "b.json"
+    p = run("--coverage", bundle_of(tmp_path, ALL_THREE, expected=None),
+            "--json", str(nodenom))
+    assert p.returncode == 2
+    assert json.loads(nodenom.read_text())["code"] == "NO_EXPECTATION_SET"
+
+
+def test_the_compare_verdict_code_is_on_the_report(tmp_path):
+    a = _rec(tmp_path, "a.json",
+             M.measured("area.die_um2", 12000.0, "um^2", SCOPE_SYNTH, SRC))
+    b = _rec(tmp_path, "b.json",
+             M.measured("area.die_um2", 15400.0, "um^2", SCOPE_ROUTE, SRC))
+    out = tmp_path / "r.json"
+    p = run("--compare", a, b, "--json", str(out))
+    assert p.returncode == 2
+    assert json.loads(out.read_text())["code"] == "DIFFERENT_SCOPE"

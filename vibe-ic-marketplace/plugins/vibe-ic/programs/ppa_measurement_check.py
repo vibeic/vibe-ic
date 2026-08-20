@@ -83,22 +83,31 @@ RC_BAD_INVOCATION = 3
 
 
 class CannotCheck(Exception):
-    """Input this program could not see. NEVER a finding about a design."""
+    """Input this program could not see. NEVER a finding about a design.
 
-    def __init__(self, message: str):
+    Carries a `code` because PPA_INTERFACES §1 requires a machine-readable code
+    on every verdict, and the verdicts that most need one are the ones a caller
+    has to tell apart without parsing English: "the bundle is not there" and
+    "the bundle is there and declares no denominator" are both rc=2 and they
+    are different problems with different fixes.
+    """
+
+    def __init__(self, message: str, code: str = "CANNOT_CHECK"):
         super().__init__(message)
         self.message = message
+        self.code = code
 
 
 def _read_json(path: Path, what: str) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise CannotCheck(f"no such {what}: {path}")
+        raise CannotCheck(f"no such {what}: {path}", "INPUT_ABSENT")
     except OSError as exc:
-        raise CannotCheck(f"{what} {path} could not be read: {exc}")
+        raise CannotCheck(f"{what} {path} could not be read: {exc}",
+                          "INPUT_UNREADABLE")
     except json.JSONDecodeError as exc:
-        raise CannotCheck(f"{what} {path} is not JSON: {exc}")
+        raise CannotCheck(f"{what} {path} is not JSON: {exc}", "INPUT_BAD_JSON")
 
 
 def _index_from(path: Path) -> Tuple[M.MetricIndex, List[Dict[str, Any]]]:
@@ -111,7 +120,7 @@ def _index_from(path: Path) -> Tuple[M.MetricIndex, List[Dict[str, Any]]]:
     try:
         recs = M.records_from_document(doc)
     except M.MetricError as exc:
-        raise CannotCheck(f"{path}: {exc.code}: {exc.message}")
+        raise CannotCheck(f"{path}: {exc.code}: {exc.message}", exc.code)
     index = M.MetricIndex()
     refusals: List[Dict[str, Any]] = []
     for i, rec in enumerate(recs):
@@ -139,7 +148,8 @@ def _expected_from(bundle_doc: Any, expect_path: Optional[Path]) -> List[Any]:
         if not isinstance(doc, list) or not doc:
             raise CannotCheck(
                 f"{expect_path} carries no non-empty `expected` list, so "
-                "there is no denominator to measure coverage against")
+                "there is no denominator to measure coverage against",
+                "NO_EXPECTATION_SET")
         return doc
     if isinstance(bundle_doc, dict) and isinstance(bundle_doc.get("expected"),
                                                    list) and bundle_doc["expected"]:
@@ -148,7 +158,8 @@ def _expected_from(bundle_doc: Any, expect_path: Optional[Path]) -> List[Any]:
         "no expectation set: neither --expect nor the bundle declares what "
         "should have been measured. Coverage computed from the records alone "
         "can only ever be 100%, because the rows it would report missing are "
-        "exactly the rows that are not there to iterate over.")
+        "exactly the rows that are not there to iterate over.",
+        "NO_EXPECTATION_SET")
 
 
 def run_coverage(bundle_path: Path,
@@ -159,7 +170,7 @@ def run_coverage(bundle_path: Path,
     try:
         cov = M.coverage(index, expected)
     except M.MetricError as exc:
-        raise CannotCheck(f"{exc.code}: {exc.message}")
+        raise CannotCheck(f"{exc.code}: {exc.message}", exc.code)
     report: Dict[str, Any] = {
         "program": "ppa_measurement_check.py", "mode": "coverage",
         "bundle": str(bundle_path),
@@ -174,6 +185,9 @@ def run_coverage(bundle_path: Path,
         # coverage gap, for the same reason 1 outranks 2 everywhere else here.
         rc = RC_REFUSED
     report["rc"] = rc
+    report["code"] = ("RECORD_REFUSED" if refusals
+                      else {0: "COVERAGE_COMPLETE", 1: "COVERAGE_" + cov.worst,
+                            2: "COVERAGE_INCOMPLETE"}[rc])
     report["_text"] = M.format_coverage(cov)
     return rc, report
 
@@ -185,20 +199,20 @@ def run_compare(a_path: Path, b_path: Path,
         try:
             recs = M.records_from_document(doc)
         except M.MetricError as exc:
-            raise CannotCheck(f"{path}: {exc.code}: {exc.message}")
+            raise CannotCheck(f"{path}: {exc.code}: {exc.message}", exc.code)
         if len(recs) != 1:
             raise CannotCheck(
                 f"{path} carries {len(recs)} records; --compare takes exactly "
                 "one on each side. Comparing a set to a set would have to "
                 "choose which rows pair up, and choosing is what this gate "
-                "refuses to do.")
+                "refuses to do.", "NOT_ONE_RECORD")
         return recs[0]
 
     a, b = one(a_path), one(b_path)
     try:
         verdict = M.compare(a, b, better=better)
     except M.MetricError as exc:
-        raise CannotCheck(f"{exc.code}: {exc.message}")
+        raise CannotCheck(f"{exc.code}: {exc.message}", exc.code)
     report = {"program": "ppa_measurement_check.py", "mode": "compare",
               "a_path": str(a_path), "b_path": str(b_path),
               "comparison": verdict}
@@ -214,6 +228,7 @@ def run_compare(a_path: Path, b_path: Path,
     else:
         rc = RC_UNDETERMINED
     report["rc"] = rc
+    report["code"] = v
     return rc, report
 
 
@@ -249,12 +264,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     except CannotCheck as exc:
         # THE VACUOUS ARM. Not rc=0 (nothing was checked) and not rc=1 (rc=1 is
         # a claim about silicon, and nothing here looked at any).
-        print(f"[CANNOT CHECK] {exc.message} rc=2.", file=sys.stderr)
+        print(f"[CANNOT CHECK] {exc.code}: {exc.message} rc=2.",
+              file=sys.stderr)
         if args.json:
             atomic_write_text(
                 Path(args.json),
                 json.dumps({"program": "ppa_measurement_check.py",
-                            "rc": RC_UNDETERMINED, "cannot_check": exc.message},
+                            "rc": RC_UNDETERMINED, "code": exc.code,
+                            "cannot_check": exc.message},
                            indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return RC_UNDETERMINED
 

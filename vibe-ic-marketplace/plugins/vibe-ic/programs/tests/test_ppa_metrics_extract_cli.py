@@ -231,3 +231,28 @@ def test_the_report_names_its_denominator(tmp_path):
     report = json.loads(out.read_text())
     assert report["records"] == 1
     assert len(report["documents"]) == 1
+
+
+def test_every_extract_verdict_carries_a_machine_readable_code(tmp_path):
+    """PPA_INTERFACES §1. Two rc=2s -- 'no documents at all' and 'a document I
+    could not read' -- are different problems with different fixes."""
+    d = tmp_path / "records"
+    d.mkdir()
+    out = tmp_path / "r.json"
+    assert run("--records", str(d), "--json", str(out)).returncode == 2
+    assert json.loads(out.read_text())["code"] == "NOTHING_TO_READ"
+
+    (d / "broken.json").write_text("{not json", encoding="utf-8")
+    assert run("--records", str(d), "--json", str(out)).returncode == 2
+    assert json.loads(out.read_text())["code"] == "INPUT_UNREADABLE"
+
+    (d / "broken.json").unlink()
+    put(d / "area.json", AREA)
+    assert run("--records", str(d), "--json", str(out)).returncode == 0
+    assert json.loads(out.read_text())["code"] == "BUNDLE_WRITTEN"
+
+    other = dict(AREA)
+    other["value"] = 15400.0
+    put(d / "b.json", other)
+    assert run("--records", str(d), "--json", str(out)).returncode == 1
+    assert json.loads(out.read_text())["code"] == "RECORD_REFUSED"
