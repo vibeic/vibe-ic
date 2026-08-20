@@ -2830,10 +2830,33 @@ def test_d3_cell_states_partition_all_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (51, 2, 15), (
+    # 2026-08-20, LATER STILL: (51, 2, 15) -> (51, 2, 16). ONE step, 37.5self,
+    # and it is the step the note twelve lines above already announces. That
+    # note and the `== 69` assertion under it were BOTH moved by the commit
+    # that added the step (`00d9dc261`, v1.11.4); this triple, seventeen lines
+    # further down in the same function, was not — so the file said 69 steps
+    # and 51+2+15=68 at the same time, and the message below ("must be
+    # re-reviewed, not absorbed") is what fired.
+    #
+    # THE STATE IS NA, not ENFORCED, and it is the SAME derivation the four
+    # path-specific steps got in (b) below: 37.5self declares a step-level
+    # `condition` — `files_exist: [input/submission_template/SELF_TAPEOUT.txt]`
+    # with `condition_kind: design_dependent` — so NA_DORMANT_CONDITION is
+    # derivable for it. MEASURED, and the premise is a property of the COMMIT,
+    # re-executed every run: `git ls-tree -r HEAD | grep -c SELF_TAPEOUT.txt`
+    # is 0 in this repository AND 0 in the published corpus, and a disk walk of
+    # every admissible run root finds none. The day a project ships one, the
+    # NA self-invalidates through `test_d3_required_outputs_are_produced` and
+    # the cell returns to the denominator.
+    #
+    # WHAT IT COSTS, said plainly, because (b) says it about the other four:
+    # 37.5self declares `reports/phase3/general_precheck.json` and no admissible
+    # run has produced it. NA means that is NOT JUDGED here rather than judged
+    # and failed.
+    assert (len(enforced), len(waived), len(na)) == (51, 2, 16), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(51, 2, 15) on 2026-08-20. A step moving between states is a real "
+        f"(51, 2, 16) on 2026-08-20. A step moving between states is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
