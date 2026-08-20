@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1132
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1132)
+- **Total programs (excluding helpers / shims):** 1133
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1133)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1123 |
+| `any` | 1124 |
 
 ## Alphabetical listing
 
@@ -886,6 +886,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `response_latency_observability_check` | any | — | LL-5. |
 | `response_payload_template_check` | any | — | M5: Verify that response payload bytes are assembled from dynamic data (register values, echoed arguments, computed results) rather than ... |
 | `result_md_audit_provenance_check` | any | Wave 33 | Wave 33 (v0.119.65). |
+| `retired_pytest_plugin_request_check` | any | — | no file may hand pytest a plugin the anchored runtime does not carry. |
 | `reused_ip_rtl_consume` | any | — | Deterministic reused-IP RTL CONSUME step. |
 | `rig_firmware_capability_check` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp, unknown | Wave 58 | Wave 58 / BACKLOG-v12 P0.5 plugin gate. |
 | `rig_topology_disclosure_check` | any | — | verify hardware rig topology is declared. |
@@ -1204,7 +1205,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1123 programs)
+### `any` (1124 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2061,6 +2062,7 @@ _(no programs in this group)_
 - `response_latency_observability_check` — LL-5.
 - `response_payload_template_check` — M5: Verify that response payload bytes are assembled from dynamic data (register values, echoed arguments, computed results) rather than ...
 - `result_md_audit_provenance_check` — Wave 33 (v0.119.65).  _[Wave 33]_
+- `retired_pytest_plugin_request_check` — no file may hand pytest a plugin the anchored runtime does not carry.
 - `reused_ip_rtl_consume` — Deterministic reused-IP RTL CONSUME step.
 - `rig_topology_disclosure_check` — verify hardware rig topology is declared.
 - `rig_topology_image_extracted_check` — gate (LL-35).  _[v0.119.32]_
