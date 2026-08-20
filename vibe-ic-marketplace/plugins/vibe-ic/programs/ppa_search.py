@@ -462,6 +462,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "The report still names the total, so a limited run "
                         "cannot read as a complete one.")
     p.add_argument("--timeout-s", type=int, default=3600)
+    p.add_argument("--resume", action="store_true",
+                   help="reuse a configuration's existing record instead of "
+                        "re-running it. A resumed record is NOT re-measured, "
+                        "so it is stamped `resumed: true` and names the run "
+                        "that produced it — a figure carried across a restart "
+                        "must say which run it came from.")
     p.add_argument("--rerender", action="store_true",
                    help="re-render SEARCH_REPORT.md from an existing "
                         "search.json and stop. Runs nothing and measures "
@@ -513,8 +519,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the search has to beat exists, and a reference sharing the machine with 8
     # concurrent flows is a different measurement.
     print(f"[ppa_search] reference (our own default run): {BASELINE}")
-    ref_rec = run_one(design, out, dict(BASELINE), args.top_name, args.runner,
-                      args.container, args.timeout_s, dir_prefix="REFERENCE_")
+    ref_path = out / "records" / ("REFERENCE_" + config_id(BASELINE) + ".json")
+    if args.resume and ref_path.exists():
+        ref_rec = json.loads(ref_path.read_text(encoding="utf-8"))
+        ref_rec["resumed"] = True
+        if not Path(ref_rec.get("run_dir", "")).is_dir():
+            print("[ppa_search] REFUSED: the resumed reference record names a "
+                  f"run tree that no longer exists: {ref_rec.get('run_dir')}. "
+                  "Re-reading its metrics would read a different tree.",
+                  file=sys.stderr)
+            return RC_REFUSED
+        print(f"[ppa_search] reference RESUMED from {ref_path.name} "
+              f"(not re-measured)")
+    else:
+        ref_rec = run_one(design, out, dict(BASELINE), args.top_name,
+                          args.runner, args.container, args.timeout_s,
+                          dir_prefix="REFERENCE_")
     ref_read = _obj.read_metrics(Path(ref_rec["run_dir"]))
     ref_rec["metrics"] = ref_read["metrics"]
     ref_rec["metric_sources"] = ref_read["sources"]
@@ -522,7 +542,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ref_rec["role"] = "reference"
     r_pass, r_total, r_why = step_progress(Path(ref_rec["run_dir"]))
     ref_rec["step"], ref_rec["stages_total"] = r_pass, r_total
-    ref_rec["config_id"] = "REFERENCE_" + ref_rec["config_id"]
+    if not str(ref_rec["config_id"]).startswith("REFERENCE_"):
+        ref_rec["config_id"] = "REFERENCE_" + ref_rec["config_id"]
     _write_record(out, ref_rec)
 
     blocking = sorted(k for k, v in ref_read["unmeasured"].items()
@@ -548,14 +569,36 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return RC_REFUSED
 
+    records: List[Dict[str, Any]] = []
+    todo: List[Dict[str, Any]] = []
+    for cfg in configs:
+        rp = out / "records" / f"{config_id(cfg)}.json"
+        if args.resume and rp.exists():
+            try:
+                done = json.loads(rp.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                todo.append(cfg)
+                continue
+            # A resumed record is NOT re-measured. It is stamped as such, and
+            # it is refused if the tree it names has gone — a figure carried
+            # across a restart must still resolve to ONE run tree.
+            if not Path(done.get("run_dir", "")).is_dir():
+                todo.append(cfg)
+                continue
+            done["resumed"] = True
+            records.append(done)
+        else:
+            todo.append(cfg)
+    if records:
+        print(f"[ppa_search] resumed {len(records)} record(s) from a previous "
+              f"run of this search; {len(todo)} left to run")
     print(f"[ppa_search] {len(configs)} of {total_space} configuration(s), "
           f"jobs={args.jobs}")
-    records: List[Dict[str, Any]] = []
     with _cf.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         futs = {pool.submit(run_one, design, out, cfg, args.top_name,
                             args.runner, args.container, args.timeout_s): cfg
-                for cfg in configs}
-        for n, fut in enumerate(_cf.as_completed(futs), 1):
+                for cfg in todo}
+        for n, fut in enumerate(_cf.as_completed(futs), 1 + len(records)):
             rec = fut.result()
             rec = score_one(rec, ref_read["metrics"], weights["weights"])
             rec["weights"] = weights
