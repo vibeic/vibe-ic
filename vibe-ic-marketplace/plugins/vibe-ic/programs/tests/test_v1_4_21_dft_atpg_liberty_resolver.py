@@ -123,8 +123,9 @@ from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
 PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
+_LOCAL_EDA_IMAGE = _local_eda_image()
 _IMAGE_STATE, _IMAGE_DETAIL = probe(
-    ["docker", "image", "inspect", _local_eda_image()])
+    ["docker", "image", "inspect", _LOCAL_EDA_IMAGE])
 
 
 @pytest.mark.skipif(
@@ -132,8 +133,15 @@ _IMAGE_STATE, _IMAGE_DETAIL = probe(
     reason=probe_skip_reason(_IMAGE_STATE, _IMAGE_DETAIL,
                              "vibeic-eda container not available",
                              RUN_REMEDY))
-def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path):
+def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path, monkeypatch):
     import fault_atpg_run as far  # noqa: E402
+    # Run the image the guard above PROVED is on this machine. `DOCKER_IMAGE`
+    # asks `_eda_image.resolve()`, which answers with the registry's current
+    # digest — right for a real run, but here it is an image the guard never
+    # checked, so `docker run` starts a 6.68 GB fetch and loses the 60 s
+    # timeout below. A guard that checks one image while the test runs another
+    # proves nothing; these two must name the same image.
+    monkeypatch.setattr(far, "DOCKER_IMAGE", _LOCAL_EDA_IMAGE)
     nl = tmp_path / "phase2" / "stage2" / "synth" / "spm_synth.v"
     nl.parent.mkdir(parents=True)
     body = ["module spm(input clk, input d0, input d1, output q0, output q1);"]

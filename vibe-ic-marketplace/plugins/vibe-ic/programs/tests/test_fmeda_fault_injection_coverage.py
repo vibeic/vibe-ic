@@ -24,6 +24,7 @@ sys.path.insert(0, str(PROG_DIR))
 import fmeda_fault_injection_coverage as fi          # noqa: E402
 import fmeda_coverage_check as gate                  # noqa: E402
 import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
+import _eda_image as _img                            # noqa: E402
 
 _REPO_ROOT = ceiling_check.find_repo_root()
 
@@ -651,14 +652,19 @@ def test_local_image_probe_reports_absence_where_resolve_invents_a_pin(
     """
     monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
     monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
-    monkeypatch.setattr(fi.shutil, "which", lambda n: "/usr/bin/docker")
 
-    class _Absent:
-        returncode = 1        # `docker image inspect` -> not present locally
+    # The fake daemon now has to be installed on `_eda_image`, which is where
+    # both answers are computed since the pinned candidate list was retired.
+    # Patching `fi.subprocess` alone would leave the real docker underneath and
+    # make this test measure the host instead of the case it describes.
+    monkeypatch.setattr(_img, "registry_digest", lambda *a, **k: None)
+    monkeypatch.setattr(_img, "local_tags", lambda *a, **k: [])
+    monkeypatch.setattr(_img, "_run",
+                        lambda *a, **k: type("R", (), {"returncode": 1})())
 
-    monkeypatch.setattr(fi.subprocess, "run", lambda *a, **k: _Absent())
-    assert fi._resolve_docker_image() == fi._IMAGE_CANDIDATES[0]  # invents one
-    assert fi._local_docker_image() is None                       # honest None
+    # Same host, opposite answers — the distinction the whole fix rests on.
+    assert fi._resolve_docker_image() == _img.LEGACY_IMAGE   # names one anyway
+    assert fi._local_docker_image() is None                  # honest None
 
 
 # ── What this gate WRITES into the project, not just what it reports ───────

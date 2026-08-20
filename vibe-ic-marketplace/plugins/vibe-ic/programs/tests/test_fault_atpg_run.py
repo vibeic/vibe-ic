@@ -9,12 +9,9 @@ Full end-to-end Fault-in-Docker run is validated by the aon_timer pilot
 (see reports/dft/coverage.json); no need to re-run in unit tests.
 """
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 SCRIPT = Path(__file__).parent.parent / "fault_atpg_run.py"
 assert SCRIPT.exists()
@@ -57,42 +54,19 @@ def test_clock_arg_required(tmp_path):
     assert "clock" in r.stderr.lower() or "required" in r.stderr.lower()
 
 
-# --- image-resolution pinning ------------------------------------------------
-# The fork fallback tags must be PINNED (vibeic-eda:X.Y.Z), never :latest — a
-# floating tag can silently resolve to a stale local image whose tool behavior
-# no longer matches what the plugin was verified against. The pinned value is
-# kept in sync with tools/vibeic-eda/VERSION by sync_image_version.py (this
-# file is registered in its INSTALL_DOC_CANDIDATES).
-
-def _find_version_file():
-    for up in Path(__file__).resolve().parents:
-        c = up / "tools" / "vibeic-eda" / "VERSION"
-        if c.is_file():
-            return c
-    return None
-
-
-def test_no_floating_fork_image_tag():
-    src = SCRIPT.read_text(encoding="utf-8")
-    assert "vibeic-eda:latest" not in src, (
-        "fork image fallback must be pinned to vibeic-eda:X.Y.Z, not :latest"
-    )
-    # the pinned fork tags must still be present (resolver not gutted)
-    assert re.search(r"ghcr\.io/vibeic/vibeic-eda:\d+\.\d+\.\d+", src)
-
-
-def test_pinned_tag_matches_version_source_of_truth():
-    vf = _find_version_file()
-    if vf is None:
-        pytest.skip("tools/vibeic-eda/VERSION not present (packaged plugin)")
-    version = vf.read_text(encoding="utf-8").strip()
-    src = SCRIPT.read_text(encoding="utf-8")
-    tags = re.findall(r"vibeic-eda:(\d+\.\d+\.\d+)", src)
-    assert tags, "expected pinned vibeic-eda:X.Y.Z tags in fault_atpg_run.py"
-    assert set(tags) == {version}, (
-        f"pinned tags {sorted(set(tags))} drifted from VERSION={version}; "
-        "run tools/vibeic-eda/sync_image_version.py --set/--bump"
-    )
+# --- image resolution --------------------------------------------------------
+# Two tests stood here and asserted the OPPOSITE of what this module now does:
+# that `fault_atpg_run.py` carries a pinned `ghcr.io/vibeic/vibeic-eda:X.Y.Z`
+# literal, and that the literal equals `tools/vibeic-eda/VERSION`. The pin is
+# gone — the module asks `_eda_image` which image is current — so neither test
+# had a subject left to assert on.
+#
+# The property they guarded is guarded MORE tightly by its successor,
+# `tests/test_the_eda_image_is_resolved_not_remembered.py`: this file is one of
+# the six named in its `_CONSUMERS` sweep, which requires that it carry no
+# version literal AT ALL and that it resolve through `_eda_image` — where a
+# further test proves the answer is a registry digest and never a bare
+# `:latest`. That is why they are removed here rather than rewritten.
 
 
 # --- pure helpers: dff-cell detection / merge / cell-model resolution -------

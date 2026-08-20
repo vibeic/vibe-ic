@@ -16,8 +16,8 @@ WHY THIS EXISTS
 
     An exemption is only as good as its premise. The premise here is that the
     module names NO image itself — it runs whatever `fault_atpg_run` resolves,
-    and `fault_atpg_run.py` IS a registered install-doc candidate whose
-    pointers the anchor rewrites. If someone later writes a
+    and `fault_atpg_run` no longer remembers a version at all: it asks
+    `_eda_image` which image is current. If someone later writes a
     `DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.x"` into the exempted
     module, the drift net will stay silent about it FOREVER, and the code
     would pull a pinned stale image while every gate reported green.
@@ -32,6 +32,7 @@ import importlib
 import re
 from pathlib import Path
 
+import _eda_image as _img
 import fault_atpg_run as far
 import fault_scan_chain_insert as fsci
 
@@ -53,17 +54,22 @@ def test_the_anchor_file_is_where_we_think_it_is():
     assert re.fullmatch(r"\d+\.\d+\.\d+", _anchor()), _anchor()
 
 
-def test_resolver_falls_back_to_the_anchor_version(monkeypatch):
-    """With no env override and nothing available locally, the image the DFT
-    steps pull is the ANCHOR image — asserted on the returned string."""
+def test_the_dft_image_is_whatever_eda_image_resolved(monkeypatch):
+    """With no env override, the image the DFT steps pull is the one
+    `_eda_image` resolved — asserted on the returned string.
+
+    This slot used to assert the ANCHOR version, back when the fallback was a
+    literal kept in step with `tools/vibeic-eda/VERSION`. There is no anchor to
+    fall back to now, and the point of the assertion was never the version: it
+    was that the DFT image is a RESOLVED value and not something this module
+    or its caller invented. Driving the resolution from a stubbed registry
+    keeps that on a value, which is what the file docstring demands.
+    """
     monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
     monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
-
-    def _never_present(*a, **k):
-        raise OSError("no docker in this test")
-
-    monkeypatch.setattr(far.subprocess, "run", _never_present)
-    assert far._resolve_docker_image() == f"ghcr.io/vibeic/vibeic-eda:{_anchor()}"
+    digest = "sha256:" + "b" * 64
+    monkeypatch.setattr(_img, "registry_digest", lambda *a, **k: digest)
+    assert far._resolve_docker_image() == f"{_img.IMAGE_REPO}@{digest}"
 
 
 def test_an_explicit_env_image_still_wins(monkeypatch):
