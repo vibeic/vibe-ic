@@ -105,12 +105,36 @@ _ppa/agent_router.py     Program-First diagnosis; explicit handoff only
 _ppa/agent_policy.py     allow-list, autonomy level, blast radius, budget
 _ppa/casebook.py         evidence-signed cases + design fingerprint compatibility
 _ppa/distillation.py     case lifecycle RAW -> ... -> PROGRAMMED
+_ppa/backends/exec.py    ONE container invocation: command, mounts, cwd,
+                         cpu-seconds, tool version, invocation provenance
 _ppa/backends/{opensta,openroad,yosys,librelane,orfs}.py   tool-specific parsing only
 ```
 
 A backend module parses one tool's output into canonical records and does
 nothing else. No thresholds, no verdicts, no policy — those live in the domain
 module, so that adding a tool never changes a rule.
+
+RUNNING the tool is the other half of that sentence, and `_ppa/backends/exec.py`
+owns it. Until this line existed the map named a parser and named no caller, so
+every function that starts a container had nowhere to go. Measured on
+`programs/phase3_one_shot_runner.py` (41,136 lines, 8,745 of them PPA): **6,111
+PPA lines — 70% — anchor on eleven invocation helpers** (`_docker_exec`,
+`_docker_exec_raw`, `_container_mounts`, `_to_container_path`,
+`_container_cpu_seconds`, `_tool_version`, `_tool_from_command`,
+`_split_shell_chain`, `_log_invocation`, `_hash_declared_outputs`,
+`_tool_status_not_the_log_sinks`) and cannot be extracted into a module this
+document never named. A silent map is not a neutral map; it is a map that says
+"leave it in the runner" without anyone having decided that.
+
+`exec.py` runs ONE invocation and records what it was: the command, the mounts,
+the working directory, the cpu-seconds it consumed, the tool version behind it,
+and the provenance of the call. It obeys the same rule as the parsers — no
+thresholds, no verdicts, no policy — so "which tool ran" and "is the result
+acceptable" stay two questions in two modules.
+
+This is an OWNERSHIP line, not a schedule. Moving the eleven helpers is a large
+extraction with its own A/B and it belongs to whoever does it; what changes here
+is that the destination now exists to move them to.
 
 ## 5. Schema conventions
 
