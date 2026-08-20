@@ -82,6 +82,22 @@ from . import canonical_json as cj
 
 SCHEMA = "vibeic.ppa.search_manifest.v1"
 
+<<<<<<< HEAD
+=======
+# A PLAN is what a search produced before it ran anything: real candidates in
+# PROPOSED, with no results. It is deliberately NOT a `search_manifest.v1`, and
+# it says so in its own first key.
+#
+# The alternative -- labelling it `search_manifest.v1` anyway -- is what this
+# file did until it was caught, and it is exactly the defect this lane exists to
+# refuse: a document that declares a schema it cannot satisfy. Its candidates
+# are PROPOSED, which `search_manifest.v1` forbids, so it failed its own
+# validator while claiming to be an instance of it. Now the schema key names
+# what the document IS, and `audit_manifest` gives it ONE clear finding instead
+# of one NON_TERMINAL_STATE per candidate.
+PLAN_SCHEMA = "vibeic.ppa.search_plan.v1"
+
+>>>>>>> origin/jppa-search/ppa-search-layer
 # ---------------------------------------------------------------------------
 # §11.2 the fidelity ladder
 # ---------------------------------------------------------------------------
@@ -740,12 +756,29 @@ def build_manifest(ledger: Ledger, space_digest: str,
                    lever_notes: Optional[List[Dict[str, str]]] = None,
                    frontier_stage: Optional[str] = None,
                    toolchain: Optional[Dict[str, Any]] = None,
+<<<<<<< HEAD
                    ) -> Dict[str, Any]:
     """The published search bundle. Complete at budget 1, complete at budget N."""
     spent = ledger.budget_spent()
     fi = frontier_input(ledger, frontier_stage)
     return {
         "schema": SCHEMA,
+=======
+                   is_plan: bool = False,
+                   ) -> Dict[str, Any]:
+    """The published search bundle. Complete at budget 1, complete at budget N.
+
+    `is_plan` switches the schema key, and nothing else. The document shape is
+    identical because a plan and a result answer the same questions -- which
+    points, under what budget, comparable on what grounds; the difference is
+    only that a plan has not run yet, and the FIRST KEY is where a reader and a
+    validator both find that out.
+    """
+    spent = ledger.budget_spent()
+    fi = frontier_input(ledger, frontier_stage)
+    return {
+        "schema": PLAN_SCHEMA if is_plan else SCHEMA,
+>>>>>>> origin/jppa-search/ppa-search-layer
         "space_digest": space_digest,
         "budget": ledger.budget.as_record(),
         "budget_spent": spent,
@@ -819,6 +852,19 @@ def audit_manifest(man: Dict[str, Any]) -> List[Dict[str, str]]:
     def bad(code: str, detail: str) -> None:
         out.append({"code": code, "detail": detail})
 
+<<<<<<< HEAD
+=======
+    if man.get("schema") == PLAN_SCHEMA:
+        # One finding, not one per candidate: the document is honest about
+        # being a plan, and the only thing wrong is asking a result-audit to
+        # bless it.
+        bad("PLAN_NOT_A_RESULT",
+            f"this document declares itself {PLAN_SCHEMA!r} -- a plan, whose "
+            "candidates have not run. A plan is not a search RESULT and cannot "
+            "be audited as one. Re-run with observed trials to produce a "
+            f"{SCHEMA!r}.")
+        return out
+>>>>>>> origin/jppa-search/ppa-search-layer
     if man.get("schema") != SCHEMA:
         bad("WRONG_SCHEMA",
             f"first key must be {SCHEMA!r}, got {man.get('schema')!r}")

@@ -1,5 +1,6 @@
 """`_ppa.backends` — one module per tool, and each one only PARSES.
 
+<<<<<<< HEAD
 A backend turns what a tool actually wrote into canonical metric records
 (`docs/PPA_INTERFACES.md` §2) and does nothing else: no thresholds, no verdicts,
 no policy. Those live in the domain modules (`_ppa/timing.py`, `_ppa/power.py`,
@@ -30,6 +31,11 @@ Four consequences that are easy to get wrong, and are therefore stated here:
   vectorless". That is not a policy; it is the tool's behaviour, it is
   measurable from the installed tool, and the module records how it was
   measured.
+=======
+`docs/PPA_INTERFACES.md` §4: "A backend module parses one tool's output into
+canonical records and does nothing else. No thresholds, no verdicts, no policy
+— those live in the domain module, so that adding a tool never changes a rule."
+>>>>>>> origin/jppa-search/ppa-search-layer
 
 The rule earns its keep at exactly the moment a tool's output is CLOSE to what a
 domain wants. A backend that notices a violation count is zero and returns
