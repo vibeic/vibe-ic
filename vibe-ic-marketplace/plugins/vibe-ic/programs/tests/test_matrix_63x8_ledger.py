@@ -4,11 +4,11 @@ This file guards the substrate that all eight dimension modules import. It
 proves three things, and deliberately nothing else:
 
   1. The ledger really is the live cross product of the flow yaml's step list
-     and dimensions 1-8 — 504 cells, each coordinate exactly once. Not 504
-     because 504 is written down somewhere; 504 because
-     ``len(step_ids()) * len(DIMENSIONS)`` is 504 *right now*. Add or delete a
+     and dimensions 1-8 — 544 cells, each coordinate exactly once. Not 544
+     because 544 is written down somewhere; 544 because
+     ``len(step_ids()) * len(DIMENSIONS)`` is 544 *right now*. Add or delete a
      step and this file goes red, which is the whole point: a ledger that
-     silently kept saying 504 while the flow drifted would be exactly the
+     silently kept saying 544 while the flow drifted would be exactly the
      "measure something adjacent and report it as the answer" disease the
      campaign exists to remove.
 
@@ -48,15 +48,43 @@ from matrix_63x8 import cells as C
 from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers as W
 
-EXPECTED_CELLS = 504
-EXPECTED_STEPS = 63
+# ──────────────────────────────────────────────────────────────────────
+# 2026-08-20, R6/R3 — EVERY TRIPWIRE BELOW MOVED, ON ONE CAUSE.
+#
+# vibe-ic#1744 added FIVE steps to the flow: 0.5ic (Submission Template
+# Ingest) and the four path-specific steps of the cell/IP-vs-chip/IC split,
+# 15.5ic 26.5ic 37.5ip 37.5ic. Measured live off the yaml in this tree, not
+# re-typed from the change:
+#
+#   EXPECTED_STEPS               63 -> 68   +5, one per new step
+#   EXPECTED_CELLS              504 -> 544   68 x 8
+#   CENSUS_GATE_PRESENT          62 -> 67   +5, every new step declares a gate
+#   CENSUS_REQUIRED_OUTPUTS_...  61 -> 66   +5, every new step declares outputs
+#   CENSUS_BLOCKS_ON_PRESENT     63 -> 68   +5, presence stays TOTAL
+#   CENSUS_BLOCKS_ON_NON_EMPTY   62 -> 66   +4, NOT +5 -- see below
+#   CENSUS_GATE_PROGRAMS_NON_... 61 -> 66   +5, every new gate names a program
+#
+# THE +4 IS THE ONE WORTH READING. 0.5ic declares `blocks_on: []`: it is a
+# genuine graph ROOT, the step that fetches the shuttle operator's template
+# before anything else can test which path the design is on. So presence moves
+# by 5 and non-empty by 4, and the `roots` set below moves from {D1} to
+# {0.5ic, D1}. That set is NOT re-typed here -- it is read out of
+# `flow_dependency_graph_check.DECLARED_ROOTS`, which #1744 moved in the same
+# commit, and the two agree on this tree: ['0.5ic', 'D1'].
+#
+# Also note A1 is no longer a root. #1258 gave it `blocks_on: [D1]` and the
+# note on CENSUS_BLOCKS_ON_NON_EMPTY below records that; the count that note
+# left at 62 is the one this change moves to 66.
+# ──────────────────────────────────────────────────────────────────────
+EXPECTED_CELLS = 544
+EXPECTED_STEPS = 68
 EXPECTED_DIMS = 8
 
 # Pinned census of the yaml as measured on 2026-07-27. These are TRIPWIRES, not
 # the definition: every structural assertion below derives its expectation live
 # from the yaml. If the flow legitimately changes, these numbers change with it
 # in ONE place and the reviewer is forced to look.
-CENSUS_GATE_PRESENT = 62
+CENSUS_GATE_PRESENT = 67
 # UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
 # was WITHDRAWN the same day: the only thing that made the declaration
 # satisfiable was `check_step` standing its early MISSING down so FS1's own
@@ -65,7 +93,7 @@ CENSUS_GATE_PRESENT = 62
 # artefacts have no producer outside its own gate, so dimension 7's W4 rule
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
-CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
+CENSUS_REQUIRED_OUTPUTS_PRESENT = 66
 # 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
 # P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
 # P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
@@ -76,7 +104,7 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 # `332b9985` also edited `flow_dependency_graph_check.py` and its test in the
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
-CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_PRESENT = 68
 # 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
 # gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
 # D1 while carrying `blocks_on: []`, so the ordering edge its own inputs
@@ -97,11 +125,11 @@ CENSUS_BLOCKS_ON_PRESENT = 63
 # gives A1 an ordering edge moves BOTH sides together instead of reddening
 # this cell". Both sides DID move together. The cell reddened anyway, because
 # this count is a THIRD copy that neither side is tied to.
-CENSUS_BLOCKS_ON_NON_EMPTY = 62
+CENSUS_BLOCKS_ON_NON_EMPTY = 66
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
-CENSUS_GATE_PROGRAMS_NON_EMPTY = 61
+CENSUS_GATE_PROGRAMS_NON_EMPTY = 66
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -548,10 +576,22 @@ def test_output_entries_classify_into_the_four_kinds():
     # (`spm/v1.9.96_gf180mcuD`, 7608 B), and it resolves in 9 of the 10
     # admissible run roots — declaring an artefact d3 cannot then evidence
     # would move the finding from d7 to d3 instead of closing it.
-    assert sum(seen.values()) == 141, seen
-    assert seen[F.FILE] == 107
-    assert seen[F.GLOB] == 12
-    assert seen[F.ANY_OF] == 22
+    # 2026-08-20 (#1744, R3): 141 -> 152, and the delta is spread across all
+    # three kinds for the first time, which is why each is asserted separately
+    # rather than only the sum. Measured per step off this tree:
+    #   0.5ic  +2  1 ANY_OF (slots/*.yaml OR NO_TEMPLATE.txt) + 1 FILE
+    #   15.5ic +2  2 FILE   (padring.def, padring.json)
+    #   26.5ic +2  1 ANY_OF (die_finished.def OR die_finishing.SKIPPED.txt)
+    #                       + 1 FILE
+    #   37.5ip +4  4 GLOB   (hardmacro/*.lef *.lib *.gds *.v -- the four views
+    #                        an IP is delivered as; a GLOB because the macro
+    #                        name is the design's, not the flow's)
+    #   37.5ic +1  1 FILE   (shuttle_precheck.json)
+    # = FILE +5 (107 -> 112), GLOB +4 (12 -> 16), ANY_OF +2 (22 -> 24).
+    assert sum(seen.values()) == 152, seen
+    assert seen[F.FILE] == 112
+    assert seen[F.GLOB] == 16
+    assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
     # does NOT exist in required_outputs. It lives only in `gate` clauses. The
     # classifier still returns it for forward-compat, but a sibling branching on
@@ -963,14 +1003,14 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
 
     This is the anti-fake-pass proof for the whole substrate. If the ledger
     were sourced from `.audit_63x8.json` — or from any frozen list — it would
-    keep reporting 63 steps / 504 cells here and this test would fail.
+    keep reporting 68 steps / 544 cells here and this test would fail.
 
     The real yaml is never touched: eight agents share this worktree.
     """
     original = F.FLOW_YAML
     doc = yaml.safe_load(original.read_text(encoding="utf-8"))
 
-    # (a) ADD a step -> 64 steps, 512 cells, new cells ABSENT_FROM_AUDIT.
+    # (a) ADD a step -> 69 steps, 552 cells, new cells ABSENT_FROM_AUDIT.
     doc["steps"].append(
         {
             "id": "ZZ_MUTANT",
@@ -989,7 +1029,7 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
         C.rebuild()
 
         assert len(F.step_ids()) == EXPECTED_STEPS + 1
-        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 512
+        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 552
         assert len(C.cells_for(1)) == EXPECTED_STEPS + 1
 
         # The added step has no audit history at all — surfaced, not swallowed.
