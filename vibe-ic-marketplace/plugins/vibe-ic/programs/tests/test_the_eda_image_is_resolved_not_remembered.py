@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""The plugin asks which EDA image is current; it does not remember a version.
+
+WHAT THIS REPLACES. The image version was a literal in eleven places, kept in
+step by `tools/vibeic-eda/sync_image_version.py --check` and advanced by a PR
+that vibeic-eda's daily release opened on this repo. The stated reason was that
+the pinned tag "matches what the plugin was VERIFIED AGAINST".
+
+Measured 2026-08-20: nothing verified that. The release proved the tag was
+PULLABLE and then wrote the verification claim anyway, on every publish — and
+charged a cross-repo check-in for it. vibeic-eda is built FOR this plugin and
+sits under it; its own release gate proves 78 commands across 17 replaced
+prefixes still resolve, runs 439 fork self-checks, and refuses to build unless
+sby/yices, ALIGN, klayout and the xyce plugin builder all work.
+
+Three properties are load-bearing here, and each has a way of quietly coming
+undone:
+  1. no literal version anywhere in the shipped programs — one left behind is
+     one that silently freezes while everything else moves;
+  2. `resolve()` never answers a bare `:latest` — `docker run …:latest` does not
+     consult the registry, so it means "whatever this machine pulled, whenever";
+  3. `resolve()` and `local_image()` stay DIFFERENT questions — collapsing them
+     hands `docker run` a 6.68 GB fetch across 84 layers where a skip guard
+     expected a local check.
+"""
+from __future__ import annotations
+
+import pathlib
+import re
+import sys
+
+import pytest
+
+_PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_PROGRAMS))
+import _eda_image as M  # noqa: E402
+
+_PINNED = re.compile(r"vibeic-eda:\d+\.\d+\.\d+")
+
+
+# ── 1. nothing remembers a version ──────────────────────────────────────────
+
+_CONSUMERS = (
+    "fault_atpg_run.py",
+    "fmeda_fault_injection_coverage.py",
+    "sta_engine_parity_check.py",
+    "pdk_via_patch_meets_layer_min_width_check.py",
+    "tests/test_v1_4_21_dft_atpg_liberty_resolver.py",
+    "tests/test_extraction_input_capability_check.py",
+)
+
+
+@pytest.mark.parametrize("rel", _CONSUMERS)
+def test_the_image_consumers_carry_no_pinned_version(rel):
+    """These six decided which image RUNS. A literal left in one of them does
+    not fail loudly — it freezes, and keeps running an older toolchain than
+    everything around it."""
+    src = (_PROGRAMS / rel).read_text(encoding="utf-8")
+    code = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("#"))
+    code = re.sub(r'"""(?:.|\n)*?"""', "", code)
+    assert not _PINNED.search(code), f"{rel} still pins a version"
+    assert "_eda_image" in src, f"{rel} does not ask _eda_image"
+
+
+def test_no_module_level_constant_freezes_an_image_version():
+    """The shape that goes stale silently, stated as a shape rather than a list
+    of files — a NEW `DEFAULT_IMAGE = "...:0.3.16"` is caught by the same test.
+
+    Deliberately NOT a sweep for the string anywhere, and deliberately not
+    over tests: this tree is full of honest history (`MEASURED ... image
+    vibeic-eda:0.2.30`) and fixture constants (`PINNED = "…:9.9.9"`), and a
+    guard that fires on those gets deleted by the next person who trips over
+    it — which leaves the real rule unguarded."""
+    import ast
+
+    offenders = []
+    for path in sorted(_PROGRAMS.rglob("*.py")):
+        # SHIPPED programs only. A test may legitimately define a fixture
+        # constant (`PINNED = "…:9.9.9"`); a program that runs the toolchain
+        # may not, because that one decides which image actually runs.
+        if "tests" in path.relative_to(_PROGRAMS).parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        for node in tree.body:                       # module level only
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str) \
+                    and _PINNED.search(value.value):
+                offenders.append(f"{path.relative_to(_PROGRAMS).as_posix()}:{node.lineno}")
+    assert not offenders, (
+        "module-level constants pinning an image version — ask _eda_image "
+        f"instead: {offenders}")
+
+
+# ── 2. never a bare :latest ─────────────────────────────────────────────────
+
+def test_resolve_returns_a_digest_not_a_floating_tag(monkeypatch):
+    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: "sha256:" + "a" * 64)
+    got = M.resolve(env={})
+    assert got == f"{M.IMAGE_REPO}@sha256:{'a' * 64}"
+    assert ":latest" not in got
+
+
+def test_an_unreachable_registry_says_so_instead_of_pretending(monkeypatch, capsys):
+    """The fallback is honest, not silent: a toolchain quietly older than the
+    caller believes is the failure this module exists to prevent."""
+    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: None)
+    monkeypatch.setattr(M, "local_tags", lambda *a, **k: ["0.3.9", "0.3.10"])
+    got = M.resolve(env={})
+    assert got == f"{M.IMAGE_REPO}:0.3.9"      # first of the list as given
+    assert "registry unreachable" in capsys.readouterr().err
+
+
+def test_with_nothing_at_all_it_names_the_legacy_image_and_warns(monkeypatch, capsys):
+    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: None)
+    monkeypatch.setattr(M, "local_tags", lambda *a, **k: [])
+    got = M.resolve(env={})
+    assert got == M.LEGACY_IMAGE
+    assert "does NOT carry the forked tools" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("key", ["VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE"])
+def test_an_explicit_override_wins_over_everything(monkeypatch, key):
+    monkeypatch.setattr(M, "registry_digest",
+                        lambda *a, **k: pytest.fail("must not ask the registry"))
+    assert M.resolve(env={key: "my/own:image"}) == "my/own:image"
+
+
+# ── 3. the two questions stay apart ─────────────────────────────────────────
+
+def test_local_image_never_touches_the_registry(monkeypatch):
+    """Collapsing this into `resolve` turns a skip guard's local check into an
+    unbounded pull."""
+    monkeypatch.setattr(M, "registry_digest",
+                        lambda *a, **k: pytest.fail("local_image asked the registry"))
+    monkeypatch.setattr(M, "local_tags", lambda *a, **k: ["0.3.16"])
+    assert M.local_image(env={}) == f"{M.IMAGE_REPO}:0.3.16"
+
+
+def test_local_image_is_None_when_the_machine_has_nothing(monkeypatch):
+    monkeypatch.setattr(M, "local_tags", lambda *a, **k: [])
+    monkeypatch.setattr(M, "_run", lambda *a, **k: type("R", (), {"returncode": 1})())
+    assert M.local_image(env={}) is None
+
+
+def test_local_tags_are_newest_first_and_ignore_non_semver(monkeypatch):
+    out = type("R", (), {"returncode": 0,
+                         "stdout": "latest\n0.3.9\n0.3.10\nedge\n0.4.0\n"})()
+    monkeypatch.setattr(M, "_run", lambda *a, **k: out)
+    assert M.local_tags() == ["0.4.0", "0.3.10", "0.3.9"]

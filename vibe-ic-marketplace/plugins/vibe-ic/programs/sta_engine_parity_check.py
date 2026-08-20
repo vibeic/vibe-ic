@@ -51,7 +51,18 @@ import _docker_memory as _dmem  # every `docker run` carries the ceiling
 
 RC_AGREE, RC_DISAGREE, RC_CANNOT_CHECK = 0, 1, 2
 
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.16"
+# The image is RESOLVED, not remembered — see `_eda_image`. This used to
+# be a pinned literal kept in step by `sync_image_version.py`; the version it
+# pinned claimed to be "what the plugin was verified against", and nothing
+# ever verified that. vibeic-eda's own release gate does.
+#
+# Resolved LAZILY: at import time this would put a registry round-trip in
+# front of every `--help`, and offline imports would stall.
+import _eda_image as _img
+
+
+def default_image() -> str:
+    return _img.resolve()
 
 #: Commands that exist ONLY on `vibeic/sta-timing-eco`, taken from its diff
 #: against upstream master rather than from memory. Every one must be reachable
@@ -218,7 +229,8 @@ def check(image: str, commands: Tuple[str, ...], *, equivalence: bool = True) ->
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--image", default=None,
+                    help="EDA image; default: the current published one")
     ap.add_argument("--baseline", default=None,
                     help="JSON register of ALREADY-KNOWN divergences. Only NEW "
                          "ones fail; the recorded set is reported every run so "
@@ -226,7 +238,9 @@ def main(argv=None) -> int:
     ap.add_argument("--json", default=None)
     a = ap.parse_args(argv)
 
-    res = check(a.image, SUPERSET_COMMANDS)
+    # `--image` defaults to None so `--help` costs no registry call; the
+    # resolution happens here, once, when an image is actually needed.
+    res = check(a.image or default_image(), SUPERSET_COMMANDS)
     if a.json:
         from pathlib import Path
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
