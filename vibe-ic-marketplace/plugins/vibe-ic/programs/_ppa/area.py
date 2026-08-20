@@ -427,9 +427,28 @@ def scope_matches(a: Optional[Mapping[str, Any]],
     let post-route be compared to synthesis whenever one side simply omitted the
     stage — and an omitted key is exactly how that would arrive.
     """
+    if not isinstance(a, Mapping) or not isinstance(b, Mapping):
+        # A scope read off disk can be a list, a string, or null. None of those
+        # is a scope, so nothing is comparable to it — and that is a
+        # not-comparable answer, not an exception two frames up.
+        return False
     if not a or not b:
         return False
-    return _cj.dumps(dict(a)) == _cj.dumps(dict(b))
+    try:
+        return _cj.dumps(dict(a)) == _cj.dumps(dict(b))
+    except (TypeError, ValueError):
+        # a scope holding something JSON cannot represent (a set, NaN) is a
+        # scope this comparison cannot establish equality for.
+        return False
+
+
+def _echo_scope(scope: Any) -> Any:
+    """Echo a scope back into a refusal WITHOUT assuming it is a scope.
+
+    The refusal is often "that is not a scope", so coercing it to a dict here
+    raises inside the very branch that exists to report it.
+    """
+    return dict(scope) if isinstance(scope, Mapping) else scope
 
 
 def _undet(code: str, why: str, **extra: Any) -> Dict[str, Any]:
@@ -486,8 +505,8 @@ def compare(baseline: Mapping[str, Any], candidate: Mapping[str, Any]
                       f"{bm}: scopes differ, so these are different metrics "
                       f"wearing one name (PPA_INTERFACES.md §2)",
                       **common,
-                      baseline_scope=dict(baseline.get("scope") or {}),
-                      candidate_scope=dict(candidate.get("scope") or {}))
+                      baseline_scope=_echo_scope(baseline.get("scope")),
+                      candidate_scope=_echo_scope(candidate.get("scope")))
     bv, cv = float(baseline["value"]), float(candidate["value"])
     if bv <= 0:
         return _undet(C_ZERO_BASELINE,

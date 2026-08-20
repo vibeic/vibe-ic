@@ -512,6 +512,42 @@ class TestCli:
         r = _run("--baseline", b, "--candidate", c)
         assert r.returncode == 2
 
+    def test_a_record_whose_scope_is_not_an_object_is_rc2(self, tmp_path):
+        """A scope read off disk can be a list, a string, or null.
+
+        None of those is a scope. Before the guard this raised inside
+        `dict(...)` two frames up, and an unhandled exception exits 1 — which
+        in this program means "the design is not smaller".
+        """
+        good = _phys("area.physical.core_um2", CORE_UM2)
+        b = _write(tmp_path, "b.json", [good])
+        c = _write(tmp_path, "c.json",
+                   [dict(good, value=11000.0, scope=["post_route"])])
+        r = _run("--baseline", b, "--candidate", c)
+        assert r.returncode == 2
+        assert "[CANNOT CHECK]" in r.stderr
+
+    def test_an_unexpected_internal_error_is_rc3_and_never_rc1(self,
+                                                               tmp_path,
+                                                               monkeypatch):
+        """The last-resort net, exercised rather than assumed.
+
+        Without it Python exits 1 on any unhandled exception, and 1 here is a
+        claim about silicon. Driven in-process because the point is precisely
+        the path no crafted INPUT reaches.
+        """
+        b = _write(tmp_path, "b.json", [_phys("area.physical.core_um2", 1.0)])
+        c = _write(tmp_path, "c.json", [_phys("area.physical.core_um2", 1.0)])
+        out = tmp_path / "v.json"
+
+        def boom(*_a, **_k):
+            raise RuntimeError("the comparator fell over")
+
+        monkeypatch.setattr(A, "area_verdict", boom)
+        rc = A.main(["--baseline", b, "--candidate", c, "--json", str(out)])
+        assert rc == 3
+        assert json.loads(out.read_text())["code"] == "AREA_INTERNAL_ERROR"
+
     def test_a_json_file_that_is_not_a_list_is_rc2(self, tmp_path):
         p = tmp_path / "b.json"
         p.write_text('{"nope": 1}', encoding="utf-8")
