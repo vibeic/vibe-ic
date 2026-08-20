@@ -205,12 +205,30 @@ def _report(root: Path) -> dict:
 
 
 def _rules(root: Path) -> set:
+    """The rule ids in the verdict document AND in the producer's report."""
     doc = _report(root)
     prod, _ = CHK._unwrap(doc)
     out = {f["rule"] for f in (doc.get("findings") or [])}
     if isinstance(prod, dict):
         out |= {f["rule"] for f in (prod.get("findings") or [])}
     return out
+
+
+def _gate_rules(root: Path) -> set:
+    """ONLY the GATE'S OWN findings.
+
+    `_rules` unions the producer's, which is right for most assertions and
+    exactly wrong for one: a test that a REFUSAL SURVIVES INTO THE GATE'S
+    VERDICT must not be satisfiable by the rule id merely sitting in the
+    embedded producer report, where it was already. Measured — a mutant that
+    deleted the gate's whole FAIL branch passed such a test, because the report
+    still carried the producer's finding and the PASS branch happened to reach
+    rc 1 by a different route (`PAD_ASSIGNMENT_ABSENT`).
+    """
+    doc = _report(root)
+    if doc.get("gate") != CHK.GATE:
+        return set()
+    return {f["rule"] for f in (doc.get("findings") or [])}
 
 
 def _config(root: Path) -> dict:
@@ -572,7 +590,13 @@ def test_a_producer_refusal_is_restated_by_rule_id_not_absorbed(tmp_path):
     root = _project(tmp_path, answers=answers)
     assert _gen(root) == 1
     assert _chk(root) == 1
-    assert "PAD_CONFIG_VARIABLE_ABSENT" in _rules(root)
+    assert "PAD_CONFIG_VARIABLE_ABSENT" in _gate_rules(root), (
+        "the GATE'S OWN verdict must carry the producer's rule id; finding it "
+        "only in the embedded producer report proves nothing about what the "
+        "step's verdict says")
+    assert "PAD_ASSIGNMENT_ABSENT" not in _gate_rules(root), (
+        "the gate must refuse for the reason the producer gave, not stumble "
+        "into rc 1 by noticing the config it never wrote is missing")
 
 
 # --------------------------------------------------------------------------- #
