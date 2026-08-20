@@ -1014,9 +1014,21 @@ run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate
 # probes dominate and vary with machine load, so budget for the high one.
 # Every subprocess this file starts is bounded at 55 s or less, and that is now
 # the ONLY bound: the `-p pytest_timeout --timeout=180 --timeout-method=thread`
-# session bound this line used to carry is gone. It was the LAST SURVIVING USE
-# in this repo of an idiom the repo has already retired, and it made this gate
-# unrunnable on the runtime the repo anchors.
+# session bound this line used to carry is gone.
+#
+# THE CLAIM THAT USED TO STAND HERE -- "it was the LAST SURVIVING USE in this
+# repo of an idiom the repo has already retired" -- WAS FALSE, and stayed false
+# for three versions. MEASURED 2026-08-20 at 9cc09b863 (v1.11.5), FOUR live
+# requests remained: `programs/tests/test_pytest_per_file_junit.py:389`, two in
+# `programs/tests/test_issue1181_probe_budget_and_summary.py`, and the DEFAULT
+# RUNNER of `tools/core_agent/covered_by.py`. They cost 28 red cells on the
+# landing gate in the anchored image that vanished on any host with an ambient
+# pip install -- a set difference of 28 whose entire content was the runtime,
+# not the code under test. The claim was true of every file anybody had
+# PINNED, and each of the five pins was scoped to one named file, so none of
+# them could see the sixth. `retired_pytest_plugin_request_check.py` below is
+# the tree-wide form, and it is what makes a claim like this one checkable
+# instead of merely asserted in a comment.
 #
 #   CAPABILITY, measured: `-p pytest_timeout` is a hard import, and
 #   `pytest-timeout` is absent from `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2`
@@ -1048,6 +1060,15 @@ run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate
 run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
     python3 -m pytest -q \
     "$ROOT/tools/test_liar_census.py"
+# ptmo/2026-08-20 — the tree-wide form of a retirement that had been enforced
+# five times, each time in ONE named file, and had therefore leaked into four
+# files nobody pinned. `-p <name>` is a hard import: pytest dies in its
+# pre-parse when the module is absent, and `pytest-timeout` is absent from the
+# anchored runner image AND from its newest tag. MEASURED, same 90 cases, same
+# tree: 30 red in the image, 3 on a host, 28-test set difference, all of it
+# this cause. BLOCKING: `run` fails the suite on any non-zero rc, and the gate
+# returns 2 rather than 0 when it could not read a file or examined none.
+run "no retired pytest plugin request" "$ROOT" python3 "$PG/retired_pytest_plugin_request_check.py" "$ROOT"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py
