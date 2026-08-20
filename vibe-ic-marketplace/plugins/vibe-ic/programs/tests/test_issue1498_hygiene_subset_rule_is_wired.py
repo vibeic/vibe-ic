@@ -527,7 +527,14 @@ def test_the_hygiene_label_this_program_matches_is_the_one_land_sh_prints():
     # program was never asked to match. The id arrived with the semantic landing
     # runtime, 7c376e348 (v1.10.69), which gave every `run`/`report` call site a
     # leading unit; the printed label did not move.
-    calls = re.findall(r'^run "([^"]*)" "([^"]*)"',
+    # `run` AND `run_emit`, AT ANY INDENT. The hygiene tier is now launched
+    # inside a lane (`run_capture "full:repo-hygiene" …`, indented) and its
+    # label is printed by the main shell's
+    # `run_emit "full:repo-hygiene" "repo hygiene gates" --last`. Both are the
+    # same two-quoted-word `<unit> <label>` shape; only the column and the
+    # function name moved. Keying on `^run "` found neither, which turned this
+    # cross-check off rather than failing it.
+    calls = re.findall(r'^\s*run(?:_emit)? "([^"]*)" "([^"]*)"',
                        _LAND.read_text(encoding="utf-8"), re.M)
     printed = [label for unit, label in calls
                if "hygiene" in unit or "hygiene" in label]
