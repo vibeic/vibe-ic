@@ -122,6 +122,60 @@ uncheckable_until 2026-11-30 "validates a RECORD rather than a design, and the c
 run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/benchmark-data"
 
+# THE REST OF THE PPA RECORD FAMILY, wired on the ruling three lines above.
+#
+# The v1.11.19..v1.11.32 PPA stack landed five more gates over PPA campaign
+# DOCUMENTS, and `checker_execution_wiring_audit` / `gate_is_wired_check` both
+# reported all five as consulted by no automatic verdict — the same finding
+# #1241 made about `ppa_head_to_head_check`, which is why that gate is on the
+# line above. The lanes could not wire them: this file and the flow YAML are
+# single-writer surfaces they were forbidden to touch, so the wiring is the
+# lander's step and this is it.
+#
+# WHY HERE AND NOT THE FLOW YAML, DECIDED PER PROGRAM AND MEASURED.
+# Each of these validates a RECORD, not a design — a contract, a candidate set,
+# a published frontier, a coverage bundle, a pair of contracts — and no flow
+# step produces any of them. A flow clause would therefore have to name a path
+# nothing writes, and `test_matrix_d2_falsifiable` demands that every BLOCKING
+# clause reach a content-earned FAIL: MEASURED with two of them wired at step
+# 36, `test_d2_gate_has_a_reachable_fail[step36]` goes red with both clauses at
+# VACUOUS_PASS, because d2 materialises an unmet `condition_files_exist` as `{}`
+# and `{}` is rc 2 to every one of these gates. Paying that with an UNREDDENED
+# registration would be recording a gap this lander created, which is the one
+# thing the register is not for. The record gates belong beside the record gate
+# that is already here; promoting them into the flow is a flow-owner change with
+# its own fixtures, and it is written up as a request rather than done quietly.
+#
+# rc 2 ON EVERY ONE OF THEM, MEASURED 2026-08-21 AGAINST AN ABSENT RECORD, which
+# is what chooses the wrapper rather than a guess:
+#   ppa_contract_check           rc 2  [CANNOT CHECK] ... contract.json: absent
+#   ppa_measurement_check        rc 2  [CANNOT CHECK] INPUT_ABSENT: no such bundle
+#   ppa_feasibility_check        rc 2  [CANNOT CHECK] candidates not found
+#   ppa_pareto_check             rc 2  [CANNOT CHECK] candidates not found
+#   ppa_problem_integrity_check  rc 2  [CANNOT CHECK] baseline ...: absent
+# Not one of them exits 0 on an input it never opened, and each NAMES the file
+# it looked for — so `run_tolerating_uncheckable` carries "I could not look" to
+# the roll-up as NOT_CHECKED instead of folding it into "I looked and it was
+# clean". `run` would be wrong here for the same reason it is right for the two
+# flow-document gates further down: those have a subject in this repository.
+#
+# LIMIT, STATED RATHER THAN LEFT TO BE FOUND. These five take an EXACT path,
+# not a corpus walk, so unlike the head-to-head gate above they do not follow
+# `$VIBE_IC_BENCHMARK_DATA` and a record filed under another name is not judged.
+# The refusal is at least self-describing — it prints the path it opened — but
+# the honest fix is a `--corpus` mode resolved through `_corpus_location`, which
+# is lane-owned code this landing may not edit. Recorded as a request.
+uncheckable_until 2026-11-30 "validates a measurement CONTRACT rather than a design, and no run in this repository has filed one yet; rc 2 names the absent document instead of printing PASS over it"
+run_tolerating_uncheckable "PPA measurement contract" "$ROOT" python3 "$PG/ppa_contract_check.py" --contract "$ROOT/benchmark-data/ppa/contract.json"
+uncheckable_until 2026-11-30 "validates a RECORD SET against a declared denominator, and no run in this repository has filed one yet; rc 2 names the absent bundle instead of computing a vacuous 100% coverage"
+run_tolerating_uncheckable "PPA measurement coverage" "$ROOT" python3 "$PG/ppa_measurement_check.py" --coverage "$ROOT/benchmark-data/ppa/coverage.json"
+uncheckable_until 2026-11-30 "adjudicates a CANDIDATE SET for promotion, and no run in this repository has filed one yet; rc 2 names the absent candidates instead of reporting every candidate feasible over an empty list"
+run_tolerating_uncheckable "PPA promotion feasibility" "$ROOT" python3 "$PG/ppa_feasibility_check.py" --candidates "$ROOT/benchmark-data/ppa/candidates.json" --contract "$ROOT/benchmark-data/ppa/contract.json"
+uncheckable_until 2026-11-30 "recomputes a PUBLISHED frontier, and no run in this repository has published one yet; rc 2 names the absent candidates instead of certifying a frontier it never recomputed"
+run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pareto_check.py" --candidates "$ROOT/benchmark-data/ppa/candidates.json" --contract "$ROOT/benchmark-data/ppa/contract.json" --frontier "$ROOT/benchmark-data/ppa/frontier.json"
+uncheckable_until 2026-11-30 "compares TWO contracts to establish that both arms solved the same problem, and no run in this repository has filed a pair yet; rc 2 names the absent baseline instead of reporting two runs comparable"
+run_tolerating_uncheckable "PPA arms solved one problem" "$ROOT" python3 "$PG/ppa_problem_integrity_check.py" --baseline "$ROOT/benchmark-data/ppa/baseline_contract.json" --candidate "$ROOT/benchmark-data/ppa/contract.json"
+
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
 # inside the container keeps running as an orphan. The checker that finds those
@@ -339,6 +393,36 @@ run "flow-gate enforcement audit"       "$ROOT" python3 "$PG/flow_gate_enforceme
 # what makes a second declaration impossible rather than merely noisy, and it
 # also refuses the degenerate repair of deleting the surviving one.
 run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membership_single_declaration_check.py"
+
+# vibe-ic#1121 family, landed in the v1.11.19..v1.11.32 PPA stack and wired
+# here by the lander because `flow/` and `tools/ci/` are single-writer surfaces
+# the lane could not touch.
+#
+# ITS SUBJECT IS THE SHIPPED FLOW DOCUMENT, which is what puts it in this file
+# rather than in a flow clause: a repo-wide invariant needing no PR context and
+# no design run, sitting beside the two gates above that read the same document.
+# It asks a question `closed_loop_edge_check` explicitly stops short of — that
+# check proves a declared `closed_loop` edge is WELL-FORMED and says in its own
+# words that nothing executes one — namely, for each declared edge, is there
+# CODE that can take it, and what does that code prove? It refuses to let an
+# edge nothing can take be reported as a closed-loop success.
+#
+# PLAIN `run`, and the wrapper was measured before it was chosen. On the shipped
+# tree, 2026-08-21: rc 0, "22 declared closed_loop edge(s) over 69 step(s);
+# DECLARED_ONLY=18, EXECUTABLE=1, REMEASURED=3, ROLLBACK_PROVEN=0". It has a
+# real subject in this repository and a real denominator that it prints, so
+# there is no "I could not look" state for `run_tolerating_uncheckable` to
+# carry, and using that wrapper would give an rc 2 somewhere to hide.
+#
+# BLOCKING FROM ITS FIRST RUN IS AFFORDABLE, MEASURED: the census is green today
+# and 18 DECLARED_ONLY edges are REPORTED, not failed — the tier a declaration
+# gets by having no registry entry is a state the gate publishes, not a finding.
+# What it fails is a citation that does not verify against the tree, so nothing
+# pre-existing is being blessed and nothing pre-existing turns red.
+#
+# ONE LINE, no `\` continuation — `gate_discloses_denominator_check.parse_gates`
+# is line-anchored, so a wrapped argv reaches its probe with the tail missing.
+run "closed-loop executable census" "$ROOT" python3 "$PG/closed_loop_executable_coverage_check.py"
 
 # vibe-ic#312 family — a checker that reads a field NO document populates sees
 # an empty value, and an empty value is indistinguishable from a clean one.
