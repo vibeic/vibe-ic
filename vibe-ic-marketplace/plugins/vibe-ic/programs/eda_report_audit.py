@@ -689,6 +689,20 @@ _DESIGN_NAME = r"([A-Za-z_][A-Za-z0-9_$]*)"
 #: statement, ``"last"`` where the format states sub-circuits first and the
 #: design last.
 _REPORT_DESIGN_RES = (
+    # The RUNNER's own stamp, e.g. "measured_design: chip_top", written by
+    # phase3_one_shot_runner alongside the sha256 of the DEF the tool read.
+    #
+    # SPELLED DIFFERENTLY FROM THE ODB LINE ON PURPOSE. `Design:` is what
+    # OpenROAD prints about itself; `measured_design:` is the runner asserting
+    # what it fed the tool. Collapsing them would let a report claim tool
+    # provenance it does not have, and the distinction costs one regex.
+    #
+    # It exists because two producers wrote reports with NO design in them at
+    # all: `reports/phase3/antenna.rpt` was byte-identical across two designs on
+    # two PDKs, and `reports/density.{rpt,json}` differed only in their numbers.
+    # No gate-side rule can bind evidence that carries no distinguishing byte.
+    (re.compile(r"(?im)^[ \t]*measured_design[ \t]*:[ \t]*" + _DESIGN_NAME
+                + r"[ \t]*$"), "all"),
     # KLayout report database (drc, erc/density)
     (re.compile(r"<top[-_]cell>\s*" + _DESIGN_NAME + r"\s*</top[-_]cell>"),
      "all"),

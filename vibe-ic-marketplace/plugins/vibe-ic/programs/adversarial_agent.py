@@ -65,12 +65,28 @@ On the measurement above, seven of seven gates were blind to design identity and
 the table's one DEFENDED was luck. drc / em / ir_drop now defend for the stated
 reason — their reports declare a design and `eda_report_audit` compares it with
 the module names the project's own Verilog declares. lvs joined them once netgen's
-top-level "Device classes" line was read. The two still listed SUCCEEDED emit no
-design identity at all — and antenna's is the sharper case: its report is
-byte-identical between the cell and the donor, two designs on two PDKs, because
-it is a runner summary of a log the cell does not publish. Nothing on the gate
-side can bind evidence that carries no distinguishing byte. That is a gap in the
-PRODUCERS and it is recorded here rather than papered over in the gates.
+top-level "Device classes" line was read. The two still listed SUCCEEDED emitted
+no design identity at all — antenna's report was BYTE-IDENTICAL between the cell
+and the donor, two designs on two PDKs, because it was a runner summary of a log
+the cell does not publish. Nothing on the gate side can bind evidence that
+carries no distinguishing byte.
+
+THE PRODUCERS NOW EMIT IT. `phase3_one_shot_runner` stamps `measured_design:`
+plus the sha256 of each input it fed the tool and the RESOLVED path of the tool's
+own log into `reports/phase3/antenna.{rpt,json}` and `reports/density.{rpt,json}`,
+and both gates bind against it. Two fixture designs that previously produced the
+same 32-byte-identical report now produce different bytes, and each gate refuses
+the other design's report by name.
+
+THESE TWO STILL READ SUCCEEDED HERE, AND THAT IS THE HONEST ANSWER. The recorded
+subject is a run PUBLISHED BEFORE the stamp existed, so its antenna and density
+reports carry none — the gate reports NOT_DETERMINED and passes, exactly as it
+must for evidence whose producer predates the binding. The cell cannot be
+re-measured either: it carries no `phase3/stage3/pnr/` at all, so the reports
+cannot be regenerated from it. The mechanism is in place and guarded; what is
+missing is a published run made with it. Calling that closed would be recording
+the publication schedule as security progress, which is the one thing this
+module exists not to do.
 
 AND THE ATTACK THAT DOES NOT WORK, KEPT BECAUSE IT DOES NOT
 -----------------------------------------------------------
