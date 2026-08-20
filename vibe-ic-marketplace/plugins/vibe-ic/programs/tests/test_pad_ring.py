@@ -701,27 +701,32 @@ def test_the_flow_declares_this_step_with_this_producer_and_this_gate():
         "pad_ring_check . --json reports/phase3/padring.json")
     assert PR.PADRING_DEF_REL in step["required_outputs"]
     assert PR.REPORT_REL in step["required_outputs"]
-    assert step["blocks_on"] == [15]
+    assert step["blocks_on"] == [15, "0.5ic"]
 
 
-def test_the_gate_the_flow_names_resolves_to_a_program_that_exists():
-    fcc = pytest.importorskip("flow_compliance_check")
-    argv = fcc._resolve_program_cmd(
-        "pad_ring_check . --json reports/phase3/padring.json")
-    assert argv and Path(argv[1]).name == "pad_ring_check.py"
-    assert (PROGRAMS / "pad_ring_gen.py").is_file()
+def test_the_step_runs_on_the_CHIP_PATH_and_not_on_the_operators_template():
+    """The condition tests WHICH PATH, not whether a shuttle operator exists.
 
-
-def test_the_gate_runs_as_the_flow_spawns_it(placed):
-    """Driven exactly as `program_exit_zero` drives it: cwd = the project, the
-    report path relative, no PDK flags — so the PDK probe is the one a real
-    run gets."""
-    r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "pad_ring_check.py"), ".",
-         "--json", PR.REPORT_REL],
-        cwd=placed, capture_output=True, text=True)
-    assert r.returncode in (0, 1), r.stdout + r.stderr
-    assert "pad_ring_check" in r.stdout
+    A chip doing its own tape-out has no operator and therefore no
+    `slots/*.yaml`; conditioning this step on that file skipped it silently for
+    exactly the design that most needs a pad ring, because a die with no pads
+    cannot be bonded or probed. Both of step 0.5ic's chip-path router files
+    select this step; `NO_TEMPLATE.txt` — the IP/hardmacro terminal — must NOT,
+    because an IP is delivered rather than fabricated.
+    """
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(FLOW.read_text())["steps"]
+    step = next(s for s in steps if str(s["id"]) == "15.5ic")
+    cond = step["condition"]
+    assert cond["any_of"] is True, (
+        "without `any_of` the two entries are an AND, and 0.5ic's own gate "
+        "refuses a tree carrying two router files at once — the step could "
+        "then never run for any design")
+    assert set(cond["files_exist"]) == {
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"}
+    assert not any("NO_TEMPLATE" in f for f in cond["files_exist"])
+    assert step["condition_kind"] == "design_dependent"
 
 
 # --------------------------------------------------------------------------- #
