@@ -19,11 +19,14 @@
     "silently 'close' every finding and the ratchet would measure the",
     "publication schedule instead of the gates."
   ],
-  "measured_on": "a38902d1",
+  "measured_on": "eed29f5f2",
   "cell": "spm/v1.9.96_gf180mcuD",
   "donor": "sha256/clean_run_v1427_20260715",
   "older_run": "sha256/clean_run_v1422_20260715",
-  "forging": [
+  "attempted": 21,
+  "forging": [],
+  "closed_since_previous_generation": "a38902d1",
+  "closed": [
     {
       "attack": "A1_TAMPER_DESTRUCTIVE",
       "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
