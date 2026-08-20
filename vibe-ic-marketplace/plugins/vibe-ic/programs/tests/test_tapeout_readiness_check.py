@@ -25,6 +25,7 @@ to match the parser.
 import ast
 import importlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -292,7 +293,7 @@ def test_a_missing_ladder_step_cannot_be_promoted_to_pass(tmp_path):
     proj = _project(tmp_path)
     run = tmp_path / "run" / "runs" / "RUN_X"
     run.mkdir(parents=True)
-    ladder = trc.SHUTTLES[trc.DEFAULT_SHUTTLE].ladder
+    ladder = _stages()
     for i, st in enumerate(ladder, start=1):
         d = run / f"{i:02d}-{trc._slug(st.step_id)}"
         d.mkdir()
@@ -316,7 +317,7 @@ def test_a_clean_ladder_with_a_non_zero_tool_exit_is_not_a_pass(tmp_path):
     proj = _project(tmp_path)
     run = tmp_path / "run" / "runs" / "RUN_X"
     run.mkdir(parents=True)
-    for i, st in enumerate(trc.SHUTTLES[trc.DEFAULT_SHUTTLE].ladder, start=1):
+    for i, st in enumerate(_stages(), start=1):
         d = run / f"{i:02d}-{trc._slug(st.step_id)}"
         d.mkdir()
         (d / "state_out.json").write_text("{}")
@@ -395,6 +396,327 @@ def test_the_command_is_the_upstream_documented_invocation(tmp_path):
     assert "python" in cmd and "precheck.py" in cmd
     assert "--input" in cmd and "--dir" in cmd
 
+
+
+# --------------------------------------------------------------------------- #
+# THE IMAGE IS PINNED BY DIGEST — because a verdict nobody can re-run is not a
+# verdict. Everything in this section is about one question: if this gate
+# refuses a layout today, does it refuse the same layout tomorrow?
+# --------------------------------------------------------------------------- #
+def _pinned_image_present():
+    """Is the pinned image on this host? Asked WITHOUT this program's help.
+
+    The tests below check whether `tapeout_readiness_check` can see an image
+    that is there, so their precondition may not be established by asking
+    `tapeout_readiness_check` whether it can see it — that turns a broken
+    resolver into a skipped test instead of a failing one, which is how a guard
+    stops guarding. `docker image inspect` is the daemon's own answer."""
+    if not shutil.which("docker"):
+        return False
+    image = trc.SHUTTLES[trc.DEFAULT_SHUTTLE].default_image
+    try:
+        q = subprocess.run(["docker", "image", "inspect", image,
+                            "--format", "{{.Id}}"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return q.returncode == 0 and bool(q.stdout.strip())
+
+
+def test_the_live_shuttle_image_is_pinned_by_digest_not_by_a_tag():
+    """A tag is a mutable pointer; a digest names bytes.
+
+    `:main` and `:latest` resolve to whatever the operator pushed most
+    recently, so the same layout could be refused today and accepted tomorrow
+    with nothing in this tree having changed. The tag is KEPT in its own field,
+    because `docker pull <tag>` is what an operator types — but only
+    `default_image` ever reaches an argv."""
+    live = trc.SHUTTLES[trc.DEFAULT_SHUTTLE]
+    assert live.status == trc.LIVE
+    assert "@sha256:" in live.default_image, live.default_image
+    assert trc.pin_kind(live.default_image) == "digest"
+    # A 64-hex digest, not a prefix somebody trimmed for readability.
+    digest = live.default_image.split("@sha256:")[1]
+    assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
+    # And the moving tag it was resolved from is recorded, not run.
+    assert trc.pin_kind(live.image_tag) == "tag"
+    assert live.image_tag.split(":")[0] == live.default_image.split("@")[0]
+
+
+def test_the_digest_is_the_thing_that_gets_run(tmp_path):
+    """The pin has to reach the argv, or it is a comment."""
+    shuttle = trc.SHUTTLES[trc.DEFAULT_SHUTTLE]
+    proj = _project(tmp_path)
+    rep = trc.evaluate(proj, image_resolver=_resolves,
+                       runner=_no_op_runner(rc=0),
+                       rundir=_complete_run(tmp_path))
+    assert shuttle.default_image in rep.command
+    assert shuttle.image_tag not in rep.command
+    assert rep.image_pinned_by == "digest"
+
+
+def test_a_tag_override_is_honoured_and_recorded_as_unpinned(tmp_path):
+    """`--image some:tag` still runs — and the report says it was a tag.
+
+    Refusing the override outright would break the operator's ability to test
+    a candidate image, and this gate is not the place to take that away. What
+    it must not do is let the resulting verdict LOOK as reproducible as a
+    pinned one, so the distinction is recorded in a field an aggregator can
+    read instead of being left in the shape of a string."""
+    proj = _project(tmp_path)
+    rep = trc.evaluate(proj, image="some.registry/precheck:nightly",
+                       image_resolver=_resolves, runner=_no_op_runner(rc=0),
+                       rundir=_complete_run(tmp_path))
+    assert rep.image == "some.registry/precheck:nightly"
+    assert rep.image_pinned_by == "tag"
+
+
+def test_docker_images_dash_q_cannot_see_a_digest_pinned_image():
+    """The bug the resolver fix exists for, proven against the real daemon.
+
+    `docker images -q` matches on repository:TAG. Given a DIGEST reference it
+    prints nothing and exits 0 — indistinguishable from an image that is not
+    there. So the moment this gate was pinned by digest, the old probe reported
+    IMAGE_ABSENT on every host that had the image and the counterparty stopped
+    being asked at all.
+
+    This runs against the real docker daemon, because the claim is about that
+    daemon's behaviour and a mock of it would only assert what the author
+    already believed. Skipped where there is no daemon or the image is not
+    present locally — a skip says "not measured here", which is the honest
+    thing for a test that cannot reach its subject."""
+    image = trc.SHUTTLES[trc.DEFAULT_SHUTTLE].default_image
+    if not _pinned_image_present():
+        pytest.skip("the pinned precheck image is not present on this host")
+
+    # The image IS here — and the program's own probe has to agree.
+    #
+    # THE SKIP GUARD ABOVE DELIBERATELY DOES NOT CALL `_image_is_local`.
+    # Measured: when it did, reverting the fix made this test SKIP rather than
+    # FAIL, because the guard asked the very function under test whether its
+    # subject was reachable. A guard that goes quiet exactly when the thing it
+    # guards is broken has not been shown to check anything, so presence is
+    # established independently and the program's answer is then ASSERTED.
+    assert trc._image_is_local(image) is True, (
+        "the pinned image is present on this host (established above without "
+        "asking this program) and default_image_resolver cannot see it — a "
+        "digest-pinned gate that reports IMAGE_ABSENT never asks the "
+        "counterparty anything")
+
+    # And the probe it used to use says nothing at all, with rc 0.
+    q = subprocess.run(["docker", "images", "-q", image],
+                       capture_output=True, text=True, timeout=60)
+    assert q.returncode == 0
+    assert q.stdout.strip() == "", (
+        "docker images -q resolved a digest reference on this host; if that is "
+        "now true generally the comment in default_image_resolver is stale, but "
+        "`image inspect` is still the correct probe and nothing here changes")
+
+
+def test_the_report_names_the_bytes_that_answered(tmp_path):
+    """Which content produced this verdict, read back from the daemon.
+
+    Not the string the caller typed: `--image` lets that be anything. Against
+    the real image, the recorded repo digest must be the pin."""
+    image = trc.SHUTTLES[trc.DEFAULT_SHUTTLE].default_image
+    if not _pinned_image_present():
+        pytest.skip("the pinned precheck image is not present on this host")
+    ident, digests = trc.image_identity(image)
+    assert ident.startswith("sha256:")
+    assert image in digests, digests
+
+
+# --------------------------------------------------------------------------- #
+# IMAGE ABSENT / CONTAINER FAILED TO START — each its own state, each a FAIL,
+# and NEITHER may ever read as "no refusals found".
+# --------------------------------------------------------------------------- #
+def _docker_start_failure_runner(rc):
+    """A runner standing in for docker refusing to create the container.
+
+    Real shape: docker writes its own diagnostic to stderr, exits 125/126/127,
+    and NOTHING is written to the run directory — the tool inside never ran, so
+    there is no per-stage evidence and no error.log of its own."""
+    def _run(cmd, timeout):
+        return rc, "", ("docker: Error response from daemon: failed to create "
+                        "task for container: OCI runtime create failed.")
+    return _run
+
+
+def test_image_absent_is_its_own_state_and_fails_the_gate(tmp_path):
+    proj = _project(tmp_path)
+    rep = trc.evaluate(proj, image_resolver=_never_resolves)
+    assert rep.state == trc.STATE_IMAGE_ABSENT
+    assert rep.verdict == trc.NOT_DETERMINED
+    assert trc.verdict_for_state(rep.state) != trc.PASS
+    assert rep.state not in trc.ACCEPT_STATES
+
+
+def test_a_container_that_would_not_start_is_a_different_state(tmp_path):
+    """Broken host, not missing config — different cause, different fix.
+
+    Docker's own exit codes for "the container never started" are 125/126/127,
+    and they are disjoint from the upstream precheck's own exits (it leaves via
+    0 or 1). Merging the two into one tidier "tool unavailable" would hand a
+    broken daemon and an unpulled image to the same person with the same
+    sentence."""
+    proj = _project(tmp_path)
+    for rc in (125, 126, 127):
+        rep = trc.evaluate(proj, image_resolver=_resolves,
+                           runner=_docker_start_failure_runner(rc),
+                           rundir=tmp_path / f"empty{rc}")
+        assert rep.state == trc.STATE_CONTAINER_FAILED_TO_START, rc
+        assert rep.verdict == trc.NOT_DETERMINED, rc
+        assert rep.state != trc.STATE_IMAGE_ABSENT
+
+    # A tool that DID start and merely wrote nothing is the other state: same
+    # verdict, different diagnosis, and the report must not conflate them.
+    other = trc.evaluate(proj, image_resolver=_resolves,
+                         runner=_no_op_runner(rc=1),
+                         rundir=tmp_path / "empty_ok")
+    assert other.state == trc.STATE_NO_EVIDENCE
+
+
+@pytest.mark.parametrize("case", ["image_absent", "container_failed"])
+def test_a_never_asked_run_can_never_read_as_no_refusals_found(case, tmp_path):
+    """THE DEFECT THIS GATE EXISTS FOR, NOT RE-CREATED INSIDE IT.
+
+    On both paths no stage refused — because no stage was asked. An aggregator
+    that counted `failed_steps` would see 0 for both, exactly as it would for a
+    clean run, and a human skimming `failed=0` reads an all-clear.
+
+    So three things are required of every never-asked path: the summary line
+    says so in words, every stage is listed under `stages_never_ran`, and the
+    process exits 1. A count of zero is only safe next to a denominator, and
+    this asserts the denominator is there."""
+    proj = _project(tmp_path)
+    if case == "image_absent":
+        rep = trc.evaluate(proj, image_resolver=_never_resolves)
+    else:
+        rep = trc.evaluate(proj, image_resolver=_resolves,
+                           runner=_docker_start_failure_runner(125),
+                           rundir=tmp_path / "empty")
+
+    assert rep.state in trc.NEVER_ASKED_STATES
+    assert rep.failed_steps == []            # nothing refused ...
+    assert rep.stages_attempted == 0         # ... because nothing was asked
+    assert len(rep.stages_never_ran) == rep.upstream_stages_total > 0
+    assert rep.stages_never_ran == [s.step_id for s in rep.steps]
+
+    line = rep.summary_line()
+    assert "THE COUNTERPARTY WAS NEVER ASKED" in line
+    assert f"0 of {rep.upstream_stages_total} stage(s) ran" in line
+    assert "no refusals" not in line.lower()
+
+    # And it exits the way a refusal exits.
+    rc = trc.main([str(proj), "--image", "no.such/image:never",
+                   "--json", str(tmp_path / "out.json")])
+    assert rc == 1
+
+
+def test_every_terminal_path_names_a_state_and_only_one_of_them_accepts(
+        tmp_path):
+    """No path may leave `state` unset, and only LADDER_PASSED is an accept."""
+    proj = _project(tmp_path)
+    seen = {
+        trc.evaluate(proj, shuttle_id="nope").state,
+        trc.evaluate(proj, shuttle_id="efabless_open_mpw").state,
+        trc.evaluate(_project(tmp_path / "empty", with_layout=False)).state,
+        trc.evaluate(proj, image_resolver=_never_resolves).state,
+        trc.evaluate(proj, image_resolver=_resolves,
+                     runner=_no_op_runner(rc=1),
+                     rundir=tmp_path / "nothing").state,
+        trc.evaluate(proj, image_resolver=_resolves, runner=_no_op_runner(rc=1),
+                     rundir=_REAL_REFUSAL).state,
+        trc.evaluate(proj, image_resolver=_resolves, runner=_no_op_runner(rc=0),
+                     rundir=_complete_run(tmp_path)).state,
+        trc.evaluate(proj, image_resolver=_resolves, runner=_no_op_runner(rc=7),
+                     rundir=_complete_run(tmp_path, "run7")).state,
+    }
+    assert "" not in seen
+    assert seen & trc.ACCEPT_STATES == {trc.STATE_LADDER_PASSED}
+    for state in seen:
+        if state != trc.STATE_LADDER_PASSED:
+            assert trc.verdict_for_state(state) != trc.PASS, state
+    # An unrecognised state is a decision nobody made, and no verdict is claimed
+    # for a decision nobody made.
+    assert trc.verdict_for_state("SOMETHING_NEW") == trc.NOT_DETERMINED
+
+
+# --------------------------------------------------------------------------- #
+# The stage sequence is hard-coded, so it has to be able to go stale OUT LOUD
+# --------------------------------------------------------------------------- #
+def test_a_flow_that_grew_a_stage_is_not_determined_rather_than_passed(
+        tmp_path):
+    """A denominator we cannot trust is not one we may pass on.
+
+    The sequence comes from one pinned image. Upstream can add, rename or
+    reorder a stage, and a gate that kept counting against the old list would
+    report a confident `16 of 16` for a flow that now has seventeen — a PASS
+    over a stage nobody looked at."""
+    proj = _project(tmp_path)
+    root = _complete_run(tmp_path)
+    run = root / "runs" / "RUN_X"
+    extra = run / "17-klayout-somethingnew"
+    extra.mkdir()
+    (extra / "state_out.json").write_text("{}")
+
+    rep = trc.evaluate(proj, rundir=root, image_resolver=_resolves,
+                       runner=_no_op_runner(rc=0))
+    assert rep.state == trc.STATE_STAGE_MAP_STALE
+    assert rep.verdict == trc.NOT_DETERMINED
+    assert "somethingnew" in rep.reason
+
+
+def test_a_renumbered_stage_is_detected_too(tmp_path):
+    """Reordering is the drift that a per-name check alone would miss."""
+    proj = _project(tmp_path)
+    root = _complete_run(tmp_path)
+    run = root / "runs" / "RUN_X"
+    stages = _stages()
+    a = run / f"01-{trc._slug(stages[0].step_id)}"
+    a.rename(run / f"09-{trc._slug(stages[0].step_id)}_moved")
+    (run / f"09-{trc._slug(stages[0].step_id)}_moved").rename(
+        run / f"09-{trc._slug(stages[0].step_id)}")
+    rep = trc.evaluate(proj, rundir=root, image_resolver=_resolves,
+                       runner=_no_op_runner(rc=0))
+    assert rep.state == trc.STATE_STAGE_MAP_STALE
+    assert rep.verdict == trc.NOT_DETERMINED
+
+
+def test_the_declared_sequence_is_the_one_the_real_tool_writes():
+    """Sixteen stages, and the slugs the counterparty's own run directory used.
+
+    Captured from a REAL run of the pinned image that reached every stage (a
+    synthetic die built to the operator's own slot geometry, which gets past the
+    seal-ring refusal our published layout stops at). This is what makes the
+    denominator a measurement rather than a memory."""
+    observed = [
+        "01-klayout-readlayout", "02-klayout-checktoplevel",
+        "03-klayout-checksize", "04-klayout-generateid", "05-klayout-render",
+        "06-klayout-density", "07-checker-klayoutdensity",
+        "08-klayout-zeroareapolygons", "09-checker-klayoutzeroareapolygons",
+        "10-klayout-antenna", "11-checker-klayoutantenna", "12-magic-drc",
+        "13-checker-magicdrc", "14-klayout-drc", "15-checker-klayoutdrc",
+        "16-klayout-writelayout",
+    ]
+    declared = _stages()
+    assert len(declared) == 16
+    for name, step in zip(observed, declared):
+        head, _, slug = name.partition("-")
+        assert int(head) == declared.index(step) + 1
+        assert trc._flat(slug) == trc._flat(trc._slug(step.step_id)), name
+
+    # And `--cob` inserts the pad-mask stage at 4, renumbering the rest —
+    # measured on a real `--cob` run of the same die, which wrote
+    # `04-klayout-checkpadmask`.
+    cob = _stages(cob=True)
+    assert len(cob) == 17
+    assert cob[3].step_id == "KLayout.CheckPadMask"
+    assert trc._slug(cob[3].step_id) == "klayout-checkpadmask"
+    assert trc.stage_map_drift(cob, [(4, "klayoutcheckpadmask", False)]) == []
+    # ... and that same directory is DRIFT against the non-cob sequence, which
+    # is what stops a cob run being scored on the wrong denominator.
+    assert trc.stage_map_drift(declared, [(4, "klayoutcheckpadmask", False)])
 
 # --------------------------------------------------------------------------- #
 # The checklist must STATE the external verdict, not omit it
@@ -549,15 +871,32 @@ def _flow_yaml():
     return p
 
 
-def _complete_run(tmp_path, name="run"):
-    """A run directory in which every ladder step COMPLETED.
+def _stages(cob=False):
+    """The stage sequence a run with these options actually has.
 
-    Built the way the upstream tool builds one — a numbered directory per step
+    NOT the whole registry: `KLayout.CheckPadMask` is inserted only under
+    `--cob`, and the upstream tool renumbers everything after it when it is.
+    Building a non-cob fixture from the cob-inclusive list produced directories
+    whose ordinals disagreed with the sequence by one from stage 5 on, which
+    `stage_map_drift` correctly reports as a stale stage map. Getting this wrong
+    in a fixture is cheap; getting it wrong in the registry would make the gate
+    refuse to judge every real run, so the drift check earning its keep here is
+    the point rather than an inconvenience."""
+    return tuple(s for s in trc.SHUTTLES[trc.DEFAULT_SHUTTLE].ladder
+                 if cob or not s.cob_only)
+
+
+def _complete_run(tmp_path, name="run", cob=False):
+    """A run directory in which every stage COMPLETED.
+
+    Built the way the upstream tool builds one — a numbered directory per stage
     carrying `state_out.json` — because that file is the discriminator the
-    parser turns on."""
+    parser turns on. EVERY stage, not only the ones that can refuse: a real
+    complete run writes all sixteen, and a fixture that wrote nine would be
+    asserting that a run which skipped Render and WriteLayout is clean."""
     run = tmp_path / name / "runs" / "RUN_X"
     run.mkdir(parents=True)
-    for i, st in enumerate(trc.SHUTTLES[trc.DEFAULT_SHUTTLE].ladder, start=1):
+    for i, st in enumerate(_stages(cob), start=1):
         d = run / f"{i:02d}-{trc._slug(st.step_id)}"
         d.mkdir()
         (d / "state_out.json").write_text("{}")
@@ -598,20 +937,50 @@ def test_the_flow_declares_this_gate_with_the_path_this_program_writes():
         f"below drive a gate no step invokes")
     step = steps[_STEP_ID]
 
-    # The BLOCKING slot, not the advisory one. A shuttle refusal recorded and
+    # THE BLOCKING SLOT, NOT THE ADVISORY ONE. A shuttle refusal recorded and
     # continued past is not an external bar, it is a note.
+    #
+    # The step's gate is an `all_of` of `program_exit_zero` clauses, and every
+    # clause of an all_of is blocking, so the requirement is that this gate be
+    # reachable through one of them — not that it be the only one. It used to be
+    # the direct clause; the step now runs TWO arms on the same layout and it is
+    # `tapeout_precheck` that issues this gate's command. Asserting the old
+    # shape kept this test red on a tree where the wiring was correct, which
+    # taught nobody anything, so what is asserted now is the property that
+    # actually has to hold: a blocking clause, and a real chain from it to this
+    # program.
     gate = step["gate"]
-    assert "program_exit_zero" in gate, sorted(gate)
-    argv = shlex.split(gate["program_exit_zero"])
-    assert argv[0] == "tapeout_readiness_check"
-    assert argv[1:] == _DECLARED_ARGV
+    clauses = gate.get("all_of", [gate])
+    cmds = [c["program_exit_zero"] for c in clauses if "program_exit_zero" in c]
+    assert cmds, sorted(gate)
+    assert len(cmds) == len(clauses), (
+        "every clause of this step's gate must be blocking; a non-blocking "
+        f"clause would let one arm's refusal be recorded and walked past: {clauses}")
 
-    # And the artefact the step will be judged on is the one that command names.
-    assert step["required_outputs"] == [_DECLARED_OUT]
+    # Each blocking command resolves to a program that exists — the same
+    # resolution the flow engine performs, so "program not found" cannot hide
+    # behind a name.
+    for cmd in cmds:
+        assert fcc._resolve_program_cmd(cmd, cwd=None), cmd
 
-    # The command resolves to a program that exists — the same resolution the
-    # flow engine performs, so "program not found" cannot hide behind a name.
-    assert fcc._resolve_program_cmd(gate["program_exit_zero"], cwd=None)
+    # THE CHAIN FROM THE BLOCKING CLAUSE TO THIS PROGRAM, re-derived rather than
+    # asserted. `tapeout_precheck` is the merge of the two arms; the operator's
+    # arm IS this gate, invoked with the argv the cases below drive and writing
+    # the artefact the step declares. Read out of that program so a refactor
+    # that stops invoking this one turns THIS test red rather than leaving a
+    # section of dead cases quietly driving a command nobody issues.
+    entry = importlib.import_module("tapeout_precheck")
+    src = Path(entry.__file__).read_text(encoding="utf-8")
+    assert any(shlex.split(c)[0] == "tapeout_precheck" for c in cmds), cmds
+    assert "tapeout_readiness_check.py" in src, (
+        "the blocking gate no longer reaches tapeout_readiness_check")
+    assert entry.THEIR_ARM_ARTEFACT == _DECLARED_OUT, entry.THEIR_ARM_ARTEFACT
+    assert _DECLARED_ARGV[1] == "--json"
+
+    # And the artefact the step will be judged on is among the ones this chain
+    # writes. The step declares more than one output now (the merge, our arm,
+    # theirs, the release documents); the one THIS program owns must be there.
+    assert _DECLARED_OUT in step["required_outputs"], step["required_outputs"]
 
 
 # ───────────────────────────── every outcome writes exactly the declared file
@@ -783,11 +1152,11 @@ def test_the_counterpartys_refusal_survives_the_flow_step_path(
         tmp_path, monkeypatch):
     """The captured refusal, driven through the CLI the flow issues.
 
-    Reproduced on the live tool on 2026-08-19 against a published layout:
-    verdict FAIL, rc 1, `the shuttle refused: KLayout.CheckSize`, 3 of 9 ladder
-    steps carrying evidence. Those numbers are the assertion — a parser change
-    that credited an incomplete step, or a ladder edit that changed the
-    denominator, moves them."""
+    Reproduced on the live tool against a published layout, most recently on
+    2026-08-21 against the DIGEST-PINNED image: verdict FAIL, rc 1, refused at
+    stage 3 of 16, 3 stages attempted, 13 that NEVER RAN. Those numbers are the
+    assertion — a parser change that credited an incomplete stage, or a registry
+    edit that changed the denominator, moves them."""
     proj = _project(tmp_path)
     monkeypatch.setattr(trc, "default_image_resolver", _resolves)
     monkeypatch.setattr(trc, "default_runner", _no_op_runner(rc=1))
@@ -796,16 +1165,93 @@ def test_the_counterpartys_refusal_survives_the_flow_step_path(
 
     assert rc == 1
     assert payload["verdict"] == trc.FAIL
+    assert payload["state"] == trc.STATE_LADDER_REFUSED
     assert payload["failed_steps"] == ["KLayout.CheckSize"]
-    assert payload["required_steps"] == 9
+    assert payload["required_steps"] == 16
     assert payload["steps_with_evidence"] == 3
-    assert "the shuttle refused: KLayout.CheckSize" in payload["reason"]
+    assert "the shuttle refused at stage 3 of 16" in payload["reason"]
 
     refused = next(s for s in payload["steps"] if s["verdict"] == trc.FAIL)
     assert "GUARD_RING_MK" in refused["evidence"]
     # The steps after the refusal are NOT_DETERMINED, not passed over.
     assert payload["undetermined_steps"] == [
         s["step_id"] for s in payload["steps"][3:]]
+
+
+def test_a_refusal_states_the_stage_it_stopped_at_and_the_stages_that_never_ran(
+        tmp_path, monkeypatch):
+    """"3 of 16", not "1 failure" — and the thirteen named, not implied.
+
+    THE DIFFERENCE THIS TEST DEFENDS. The counterparty's flow exits at its first
+    refusal, so our published layout produced a verdict on stage 3 and NOTHING
+    AT ALL on stages 4 through 16. A report that says `failed=1` has converted
+    thirteen stages of silence into an implied all-clear — and those thirteen
+    include the pad openings and the die-id cells, which this same layout also
+    lacks and which the counterparty simply never got far enough to say so
+    about.
+
+    So the arithmetic is asserted, and so is the phrasing of the one line most
+    readers will ever see."""
+    proj = _project(tmp_path)
+    rep = trc.evaluate(proj, rundir=_REAL_REFUSAL,
+                       image_resolver=_resolves, runner=_no_op_runner(rc=1))
+
+    assert rep.upstream_stages_total == 16
+    assert rep.stages_attempted == 3
+    assert rep.refused_at_stage == {
+        "order": 3, "step_id": "KLayout.CheckSize", "label": "Check Slot Size"}
+    assert len(rep.stages_never_ran) == 13
+    # NEVER RAN and PASSED are different facts, carried per stage.
+    ran = {s.step_id: s.ran for s in rep.steps}
+    assert ran["KLayout.ReadLayout"] and ran["KLayout.CheckSize"]
+    assert not ran["Checker.KLayoutDRC"]
+    assert not ran["KLayout.WriteLayout"]
+
+    line = rep.summary_line()
+    assert "REFUSED at stage 3 of 16" in line
+    assert "13 NEVER RAN" in line
+
+
+def test_the_four_refusals_this_layout_earns_are_all_named(tmp_path):
+    """One observed, three still queued behind it — and all four in the report.
+
+    The measured gap is four refusals: the seal ring, the die size against the
+    slot, the pad openings and the die-id cells. Exactly ONE of them can be
+    quoted, because `check_size.py` exits on its first failing predicate and the
+    flow exits with it. A report that named only what was quoted would tell a
+    reader they have one problem when they have four.
+
+    The other three are named where they honestly live: in the `refuses_on`
+    clause of the stage that refused (which carries the die-size predicate
+    behind the seal-ring one), and in the two stages that NEVER RAN."""
+    proj = _project(tmp_path)
+    rep = trc.evaluate(proj, rundir=_REAL_REFUSAL, cob=True,
+                       image_resolver=_resolves, runner=_no_op_runner(rc=1))
+    by_id = {s.step_id: s for s in rep.steps}
+
+    # 1. the seal ring — QUOTED, from the counterparty's own run directory.
+    seal = by_id["KLayout.CheckSize"]
+    assert seal.verdict == trc.FAIL and seal.ran
+    assert "GUARD_RING_MK" in seal.evidence and "seal ring" in seal.evidence
+
+    # 2. the die size against the purchased slot — same stage, still untested,
+    #    and named in that stage's clause so the reader knows it is queued.
+    assert "die dimensions do not match the purchased slot" in seal.refuses_on
+    assert "exits on the FIRST" in seal.refuses_on
+
+    # 3. the pad openings, and 4. the die-id cells — stages that NEVER RAN.
+    for step_id, phrase in (("KLayout.CheckPadMask", "pad opening"),
+                            ("KLayout.GenerateID", "id cells")):
+        st = by_id[step_id]
+        assert not st.ran, step_id
+        assert st.verdict == trc.NOT_DETERMINED, step_id
+        assert step_id in rep.stages_never_ran, step_id
+        assert phrase in st.refuses_on, step_id
+
+    # And neither of those two has an in-tree counterpart, which is the whole
+    # reason an outside party has to be the one asked.
+    assert set(rep.uncovered_in_tree) == {"KLayout.CheckPadMask",
+                                          "KLayout.GenerateID"}
 
 
 def test_only_a_clean_ladder_earns_the_flow_step_rc_zero(tmp_path, monkeypatch):
@@ -822,9 +1268,11 @@ def test_only_a_clean_ladder_earns_the_flow_step_rc_zero(tmp_path, monkeypatch):
 
     assert rc == 0, payload["reason"]
     assert payload["verdict"] == trc.PASS
+    assert payload["state"] == trc.STATE_LADDER_PASSED
     assert payload["failed_steps"] == []
     assert payload["undetermined_steps"] == []
-    assert payload["steps_with_evidence"] == payload["required_steps"] == 9
+    assert payload["stages_never_ran"] == []
+    assert payload["steps_with_evidence"] == payload["required_steps"] == 16
 
 
 # --------------------------------------------------------------------------- #

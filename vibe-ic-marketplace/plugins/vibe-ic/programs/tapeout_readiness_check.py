@@ -67,13 +67,33 @@ and an EVIDENCE MAP, not a set of rules: it names the step ids the upstream flow
 emits so the report can be stated in submission-failure order and so a step that
 produced no evidence can be named as such.
 
-THE MEASUREMENT THAT SETTLED IT (2026-08-18)
-===========================================
+THE IMAGE IS PINNED BY DIGEST, AND IT RUNS OFFLINE
+=================================================
+Two properties, and both are about whether a refusal means anything.
+
+PINNED BY DIGEST, never by `:main` or `:latest`. A tag is a mutable pointer:
+the same layout could be refused today and accepted tomorrow with nothing in
+this tree having changed, and the first question anyone asks of a refusal —
+"would it refuse again?" — would have no answer. A digest names bytes, and
+`docker run` verifies it. The report additionally records the content id and
+repo digests read back from the daemon AFTER resolution, so it names what
+actually answered even when a caller passed `--image` with a tag.
+
+RUN WITH `--network=none`. A precheck that can reach the network is a precheck
+whose result depends on something outside the artefact — a deck fetched at run
+time, a registry consulted, an operator's server having an opinion today. The
+flag is also upstream's own documented invocation, so this is not a restriction
+imposed on their tool; it is their tool run the way they document it.
+
+THE MEASUREMENT THAT SETTLED IT (2026-08-18, re-run 2026-08-21 on the pin)
+=========================================================================
 #1744 asked for one thing above argument: run the live precheck against a
-layout this project has already published, and see what comes back. Done, with
-`ghcr.io/wafer-space/gf180mcu-precheck:latest` against
-`ic/spm/v1.9.96_gf180mcuD/phase3/stage4/gds/chip_top.gds`
-(sha256 fb08d9ed51f501ff4c3fbd6b9a30916c5927c86d586f07f147c9388388d8a255).
+layout this project has already published, and see what comes back. Done,
+against `ic/spm/v1.9.96_gf180mcuD/phase3/stage4/gds/chip_top.gds`
+(sha256 fb08d9ed51f501ff4c3fbd6b9a30916c5927c86d586f07f147c9388388d8a255),
+with the image pinned at
+`ghcr.io/wafer-space/gf180mcu-precheck@sha256:f6c0cb88efce8769ec87de5a2035ada7`
+`31fd8fffb1b3e5e1968078f6dd191c2f` and `--network=none`.
 
 REFUSED, at ladder step 3 of 16:
 
@@ -125,6 +145,42 @@ THE THREE VERDICTS, AND WHY THERE ARE ONLY THREE
 There is deliberately no fourth tier. `SKIPPED`, `N/A` and `BLOCKED` all read as
 "nothing to worry about here" in an aggregate, and the whole point of this gate
 is that nothing-to-worry-about is precisely what we are not entitled to say.
+
+AND A `state`, BECAUSE THREE VERDICTS CANNOT SAY WHAT HAPPENED
+=============================================================
+`verdict` answers "may this be submitted". Six different things reduce to
+NOT_DETERMINED, and they are not interchangeable: an image that is not on this
+host is a config mistake somebody fixes in a minute; a container that would not
+start is a broken host; a retired counterparty is neither. So every terminal
+path also names a `state` from a closed vocabulary, and the summary line leads
+with it.
+
+`IMAGE_ABSENT` and `CONTAINER_FAILED_TO_START` are separate states, they FAIL
+the gate (rc 1), and on those paths the report says
+`THE COUNTERPARTY WAS NEVER ASKED — 0 of 16 stage(s) ran` and lists every stage
+under `stages_never_ran`. Without that, both would present as `failed=0` beside
+an empty refusal list, which reads — to a human skimming and to an aggregator
+counting — as "no refusals found". That is the exact defect this repo hunts, and
+having it inside the gate built to remove it would be the worst place for it.
+
+"3 OF 16" IS THE SHAPE. "1 FAILURE" IS NOT.
+===========================================
+The registry carries the FULL upstream stage sequence, not the reduced set of
+stages that can refuse, because the reduced set cannot state the only number a
+refusal is really about. Our published GDS did not produce "1 failure": it
+produced a verdict on stage 3 and NOTHING AT ALL on stages 4 through 16. A
+report that says `failed=1` has quietly converted thirteen stages of silence
+into an implied all-clear.
+
+So the report states `upstream_stages_total`, `stages_attempted`,
+`stopped_at_stage` and the full `stages_never_ran` list, and each stage carries
+`ran` alongside its verdict — NEVER RAN and PASSED are different facts.
+
+The sequence is hard-coded from one pinned image, so it can go stale, so
+`stage_map_drift` compares it against the directories the tool actually wrote on
+every run. A slug or an ordinal the registry does not declare makes the verdict
+NOT_DETERMINED with `state=STAGE_MAP_STALE` — never a PASS, because a
+denominator we cannot trust is not one we may pass on.
 
 EXIT CODES, AND THE ONE THAT IS DELIBERATELY NOT USED
 =====================================================
@@ -198,6 +254,77 @@ RETIRED = "RETIRED"
 
 
 # --------------------------------------------------------------------------- #
+# STATES — WHY THE THREE VERDICTS ARE NOT ENOUGH ON THEIR OWN
+#
+# `verdict` answers "may this be submitted". `state` answers "what happened",
+# and the two are not the same question. Six distinct things all reduce to
+# NOT_DETERMINED, and one of them — the image is not there — is a config
+# mistake somebody can fix in a minute, while another — the container refused
+# to start — is a broken host. A reader given only NOT_DETERMINED has to guess
+# which, and an aggregator counting `failed_steps` sees 0 for BOTH and can
+# report "no refusals found", which is the exact defect this gate exists to
+# remove, re-created inside the gate itself.
+#
+# So every terminal path names its state, the vocabulary is CLOSED, and the
+# summary line leads with it. `IMAGE_ABSENT` and `CONTAINER_FAILED_TO_START`
+# are separate members for that reason and not merged into a tidier "tool
+# unavailable": they have different causes, different fixes, and different
+# people to hand them to.
+#
+# NONE of these is an accept. `ACCEPT_STATES` is a one-element set, and
+# `verdict_for_state` is what maps state to verdict, so a state added later
+# without a decision about what it means cannot default into a pass.
+# --------------------------------------------------------------------------- #
+STATE_LADDER_PASSED = "LADDER_PASSED"                    # PASS
+STATE_LADDER_REFUSED = "LADDER_REFUSED"                  # FAIL
+STATE_UNKNOWN_SHUTTLE = "UNKNOWN_SHUTTLE"                # NOT_DETERMINED
+STATE_SHUTTLE_RETIRED = "SHUTTLE_RETIRED"                # NOT_DETERMINED
+STATE_NO_LAYOUT = "NO_LAYOUT"                            # NOT_DETERMINED
+STATE_IMAGE_ABSENT = "IMAGE_ABSENT"                      # NOT_DETERMINED
+STATE_CONTAINER_FAILED_TO_START = "CONTAINER_FAILED_TO_START"
+STATE_ORCHESTRATION_ERROR = "ORCHESTRATION_ERROR"        # NOT_DETERMINED
+STATE_NO_EVIDENCE = "NO_EVIDENCE"                        # NOT_DETERMINED
+STATE_LADDER_INCOMPLETE = "LADDER_INCOMPLETE"            # NOT_DETERMINED
+STATE_STAGE_MAP_STALE = "STAGE_MAP_STALE"                # NOT_DETERMINED
+STATE_TOOL_DISAGREED = "TOOL_DISAGREED"                  # NOT_DETERMINED
+
+#: The ONLY state that is an accept. Written as a set of one so that adding a
+#: state is not the same edit as deciding it passes.
+ACCEPT_STATES = frozenset({STATE_LADDER_PASSED})
+
+#: The states in which the counterparty was never reached at all. Named as a
+#: group because these are the ones an aggregator must not read as "clean": no
+#: stage refused, and no stage was asked either.
+NEVER_ASKED_STATES = frozenset({
+    STATE_UNKNOWN_SHUTTLE, STATE_SHUTTLE_RETIRED, STATE_NO_LAYOUT,
+    STATE_IMAGE_ABSENT, STATE_CONTAINER_FAILED_TO_START,
+    STATE_ORCHESTRATION_ERROR,
+})
+
+
+def verdict_for_state(state: str) -> str:
+    """PASS for the one accepting state, FAIL for a refusal, else NOT_DETERMINED.
+
+    Deliberately NOT a dict lookup with a default: an unrecognised state is a
+    state nobody decided about, and the safe reading of a decision nobody made
+    is that no verdict was obtained."""
+    if state == STATE_LADDER_PASSED:
+        return PASS
+    if state == STATE_LADDER_REFUSED:
+        return FAIL
+    return NOT_DETERMINED
+
+
+#: `docker run`'s OWN exit codes for "the container never started": 125 the
+#: daemon could not create it, 126 the entrypoint was not executable, 127 it was
+#: not found. Documented by docker itself, and disjoint from the upstream
+#: precheck's own exits (`precheck.py` leaves via `sys.exit(1)` or 0). Our
+#: `default_runner` reuses 125 when the docker binary itself could not be
+#: executed, which is the same class of event.
+_CONTAINER_START_RCS = frozenset({125, 126, 127})
+
+
+# --------------------------------------------------------------------------- #
 # The shuttle registry — WHO refuses, and what their ladder is called.
 #
 # `ladder` is an ORDERING + EVIDENCE MAP in SUBMISSION-FAILURE ORDER, taken from
@@ -213,7 +340,16 @@ class LadderStep:
     label: str            # human label for the report
     refuses_on: str       # what the counterparty refuses for, in one clause
     covered_by: Tuple[str, ...] = ()   # candidate in-tree counterpart programs
-    cob_only: bool = False             # only in the ladder when --cob is set
+    cob_only: bool = False             # only in the stage list when --cob is set
+    #: Can this stage REFUSE a submission, or does it only move data?
+    #:
+    #: Both kinds must COMPLETE for a PASS — a transport step that died is a run
+    #: that did not finish, and this gate may not read that as clean. The flag
+    #: exists for the OTHER two questions: which stages carry a property an
+    #: in-tree gate could cover (`uncovered_in_tree` is computed over the
+    #: refusing ones alone, because "we have no counterpart for Render" is not
+    #: a gap anybody should act on), and which stage a report should lead with.
+    refusing: bool = True
 
 
 @dataclass(frozen=True)
@@ -222,8 +358,33 @@ class Shuttle:
     status: str                      # LIVE / RETIRED
     tool: str                        # the external tool this WRAPS
     upstream: str                    # where that tool lives
+    #: THE IMAGE THIS GATE RUNS, PINNED BY DIGEST — never by a tag.
+    #:
+    #: A tag is a mutable pointer. `:main` and `:latest` name whatever the
+    #: operator pushed most recently, so the same layout can be refused today
+    #: and accepted tomorrow with nothing in this tree having changed, and the
+    #: first question anybody asks of a refusal — "would it refuse again?" —
+    #: becomes unanswerable. A digest names bytes. `docker run` verifies it on
+    #: the way in, so a digest ref cannot silently resolve to different content.
+    #:
+    #: This repo's own hermetic landing runner already pins itself this way
+    #: (`tools/ci/protected_landing_transition.json` -> runner.image); this is
+    #: the same discipline pointed at somebody else's container.
     default_image: str
+    #: The MOVING tag the digest above was resolved from. Recorded for humans
+    #: (`docker pull <tag>` is what an operator types) and NEVER used to run:
+    #: `default_image` is the only thing that reaches an argv.
+    image_tag: str
     entrypoint: Tuple[str, ...]      # argv prefix inside the container
+    #: THE FULL UPSTREAM STAGE SEQUENCE, in the tool's own order — every stage,
+    #: not only the ones that can refuse.
+    #:
+    #: The reduced list this used to carry could not state the one number a
+    #: refusal is actually about. A run that dies at CheckSize has not produced
+    #: "1 failure"; it has produced a verdict on stage 3 and NOTHING AT ALL on
+    #: stages 4 through 16, and those two readings lead to opposite decisions.
+    #: Keeping the whole sequence is what lets the report say "3 of 16" and name
+    #: the thirteen that never ran.
     ladder: Tuple[LadderStep, ...]
     #: WHICH PDK THIS SHUTTLE'S PRECHECK IS FOR — the FAMILY name, not a
     #: variant. It is the answer to "does this PDK ship a shuttle precheck",
@@ -241,22 +402,43 @@ class Shuttle:
     retired_reason: str = ""
 
 
-# The live path. Ladder order is `PrecheckFlow.Steps` from the upstream tool,
-# reduced to the steps that can REFUSE a submission. `ReadLayout` IS one of them
-# — an unreadable or unsupported layout is a refusal — while `Render` and
-# `WriteLayout` only move data and are left out. The paired raw runner steps
-# (`KLayout.Density`, `KLayout.Antenna`, `KLayout.DRC`) are left out too: their
-# `Checker.*` siblings are what stop the flow, and they are here. The cost of
-# that choice is stated rather than hidden — if a raw runner crashes, its
-# `Checker.*` sibling never gets a directory and this gate reports that step
-# NOT_DETERMINED instead of naming a FAIL. That under-reports in the SAFE
-# direction: the overall verdict is still not a PASS.
+# The live path.
+#
+# STAGE ORDER IS `PrecheckFlow.Steps`, VERBATIM AND COMPLETE — all sixteen, in
+# the tool's own sequence, read out of the pinned image rather than remembered:
+#
+#     docker run --rm --network=none <the digest below> \
+#         python -c "print(open('/workspace/precheck.py').read())"
+#
+# and confirmed against a real run's own directory names (`01-klayout-readlayout`
+# … `16-klayout-writelayout`). `--cob` inserts `CheckPadMask` immediately after
+# `CheckSize` (`precheck.py`, `Flow.Substitute([("+KLayout.CheckSize",
+# CheckPadMask)])`), which is why that one entry is `cob_only` and why the total
+# is 17 under `--cob`.
+#
+# THE LIST IS AN ORDERING AND AN EVIDENCE MAP. It carries no slot dimension, no
+# density window, no DRC rule — nothing that could disagree with the tool. What
+# it carries is the DENOMINATOR: sixteen is how many stages a submission has to
+# survive, so a run that died at three has thirteen stages of silence behind it
+# and this file is what lets the report say so.
+#
+# STALENESS IS DETECTED, NOT ASSUMED AWAY. A hard-coded sequence goes wrong when
+# upstream adds a stage. `_stage_map_drift` compares this list against the
+# directories the tool actually wrote; a slug or an ordinal that is not in here
+# makes the verdict NOT_DETERMINED with `state=STAGE_MAP_STALE`, never a PASS.
 _WAFER_SPACE_GF180MCU = Shuttle(
     shuttle_id="wafer_space_gf180mcu",
     status=LIVE,
     tool="gf180mcu-precheck",
     upstream="https://github.com/wafer-space/gf180mcu-precheck",
-    default_image="ghcr.io/wafer-space/gf180mcu-precheck:latest",
+    # PINNED BY DIGEST. Resolved 2026-08-21 from the tag below, and it is this
+    # digest — not the tag — that produced every measurement quoted in this
+    # file. `docker run` verifies it, so a refusal recorded against this pin can
+    # be re-run against the same bytes for as long as the registry keeps them.
+    default_image=("ghcr.io/wafer-space/gf180mcu-precheck@sha256:"
+                   "f6c0cb88efce8769ec87de5a2035ada731fd8fffb1b3e5e19"
+                   "68078f6dd191c2f"),
+    image_tag="ghcr.io/wafer-space/gf180mcu-precheck:latest",
     pdk="gf180mcu",
     # The upstream image's own documented invocation (its Dockerfile carries
     # this as org.opencontainers.image.usage); the entrypoint is a nix dev-shell
@@ -274,8 +456,29 @@ _WAFER_SPACE_GF180MCU = Shuttle(
             covered_by=("gds_topcell_name_check",)),
         LadderStep(
             "KLayout.CheckSize", "Check Slot Size",
-            "origin is not at (0,0), or the die dimensions do not match the "
-            "purchased slot",
+            # FOUR SEPARATE REFUSALS LIVE IN THIS ONE STAGE, and the clause used
+            # to name only two of them. `check_size.py` runs its predicates in
+            # order and exits on the FIRST one that fails, so the stage that
+            # refused our published GDS reported the seal ring and said nothing
+            # about the die size behind it. A reader who is told only "die
+            # dimensions" cannot tell which of the two stopped the submission,
+            # and cannot tell that a second refusal is still queued behind the
+            # one they can see. Both are named, in the order the tool tests
+            # them.
+            # NAMED AS PROPERTIES, NOT AS THE OPERATOR'S CONSTANTS. Which
+            # marker layer, which database unit, which metal is the ceiling and
+            # how big the slot is are all THEIRS; writing any of them down here
+            # would be the first half of a reimplementation, and
+            # `test_it_wraps_rather_than_reimplements` refuses it. The concrete
+            # values reach the report where they belong — quoted verbatim out of
+            # the counterparty's own run directory, as evidence rather than as
+            # rules.
+            "the origin is not at (0,0); or the layout's database unit is not "
+            "the one the operator requires; or the layout uses metal above the "
+            "operator's stack ceiling; or the seal-ring marker layer is absent; "
+            "or the die dimensions do not match the purchased slot. The tool "
+            "exits on the FIRST of these that fails, so a refusal here names "
+            "one of them and leaves the other four untested",
             # `gds_size_check` is a FILE-size gate (missing / empty / bad header
             # / below a byte threshold). It is NOT a die-DIMENSION gate and is
             # deliberately not claimed here: naming it would report coverage this
@@ -294,7 +497,8 @@ _WAFER_SPACE_GF180MCU = Shuttle(
                         "seal_ring_check", "frame_dimension_check")),
         LadderStep(
             "KLayout.CheckPadMask", "Check Pad Mask",
-            "the pad openings do not match the pad mask for the slot",
+            "the pad openings on the Pad layer do not match the pad mask "
+            "published for the purchased slot",
             # `pad_side_constraint_check` verifies pin SIDES against an L-doc
             # table; the shuttle checks pad OPENING GEOMETRY against its own pad
             # mask. Different property, so it is not claimed.
@@ -306,10 +510,22 @@ _WAFER_SPACE_GF180MCU = Shuttle(
             "template location",
             covered_by=("frame_marker_check", "die_id_marker_check")),
         LadderStep(
+            "KLayout.Render", "Render the Layout",
+            "the layout could not be rendered",
+            refusing=False),
+        LadderStep(
+            "KLayout.Density", "Density Deck",
+            "the density deck could not be run to completion",
+            refusing=False),
+        LadderStep(
             "Checker.KLayoutDensity", "Density Checker",
             "layer density outside the accepted window",
             covered_by=("metal_layer_density_check",
                         "metal_fill_density_check")),
+        LadderStep(
+            "KLayout.ZeroAreaPolygons", "Zero Area Polygons Deck",
+            "the zero-area deck could not be run to completion",
+            refusing=False),
         LadderStep(
             "Checker.KLayoutZeroAreaPolygons", "Zero Area Polygons Checker",
             "the layout contains zero-area polygons",
@@ -319,17 +535,33 @@ _WAFER_SPACE_GF180MCU = Shuttle(
             # threshold of ours that somebody could widen.
             covered_by=("general_precheck", "zero_area_polygon_check")),
         LadderStep(
+            "KLayout.Antenna", "Antenna Deck",
+            "the antenna deck could not be run to completion",
+            refusing=False),
+        LadderStep(
             "Checker.KLayoutAntenna", "Antenna Checker",
             "antenna ratio violations",
             covered_by=("antenna_report_check",)),
+        LadderStep(
+            "Magic.DRC", "Magic DRC Deck",
+            "the Magic DRC deck could not be run to completion",
+            refusing=False),
         LadderStep(
             "Checker.MagicDRC", "Magic DRC Checker",
             "Magic DRC violations",
             covered_by=("drc_report_check", "drc_vacuous_pass_check")),
         LadderStep(
+            "KLayout.DRC", "KLayout DRC Deck",
+            "the KLayout DRC deck could not be run to completion",
+            refusing=False),
+        LadderStep(
             "Checker.KLayoutDRC", "KLayout DRC Checker",
             "KLayout DRC violations",
             covered_by=("drc_report_check",)),
+        LadderStep(
+            "KLayout.WriteLayout", "Write the Layout",
+            "the accepted layout could not be written back",
+            refusing=False),
     ),
     note="wafer.space open-MPW; the precheck is a LibreLane flow the shuttle "
          "operator maintains.",
@@ -344,7 +576,15 @@ _EFABLESS_OPEN_MPW = Shuttle(
     status=RETIRED,
     tool="mpw_precheck",
     upstream="https://github.com/efabless/mpw_precheck",
+    # NOT PINNED, AND IT CANNOT BE. A digest names bytes in a registry that
+    # somebody keeps serving; this operator stopped. The tag is recorded because
+    # it is what the three surviving programs still name, and neither field is
+    # ever read on this path — `evaluate` returns NOT_DETERMINED on `status ==
+    # RETIRED` before any image is resolved. Left visibly unpinned rather than
+    # given a plausible-looking digest, which would claim a reproducibility this
+    # entry does not have.
     default_image="efabless/mpw_precheck:latest",
+    image_tag="efabless/mpw_precheck:latest",
     pdk="sky130",
     entrypoint=("python3", "mpw_precheck.py"),
     ladder=(
@@ -486,6 +726,14 @@ class StepEvidence:
     source: Optional[str] = None
     covered_in_tree_by: Optional[str] = None   # resolved in-tree counterpart
     covered: bool = False
+    #: Can this stage refuse, or does it only move data? See `LadderStep`.
+    refusing: bool = True
+    #: Did the tool create a directory for this stage at all? `False` is the
+    #: honest word for the thirteen stages behind an early exit: not "passed",
+    #: not "failed", NEVER RAN. Reported as its own field rather than left to be
+    #: inferred from `verdict == NOT_DETERMINED`, which also covers the very
+    #: different case of a stage that ran and logged nothing usable.
+    ran: bool = False
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -508,7 +756,41 @@ class ReadinessReport:
     failed_steps: List[str] = field(default_factory=list)
     undetermined_steps: List[str] = field(default_factory=list)
     uncovered_in_tree: List[str] = field(default_factory=list)
+    #: WHAT HAPPENED, from the closed vocabulary above. `verdict` says whether
+    #: this may be submitted; `state` says why, and the two are read by
+    #: different people.
+    state: str = ""
+    #: THE DENOMINATOR A REFUSAL IS ACTUALLY ABOUT. How many stages the
+    #: counterparty's flow has, how many it got a directory for, and — when it
+    #: stopped early — which one it stopped in and which ones therefore never
+    #: ran. "stage 3 of 16" is the shape; "1 failure" is not, because it hides
+    #: thirteen stages of silence behind a number that reads like completeness.
+    upstream_stages_total: int = 0
+    stages_attempted: int = 0
+    #: THE FIRST STAGE THAT REFUSED, with its position in the sequence — the
+    #: "3" in "stage 3 of 16".
+    #:
+    #: NOT called `stopped_at`, and the difference was measured. Some upstream
+    #: checkers DEFER their error: a real run of a die with DRC violations
+    #: refuses at stage 15 and then still runs stage 16. So the stage that
+    #: refused and the stage the flow stopped after are not always the same
+    #: stage, and `stages_never_ran` — computed from which directories the tool
+    #: actually wrote — is the field that answers the second question.
+    refused_at_stage: Optional[Dict[str, Any]] = None
+    stages_never_ran: List[str] = field(default_factory=list)
     image: str = ""
+    #: HOW THE IMAGE WAS NAMED, and WHICH BYTES ANSWERED.
+    #:
+    #: `image_pinned_by` is `digest` / `tag` / `unresolved`. A digest makes the
+    #: verdict re-runnable; a tag does not, and a report that did not say which
+    #: it used would leave "would it refuse again?" unanswerable. `image_id` and
+    #: `image_repo_digests` are read back from the daemon AFTER resolution, so
+    #: the record names the content that ran however the caller spelled it —
+    #: including a `--image` override that came in on a moving tag.
+    image_tag: str = ""
+    image_pinned_by: str = "unresolved"
+    image_id: str = ""
+    image_repo_digests: List[str] = field(default_factory=list)
     rundir: Optional[str] = None
     returncode: Optional[int] = None
     command: List[str] = field(default_factory=list)
@@ -522,10 +804,34 @@ class ReadinessReport:
         return d
 
     def summary_line(self) -> str:
-        """One line that ALWAYS states the denominator (#447)."""
+        """One line that ALWAYS states the denominator (#447).
+
+        LEADS WITH THE STATE, on purpose. The old line led with counts, and for
+        every path where the counterparty was never reached those counts read
+        `failed=0, undetermined=9` — which a human skims as "nothing refused"
+        and an aggregator reads as zero findings. The state is the first thing
+        after the verdict now, and the stage arithmetic is stated as "stopped at
+        N of M, K never ran" rather than as a failure tally."""
+        head = (f"{self.verdict} [{self.state or 'UNSET'}]: "
+                f"shuttle={self.shuttle} ({self.shuttle_status}) "
+                f"tool={self.tool}")
+        if self.state in NEVER_ASKED_STATES:
+            # No stage refused AND no stage was asked. Say the second part, or
+            # the first reads as an all-clear.
+            stages = (f"THE COUNTERPARTY WAS NEVER ASKED — "
+                      f"0 of {self.upstream_stages_total} stage(s) ran")
+        elif self.refused_at_stage:
+            stages = (f"REFUSED at stage {self.refused_at_stage['order']} of "
+                      f"{self.upstream_stages_total} "
+                      f"({self.refused_at_stage['label']}), "
+                      f"{self.stages_attempted} stage(s) ran, "
+                      f"{len(self.stages_never_ran)} NEVER RAN")
+        else:
+            stages = (f"{self.stages_attempted} of "
+                      f"{self.upstream_stages_total} stage(s) ran, "
+                      f"{len(self.stages_never_ran)} NEVER RAN")
         return (
-            f"{self.verdict}: shuttle={self.shuttle} ({self.shuttle_status}) "
-            f"tool={self.tool} — layouts_found={self.layouts_found}, "
+            f"{head} — layouts_found={self.layouts_found}, {stages}, "
             f"ladder_steps_required={self.required_steps}, "
             f"steps_with_evidence={self.steps_with_evidence}, "
             f"failed={len(self.failed_steps)}, "
@@ -547,15 +853,30 @@ def default_image_resolver(image: str, allow_pull: bool,
 
     Any docker error — daemon down, docker absent, pull refused — resolves to
     None, and the caller then reports NOT_DETERMINED. It never guesses that an
-    unreachable tool would have passed."""
+    unreachable tool would have passed.
+
+    `docker image inspect`, NOT `docker images -q`, AND THE DIFFERENCE IS A BUG
+    ------------------------------------------------------------------------
+    `docker images -q` matches on repository:TAG. Given a digest reference it
+    prints NOTHING and exits 0 — the same output as for an image that genuinely
+    is not there. Measured on the pinned image while it was present locally:
+
+        $ docker images -q ghcr.io/…/gf180mcu-precheck@sha256:f6c0cb88…
+        (no output, rc 0)
+        $ docker image inspect ghcr.io/…/gf180mcu-precheck@sha256:f6c0cb88… \
+              --format '{{.Id}}'
+        sha256:4f58bb5de3159afe26ebf17310c5129234fe0bc7b9697723164ad0fab984fc40
+
+    So the moment this gate was pinned by digest — which is the whole point of
+    pinning it — the old probe reported IMAGE_ABSENT on every host that had the
+    image, and the gate stopped asking the counterparty anything. Not a hedge
+    against a hypothetical: with the digest pin in place and this probe left
+    alone, EVERY run is a non-run. `docker image inspect` resolves tags and
+    digests alike and exits non-zero when the reference is not present, which is
+    the question actually being asked."""
     if not shutil.which(docker_bin):
         return None
-    try:
-        q = subprocess.run([docker_bin, "images", "-q", image],
-                           capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if q.returncode == 0 and q.stdout.strip():
+    if _image_is_local(image, docker_bin):
         return image
     if not allow_pull:
         return None
@@ -564,7 +885,65 @@ def default_image_resolver(image: str, allow_pull: bool,
                            capture_output=True, text=True, timeout=3600)
     except (OSError, subprocess.SubprocessError):
         return None
-    return image if p.returncode == 0 else None
+    # A pull that reported success but left nothing inspectable is not a
+    # resolution. Re-ask rather than trusting the exit code.
+    return image if (p.returncode == 0
+                     and _image_is_local(image, docker_bin)) else None
+
+
+def _image_is_local(image: str, docker_bin: str = "docker") -> bool:
+    try:
+        q = subprocess.run([docker_bin, "image", "inspect", image,
+                            "--format", "{{.Id}}"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return q.returncode == 0 and bool(q.stdout.strip())
+
+
+def image_identity(image: str,
+                   docker_bin: str = "docker") -> Tuple[str, List[str]]:
+    """(content id, repo digests) for a resolved image, or ("", []).
+
+    WHICH BYTES ANSWERED, read back from the daemon rather than assumed from the
+    string the caller typed. A refusal is only re-runnable if the record names
+    the image content, and `--image` lets a caller name it however they like —
+    including with a tag that will point somewhere else next week. Best-effort:
+    a daemon that will not answer degrades the RECORD, and must not change the
+    VERDICT, so this never raises and never returns a guess."""
+    # `{{json .RepoDigests}}`, not `{{join .RepoDigests ","}}`. Measured: on
+    # this daemon `join` fails with `wrong type for value; expected []string;
+    # got []interface {}` and the whole inspect exits 1, so the identity came
+    # back empty on the very runs it exists to record. `json` renders any shape.
+    try:
+        q = subprocess.run(
+            [docker_bin, "image", "inspect", image,
+             "--format", "{{.Id}}\n{{json .RepoDigests}}"],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return "", []
+    if q.returncode != 0:
+        return "", []
+    parts = (q.stdout or "").strip().splitlines()
+    ident = parts[0].strip() if parts else ""
+    digests: List[str] = []
+    if len(parts) > 1:
+        try:
+            loaded = json.loads(parts[1])
+        except ValueError:
+            loaded = None
+        if isinstance(loaded, list):
+            digests = [str(d) for d in loaded if d]
+    return ident, digests
+
+
+def pin_kind(image: str) -> str:
+    """`digest` when the reference names content, `tag` when it names a pointer.
+
+    The whole test is whether an `@sha256:` appears, because that is the whole
+    difference: docker verifies a digest reference against the content it
+    fetched and rejects a mismatch, and verifies nothing at all about a tag."""
+    return "digest" if "@sha256:" in (image or "") else "tag"
 
 
 def default_runner(cmd: List[str],
@@ -738,6 +1117,60 @@ def parse_run_evidence(rundir: Path) -> Dict[str, Tuple[str, str, str]]:
     return found
 
 
+def observed_stages(rundir: Path) -> List[Tuple[int, str, bool]]:
+    """(ordinal, flattened slug, completed) for every stage directory the tool wrote.
+
+    The counterparty's own record of which stages it ATTEMPTED. A stage with no
+    directory was not attempted; that is the difference between "this stage was
+    checked and was fine" and "this stage never ran", and it is the whole reason
+    a refusal is reported as `3 of 16` rather than as a failure count."""
+    seen: Dict[int, Tuple[int, str, bool]] = {}
+    for run_root in _run_roots(rundir):
+        try:
+            kids = sorted(d for d in run_root.iterdir()
+                          if d.is_dir() and _numbered_step_dir(d.name))
+        except OSError:
+            continue
+        for d in kids:
+            head, _, slug = d.name.partition("-")
+            seen[int(head)] = (int(head), _flat(slug),
+                               (d / "state_out.json").is_file())
+    return [seen[k] for k in sorted(seen)]
+
+
+def stage_map_drift(shuttle_stages: Tuple[LadderStep, ...],
+                    observed: List[Tuple[int, str, bool]]) -> List[str]:
+    """Ways the declared stage sequence disagrees with the run, as sentences.
+
+    A HARD-CODED SEQUENCE HAS TO BE ABLE TO GO WRONG OUT LOUD. The stage list in
+    the registry was read out of one pinned image; upstream can add a stage,
+    rename one, or reorder them, and a gate that kept counting against a stale
+    list would report a confident `12 of 16` for a flow that now has eighteen.
+    Every disagreement found here makes the verdict NOT_DETERMINED with
+    `state=STAGE_MAP_STALE` — never a PASS, because a denominator we cannot
+    trust is not a denominator we may pass on.
+
+    Deliberately compares against what the TOOL wrote, so the check needs no
+    second source and cannot itself go stale."""
+    declared = {_flat(_slug(s.step_id)): i
+                for i, s in enumerate(shuttle_stages, start=1)}
+    problems: List[str] = []
+    for order, slug, _done in observed:
+        if slug not in declared:
+            problems.append(
+                f"the run wrote stage {order} '{slug}', which is not in this "
+                f"registry's declared sequence of {len(shuttle_stages)} stage(s)")
+        elif declared[slug] != order:
+            problems.append(
+                f"the run wrote '{slug}' as stage {order}; this registry "
+                f"declares it as stage {declared[slug]}")
+    if observed and observed[-1][0] > len(shuttle_stages):
+        problems.append(
+            f"the run reached stage {observed[-1][0]}, beyond the "
+            f"{len(shuttle_stages)} this registry declares")
+    return problems
+
+
 def _run_roots(rundir: Path) -> List[Path]:
     """Every plausible run root under `rundir`, newest last.
 
@@ -799,23 +1232,45 @@ def evaluate(
     shuttle = SHUTTLES.get(shuttle_id)
     if shuttle is None:
         known = ", ".join(sorted(SHUTTLES))
-        return ReadinessReport(
+        rep = ReadinessReport(
             project=str(project), shuttle=shuttle_id, shuttle_status="UNKNOWN",
             tool="", upstream="", verdict=NOT_DETERMINED,
             reason=f"unknown shuttle '{shuttle_id}'; known shuttles: {known}",
-            layouts_found=0)
+            layouts_found=0, state=STATE_UNKNOWN_SHUTTLE)
+        return rep
 
+    # The stages this run has, in the tool's own order. `--cob` inserts one, so
+    # the denominator is a property of the invocation and not a constant.
     ladder = tuple(s for s in shuttle.ladder if cob or not s.cob_only)
+    total_stages = len(ladder)
     steps = _blank_steps(ladder, programs_dir)
-    uncovered = [s.step_id for s in steps if not s.covered]
+    # Coverage is asked of the stages that can REFUSE. "no in-tree counterpart
+    # for Render" is not a gap; naming it as one would bury the two that are.
+    uncovered = [s.step_id for s in steps if s.refusing and not s.covered]
 
-    def _report(verdict: str, reason: str, **kw: Any) -> ReadinessReport:
+    def _report(state: str, reason: str, **kw: Any) -> ReadinessReport:
         rep = ReadinessReport(
             project=str(project), shuttle=shuttle.shuttle_id,
             shuttle_status=shuttle.status, tool=shuttle.tool,
-            upstream=shuttle.upstream, verdict=verdict, reason=reason,
-            required_steps=len(ladder), steps=steps,
-            uncovered_in_tree=uncovered, **kw)
+            upstream=shuttle.upstream, verdict=verdict_for_state(state),
+            state=state, reason=reason,
+            required_steps=total_stages, steps=steps,
+            uncovered_in_tree=uncovered,
+            upstream_stages_total=total_stages,
+            image_tag=shuttle.image_tag, **kw)
+        return rep
+
+    def _never_asked(state: str, reason: str, **kw: Any) -> ReadinessReport:
+        """A terminal path on which the counterparty was never reached.
+
+        Every stage is NOT_DETERMINED and `stages_never_ran` is ALL of them —
+        stated rather than left empty, because an empty never-ran list beside an
+        empty failed list is precisely the "no refusals found" reading this gate
+        exists to make impossible."""
+        rep = _report(state, reason, **kw)
+        rep.undetermined_steps = [s.step_id for s in steps]
+        rep.stages_never_ran = [s.step_id for s in steps]
+        rep.stages_attempted = 0
         return rep
 
     # (1) A RETIRED shuttle can never produce an external verdict. Not a PASS,
@@ -830,13 +1285,11 @@ def evaluate(
         # which shuttle it belongs to, so the prose channel alone could not
         # tell one retired counterparty from another. Composed from the
         # registry entry, so it names any future retired shuttle too.
-        rep = _report(
-            NOT_DETERMINED,
+        return _never_asked(
+            STATE_SHUTTLE_RETIRED,
             f"the '{shuttle.shuttle_id}' shuttle is RETIRED, so its precheck "
             f"tool '{shuttle.tool}' was never run: {shuttle.retired_reason}",
             layouts_found=0)
-        rep.undetermined_steps = [s.step_id for s in steps]
-        return rep
 
     # (2) Which layout? A project with none refuses over the empty set (#564).
     if layout is None:
@@ -844,32 +1297,41 @@ def evaluate(
     else:
         hits = [layout] if layout.is_file() else []
     if not hits:
-        rep = _report(
-            NOT_DETERMINED,
+        return _never_asked(
+            STATE_NO_LAYOUT,
             "no finished layout found under the project "
             f"(searched {len(_LAYOUT_GLOBS)} layout location(s) below "
             f"{project}); nothing was submitted to the shuttle, so nothing was "
             "determined", layouts_found=0)
-        rep.undetermined_steps = [s.step_id for s in steps]
-        return rep
     chosen = hits[0]
     top = top or chosen.name.split(os.extsep)[0]
 
-    # (3) Resolve the external tool. Unreachable is NOT_DETERMINED, never a pass.
+    # (3) Resolve the external tool.
+    #
+    #     IMAGE ABSENT IS ITS OWN STATE AND IT FAILS THE GATE. It is not a
+    #     variety of "nothing found" and it must never aggregate as one: no
+    #     stage refused because no stage was asked, and the difference between
+    #     those two sentences is the difference between shipping and not.
     img = image or shuttle.default_image
+    pinned_by = pin_kind(img)
     resolve = image_resolver or default_image_resolver
     resolved = resolve(img, allow_pull)
     if not resolved:
-        rep = _report(
-            NOT_DETERMINED,
+        return _never_asked(
+            STATE_IMAGE_ABSENT,
             f"the shuttle precheck image '{img}' is not available"
             + (" and could not be pulled" if allow_pull else "")
             + f". Pull it with: {docker_bin} pull {img} (upstream: "
             f"{shuttle.upstream}). The counterparty was never asked, so no "
-            "external verdict exists",
-            layouts_found=len(hits), layout=str(chosen), image=img)
-        rep.undetermined_steps = [s.step_id for s in steps]
-        return rep
+            "external verdict exists and NO STAGE OF THE LADDER RAN",
+            layouts_found=len(hits), layout=str(chosen), image=img,
+            image_pinned_by=pinned_by)
+
+    # WHICH BYTES ANSWERED. Read back from the daemon after resolution, so the
+    # record is of content rather than of the string somebody typed.
+    ident, repo_digests = image_identity(resolved, docker_bin)
+    img_facts = dict(image=resolved, image_pinned_by=pin_kind(resolved),
+                     image_id=ident, image_repo_digests=repo_digests)
 
     # (4) Run the real tool, unmodified.
     run_root = (rundir or (project / "reports" / "phase3" /
@@ -881,21 +1343,22 @@ def evaluate(
     try:
         rc, out, err = run(cmd, timeout)
     except Exception as e:  # noqa: BLE001 — any orchestration crash is undetermined
-        rep = _report(
-            NOT_DETERMINED,
+        return _never_asked(
+            STATE_ORCHESTRATION_ERROR,
             f"the shuttle precheck orchestration raised {e!r} before producing "
-            "evidence; no external verdict exists",
-            layouts_found=len(hits), layout=str(chosen), image=resolved,
-            rundir=str(run_root), command=cmd)
-        rep.undetermined_steps = [s.step_id for s in steps]
-        return rep
+            "evidence; no external verdict exists and NO STAGE OF THE LADDER "
+            "RAN",
+            layouts_found=len(hits), layout=str(chosen),
+            rundir=str(run_root), command=cmd, **img_facts)
 
     # (5) Read the tool's OWN run directory.
+    observed = observed_stages(run_root)
     evidence = parse_run_evidence(run_root)
     for st in steps:
         hit = evidence.get(_flat(_slug(st.step_id)))
         if hit is None:
-            continue          # never ran -> stays NOT_DETERMINED
+            continue          # never ran -> stays NOT_DETERMINED, ran stays False
+        st.ran = True
         st.verdict, st.source, st.evidence = hit
         if st.verdict == FAIL and not st.evidence:
             st.evidence = _tail(out, err)
@@ -903,48 +1366,93 @@ def evaluate(
     with_evidence = sum(1 for s in steps if s.verdict != NOT_DETERMINED)
     failed = [s.step_id for s in steps if s.verdict == FAIL]
     undet = [s.step_id for s in steps if s.verdict == NOT_DETERMINED]
+    never_ran = [s.step_id for s in steps if not s.ran]
+    # THE FIRST STAGE THAT REFUSED — attempted, and did not complete.
+    #
+    # There can be MORE than one, and that was measured rather than assumed: a
+    # checker whose error is DEFERRED lets the flow carry on, so a real run
+    # against a die with both density and DRC violations refuses at stage 7 AND
+    # at stage 15 and still writes stage 16. `failed_steps` names them all;
+    # this names the one a reader should look at first, because it is the one
+    # a submission hits first.
+    refused = next((s for s in steps if s.ran and s.verdict == FAIL), None)
+    refused_at = ({"order": refused.order, "step_id": refused.step_id,
+                   "label": refused.label} if refused else None)
 
-    common = dict(layouts_found=len(hits), layout=str(chosen), image=resolved,
+    common = dict(layouts_found=len(hits), layout=str(chosen),
                   rundir=str(run_root), returncode=rc, command=cmd,
-                  stdout_tail=out[-4000:], stderr_tail=err[-4000:])
+                  stdout_tail=out[-4000:], stderr_tail=err[-4000:],
+                  stages_attempted=len(observed),
+                  refused_at_stage=refused_at,
+                  stages_never_ran=never_ran, **img_facts)
 
-    if not with_evidence:
-        rep = _report(
-            NOT_DETERMINED,
-            f"the shuttle precheck exited rc={rc} but wrote no per-step "
-            f"evidence under {run_root}; the ladder did not run, so no external "
-            "verdict exists", **common)
+    def _finish(state: str, reason: str) -> ReadinessReport:
+        rep = _report(state, reason, **common)
+        rep.steps_with_evidence = with_evidence
+        rep.failed_steps = failed
         rep.undetermined_steps = undet
-        rep.steps_with_evidence = 0
         return rep
 
+    # (5a) DID THE COUNTERPARTY'S FLOW STILL HAVE THE SHAPE WE COUNT AGAINST?
+    #      Asked before any verdict, because every number below is stated over
+    #      a denominator this registry supplies, and a denominator that no
+    #      longer matches the tool makes all of them meaningless — including,
+    #      and especially, a PASS.
+    drift = stage_map_drift(ladder, observed)
+    if drift:
+        return _finish(
+            STATE_STAGE_MAP_STALE,
+            "the counterparty's flow no longer matches the stage sequence this "
+            "registry declares, so no stage arithmetic here can be trusted: "
+            + "; ".join(drift)
+            + ". Re-read `PrecheckFlow.Steps` from the pinned image and update "
+              "the registry; until then no verdict is claimed")
+
+    if not with_evidence:
+        return _finish(
+            STATE_CONTAINER_FAILED_TO_START if rc in _CONTAINER_START_RCS
+            else STATE_NO_EVIDENCE,
+            # BOTH BRANCHES FAIL THE GATE, and they are kept apart because they
+            # are handed to different people: a container that would not start
+            # is a broken host, and a container that started and wrote nothing
+            # is a broken invocation.
+            (f"the container did not start (rc={rc}, which is docker's own "
+             f"code for it); the counterparty was never asked and NO STAGE OF "
+             f"THE LADDER RAN"
+             if rc in _CONTAINER_START_RCS else
+             f"the shuttle precheck exited rc={rc} but wrote no per-stage "
+             f"evidence under {run_root}; the ladder did not run, so no "
+             f"external verdict exists")
+            + f". Last output: {_tail(out, err) or '(none)'}")
+
     if failed:
-        rep = _report(
-            FAIL,
-            "the shuttle refused: " + ", ".join(failed)
+        where = (f"at stage {refused_at['order']} of {total_stages} "
+                 f"({refused_at['label']})" if refused_at else "")
+        return _finish(
+            STATE_LADDER_REFUSED,
+            f"the shuttle refused {where}: " + ", ".join(failed)
             + " — this is the counterparty's verdict, quoted from its own run "
-              "directory", **common)
-    elif undet:
-        rep = _report(
-            NOT_DETERMINED,
-            "ladder step(s) produced no evidence: " + ", ".join(undet)
-            + ". A step that never ran is not a pass", **common)
-    elif rc != 0:
-        rep = _report(
-            NOT_DETERMINED,
-            f"every ladder step carries passing evidence but the tool exited "
-            f"rc={rc}; the disagreement is not ours to resolve in favour of a "
-            "pass", **common)
-    else:
-        rep = _report(
-            PASS,
-            f"the shuttle precheck ran and every one of the {len(ladder)} "
-            "ladder step(s) carries passing evidence in the tool's own run "
-            "directory", **common)
-    rep.steps_with_evidence = with_evidence
-    rep.failed_steps = failed
-    rep.undetermined_steps = undet
-    return rep
+              "directory"
+            + (f". {len(never_ran)} stage(s) NEVER RAN and are UNKNOWN, not "
+               f"clean: " + ", ".join(never_ran) if never_ran else ""))
+
+    if undet:
+        return _finish(
+            STATE_LADDER_INCOMPLETE,
+            "ladder stage(s) produced no evidence: " + ", ".join(undet)
+            + ". A stage that never ran is not a pass")
+
+    if rc != 0:
+        return _finish(
+            STATE_TOOL_DISAGREED,
+            f"every one of the {total_stages} stage(s) carries passing evidence "
+            f"but the tool exited rc={rc}; the disagreement is not ours to "
+            "resolve in favour of a pass")
+
+    return _finish(
+        STATE_LADDER_PASSED,
+        f"the shuttle precheck ran and every one of the {total_stages} "
+        "stage(s) carries passing evidence in the tool's own run directory")
 
 
 def _blank_steps(ladder: Tuple[LadderStep, ...],
@@ -955,7 +1463,8 @@ def _blank_steps(ladder: Tuple[LadderStep, ...],
         out.append(StepEvidence(
             step_id=st.step_id, label=st.label, order=i,
             verdict=NOT_DETERMINED, refuses_on=st.refuses_on,
-            covered_in_tree_by=cov, covered=cov is not None))
+            covered_in_tree_by=cov, covered=cov is not None,
+            refusing=st.refusing))
     return out
 
 
@@ -995,7 +1504,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--id", default="", dest="die_id",
                    help="Die id passed through to the shuttle tool.")
     p.add_argument("--image", default="",
-                   help="Override the shuttle precheck container image.")
+                   help="Override the shuttle precheck container image. The "
+                        "registry default is pinned BY DIGEST; an override "
+                        "given as a tag is honoured and recorded as "
+                        "image_pinned_by=tag, because a tag can point "
+                        "somewhere else tomorrow and a verdict nobody can "
+                        "re-run is worth less than one they can.")
     p.add_argument("--pull", action="store_true",
                    help="Attempt to pull the image when it is not local.")
     p.add_argument("--rundir", type=Path, default=None,
@@ -1030,7 +1544,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                       encoding="utf-8")
     print(json.dumps(payload, indent=2))
     print(rep.summary_line())
-    return 0 if rep.verdict == PASS else 1
+    # rc 0 for the one accepting state and nothing else. Asked of the state
+    # rather than of the verdict so that a state added without a decision about
+    # what it means cannot fall through to a green light.
+    return 0 if rep.state in ACCEPT_STATES else 1
 
 
 if __name__ == "__main__":  # pragma: no cover
