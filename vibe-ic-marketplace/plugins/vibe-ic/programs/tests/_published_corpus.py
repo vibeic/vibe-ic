@@ -52,6 +52,7 @@ exists, and a broken pointer raises instead of skipping — see `corpus_root`.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -62,6 +63,17 @@ CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
 
 _PLUGIN = Path(__file__).resolve().parents[1]
 _REPO = _PLUGIN.parents[2]
+
+#: The four states this module answers, spelled once so a caller can branch on
+#: them instead of matching the message text.
+#:
+#: `UNSET` and `PUBLISHES_NOTHING` are both SKIPs and they are NOT the same skip:
+#: one is "nobody offered a corpus", the other is "I read the corpus you named
+#: and it publishes zero cells". `BROKEN` is neither, and never becomes either.
+UNSET = "unset"
+BROKEN = "broken"
+PUBLISHES_NOTHING = "publishes_nothing"
+PRESENT = "present"
 
 
 class CorpusPointerBroken(RuntimeError):
@@ -92,21 +104,124 @@ def corpus_root() -> Optional[Path]:
     are fixed: the pointer now refuses, and the test is written below the module
     it guards (`test_published_corpus_helper.py`).
     """
+    state, root, reason = corpus_state()
+    if state == PRESENT:
+        return root
+    if state == BROKEN:
+        raise CorpusPointerBroken(reason)
+    # UNSET and PUBLISHES_NOTHING both mean "there is no cell to measure", and
+    # the two are told apart by the REASON, which is what `needs_corpus` puts on
+    # the skip and what a reader sees in the junit record.
+    return None
+
+
+def _not_a_corpus_checkout(root: Path) -> Optional[str]:
+    """None when `root` is a readable checkout of a published-corpus repository;
+    otherwise the sentence naming why it is not one.
+
+    THIS IS THE DISCRIMINATOR BETWEEN A BROKEN POINTER AND AN EMPTY CORPUS, and
+    it has to be a property a mistake CANNOT accidentally satisfy. A mistyped
+    path, a failed clone, a no-op CI fetch step and a bare `mkdir` all produce a
+    path that is not a git checkout, or is one that tracks nothing under `ic/`.
+    A real clone of the published-corpus repository is a checkout AND tracks its
+    `ic/` tree even in the weeks when it publishes no cell at all — which is the
+    live state as of 2026-08-20, when `bcf2f94` withdrew all four.
+
+    Git's INDEX, never a walk: an untracked `ic/` somebody created by hand inside
+    a checkout is not the published tree.
+    """
+    if not root.is_dir():
+        return (f"the path does not exist" if not root.exists()
+                else "the path is not a directory")
+    try:
+        top = subprocess.run(["git", "-C", str(root), "rev-parse",
+                              "--show-toplevel"],
+                             capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:   # noqa: BLE001
+        return f"the path exists but git could not be asked about it ({exc})"
+    if top.returncode != 0 or not top.stdout.strip():
+        return ("the path exists but is not a git checkout, so it cannot be a "
+                "clone of the published-corpus repository — a tarball fetch, an "
+                "archive export, a dead clone or a bare mkdir all produce this")
+    if not (root / "ic").is_dir():
+        return ("the path is a git checkout but carries no ic/ tree, so it is "
+                "not the published-corpus repository")
+    try:
+        tracked = subprocess.run(["git", "-C", str(root), "ls-files", "-z",
+                                  "--", "ic"],
+                                 capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:   # noqa: BLE001
+        return f"git could not enumerate ic/ in {root} ({exc})"
+    if tracked.returncode != 0 or not tracked.stdout.strip():
+        return ("the path is a git checkout but git TRACKS nothing under ic/, "
+                "so its ic/ tree is not the published one")
+    return None
+
+
+def corpus_state() -> Tuple[str, Optional[Path], str]:
+    """``(state, root, reason)`` — the whole resolution, in one place.
+
+    FOUR OUTCOMES, AND COLLAPSING ANY TWO OF THEM IS THE DEFECT.
+
+        nobody set the pointer, no cells here
+            -> UNSET. No corpus was offered; a check over one skips.
+
+        set, and there is nothing readable / it is not a corpus checkout
+            -> BROKEN. They named a corpus and the name is wrong, or the clone
+               failed, or the CI step meant to fetch it did nothing. Rendering
+               that as "there is no corpus" is the measured exploit this module
+               exists to close: `VIBE_IC_BENCHMARK_DATA=<empty dir> pytest …`
+               once gave `29 passed, 2 skipped` — a green run with every corpus
+               check switched off.
+
+        set, a real corpus checkout, and it publishes ZERO cells
+            -> PUBLISHES_NOTHING. **A TREE WITH NO CELLS IS NOT A TREE NOBODY
+               LOOKED AT.** This state was previously indistinguishable from
+               BROKEN: both raised, and the raise happens at module import (the
+               `needs_corpus` marker below), so a whole test FILE died as a
+               COLLECTION ERROR — including its tests that never touch the
+               corpus. MEASURED 2026-08-20 against `vibeic/benchmark-data`
+               @ `bcf2f94` ("withdraw all four published cells"), a clean clone
+               of upstream head:
+
+                   ERROR collecting tests/test_matrix_artefact_mutation_channel.py
+                   ERROR collecting tests/test_matrix_d3_outputs_produced.py
+                   Interrupted: 2 errors during collection
+
+               and the remedy it printed — "point it at a clone of
+               vibeic/benchmark-data" — was already satisfied. A refusal whose
+               remedy is already in force is not a refusal, it is a dead end.
+
+        set, a real corpus checkout, cells readable
+            -> PRESENT. Everything runs exactly as it always did.
+
+    chip-AGNOSTIC: path/git plumbing only.
+    """
     env = os.environ.get(CORPUS_ENV)
     if env:
-        p = Path(env)
-        if _has_cells(p):
-            return p
-        raise CorpusPointerBroken(
-            f"{CORPUS_ENV}={env!r} names a corpus with no published cell under "
-            f"ic/<design>/v<version>_<PDK>/ "
-            f"({'the path does not exist' if not p.exists() else 'the path exists but is empty of cells'}). "
-            f"This is NOT the same as having no corpus: you said where it is. "
-            f"Unset {CORPUS_ENV} to run these checks as skipped, or point it at a "
-            f"clone of vibeic/benchmark-data."
-        )
+        root = Path(env)
+        if _has_cells(root):
+            return PRESENT, root, ""
+        why = _not_a_corpus_checkout(root)
+        if why is not None:
+            return BROKEN, None, (
+                f"{CORPUS_ENV}={env!r} names a corpus with no published cell "
+                f"under ic/<design>/v<version>_<PDK>/ ({why}). This is NOT the "
+                f"same as having no corpus: you said where it is. Unset "
+                f"{CORPUS_ENV} to run these checks as skipped, or point it at a "
+                f"clone of vibeic/benchmark-data.")
+        return PUBLISHES_NOTHING, root, (
+            f"{CORPUS_ENV}={env!r} IS a readable checkout of the published-corpus "
+            f"repository and it publishes 0 cells right now — no "
+            f"ic/<design>/v<version>_<PDK>/ anywhere under it. The pointer is "
+            f"NOT broken and there is nothing to fix here: this check has no "
+            f"subject until a cell is published. Read this as 'I looked and the "
+            f"corpus is empty', never as 'nothing was wrong' and never as "
+            f"'nobody told me where the corpus is'.")
     here = _REPO / "benchmark-data"
-    return here if _has_cells(here) else None
+    if _has_cells(here):
+        return PRESENT, here, ""
+    return UNSET, None, SKIP_REASON
 
 
 def _has_cells(root: Path) -> bool:
@@ -152,4 +267,13 @@ SKIP_REASON = (
 )
 
 #: Apply to any test whose subject is a PUBLISHED CELL rather than plugin behaviour.
-needs_corpus = pytest.mark.skipif(corpus_root() is None, reason=SKIP_REASON)
+#:
+#: Evaluated ONCE, at import, and the reason carried is the STATE's reason, not a
+#: single string — so `unset` and `publishes_nothing` are two different skips in
+#: the junit record and a reader can tell which happened without re-running.
+#: BROKEN still raises here, which is deliberate: the exploit it closes is a
+#: broken pointer being swallowed into a skip.
+_STATE, _ROOT, _REASON = corpus_state()
+if _STATE == BROKEN:
+    raise CorpusPointerBroken(_REASON)
+needs_corpus = pytest.mark.skipif(_STATE != PRESENT, reason=_REASON)

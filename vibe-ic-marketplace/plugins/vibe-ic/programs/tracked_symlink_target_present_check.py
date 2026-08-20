@@ -156,7 +156,13 @@ DEFAULT_BASELINE = DIR / "tracked_symlink_target_baseline.json"
 #: same way `benchmark_evidence_structure_check`, `tracked_symlink_portability_
 #: check` and `programs/tests/_published_corpus` spell it: one name for one
 #: thing, so two gates cannot disagree about whether a corpus was checked.
-CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+sys.path.insert(0, str(DIR))
+import _corpus_location as _cloc  # noqa: E402
+
+CORPUS_ENV = _cloc.CORPUS_ENV
+
+#: The name this gate prints itself under.
+GATE = "tracked_symlink_target_present_check"
 
 
 def _repo_root(start: Path) -> Path:
@@ -321,12 +327,38 @@ def main(argv=None) -> int:
                          "corpus — that stays UNDETERMINED.")
     a = ap.parse_args(argv)
 
-    # THE POINTER WINS OVER THE PATH, ANNOUNCED (#1710). A clone of the published
-    # corpus is its own repository, so the pointer resolves to that repository's
-    # TOPLEVEL and the subdir to the corpus's path inside it; the enumeration
-    # below is then unchanged and still reads git's index, never a walk.
-    env_tree = os.environ.get(CORPUS_ENV)
+    # THE POINTER REPLACES A MISSING TREE; IT DOES NOT REPLACE A PRESENT ONE
+    # (#1710, corrected 2026-08-20). A clone of the published corpus is its own
+    # repository, so the pointer resolves to that repository's TOPLEVEL and the
+    # subdir to the corpus's path inside it; the enumeration below is then
+    # unchanged and still reads git's index, never a walk.
+    #
+    # What this gate is AIMED at is `<--root>/<--subdir>`, and the pointer used to
+    # win over that even when the caller had named a directory that carries a tree.
+    # An environment default outranking an explicit command-line argument is
+    # backwards, and it is not a hypothetical: `tools/ci/gate_fixtures/
+    # tracked_symlink_target_present.py` builds a two-file subject with one tracked
+    # symlink and the hygiene runner invokes this gate as
+    # `--root <subject> --corpus-may-be-absent`, inheriting the caller's
+    # environment. With the pointer set, BOTH arms of that fixture were answered
+    # about the real corpus, the mutation did not move the verdict, and
+    # `test_gate_fixtures_discriminate[tracked_symlink_target_present]` failed —
+    # a gate proving it discriminates, defeated by the pointer.
+    #
+    # `_corpus_location.resolve`'s rule is `named.is_dir()`. The shipped call site
+    # names `$ROOT/benchmark-data`, which is absent since v1.10.56 and so still
+    # falls through to the pointer; a fixture subject that carries the tree does
+    # not.
+    env_tree = _cloc.env_pointer()
     subdir = a.subdir
+    if env_tree and a.root:
+        _named_tree = Path(a.root) / a.subdir
+        if _named_tree.is_dir():
+            print(f"[{GATE}] note: enumerating the tree at the named root "
+                  f"({_named_tree}); {CORPUS_ENV}={env_tree} is set and NOT "
+                  f"followed, because --root/--subdir names a tree of its own.",
+                  file=sys.stderr)
+            env_tree = None
     if env_tree:
         print(f"note: {CORPUS_ENV} overrides --subdir {a.subdir} -> {env_tree}",
               file=sys.stderr)

@@ -70,7 +70,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 #: The environment variable that opts a host OUT of the digest-pinned image and
@@ -89,6 +89,59 @@ HOST_LANE_AUTO = "auto"
 #: with a runtime nobody pinned.
 RUNNER_IMAGE = ("ghcr.io/vibeic/vibeic-eda@sha256:"
                 "66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff")
+
+#: The image's ENTRYPOINT is the iic-osic-tools launcher, not the command. Its
+#: own usage states the constraint:
+#:
+#:     -s, --skip  Skips the UI startup and just executes the assigned command.
+#:                 WARNING: this must be the first parameter to the script or it
+#:                 is ignored!
+#:
+#: A remedy printed without it does not run. MEASURED 2026-08-20 against the
+#: digest above:
+#:
+#:     docker run … <image> bash -c 'echo HELLO'
+#:       -> [ERROR] Unexpected option "bash" + usage dump, rc 1, no HELLO
+#:     docker run … <image> --skip bash -c 'echo HELLO'
+#:       -> [INFO] Executing command: 'bash -c echo HELLO' / HELLO, rc 0
+#:
+#: A REFUSAL WHOSE REMEDY DOES NOT RUN IS HALF A REFUSAL. The reader is already
+#: blocked; handing them a second failure to debug is the cost this constant
+#: removes. `image_lane_argv` is the single source of the command, and
+#: `test_the_printed_image_remedy_RUNS_as_printed` EXECUTES what it builds rather
+#: than asserting on its text — a text assertion would have passed for the whole
+#: life of the broken line.
+IMAGE_ENTRYPOINT_SKIP = "--skip"
+
+#: What the remedy tells the reader to run inside the image.
+LANDING_COMMAND: Tuple[str, ...] = ("bash", "tools/gatekeeper-land.sh")
+
+
+def image_lane_argv(command: Sequence[str] = LANDING_COMMAND,
+                    *, workdir: str = "$PWD") -> List[str]:
+    """The image-lane invocation, as ONE list, so the printed remedy and any
+    caller that executes it cannot drift apart.
+
+    `workdir` is the shell word `"$PWD"` for the printed form and a real
+    absolute path for a caller that runs it.
+    """
+    return ["docker", "run", "--rm", "-v", f"{workdir}:{workdir}", "-w", workdir,
+            RUNNER_IMAGE, IMAGE_ENTRYPOINT_SKIP, *command]
+
+def _image_lane_lines() -> List[str]:
+    """The remedy, wrapped for the refusal block — built FROM the argv above so
+    the two cannot drift. `shlex.quote` is deliberately not used: `"$PWD"` must
+    reach the reader's shell as an expansion, and every other word is a literal
+    with no shell metacharacter in it."""
+    def word(w: str) -> str:
+        return f'"{w}"' if ("$" in w or " " in w) else w
+
+    argv = image_lane_argv()
+    cut = argv.index(RUNNER_IMAGE)
+    return [" ".join(word(w) for w in argv[:cut]) + " \\",
+            f"  {RUNNER_IMAGE} \\",
+            "  " + " ".join(word(w) for w in argv[cut + 1:])]
+
 
 #: The parent's semantic progress stream, which this probe must NOT join.
 #:
@@ -217,9 +270,7 @@ def _refusal_lines(*, python: str, isolated_ok: bool, resolved: str,
         "          REMEDY — run the landing inside the digest-pinned runner image,",
         "          where the test runner is in the system site directory:",
         "",
-        f'            docker run --rm -v "$PWD:$PWD" -w "$PWD" \\',
-        f"              {RUNNER_IMAGE} \\",
-        "              bash tools/gatekeeper-land.sh",
+    ] + [f"            {line}" for line in _image_lane_lines()] + [
         "",
         "          OR open the HOST LANE explicitly, accepting that the runtime is",
         "          then the host's and not the pinned image's:",
