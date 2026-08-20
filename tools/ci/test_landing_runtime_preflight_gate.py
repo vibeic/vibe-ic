@@ -206,28 +206,41 @@ def _real_site_dir() -> Path:
     return Path(proc.stdout.strip()).resolve().parents[1]
 
 
-def _isolated_site_dirs() -> list[Path]:
-    """The directories an ISOLATED interpreter keeps on this installation.
+def _site_processing_dirs() -> list[Path]:
+    """Every directory SITE PROCESSING adds to this installation's path.
 
-    `-I` suppresses the USER site directory and nothing else, so these are
-    exactly what the fleet's real lane consumer -- the system interpreter --
-    still sees after the lane is opened. Read from the interpreter rather than
-    spelled out, because the answer differs between a host and the image and a
-    literal would be right in one of them.
+    Derived as a set difference -- what the ordinary interpreter can import
+    from, MINUS what an interpreter with site processing off (`-S -I`) can --
+    rather than by matching the names `site-packages` and `dist-packages`. The
+    name match was the first shape and it is a guess about two spellings: it
+    silently returns an INCOMPLETE lane on any installation that adds a
+    directory under some other name, and on any directory a `.pth` file
+    injected. Both are hosts this fleet does not happen to have, which is the
+    same reason the guard in
+    `test_the_entry_reports_the_runtime_it_was_given_and_never_completes_it`
+    was wrong until another host measured it.
+
+    The difference is also what makes the ordering assertion sound: none of
+    these directories is on a siteless interpreter's path by construction, so
+    when the lane names them they appear because the lane named them.
+
+    MEASURED on 8HD-d at 88244380f6 -- the two constructions agree here, so this
+    is a change of DEFINITION and not of behaviour on this host:
+        ~/.local/lib/python3.12/site-packages
+        /usr/local/lib/python3.12/dist-packages
+        /usr/lib/python3/dist-packages
     """
-    proc = subprocess.run(
-        [sys.executable, "-I", "-c",
-         "import sys" + chr(10) + "for e in sys.path: print(e)"],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        timeout=_QUICK, check=False)
-    assert proc.returncode == 0, proc.stderr
-    # SITE DIRECTORIES ONLY. The stdlib directories on that path are already on
-    # every interpreter's path, so naming them adds nothing the lane could
-    # supply and makes the value harder to read. `site-packages` /
-    # `dist-packages` is the naming both a host and the image use.
-    return [Path(line) for line in proc.stdout.split()
-            if line and Path(line).is_dir()
-            and Path(line).name in {"site-packages", "dist-packages"}]
+    def seen(*flags: str) -> list[str]:
+        proc = subprocess.run(
+            [sys.executable, *flags, "-c",
+             "import sys" + chr(10) + "for e in sys.path: print(e)"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+        return [line for line in proc.stdout.split()
+                if line and Path(line).is_dir()]
+
+    siteless = set(seen("-S", "-I"))
+    return [Path(item) for item in seen() if item not in siteless]
 
 
 def _closure_lane() -> str:
@@ -260,7 +273,7 @@ def _closure_lane() -> str:
     drives it with a lane that resolves and is empty; both require the refusal.
     """
     seen: list[str] = []
-    for source in [_real_site_dir(), *_isolated_site_dirs()]:
+    for source in [_real_site_dir(), *_site_processing_dirs()]:
         item = str(source)
         if source.is_dir() and item not in seen:
             seen.append(item)
