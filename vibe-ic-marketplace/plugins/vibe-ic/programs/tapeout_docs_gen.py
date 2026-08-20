@@ -461,7 +461,15 @@ def main():
         print("\nA release document for a run that did not pass is worse than no "
               "document: it becomes a file that outlives the run it came from. "
               "Fix the run, or pass --allow-incomplete to write a DRAFT.", file=sys.stderr)
-        raise SystemExit(2)
+        # rc=1, NOT 2. In this flow rc==2 is the "input-missing skip" convention
+        # and `flow_compliance_check` promotes it to VACUOUS_PASS -- a PASS tier.
+        # Exiting 2 here meant step 37.5ic's gate reported a pass on precisely
+        # the runs this program had just refused to document: MEASURED on
+        # origin/main 69ce9260d, a project whose only defect was
+        # timing__setup__ws = -1.53 returned `ok = True` from
+        # `_check_program_exit_zero`, tagged `__VACUOUS_HINT__`. A run that is
+        # NOT RELEASABLE is a content-earned FAIL and must be scored as one.
+        raise SystemExit(1)
 
     a.out_dir.mkdir(parents=True, exist_ok=True)
     so = a.out_dir / f"SIGNOFF_{a.design}_{a.pdk}.html"
