@@ -265,3 +265,122 @@ def test_the_CLI_REFUSES_a_cell_whose_report_was_swapped(tmp_path):
         f"the gate NAMED the foreign evidence and still exited {rc1}. A gate "
         f"that notices and does not block differs from no gate only in being "
         f"auditable afterwards.")
+
+
+# ===========================================================================
+# AN ERROR FINDING MUST FAIL THE AUDIT
+#
+# THE FINDING. `adversarial_agent`'s A1 overwrites every `*.rpt` in a published
+# cell with "TAMPERED BY THE ADVERSARY". Six of seven gates flip rc 0 -> 1
+# because they need their evidence to pass. Measured on the cell the ledger
+# names, 23 reports overwritten:
+#
+#     ir_drop_report_check   rc=0   passed: True
+#       ERROR IR_DROP_REPORT_TOO_SMALL    reports/phase3/ir_drop.rpt
+#       ERROR IR_DROP_NO_TOOL_SIGNATURE   reports/phase3/ir_drop.rpt
+#
+# It named the destroyed report twice, at ERROR, and signed the step off.
+# ===========================================================================
+def _result(passed: bool, *severities: str):
+    return ERA.AuditResult(
+        program="eda_report_audit:test", passed=passed,
+        findings=[ERA.Finding(rule=f"R{i}", severity=sev, message="m")
+                  for i, sev in enumerate(severities)],
+        summary={})
+
+
+def test_a_PASS_beside_an_ERROR_finding_is_downgraded():
+    out = ERA.enforce_error_findings(_result(True, "ERROR"))
+    assert out.passed is False
+    assert out.summary["passed_downgraded_by"] == ["R0"], out.summary
+    assert "differs from no gate" in out.summary["passed_downgraded_note"]
+
+
+def test_PAIRED_a_PASS_with_no_ERROR_finding_survives():
+    """The twin. A rule that downgrades everything is not a gate, it is an
+    outage, and WARNING / INFO exist in this program precisely so a finding can
+    be recorded without gating."""
+    out = ERA.enforce_error_findings(_result(True, "WARNING", "INFO"))
+    assert out.passed is True
+    assert out.summary["error_findings"] == [], out.summary
+    assert "passed_downgraded_by" not in out.summary
+
+
+def test_it_only_ever_DOWNGRADES():
+    """A mode that already failed must not be turned green by the rule meant to
+    make gates stricter."""
+    out = ERA.enforce_error_findings(_result(False))
+    assert out.passed is False
+
+
+def test_the_downgrade_is_never_silent():
+    """Degrade loudly: the rules responsible are named, so a reader can see WHY
+    a gate that used to pass no longer does."""
+    out = ERA.enforce_error_findings(_result(True, "ERROR", "WARNING", "ERROR"))
+    assert out.summary["passed_downgraded_by"] == ["R0", "R2"], out.summary
+
+
+@needs_corpus
+def test_no_published_cell_relies_on_an_ERROR_being_IGNORED():
+    """Criterion 2, and the measurement that made this rule safe to write:
+    every reachable published cell carrying a ledger, every sign-off mode,
+    9 x 6 = 54 runs -> passed=True while carrying an ERROR finding: 0."""
+    cells = [c for c in cell_dirs() if (c / "provenance.jsonl").is_file()]
+    if not cells:
+        pytest.skip("no published cell here carries a provenance ledger")
+    runs = 0
+    for cell in cells:
+        for mode in ("drc", "antenna", "em", "lvs", "ir_drop", "sta"):
+            r = subprocess.run(
+                [sys.executable, str(PROGRAMS / f"{mode}_report_check.py"),
+                 ".", "--mode", mode],
+                cwd=str(cell), capture_output=True, text=True, timeout=600)
+            try:
+                doc = json.loads(r.stdout[r.stdout.index("{"):])
+            except (ValueError, KeyError):
+                continue
+            runs += 1
+            assert not doc["summary"].get("passed_downgraded_by"), (
+                f"{cell.name} --mode {mode}: this rule downgrades a PRISTINE "
+                f"published cell on "
+                f"{doc['summary']['passed_downgraded_by']}, which makes it a "
+                f"bug in the rule and not a finding")
+    assert runs > 0, "no mode run completed, so this measured nothing"
+
+
+@needs_corpus
+def test_the_CLI_REFUSES_a_cell_whose_tool_report_was_DESTROYED(tmp_path):
+    """Prove-by-run for A1, through the gate's own CLI.
+
+    Distinct from the substitution proof above: nothing is swapped in, the
+    tool's own output is simply replaced with a line of nonsense. The gate must
+    not be able to reach a PASS from the runner's JSON summary alone.
+    """
+    cells = [c for c in cell_dirs()
+             if (c / "reports" / "phase3" / "ir_drop.rpt").is_file()
+             and (c / "reports" / "phase3" / "ir_drop.json").is_file()]
+    if not cells:
+        pytest.skip("no published cell here carries both halves of the "
+                    "ir_drop measurement")
+    src = cells[0]
+    proj = tmp_path / "proj"
+    subprocess.run(["cp", "-r", str(src), str(proj)], check=True)
+
+    rc0, rules0, _ = _run(proj, "ir_drop", tmp_path / "a.json")
+    if rc0 != 0:
+        pytest.skip(f"{src.name} --mode ir_drop is not green pristine "
+                    f"(rc={rc0}); there is no green here to forge")
+
+    n = 0
+    for f in sorted(proj.rglob("*.rpt")):
+        if f.is_file():
+            f.write_text("TAMPERED BY THE ADVERSARY\n", encoding="utf-8")
+            n += 1
+    assert n > 0, "nothing was overwritten, so this proved nothing"
+
+    rc1, rules1, summary1 = _run(proj, "ir_drop", tmp_path / "b.json")
+    assert rc1 == 1, (
+        f"{n} report(s) replaced with a line of nonsense and the gate still "
+        f"exited {rc1}. Findings were {rules1}, downgrade "
+        f"{summary1.get('passed_downgraded_by')}. Its PASS rests on the JSON "
+        f"summary the RUNNER wrote, not on the output the TOOL produced.")

@@ -2628,6 +2628,56 @@ MODE_MAP = {
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# AN ERROR FINDING MUST FAIL THE AUDIT
+#
+# THE FINDING THIS CLOSES. `adversarial_agent`'s A1 overwrites every `*.rpt` in
+# a published cell with the line "TAMPERED BY THE ADVERSARY" and re-runs each
+# gate. Six of seven flip rc 0 -> 1, because they need their evidence to pass.
+# `ir_drop_report_check` did not -- measured on the cell the findings ledger
+# names, 23 reports overwritten:
+#
+#     rc=0   passed: True
+#       ERROR IR_DROP_REPORT_TOO_SMALL    reports/phase3/ir_drop.rpt
+#       ERROR IR_DROP_NO_TOOL_SIGNATURE   reports/phase3/ir_drop.rpt
+#
+# It NAMED the destroyed report, twice, at ERROR, and signed the step off. The
+# cause is structural rather than local to this mode: `_check_tool_authenticity`
+# returns True when AT LEAST ONE candidate is authentic, and each mode then
+# spells its own verdict as `passed = <its own predicates>` -- so a finding
+# appended by a shared helper reaches the report and not the verdict. Here the
+# surviving authentic candidate was `reports/phase3/ir_drop.json`, the
+# machine-readable summary the RUNNER wrote, so the gate's green was a statement
+# about the runner's own JSON while the TOOL's output was nonsense.
+#
+# BLOCKING. The severity vocabulary already draws this line -- this program uses
+# WARNING for `SCOPE_NOT_FOUND` and INFO for `WAIVED_TOOL_UNAVAILABLE` precisely
+# so they do not gate -- so an ERROR that does not gate is not a policy, it is
+# the declaration going unread.
+#
+# FALSE-POSITIVE BUDGET, MEASURED before it was written: every reachable
+# published cell carrying a ledger, every sign-off mode, 9 x 6 = 54 runs ->
+# passed=True while carrying an ERROR finding: 0. No legitimate cell relies on
+# an ERROR being ignored.
+#
+# It DOWNGRADES only; a mode that already failed is untouched, and the rules
+# responsible are named in the summary so the downgrade is never silent.
+# ---------------------------------------------------------------------------
+def enforce_error_findings(result: "AuditResult") -> "AuditResult":
+    """Refuse a PASS that sits beside this program's own ERROR findings."""
+    errors = sorted({f.rule for f in result.findings
+                     if f.severity == "ERROR"})
+    result.summary["error_findings"] = errors
+    if errors and result.passed:
+        result.passed = False
+        result.summary["passed_downgraded_by"] = errors
+        result.summary["passed_downgraded_note"] = (
+            "this audit reported the ERROR finding(s) above and had reached a "
+            "PASS. A gate that names a defect and passes anyway differs from no "
+            "gate only in being auditable after the fact.")
+    return result
+
+
 def main(argv: list = None) -> int:
     parser = argparse.ArgumentParser(
         description="Multi-mode EDA report compliance checker")
@@ -2692,6 +2742,8 @@ def main(argv: list = None) -> int:
                              f"contains. A report-not-found finding alongside "
                              f"this one is caused by the scope, not by a "
                              f"missing report.")))
+
+    result = enforce_error_findings(result)
 
     report = asdict(result)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
