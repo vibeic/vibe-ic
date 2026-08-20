@@ -996,6 +996,196 @@ _HYGIENE_PARALLEL_REL = (
 _HYGIENE_STALL_GRACE_S = 1800
 
 
+# --------------------------------------------------------------------------
+# THE PUBLISHED CORPUS IS AN INPUT TO THIS GATE, SO THIS GATE RESOLVES IT.
+#
+# WHAT WAS WRONG
+# --------------
+# v1.10.56 moved the published cells into their own repository
+# (https://github.com/vibeic/benchmark-data.git).  `tools/ci/routed_def_corpus.py`
+# enumerates the corpus "published cells carrying a routed DEF" from the tree
+# `$VIBE_IC_BENCHMARK_DATA` names, and `repo_hygiene_gates.sh:591` wires that
+# producer with `GATE_DISPATCH_ATTEST_POPULATION=1`, so a population of zero is
+# a BLOCKING dispatcher-owned refusal (`_gate_dispatch.sh:1270`) that cannot be
+# excused (`_dispatch` mode 2, ll. 637-641/667-670).  That refusal is CORRECT.
+#
+# What was wrong is that this program — the one a maintainer runs before every
+# push — never resolved the corpus at all.  It inherited whatever the operator
+# happened to have exported, so on an ordinary checkout the set spent four
+# minutes and then certified nothing, and no line in the run named the cause or
+# the remedy.
+#
+# MEASURED (2026-08-20, clean origin/main 3199e9b3, this host):
+#     pointer UNSET -> 75 of 80 decided, 71 passed, 4 failed, 5 NOT CHECKED,
+#                      the routed-DEF corpus EMPTY and BLOCKING, 239s wasted.
+#     pointer SET   -> 77 of 83 decided, 73 passed, 4 failed, 6 NOT CHECKED, 241s,
+#                      and `published-evidence index honest` FAILS — a real,
+#                      committed-INDEX-is-stale defect the empty corpus hid
+#                      outright.
+#
+# WHY RESOLVE-AND-REFUSE AND NOT "LET AN EMPTY CORPUS BE A STATED NOT_CHECKED"
+# ---------------------------------------------------------------------------
+# The second option is one line and it is the wrong line, on this repository's
+# own recorded evidence:
+#
+#   * `_corpus_location.py:41-46,63-66` — "nothing anywhere + the CALL SITE
+#     opted in -> NO_CORPUS (rc 0) ... an rc 0 for a scan that did not happen is
+#     the false certificate this whole gate suite exists to remove, and the only
+#     thing keeping it from becoming the general answer is that somebody has to
+#     type it."
+#   * `_gate_dispatch.sh:637-641` — mode 2 is private precisely so an empty
+#     population "must never acquire the non-fatal tolerance that a human may
+#     buy with `uncheckable_until`"; ll. 667-670 make attaching one a WIRING
+#     ERROR.  Softening the empty corpus means deleting a guard whose comment
+#     records the measured reason it exists.
+#   * `repo_hygiene_gates.sh:539-547` — the last time this exact corpus read as
+#     CHECKED while nothing in it was opened (the `$ROOT/$ABSOLUTE` prefix bug),
+#     four gates were absorbed under exemptions whose stated reasons were FALSE.
+#     The comment ends: "the empty-population refusal above cannot see this,
+#     because the population is 1, not 0."  At 0 the blocking refusal is the
+#     only thing left that can notice.
+#   * The LANDING arm already resolves it and already dies loudly when it
+#     cannot (`tools/gatekeeper-verify-merge.sh:617-640`).  A review that is
+#     PERMISSIVE where landing is STRICT is the "MERGE_OK, then main went RED"
+#     shape this whole gate was written to end (see the block at line 928).
+#
+# So the corpus is resolved HERE, with the SAME precedence the landing arm uses
+# — one order, not two — and a corpus that cannot be resolved is rc 2 with the
+# cause and the remedy named, BEFORE the four-minute set is spent.
+#
+# WHY THE BOUND SHA IS EXPORTED TOO
+# ---------------------------------
+# `_corpus_location.resolve()` prefers a NAMED root over the pointer, and some
+# gates compute that named root by walking `Path(__file__).parents` (e.g.
+# `l_doc_field_producer_check.py:299-302`), which climbs out of the repository.
+# MEASURED on this host: those gates adopted `$HOME/benchmark-data` and printed
+# "VIBE_IC_BENCHMARK_DATA=… is set and NOT followed".  A pointer that can be
+# shadowed by whatever happens to sit above the checkout is not a binding.
+# `GATEKEEPER_BENCHMARK_DATA_SHA` is the mechanism this repo already built for
+# exactly that (`_corpus_location.py:137-156`): with it set, the pointer wins
+# unconditionally and every candidate-local shadow is refused.  It also reaches
+# the record as `corpus_inputs.benchmark_data_sha`, which the landing arm's
+# `hygiene_record_binds_benchmark()` already validates.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO
+# ----------------------------------
+# It does not fetch and it does not judge CURRENCY.  Binding the checkout's HEAD
+# says WHICH tree was scanned, which is the property a review needs; proving the
+# tree equals the canonical `origin/main` is the landing arm's job and it owns a
+# whole program for it (`tools/ci/benchmark_data_landing_checkout.py measure`).
+# A review gate that reached the network would be a review gate that fails when
+# the network does.
+# --------------------------------------------------------------------------
+_CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+_CORPUS_CHECKOUT_ENV = "VIBEIC_BENCHMARK_DATA_CHECKOUT"
+_CORPUS_BOUND_SHA_ENV = "GATEKEEPER_BENCHMARK_DATA_SHA"
+_CORPUS_DEFAULT_DIRNAME = "_matrix_benchmark_data"
+_CORPUS_SUBDIR = "ic"
+_CORPUS_ORIGIN = "https://github.com/vibeic/benchmark-data.git"
+_OID_CHARS = set("0123456789abcdef")
+
+
+def _corpus_remedy() -> str:
+    return (f"Remedy: clone the published corpus and name it — "
+            f"`git clone {_CORPUS_ORIGIN} ~/{_CORPUS_DEFAULT_DIRNAME}`, or "
+            f"export {_CORPUS_ENV}=<path to that clone>.")
+
+
+def _published_corpus_binding() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """`(env additions, refusal)` for the published-corpus checkout.
+
+    Exactly one of the two is None.  The refusal is a complete sentence naming
+    the slot that supplied the path, what was wrong with it, and the remedy —
+    it is the whole verdict a reader gets, so it may not be a bare word.
+    """
+    slots = (
+        (_CORPUS_ENV, os.environ.get(_CORPUS_ENV) or None),
+        (_CORPUS_CHECKOUT_ENV, os.environ.get(_CORPUS_CHECKOUT_ENV) or None),
+    )
+    named: Optional[Path] = None
+    slot = ""
+    for key, value in slots:
+        if value:
+            named, slot = Path(value), key
+            break
+    if named is None:
+        home = os.environ.get("HOME") or ""
+        if not home:
+            return None, (f"ERROR — the published corpus could not be located: "
+                          f"neither {_CORPUS_ENV} nor {_CORPUS_CHECKOUT_ENV} is "
+                          f"set and HOME is unset, so there is no default "
+                          f"checkout to fall back on. NOTHING WAS SCANNED and "
+                          f"the hygiene set was NOT run. " + _corpus_remedy())
+        named = Path(home) / _CORPUS_DEFAULT_DIRNAME
+        slot = ""
+
+    if not named.is_dir():
+        # SET AND WRONG IS NOT ABSENT (`_corpus_location.py:26-29`), and NOTHING
+        # ANYWHERE is not a pass either. The two are different states with
+        # different remedies, so they get different sentences; neither is rc 0.
+        if slot:
+            return None, (f"ERROR — the published corpus at {named} (from "
+                          f"{slot}) is not a readable directory, so the "
+                          f"per-cell gates had nothing to examine. A pointer "
+                          f"that is set and wrong is a broken configuration, "
+                          f"not an absent corpus. NOTHING WAS SCANNED and the "
+                          f"hygiene set was NOT run. " + _corpus_remedy())
+        return None, (f"ERROR — no published-corpus checkout: {_CORPUS_ENV} and "
+                      f"{_CORPUS_CHECKOUT_ENV} are both unset and the default "
+                      f"{named} does not exist. The published cells moved to "
+                      f"their own repository in v1.10.56, so this tree carries "
+                      f"none and the per-cell gates would examine 0 of them. "
+                      f"NOTHING WAS SCANNED and the hygiene set was NOT run. "
+                      + _corpus_remedy())
+
+    resolved = named.resolve()
+    # The producer reads git's INDEX (`tools/ci/routed_def_corpus.py:42-83`), so
+    # a loose directory enumerates zero cells and that zero is "I could not
+    # look", not "there are none" — the one substitution this whole module
+    # exists to refuse.
+    top = _git_text(resolved, ["rev-parse", "--show-toplevel"])
+    if top is None or Path(top).resolve() != resolved:
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"is not the ROOT of a git checkout"
+                      + (f" (git reports its root as {top})" if top else "")
+                      + f". The corpus producer reads git's INDEX; over a "
+                      f"tarball fetch, an archive export or a dead clone it "
+                      f"would enumerate zero cells and that is 'I could not "
+                      f"look', not 'there are none'. NOTHING WAS SCANNED and "
+                      f"the hygiene set was NOT run. " + _corpus_remedy())
+
+    if not (resolved / _CORPUS_SUBDIR).is_dir():
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"is a git checkout but carries no {_CORPUS_SUBDIR}/ "
+                      f"directory, so it is not the published-cell repository "
+                      f"this gate needs. NOTHING WAS SCANNED and the hygiene "
+                      f"set was NOT run. " + _corpus_remedy())
+
+    sha = _git_text(resolved, ["rev-parse", "HEAD"])
+    if (sha is None or len(sha) not in (40, 64)
+            or any(ch not in _OID_CHARS for ch in sha)):
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"has no readable HEAD commit, so the verdicts could not "
+                      f"be bound to the tree that produced them. NOTHING WAS "
+                      f"SCANNED and the hygiene set was NOT run. "
+                      + _corpus_remedy())
+
+    return {_CORPUS_ENV: str(resolved), _CORPUS_BOUND_SHA_ENV: sha}, None
+
+
+def _git_text(cwd: Path, argv: List[str]) -> Optional[str]:
+    """One line of git output, or None when git could not answer."""
+    try:
+        proc = subprocess.run(["git", "-C", str(cwd), *argv],
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.strip()
+    return out or None
+
+
 def repo_hygiene_gate(repo: Path,
                       script: Optional[Path] = None,
                       stall_grace: int = _HYGIENE_STALL_GRACE_S,
@@ -1026,11 +1216,24 @@ def repo_hygiene_gate(repo: Path,
                           f"skipped — 0 gate(s) consulted: {_HYGIENE_SCRIPT_REL} "
                           f"not present under {repo}")
 
+    # BEFORE the four-minute set, not after it. A corpus that cannot be
+    # resolved makes every per-cell verdict impossible, so spending the set to
+    # discover that costs four minutes and reports the consequence instead of
+    # the cause. `script is not None` is the unit-test seam (see the docstring):
+    # a fixture script wires no corpus and must not be made to need one.
+    corpus_env: Dict[str, str] = {}
+    if script is None:
+        corpus_env_or_none, corpus_refusal = _published_corpus_binding()
+        if corpus_refusal is not None:
+            return GateResult(name, 2, corpus_refusal)
+        corpus_env = corpus_env_or_none or {}
+
     with tempfile.TemporaryDirectory(prefix="hygiene_summary_") as td:
         summary_path = Path(td) / "summary.json"
         progress = None
         try:
-            env = None
+            env = os.environ.copy()
+            env.update(corpus_env)
             if progress_out is not None:
                 progress = Path(progress_out).resolve()
                 progress.parent.mkdir(parents=True, exist_ok=True)
@@ -1038,7 +1241,6 @@ def repo_hygiene_gate(repo: Path,
                     progress.unlink()
                 except FileNotFoundError:
                     pass
-                env = os.environ.copy()
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(progress)
             def _popen(argv, **kwargs):
                 return subprocess.Popen(
