@@ -821,8 +821,17 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           Precheck declares exactly one output, `reports/phase3/
 #:           general_precheck.json`, which is what puts it in this population.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
+    # 2026-08-20: 27 members. Step 37.5ic LEFT this population when 69ce9260d
+    # made the release documents an output of it (1 entry -> 3); step 37.5self
+    # JOINED it at v1.11.4 declaring exactly one output. The two changes were
+    # authored on different bases and each re-derived correctly for its own; the
+    # merge was RE-DERIVED again rather than hand-united, because a hand-united
+    # tuple is how v1.10.38 shipped a 28-entry pin over a 27-step population.
+    # The tuple below is exactly what
+    # `[k for k in steps if len(required_outputs(k)) < 2]` answers on this tree,
+    # in flow order: 27 members, and no member had gone stale.
     "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5", "A7", "A9",
-    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37", "37.5ic",
+    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37",
     "37.5self", "M4", "42", "44", "P0",
 )
 
