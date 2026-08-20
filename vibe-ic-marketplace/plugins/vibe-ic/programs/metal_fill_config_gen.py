@@ -38,7 +38,7 @@ import math
 import re
 import sys
 from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 _DEFAULT_FLOOR_PCT = 30.0
@@ -258,7 +258,8 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
                             metal_prefix: Optional[str] = None,
                             margin: float = _DEFAULT_MARGIN,
                             window_um: Optional[float] = None,
-                            max_passes: int = 8) -> Optional[dict]:
+                            max_passes: int = 8,
+                            keepout: Optional[List[Dict[str, Any]]] = None) -> Optional[dict]:
     # `metal_prefix=None` (the new default) means DERIVE IT FROM THE PDK. The old
     # default was the literal "metal", which matches gf180mcuD's `Metal1` and
     # neither sky130A's `met1` nor a `MET1`-style process — on those the parses
@@ -317,6 +318,10 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
     return {
         "boundary_layer": None,               # -> engine uses the full-die extent
         "window_um": window_um,               # None -> single whole-die window (== rule)
+        # FIX 3 — regions the fill must stay out of, with their own clearance.
+        # Emitted ALWAYS (as [] when the caller declared none) so a config that
+        # was asked and a config that predates the concept are distinguishable.
+        "keepout": list(keepout or []),
         "max_passes": max_passes,
         "mfg_grid_um": grid_um,               # fill snapped to the manufacturing grid
         "fill_datatype": None,
@@ -334,6 +339,7 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
             "dummy_to_circuit_space_um": space_dc,
             "layers_derived": len(layers),
             "dummy_datatype_found": sum(1 for s in layers if "fill_datatype" in s),
+            "keepout_declared": len(keepout or []),
         },
     }
 
@@ -359,13 +365,38 @@ def main(argv=None) -> int:
     ap.add_argument("--window-um", type=float, default=None)
     ap.add_argument("--max-passes", type=int, default=8)
     ap.add_argument("--margin", type=float, default=_DEFAULT_MARGIN)
+    ap.add_argument("--keepout", action="append", default=None,
+                    metavar="LAYER/DATATYPE:SPACE_UM[:WHY]",
+                    help="FIX 3 — a region the fill must stay OUT of, and the "
+                         "clearance the PDK's own deck states for it. Repeatable. "
+                         "Dummy fill is metal; anything drawn after routing (a "
+                         "seal ring and its marker) has clearance rules the "
+                         "engine cannot infer from the routing layers alone. "
+                         "The numbers are the PDK's; cite the rule in WHY.")
     ap.add_argument("--out", default=None)
     ns = ap.parse_args(argv)
+
+    keepout: List[Dict[str, Any]] = []
+    for tok in (ns.keepout or []):
+        try:
+            lay, rest = str(tok).split(":", 1)
+            num, dt = lay.split("/")
+            parts = rest.split(":", 1)
+            ko: Dict[str, Any] = {"layer": [int(num), int(dt)],
+                                  "space_um": float(parts[0])}
+            if len(parts) > 1 and parts[1]:
+                ko["why"] = parts[1]
+        except Exception:
+            sys.stderr.write(f"metal_fill_config_gen: --keepout {tok!r} is not "
+                             "'LAYER/DATATYPE:SPACE_UM[:WHY]'\n")
+            return 2
+        keepout.append(ko)
 
     cfg = build_metal_fill_config(
         _read(ns.layermap), _read(ns.techlef), _read(ns.deck),
         metal_prefix=ns.metal_prefix, margin=ns.margin,
-        window_um=ns.window_um, max_passes=ns.max_passes)
+        window_um=ns.window_um, max_passes=ns.max_passes,
+        keepout=keepout)
     if cfg is None:
         sys.stderr.write("metal_fill_config_gen: no routing metal derivable "
                          "from the supplied PDK files\n")

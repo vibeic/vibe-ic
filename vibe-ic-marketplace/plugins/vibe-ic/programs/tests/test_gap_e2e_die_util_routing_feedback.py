@@ -252,9 +252,39 @@ class TestRewriteFloorplanDie:
 
     def test_matches_the_real_pnr_tcl_emit(self):
         # The rewrite regex must match what _build_pnr_tcl_text actually emits,
-        # or a resize would silently no-op the tcl. Assert against a real emit.
+        # or a resize would silently no-op the tcl.
+        #
+        # This used to assert a LITERAL substring of the builder's source. FIX 1
+        # made the die a rectangle rather than a size, so the emitted names
+        # changed and the literal stopped matching — while the regex it exists
+        # to protect still matched perfectly. A source-substring test cannot
+        # tell "the shape drifted" from "the shape was parameterised", so it is
+        # replaced by the property itself: format the builder's own template
+        # with the unpinned geometry and require the regex to find it.
         src = inspect.getsource(mod._build_pnr_tcl_text)
-        assert 'initialize_floorplan -die_area "0 0 {die_w} {die_h}"' in src
+        assert "initialize_floorplan -die_area" in src
+        (d, c) = mod._die_core_rects(130, 130, 10, 120, 120)   # unpinned path
+        emitted = (f'initialize_floorplan -die_area "{d[0]} {d[1]} {d[2]} {d[3]}" \\\n'
+                   f'                      -core_area "{c[0]} {c[1]} {c[2]} {c[3]}" \\\n'
+                   f'                      -site unithd\n')
+        assert mod._RE_PNR_FLOORPLAN_DIE.search(emitted) is not None
+        # ...and with a PINNED, non-origin rectangle too, which is the whole
+        # point of the change: a resize must not silently no-op on a slot die.
+        import phase3_one_shot_runner as _m
+        _prev = _m._PINNED_DIE_RECT
+        try:
+            _m._PINNED_DIE_RECT = (442, 442, 1494, 2089)
+            (d2, c2) = mod._die_core_rects(1052, 1647, 10, 1032, 1627)
+            assert d2 == (442, 442, 1494, 2089)
+            assert c2 == (452, 452, 1484, 2079)
+            emitted2 = (f'initialize_floorplan -die_area '
+                        f'"{d2[0]} {d2[1]} {d2[2]} {d2[3]}" \\\n'
+                        f'                      -core_area '
+                        f'"{c2[0]} {c2[1]} {c2[2]} {c2[3]}" \\\n'
+                        f'                      -site unithd\n')
+            assert mod._RE_PNR_FLOORPLAN_DIE.search(emitted2) is not None
+        finally:
+            _m._PINNED_DIE_RECT = _prev
 
 
 # ---------------------------------------------------------------------------

@@ -63,6 +63,9 @@ Config (chip/PDK-AGNOSTIC — every number supplied by the caller / derived from
       "max_passes": 8,
       "mfg_grid_um": 0.005,            // manufacturing grid; fill snapped to it
       "fill_datatype": null,           // optional GLOBAL dummy-fill datatype override
+      "keepout": [                     // optional; regions fill must stay OUT of
+        {"layer": [167, 5], "space_um": 10.0}   // marker layer + its clearance rule
+      ],
       "layers": [
         {"name":"metal1","layer":[34,0],"target":0.34,"max":0.95,
          "space":0.98,"space_to_metal":2.0,"width":1.4,"fill_datatype":4}
@@ -207,6 +210,7 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
         return (drawn + _fill_now()).merged() if separate else _fill_now()
 
     boundary = spec.get("_bbox")
+    _keepout = spec.get("_keepout")
     metal0 = _measure()
     bbox = boundary if boundary is not None else metal0.bbox()
     if bbox.area() <= 0:
@@ -250,6 +254,8 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
             # Keep out of ALREADY-PLACED fill too, not just circuit metal:
             # in the shared-datatype case `fill_r` now includes it.
             blocked = drawn_block + fill_r.sized(sp)
+            if _keepout is not None:
+                blocked = blocked + _keepout
             fillable = fill_zone - blocked
             if fillable.is_empty():
                 break                                   # this size cannot fit -> smaller
@@ -320,10 +326,46 @@ def run(gds, cfg, out_gds, cell_name=None):
     wu = cfg.get("window_um", None)
     wd = None if wu in (None, 0, 0.0) else int(round(float(wu) / ly.dbu))
 
+    # ── FIX 3 (agent gfinal) — THE ENGINE HAD NO KEEP-OUT ────────────────
+    # This engine fills the whole measured area. That is correct while the die
+    # is only the routed core, and wrong the moment anything else is on it: a
+    # seal ring is drawn AFTER routing, it carries a marker layer with its own
+    # clearance rule, and dummy fill is metal like any other. MEASURED on a
+    # sealed slot die: filling with no keep-out took DRC 1177 -> 18686, and the
+    # entire delta was ONE rule -- the marker-to-metal clearance -- 19 -> 17528.
+    # No density rule regressed; every other rule count was bit-identical. On
+    # the same die WITHOUT the ring the same fill added zero violations, which
+    # is the control that isolates it.
+    #
+    # So: a list of {layer, space_um}. Each named layer's geometry, grown by its
+    # own clearance, is subtracted from what may be filled. The DENOMINATOR is
+    # deliberately NOT changed -- the foundry rule measures coverage over the
+    # whole die including the band, so shrinking the measured area here would
+    # report a density the deck will not agree with. Chip- and PDK-AGNOSTIC:
+    # the layer and the clearance are the caller's, read from the PDK's own
+    # rule deck. An absent/empty layer keeps out nothing and says so.
+    keepout = pya.Region()
+    keepout_note = []
+    for ko in (cfg.get("keepout") or []):
+        kl = ko.get("layer")
+        if kl is None:
+            continue
+        sp_um = float(ko.get("space_um", 0.0) or 0.0)
+        kr = pya.Region(top.begin_shapes_rec(_li(ly, kl))).merged()
+        n_shapes = kr.count()
+        if n_shapes:
+            kr = kr.sized(int(round(sp_um / ly.dbu))) if sp_um > 0 else kr
+            keepout += kr
+        keepout_note.append({"layer": list(kl), "space_um": sp_um,
+                             "shapes": n_shapes,
+                             "area_um2": round(kr.area() * ly.dbu * ly.dbu, 3)})
+    keepout.merge()
+
     layers = []
     for spec in cfg["layers"]:
         spec = dict(spec)
         spec["_bbox"] = bbox
+        spec["_keepout"] = keepout if not keepout.is_empty() else None
         layers.append(fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu))
 
     # A FILL CELL THAT WAS NEVER PLACED IS A SECOND TOP CELL, AND A SECOND TOP
@@ -361,6 +403,10 @@ def run(gds, cfg, out_gds, cell_name=None):
     return {"verdict": "PASS" if reached_all else "PARTIAL",
             "gds_in": gds, "gds_out": out_gds,
             "window_um": cfg.get("window_um"), "mfg_grid_um": mfg_grid_um,
+            # Disclosed EVERY run, including the run that kept out of nothing:
+            # an empty list and an absent key read the same to a consumer, and
+            # only one of them means "asked and there was nothing there".
+            "keepout": keepout_note,
             "unplaced_fill_cells_pruned": pruned,
             "layers": layers}
 

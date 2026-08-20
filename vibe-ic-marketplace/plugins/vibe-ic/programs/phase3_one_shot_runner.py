@@ -4880,7 +4880,34 @@ def _discover_filler_masters_from_lef(cell_lef: Optional[str],
             fills.append((size, name))
     decaps.sort(reverse=True)
     fills.sort(reverse=True)
-    return [n for _, n in decaps] + [n for _, n in fills]
+    # ── FIX 2 (agent gfinal) — SPACERS ONLY, decaps opt-in ────────────────
+    # A decap filler is not a spacer. It is a real MOS capacitor: it draws its
+    # own wells and needs its own well ties, and this flow's post-placement tap
+    # prune has no idea it exists. Ordering decaps FIRST (greedy tiling packs
+    # the big cells first) therefore floods an empty die with devices whose
+    # taps were pruned. MEASURED on a sparse slot die: 7295 of 8317 inserted
+    # cells were decaps and KLayout DRC went 360 -> 11964, with 99.5-100% of
+    # the new violations sitting on a decap. With the same insertion restricted
+    # to spacer masters, six well/implant rules go to zero and nothing new
+    # appears.
+    #
+    # So the default is spacers. Decaps are still discoverable and still
+    # ordered first WHEN ASKED FOR, because on a dense die they are the
+    # standard way to buy on-die decoupling — it is the silent default that was
+    # wrong, not the capability. `VIBEIC_FILLER_INCLUDE_DECAPS=1` restores the
+    # historical set. Family-name based; no vendor literal.
+    if os.environ.get("VIBEIC_FILLER_INCLUDE_DECAPS", "").strip() in (
+            "1", "true", "TRUE", "yes", "YES"):
+        return [n for _, n in decaps] + [n for _, n in fills]
+    if decaps and not fills:
+        # A PDK whose ONLY fillers are decaps: refusing them would silently
+        # leave every row gap open, which is the defect this discovery exists
+        # to fix. Take them, and say so.
+        print("FILLER_DECAPS_ONLY: this PDK ships no spacer-only filler "
+              f"masters; using its {len(decaps)} decap master(s)",
+              file=sys.stderr)
+        return [n for _, n in decaps]
+    return [n for _, n in fills]
 
 
 # v1.3.93 — an antenna-diode cell is marked in LEF with `CLASS CORE ANTENNACELL`
@@ -13229,12 +13256,60 @@ def _compute_loosened_die(die_w: int, die_h: int,
     return new_w, new_h
 
 
+# ── FIX 1 (agent gfinal) — an explicit, NON-ORIGIN die rectangle ────────
+# A shuttle slot is not a size, it is a RECTANGLE, and the submitter's template
+# pins two of them: the slot's own `DIE_AREA` and, inset from it, the `CORE_AREA`
+# the standard cells and the pins are allowed to occupy. This flow only ever
+# emitted `-die_area "0 0 W H"`, so `-core_area` was the ONLY inset it could
+# express — and OpenROAD's `ppl place_pins` places pins on the DIE boundary and
+# has no core-boundary mode, so every pin landed flush on the outer edge, where
+# the seal ring is. MEASURED: setting `-core_area` alone moved the rows to
+# 442.4um and left all 41 pins at 0.000 from the die edge.
+#
+# `--die-rect "llx lly urx ury"` therefore pins the rectangle OpenROAD is given.
+# The slot rectangle is kept for the ring and the operator's size check; it is
+# not what the placer is handed. Chip- and PDK-AGNOSTIC: the four numbers are
+# read from the operator's template, never computed here.
+_PINNED_DIE_RECT: Optional[Tuple[int, int, int, int]] = None
+
+#: FIX 1, second half — the FINISHED die. The rectangle the seal ring is drawn
+#: on and the operator's size check measures is the SLOT, not the rectangle the
+#: placer was handed. `die_finishing_gen` falls back to the routed DEF's own
+#: DIEAREA when nobody tells it otherwise, so without this it would silently
+#: seal the core rectangle and report PASS for a die the operator will refuse.
+_SLOT_RECT: Optional[Tuple[int, int, int, int]] = None
+
+#: FIX 3 — regions the density fill must stay out of, as
+#: {"layer": [n, d], "space_um": x, "why": "<rule citation>"}. Threaded into the
+#: derived fill config. Empty = the historical behaviour, fill everywhere.
+_FILL_KEEPOUT: List[Dict[str, Any]] = []
+
+
+def _die_core_rects(die_w: int, die_h: int, core_pad: int,
+                    core_w: int, core_h: int
+                    ) -> Tuple[Tuple[int, int, int, int],
+                               Tuple[int, int, int, int]]:
+    """Return ((die llx,lly,urx,ury), (core llx,lly,urx,ury)) for the emitter.
+
+    Without a pinned rect this reproduces the historical strings EXACTLY
+    (`-die_area "0 0 W H"`, `-core_area "pad pad core_w core_h"`), so every
+    existing result stays bit-identical. With one, the die is the pinned
+    rectangle and the core is that rectangle inset by `core_pad` on all four
+    sides."""
+    if _PINNED_DIE_RECT is None:
+        return ((0, 0, die_w, die_h),
+                (core_pad, core_pad, core_w, core_h))
+    llx, lly, urx, ury = _PINNED_DIE_RECT
+    return ((llx, lly, urx, ury),
+            (llx + core_pad, lly + core_pad, urx - core_pad, ury - core_pad))
+
+
 # The floorplan-die rewrite regex, shared by every retry path (upsize /
 # downsize / loosen) so the emitted `initialize_floorplan` shape and the
 # rewrite stay in lockstep. Matches only the die/core lines, leaving the
 # trailing `-site …` continuation intact.
 _RE_PNR_FLOORPLAN_DIE = re.compile(
-    r'initialize_floorplan -die_area "0 0 \d+ \d+"\s*\\?\s*\n'
+    r'initialize_floorplan -die_area "\d+ \d+ \d+ \d+"\s*\\?\s*\n'
     r'\s*-core_area "\d+ \d+ \d+ \d+"')
 
 
@@ -13243,10 +13318,12 @@ def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
     """Return `tcl_text` with the `initialize_floorplan` die/core geometry
     rewritten to the given dimensions. Pure string transform used by the PnR
     retry loop after every die resize (upsize / downsize / loosen)."""
+    (dllx, dlly, durx, dury), (cllx, clly, curx, cury) = _die_core_rects(
+        die_w, die_h, core_pad, core_w, core_h)
     return _RE_PNR_FLOORPLAN_DIE.sub(
-        (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
-         f'                      -core_area "{core_pad} {core_pad} '
-         f'{core_w} {core_h}"'),
+        (f'initialize_floorplan -die_area "{dllx} {dlly} {durx} {dury}" \\\n'
+         f'                      -core_area "{cllx} {clly} '
+         f'{curx} {cury}"'),
         tcl_text,
     )
 
@@ -18786,6 +18863,11 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     _rd_margin_placement = _repair_design_margin_tcl("repair_design_pl")
     _rd_margin_globalrt = _repair_design_margin_tcl("repair_design_gr")
     min_area_patch_block = _min_area_patch_tcl("MIN_AREA_PATCH")
+    # FIX 1 — the die OpenROAD is given may be a non-origin rectangle (a slot's
+    # CORE_AREA). Unpinned, these are the historical "0 0 W H" / "pad pad …".
+    ((_fp_dllx, _fp_dlly, _fp_durx, _fp_dury),
+     (_fp_cllx, _fp_clly, _fp_curx, _fp_cury)) = _die_core_rects(
+        die_w, die_h, core_pad, core_w, core_h)
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -18820,8 +18902,8 @@ if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{
 # database from the netlist. A resume replaces the whole region with a
 # `read_def` of the last stage checkpoint, so the work is never redone.
 puts "{_PNR_STAGE_MARKER} floorplan"
-initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
-                      -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
+initialize_floorplan -die_area "{_fp_dllx} {_fp_dlly} {_fp_durx} {_fp_dury}" \\
+                      -core_area "{_fp_cllx} {_fp_clly} {_fp_curx} {_fp_cury}" \\
                       -site {site}
 make_tracks
 {place_pins_block}
@@ -22671,6 +22753,24 @@ def _die_finishing(project: Path, top: str, pdk: PdkConfig,
             "--gds", str(gds_path), "--in-place",
             "--pdk-root", str(Path(pdk_dir).parent),
             "--pdk", Path(pdk_dir).name]
+    # FIX 1 (second half) — SEAL THE SLOT, NOT THE ROUTED RECTANGLE.
+    # Left to itself the generator takes the routed DEF's DIEAREA, which after
+    # `--die-rect` is the CORE rectangle. It would then draw a correct ring
+    # around the wrong rectangle and return PASS, and the operator's size check
+    # — `!=` on floats to the micron, no tolerance — would refuse the die.
+    if _SLOT_RECT is not None:
+        _sllx, _slly, _slurx, _slury = _SLOT_RECT
+        argv += ["--die-width", str(_slurx - _sllx),
+                 "--die-height", str(_slury - _slly)]
+    # A staged seal-ring generator overrides the PDK's own: the PDK in an EDA
+    # image may ship the script without the PCell library it imports, in which
+    # case the script prints an error, exits 0 and writes nothing.
+    _seal_script = os.environ.get("VIBEIC_SEALRING_SCRIPT")
+    if _seal_script:
+        argv += ["--script", _seal_script]
+    _seal_pdk_root = os.environ.get("VIBEIC_SEALRING_PDK_ROOT")
+    if _seal_pdk_root:
+        argv[argv.index("--pdk-root") + 1] = _seal_pdk_root
     # Same reason `_density_metal_fill` passes it: the program resolves its own
     # KLayout runner via `_klayout_launch`, which looks for a container NAMED
     # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run
@@ -22729,6 +22829,11 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
         return False, "no GDS to fill"
     if not (mfd or {}).get("layers"):
         return False, "metal_fill_density config has no layers"
+    # FIX 3 — thread the declared keep-outs into whichever config we ended up
+    # with (bridge-declared or derived). Written even when empty so a config
+    # that was asked and one that predates the concept are distinguishable.
+    mfd = dict(mfd)
+    mfd["keepout"] = list(_FILL_KEEPOUT)
     prog = Path(__file__).resolve().parent / "metal_fill_emit.py"
     if not prog.is_file():
         return False, "metal_fill_emit program not found"
@@ -22764,6 +22869,64 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
                        + (tail[0][:200] if tail else f"rc={cp.returncode}"))
     return True, ("per-layer density fill reached target on every layer"
                   + (" (config derived chip-AGNOSTIC from PDK files)" if derived else ""))
+
+
+def _feol_density_fill(project: Path, top: str, gds_path: Path,
+                       container: Optional[str] = None) -> Tuple[bool, str]:
+    """FEOL (active + poly) density fill — the PDK's OWN script, not ours.
+
+    WHY THIS IS SEPARATE FROM `_density_metal_fill`. The flow's fill engine is
+    a routing-metal engine: `metal_fill_config_gen` derives its per-layer
+    geometry from the tech LEF's `TYPE ROUTING` layers and the deck's dummy
+    METAL rules, so the two FEOL density floors — active and poly over the
+    whole die — have no configuration it can produce. MEASURED on this die:
+    every metal layer reached 44-45% against a 30% floor while active sat at
+    3.383586% against a 25% floor and poly at 0.130530% against 14%. Three of
+    the eight density rules passed by a wide margin and two failed by 20+
+    points, because nothing had ever filled those two layers.
+
+    The PDK ships generators for them, with the FEOL rule geometry (fill-cell
+    size, line space, and the clearances to active, poly, every well, the pad
+    and the scribe line) inside its own scripts. So this step CALLS them, the
+    way Step 26.5ic calls the PDK's seal-ring generator, and contains no fill
+    geometry of its own.
+
+    ORDER: after the seal ring and after the metal fill, so the script's own
+    die-frame-relative exclusion (`_frame - _frame.sized(-space_to_scribe_line)`)
+    subtracts against the FINISHED die and not the routed rectangle.
+
+    NONFATAL and config-gated, like its siblings: no script declared, no fill
+    and no claim. chip- and PDK-AGNOSTIC — the script path is an input.
+    """
+    script = os.environ.get("VIBEIC_FEOL_FILL_SCRIPT")
+    if not script:
+        return False, "no FEOL fill script declared"
+    if not gds_path.is_file():
+        return False, "no GDS to fill"
+    out = gds_path.with_suffix(".feol.gds")
+    cmd = (f"klayout -b -r {shlex.quote(script)} "
+           f"-rd input={shlex.quote(str(gds_path))} "
+           f"-rd output={shlex.quote(str(out))}")
+    try:
+        if container:
+            rc, so, se = _docker_exec(container, cmd)
+        else:
+            cp = subprocess.run(["bash", "-lc", cmd], capture_output=True,
+                                text=True, timeout=7200)
+            rc, so, se = cp.returncode, cp.stdout, cp.stderr
+    except Exception as exc:  # nosec — NONFATAL by contract
+        return False, f"FEOL fill NONFATAL: {exc}"
+    if rc != 0 or not out.is_file():
+        tail = ((so or "") + (se or "")).strip().splitlines()
+        return False, ("FEOL fill did NOT complete: "
+                       + (tail[-1][:200] if tail else f"rc={rc}"))
+    # Replace in place ONLY on success, so a failed pass can never leave a
+    # half-filled die behind the name of a filled one.
+    try:
+        os.replace(str(out), str(gds_path))
+    except OSError as exc:
+        return False, f"FEOL fill produced {out.name} but could not install it: {exc}"
+    return True, f"FEOL (active/poly) density fill applied by the PDK's own script: {script}"
 
 
 def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
@@ -24337,6 +24500,8 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         # Per-layer density fill BEFORE the density checks / sign-off DRC read
         # this GDS. Config-gated + NONFATAL; the note always discloses.
         dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+        ffill_ok, ffill_note = _feol_density_fill(project, top, gds_out, container)
+        print(f"[phase3] FEOL density fill: {ffill_note}", file=sys.stderr)
         # vibe-ic#613 — the port-label restore is a POST-streamout pass over the
         # finished GDS, so it belongs on BOTH engines. Gating it on the KLayout
         # path alone would have made "which streamout ran" decide whether a
@@ -24499,6 +24664,8 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # PATTERN above and before the density checks / sign-off DRC consume this
     # GDS. Config-gated + NONFATAL; the note always discloses the outcome.
     dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+    ffill_ok, ffill_note = _feol_density_fill(project, top, gds_out, container)
+    print(f"[phase3] FEOL density fill: {ffill_note}", file=sys.stderr)
     # v1.3.91 — restore top PORT text labels + VDD/VSS rail markers LAST (after
     # merge/heal/fill so the labels/markers land on the final geometry): makes
     # the KLayout-streamed GDS LVS-able by the geometric extractor. Config-gated
@@ -39203,6 +39370,29 @@ def main() -> int:
                    help="Die size W x H in microns, or 'auto' (default) to size "
                         "the die from the synth cell count + PDK site area + "
                         "target util (GAP-E2E-4/10)")
+    p.add_argument("--die-rect", default=None, metavar="LLX LLY URX URY",
+                   help="FIX 1 — pin the die RECTANGLE handed to OpenROAD "
+                        "(four integers in microns). Use when a shuttle slot's "
+                        "template pins a CORE_AREA inset from the slot's own "
+                        "DIE_AREA: `ppl place_pins` places pins on the DIE "
+                        "boundary and has no core-boundary mode, so the inset "
+                        "must BE the die. The slot rectangle is still what the "
+                        "seal ring and the operator's size check use. Read the "
+                        "four numbers from the operator's template.")
+    p.add_argument("--slot-rect", default=None, metavar="LLX LLY URX URY",
+                   help="FIX 1 (second half) — the FINISHED die rectangle: what "
+                        "the seal ring is drawn on and what the shuttle "
+                        "operator's size check measures. Without it the ring "
+                        "generator falls back to the routed DEF's own DIEAREA "
+                        "and silently seals the core rectangle. Read from the "
+                        "operator's template.")
+    p.add_argument("--fill-keepout", action="append", default=None,
+                   metavar="LAYER/DATATYPE:SPACE_UM[:WHY]",
+                   help="FIX 3 — a region the density fill must stay OUT of, "
+                        "with the clearance the PDK's own deck states for it. "
+                        "Repeatable. Dummy fill is metal; a seal ring drawn "
+                        "after routing carries marker-clearance rules the fill "
+                        "engine cannot infer from the routing layers.")
     p.add_argument("--util", type=float, default=0.30,
                    help="Global placement density (--density passed to OpenROAD "
                         "global_placement). v0.1.44 spm pilot Tier 1.5 finding: "
@@ -39275,6 +39465,70 @@ def main() -> int:
     # helpers agree with the steps. Chip- and PDK-AGNOSTIC.
     if getattr(args, "container", None):
         os.environ["EDA_CONTAINER"] = args.container
+
+    # FIX 1 — publish the pinned die rectangle. Validated HERE, at the CLI
+    # boundary: four integers, strictly ordered, or exit 2. A rectangle that
+    # was silently ignored reads exactly like one that was honoured.
+    if getattr(args, "die_rect", None):
+        global _PINNED_DIE_RECT
+        _toks = str(args.die_rect).replace(",", " ").split()
+        try:
+            _r = tuple(int(t) for t in _toks)
+        except ValueError:
+            print("[phase3] --die-rect: four INTEGER microns expected, got "
+                  f"{args.die_rect!r}", file=sys.stderr)
+            return 2
+        if len(_r) != 4 or _r[2] <= _r[0] or _r[3] <= _r[1]:
+            print("[phase3] --die-rect: need 'LLX LLY URX URY' with URX>LLX and "
+                  f"URY>LLY, got {args.die_rect!r}", file=sys.stderr)
+            return 2
+        _PINNED_DIE_RECT = _r  # type: ignore[assignment]
+        # An absolutely-pinned rectangle is also an absolutely-pinned SIZE:
+        # leaving --die-um at 'auto' would let the auto-sizer publish a die
+        # width the emitted Tcl does not use.
+        if str(getattr(args, "die_um", "auto")).lower() == "auto":
+            args.die_um = f"{_r[2]-_r[0]}x{_r[3]-_r[1]}"
+        print(f"[phase3] --die-rect: OpenROAD die pinned to "
+              f"[{_r[0]}, {_r[1]}, {_r[2]}, {_r[3]}] "
+              f"({_r[2]-_r[0]}x{_r[3]-_r[1]} um); the slot rectangle is NOT "
+              f"what the placer is handed.", file=sys.stderr)
+
+    if getattr(args, "slot_rect", None):
+        global _SLOT_RECT
+        try:
+            _s = tuple(int(t) for t in
+                       str(args.slot_rect).replace(",", " ").split())
+        except ValueError:
+            print("[phase3] --slot-rect: four INTEGER microns expected, got "
+                  f"{args.slot_rect!r}", file=sys.stderr)
+            return 2
+        if len(_s) != 4 or _s[2] <= _s[0] or _s[3] <= _s[1]:
+            print("[phase3] --slot-rect: need 'LLX LLY URX URY', got "
+                  f"{args.slot_rect!r}", file=sys.stderr)
+            return 2
+        _SLOT_RECT = _s  # type: ignore[assignment]
+        print(f"[phase3] --slot-rect: the FINISHED die is "
+              f"{_s[2]-_s[0]}x{_s[3]-_s[1]} um; the seal ring is drawn on that "
+              f"rectangle, not on the routed DEF's DIEAREA.", file=sys.stderr)
+
+    if getattr(args, "fill_keepout", None):
+        global _FILL_KEEPOUT
+        for _tok in args.fill_keepout:
+            try:
+                _lay, _rest = str(_tok).split(":", 1)
+                _n, _d = _lay.split("/")
+                _parts = _rest.split(":", 1)
+                _ko: Dict[str, Any] = {"layer": [int(_n), int(_d)],
+                                       "space_um": float(_parts[0])}
+                if len(_parts) > 1 and _parts[1]:
+                    _ko["why"] = _parts[1]
+            except Exception:
+                print(f"[phase3] --fill-keepout {_tok!r} is not "
+                      "'LAYER/DATATYPE:SPACE_UM[:WHY]'", file=sys.stderr)
+                return 2
+            _FILL_KEEPOUT.append(_ko)
+        print(f"[phase3] --fill-keepout: {len(_FILL_KEEPOUT)} region(s) the "
+              f"density fill must stay out of.", file=sys.stderr)
 
     project = args.project.resolve()
     if not project.is_dir():

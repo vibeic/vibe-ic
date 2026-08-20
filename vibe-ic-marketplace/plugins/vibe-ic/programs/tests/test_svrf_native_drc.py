@@ -395,22 +395,50 @@ def _pdk_with_lef(lef_path):
                        drc_deck=None)
 
 
-def test_discover_filler_masters_orders_decap_then_fill_largest_first(tmp_path):
+def test_discover_filler_masters_are_spacers_largest_first(tmp_path):
+    # FIX 2 — spacers only, largest first. The decaps are still DISCOVERED (see
+    # the opt-in test below) but they are no longer the default: a decap is a
+    # real MOS capacitor with its own wells, and greedy tiling packed the big
+    # ones first, so an empty die was flooded with devices whose well ties the
+    # post-placement tap prune had already removed. MEASURED on a sparse slot
+    # die: 7295 of 8317 inserted cells were decaps and KLayout DRC went
+    # 360 -> 11964, 99.5-100% of the new items sitting on a decap.
     lef = tmp_path / "cells.lef"
     lef.write_text(
         "MACRO FILL1\nMACRO FILL64\nMACRO FILL8\n"
         "MACRO DECAP4\nMACRO DECAP64\n"
         "MACRO INV_1\nMACRO NAND2_2\n")   # non-filler cells ignored
     got = R._discover_filler_masters_from_lef(str(lef))
-    # decaps largest-first, then fills largest-first
-    assert got == ["DECAP64", "DECAP4", "FILL64", "FILL8", "FILL1"]
+    assert got == ["FILL64", "FILL8", "FILL1"]
+
+
+def test_discover_filler_masters_decaps_are_opt_in(tmp_path, monkeypatch):
+    # The capability is retained, not removed: on a DENSE die decaps are the
+    # standard way to buy on-die decoupling. Asked for, they come back first
+    # (greedy tiling wants the big cells first), which is the historical set.
+    lef = tmp_path / "cells.lef"
+    lef.write_text(
+        "MACRO FILL1\nMACRO FILL64\nMACRO FILL8\n"
+        "MACRO DECAP4\nMACRO DECAP64\n")
+    monkeypatch.setenv("VIBEIC_FILLER_INCLUDE_DECAPS", "1")
+    assert R._discover_filler_masters_from_lef(str(lef)) == [
+        "DECAP64", "DECAP4", "FILL64", "FILL8", "FILL1"]
+
+
+def test_discover_filler_masters_decap_only_pdk_still_gets_fillers(tmp_path):
+    # A PDK whose ONLY fillers are decaps must not silently get ZERO fillers —
+    # that is the defect the discovery exists to fix (unfilled row gaps ->
+    # nwell notches). Take them, and the runner says so on stderr.
+    lef = tmp_path / "cells.lef"
+    lef.write_text("MACRO DECAP4\nMACRO DECAP64\nMACRO INV_1\n")
+    assert R._discover_filler_masters_from_lef(str(lef)) == ["DECAP64", "DECAP4"]
 
 
 def test_filler_masters_for_custom_pdk_uses_lef_discovery(tmp_path):
     lef = tmp_path / "cells.lef"
     lef.write_text("MACRO FILL2\nMACRO FILL16\nMACRO DECAP8\n")
     pdk = _pdk_with_lef(lef)          # tapcell_master=None → not sky130
-    assert R._filler_masters_for_pdk(pdk) == ["DECAP8", "FILL16", "FILL2"]
+    assert R._filler_masters_for_pdk(pdk) == ["FILL16", "FILL2"]
 
 
 def test_filler_masters_empty_when_no_fillers(tmp_path):
