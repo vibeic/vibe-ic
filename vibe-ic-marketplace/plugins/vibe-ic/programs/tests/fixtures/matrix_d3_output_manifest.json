@@ -1491,6 +1491,15 @@
           "status": "UNPROVEN"
         }
       }
+    },
+    "1.6x": {
+      "verdict": "ENFORCED",
+      "_comment": "Flow step 1.6x is NEW; no PUBLISHED run predates it, so its declared output has no run evidence yet and the truthful status is UNPROVEN. It is not WAIVED and not dormant: the step is unconditional and its judge writes this artefact on every run, including the NOT_APPLICABLE one.",
+      "entries": {
+        "reports/crosslayer/rewrite_equivalence_check.json": {
+          "status": "UNPROVEN"
+        }
+      }
     }
   }
 }

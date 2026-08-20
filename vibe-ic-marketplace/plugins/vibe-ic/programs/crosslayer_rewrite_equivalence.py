@@ -228,6 +228,17 @@ def build_delay_wrapper(top: str, ports: List[Tuple[str, str, str]],
     caller realign one signal at a time until a mismatch disappeared, which is
     the cheat this whole gate exists to refuse.
 
+    `depth == 0` builds a PASS-THROUGH wrapper that changes nothing electrically
+    and exists only to give the candidate side the SAME `flatten` prefix the
+    gold side acquires from its delay wrapper. Without it `equiv_make`, which
+    matches wires BY NAME, sees `u_inner.s` on one side and `s` on the other and
+    builds ONE key point (the output port) instead of one per state bit — and a
+    32-bit sequential miter reduced to a single point is not decomposable, so
+    induction runs to the wall clock and the candidate lands NOT_PROVEN. MEASURED
+    on a +1-latency multiplier: 1 compared point, 895s, no verdict. This is the
+    same prefix-matching trick `lec_run.build_scan_wrappers` uses for exactly the
+    same reason on the scan path.
+
     `reset` is not decoration. A pipelined candidate FLUSHES its extra stages
     when the design resets, so an alignment chain that does not reset diverges
     from it for exactly `depth` cycles after every reset — and that divergence
@@ -259,6 +270,11 @@ def build_delay_wrapper(top: str, ports: List[Tuple[str, str, str]],
         [f".{n}({n})" for _, _, n in ins] +
         [f".{n}({n}__u)" for _, n in outs])
     body.append(f"    {inner}{pmap} u_inner ({conns});")
+    if depth == 0:
+        for rng, name in outs:
+            body.append(f"    assign {name} = {name}__u;")
+        body.append("endmodule")
+        return "\n".join(body) + "\n"
     for i in range(depth):
         for rng, name in outs:
             body.append(f"    reg {_rng(rng)}{name}__d{i};")
@@ -290,7 +306,9 @@ def build_rewrite_equiv_script(baseline_files: List[str],
                                candidate_files: List[str],
                                top: str,
                                wrapper_v: str = "",
-                               wrapper_top: str = "") -> str:
+                               wrapper_top: str = "",
+                               cand_wrapper_v: str = "",
+                               cand_wrapper_top: str = "") -> str:
     """The RTL==RTL Yosys script.
 
     The pass list is PORTED from `lec_run.build_equiv_script` and each pass is
@@ -320,8 +338,11 @@ def build_rewrite_equiv_script(baseline_files: List[str],
     base_read = " ".join(shlex.quote(f) for f in baseline_files)
     cand_read = " ".join(shlex.quote(f) for f in candidate_files)
     gold_top = wrapper_top or top
+    cand_top = cand_wrapper_top or top
     gold_extra = (f"read_verilog -sv {shlex.quote(wrapper_v)}\n"
                   if wrapper_v else "")
+    cand_extra = (f"read_verilog -sv {shlex.quote(cand_wrapper_v)}\n"
+                  if cand_wrapper_v else "")
     # The SAME normalisation on both sides. Asymmetry here is how a filter
     # stops discriminating, so there is exactly one string and it is used twice.
     common = ("memory_map\n"
@@ -337,11 +358,12 @@ def build_rewrite_equiv_script(baseline_files: List[str],
         f"{common}"
         f"design -stash gold\n"
         f"read_verilog -sv {cand_read}\n"
-        f"prep -top {top}\n"
+        f"{cand_extra}"
+        f"prep -top {cand_top}\n"
         f"{common}"
         f"design -stash gate\n"
         f"design -copy-from gold -as gold {gold_top}\n"
-        f"design -copy-from gate -as gate {top}\n"
+        f"design -copy-from gate -as gate {cand_top}\n"
         f"equiv_make gold gate equiv\n"
         f"hierarchy -top equiv\n"
         f"equiv_struct\n"
@@ -367,7 +389,9 @@ def build_refutation_script(baseline_files: List[str],
                             candidate_files: List[str],
                             top: str, seq: int,
                             wrapper_v: str = "",
-                            wrapper_top: str = "") -> str:
+                            wrapper_top: str = "",
+                            cand_wrapper_v: str = "",
+                            cand_wrapper_top: str = "") -> str:
     """The BOUNDED refutation script: a miter plus `sat -seq N`.
 
     Stage 1 (`build_rewrite_equiv_script`) is an UNBOUNDED induction proof, and
@@ -393,8 +417,11 @@ def build_refutation_script(baseline_files: List[str],
     base_read = " ".join(shlex.quote(f) for f in baseline_files)
     cand_read = " ".join(shlex.quote(f) for f in candidate_files)
     gold_top = wrapper_top or top
+    cand_top = cand_wrapper_top or top
     gold_extra = (f"read_verilog -sv {shlex.quote(wrapper_v)}\n"
                   if wrapper_v else "")
+    cand_extra = (f"read_verilog -sv {shlex.quote(cand_wrapper_v)}\n"
+                  if cand_wrapper_v else "")
     common = ("memory_map\n"
               "flatten\n"
               "async2sync\n"
@@ -408,9 +435,10 @@ def build_refutation_script(baseline_files: List[str],
         f"rename {gold_top} gold\n"
         f"design -stash gold\n"
         f"read_verilog -sv {cand_read}\n"
-        f"prep -top {top}\n"
+        f"{cand_extra}"
+        f"prep -top {cand_top}\n"
         f"{common}"
-        f"rename {top} gate\n"
+        f"rename {cand_top} gate\n"
         f"design -stash gate\n"
         f"design -copy-from gold -as gold gold\n"
         f"design -copy-from gate -as gate gate\n"
@@ -618,6 +646,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     wrapper_v = ""
     wrapper_top = ""
+    cand_wrapper_v = ""
+    cand_wrapper_top = ""
     if offset:
         merged = "\n".join(
             Path(f).read_text(encoding="utf-8", errors="replace")
@@ -645,13 +675,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         wrapper_v = str((project / args.json).with_name(
             Path(args.json).stem + "_delay_wrapper.v"))
         Path(wrapper_v).parent.mkdir(parents=True, exist_ok=True)
+        params_txt = module_params(merged, args.top)
         Path(wrapper_v).write_text(
             build_delay_wrapper(args.top, ports, args.top, wrapper_top,
-                                offset, args.clock,
-                                module_params(merged, args.top),
+                                offset, args.clock, params_txt,
                                 reset=args.reset,
                                 reset_active_low=args.reset_active_low),
             encoding="utf-8")
+        # The CANDIDATE gets a 0-deep pass-through wrapper with the SAME inner
+        # instance name. It changes nothing electrically and exists only so
+        # that `flatten` stamps the same `u_inner.` prefix on both sides:
+        # `equiv_make` matches wires BY NAME, and without this it sees
+        # `u_inner.s` against `s` and builds ONE key point (the output port)
+        # instead of one per state bit. MEASURED on a +1-latency multiplier
+        # WITHOUT it — 1 compared point, 895s, NOT_PROVEN, no verdict either
+        # way. Same prefix-matching trick `lec_run.build_scan_wrappers` uses,
+        # for the same reason.
+        cand_ports = module_ports(
+            "\n".join(Path(f).read_text(encoding="utf-8", errors="replace")
+                      for f in candidate_files), args.top)
+        if cand_ports:
+            cand_wrapper_top = f"{args.top}__align0"
+            cand_wrapper_v = str((project / args.json).with_name(
+                Path(args.json).stem + "_align_wrapper.v"))
+            Path(cand_wrapper_v).write_text(
+                build_delay_wrapper(args.top, cand_ports, args.top,
+                                    cand_wrapper_top, 0, args.clock,
+                                    params_txt),
+                encoding="utf-8")
 
     if not _container_available(args.container):
         return fail_not_measured(
@@ -661,7 +712,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     script = build_rewrite_equiv_script(baseline_files, candidate_files,
                                         args.top, wrapper_v=wrapper_v,
-                                        wrapper_top=wrapper_top)
+                                        wrapper_top=wrapper_top,
+                                        cand_wrapper_v=cand_wrapper_v,
+                                        cand_wrapper_top=cand_wrapper_top)
     ys_host = (project / args.json).with_name(Path(args.json).stem + ".ys")
     ys_host.parent.mkdir(parents=True, exist_ok=True)
     ys_host.write_text(script, encoding="utf-8")
@@ -691,7 +744,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         ref_script = build_refutation_script(baseline_files, candidate_files,
                                              args.top, sat_seq,
                                              wrapper_v=wrapper_v,
-                                             wrapper_top=wrapper_top)
+                                             wrapper_top=wrapper_top,
+                                             cand_wrapper_v=cand_wrapper_v,
+                                             cand_wrapper_top=cand_wrapper_top)
         ref_ys = ys_host.with_name(Path(args.json).stem + "_refute.ys")
         ref_ys.write_text(ref_script, encoding="utf-8")
         _launched2, raw2 = _run_yosys_equiv(
