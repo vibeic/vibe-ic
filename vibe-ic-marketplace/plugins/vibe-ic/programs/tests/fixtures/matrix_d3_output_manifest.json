@@ -1221,22 +1221,18 @@
     "37.5ic": {
       "verdict": "NA_DORMANT_CONDITION",
       "entries": {
+        "reports/phase3/tapeout_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/general_precheck.json": {
+          "status": "UNPROVEN"
+        },
         "reports/phase3/shuttle_precheck.json": {
           "status": "UNPROVEN"
         }
       },
       "condition_files": [
-        "input/submission_template/slots/*.yaml"
-      ]
-    },
-    "37.5self": {
-      "verdict": "NA_DORMANT_CONDITION",
-      "entries": {
-        "reports/phase3/general_precheck.json": {
-          "status": "UNPROVEN"
-        }
-      },
-      "condition_files": [
+        "input/submission_template/slots/*.yaml",
         "input/submission_template/SELF_TAPEOUT.txt"
       ]
     },

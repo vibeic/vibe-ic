@@ -3,8 +3,12 @@
 
 ENFORCEMENT: advisory here — this gate is not in
 ``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes it
-inline at all. It runs when ``flow_compliance_check`` evaluates step 37.5self's
-``program_exit_zero`` clause, so its rc IS that step's verdict — "advisory" names
+inline at all. It runs as the FIRST ARM of step 37.5ic, invoked by
+``tapeout_precheck``, whose rc IS that step's verdict — so a refusal here refuses
+the step. (Until 2026-08-20 it was step 37.5self's own ``program_exit_zero``
+clause; the step was retired and this ladder became an arm rather than a route,
+which STRENGTHENS the channel: it now runs on every design reaching 37.5ic
+instead of only on the ones carrying a self-tape-out marker.) "advisory" names
 the RUNNER channel it is absent from, not a verdict this gate cannot reach. The
 same words its sibling ``tapeout_readiness_check`` carries, for the same reason
 and about the same channel: wiring a new gate into the runner changes what a real
