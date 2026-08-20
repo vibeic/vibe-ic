@@ -1344,6 +1344,47 @@ def _f_hardmacro_kit_incomplete(p: Path) -> None:
        'END LIBRARY\n')
 
 
+def _f_extract_illegal_overlap(p: Path) -> None:
+    """Magic filed illegal-overlap feedback areas; the extraction is fiction.
+
+    Reddens the Step-31 clause
+    ``magic_illegal_overlap_check . --json
+    reports/phase3/magic_illegal_overlap.json``.
+
+    EMPTY cannot reach it, and the gate's docstring says why in its own terms:
+    with no extraction in scope there is "no run for the question to be about",
+    which is rc 2 and never a statement that the extraction was clean. ABSENT
+    IS NOT ZERO — the distinction is the whole point of the gate — so the
+    fixture must supply an extraction that DID run and DID file feedback.
+
+    Two `feedback add` records in magic's own save format, each preceded by its
+    `box` line so the structural parser can read it, beside an extracted
+    netlist so the extraction is evidenced. Both counting arms then agree at 2,
+    which is itself load-bearing: the gate takes the LARGER of the string and
+    structural counts and raises FEEDBACK_COUNT_DISAGREEMENT when they differ,
+    so a fixture whose records did not parse would redden the gate for the
+    WRONG reason and would prove nothing about the overlap arm.
+
+    MEASURED, verbatim (rc 1):
+
+        [ERROR] MAGIC_ILLEGAL_OVERLAP: the extractor reported 2 illegal
+        overlap(s), against a threshold of 0. Counted from: feedback dump
+        string=2 structural=2 (2 area(s)), transcript=0 ...
+
+    Chip- and PDK-AGNOSTIC: the only literals are magic's own message text (the
+    channel itself) and LEF/SPICE-generic layer and device nouns.
+    """
+    _w(p, "phase3/stage3/extracted/extract_feedback.txt",
+       "box 20 20 35 40\n"
+       'feedback add "Illegal overlap between nwell and pdiff '
+       '(types do not connect)" pale\n'
+       "box 61 12 74 26\n"
+       'feedback add "Illegal overlap between metal1 and poly '
+       '(types do not connect)" pale\n')
+    _w(p, "phase3/stage3/extracted/top.spice",
+       ".subckt top a b\nM1 a b 0 0 nfet\n.ends\n")
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1375,8 +1416,9 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
-    "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
     "DIE_UNFINISHED": _f_die_unfinished,
+    "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
+    "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1441,6 +1483,9 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("37.5ip", "digital_hardmacro_check . --json "
                "reports/phase3/digital_hardmacro.json"):
         "HARDMACRO_KIT_INCOMPLETE",
+    ("31", "magic_illegal_overlap_check . --json "
+           "reports/phase3/magic_illegal_overlap.json"):
+        "EXTRACT_ILLEGAL_OVERLAP",
     ("25", "em_peak_current_authority_check . --json "
            "reports/phase3/em_current_authority.json"): "EM_PEAK_EXCEEDS_SUPPLY",
     ("33", "power_total_vs_budget_check . --json "
