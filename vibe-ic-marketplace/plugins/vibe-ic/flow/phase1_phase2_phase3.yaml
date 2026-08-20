@@ -4519,7 +4519,30 @@ steps:
       # this file, it RE-RUNS `drc_report_check` and WRITES it (see the
       # separate finding on that clobber). The rule's CONCLUSION is right
       # anyway — the three readers above are real — so the entry is declared on
-      # their evidence, not on the consumer W1 quoted.
+      # their evidence, not on the consumer W1 quoted. It has to be: with the
+      # clobber fixed the accidental consumer is gone, W1 falls silent on this
+      # path, and the gap would go back to being invisible. MEASURED: remove
+      # this entry from a tree carrying the general_precheck fix and step 31
+      # goes GREEN with the three readers untouched.
+      #
+      # WHAT IT COSTS, measured over the published corpus the way the step-23
+      # stance withdrawal in `test_signoff_required_outputs_completeness`
+      # requires (`find` over benchmark-data, 2026-08-21, the corpus at
+      # `~/vibe-ic` — it is no longer tracked on main): 16 roots carry
+      # `drc_signoff.rpt`, 3 carry `drc_signoff.json`, so 13 would report the
+      # new entry MISSING. Those 13 are NOT runs that dropped it — the PRODUCER
+      # POSTDATES THEM. Every root carrying the JSON is dated 2026-08-03 or
+      # later (caravel_user_project/v1.9.43_sky130A 08-03, spm/v1.9.96_gf180mcuD
+      # 08-07, spm/v1.10.18_sky130A 08-09) and every root without it is
+      # 2026-07-25 or earlier, which is `final_report_generate`'s own
+      # ORGANIC-20260808 note from the other side: "nothing in this tree writes
+      # drc_signoff.json" STOPPED BEING TRUE when `eda_report_audit:drc` began
+      # staging one. So this is the `magic_illegal_overlap.json` case three
+      # entries up — the gate postdates every older published run, dimension 3
+      # records the entry UNPROVEN there, and that is the true statement of the
+      # gap replacing a hidden one. It is NOT the step-23 stance case, where the
+      # producer was contemporary with the roots that lacked the artefact and
+      # the declaration was withdrawn for that reason.
       - "reports/phase3/drc_signoff.json"
     gate:
       all_of:
