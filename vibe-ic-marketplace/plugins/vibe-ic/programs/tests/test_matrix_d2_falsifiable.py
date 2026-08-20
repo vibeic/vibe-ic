@@ -467,6 +467,52 @@ def _f_rtl_bad(p: Path) -> None:
     _w(p, "phase2/stage1/rtl/top.v", _BAD_RTL)
 
 
+#: RTL carrying the NBA address-read race `nba_addr_read_race_check` exists for.
+#:
+#: The shape is the gate's own documented real occurrence, reduced to one
+#: module: a single always block that drives `otp_addr_o` and consumes
+#: `otp_data_i` in the same block, with no pipeline stage and no pre-advance
+#: form. The gate's rule is `addr_data_no_pipeline`.
+#:
+#: MEASURED 2026-08-20, three arms over ONE variable — the address assignment:
+#:   EMPTY project              -> VACUOUS (no RTL to scan; scanned=0)
+#:   `otp_addr_o <= {2'b00, otp_step[2:0]}` -> FAIL, rc=1, total_findings=1,
+#:                                 rule `addr_data_no_pipeline`
+#:   `otp_addr_o <= (otp_step + 5'd1)`      -> rc=0
+#: The corrected arm is the gate's own documented workaround (b), so the
+#: fixture reddens on the DEFECT and not on the file merely being present.
+_NBA_ADDR_RACE_RTL = """\
+module cmd_fsm (
+    input  wire        clk,
+    input  wire        rst_n,
+    output reg  [4:0]  otp_addr_o,
+    input  wire [7:0]  otp_data_i,
+    input  wire        otp_valid_i,
+    output reg  [7:0]  rsp_byte
+);
+    reg [4:0] otp_step;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            otp_step   <= 5'd0;
+            otp_addr_o <= 5'd0;
+            rsp_byte   <= 8'd0;
+        end else begin
+            otp_addr_o <= {2'b00, otp_step[2:0]};
+            if (otp_valid_i) begin
+                rsp_byte <= otp_data_i;
+                otp_step <= otp_step + 5'd1;
+            end
+        end
+    end
+endmodule
+"""
+
+
+def _f_nba_addr_race(p: Path) -> None:
+    _w(p, "phase2/stage1/rtl/cmd_fsm.v", _NBA_ADDR_RACE_RTL)
+
+
 def _analog_partial(p: Path, root: str) -> None:
     """Two blocks declared; only ONE carries any A-step artefact, and every
     artefact it carries is a stub.
@@ -1388,6 +1434,7 @@ def _f_extract_illegal_overlap(p: Path) -> None:
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
+    "NBA_ADDR_RACE": _f_nba_addr_race,
     "ANALOG_P3": _f_analog_p3,
     "A0_SKIPPED": _f_a0_skipped,
     "LDOC_TODO": _f_ldoc_todo,
@@ -1427,6 +1474,13 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
 #: not redden it) fails loudly rather than silently keeping a stale recipe.
 #: Clauses absent from this table use ``EMPTY``.
 CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
+    # vibe-ic 63x8 d2: this clause sat in UNREDDENED as "needs the specific NBA
+    # address-read race shape ... no generic fixture has". That was true of the
+    # generic fixture, not of the gate: the gate's own docstring carries the
+    # exact shape, and a fixture built from it reddens the clause on content.
+    # See `_NBA_ADDR_RACE_RTL` for the three arms measured 2026-08-20.
+    ("2", "nba_addr_read_race_check phase2/stage1/rtl --json "
+          "reports/phase2/gates/nba_addr_race.json"): "NBA_ADDR_RACE",
     # vibe-ic#700 wired this into D1. EMPTY cannot redden it: absence of the
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
@@ -1718,10 +1772,6 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
           "reports/phase2/gates/spec_response_delay.json"):
         "PASS/VACUOUS: needs RTL whose measured response delay contradicts a "
         "populated L8 spec — a design-specific pair no generic fixture has",
-    ("2", "nba_addr_read_race_check phase2/stage1/rtl --json "
-          "reports/phase2/gates/nba_addr_race.json"):
-        "PASS/VACUOUS: needs the specific NBA address-read race shape "
-        "(memory read addressed by a non-blocking-assigned register)",
     ("2", "periodic_timer_vs_rx_activity_check phase2/stage1/rtl --json "
           "reports/phase2/gates/periodic_timer.json"):
         "PASS/VACUOUS: needs a periodic-timer/rx-activity pair in the RTL, a "
