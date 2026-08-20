@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """pad_assignment_gen — the AUTHOR of `phase3/stage3/pnr/pad_assignment.json`.
 
+ENFORCEMENT: advisory here — this program is not in
+``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
+it, and measured on this tree no runner dispatches step 15.5ic at all. It runs
+when ``flow_compliance_check`` evaluates that step's first ``program_exit_zero``
+clause, so its rc IS half that step's verdict — "advisory" names the RUNNER
+channel it is absent from, not a verdict it cannot reach. The same words, for
+the same reason, as its sibling ``pad_ring_check``. Declared because
+vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an enforcement decision
+nobody made; wiring it into the runner would change what a real run blocks on,
+which is the flow owner's call and is recorded, not taken here. Kept in the
+first 4 kB: `declared_intent` reads only `text[:4000]`.
+
 WHY THIS PROGRAM EXISTS
 =======================
 `pad_ring_gen` reads that file and NOTHING WROTE IT. Measured on this tree
