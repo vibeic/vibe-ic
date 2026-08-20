@@ -101,10 +101,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import subprocess
 import sys
+import tokenize
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -124,11 +126,37 @@ CATALOGUE_NAME = "ppa_pr_scope_checklist.v1.json"
 
 RC_PASS, RC_FAIL, RC_UNDETERMINED, RC_BAD_INVOCATION = 0, 1, 2, 3
 
-#: Extensions whose added lines are prose, not code. The code-signature rules
-#: are not applied to them: a document that QUOTES `shell=True` has not
-#: acquired a shell surface, and firing on it would train authors to distrust
-#: the detector, which is a slower way of turning it off.
+#: A changed file belongs to one of three classes, and the class decides which
+#: content rules can meaningfully fire on it.
+#:
+#:   code    it executes. Every rule applies.
+#:   config  it is structured data that can GRANT a capability but cannot run
+#:           one. A config's field names are a VOCABULARY, not a surface: a
+#:           checklist that lists the word "pareto" has not acquired a Pareto
+#:           frontier. What a config genuinely can carry is an allow-list, a
+#:           tool name, a provider, a command string — so those rules apply and
+#:           the domain-vocabulary rules do not.
+#:   prose   it is documentation. A document that QUOTES `shell=True` has not
+#:           acquired a shell surface. What a document genuinely can carry is
+#:           an outward claim, and an agent-facing instruction to reach a tool.
+#:
+#: This split is not a loosening. No rule was weakened and no path was removed
+#: from the scan; a rule is simply not asked a question its file class cannot
+#: answer. Measured on this lane's own PR, it takes the content arm from 44
+#: hits (its own regex table and docstrings) to the hits that are real.
 PROSE_SUFFIXES = {".md", ".rst", ".txt"}
+CONFIG_SUFFIXES = {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg"}
+
+CLASS_CODE, CLASS_CONFIG, CLASS_PROSE = "code", "config", "prose"
+
+
+def file_class(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    if suffix in PROSE_SUFFIXES:
+        return CLASS_PROSE
+    if suffix in CONFIG_SUFFIXES:
+        return CLASS_CONFIG
+    return CLASS_CODE
 
 VERIFIABLE_KINDS = ("artefact", "test", "path")
 
@@ -235,89 +263,108 @@ PATH_RULES: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
 # These run over the lines a diff ADDS, in any file anywhere in the repository.
 # This is the arm that cannot be defeated by choosing a different filename.
 # --------------------------------------------------------------------------
-CODE_CONTENT_RULES: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
-    ("shell_true", r"shell\s*=\s*True",
+CONTENT_RULES: Tuple[Tuple[str, str, Tuple[str, ...], str,
+                          Tuple[str, ...]], ...] = (
+    ("shell_true", r"shell\s*=\s*True|\"shell\"\s*:\s*true",
      ("security", "tool"),
-     "A shell is a metacharacter interpreter; question 19 names it directly."),
+     "A shell is a metacharacter interpreter; question 19 names it directly.",
+     (CLASS_CODE, CLASS_CONFIG)),
     ("os_system", r"\bos\.(system|popen)\s*\(",
      ("security", "tool"),
-     "os.system / os.popen run a string through a shell."),
+     "os.system / os.popen run a string through a shell.",
+     (CLASS_CODE,)),
     ("dynamic_argv",
      r"\bsubprocess\.(run|Popen|call|check_output|check_call)\s*\(\s*(?!\[)",
      ("security", "tool"),
      "A subprocess whose argv is not a literal list takes its argv from data. "
-     "The literal-list form is the safe one and is deliberately not matched."),
+     "The literal-list form is the safe one and is deliberately not matched.",
+     (CLASS_CODE,)),
     ("eval_exec", r"(?<![\w.])(eval|exec)\s*\(",
      ("security",),
-     "Question 19's 'raw script' and 'arbitrary shell' in their in-process form."),
+     "Question 19's 'raw script' and 'arbitrary shell' in their in-process form.",
+     (CLASS_CODE,)),
     ("unsafe_deserialize",
      r"\b(pickle|marshal)\.loads?\s*\(|\byaml\.load\s*\(",
      ("security",),
-     "Deserialising untrusted bytes executes whatever they describe."),
+     "Deserialising untrusted bytes executes whatever they describe.",
+     (CLASS_CODE,)),
     ("archive_extract", r"\.extractall\s*\(|\bshutil\.unpack_archive\s*\(",
      ("security",),
-     "extractall is the classic path-traversal write primitive."),
+     "extractall is the classic path-traversal write primitive.",
+     (CLASS_CODE,)),
     ("symlink_surface", r"\bos\.symlink\s*\(|follow_symlinks\s*=\s*True",
      ("security",),
-     "Question 19 names path/symlink traversal."),
+     "Question 19 names path/symlink traversal.",
+     (CLASS_CODE,)),
     ("mcp_dispatch",
      r"\bmcp__|\b(call_tool|invoke_tool|tool_call|tool_use|dispatch_tool)\b",
      ("tool", "agent", "security", "runtime"),
-     "Question 19 names generic MCP bypass; this is where a tool is reached."),
+     "Question 19 names generic MCP bypass; this is where a tool is reached. "
+     "It applies to prose too: a skill or command document that tells an agent "
+     "to reach a tool has granted that reach as surely as a call site.",
+     (CLASS_CODE, CLASS_CONFIG, CLASS_PROSE)),
     ("llm_surface",
      r"\b(anthropic|system_prompt|user_prompt|llm_client)\b|\bcompletion\s*\(",
      ("ai", "agent", "provider"),
-     "An LLM call site is an AI surface whether or not it lives in _ppa/."),
+     "An LLM call site is an AI surface whether or not it lives in _ppa/.",
+     (CLASS_CODE, CLASS_CONFIG)),
     ("action_registry_surface",
      r"\b(ACTION_REGISTRY|action_registry|ALLOWLIST|ALLOW_LIST|allow_list|"
      r"allowlist|autonomy_level|blast_radius|action_budget)\b",
      ("action_registry", "blast_radius", "agent", "security"),
      "Question 15 asks whether the action is inside the typed registry, the "
-     "budget, the blast radius and the autonomy level."),
+     "budget, the blast radius and the autonomy level. An allow-list declared "
+     "in a config IS that registry.",
+     (CLASS_CODE, CLASS_CONFIG)),
     ("closure_actuator",
      r"\b(actuator|rollback|roll_back|remeasure|re_measure)\b",
      ("closure", "controller"),
      "Questions 8-10 are about the actuator, the re-measurement and the "
-     "rollback by name."),
+     "rollback by name.",
+     (CLASS_CODE,)),
     ("pareto_surface", r"\bpareto\b|\bfrontier\b|\bdominated_by\b",
      ("pareto", "feasibility"),
-     "Question 7 asks whether an infeasible candidate can enter the frontier."),
+     "Question 7 asks whether an infeasible candidate can enter the frontier.",
+     (CLASS_CODE,)),
     ("candidate_search_surface",
-     r"\bcandidate_(id|set|pool|lifecycle)\b|\bsearch_space\b|\bmulti_fidelity\b",
+     r"\bcandidate_(id|set|pool|lifecycle)\b|\bsearch_space\b|"
+     r"\bmulti_fidelity\b",
      ("candidate", "search"),
-     "Question 6 asks whether a candidate can win by modifying the problem."),
-    ("casebook_surface",
-     r"\b(casebook|distillation|case_lifecycle)\b",
+     "Question 6 asks whether a candidate can win by modifying the problem.",
+     (CLASS_CODE,)),
+    ("casebook_surface", r"\b(casebook|distillation|case_lifecycle)\b",
      ("casebook", "recovery"),
-     "Question 18 asks whether an AI recovery can be distilled."),
+     "Question 18 asks whether an AI recovery can be distilled.",
+     (CLASS_CODE,)),
     ("benchmark_surface",
      r"pass@1|\b(arm_a|arm_b|fairness_condition|independent_scorer)\b",
      ("benchmark",),
-     "Question 20 separates an AI-attributed gain from more trials."),
+     "Question 20 separates an AI-attributed gain from more trials.",
+     (CLASS_CODE,)),
     ("metric_surface",
      r"vibeic\.ppa\.metric|\b(wns_ns|tns_ns|slack_ns|leakage_w|area_um2|"
      r"activity_basis)\b",
      ("metric",),
-     "A canonical metric field is a measurement surface (questions 1-3)."),
+     "A canonical metric field is a measurement surface (questions 1-3).",
+     (CLASS_CODE,)),
     ("verdict_surface", r"\[CANNOT CHECK\]|\[REFUSE\]|VACUOUS_PASS:",
      ("gate",),
-     "These markers exist only in something that renders a verdict."),
-)
-
-CLAIM_CONTENT_RULES: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
+     "These markers exist only in something that renders a verdict.",
+     (CLASS_CODE,)),
     ("outward_claim",
      r"\b(tapeout-ready|production-ready|guarantee[sd]?|certified|proven)\b|"
      r"\b100\s?%",
      ("claims", "claim_surface", "report"),
      "Question 12 asks whether an outward claim's scope exceeds its evidence; "
-     "these are the words an over-broad claim is written in."),
+     "these are the words an over-broad claim is written in.",
+     (CLASS_CODE, CLASS_PROSE)),
 )
 
 #: Every token the content arm is capable of producing. A run without the
 #: content arm cannot report N/A for any question that depends on one of these
 #: — it did not look.
 CONTENT_REACHABLE_TOKENS: Set[str] = set()
-for _r in CODE_CONTENT_RULES + CLAIM_CONTENT_RULES:
+for _r in CONTENT_RULES:
     CONTENT_REACHABLE_TOKENS.update(_r[2])
 
 
@@ -363,16 +410,24 @@ def diff_text_from_git(repo: Path, base: str, head: str) -> str:
     return out
 
 
+_HUNK_RX = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
 def added_lines(diff_text: str) -> List[Tuple[str, int, str]]:
-    """(path, hunk-relative index, text) for every line a unified diff ADDS.
+    """(path, POST-CHANGE line number, text) for every line a unified diff ADDS.
 
     Deliberately keyed on `+++ b/<path>`: a rename or a copy still names the
     destination there, so code that MOVED into a new file is attributed to the
     file it moved into. That is the case this arm exists for.
+
+    The line number is the real one in the post-change file, taken from the hunk
+    header, because the masking pass below has to line a match up against the
+    tokens of that file. A hunk-relative index would have been enough to REPORT
+    a hit and not enough to decide whether it is inside a string.
     """
     out: List[Tuple[str, int, str]] = []
     current: Optional[str] = None
-    idx = 0
+    lineno = 0
     for line in diff_text.splitlines():
         if line.startswith("+++ "):
             target = line[4:].strip()
@@ -380,17 +435,72 @@ def added_lines(diff_text: str) -> List[Tuple[str, int, str]]:
                 current = None
             else:
                 current = target[2:] if target.startswith(("a/", "b/")) else target
-            idx = 0
+            lineno = 0
             continue
         if line.startswith("--- ") or line.startswith("diff --git"):
             continue
-        if line.startswith("@@"):
-            idx = 0
+        m = _HUNK_RX.match(line)
+        if m:
+            lineno = int(m.group(1))
             continue
-        if line.startswith("+") and current:
-            idx += 1
-            out.append((current, idx, line[1:]))
+        if not current:
+            continue
+        if line.startswith("+"):
+            out.append((current, lineno, line[1:]))
+            lineno += 1
+        elif line.startswith("-") or line.startswith("\\"):
+            continue
+        else:
+            lineno += 1
     return out
+
+
+#: `tokenize` token types whose text is data, not executable code. A rule match
+#: inside one of these is a MENTION of a surface, not the surface. Python 3.12
+#: splits f-strings into their own token types; they are picked up by name so a
+#: newer interpreter masks them too and an older one simply has fewer types.
+_DATA_TOKENS = tuple(
+    t for t in (
+        getattr(tokenize, "STRING", None),
+        getattr(tokenize, "COMMENT", None),
+        getattr(tokenize, "FSTRING_START", None),
+        getattr(tokenize, "FSTRING_MIDDLE", None),
+        getattr(tokenize, "FSTRING_END", None),
+    ) if t is not None)
+
+
+def data_spans(source: str) -> Optional[Dict[int, List[Tuple[int, int]]]]:
+    """line number -> the (col_start, col_end) ranges that are string/comment.
+
+    `None` means the source could not be tokenized. That is NOT the same as "it
+    had no strings", and the caller must not treat it as such: an untokenizable
+    file gets no masking, so every match stands. Failing toward DETECTING is the
+    only safe direction for a detector whose job is to be hard to route around.
+    """
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except Exception:
+        return None
+    spans: Dict[int, List[Tuple[int, int]]] = {}
+    for tok in toks:
+        if tok.type not in _DATA_TOKENS:
+            continue
+        (srow, scol), (erow, ecol) = tok.start, tok.end
+        for row in range(srow, erow + 1):
+            lo = scol if row == srow else 0
+            hi = ecol if row == erow else _COL_MAX
+            spans.setdefault(row, []).append((lo, hi))
+    return spans
+
+
+_COL_MAX = 1 << 30
+
+
+def _is_masked(spans: Optional[Dict[int, List[Tuple[int, int]]]],
+               lineno: int, col: int) -> bool:
+    if not spans:
+        return False
+    return any(lo <= col < hi for lo, hi in spans.get(lineno, ()))
 
 
 # --------------------------------------------------------------------------
@@ -409,23 +519,54 @@ def detect_path_surfaces(paths: Sequence[str]) -> List[Dict[str, Any]]:
 
 
 def detect_content_surfaces(
-        adds: Sequence[Tuple[str, int, str]]) -> List[Dict[str, Any]]:
+        adds: Sequence[Tuple[str, int, str]],
+        source_of: Optional[Any] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Scan the added lines, and report how each file was masked.
+
+    `source_of(path)` returns the POST-CHANGE text of a `.py` file, or None. It
+    is what makes masking possible; when it cannot supply a file, that file is
+    scanned unmasked and says so in the returned masking map. The second return
+    value exists so the report can never imply a precision the run did not have.
+    """
     hits: List[Dict[str, Any]] = []
-    compiled_code = [(rid, re.compile(pat), tok, why)
-                     for rid, pat, tok, why in CODE_CONTENT_RULES]
-    compiled_claim = [(rid, re.compile(pat), tok, why)
-                      for rid, pat, tok, why in CLAIM_CONTENT_RULES]
-    for path, idx, text in adds:
-        suffix = Path(path).suffix.lower()
-        rules = compiled_claim if suffix in PROSE_SUFFIXES else \
-            compiled_code + compiled_claim
-        for rule_id, rx, tokens, why in rules:
-            if rx.search(text):
+    masking: Dict[str, str] = {}
+    compiled = [(rid, re.compile(pat), tok, why, klasses)
+                for rid, pat, tok, why, klasses in CONTENT_RULES]
+    by_class = {k: [r for r in compiled if k in r[4]]
+                for k in (CLASS_CODE, CLASS_CONFIG, CLASS_PROSE)}
+    spans_cache: Dict[str, Optional[Dict[int, List[Tuple[int, int]]]]] = {}
+
+    def spans_for(path: str) -> Optional[Dict[int, List[Tuple[int, int]]]]:
+        if path in spans_cache:
+            return spans_cache[path]
+        result: Optional[Dict[int, List[Tuple[int, int]]]] = None
+        if Path(path).suffix.lower() == ".py" and source_of is not None:
+            src = source_of(path)
+            if src is None:
+                masking[path] = "NOT_APPLIED_SOURCE_UNAVAILABLE"
+            else:
+                result = data_spans(src)
+                masking[path] = ("APPLIED" if result is not None
+                                 else "NOT_APPLIED_UNTOKENIZABLE")
+        else:
+            masking[path] = "NOT_APPLICABLE_NOT_PYTHON"
+        spans_cache[path] = result
+        return result
+
+    for path, lineno, text in adds:
+        rules = by_class[file_class(path)]
+        spans = spans_for(path)
+        for rule_id, rx, tokens, why, _klasses in rules:
+            for m in rx.finditer(text):
+                if _is_masked(spans, lineno, m.start()):
+                    continue
                 hits.append({"arm": "content", "rule": rule_id, "path": path,
-                             "added_line_index": idx,
+                             "line": lineno,
                              "evidence_line": text.strip()[:200],
                              "tokens": list(tokens), "why": why})
-    return hits
+                break
+    return hits, masking
 
 
 # --------------------------------------------------------------------------
@@ -764,7 +905,8 @@ def build_report(repo: Path, catalogue: Dict[str, Any],
                  answers_doc: Optional[Dict[str, Any]],
                  rows: List[Dict[str, Any]],
                  base: Optional[str], head: Optional[str],
-                 tokens: Set[str]) -> Dict[str, Any]:
+                 tokens: Set[str],
+                 masking: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     changed = _classify_changed(paths)
     detected = sorted({t for h in path_hits + content_hits
                        for t in h["tokens"]})
@@ -796,6 +938,13 @@ def build_report(repo: Path, catalogue: Dict[str, Any],
                 "LOOKED FOR; their absence is not established and the "
                 "questions that depend on them report UNDETERMINED, never N/A."
             ),
+            "content_masking": dict(sorted((masking or {}).items())),
+            "content_masking_note": (
+                "APPLIED: string and comment tokens of the post-change file "
+                "were excluded, so a rule that matched only a MENTION of a "
+                "surface did not fire. NOT_APPLIED_*: the file was scanned "
+                "unmasked and every match stands — the safe direction for a "
+                "detector, and stated here rather than implied."),
             "detected_tokens": detected,
             "declared_scope": sorted(set(declared_scope)),
             "effective_tokens": sorted(tokens),
@@ -931,6 +1080,38 @@ def _find_repo_root(start: Path) -> Path:
     return start
 
 
+def _source_reader(repo: Path, head_ref: Optional[str]) -> Any:
+    """A reader for the POST-CHANGE text of a file, for the masking pass.
+
+    Preference order, and the order is the point: the HEAD revision first,
+    because that is the text the diff describes; the working tree only as a
+    fallback for `--diff-file` runs where no ref was named. A working tree that
+    has moved on from the diff would mask the wrong lines, so a ref is used
+    whenever one exists.
+    """
+    cache: Dict[str, Optional[str]] = {}
+
+    def read(path: str) -> Optional[str]:
+        if path in cache:
+            return cache[path]
+        text: Optional[str] = None
+        if head_ref:
+            rc, out, _ = _git(repo, "show", f"{head_ref}:{path}")
+            if rc == 0:
+                text = out
+        if text is None:
+            candidate = repo / path
+            if candidate.is_file():
+                try:
+                    text = candidate.read_text(encoding="utf-8")
+                except OSError:
+                    text = None
+        cache[path] = text
+        return text
+
+    return read
+
+
 def _refuse(code: str, detail: str) -> int:
     print(f"[CANNOT CHECK] {GATE_NAME}: {detail}", file=sys.stderr)
     if _vx is not None:
@@ -1005,8 +1186,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     content_arm_ran = diff_text is not None
     path_hits = detect_path_surfaces(paths)
-    content_hits = detect_content_surfaces(
-        added_lines(diff_text)) if content_arm_ran else []
+    if content_arm_ran:
+        content_hits, masking = detect_content_surfaces(
+            added_lines(diff_text),
+            source_of=_source_reader(repo, args.head))
+    else:
+        content_hits, masking = [], {}
 
     declared_scope = []
     if answers_doc:
@@ -1030,7 +1215,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     answers_by_id, answers_present)
     report = build_report(repo, catalogue, paths, path_hits, content_hits,
                           content_arm_ran, declared_scope, answers_present,
-                          answers_doc, rows, args.base, args.head, tokens)
+                          answers_doc, rows, args.base, args.head, tokens,
+                          masking)
     rc, verdict = verdict_of(report)
     report["verdict"] = verdict
     report["rc"] = rc
