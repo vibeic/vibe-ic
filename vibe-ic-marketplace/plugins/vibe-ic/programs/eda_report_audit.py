@@ -630,6 +630,147 @@ def _has_strong_signature(text: str, mode: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# DOES THIS REPORT DESCRIBE THIS DESIGN? (vibe-ic#1119, A3_CROSS_DESIGN)
+#
+# THE DEFECT, MEASURED. The repository's adversarial role, run with a donor,
+# copies a DIFFERENT
+# design's same-named reports over a cell's and re-runs the cell's own sign-off
+# gates. Against `spm/v1.9.96_gf180mcuD` with 149 artefacts taken from
+# `sha256/clean_run_v1427_20260715`:
+#
+#     drc_report_check        rc 0 -> 0    SUCCEEDED
+#     em_report_check         rc 0 -> 0    SUCCEEDED
+#     ir_drop_report_check    rc 0 -> 0    SUCCEEDED
+#     lvs / erc_density / antenna          SUCCEEDED
+#
+# Six sign-off gates certified one design using another design's evidence, and
+# they did it while READING files that say whose evidence it is in plain text:
+#
+#     cell   phase3/reports/drc.rpt   <top-cell>chip_top</top-cell>
+#     donor  phase3/reports/drc.rpt   <top-cell>sha256</top-cell>
+#
+# The identity was never hidden. Nothing asked. `report_belongs_to_project_check`
+# (vibe-ic#587) already asks exactly this question of RUNNER json — "is this
+# report about this project at all?" — and the same question had never been put
+# to the TOOL reports a sign-off gate reads.
+#
+# WHAT IS COMPARED, AND WHY IT SURVIVES THE ATTACK. The reference is the set of
+# module names the project's own Verilog declares. That is the DESIGN, not a
+# statement about it: an attacker who replaces it has replaced the design rather
+# than forged evidence about it, and the substitution attack does not touch it
+# (it copies only `.rpt` / `.json` / `.log`). Measured on the published cell:
+# 342 module names, `chip_top` among them and `sha256` not.
+#
+# ONLY TWO DIALECTS ARE READ, deliberately. A KLayout report database's
+# `<top-cell>` and OpenROAD ODB's `Design:` line are unambiguous and
+# tool-written. netgen's `Circuit 1:` lines were tried and REJECTED: they name
+# sub-circuits rather than the design, and netgen truncates them to a fixed
+# column, so `gf180mcu_fd_sc_mcu7t5v0__aoi21_` is not a name any tree declares.
+# Reading them produced six false foreign-design findings on a pristine
+# published cell. A binding that reddens honest evidence would be removed within
+# the week and would take the real check with it.
+#
+# WHAT A REPORT THAT DECLARES NOTHING GETS. `NOT_DETERMINED`, recorded in the
+# summary, and NOT a pass of this question — `antenna`, `lvs`, `power` and `sta`
+# reports on the published cell name no design at all, which is a real gap and
+# is published as one rather than being spelled "clean". This check can only
+# ever FAIL a report that names a design this project does not contain; it
+# cannot manufacture a verdict for one that names nothing.
+_DESIGN_SOURCE_SUFFIXES = ("*.v", "*.sv")
+
+_VERILOG_MODULE_RE = re.compile(
+    r"(?m)^[ \t]*module[ \t]+([A-Za-z_][A-Za-z0-9_$]*)")
+
+_DESIGN_NAME = r"([A-Za-z_][A-Za-z0-9_$]*)"
+
+#: The tool-written declarations of WHOSE design a report is about.
+_REPORT_DESIGN_RES = (
+    # KLayout report database (drc, erc/density)
+    re.compile(r"<top[-_]cell>\s*" + _DESIGN_NAME + r"\s*</top[-_]cell>"),
+    # OpenROAD ODB, e.g. "[INFO ODB-0128] Design: chip_top"
+    re.compile(r"(?im)(?:^|\])[ \t]*Design[ \t]*:[ \t]*" + _DESIGN_NAME
+               + r"[ \t]*$"),
+)
+
+#: `NOT_DETERMINED` is a THIRD value beside True/False and is spelled out so a
+#: reader of the json cannot mistake it for either.
+DESIGN_BINDING_NOT_DETERMINED = "NOT_DETERMINED"
+
+_design_names_cache: dict = {}
+
+
+def _project_design_names(project_dir: Path) -> set:
+    """Every module name the project's own Verilog declares.
+
+    Cached per project because a mode checker asks once and the walk is over
+    every `.v`/`.sv` in the tree.
+    """
+    key = str(Path(project_dir).resolve())
+    if key in _design_names_cache:
+        return _design_names_cache[key]
+    names: set = set()
+    root = Path(project_dir)
+    for pattern in _DESIGN_SOURCE_SUFFIXES:
+        for fp in root.rglob(pattern):
+            if not fp.is_file():
+                continue
+            try:
+                names.update(_VERILOG_MODULE_RE.findall(
+                    fp.read_text(errors="replace")))
+            except OSError:
+                continue
+    _design_names_cache[key] = names
+    return names
+
+
+def _report_declared_designs(text: str) -> set:
+    """The design names a report states it is about. Empty when it states none."""
+    out: set = set()
+    for rx in _REPORT_DESIGN_RES:
+        out.update(rx.findall(text))
+    return out
+
+
+def _check_report_design_binding(files: List[Path], project_dir: Path,
+                                 mode: str, result: AuditResult):
+    """(ok, binding) — ok is False only for a report naming a FOREIGN design.
+
+    `binding` is True (at least one report named this design), False (a report
+    named another design) or `NOT_DETERMINED` (no report named any design).
+    """
+    declared = _project_design_names(project_dir)
+    if not declared:
+        # No Verilog in the tree: there is nothing to be foreign TO. Saying
+        # "belongs" here would be a verdict about a comparison never made.
+        return True, DESIGN_BINDING_NOT_DETERMINED
+    foreign_seen = False
+    own_seen = False
+    for fp in files:
+        try:
+            text = fp.read_text(errors="replace")
+        except (OSError, ValueError):
+            continue
+        names = _report_declared_designs(text)
+        foreign = sorted(n for n in names if n not in declared)
+        if foreign:
+            foreign_seen = True
+            result.findings.append(Finding(
+                rule=f"{mode.upper()}_REPORT_IS_ABOUT_ANOTHER_DESIGN",
+                severity="ERROR",
+                message=(f"report states it is about {', '.join(foreign)}, "
+                         f"which this project's Verilog does not declare. A "
+                         f"sign-off gate that accepts it is certifying this "
+                         f"design with another design's evidence (#1119 "
+                         f"A3_CROSS_DESIGN)."),
+                file=str(fp)))
+        elif names:
+            own_seen = True
+    if foreign_seen:
+        return False, False
+    return True, (True if own_seen else DESIGN_BINDING_NOT_DETERMINED)
+
+
 def _check_tool_authenticity(files: List[Path], mode: str,
                               result: AuditResult) -> bool:
     """Append findings for missing tool signature + undersized reports.
@@ -1246,6 +1387,8 @@ def _check_drc(project_dir: Path) -> AuditResult:
 
     # Tool-authenticity check — rejects hand-typed stubs (added 2026-04-22)
     authentic = _check_tool_authenticity(files, "drc", result)
+    own_design, design_binding = _check_report_design_binding(
+        files, project_dir, "drc", result)
 
     # DISCLOSE (never silent) the foundry-qualified std-cell-internal count that
     # was tiered out of the gating total — same waiver the phase-3 drc step
@@ -1276,9 +1419,10 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # that disagree cannot both be zero — but a verdict that depends on that
     # coincidence would be silently undone by any later change to how the total
     # is formed, and this is the whole decision being added.
-    result.passed = (determined_files > 0 and real_total == 0 and authentic
+    result.passed = (own_design and determined_files > 0 and real_total == 0 and authentic
                      and not unreadable and not contradictions)
     result.summary = {"files_found": len(files), "categories_found": cats_found,
+                      "design_binding": design_binding,
                       "has_count": has_count, "tool_authentic": authentic,
                       "determined_files": determined_files,
                       "real_violation_total": real_total,
@@ -1423,6 +1567,8 @@ def _check_lvs(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(scoped_files, "lvs", result)
+    own_design, design_binding = _check_report_design_binding(
+        scoped_files, project_dir, "lvs", result)
 
     # ORGANIC-20260608 #507 (CRITICAL) — terminal-verdict gate. Pre-#507
     # `passed` was decided SOLELY by (category-keyword present + tool
@@ -1470,9 +1616,10 @@ def _check_lvs(project_dir: Path) -> AuditResult:
 
     # PASS requires: a conclusive MATCH verdict AND a mismatch category
     # keyword found (report structure) AND an authentic tool signature.
-    result.passed = (verdict == "MATCH"
+    result.passed = (own_design and verdict == "MATCH"
                      and len(cats_found) > 0 and authentic)
     result.summary = {"files_found": len(files), "categories_found": cats_found,
+                      "design_binding": design_binding,
                       "tool_authentic": authentic,
                       "terminal_verdict": verdict,
                       "canonical_report_used": scoped_files is not files}
@@ -1535,6 +1682,8 @@ def _check_power(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "power", result)
+    own_design, design_binding = _check_report_design_binding(
+        files, project_dir, "power", result)
 
     # The declared machine-readable half (reports/phase3/power.json). It
     # carries no number of its own, but it does carry two claims ABOUT the
@@ -1580,8 +1729,9 @@ def _check_power(project_dir: Path) -> AuditResult:
                          f"match the report it summarises"),
                 file=rel))
 
-    result.passed = has_leak and has_dyn and authentic and machine_ok
+    result.passed = own_design and has_leak and has_dyn and authentic and machine_ok
     result.summary = {"files_found": len(files), "has_leakage": has_leak,
+                      "design_binding": design_binding,
                       "has_dynamic": has_dyn, "tool_authentic": authentic,
                       "analysis_modes_in_report": sorted(stated_modes),
                       "machine_readable_found": len(companions),
@@ -1645,6 +1795,8 @@ def _check_em(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "em", result)
+    own_design, design_binding = _check_report_design_binding(
+        files, project_dir, "em", result)
 
     # The declared machine-readable half (reports/phase3/em.json). The text
     # screen above always matches the emitted "current density (Jpeak,
@@ -1697,8 +1849,9 @@ def _check_em(project_dir: Path) -> AuditResult:
                      "formatted zero, not an electromigration result"),
             file=rel))
 
-    result.passed = has_density and authentic and machine_ok
+    result.passed = own_design and has_density and authentic and machine_ok
     result.summary = {"files_found": len(files), "has_density": has_density,
+                      "design_binding": design_binding,
                       "positive_current_in_report": positive_current,
                       "tool_authentic": authentic,
                       "machine_readable_found": len(companions),
@@ -1746,6 +1899,8 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "ir_drop", result)
+    own_design, design_binding = _check_report_design_binding(
+        files, project_dir, "ir_drop", result)
 
     # ORGANIC-20260606 #444 — budget comparison: when the runner's
     # ir_drop.json carries worst_ir_uv + budget_uv, the step gate applies
@@ -1775,8 +1930,9 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
                     file=rel))
         break
 
-    result.passed = has_drop and authentic and budget_ok
+    result.passed = own_design and has_drop and authentic and budget_ok
     result.summary = {"files_found": len(files), "has_drop_value": has_drop,
+                      "design_binding": design_binding,
                       "tool_authentic": authentic,
                       "worst_ir_uv": worst_uv, "budget_uv": budget_uv,
                       "ir_within_budget": budget_ok}
@@ -2145,6 +2301,8 @@ def _check_sta(project_dir: Path) -> AuditResult:
             file=_first))
 
     authentic = _check_tool_authenticity(files, "sta", result)
+    own_design, design_binding = _check_report_design_binding(
+        files, project_dir, "sta", result)
 
     # #437(c) — multi-corner SUBSTANCE: a per_corner/ directory IS a
     # multi-corner-STA claim, and the claim needs >= 2 NON-IDENTICAL
@@ -2272,10 +2430,11 @@ def _check_sta(project_dir: Path) -> AuditResult:
     # `not basis_offenders` is part of the verdict, not a note beside it: a
     # gate that emits an ERROR finding and still returns rc 0 is the "reported
     # another question" failure one layer up.
-    result.passed = (has_wns_tns and has_setup_hold and authentic and corners_ok
+    result.passed = (own_design and has_wns_tns and has_setup_hold and authentic and corners_ok
                       and any_verdict_determined and not real_violation_found
                       and not basis_offenders and not unreadable)
     result.summary = {"files_found": len(files),
+                      "design_binding": design_binding,
                       # `files_found` counts DISCOVERED PATHS; this counts the
                       # ones that yielded bytes. They were the same number by
                       # assumption, never by measurement.
@@ -2385,6 +2544,8 @@ def _check_antenna(project_dir: Path) -> AuditResult:
             total_viol = (total_viol or 0) + cnt
 
     authentic = _check_tool_authenticity(files, "antenna", result)
+    own_design, design_binding = _check_report_design_binding(
+        files, project_dir, "antenna", result)
     # Determine pass: a parseable count of 0 (or an explicit "clean: YES") is a
     # clean antenna result; >0 is a real violation FAIL. A present report with NO
     # parseable count is treated like _check_em's missing-content case → ERROR
@@ -2403,8 +2564,9 @@ def _check_antenna(project_dir: Path) -> AuditResult:
             file=best_file))
         result.passed = False
     else:
-        result.passed = authentic
+        result.passed = authentic and own_design
     result.summary = {"files_found": len(files), "violations": total_viol,
+                      "design_binding": design_binding,
                       "clean": clean_flag, "tool_authentic": authentic}
     return result
 

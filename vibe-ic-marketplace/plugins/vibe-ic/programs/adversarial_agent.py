@@ -44,17 +44,30 @@ MEASURED ON THIS COMMIT, and this is why the module exists
 re-run A's gate — against `spm/v1.9.96_gf180mcuD` with 19 reports taken from
 `sha256/clean_run_v1427_20260715`:
 
-    drc_report_check        rc 0 -> 0    SUCCEEDED
     antenna_report_check    rc 0 -> 0    SUCCEEDED
-    em_report_check         rc 0 -> 0    SUCCEEDED
     erc_density_check       rc 0 -> 0    SUCCEEDED
     lvs_report_check        rc 0 -> 0    SUCCEEDED
-    ir_drop_report_check    rc 0 -> 0    SUCCEEDED
+    drc_report_check        rc 0 -> 1    DEFENDED
+    em_report_check         rc 0 -> 1    DEFENDED
+    ir_drop_report_check    rc 0 -> 1    DEFENDED
     sta_report_check        rc 0 -> 1    DEFENDED
 
-Six of seven sign-off gates certified one design using another design's
-evidence. `sta_report_check` noticed, which is what makes this an attack and not
-a tautology: a probe that "succeeds" against everything measures nothing.
+Three of seven sign-off gates still certify one design using another design's
+evidence. The other four object, which is what makes this an attack and not a
+tautology: a probe that "succeeds" against everything measures nothing.
+
+WHAT THIS TABLE SAID BEFORE, AND WHY THE CORRECTION IS PART OF THE FINDING.
+It read six SUCCEEDED and one DEFENDED, and credited `sta_report_check` with
+noticing. sta did not notice. It tripped `STA_REAL_VIOLATION_FOUND` on a
+negative slack that happened to be in the DONOR's numbers, and
+`STA_REPORT_TOO_SMALL` on one donor file; a clean donor would have passed it.
+On the measurement above, seven of seven gates were blind to design identity and
+the table's one DEFENDED was luck. drc / em / ir_drop now defend for the stated
+reason — their reports declare a design and `eda_report_audit` compares it with
+the module names the project's own Verilog declares. The three still listed
+SUCCEEDED emit no design identity a reader could bind: netgen writes none, and
+neither does the antenna or density producer. That is a gap in the PRODUCERS and
+it is recorded here rather than papered over in the gates.
 
 AND THE ATTACK THAT DOES NOT WORK, KEPT BECAUSE IT DOES NOT
 -----------------------------------------------------------
@@ -104,7 +117,7 @@ and compares, and the third case below is the one that makes it honest:
     a recorded pair now UNAVAILABLE    -> the cell it needed is gone. The finding
                                           is UNPROVEN, not fixed.
 
-Without that third case a corpus prune would silently "close" all thirteen and
+Without that third case a corpus prune would silently "close" all of them and
 the ratchet would be measuring the publication schedule instead of the gates —
 the exact defect #527 removed from dimension 3.
 

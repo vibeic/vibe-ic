@@ -48,10 +48,25 @@ CELL = _corpus_cell("spm", "v1.9.96_gf180mcuD")
 DONOR = _corpus_cell("sha256", "clean_run_v1427_20260715")
 OLDER = _corpus_cell("sha256", "clean_run_v1422_20260715")
 
-#: The gate that NOTICES, measured. Keeping the pair small keeps the test quick
-#: while preserving the only property that matters: one of each colour.
-FORGEABLE = ("drc_report_check", (".",))
-DEFENDING = ("sta_report_check", (".", "--mode", "sta"))
+#: One of each colour, measured, because a probe that succeeds against
+#: everything measures nothing. Keeping the pair small keeps the test quick.
+#:
+#: BOTH HALVES MOVED when the design binding landed. `drc_report_check` was the
+#: FORGEABLE half and now DEFENDS: its report declares `<top-cell>` and the gate
+#: reads it, so another design's evidence is refused by name. It replaces
+#: `sta_report_check` as the DEFENDING half, and that is an improvement in what
+#: this pair proves rather than a relabelling — sta's defence was INCIDENTAL. It
+#: tripped `STA_REAL_VIOLATION_FOUND` on a negative slack in the donor's numbers
+#: and `STA_REPORT_TOO_SMALL` on one donor file; it never looked at whose design
+#: it was reading, and a clean donor would have walked straight past it. The
+#: campaign's own note read as though sta had caught the forgery. It had not.
+#:
+#: `lvs_report_check` is the FORGEABLE half now because it still is one: netgen
+#: writes no design identity this auditor can read (its `Circuit N:` lines name
+#: sub-circuits and are truncated to a fixed column), so nothing binds an LVS
+#: report to the tree it sits in.
+FORGEABLE = ("lvs_report_check", (".",))
+DEFENDING = ("drc_report_check", (".",))
 
 #: The bound on every CLI subprocess below (vibe-ic#1241).
 #:
@@ -322,8 +337,14 @@ def _live_recorded_attacks():
 
 @_corpus
 def test_the_findings_ratchet_holds_in_BOTH_directions():
-    """13 forged greens are recorded. A fourteenth is a regression; a twelfth is
-    progress that must be adjudicated, not absorbed."""
+    """One more forged green than the ledger records is a regression; one fewer
+    is progress that must be adjudicated, not absorbed.
+
+    The count is READ FROM THE LEDGER, never typed here. It was typed here — as
+    13 — and the number outlived the measurement: 6 of those 13 closed when the
+    sign-off gates learned to read the design their evidence names, and a
+    hard-coded 13 in a docstring is the same rot this campaign exists to find.
+    """
     led, attempts = _live_recorded_attacks()
     d = AA.ratchet_diff(led, attempts)
     assert not d["newly_forging"], (
@@ -409,7 +430,8 @@ def test_the_unwired_state_is_disclosed_or_gone():
     # one as evidence of wiring would delete a disclosure that is still true.
     own = {"adversarial_agent.py", "test_adversarial_agent.py",
            "adversarial_findings.json", "INDEX.md",
-           "test_the_adversarial_ratchet_follows_the_corpus_pointer.py"}
+           "test_the_adversarial_ratchet_follows_the_corpus_pointer.py",
+           "test_a_signoff_report_must_be_about_this_design.py"}
     callers = []
     for d in (PLUGIN / "flow", PLUGIN / "benchmark", PLUGIN / "programs"):
         if not d.is_dir():

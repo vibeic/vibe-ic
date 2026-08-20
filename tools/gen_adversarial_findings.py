@@ -1,5 +1,6 @@
 """Generate programs/adversarial_findings.json from a LIVE campaign. argv: <plugin>"""
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +26,17 @@ IC = _ROOT / "ic"
 CELL = "spm/v1.9.96_gf180mcuD"
 DONOR = "sha256/clean_run_v1427_20260715"
 OLDER = "sha256/clean_run_v1422_20260715"
+
+# MEASURED_ON WAS A TYPED LITERAL and stayed "a38902d1" across every
+# regeneration after it. A finding set whose subject commit is hand-carried
+# says whatever it said last time somebody remembered, and this file exists
+# precisely because a finding must not be negotiable. Derived now.
+try:
+    MEASURED_ON = subprocess.run(
+        ["git", "-C", str(PLUGIN), "rev-parse", "--short=8", "HEAD"],
+        capture_output=True, text=True, timeout=30, check=True).stdout.strip()
+except (OSError, subprocess.SubprocessError):
+    MEASURED_ON = "NOT DETERMINED"
 
 rows = []
 for attack, fn, kwargs in (
@@ -64,7 +76,7 @@ doc = {
         "silently 'close' every finding and the ratchet would measure the",
         "publication schedule instead of the gates.",
     ],
-    "measured_on": "a38902d1",
+    "measured_on": MEASURED_ON,
     "cell": CELL,
     "donor": DONOR,
     "older_run": OLDER,
