@@ -76,15 +76,54 @@ from matrix_63x8 import waivers as W
 # note on CENSUS_BLOCKS_ON_NON_EMPTY below records that; the count that note
 # left at 62 is the one this change moves to 66.
 # ──────────────────────────────────────────────────────────────────────
-EXPECTED_CELLS = 544
-EXPECTED_STEPS = 68
+# ──────────────────────────────────────────────────────────────────────
+# 2026-08-20 — ALL SEVEN TRIPWIRES MOVED AGAIN, ON ONE CAUSE, FOR THE
+# FOURTH TIME. This is the fourth entry in a series (P0, A1, #1744's five
+# steps, and now this one) and the series itself is the finding.
+#
+# `00d9dc261` (v1.11.4) added ONE step to the flow: `37.5self`, the general
+# tape-out precheck for a design with no shuttle operator. That commit moved
+# six matrix modules in the same change — d3, d4, d5, d7, d8 and the coverage
+# meta-test — and did NOT move this file. `8e35c6439` (v1.11.6) then edited
+# this very file for a DIFFERENT step's gate clause and still left the seven
+# counts below at their pre-`37.5self` values, so the substrate every other
+# dimension module imports sat red on main across two landings.
+#
+# Measured live off the yaml in THIS tree, never re-typed from the change
+# (`F.step_ids()` and the accessors each pin is asserted against):
+#
+#   EXPECTED_STEPS                68 -> 69   +1
+#   EXPECTED_CELLS               544 -> 552   69 x 8
+#   CENSUS_GATE_PRESENT           67 -> 68   +1, 37.5self declares a gate
+#   CENSUS_REQUIRED_OUTPUTS_...   66 -> 67   +1, it declares outputs
+#   CENSUS_BLOCKS_ON_PRESENT      68 -> 69   +1, presence stays TOTAL
+#   CENSUS_BLOCKS_ON_NON_EMPTY    66 -> 67   +1, it is NOT a graph root
+#   CENSUS_GATE_PROGRAMS_NON_...  66 -> 67   +1, its gate names a program
+#
+# EVERY ONE OF THE SEVEN MOVES BY EXACTLY +1, which is what a single added
+# step that declares a gate, outputs, a program and a non-empty `blocks_on`
+# looks like. A subset moving would mean the step declares less than that and
+# would need reading, not re-pinning. The `roots` set is UNCHANGED at
+# ['0.5ic', 'D1'] — 37.5self blocks on upstream steps, so it adds no root, and
+# that set is still read out of `flow_dependency_graph_check.DECLARED_ROOTS`
+# rather than re-typed here.
+#
+# NOT auto-derived, deliberately. Computing these from the yaml would make
+# every future flow change silently self-certifying, which is the one thing
+# the tripwire exists to prevent — it would be making the check pass by making
+# it check less. The cost of that choice is exactly the staleness above, and
+# the fix for the staleness is a reviewer moving the number, not the number
+# moving itself.
+# ──────────────────────────────────────────────────────────────────────
+EXPECTED_CELLS = 552
+EXPECTED_STEPS = 69
 EXPECTED_DIMS = 8
 
 # Pinned census of the yaml as measured on 2026-07-27. These are TRIPWIRES, not
 # the definition: every structural assertion below derives its expectation live
 # from the yaml. If the flow legitimately changes, these numbers change with it
 # in ONE place and the reviewer is forced to look.
-CENSUS_GATE_PRESENT = 67
+CENSUS_GATE_PRESENT = 68
 # UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
 # was WITHDRAWN the same day: the only thing that made the declaration
 # satisfiable was `check_step` standing its early MISSING down so FS1's own
@@ -93,7 +132,7 @@ CENSUS_GATE_PRESENT = 67
 # artefacts have no producer outside its own gate, so dimension 7's W4 rule
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
-CENSUS_REQUIRED_OUTPUTS_PRESENT = 66
+CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
 # P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
 # P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
@@ -104,7 +143,7 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 66
 # `332b9985` also edited `flow_dependency_graph_check.py` and its test in the
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
-CENSUS_BLOCKS_ON_PRESENT = 68
+CENSUS_BLOCKS_ON_PRESENT = 69
 # 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
 # gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
 # D1 while carrying `blocks_on: []`, so the ordering edge its own inputs
@@ -125,11 +164,11 @@ CENSUS_BLOCKS_ON_PRESENT = 68
 # gives A1 an ordering edge moves BOTH sides together instead of reddening
 # this cell". Both sides DID move together. The cell reddened anyway, because
 # this count is a THIRD copy that neither side is tied to.
-CENSUS_BLOCKS_ON_NON_EMPTY = 66
+CENSUS_BLOCKS_ON_NON_EMPTY = 67
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
-CENSUS_GATE_PROGRAMS_NON_EMPTY = 66
+CENSUS_GATE_PROGRAMS_NON_EMPTY = 67
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1034,14 +1073,14 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
 
     This is the anti-fake-pass proof for the whole substrate. If the ledger
     were sourced from `.audit_63x8.json` — or from any frozen list — it would
-    keep reporting 68 steps / 544 cells here and this test would fail.
+    keep reporting 69 steps / 552 cells here and this test would fail.
 
     The real yaml is never touched: eight agents share this worktree.
     """
     original = F.FLOW_YAML
     doc = yaml.safe_load(original.read_text(encoding="utf-8"))
 
-    # (a) ADD a step -> 69 steps, 552 cells, new cells ABSENT_FROM_AUDIT.
+    # (a) ADD a step -> 70 steps, 560 cells, new cells ABSENT_FROM_AUDIT.
     doc["steps"].append(
         {
             "id": "ZZ_MUTANT",
@@ -1060,7 +1099,7 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
         C.rebuild()
 
         assert len(F.step_ids()) == EXPECTED_STEPS + 1
-        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 552
+        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 560
         assert len(C.cells_for(1)) == EXPECTED_STEPS + 1
 
         # The added step has no audit history at all — surfaced, not swallowed.
