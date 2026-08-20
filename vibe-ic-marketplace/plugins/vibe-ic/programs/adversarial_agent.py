@@ -122,6 +122,48 @@ BOTH directions: while unwired it requires this paragraph, and the moment somebo
 wires it the test fails and forces the paragraph out. What it cannot do is decide
 WHICH step should own the clause — that is a flow declaration and needs the ruling.
 
+A8_LAUNDERED_REGISTER — THE DONOR IS PART OF THE MEASUREMENT
+============================================================
+The thirteen findings above were closed by `_run_evidence_binding`: the gates
+now ask whether the bytes they read are the bytes a register in THIS RUN's tree
+recorded producing. The campaign that certified that closure used a
+`clean_run_*` donor, and MEASURED on this corpus that donor carries ZERO
+`steps/**/STEP_RECORD.json`. So it could substitute the reports and not the
+register, and "all DEFENDED" was a statement about THAT DONOR.
+
+A published SIBLING cell carries 63 of them, at the same relative paths, and
+`STEP_RECORD.json` ends in `.json` — inside :data:`ARTEFACT_SUFFIXES`. Handing
+the target the donor's register along with the donor's reports makes the two
+agree, and the binding certifies the forgery. MEASURED, against the fixed tree,
+`v1.9.96_gf180mcuD` with `v1.10.18_sky130A` as the donor:
+
+    antenna_report_check     rc 0 -> 0    SUCCEEDED
+    em_report_check          rc 0 -> 0    SUCCEEDED
+    erc_density_check        rc 0 -> 0    SUCCEEDED
+    ir_drop_report_check     rc 0 -> 0    SUCCEEDED
+    sta_report_check         rc 0 -> 0    SUCCEEDED
+    drc_report_check         rc 0 -> 1    DEFENDED
+    lvs_report_check         rc 0 -> 1    DEFENDED
+
+and the mechanism isolated, over the paths whose BYTES actually changed:
+
+    STEP_RECORDs substituted   BOUND 47   MISMATCH  6   UNRECORDED 208
+    STEP_RECORDs left alone    BOUND  0   MISMATCH 51   UNRECORDED 170
+
+This is NOT a fourteenth kind of defect. It is the same defect, and it is
+recorded under its own id because a fix's acceptance test that only ever sees
+the donor it was written against measures the donor. `sta_report_check`'s
+original DEFENDED was that error in the other direction.
+
+WHAT WOULD CLOSE IT — stated so it is not mistaken for undone work nobody
+looked at: nothing inside the run tree can. `provenance.jsonl`, every
+`STEP_RECORD.json` and every `written.json` all live in the tree they vouch
+for, so an adversary with write access to the evidence has write access to the
+voucher; today's survival of `provenance.jsonl` rests only on `.jsonl` being
+outside a suffix list. Closing A8 needs an anchor the run cannot write — a
+digest held by the gatekeeper, a signature, or the published tree's own git
+objects — and that is a design change, not a patch to a gate.
+
 THE HONEST LIMIT, PUBLISHED AS A DENOMINATOR
 ============================================
 This does not make the flow correct. It makes the flow's CLAIMS harder to forge.
@@ -279,6 +321,83 @@ def attack_cross_design(plugin: Path, cell: Path, donor: Optional[Path],
                 f"{cell.name}:{program}",
                 {"rc_before": before, "rc_after": after, "substituted": swapped,
                  "donor": donor.name}))
+    return out
+
+
+#: The file names `_run_evidence_binding` reads as a run's own record of what
+#: it produced. `STEP_RECORD.json` ends in `.json`, so it is inside
+#: :data:`ARTEFACT_SUFFIXES` and a substitution attack rewrites it along with
+#: the reports it vouches for. `provenance.jsonl` is not, TODAY, and that is an
+#: accident of the suffix list rather than a property of the register.
+REGISTER_BASENAMES: Tuple[str, ...] = ("STEP_RECORD.json", "provenance.jsonl")
+
+
+def shared_substitutable_registers(cell: Path, donor: Path) -> List[str]:
+    """Register files this attack could overwrite: present in BOTH trees and
+    inside :data:`ARTEFACT_SUFFIXES`. The donor's ability to launder is a
+    property of the donor, so it is MEASURED, never assumed."""
+    out: List[str] = []
+    if not (cell.is_dir() and donor.is_dir()):
+        return out
+    for f in sorted(donor.rglob("*")):
+        if (not f.is_file() or f.name not in REGISTER_BASENAMES
+                or f.suffix not in ARTEFACT_SUFFIXES):
+            continue
+        rel = f.relative_to(donor)
+        if (cell / rel).is_file():
+            out.append(rel.as_posix())
+    return out
+
+
+def attack_laundered_register(plugin: Path, cell: Path, donor: Optional[Path],
+                              gates=DEFAULT_GATES) -> List[Attempt]:
+    """A8 — substitute the evidence AND the register that vouches for it.
+
+    THIS IS A3 WITH A BETTER-CHOSEN DONOR, AND THAT IS THE POINT. The run
+    -evidence binding that closed the thirteen A1/A2/A3 findings asks whether
+    the bytes on disk are the bytes a register in THIS RUN's tree recorded
+    producing. The register is inside the tree it vouches for, and
+    `steps/**/STEP_RECORD.json` matches `.json`, so a donor that shares those
+    paths hands over its own digests along with its own reports and the binding
+    certifies the forgery.
+
+    The donor the closure was measured against could not do this — a
+    `clean_run_*` tree carries ZERO `STEP_RECORD.json` — so "all DEFENDED" was a
+    statement about that donor, exactly the way `sta_report_check`'s original
+    DEFENDED was a statement about a donor that happened to carry a violation.
+    A separate attack id keeps the two answers from being averaged into one.
+
+    UNAVAILABLE, with the reason, when the donor shares no substitutable
+    register with the cell: nothing was laundered, so nothing was measured.
+    """
+    obj = ("a gate accepts another run's reports because that run's own "
+           "register was substituted along with them")
+    def _unavailable(reason: str) -> List[Attempt]:
+        # ONE PER GATE, not one for the whole attack. The ratchet compares
+        # (attack, cell:gate) pairs, so a single collective UNAVAILABLE leaves
+        # every recorded A8 finding with no live counterpart at all — which
+        # reads as "the comparison is broken" instead of the ratchet's own
+        # third case, "the evidence went away, so these are UNPROVEN".
+        return [Attempt("A8_LAUNDERED_REGISTER", obj, UNAVAILABLE, reason,
+                        f"{cell.name}:{program}")
+                for program, _argv in gates] or [
+            Attempt("A8_LAUNDERED_REGISTER", obj, UNAVAILABLE, reason,
+                    str(cell))]
+
+    if donor is None or not donor.is_dir():
+        return _unavailable("no register-carrying donor available to launder from")
+    shared = shared_substitutable_registers(cell, donor)
+    if not shared:
+        return _unavailable(
+            f"donor {donor.name} shares no substitutable register with the "
+            f"cell, so this attack would be A3 under another name")
+    out = _substitute_and_rerun(plugin, cell, donor, gates,
+                                "A8_LAUNDERED_REGISTER", obj)
+    for a in out:
+        a.evidence["registers_substituted"] = len(shared)
+        if a.verdict != UNAVAILABLE:
+            a.detail += (f", INCLUDING {len(shared)} register file(s) the "
+                         f"binding reads")
     return out
 
 
@@ -536,10 +655,19 @@ def mark_resolved(finding: Dict[str, object], resolved_by: str) -> Dict[str, obj
 # --------------------------------------------------------------------------- #
 def run_campaign(plugin: Path, cell: Path, donor: Optional[Path] = None,
                  older: Optional[Path] = None,
-                 gates=DEFAULT_GATES) -> Tuple[int, Dict[str, object]]:
-    """Every attack, against one cell. Returns `(rc, report)`."""
+                 gates=DEFAULT_GATES,
+                 launderer: Optional[Path] = None
+                 ) -> Tuple[int, Dict[str, object]]:
+    """Every attack, against one cell. Returns `(rc, report)`.
+
+    `launderer` is a donor that CARRIES A REGISTER at a path this cell also has.
+    It is a separate parameter rather than a second `donor` because a campaign
+    run without one has not tested A8, and an absent parameter says that in the
+    report instead of leaving a reader to infer it.
+    """
     attempts: List[Attempt] = []
     attempts += attack_cross_design(plugin, cell, donor, gates)
+    attempts += attack_laundered_register(plugin, cell, launderer, gates)
     attempts += attack_stale_replay(plugin, cell, older, gates)
     attempts += attack_tamper_destructive(plugin, cell, gates)
     attempts += attack_violation_deletion(plugin, cell, gates)
@@ -557,6 +685,7 @@ def run_campaign(plugin: Path, cell: Path, donor: Optional[Path] = None,
         "cell": str(cell),
         "donor": donor.name if donor else None,
         "older_run": older.name if older else None,
+        "launderer": launderer.name if launderer else None,
         "counts": {"attempted": attempted, "succeeded": len(succeeded),
                    "defended": len(defended), "unavailable": len(unavailable)},
         # THE DENOMINATOR, PUBLISHED. The adversary's imagination is the new
@@ -633,6 +762,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("cell", help="the published run/cell to attack")
     ap.add_argument("--donor", help="a DIFFERENT design's cell, for A3")
+    ap.add_argument("--launderer",
+                    help="a donor that carries a register at a path this cell "
+                         "also has, for A8. Without one A8 is UNAVAILABLE and "
+                         "the campaign says so.")
     ap.add_argument("--older", help="an EARLIER run of the same design, for A2")
     ap.add_argument("--plugin", default=str(_HERE.parent),
                     help="plugin root (default: this program's parent)")
@@ -646,7 +779,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     rc, report = run_campaign(
         Path(args.plugin), cell,
         Path(args.donor) if args.donor else None,
-        Path(args.older) if args.older else None)
+        Path(args.older) if args.older else None,
+        launderer=Path(args.launderer) if args.launderer else None)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(Path(args.json), json.dumps(report, indent=2, sort_keys=True)

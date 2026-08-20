@@ -51,6 +51,10 @@ IC = (_CORPUS / "ic") if _CORPUS is not None else Path("/nonexistent-corpus")
 CELL = IC / "spm" / "v1.9.96_gf180mcuD"
 DONOR = IC / "sha256" / "clean_run_v1427_20260715"
 OLDER = IC / "sha256" / "clean_run_v1422_20260715"
+#: A donor that CARRIES a register at a path `CELL` also has, for A8. `DONOR`
+#: does not — measured, `clean_run_*` holds zero `steps/**/STEP_RECORD.json` —
+#: so a campaign run with `DONOR` alone cannot launder the run-evidence binding.
+LAUNDERER = IC / "spm" / "v1.10.18_sky130A"
 
 #: The gate that NOTICES, measured. Keeping the pair small keeps the test quick
 #: while preserving the only property that matters: one of each colour.
@@ -285,6 +289,82 @@ def test_PAIRED_the_campaign_PASSES_on_the_published_cell():
 
 
 # ===========================================================================
+# A8 — THE DONOR IS PART OF THE MEASUREMENT
+# ===========================================================================
+_launderer = pytest.mark.skipif(
+    not (CELL.is_dir() and LAUNDERER.is_dir()),
+    reason="this corpus has no second published cell carrying a register")
+
+
+@_launderer
+def test_the_donor_that_carries_a_register_LAUNDERS_the_binding():
+    """THE OPEN FINDING, PINNED — not a claim in a report.
+
+    `_run_evidence_binding` closed the thirteen A1/A2/A3 findings by asking
+    whether the bytes a gate read are the bytes a register in THIS RUN's tree
+    recorded producing. The register lives inside the tree it vouches for and
+    `STEP_RECORD.json` is inside `ARTEFACT_SUFFIXES`, so a donor that shares
+    those paths hands over its digests with its reports and the binding
+    certifies the forgery.
+
+    This asserts the forgery SUCCEEDS. It is the honest shape for a limit
+    nothing in the run tree can close, and it fails by name the day an
+    out-of-tree anchor closes it — which is when the module docstring's
+    "WHAT WOULD CLOSE IT" paragraph has to come out.
+    """
+    shared = AA.shared_substitutable_registers(CELL, LAUNDERER)
+    assert shared, (
+        "the donor shares no substitutable register with the cell, so this "
+        "test would be A3 under another name")
+    got = AA.attack_laundered_register(PLUGIN, CELL, LAUNDERER,
+                                       gates=(DEFENDING,))
+    assert [a.verdict for a in got] == [AA.SUCCEEDED], [a.detail for a in got]
+    assert got[0].evidence["registers_substituted"] == len(shared), got[0].evidence
+
+
+@_corpus
+def test_PAIRED_the_same_gate_DEFENDS_against_a_donor_that_cannot_launder():
+    """The other colour, through the SAME instrument and the SAME gate.
+
+    Without it, a binding that had simply stopped working would read as the A8
+    finding rather than as a regression of the thirteen closures."""
+    assert not AA.shared_substitutable_registers(CELL, DONOR), (
+        "DONOR can substitute a register, so it is no longer the control this "
+        "pairing needs")
+    got = AA.attack_cross_design(PLUGIN, CELL, DONOR, gates=(DEFENDING,))
+    assert [a.verdict for a in got] == [AA.DEFENDED], [a.detail for a in got]
+
+
+@_corpus
+def test_A8_without_a_register_carrying_donor_is_UNAVAILABLE_not_DEFENDED():
+    """A donor that cannot launder proves nothing about laundering. Reporting
+    that as DEFENDED is the "I could not look" / "I looked and found nothing"
+    conflation this whole module exists to refuse."""
+    got = AA.attack_laundered_register(PLUGIN, CELL, DONOR, gates=(DEFENDING,))
+    assert [a.verdict for a in got] == [AA.UNAVAILABLE], [a.detail for a in got]
+    assert "shares no substitutable register" in got[0].detail, got[0].detail
+    none = AA.attack_laundered_register(PLUGIN, CELL, None, gates=(DEFENDING,))
+    assert none[0].verdict == AA.UNAVAILABLE, none[0]
+
+
+@_launderer
+def test_the_campaign_REPORTS_A8_and_names_the_launderer():
+    """A report that does not name the launderer cannot be read: `ALL_DEFENDED`
+    from a campaign that never had a laundering donor and `ALL_DEFENDED` from
+    one that did are different claims."""
+    rc, report = AA.run_campaign(PLUGIN, CELL, None, None,
+                                 gates=(DEFENDING,), launderer=LAUNDERER)
+    assert report["launderer"] == LAUNDERER.name, report["launderer"]
+    assert rc == 1 and report["findings"], (rc, report["counts"])
+    assert {f["attack"] for f in report["findings"]} == {"A8_LAUNDERED_REGISTER"}, (
+        report["findings"])
+    blind, _ = AA.run_campaign(PLUGIN, CELL, None, None, gates=(DEFENDING,))
+    assert blind == 0, (
+        "the campaign without a launderer must still say ALL_DEFENDED — that "
+        "is exactly the false green this attack exists to expose")
+
+
+# ===========================================================================
 # THE ASYMMETRY, AS A MECHANISM
 # ===========================================================================
 def test_the_finder_may_not_resolve_its_own_finding():
@@ -399,13 +479,27 @@ def _live_recorded_attacks():
     out += AA.attack_cross_design(PLUGIN, cell, donor)
     out += AA.attack_stale_replay(PLUGIN, cell, older)
     out += AA.attack_tamper_destructive(PLUGIN, cell)
+    # A8 needs the donor the ledger names for it. Omitting it would re-run
+    # every A8 finding with no laundering donor, which returns UNAVAILABLE —
+    # and the ratchet would then read five open findings as "the evidence went
+    # away". The replay must use the SAME donors the record was measured with.
+    launderer = led.get("launderer")
+    assert launderer or not any(
+        f["attack"] == "A8_LAUNDERED_REGISTER" for f in led.get("forging", ())), (
+        "the ledger records A8 findings but names no `launderer`, so this "
+        "replay would re-run them with no laundering donor, get UNAVAILABLE, "
+        "and read five open findings as evidence that went away")
+    out += AA.attack_laundered_register(
+        PLUGIN, cell, (ic / launderer) if launderer else None)
     return led, out
 
 
 @_corpus
 def test_the_findings_ratchet_holds_in_BOTH_directions():
-    """13 forged greens are recorded. A fourteenth is a regression; a twelfth is
-    progress that must be adjudicated, not absorbed."""
+    """One more recorded pair is a regression; one fewer is progress that must
+    be adjudicated, not absorbed. The count is read from the ledger, never
+    typed here — a number in this docstring would have to be edited in the same
+    change that moves it, which is how a ratchet becomes a rubber stamp."""
     led, attempts = _live_recorded_attacks()
     d = AA.ratchet_diff(led, attempts)
     assert not d["newly_forging"], (
