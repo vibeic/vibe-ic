@@ -814,12 +814,16 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     registry entry this module can name.
     """
     cells = cells_for(DIM)
-    # 68 -> 69: step `37.5self` (General Precheck) joined the flow. It is the
-    # chip path with NO operator — 37.5ic wants the shuttle's slot template and
-    # 37.5ip is the IP terminal, so a design taping itself out routed to neither
-    # and passed no submission check at all. Re-stated by hand, as the census
-    # comments here require: a new step must force a human to say the number.
-    assert len(cells) == len(F.step_ids()) == 69, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    assert len(cells) == len(F.step_ids()) == 68, (
         f"the flow declares {len(F.step_ids())} steps; dimension {DIM} carries "
         f"{len(cells)} cells — the ledger and the yaml have diverged"
     )
@@ -841,12 +845,16 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     # The number stays hard-coded on purpose: deriving it from `waived` would
     # make this assertion unfalsifiable, and a NEW waiver must force a human
     # to re-state the census rather than slip in silently.
-    # 68 -> 69: step `37.5self` (General Precheck) joined the flow. It is the
-    # chip path with NO operator — 37.5ic wants the shuttle's slot template and
-    # 37.5ip is the IP terminal, so a design taping itself out routed to neither
-    # and passed no submission check at all. Re-stated by hand, as the census
-    # comments here require: a new step must force a human to say the number.
-    assert len(cells) - len(waived) == 69 and not waived, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    assert len(cells) - len(waived) == 68 and not waived, (
         f"{len(cells) - len(waived)} cells are enforced and {len(waived)} are "
         f"waived; this module was reported as enforcing all 63 with no "
         f"waiver. Update the report, or explain the change."

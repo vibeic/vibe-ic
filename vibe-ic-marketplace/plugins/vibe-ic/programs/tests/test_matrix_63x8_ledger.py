@@ -619,8 +619,30 @@ def test_output_entries_classify_into_the_four_kinds():
     # a GLOB because the identifying half of the name is the design's, not the
     # flow's.
     # = GLOB +2 (16 -> 18), FILE 114 unchanged, ANY_OF 24 unchanged.
-    assert sum(seen.values()) == 156, seen
-    assert seen[F.FILE] == 114
+    # 2026-08-20 (smrg): 156 -> 161, five FILE, and the accounting is
+    # RE-DERIVED rather than incremented — measured by classifying the yaml at
+    # `ff5071caa` (the commit that last set this constant) and at the tip, and
+    # diffing per step. FOUR of the five predate this change and had left the
+    # tripwire sitting red on main, which is the third time this file records
+    # that happening:
+    #   0.5ic  +2  `input/submission_template/tapeout_declaration.json` and
+    #             `reports/phase1/tapeout_declaration.json` — the declaration
+    #             the route-deciding step writes on every route.
+    #   21     +1  `reports/phase3/drc_router.json`.
+    # The FIFTH is this change's, and it is a NET +1 over the tip because it
+    # both adds and removes:
+    #   37.5self  -1  the step is RETIRED. Its `reports/phase3/
+    #                 general_precheck.json` is not deleted — it moves.
+    #   37.5ic    +2  `reports/phase3/tapeout_precheck.json` (the merged, per-
+    #                 line-authority record) and `reports/phase3/
+    #                 general_precheck.json` (our arm's own report, which the
+    #                 merge quotes rather than replaces).
+    # `reports/phase3/shuttle_precheck.json` does NOT move: 37.5ic already
+    # declared it and still does — what changed is that it is now written on
+    # every path, including the paths where the operator was never asked.
+    # = FILE 114 + 2 + 1 + 2 = 119; GLOB and ANY_OF untouched.
+    assert sum(seen.values()) == 161, seen
+    assert seen[F.FILE] == 119
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
