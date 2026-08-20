@@ -1896,6 +1896,14 @@ def matrix_skip_precondition(step_id):
     same order: a waived cell with nothing to show, on a tree whose write
     record observed nothing and with no corpus to read it from, is
     UNMEASURABLE rather than healed.
+
+    IT IS NOT FREE and the price is stated rather than discovered: over the 63
+    cells this costs 20.5 s, all of it the FIRST ``G.findings_for`` call
+    building the AST index the whole module shares. Reordering the four
+    conditions cheapest-first was measured and does NOT avoid it — the waived
+    cells still reach that call, and the index is built once for the first of
+    them (19.7 s, within noise of 20.5) — so the order here stays the cell's
+    own, where it is checkable by reading rather than by trusting a comment.
     """
     if matrix_na_precondition(step_id) is not None:
         return None

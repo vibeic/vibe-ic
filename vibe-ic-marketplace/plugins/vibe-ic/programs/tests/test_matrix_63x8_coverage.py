@@ -1150,70 +1150,6 @@ def test_every_na_cell_asserts_a_live_precondition():
         f"{len(problems)} NA problem(s):\n  - " + "\n  - ".join(problems))
 
 
-def test_every_skipping_cell_names_the_resource_it_could_not_reach():
-    """A ``-SKIPPED`` cell is DECLARED by its own module, live, in both
-    directions.
-
-    This is the guard that lets clause (3) of the test above stop banning the
-    call outright. The ban was a static, blunt "no skip anywhere"; this is a
-    live, per-cell equality between what the run DID and what the module SAYS
-    it would do, so a module cannot satisfy it with a constant:
-
-      * ``matrix_skip_precondition`` that always answers -> reddens on the
-        ~457 cells the run did not skip;
-      * one that never answers -> reddens on the ones it did;
-      * one that answers for the wrong cells -> reddens on both sides.
-
-    A dimension whose cells never skip does not need the function at all, and
-    is not asked for it — the requirement follows the observed behaviour, not
-    a list somebody has to remember to update.
-
-    MEASURED at the time of writing: 47 of 504 cells report ``skipped``, 46 in
-    dimension 3 and 1 in dimension 7, and both of those modules reach their
-    skip through ``corpus_root() is None`` — the published cells left this
-    repository (vibe-ic#1703) and no pointer to a clone was offered here.
-    """
-    census = enforcement_census()
-    problems: List[str] = []
-    skipped_cells, declared_cells = [], []
-    for (sid, dim), verdict in sorted(census.items(), key=lambda kv: kv[0][1]):
-        mod = dimension_modules()[dim]
-        fn = getattr(mod, "matrix_skip_precondition", None)
-        did_skip = bool(verdict.outcomes) and all(
-            o == "skipped" for o in verdict.outcomes)
-        if did_skip:
-            skipped_cells.append(f"{sid}/d{dim}")
-        if not callable(fn):
-            if did_skip:
-                problems.append(
-                    f"{sid}/d{dim}: the live run skipped this cell but "
-                    f"dimension {dim} exports no matrix_skip_precondition() — "
-                    f"a cell that declined to run must name the resource it "
-                    f"could not reach")
-            continue
-        says = (fn(sid) or "").strip()
-        if says:
-            declared_cells.append(f"{sid}/d{dim}")
-        if did_skip and not says:
-            problems.append(
-                f"{sid}/d{dim}: the live run skipped this cell "
-                f"({verdict.label}) but matrix_skip_precondition() returned "
-                f"{says!r} — an undeclared skip is silence, and silence is "
-                f"what the second axis exists to refuse")
-        if says and not did_skip:
-            problems.append(
-                f"{sid}/d{dim}: matrix_skip_precondition() claims this cell "
-                f"declines to run ({says!r}) but the live run reports "
-                f"{verdict.outcomes or ('<never observed>',)} — the module's "
-                f"account of its own silence is wrong in the direction that "
-                f"would let a real skip hide behind a standing excuse")
-    assert not problems, (
-        f"{len(problems)} skip-declaration problem(s) over {len(census)} "
-        f"cells (live-skipped {len(skipped_cells)}: {skipped_cells}; declared "
-        f"{len(declared_cells)}: {declared_cells}):\n  - "
-        + "\n  - ".join(problems))
-
-
 def test_na_cells_are_a_minority_and_are_named():
     """NA is a real state, not a bucket to sweep cells into.
 
@@ -2169,6 +2105,92 @@ def test_no_cell_is_counted_enforced_while_its_predicate_is_red():
             + "\n\nA cell in this list is counted as coverage and is not "
               "covering anything. Fix the predicate or waive it on the "
               "record; see matrix_63x8/README.md, 'The three-state rule'.")
+
+
+def test_every_skipping_cell_names_the_resource_it_could_not_reach():
+    """A ``-SKIPPED`` cell is DECLARED by its own module, live, in both
+    directions.
+
+    This is the guard that lets clause (3) of the test above stop banning the
+    call outright. The ban was a static, blunt "no skip anywhere"; this is a
+    live, per-cell equality between what the run DID and what the module SAYS
+    it would do, so a module cannot satisfy it with a constant:
+
+      * ``matrix_skip_precondition`` that always answers -> reddens on the
+        ~457 cells the run did not skip;
+      * one that never answers -> reddens on the ones it did;
+      * one that answers for the wrong cells -> reddens on both sides.
+
+    A dimension whose cells never skip does not need the function at all, and
+    is not asked for it — the requirement follows the observed behaviour, not
+    a list somebody has to remember to update.
+
+    MEASURED at the time of writing: 47 of 504 cells report ``skipped``, 46 in
+    dimension 3 and 1 in dimension 7, and both of those modules reach their
+    skip through ``corpus_root() is None`` — the published cells left this
+    repository (vibe-ic#1703) and no pointer to a clone was offered here.
+
+    IT SITS WITH THE OTHER CENSUS CONSUMERS, not beside the NA test whose
+    clause it discharges, because it reads :func:`enforcement_census` and the
+    first consumer of that pays for the nested outcome run — roughly two and a
+    half minutes that belongs in this section of the file rather than in the
+    middle of the static checks.
+
+    IT COSTS ~20 s, and where that goes is measured, not guessed: dimension
+    7's ``matrix_skip_precondition`` reaches ``G.findings_for``, whose first
+    call builds the AST index the whole module shares (20.5 s over the 63
+    cells; 19.7 s with the four conditions reordered cheapest-first, so the
+    reorder was measured and dropped).
+
+    ONE NEIGHBOUR IS FLAKY AND IT IS NOT THIS ONE.
+    ``test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress``
+    drives 12 child tests that each sleep exactly its 0.45 s forward-progress
+    stall bound, so on a busy host it is killed as hung. MEASURED here, that
+    test ALONE, ten runs per tree: 4/10 red on unmodified ``origin/main`` and
+    3/10 red on this branch. Whole-file runs correlate with the branch only
+    because the branch's file runs 18 s longer; the isolated rate is where the
+    attribution lives, and it says pre-existing. Do not charge it to a diff
+    without re-running it alone first.
+    """
+    census = enforcement_census()
+    problems: List[str] = []
+    skipped_cells, declared_cells = [], []
+    for (sid, dim), verdict in sorted(census.items(), key=lambda kv: kv[0][1]):
+        mod = dimension_modules()[dim]
+        fn = getattr(mod, "matrix_skip_precondition", None)
+        did_skip = bool(verdict.outcomes) and all(
+            o == "skipped" for o in verdict.outcomes)
+        if did_skip:
+            skipped_cells.append(f"{sid}/d{dim}")
+        if not callable(fn):
+            if did_skip:
+                problems.append(
+                    f"{sid}/d{dim}: the live run skipped this cell but "
+                    f"dimension {dim} exports no matrix_skip_precondition() — "
+                    f"a cell that declined to run must name the resource it "
+                    f"could not reach")
+            continue
+        says = (fn(sid) or "").strip()
+        if says:
+            declared_cells.append(f"{sid}/d{dim}")
+        if did_skip and not says:
+            problems.append(
+                f"{sid}/d{dim}: the live run skipped this cell "
+                f"({verdict.label}) but matrix_skip_precondition() returned "
+                f"{says!r} — an undeclared skip is silence, and silence is "
+                f"what the second axis exists to refuse")
+        if says and not did_skip:
+            problems.append(
+                f"{sid}/d{dim}: matrix_skip_precondition() claims this cell "
+                f"declines to run ({says!r}) but the live run reports "
+                f"{verdict.outcomes or ('<never observed>',)} — the module's "
+                f"account of its own silence is wrong in the direction that "
+                f"would let a real skip hide behind a standing excuse")
+    assert not problems, (
+        f"{len(problems)} skip-declaration problem(s) over {len(census)} "
+        f"cells (live-skipped {len(skipped_cells)}: {skipped_cells}; declared "
+        f"{len(declared_cells)}: {declared_cells}):\n  - "
+        + "\n  - ".join(problems))
 
 
 def test_the_enforcement_census_is_reported_for_humans(record_property):
