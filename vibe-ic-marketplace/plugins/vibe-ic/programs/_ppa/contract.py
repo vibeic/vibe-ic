@@ -81,7 +81,8 @@ __all__ = [
     "SEV_FAIL", "SEV_UNDETERMINED", "SEV_NOTE",
     "DEFAULT_AUTHORITY_ORDER", "POWER_BASIS_POLICIES",
     "build", "validate", "rc_from", "contract_digest_of", "load_json",
-    "format_findings", "marker_for",
+    "format_findings", "marker_for", "denominators",
+    "format_denominators",
     "finding",
 ]
 
@@ -774,3 +775,65 @@ def marker_for(rc: int) -> str:
     marker so a 2 can never be read as a silent skip.
     """
     return {0: "[PASS]", 1: "[REFUSE]", 2: "[CANNOT CHECK]"}.get(rc, "[ERROR]")
+
+def denominators(document: Mapping[str, Any]) -> Dict[str, int]:
+    """What the validator actually LOOKED AT, so "0 findings" says what it is.
+
+    A clean report over an empty document and a clean report over a full one
+    print the same `0`. This repository has a standing rule about that -- a
+    zero with no denominator beside it is indistinguishable from a check that
+    ran over nothing -- and a contract is exactly the kind of document that can
+    be trivially clean by being trivially empty.
+
+    Reported, never asserted on: how many metrics a contract SHOULD carry is
+    not this module's question, and inventing a floor here would be a threshold
+    in a module whose job is identity.
+    """
+    manifest = document.get("run_manifest", {}) or {}
+    evidence = document.get("evidence_manifest", {}) or {}
+    metrics = document.get("metrics", []) or []
+    ids = document.get("identities", {}) or {}
+    return {
+        "identities_measured": sum(
+            1 for k in ident.IDENTITY_KINDS
+            if (ids.get(k) or {}).get("status") == prov.MEASURED),
+        "identities_total": len(ident.IDENTITY_KINDS),
+        "artefacts_measured": sum(
+            1 for r in manifest.get("artefacts", []) or []
+            if r.get("status") == prov.MEASURED),
+        "artefacts_declared": len(manifest.get("artefacts", []) or []),
+        "evidence_artefacts": len(evidence.get("artefacts", []) or []),
+        "images": len(manifest.get("images", []) or []),
+        "images_verdict_bearing": sum(
+            1 for r in manifest.get("images", []) or []
+            if r.get("verdict_bearing")),
+        "declared_facts": len(document.get("declared_facts", []) or []),
+        "resolutions": len(document.get("resolutions", []) or []),
+        "candidate_mutations": len(
+            (document.get("candidate", {}) or {}).get("mutations", []) or []),
+        "metrics": len(metrics),
+        "metrics_value_bearing": sum(
+            1 for m in metrics if m.get("status") in _VALUE_BEARING_STATUSES),
+        "metrics_power": sum(
+            1 for m in metrics
+            if str(m.get("metric", "")).startswith("power.")),
+    }
+
+
+def format_denominators(counts: Mapping[str, int]) -> List[str]:
+    """The disclosure lines that go beside a verdict."""
+    return [
+        f"   examined: {counts['identities_measured']}/"
+        f"{counts['identities_total']} identities MEASURED, "
+        f"{counts['artefacts_measured']}/{counts['artefacts_declared']} "
+        f"declared artefacts hashed, {counts['evidence_artefacts']} in the "
+        f"evidence manifest",
+        f"   examined: {counts['images']} image(s) "
+        f"({counts['images_verdict_bearing']} verdict-bearing), "
+        f"{counts['declared_facts']} declared fact(s), "
+        f"{counts['resolutions']} authority resolution(s), "
+        f"{counts['candidate_mutations']} candidate mutation(s)",
+        f"   examined: {counts['metrics']} metric(s), "
+        f"{counts['metrics_value_bearing']} carrying a value, "
+        f"{counts['metrics_power']} of them power",
+    ]

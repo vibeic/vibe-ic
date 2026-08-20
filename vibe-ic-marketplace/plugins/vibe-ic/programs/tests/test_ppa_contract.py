@@ -899,3 +899,52 @@ def test_two_runs_that_declared_nothing_are_not_reported_comparable(tmp_path):
         f"comparable (rc={verdict.returncode})\n{verdict.stdout}\n"
         f"{verdict.stderr}")
     assert "PPA-C-007" in codes(verdict)
+
+
+def test_a_clean_verdict_discloses_what_it_examined(tmp_path):
+    """`0 finding(s)` over an empty contract and over a full one print the same
+    zero, and only the denominator tells them apart. A contract is exactly the
+    document that can be trivially clean by being trivially empty."""
+    build_contract(tmp_path, base_declaration())
+    checked = run_cli(CHECK, "--contract", str(tmp_path / "contract.json"),
+                      "--json", str(tmp_path / "report.json"))
+    assert checked.returncode == 0, checked.stderr
+    text = checked.stdout
+    assert "5/5 identities MEASURED" in text, text
+    assert "4/4 declared artefacts hashed" in text, text
+    assert "1 image(s) (1 verdict-bearing)" in text, text
+    assert "1 metric(s), 1 carrying a value, 0 of them power" in text, text
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert report["examined"]["identities_measured"] == 5
+    assert report["examined"]["artefacts_declared"] == 4
+
+
+def test_the_disclosure_moves_with_the_document(tmp_path):
+    """A denominator that never changes is decoration. This is the positive
+    control for the disclosure itself: add a metric and an artefact and the
+    printed counts must follow."""
+    decl = base_declaration()
+    decl["analysis"]["artefacts"].append(
+        {"role": "sta_hold", "path": "sta/setup.rpt"})
+    decl["metrics"].append({
+        "schema": "vibeic.ppa.metric.v1", "metric": "power.total_mw",
+        "status": "MEASURED", "value": 1.2, "unit": "mW",
+        "scope": {"activity_basis": "vcd"},
+        "source": {"path": "sta/setup.rpt"}})
+    build_contract(tmp_path, decl, name="fuller.json")
+    checked = run_cli(CHECK, "--contract", str(tmp_path / "fuller.json"))
+    assert checked.returncode == 0, checked.stderr
+    assert "5/5 declared artefacts hashed" in checked.stdout, checked.stdout
+    assert "2 metric(s), 2 carrying a value, 1 of them power" in checked.stdout
+
+
+def test_the_disclosure_is_printed_on_a_refusal_too(tmp_path):
+    """A reader triaging a red verdict needs the denominator most: it is how
+    they tell 'one bad row out of forty' from 'the only row there was'."""
+    decl = base_declaration()
+    decl["toolchain"]["images"][0]["ref"] = "ghcr.io/vibeic-test/img:latest"
+    build_contract(tmp_path, decl, name="red.json")
+    checked = run_cli(CHECK, "--contract", str(tmp_path / "red.json"))
+    assert checked.returncode != 0
+    assert "examined:" in checked.stderr, checked.stderr

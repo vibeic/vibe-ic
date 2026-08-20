@@ -189,17 +189,21 @@ def main(argv=None) -> int:
             "contract": str(args.contract),
             "contract_digest": document.get("contract_digest"),
             "rc": rc,
+            "examined": C.denominators(document),
             "findings": findings,
         }, indent=2) + "\n")
 
+    counts = C.denominators(document)
     stream = sys.stdout if rc == 0 else sys.stderr
     print(f"{C.marker_for(rc)} ppa_contract_check: {args.contract} — "
           f"{len(findings)} finding(s)", file=stream)
     for line in C.format_findings(findings):
         print(line, file=stream)
-    if rc == 0:
-        print("   problem, implementation, analysis, toolchain and agent "
-              "identities are all MEASURED and internally consistent.")
+    # Always, and on BOTH streams' verdicts: a `0 finding(s)` over an empty
+    # contract and one over a full contract print the same zero, and only the
+    # denominator tells them apart.
+    for line in C.format_denominators(counts):
+        print(line, file=stream)
     return rc
 
 
