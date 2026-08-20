@@ -193,3 +193,88 @@ def test_the_project_reference_is_the_design_and_not_a_report(tmp_path):
         "a name planted in a REPORT was accepted as one of this project's own "
         "design names; the comparison would then have both sides under the "
         "attacker's control")
+
+
+# ===========================================================================
+# THE netgen DIALECT, AND THE TRAP IT SETS
+# ===========================================================================
+# netgen compares bottom-up: every standard cell gets a "Device classes X and X
+# are equivalent." line before the design gets one. Taking ALL of them enrols
+# the whole cell library, and a project whose tree does not also carry the
+# library's Verilog is then declared foreign to its own PDK. Only the LAST line
+# — the top-level comparison, immediately above "Final result:" — is the design.
+#
+# Measured on the published cell and its donor, in both `lvs.rpt` and
+# `lvs_power_aware.rpt`: last line is `chip_top` for the cell and `sha256` for
+# the donor, in all four files.
+def _lvs_project(root: Path, rtl_top: str, report_top: str) -> Path:
+    (root / "rtl").mkdir(parents=True, exist_ok=True)
+    (root / "rtl" / f"{rtl_top}.v").write_text(
+        f"module {rtl_top} (input wire clk, output wire q);\n"
+        f"  assign q = clk;\nendmodule\n", encoding="utf-8")
+    rep = root / "reports" / "phase3"
+    rep.mkdir(parents=True, exist_ok=True)
+    lines = ["Netgen 1.5.240 LVS comparison", ""]
+    # Twelve library cells the RTL above does NOT declare. They are the trap:
+    # if the dialect took every match, each of these would read as a foreign
+    # design and the own-design arm below would fail. They also pad the report
+    # past MIN_REPORT_BYTES["lvs"] (1536).
+    for i in range(12):
+        c = f"libcell_variant_{i:02d}_x1"
+        lines += ["Subcircuit pins:", f"Circuit 1: {c} |Circuit 2: {c}",
+                  "Cell pin lists are equivalent.",
+                  f"Device classes {c} and {c} are equivalent.", ""]
+    lines += ["Subcircuit pins:",
+              f"Circuit 1: {report_top} |Circuit 2: {report_top}",
+              "Cell pin lists are equivalent.",
+              f"Device classes {report_top} and {report_top} are equivalent.",
+              "", "Final result: Circuits match uniquely.", "."]
+    (rep / "lvs.rpt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return root
+
+
+def _lvs_audit(project: Path) -> dict:
+    r = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "lvs_report_check.py"), "."],
+        cwd=str(project), capture_output=True, text=True, timeout=_CLI_BOUND_S)
+    try:
+        doc = json.loads(r.stdout)
+    except ValueError:
+        doc = {"program": "unparseable", "stdout": r.stdout, "stderr": r.stderr}
+    doc["rc"] = r.returncode
+    return doc
+
+
+def test_netgen_the_library_cells_are_not_enrolled_as_designs(tmp_path):
+    """The discriminating twin AND the trap, in one arm.
+
+    Twelve cell names appear in the report and in no Verilog in the tree. If
+    any of them counted, this passes for the wrong reason — or rather, fails,
+    which is how the `Circuit N:` variant of this dialect was caught.
+    """
+    got = _lvs_audit(_lvs_project(tmp_path / "own", "my_top", "my_top"))
+    assert got["rc"] == 0, (
+        f"an LVS report about THIS design was refused. If the finding names a "
+        f"libcell_variant_*, the dialect is reading sub-circuit comparisons as "
+        f"design declarations:\n{json.dumps(got, indent=2)}")
+    assert got["summary"]["design_binding"] is True
+
+
+def test_netgen_a_foreign_top_level_circuit_is_refused(tmp_path):
+    """THE FINDING for lvs. Same twelve library cells, top-level name changed."""
+    got = _lvs_audit(
+        _lvs_project(tmp_path / "foreign", "my_top", "someone_elses_chip"))
+    assert got["rc"] == 1, (
+        f"lvs_report_check accepted a netgen report whose top-level comparison "
+        f"is someone_elses_chip:\n{json.dumps(got, indent=2)}")
+    rules = [f["rule"] for f in got["findings"]]
+    assert "LVS_REPORT_IS_ABOUT_ANOTHER_DESIGN" in rules, rules
+
+
+def test_netgen_only_the_last_device_class_line_is_the_design():
+    """Stated on the extractor directly, so the rule cannot drift silently."""
+    text = ("Device classes cell_a and cell_a are equivalent.\n"
+            "Device classes cell_b and cell_b are equivalent.\n"
+            "Device classes the_design and the_design are equivalent.\n"
+            "Final result: Circuits match uniquely.\n")
+    assert E._report_declared_designs(text) == {"the_design"}
