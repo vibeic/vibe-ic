@@ -876,3 +876,85 @@ def test_every_axis_declares_its_measurement_scale():
     error rather than a rendering."""
     assert set(B.AXIS_SCALE) == set(B.AXES)
     assert set(B.AXIS_SCALE.values()) <= {"ratio", "interval"}
+
+
+# ---------------------------------------------------------------------------
+# ONE ANSWER PER QUESTION -- the fact with two homes
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("field,value", [
+    ("pdk", "A_DIFFERENT_PDK"),
+    ("clock_target_ns", 5.0),
+    ("spec_sha256", "b" * 64),
+    ("corners", ["c_typ"]),
+])
+def test_a_record_that_states_one_problem_twice_and_differently_is_refused(
+        tmp_path, field, value):
+    """`design` and `contract.body` both name the PDK, the clock target, the
+    spec digest and the corner set. Where a fact has two homes and two values it
+    is believed according to which one the reader opened, and this repository
+    has paid for that shape before.
+
+    Note what this does NOT catch and why it still matters: BOTH arms are
+    mutated identically here, so C1 (which compares arms to each other) is
+    satisfied and F1 (which compares contract hashes) is satisfied. The
+    contradiction is INSIDE one arm, and only a within-arm check sees it."""
+    doc = clean()
+    for arm in doc["arms"]:
+        arm["contract"]["body"] = dict(_CONTRACT_BODY, **{field: value})
+        arm["contract"]["sha256"] = cj.digest_of(arm["contract"]["body"])
+    assert C.check_same_problem(doc["arms"])       # C1 still satisfied
+    rc, rep = run(tmp_path, doc)
+    assert rc == C.RC_REFUSED, rep
+    assert code_of(rep) == "CONTRACT_CONTRADICTS_DESIGN"
+    assert field in rep["refusal"]["message"]
+
+
+def test_a_contract_RICHER_than_design_is_not_penalised_for_being_richer(
+        tmp_path):
+    """The differential half. The check is over the INTERSECTION of the two, so
+    a contract that pins more than `design` does -- which is the whole reason
+    the hash exists -- passes. A rule that demanded they be equal would forbid
+    the extra keys that make F1 stronger than C1."""
+    body = clean()["arms"][0]["contract"]["body"]
+    assert "floorplan" in body and "floorplan" not in _DESIGN
+    rc, rep = run(tmp_path, clean())
+    assert rc == C.RC_OK, rep
+
+
+def test_corner_ORDER_does_not_make_the_contract_contradict_the_design(
+        tmp_path):
+    """A corner SET, in both places. Refusing on order would be a false
+    positive, and a check that fires on legitimate records is worse than no
+    check."""
+    doc = clean()
+    for arm in doc["arms"]:
+        arm["contract"]["body"] = dict(_CONTRACT_BODY, corners=["c_typ", "c_slow"])
+        arm["contract"]["sha256"] = cj.digest_of(arm["contract"]["body"])
+    rc, rep = run(tmp_path, doc)
+    assert rc == C.RC_OK, rep
+
+
+def test_VACUOUS_an_EMPTY_contract_body_does_not_satisfy_the_identity_check(
+        tmp_path):
+    """Two empty contracts hash identically. Without this, the strongest
+    condition in v2 is satisfied by a document that identifies no problem --
+    the same degenerate move `REQUIRED_SCOPE` blocks one layer down."""
+    doc = clean()
+    for arm in doc["arms"]:
+        arm["contract"] = {"sha256": cj.digest_of({}), "body": {}}
+    assert (doc["arms"][0]["contract"]["sha256"]
+            == doc["arms"][1]["contract"]["sha256"]), "equal, and useless"
+    rc, rep = run(tmp_path, doc)
+    assert rc == C.RC_UNDETERMINED, rep
+    assert code_of(rep) == "CONTRACT_VACUOUS"
+    assert "[CANNOT CHECK]" in C.format_report(rc, rep)
+
+
+def test_the_two_vocabularies_are_ONE_vocabulary():
+    """`PROBLEM_FIELDS` is defined once and bound in the CLI. Two copies of a
+    vocabulary is how one of them silently stops matching -- and here the two
+    copies would decide DIFFERENT things (which fields C1 compares between arms,
+    and which fields the contract must agree with inside an arm)."""
+    assert C.PROBLEM_FIELDS is B.PROBLEM_FIELDS
+    assert C.AXES is B.AXES
+    assert C.Refusal is B.Refusal

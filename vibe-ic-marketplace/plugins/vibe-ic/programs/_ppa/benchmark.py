@@ -88,6 +88,7 @@ __all__ = [
     "SCHEMA_V1", "SCHEMA_V2", "AXES",
     "Refusal",
     "record_schema", "axis_scope", "axis_value",
+    "PROBLEM_FIELDS",
     "check_contract_identity", "check_scope_parity", "check_stage_basis_agreement",
     "check_feasibility", "check_tuning_parity",
     "derive_feasibility", "pareto_relation", "score",
@@ -196,6 +197,10 @@ REQUIRED_SCOPE: Dict[str, Tuple[str, ...]] = {
     "power_mw": ("stage", "mode", "process", "voltage_v", "temperature_c",
                  "activity_basis"),
 }
+
+#: The identity of the PROBLEM as the v1 refusal names it. Compared as opaque
+#: values and never interpreted, which is what keeps this PDK-agnostic.
+PROBLEM_FIELDS = ("spec_sha256", "pdk", "clock_target_ns", "corners")
 
 #: A number may enter a numeric comparison only from this status.
 #: `docs/PPA_INTERFACES.md` section 2 lists the other five and why each is out.
@@ -318,6 +323,17 @@ def check_contract_identity(arms: Sequence[Mapping[str, Any]]) -> str:
                 RC_UNDETERMINED)
         body = contract.get("body")
         if isinstance(body, Mapping):
+            if not body:
+                # The same argument REQUIRED_SCOPE makes one layer down: both
+                # arms declaring NOTHING must not satisfy an equality check.
+                # Two empty contracts hash identically and say nothing, and an
+                # identity that carries no content identifies no problem.
+                raise Refusal(
+                    "CONTRACT_VACUOUS",
+                    f"arm {a.get('flow')!r} carries an EMPTY contract body. "
+                    "Two empty contracts hash identically, so this would "
+                    "satisfy the identity check while identifying no problem.",
+                    RC_UNDETERMINED)
             recomputed = canonical_json.digest_of(body)
             if recomputed != declared:
                 raise Refusal(
@@ -327,6 +343,33 @@ def check_contract_identity(arms: Sequence[Mapping[str, Any]]) -> str:
                     f"record canonicalises to {recomputed!r}. A document whose "
                     "stated identity is not its identity cannot anchor a "
                     "comparison to anything.")
+            # ONE ANSWER PER QUESTION. `design` and the contract body both name
+            # the PDK, the clock target, the spec digest and the corner set, and
+            # this repository has paid before for a fact with two homes and two
+            # values -- the reader believes whichever they opened. Where both
+            # declare a field it must be the same field, and the check is over
+            # the INTERSECTION so that a contract legitimately richer than
+            # `design` is not penalised for being richer.
+            design = a.get("design") or {}
+            clashing = {}
+            for field in PROBLEM_FIELDS:
+                if field not in design or field not in body:
+                    continue
+                d, c = design[field], body[field]
+                same = (sorted(d) == sorted(c)
+                        if field == "corners" and isinstance(d, list)
+                        and isinstance(c, list) else d == c)
+                if not same:
+                    clashing[field] = (d, c)
+            if clashing:
+                raise Refusal(
+                    "CONTRACT_CONTRADICTS_DESIGN",
+                    f"arm {a.get('flow')!r} states one problem twice and "
+                    "differently: "
+                    + "; ".join(f"design.{f}={d!r} vs contract.body.{f}={c!r}"
+                                for f, (d, c) in sorted(clashing.items()))
+                    + ". A fact with two homes and two values is believed "
+                      "according to which one the reader opened.")
         digests.append((str(a.get("flow")), declared))
     distinct = sorted({d for _, d in digests})
     if len(distinct) > 1:

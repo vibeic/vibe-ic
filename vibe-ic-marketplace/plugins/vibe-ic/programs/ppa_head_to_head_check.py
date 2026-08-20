@@ -199,7 +199,10 @@ COLLAPSED_SCALAR_FIELDS = ("score", "ppa_score", "overall", "figure_of_merit",
 
 #: The identity of the PROBLEM. Two arms disagreeing on any of these are not
 #: running the same problem. Compared as opaque values; never interpreted.
-PROBLEM_FIELDS = ("spec_sha256", "pdk", "clock_target_ns", "corners")
+#: Defined once in `_ppa/benchmark.py` and bound here, because the v2 condition
+#: that checks `design` against the contract body compares the SAME list -- and
+#: two copies of a vocabulary is how one of them silently stops matching.
+PROBLEM_FIELDS = _bench.PROBLEM_FIELDS
 
 MEASUREMENT_BASES = ("signed_off_gds", "post_route_sta", "silicon")
 
