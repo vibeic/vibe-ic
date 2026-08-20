@@ -700,8 +700,15 @@ def test_output_entries_classify_into_the_four_kinds():
     # applied to the last number in this comment block is only correct when
     # nothing landed in between, and this file has now been wrong that way
     # twice.
-    assert sum(seen.values()) == 160, seen
-    assert seen[F.FILE] == 118
+    #
+    # 2026-08-20: 160 -> 161, FILE 118 -> 119, one entry, and it is this
+    # branch's own — step 31's `reports/phase3/drc_signoff.json`, declared to
+    # close the dimension-7 W1 finding `general_precheck` opened when it began
+    # delegating its Magic-DRC rung to that report. GLOB and ANY_OF untouched.
+    # MEASURED on this tree by the same sweep the block above describes, after
+    # the yaml edit and not derived from it.
+    assert sum(seen.values()) == 161, seen
+    assert seen[F.FILE] == 119
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

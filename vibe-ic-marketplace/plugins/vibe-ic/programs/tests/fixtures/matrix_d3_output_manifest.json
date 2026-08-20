@@ -1095,6 +1095,14 @@
           "alternative": "reports/phase3/lvs_verdict.json",
           "path": "reports/phase3/lvs_verdict.json",
           "size_bytes": 1131
+        },
+        "reports/phase3/drc_signoff.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "declared 2026-08-20 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31 — the same finding, the same reader and the same remedy as step 21's reports/phase3/drc_router.json, which the commit that introduced the reader (v1.11.4, general_precheck) fixed there and missed here. Like lvs_verdict.json above and unlike magic_illegal_overlap.json, this one IS evidenced: recorded against the run root and byte size it was MEASURED at, and spm/v1.10.18_sky130A carries it too (2142 B), both git-tracked. MEASURED CONSEQUENCE, which is the whole reason to state it: with a corpus supplied, step 31's message goes from 'declares 7 required_outputs; 1 are NOT produced' to 'declares 8 required_outputs; 1 are NOT produced' — the same one, magic_illegal_overlap.json — so this declaration resolves live and costs dimension 3 nothing. STATED BECAUSE IT LIMITS THE RECORD: corpus commit bcf2f94 subsequently WITHDREW all four published cells, so `git ls-tree -r bcf2f94 | grep -c drc_signoff.json` is 0. This entry therefore names a run that a host pointed at the corpus HEAD cannot consult. It cannot manufacture a green anywhere reachable — that host fails collection on the empty-corpus refusal, and a host with no corpus skips the cell — but it is a record of what was published at 0bcbca2, not a claim about the corpus today.",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/drc_signoff.json",
+          "path": "reports/phase3/drc_signoff.json",
+          "size_bytes": 1919
         }
       }
     },

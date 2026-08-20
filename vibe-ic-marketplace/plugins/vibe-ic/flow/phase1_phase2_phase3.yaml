@@ -4372,6 +4372,39 @@ steps:
       # three published spm cells carry it tracked and non-empty (944-1131 B),
       # so declaring it closes the d7 finding and costs dimension 3 nothing.
       - "reports/phase3/lvs_verdict.json"
+      # DECLARED because it became LOAD-BEARING, and D7 is what noticed — the
+      # SAME finding, the SAME reader and the SAME remedy as step 21's
+      # `reports/phase3/drc_router.json` above, which is spelled out at that
+      # entry: "The remedy for a load-bearing artefact a step does not declare
+      # is to DECLARE it — not to stop reading it, and not to waive the
+      # dimension that caught it."
+      #
+      # `drc_report_check` has always written this JSON here — the `--signoff`
+      # gate clause below names it with
+      # `--json reports/phase3/drc_signoff.json` — but nothing outside step 31
+      # read it, so an undeclared output stayed latent. `general_precheck`
+      # (v1.11.4) delegates its Magic-DRC rung to exactly this report
+      # (`general_precheck.py`, the `Checker.MagicDRC` Step, rung 10 of 11)
+      # and the moment it did,
+      # `test_d7_required_outputs_list_is_complete[step31]` went red with
+      #   [W1:gate_output_read_elsewhere] 'reports/phase3/drc_signoff.json'
+      #   (written by drc_report_check; read by program:general_precheck)
+      #
+      # THE COMMIT THAT INTRODUCED THE READER FIXED THE OTHER THREE AND MISSED
+      # THIS ONE. `general_precheck` delegates four rungs to gate-written
+      # reports; measured on this tree:
+      #   drc_router.json      gate-designated, DECLARED on step 21   (fixed)
+      #   antenna_signoff.json gate-designated, DECLARED on step 26   (already)
+      #   density_signoff.json NOT gate-designated, so W1 cannot apply
+      #   drc_signoff.json     gate-designated, DECLARED NOWHERE      <- this
+      #
+      # EVIDENCE, stated rather than implied: like magic_illegal_overlap.json
+      # above and unlike lvs_verdict.json, this one is NOT evidenced. No run
+      # root this repository may consult carries the path, so its dimension-3
+      # manifest entry is UNPROVEN, not PRODUCED_BY_RUN. Declaring it closes a
+      # load-bearing d7 gap and pays that d3 cost openly — the same trade, on
+      # the same step, recorded the same way.
+      - "reports/phase3/drc_signoff.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.
