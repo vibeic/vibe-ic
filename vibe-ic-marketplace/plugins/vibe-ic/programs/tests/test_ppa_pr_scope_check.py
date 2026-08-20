@@ -676,3 +676,75 @@ class TestExitCodes:
             rows = [{"question": i, "status": s}
                     for i, s in enumerate(statuses, 1)]
             assert mod.verdict_of({"questions": rows}) == expected
+
+
+# --------------------------------------------------------------------------
+# A refusal has to be recordable, not only printable.
+# --------------------------------------------------------------------------
+class TestRefusalIsRecorded:
+    def test_a_refusal_writes_a_report_that_says_it_refused(
+            self, tmp_path, capsys):
+        """'No report was written' cannot be told apart from a crash, and the
+        two need different responses. A refusal writes its own document."""
+        out = tmp_path / "r.json"
+        rc = mod.main(["--repo", str(tmp_path),
+                       "--changed-file", str(tmp_path / "nope.txt"),
+                       "--json", str(out)])
+        capsys.readouterr()
+        assert rc == mod.RC_UNDETERMINED
+        doc = json.loads(out.read_text(encoding="utf-8"))
+        assert doc["verdict"] == "UNDETERMINED"
+        assert doc["rc"] == 2
+        assert doc["refusal"]["code"] == "CHANGE_SET_MISSING"
+        assert doc["questions"] == []
+
+    def test_a_refusal_document_is_never_mistakable_for_a_verdict(
+            self, tmp_path, capsys):
+        """It carries no question rows at all, so a consumer that counts
+        satisfied questions counts zero rather than inheriting a stale set."""
+        out = tmp_path / "r.json"
+        mod.main(["--repo", str(tmp_path),
+                  "--changed-file", str(tmp_path / "nope.txt"),
+                  "--json", str(out)])
+        capsys.readouterr()
+        doc = json.loads(out.read_text(encoding="utf-8"))
+        assert doc["schema"] == mod.REPORT_SCHEMA
+        assert "summary" not in doc
+        assert doc["digest"].startswith("sha256:")
+
+
+class TestChangeSetChannels:
+    def test_the_repository_change_set_env_var_is_honoured(
+            self, tmp_path, monkeypatch, capsys):
+        """`GATEKEEPER_CHANGED_PATHS` is the channel `tools/ci/_gate_dispatch.sh`
+        already uses. Reading it means this gate needs no new plumbing to join
+        the dispatcher."""
+        cf = tmp_path / "changed.txt"
+        cf.write_text(DOC + "\n", encoding="utf-8")
+        out = tmp_path / "r.json"
+        monkeypatch.setenv("GATEKEEPER_CHANGED_PATHS", str(cf))
+        rc = mod.main(["--repo", str(tmp_path), "--json", str(out)])
+        capsys.readouterr()
+        report = json.loads(out.read_text(encoding="utf-8"))
+        assert report["change_set"]["path_count"] == 1
+        assert rc in (mod.RC_FAIL, mod.RC_UNDETERMINED)
+
+    def test_an_env_var_naming_a_file_that_is_not_there_refuses(
+            self, tmp_path, monkeypatch, capsys):
+        """The fallback must not become a way to be checked by nothing."""
+        monkeypatch.setenv("GATEKEEPER_CHANGED_PATHS", str(tmp_path / "gone.txt"))
+        rc = mod.main(["--repo", str(tmp_path)])
+        assert rc == mod.RC_UNDETERMINED
+        assert "[CANNOT CHECK]" in capsys.readouterr().err
+
+    def test_an_explicit_flag_beats_the_environment(
+            self, tmp_path, monkeypatch, capsys):
+        cf = tmp_path / "explicit.txt"
+        cf.write_text(DOC + "\n", encoding="utf-8")
+        monkeypatch.setenv("GATEKEEPER_CHANGED_PATHS", str(tmp_path / "gone.txt"))
+        out = tmp_path / "r.json"
+        mod.main(["--repo", str(tmp_path), "--changed-file", str(cf),
+                  "--json", str(out)])
+        capsys.readouterr()
+        report = json.loads(out.read_text(encoding="utf-8"))
+        assert report["change_set"]["path_count"] == 1

@@ -92,6 +92,28 @@ their scope tokens and their minimum evidence kinds. Editing a question is a
 data change. The `v1` in the filename is the schema version: once something has
 hashed against it, a change is a `v2` file, never an edit.
 
+THE ANSWERS DOCUMENT
+===================
+    {
+      "schema": "vibeic.ppa.pr_answers.v1",
+      "declared_scope": ["casebook"],          optional; may only ADD questions
+      "answers": [
+        {"question": 3,
+         "evidence": [{"kind": "artefact", "ref": "phase3/sta.rpt",
+                       "sha256": "sha256:..."}]},
+        {"question": 11,
+         "evidence": [{"kind": "test",
+                       "ref": "programs/tests/test_x.py::test_negative"}]},
+        {"question": 1,
+         "evidence": [{"kind": "path", "ref": "programs/x.py"},
+                      {"kind": "prose", "text": "context, never an answer"}]}
+      ]
+    }
+
+An `"applicability": "N/A"` key is ACCEPTED in an answer and then REFUSED if the
+detector disagrees, rather than rejected as malformed — the author is allowed to
+state their belief, and the report is where the disagreement is recorded.
+
 Usage:
     ppa_pr_scope_check.py --base <ref> --head <ref> --answers <answers.json>
     ppa_pr_scope_check.py --changed-file <paths.txt> [--diff-file <diff>] ...
@@ -103,6 +125,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1112,13 +1135,37 @@ def _source_reader(repo: Path, head_ref: Optional[str]) -> Any:
     return read
 
 
-def _refuse(code: str, detail: str) -> int:
+def _refuse(code: str, detail: str, json_path: Optional[str] = None) -> int:
+    """Say, on stderr AND in the report, that the merge condition was not judged.
+
+    The document matters as much as the message. A consumer that only ever sees
+    "no report was written" cannot tell a refusal from a crash, and the two need
+    different responses. So a refusal writes a report of its own, carrying the
+    same machine code that was printed, and `verdict: UNDETERMINED` — never an
+    absent file that a reader is left to interpret.
+    """
     print(f"[CANNOT CHECK] {GATE_NAME}: {detail}", file=sys.stderr)
     if _vx is not None:
         _vx.announce_vacuous(GATE_NAME, code)
     else:                                                     # pragma: no cover
         print(f"VACUOUS_PASS: {GATE_NAME} examined nothing (reason: {code})",
               file=sys.stderr)
+    if json_path:
+        doc = {
+            "schema": REPORT_SCHEMA,
+            "gate": GATE_NAME,
+            "verdict": "UNDETERMINED",
+            "rc": RC_UNDETERMINED,
+            "refusal": {"code": code, "detail": detail},
+            "questions": [],
+            "note": "The merge condition was NOT evaluated. This document "
+                    "records a refusal to judge, which is not a pass and not "
+                    "a finding.",
+        }
+        doc["digest"] = digest_of(doc)
+        out = Path(json_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(out, doc, indent=2)
     return RC_UNDETERMINED
 
 
@@ -1147,8 +1194,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", default=None, help="write the report JSON here")
     args = ap.parse_args(argv)
 
+    # `GATEKEEPER_CHANGED_PATHS` is this repository's existing change-set
+    # channel (`tools/ci/_gate_dispatch.sh`, `tools/ci/test_gate_scope.sh`).
+    # Honouring it means a gate added to the dispatcher needs no new plumbing.
+    # It is a FALLBACK, never an override: an explicit flag always wins, and a
+    # value that names a file which is not there is a refusal, not a skip.
     if not args.changed_file and not (args.base and args.head):
-        ap.error("supply either --base and --head, or --changed-file")
+        env_paths = os.environ.get("GATEKEEPER_CHANGED_PATHS", "").strip()
+        if env_paths:
+            args.changed_file = env_paths
+    if not args.changed_file and not (args.base and args.head):
+        ap.error("supply either --base and --head, or --changed-file "
+                 "(or set GATEKEEPER_CHANGED_PATHS)")
 
     repo = Path(args.repo).resolve() if args.repo else \
         _find_repo_root(Path(__file__).resolve().parent)
@@ -1182,7 +1239,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif args.base and args.head:
             diff_text = diff_text_from_git(repo, args.base, args.head)
     except _Refusal as exc:
-        return _refuse(exc.code, exc.detail)
+        return _refuse(exc.code, exc.detail, args.json)
 
     content_arm_ran = diff_text is not None
     path_hits = detect_path_surfaces(paths)
