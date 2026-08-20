@@ -2943,33 +2943,99 @@ steps:
     name: "Pad Ring (chip/IC path only)"
     stage: stage3
     condition:
-      files_exist: ["input/submission_template/slots/*.yaml"]
+      # THE CHIP PATH, NOT THE SHUTTLE TEMPLATE — and the difference is the
+      # whole of vibe-ic#1410/cpath. This condition used to read
+      # `files_exist: [input/submission_template/slots/*.yaml]`, which is the
+      # SHUTTLE OPERATOR'S template. A chip doing its own tape-out has no
+      # operator and therefore no such file, so this step was skipped as "not
+      # applicable" and the design shipped WITH NO PAD RING. A chip with no
+      # pads cannot be bonded or probed. That is not a property of being on a
+      # shuttle; it is a property of being a DIE. The operator's template
+      # supplies the GEOMETRY this step needs, so its absence must change
+      # WHERE the geometry comes from and never WHETHER the step runs.
+      #
+      # `any_of`, not the default ALL-of, and the two entries are the SAME
+      # chip-path marker step 37.5ic already carries: they are MUTUALLY
+      # EXCLUSIVE router files and no tree ever holds both
+      # (`tapeout_declaration_check` refuses the tree that does), so an ALL-of
+      # reading would make this step unreachable for every design.
+      any_of: true
+      files_exist:
+        - "input/submission_template/slots/*.yaml"
+        - "input/submission_template/SELF_TAPEOUT.txt"
     # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
     # condition tests WHICH PATH the design is on, and step 0.5ic's
-    # required_outputs is the OR of exactly these two artefacts, so on any run
-    # where 0.5ic itself passed, precisely one of them exists. A chip
-    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
-    # seal ring or shuttle precheck — a silent skip is the correct reading. The
-    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
-    # having run, which its own gate refuses as NEVER_LOOKED rather than
-    # leaving to be inferred from a downstream skip. Stated rather than left to
-    # the default so the reading is the step's, not the consumer's fallback.
+    # required_outputs is the OR of exactly the three router artefacts, so on
+    # any run where 0.5ic itself passed, precisely one of them exists. The two
+    # named above are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the
+    # IP/hardmacro terminal 37.5ip owns, and an IP is delivered as a hardmacro
+    # somebody else places — it has no die edge, so no pad ring — a silent skip
+    # is the correct reading. The "someone forgot" case is NOT lost to this
+    # default: it is 0.5ic never having run, which its own gate refuses as
+    # NEVER_LOOKED rather than leaving to be inferred from a downstream skip.
+    # Stated rather than left to the default so the reading is the step's, not
+    # the consumer's fallback.
     condition_kind: design_dependent
     required_inputs:
       - from: 15
         path: "phase3/stage3/pnr/floorplan.def"
+      # WHERE THE GEOMETRY COMES FROM WHEN THERE IS NO OPERATOR. 0.5ic writes
+      # this declaration on EVERY route, including the one with no operator, so
+      # it exists wherever this step runs. Its section 2B is
+      # `_pad_ring.REQUIRED_VARS` grouped into the 8 things a human decides,
+      # and `_tapeout_declaration.py` names `pad_ring_gen` as the `consumer` of
+      # every one of those 8. Until this edge, nothing read them.
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
     # BEFORE ROUTING, NOT AFTER. The pads are the design's BTerms once a pad
     # ring exists, so routing must already see them. OpenROAD places its pad
     # ring immediately after the power connections are set, for the same
     # reason, and LibreLane's Chip flow then deletes IOPlacement outright:
     # "No pin placement necessary -> pads are the BTerms".
     programs:
+      # THE AUTHOR OF THIS STEP'S OWN INPUT, and it did not exist until
+      # vibe-ic#1410/cpath. `pad_ring_gen` reads
+      # `phase3/stage3/pnr/pad_assignment.json`; measured by grep over the
+      # whole repository, that path had TWO references and both were readers.
+      # Nothing wrote it, so `pad_ring_gen` took its SKIP branch on the shuttle
+      # path and on the self-tape-out path alike — a step that can only skip is
+      # not a step. `pad_assignment_gen` composes the config from the
+      # operator's slot geometry WHERE THE SLOT SPEAKS and from the design's own
+      # tape-out declaration everywhere else, derives nothing, and stamps every
+      # variable with which source it came from.
+      - pad_assignment_gen
       - pad_ring_gen
     required_outputs:
       - "phase3/stage3/pnr/padring.def"
       - "reports/phase3/padring.json"
+      # THE HONEST HALF, and unlike `padring.def` it is written on EVERY path
+      # this step takes — including the two that produce no ring. A run that
+      # was never asked for a pin-out and a run whose declaration is half
+      # written are different facts, and this is the artefact that keeps them
+      # apart where a reader can see them.
+      - "reports/phase3/pad_assignment.json"
     gate:
-      program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
+      all_of:
+        # FIRST, because it is the one that can say WHY there is no ring.
+        # Its three outcomes are the three states this step actually has:
+        #   rc 0  every one of the 13 variables resolved from a declared source
+        #   rc 2  NOT_ASKED — no slot pins a per-side pad list and section 2B
+        #         of the declaration is entirely NOT_DETERMINED. The flow reads
+        #         rc=2 as its disclosed-skip tier, which is the correct reading:
+        #         nobody was asked, `pad_assignment.json` is deliberately NOT
+        #         written, and `pad_ring_gen`'s own SKIP is left exactly as it
+        #         is today. This is the state every tree in this repository is
+        #         in, so wiring this clause changes no existing verdict.
+        #   rc 1  REFUSE — a source could not be READ, two slot files pin the
+        #         same side differently, a slot pad list names no die side, or
+        #         the declaration was STARTED and still owes a field. The
+        #         message NAMES the field. It never guesses a pad site, an edge
+        #         spacing, a rotation or a filler, so every one of
+        #         `pad_ring_gen`'s own refusals (PAD_SITE_NOT_FOUND,
+        #         PAD_SITE_CLASS_NOT_PAD, PAD_CORNER_SPACING_NOT_SITE_MULTIPLE
+        #         and the other three) stays reachable and still fires.
+        - program_exit_zero: "pad_assignment_gen . --json reports/phase3/pad_assignment.json"
+        - program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
     # 0.5ic writes the template this step's condition reads; without the
     # edge the graph says the pad ring may run before the slot geometry
     # that decides its size exists (D5-MISSING-EDGE, 2026-08-20).
@@ -4069,21 +4135,51 @@ steps:
     name: "Die Finishing — seal ring + die identification (chip/IC path only)"
     stage: stage3
     condition:
-      files_exist: ["input/submission_template/slots/*.yaml"]
+      # THE CHIP PATH, NOT THE SHUTTLE TEMPLATE. Same change and same reason as
+      # 15.5ic above: this read `files_exist:
+      # [input/submission_template/slots/*.yaml]`, the shuttle OPERATOR'S
+      # template, so a chip doing its own tape-out skipped die finishing as
+      # "not applicable" and shipped WITH NO SEAL RING. A seal ring is what
+      # dicing damage and moisture get into a die through; it is a property of
+      # being a DIE, not of being on a shuttle. Measured by the external
+      # authority rather than by this repository's opinion: an open-MPW
+      # precheck container refused a layout this flow published at ladder step
+      # 3 of 16 with "requires a seal ring (guard ring) around the die", and
+      # stages 4-16 never executed.
+      #
+      # `any_of`, and the entries are 37.5ic's chip-path marker verbatim — two
+      # mutually exclusive router files, never both on one tree.
+      any_of: true
+      files_exist:
+        - "input/submission_template/slots/*.yaml"
+        - "input/submission_template/SELF_TAPEOUT.txt"
     # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
     # condition tests WHICH PATH the design is on, and step 0.5ic's
-    # required_outputs is the OR of exactly these two artefacts, so on any run
-    # where 0.5ic itself passed, precisely one of them exists. A chip
-    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
-    # seal ring or shuttle precheck — a silent skip is the correct reading. The
-    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
-    # having run, which its own gate refuses as NEVER_LOOKED rather than
-    # leaving to be inferred from a downstream skip. Stated rather than left to
-    # the default so the reading is the step's, not the consumer's fallback.
+    # required_outputs is the OR of exactly the three router artefacts, so on
+    # any run where 0.5ic itself passed, precisely one of them exists. The two
+    # named above are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the
+    # IP/hardmacro terminal 37.5ip owns, and a hardmacro is placed inside
+    # somebody else's die — it has no die edge of its own to seal — so a silent
+    # skip is the correct reading. The "someone forgot" case is NOT lost to
+    # this default: it is 0.5ic never having run, which its own gate refuses as
+    # NEVER_LOOKED rather than leaving to be inferred from a downstream skip.
+    # Stated rather than left to the default so the reading is the step's, not
+    # the consumer's fallback.
     condition_kind: design_dependent
     required_inputs:
       - from: 21
         path: "phase3/stage3/pnr/routed.def"
+      # WHERE THE SEAL-RING INPUTS COME FROM WHEN THERE IS NO OPERATOR. 0.5ic
+      # writes this declaration on every route. Its section 2C is the three
+      # inputs this step already takes — whether a ring is required, which PDK
+      # script builds it, and which marker layer must carry geometry — and
+      # `_tapeout_declaration.py` was written to supply exactly them. Until this
+      # edge, nothing read them: `die_finishing_gen` resolved its script and its
+      # marker layer from the PDK bridge config and the environment only, so a
+      # self-tape-out that had ANSWERED all three was driven as though it had
+      # answered none.
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
     # AFTER THE ANTENNA CHECK AND BEFORE PHYSICAL VERIFICATION, and the order
     # is the whole point. A seal ring is real metal. Adding it after step 31
     # would mean the die step 31 signed off is not the die that ships — the

@@ -641,8 +641,46 @@ def test_output_entries_classify_into_the_four_kinds():
     # declared it and still does — what changed is that it is now written on
     # every path, including the paths where the operator was never asked.
     # = FILE 114 + 2 + 1 + 2 = 119; GLOB and ANY_OF untouched.
-    assert sum(seen.values()) == 161, seen
-    assert seen[F.FILE] == 119
+    # 2026-08-21 (cpath): 161 -> 163, two FILE, and the two have DIFFERENT
+    # OWNERS. RE-DERIVED rather than incremented, by classifying the yaml at
+    # `d6f09f455` (v1.11.17), at `867de4289` (v1.11.18, the tip this change was
+    # cut from) and at this tree, and diffing per step:
+    #
+    #   d6f09f455  FILE 119   GLOB 18   ANY_OF 24     <- what the pin above says
+    #   867de4289  FILE 120   GLOB 18   ANY_OF 24     <- the pin was already one
+    #                                                    short ON MAIN
+    #   this tree  FILE 121   GLOB 18   ANY_OF 24
+    #
+    # THE FIRST +1 IS NOT THIS CHANGE'S, and the arithmetic of the note
+    # directly above is where it went missing. That note lands at 119 for the
+    # smrg/retire-37p5self landing; measured per step across that same landing:
+    #   37.5self  -1 FILE  the step is retired, taking
+    #                      `reports/phase3/general_precheck.json` with it
+    #   37.5ic    +2 FILE  `reports/phase3/tapeout_precheck.json` and
+    #                      `reports/phase3/general_precheck.json`
+    # which is a NET +1 on a base of 119, i.e. 120 — not 119. The pin was left
+    # where it was and this tripwire has been red on main since v1.11.18. It is
+    # recorded here rather than silently absorbed, because the whole point of
+    # this constant is that a human says the number out loud.
+    #
+    # THE SECOND +1 IS THIS CHANGE'S (vibe-ic#1410, agent cpath), and it is one
+    # entry on one step:
+    #   15.5ic  +1 FILE  `reports/phase3/pad_assignment.json` — the report of
+    #                    `pad_assignment_gen`, the new AUTHOR of
+    #                    `phase3/stage3/pnr/pad_assignment.json`. That path had
+    #                    two references in the whole repository before this
+    #                    change and both were READERS, so step 15.5ic could
+    #                    only ever take `pad_ring_gen`'s SKIP branch. The
+    #                    report is declared because it is written on EVERY path
+    #                    this step takes, including the two that produce no
+    #                    ring, which `padring.def` deliberately is not.
+    # `padring.def` does NOT gain an `OR ...SKIPPED.txt` alternative and stays
+    # a plain FILE: a seal ring can legitimately not apply, a pad ring on a die
+    # cannot, so a skipped pad ring must stay MISSING.
+    # = FILE 119 + 1 (v1.11.18, not ours) + 1 (ours) = 121; GLOB and ANY_OF
+    #   untouched.
+    assert sum(seen.values()) == 163, seen
+    assert seen[F.FILE] == 121
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
