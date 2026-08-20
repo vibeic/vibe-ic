@@ -426,6 +426,44 @@ def axis_discrimination(scored: List[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def resumable(rec: Dict[str, Any]) -> Optional[str]:
+    """``None`` if this record may be reused, else why it may not.
+
+    MEASURED 2026-08-21, and it cost six configurations of a fifty-configuration
+    campaign. Stopping the search SIGTERM'd its in-flight children; the
+    `as_completed` loop then wrote six records carrying `rc: -15` and
+    `NOT_MEASURED` for every metric before the process died. `--resume` saw six
+    existing records with intact run trees and reused them — publishing an
+    INTERRUPTION as a measurement of those configurations. The search reported
+    "44 scored, 6 NOT_MEASURED" when the six had never been given a chance to
+    produce a number.
+
+    "We already measured this" and "we have a record of this being killed" are
+    different facts, and only the first is a reason not to run. So:
+
+      * a negative `rc` is a SIGNAL, not a result — the run was killed;
+      * `timed_out` is the same thing with a different clock;
+      * a verdict that is not `SCORED` means the record has no number in it, and
+        re-running is cheap next to publishing a blank as a finding.
+
+    A configuration that genuinely cannot be scored will produce the same
+    NOT_MEASURED verdict again, and THEN it is a property of the configuration.
+    """
+    rc = rec.get("rc")
+    if rec.get("timed_out"):
+        return "the recorded run TIMED OUT — that is an interruption, not a result"
+    if rc is None:
+        return "the record carries no exit status, so the run never completed"
+    if isinstance(rc, int) and rc < 0:
+        return (f"the recorded run was killed by signal {-rc} — an "
+                "interruption is not a measurement of this configuration")
+    verdict = rec.get("verdict")
+    if verdict is not None and verdict != "SCORED":
+        return (f"the record's verdict is {verdict!r}, so it carries no score; "
+                "re-running is cheaper than publishing a blank as a finding")
+    return None
+
+
 def _write_record(out_root: Path, rec: Dict[str, Any]) -> str:
     path = out_root / "records" / f"{rec['config_id']}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -642,6 +680,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.resume and ref_path.exists():
         ref_rec = json.loads(ref_path.read_text(encoding="utf-8"))
         ref_rec["resumed"] = True
+        _why = resumable(ref_rec)
+        if _why is not None:
+            print(f"[ppa_search] REFUSED: the resumed reference record cannot "
+                  f"anchor a search: {_why}. Delete it and re-run.",
+                  file=sys.stderr)
+            return RC_REFUSED
         if not Path(ref_rec.get("run_dir", "")).is_dir():
             print("[ppa_search] REFUSED: the resumed reference record names a "
                   f"run tree that no longer exists: {ref_rec.get('run_dir')}. "
@@ -702,6 +746,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             # it is refused if the tree it names has gone — a figure carried
             # across a restart must still resolve to ONE run tree.
             if not Path(done.get("run_dir", "")).is_dir():
+                todo.append(cfg)
+                continue
+            why = resumable(done)
+            if why is not None:
+                print(f"[ppa_search] re-running {config_id(cfg)}: {why}")
                 todo.append(cfg)
                 continue
             done["resumed"] = True

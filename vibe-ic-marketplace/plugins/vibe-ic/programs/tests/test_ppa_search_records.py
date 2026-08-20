@@ -30,7 +30,7 @@ import pytest
 import ppa_objective as _obj
 from ppa_search import (BASELINE, DEFAULT_SPACE, KNOB_FLAGS,
                         axis_discrimination, _expand, config_id, report_md,
-                        step_progress)
+                        resumable as ppa_search_resumable, step_progress)
 
 
 def test_the_default_space_actually_reaches_fifty():
@@ -357,3 +357,35 @@ def test_a_complete_disclosure_does_not_claim_missing_records():
     assert all(got[a]["unreadable"] == 0 for a in got)
     assert "carried no such term" not in report_md(
         _search(axis_discrimination=got))
+
+
+# --------------------------------------------------------------------------
+# --resume must not publish an interruption as a measurement
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("rec,fragment", [
+    ({"rc": -15, "verdict": "NOT_MEASURED"}, "signal 15"),
+    ({"rc": -9, "verdict": "SCORED"}, "signal 9"),
+    ({"rc": 0, "timed_out": True, "verdict": "SCORED"}, "TIMED OUT"),
+    ({"rc": None, "verdict": "SCORED"}, "no exit status"),
+    ({"rc": 1, "verdict": "NOT_MEASURED"}, "carries no score"),
+    ({"rc": 1, "verdict": "REFUSED"}, "carries no score"),
+])
+def test_an_interrupted_record_is_not_resumable(rec, fragment):
+    """MEASURED, and it cost six configurations of a fifty-configuration
+    campaign: stopping the search SIGTERM'd its children, the loop wrote six
+    `rc: -15` records with NOT_MEASURED metrics, and `--resume` reused them —
+    publishing an interruption as a measurement of those configurations."""
+    why = ppa_search_resumable(rec)
+    assert why is not None
+    assert fragment in why
+
+
+def test_a_completed_scored_record_is_resumable():
+    assert ppa_search_resumable(
+        {"rc": 1, "timed_out": False, "verdict": "SCORED"}) is None
+
+
+def test_a_completed_record_with_no_verdict_yet_is_resumable():
+    """The reference record is written before it is scored; rc=1 is the phase-3
+    runner's normal completion-audit exit and must not be read as a failure."""
+    assert ppa_search_resumable({"rc": 1, "timed_out": False}) is None
