@@ -20,13 +20,11 @@ distinct "I could not look" cases which must be rc 2 and never rc 0.
 """
 from __future__ import annotations
 
-import os
 import stat
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[1]
