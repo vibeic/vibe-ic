@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1132
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1132)
+- **Total programs (excluding helpers / shims):** 1134
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1134)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1123 |
+| `any` | 1125 |
 
 ## Alphabetical listing
 
@@ -726,6 +726,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `package_invariants_check` | any | — | the rule lives NEXT TO the code it binds. |
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3.... |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity checks in any module that dispatches on a received command. |
+| `pad_assignment_check` | any | — | the gate on step 15.5ic's config producer. |
+| `pad_assignment_gen` | any | — | step 15.5ic's FIRST producer: write the pad-ring config from a DECLARED source, or refuse and name the field nobody answered. |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
 | `pad_ring_check` | any | — | step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe... |
 | `pad_ring_gen` | any | — | step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without. |
@@ -1204,7 +1206,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1123 programs)
+### `any` (1125 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1901,6 +1903,8 @@ _(no programs in this group)_
 - `package_invariants_check` — the rule lives NEXT TO the code it binds.
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3....  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity checks in any module that dispatches on a received command.
+- `pad_assignment_check` — the gate on step 15.5ic's config producer.
+- `pad_assignment_gen` — step 15.5ic's FIRST producer: write the pad-ring config from a DECLARED source, or refuse and name the field nobody answered.
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
 - `pad_ring_check` — step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe...
 - `pad_ring_gen` — step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without.

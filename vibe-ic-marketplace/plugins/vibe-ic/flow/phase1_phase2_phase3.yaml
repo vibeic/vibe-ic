@@ -2860,18 +2860,61 @@ steps:
     required_inputs:
       - from: 15
         path: "phase3/stage3/pnr/floorplan.def"
+      # WHERE THE GEOMETRY COMES FROM, declared rather than left for the
+      # producer to go looking for. Both are step 0.5ic's own outputs and both
+      # are written on EVERY route, so this edge costs a design nothing it did
+      # not already have:
+      #   the declaration  section `2B_pad_ring` — 8 questions whose own
+      #                    `consumer` field, in `_tapeout_declaration.py`,
+      #                    already reads `pad_ring_gen`. It is the source for a
+      #                    chip doing its own tape-out, which has no operator.
+      #   the ingest report the operator slot's PAD_SOUTH / PAD_EAST /
+      #                    PAD_NORTH / PAD_WEST, ALREADY PARSED by
+      #                    `submission_template_ingest` into
+      #                    `ingest.slots[].pads`. The slot yaml is deliberately
+      #                    NOT re-parsed downstream: two parsers of one file
+      #                    drift, and the second is the one nobody re-measures.
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
+      - from: 0.5ic
+        path: "reports/phase1/submission_template.json"
     # BEFORE ROUTING, NOT AFTER. The pads are the design's BTerms once a pad
     # ring exists, so routing must already see them. OpenROAD places its pad
     # ring immediately after the power connections are set, for the same
     # reason, and LibreLane's Chip flow then deletes IOPlacement outright:
     # "No pin placement necessary -> pads are the BTerms".
+    #
+    # TWO PRODUCERS, IN THIS ORDER, AND THE FIRST ONE IS NEW BECAUSE THE
+    # SECOND HAD NO INPUT. MEASURED on v1.11.7: `pad_ring_gen` reads its whole
+    # geometry from `phase3/stage3/pnr/pad_assignment.json`, and a grep for
+    # that path over the whole tree returned five hits, every one of them a
+    # READER. Nothing wrote it. Run against a project carrying an operator slot
+    # template with four pad lists in it, the step still reported all 13
+    # config variables absent and exited 2 — so this step could only ever SKIP,
+    # and not only on the self-tape-out path its condition used to exclude but
+    # on the SHUTTLE path, the one path the condition admitted. A step wired to
+    # a file with no producer is the same defect as an unwired step.
+    # `pad_assignment_gen` writes that file from a DECLARED source and refuses,
+    # naming the field, when no source declares one. It derives nothing.
     programs:
+      - pad_assignment_gen
       - pad_ring_gen
     required_outputs:
       - "phase3/stage3/pnr/padring.def"
       - "reports/phase3/padring.json"
+      - "reports/phase3/pad_assignment.json"
+    # `all_of`, and the ORDER is the point. Without the first clause the
+    # producer's refusal would reach the flow only as an absence: no config
+    # written, so `pad_ring_gen` skips saying "the config is absent", and
+    # "nobody ever declared a pad ring", "the declaration left `pad_site_name`
+    # NOT_DETERMINED" and "the operator's slot and the design's declaration
+    # disagree about PAD_SOUTH" all arrive wearing the same sentence.
+    # `pad_assignment_check` re-derives and re-states WHICH refusal, by rule
+    # id. It is an auditor: it opens no layout and writes only its verdict.
     gate:
-      program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
+      all_of:
+        - program_exit_zero: "pad_assignment_check . --json reports/phase3/pad_assignment.json"
+        - program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
     # 0.5ic writes the template this step's condition reads; without the
     # edge the graph says the pad ring may run before the slot geometry
     # that decides its size exists (D5-MISSING-EDGE, 2026-08-20).
