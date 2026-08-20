@@ -17544,7 +17544,12 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
     EXACT recipe (fork-openroad, proven on sha256's sign-off corner: worst slack
     −8.83 ns → exit 0, 40/40 endpoints repaired → +0.33 ns):
       read_spef → estimate_parasitics -detailed_routing → repair_design
-                → repair_timing -setup
+                → repair_timing -setup → repair_timing -hold
+    and BOTH slacks are reported before/after: `sta::worst_slack -max` (setup)
+    and `sta::worst_slack -min` (HOLD). The hold half was added 2026-08-20 after
+    a gf180mcuD chip-path run routed with a −67.9 ps pad-to-flop hold violation
+    that this block neither repaired nor reported, because it only ever asked
+    about setup. UNMEASURED IS NOT ZERO applies to hold exactly as to setup.
     The `-detailed_routing` flag is on **estimate_parasitics** (marks the real
     SPEF RC valid); `repair_timing`/`repair_design` take NO such flag (a
     `repair_timing -setup -detailed_routing` throws STA-0562, which a NONFATAL
@@ -17571,6 +17576,11 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         "  if {[catch {estimate_parasitics -detailed_routing} _prr_ep]} { "
         "puts \"SPEF_REPAIR_EP_NONFATAL: $_prr_ep\" }\n"
         "  catch {puts \"SPEF_REPAIR_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
+        # vibe-ic gf180 chip-path campaign — HOLD is the other half, and it was
+        # the missing one. `-max` is SETUP; `-min` is HOLD. Reporting only -max
+        # made a post-route hold violation invisible to this block, which is the
+        # one place in the flow that sees REAL parasitics.
+        "  catch {puts \"SPEF_REPAIR_HOLD_WNS_BEFORE: [sta::worst_slack -min]\"}\n"
         # vibe-ic#569 — the recovery (this PR) and the REFUSAL COUNT (v1.9.9)
         # are both needed, and they answer different halves.
         #
@@ -17619,14 +17629,41 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         + "    if {!$_spef_repair_setup_est_rec} { "
         "puts \"SPEF_REPAIR_SETUP_NONFATAL: $_prr_rt\" ; incr _prr_refused }\n"
         "  }\n"
+        # ── POST-ROUTE HOLD REPAIR ────────────────────────────────────────
+        # MEASURED (gf180mcuD chip path, 2026-08-20): the flow repaired hold
+        # ONLY at the pre-route `hold_repair` stage, on ESTIMATED wire delay,
+        # and every post-route repair here was `-setup`. A design with a
+        # pad-to-flop path can therefore route with a real hold violation that
+        # nothing downstream repairs OR reports. `_post_buffered_repair_tcl`
+        # in this same file has always emitted `-setup` AND `-hold` together
+        # and calls itself "the ONE post-buffered repair command set"; this
+        # block simply never used the hold half.
+        # SAFE for the same reason the setup repair is: this whole block runs
+        # AFTER routed.def / <top>.def / <top>_pnr.v and after the
+        # authoritative sta.rpt, so it edits only the in-memory netlist and
+        # ships nothing. It relaxes no check — it makes one that was silent
+        # speak. NEVER `repair_design` here (segfaults on buffered gate
+        # configs; see _post_buffered_repair_tcl).
+        "  if {[catch {repair_timing -hold} _prr_rh]} {\n"
+        + _est0104_recovery_tcl(
+            spef_c, "_prr_rh", "repair_timing -hold", "SPEF_REPAIR_HOLD",
+            indent="    ", after_spef="estimate_parasitics -detailed_routing")
+        + "    if {!$_spef_repair_hold_est_rec} { "
+        "puts \"SPEF_REPAIR_HOLD_NONFATAL: $_prr_rh\" ; incr _prr_refused }\n"
+        "  }\n"
         "  catch {puts \"SPEF_REPAIR_WNS_AFTER: [sta::worst_slack -max]\"}\n"
+        "  catch {puts \"SPEF_REPAIR_HOLD_WNS_AFTER: [sta::worst_slack -min]\"}\n"
         f"  catch {{report_checks > {out_dir_c}/sta_spef_repaired.rpt}}\n"
-        "  if {$_prr_refused >= 2} {\n"
-        "    puts \"SPEF_REPAIR_NOT_APPLIED: both repairs refused "
-        "($_prr_refused/2) — WNS_BEFORE and WNS_AFTER describe the SAME "
+        # THREE repairs are attempted now (design, setup, hold), so the
+        # "all of them refused" threshold moves with the count. Leaving it
+        # at 2 would have printed NOT_APPLIED for a round in which the
+        # hold repair actually ran.
+        "  if {$_prr_refused >= 3} {\n"
+        "    puts \"SPEF_REPAIR_NOT_APPLIED: every repair refused "
+        "($_prr_refused/3) — WNS_BEFORE and WNS_AFTER describe the SAME "
         "design and their equality is not evidence of convergence\"\n"
         "  } elseif {$_prr_refused > 0} {\n"
-        "    puts \"SPEF_REPAIR_PARTIAL: $_prr_refused of 2 repairs refused\"\n"
+        "    puts \"SPEF_REPAIR_PARTIAL: $_prr_refused of 3 repairs refused\"\n"
         "    puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
         "  } else {\n"
         "    puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
