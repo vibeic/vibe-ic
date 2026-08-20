@@ -19,7 +19,7 @@
     "silently 'close' every finding and the ratchet would measure the",
     "publication schedule instead of the gates."
   ],
-  "measured_on": "a38902d1",
+  "measured_on": "38f8bddc",
   "cell": "spm/v1.9.96_gf180mcuD",
   "donor": "sha256/clean_run_v1427_20260715",
   "older_run": "sha256/clean_run_v1422_20260715",
@@ -34,19 +34,7 @@
     },
     {
       "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:drc_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:em_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
       "target": "v1.9.96_gf180mcuD:erc_density_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
     },
     {
       "attack": "A2_STALE_REPLAY",
@@ -58,19 +46,7 @@
     },
     {
       "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:drc_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:em_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
       "target": "v1.9.96_gf180mcuD:erc_density_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
     },
     {
       "attack": "A3_CROSS_DESIGN",
