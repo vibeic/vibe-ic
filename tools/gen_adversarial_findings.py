@@ -39,6 +39,12 @@ import _corpus_location as _cl  # noqa: E402
 CELL = "spm/v1.9.96_gf180mcuD"
 DONOR = "sha256/clean_run_v1427_20260715"
 OLDER = "sha256/clean_run_v1422_20260715"
+#: A donor that CARRIES a register at a path the cell also has, for A8. The
+#: `clean_run_*` donor above carries zero `steps/**/STEP_RECORD.json`, so a
+#: campaign run with only that donor cannot launder the run-evidence binding
+#: and its "all DEFENDED" is a statement about the donor. Named here so the
+#: ledger records which cell supplied the laundering ability.
+LAUNDERER = "spm/v1.10.18_sky130A"
 
 _GATE = "gen_adversarial_findings"
 _named = PLUGIN.parents[2] / "benchmark-data" / "ic"
@@ -61,17 +67,13 @@ def _measured_on() -> str:
     return out if r.returncode == 0 and out else "NOT DETERMINED"
 
 rows = []
-for attack, fn, kwargs in (
-    ("A3_CROSS_DESIGN", AA.attack_cross_design, {"donor": IC / DONOR}),
-    ("A2_STALE_REPLAY", AA.attack_stale_replay, {"older": IC / OLDER}),
-    ("A1_TAMPER_DESTRUCTIVE", AA.attack_tamper_destructive, {}),
+for attack, fn, arg in (
+    ("A3_CROSS_DESIGN", AA.attack_cross_design, IC / DONOR),
+    ("A8_LAUNDERED_REGISTER", AA.attack_laundered_register, IC / LAUNDERER),
+    ("A2_STALE_REPLAY", AA.attack_stale_replay, IC / OLDER),
+    ("A1_TAMPER_DESTRUCTIVE", AA.attack_tamper_destructive, None),
 ):
-    if attack == "A3_CROSS_DESIGN":
-        got = fn(PLUGIN, IC / CELL, kwargs["donor"])
-    elif attack == "A2_STALE_REPLAY":
-        got = fn(PLUGIN, IC / CELL, kwargs["older"])
-    else:
-        got = fn(PLUGIN, IC / CELL)
+    got = fn(PLUGIN, IC / CELL) if arg is None else fn(PLUGIN, IC / CELL, arg)
     for a in got:
         rows.append({"attack": attack, "target": a.target, "verdict": a.verdict})
 
@@ -122,11 +124,18 @@ doc = {
         "That third case is the one that matters: without it a corpus prune would",
         "silently 'close' every finding and the ratchet would measure the",
         "publication schedule instead of the gates.",
+        "",
+        "THE DONOR IS PART OF THE MEASUREMENT. `donor` cannot substitute a",
+        "register (it carries zero steps/**/STEP_RECORD.json), `launderer`",
+        "can. A campaign that ran only the first would report every A8 finding",
+        "below as DEFENDED, so both are named here and the attack that needs",
+        "the second has its own id rather than being averaged into A3.",
     ],
     "measured_on": _measured_on(),
     "cell": CELL,
     "donor": DONOR,
     "older_run": OLDER,
+    "launderer": LAUNDERER,
     "attempted": len(rows),
     "forging": [{"attack": a, "target": t} for a, t in forging],
     # THE CLOSURES, IN THE ARTEFACT. A finding count that fell is not readable
