@@ -66,6 +66,23 @@ An arm with an unmeasured axis yields rc=2 UNDETERMINED, never a win on the axes
 that were measured. A comparison that could not look must not reach a reader as
 a comparison that looked and was favourable.
 
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 36 while step 36 is running. That is the narrow question
+`flow_gate_enforcement_audit` scores, and `advisory` is that audit's token for
+the answer; it is NOT a licence to ignore the verdict. This gate is a leg of
+step 36 in the flow's BLOCKING slot (`program_exit_zero`, never
+`advisory_program_exit_zero`), so when `flow_compliance_check` evaluates that
+clause an rc 1 FAILs the step — and step 37 `blocks_on: [34, 36]`, so a record
+that cannot support its claim stops the run before stream-out. The two words are
+one axis apart and reading them as one axis is how a gate gets quietly defanged
+into the advisory slot.
+
+WHY IT IS NOT PROMOTED TO INLINE-BLOCKING: this program validates a RECORD, not
+a design. The phase-3 runner's inline pattern spawns gates over artefacts the
+step it guards has just produced, and no step produces a head-to-head record —
+it is written by a comparison campaign, not by a flow run. There is nothing for
+an inline spawn to observe as it happens.
+
 chip-AGNOSTIC, PDK-AGNOSTIC, vendor-AGNOSTIC: no design, PDK, process, vendor or
 part literal appears in the logic or can affect it. The PDK string is compared
 to the OTHER arm's PDK string and is never interpreted.
@@ -79,6 +96,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+import _corpus_location as _corpus  # sibling program, one seam for all corpora
 
 RC_OK = 0
 RC_REFUSED = 1
@@ -381,7 +399,59 @@ def corpus_records(corpus: Path):
     return sorted(p for p in corpus.glob(_RECORD_GLOB) if p.is_file())
 
 
-def check_corpus(corpus: Path) -> int:
+#: Aggregation order for a corpus, and it is NOT the integer order.
+#:
+#: `flow_compliance_check.__check_program_exit_zero` maps rc 2 -> VACUOUS_PASS
+#: (the step PASSES and is disclosed) and rc 1 -> FAIL. So rc 2 is the larger
+#: integer and the WEAKER verdict, and aggregating a corpus with `max()` — which
+#: is what this did — promoted a refusal to a pass. MEASURED: a corpus holding
+#: one C3-refused record returned rc 1; dropping ONE further record with an
+#: unmeasured axis beside it returned rc 2, so the refusal reached the flow as a
+#: vacuous pass. Adding a record must never be able to SUBTRACT a refusal, and
+#: an aggregator in which it can is a defeat-the-gate primitive inside the one
+#: gate whose whole subject is claims that cannot be checked afterwards.
+#:
+#: The order below is the docstring's own: "MISSING IS NOT WINNING" — a refusal
+#: outranks an undetermined, which outranks an accepted record.
+_SEVERITY = {RC_REFUSED: 2, RC_UNDETERMINED: 1, RC_OK: 0}
+
+
+def worst_rc(rcs: List[int]) -> int:
+    """The corpus verdict: the single most severe record decides it."""
+    worst = RC_OK
+    for rc in rcs:
+        if _SEVERITY.get(rc, _SEVERITY[RC_REFUSED]) > _SEVERITY[worst]:
+            worst = rc if rc in _SEVERITY else RC_REFUSED
+    return worst
+
+
+#: What this gate would have examined, for the NO_CORPUS / UNDETERMINED line. A
+#: zero is stated over a NAMED population or it is not stated at all.
+_SCANNED = "published head-to-head record(s)"
+_GATE = "PPA head-to-head records"
+
+
+def check_corpus(named: Path, may_be_absent: bool = False) -> int:
+    # A CORPUS THAT IS NOT THERE IS NOT AN EMPTY CORPUS, and until this branch
+    # existed those two were byte-identical here: `Path.glob` yields nothing for
+    # a missing directory, so both printed `0 head-to-head record(s) found` and
+    # both exited 2. That is a denominator asserted over a population nobody
+    # searched. It was not hypothetical — the only caller in the tree points at
+    # `<repo>/benchmark-data`, and that tree moved to its own repository in
+    # v1.10.56, so this gate has been certifying a clean empty population over a
+    # path that is absent.
+    #
+    # Resolved through `_corpus_location` rather than a fourth hand-rolled
+    # answer: that module exists because three gates re-derived this same
+    # question on the same day and got it wrong the same way, and it keeps the
+    # four outcomes apart — a pointer that is SET AND WRONG stays UNDETERMINED
+    # and is never excused by the opt-in, while "the corpus lives in another
+    # repository" is a separate, stated NO_CORPUS. The flow's call site names
+    # the project directory, which always exists, so it never reaches here.
+    corpus, origin = _corpus.resolve(named, gate=_GATE, announce=True)
+    if not corpus.is_dir():
+        return _corpus.refuse(_GATE, named, corpus, origin, may_be_absent,
+                              _SCANNED)
     recs = corpus_records(corpus)
     print(f"ppa_head_to_head_check --corpus {corpus}: "
           f"{len(recs)} head-to-head record(s) found")
@@ -390,11 +460,18 @@ def check_corpus(corpus: Path) -> int:
               "was validated. This is NOT a pass — the first head-to-head run "
               "has not been published yet (vibe-ic#1121). rc=2.",
               file=sys.stderr)
-        return 2
-    worst = 0
-    for r in recs:
-        rc = main([str(r)])
-        worst = max(worst, rc)
+        return RC_UNDETERMINED
+    rcs = [main([str(r)]) for r in recs]
+    worst = worst_rc(rcs)
+    refused = sum(1 for rc in rcs if rc == RC_REFUSED)
+    undet = sum(1 for rc in rcs if rc == RC_UNDETERMINED)
+    print(f"ppa_head_to_head_check --corpus {corpus}: {len(recs)} record(s), "
+          f"{refused} refused, {undet} undetermined, "
+          f"{len(recs) - refused - undet} accepted -> rc={worst}")
+    if refused:
+        print(f"REFUSED: {refused} of {len(recs)} record(s) cannot support the "
+              f"claim printed on them. An undetermined record beside a refused "
+              f"one does not soften it.", file=sys.stderr)
     return worst
 
 
@@ -407,10 +484,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--corpus", default=None, metavar="DIR",
                     help="validate every head-to-head record under DIR; "
                          "exits 2 when the corpus carries none (#1241)")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="this repository need not carry the published corpus "
+                         "(vibe-ic#1710). Turns 'nothing anywhere' into a "
+                         "stated NO_CORPUS that names its zero, and NEVER "
+                         "excuses a $VIBE_IC_BENCHMARK_DATA that is set and "
+                         "unreadable.")
     ap.add_argument("--json", default=None, help="optional JSON report path")
     args = ap.parse_args(argv)
     if args.corpus is not None:
-        return check_corpus(Path(args.corpus).resolve())
+        return check_corpus(Path(args.corpus).resolve(),
+                            args.corpus_may_be_absent)
     if not args.record:
         ap.error("give a record path or --corpus DIR")
 

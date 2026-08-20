@@ -318,3 +318,162 @@ def test_the_checker_is_chip_and_pdk_agnostic():
         assert literal not in body.lower(), (
             f"{literal!r} appears in the logic; this gate must not know any "
             "PDK, vendor or process name")
+
+
+# ---------------------------------------------------------------------------
+# CORPUS MODE. Two defects lived here, and both made the gate non-discriminating
+# in the direction that matters — a refusal reaching the flow as a pass.
+# ---------------------------------------------------------------------------
+def _corpus(tmp_path, name, *docs):
+    """A corpus directory holding `docs` under the checker's own record glob."""
+    d = tmp_path / name
+    d.mkdir()
+    for i, doc in enumerate(docs):
+        (d / f"run{i}_head_to_head.json").write_text(
+            json.dumps(doc), encoding="utf-8")
+    return d
+
+
+def _undetermined_doc():
+    """A record the checker can read and cannot decide: one axis unmeasured."""
+    doc = copy.deepcopy(CLEAN)
+    doc["arms"][0]["ppa"].pop("power_mw")
+    return doc
+
+
+def _refused_doc():
+    """A record the checker REFUSES: C3, a baseline this project tuned."""
+    doc = copy.deepcopy(CLEAN)
+    doc["arms"][1]["tuned_by_this_project"] = True
+    return doc
+
+
+def test_an_absent_corpus_does_not_report_an_empty_one(tmp_path, capsys,
+                                                       monkeypatch):
+    """Hard rule: "I could not read it" and "I read it and it was empty" must
+    not come out as the same answer.
+
+    `Path.glob` yields nothing for a directory that does not exist, so before
+    this the two printed the SAME denominator (0) and the same rc — a zero
+    asserted over a population nobody searched. Not hypothetical: the checker's
+    only caller pointed at `<repo>/benchmark-data`, which moved to its own
+    repository in v1.10.56, so the gate certified a clean empty population over
+    an absent path on every run.
+    """
+    monkeypatch.delenv("VIBE_IC_BENCHMARK_DATA", raising=False)
+    monkeypatch.delenv("GATEKEEPER_BENCHMARK_DATA_SHA", raising=False)
+
+    missing = tmp_path / "no_such_corpus"
+    assert not missing.exists()
+    C.check_corpus(missing)
+    absent = capsys.readouterr()
+
+    empty = tmp_path / "empty_corpus"
+    empty.mkdir()
+    C.check_corpus(empty)
+    present = capsys.readouterr()
+
+    # THE DENOMINATOR IS THE TELL. A corpus that was opened may state its zero;
+    # one that was never found may not, because it never took the measurement.
+    assert "0 head-to-head record(s) found" in present.out
+    assert "0 head-to-head record(s) found" not in absent.out
+    assert "no corpus at" in absent.err
+    assert "no corpus at" not in present.err
+
+
+def test_the_absent_corpus_opt_in_states_the_zero_it_did_not_take(
+        tmp_path, capsys, monkeypatch):
+    """vibe-ic#1710's NO_CORPUS: rc 0, and it must never read as a scan."""
+    monkeypatch.delenv("VIBE_IC_BENCHMARK_DATA", raising=False)
+    monkeypatch.delenv("GATEKEEPER_BENCHMARK_DATA_SHA", raising=False)
+    rc = C.check_corpus(tmp_path / "gone", may_be_absent=True)
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "NO_CORPUS" in err and "NOTHING WAS SCANNED" in err
+    assert "published head-to-head record(s)" in err
+
+
+def test_a_pointer_that_is_set_and_wrong_is_never_excused(tmp_path, capsys,
+                                                          monkeypatch):
+    """SET AND WRONG IS NOT ABSENT — a mistyped path, a failed clone or a no-op
+    CI fetch must not become a green gate over nothing, opt-in or not."""
+    monkeypatch.delenv("GATEKEEPER_BENCHMARK_DATA_SHA", raising=False)
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(tmp_path / "never_cloned"))
+    rc = C.check_corpus(tmp_path / "gone", may_be_absent=True)
+    assert rc == C.RC_UNDETERMINED
+    assert "is set and" in capsys.readouterr().err
+
+
+def test_the_pointer_actually_aims_the_gate(tmp_path, monkeypatch):
+    """The gate's own promise: "the day a record lands the gate starts deciding
+    with no further change". Before the corpus was resolved through the shared
+    seam it could not — the pointer was never consulted and the named path had
+    left the repository, so a RIGGED record in the published corpus was never
+    opened at all.
+    """
+    monkeypatch.delenv("GATEKEEPER_BENCHMARK_DATA_SHA", raising=False)
+    clone = tmp_path / "external_clone"
+    clone.mkdir()
+    (clone / "run_head_to_head.json").write_text(
+        json.dumps(_refused_doc()), encoding="utf-8")
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(clone))
+    assert C.check_corpus(tmp_path / "gone") == C.RC_REFUSED
+
+    (clone / "run_head_to_head.json").write_text(
+        json.dumps(CLEAN), encoding="utf-8")
+    assert C.check_corpus(tmp_path / "gone") == C.RC_OK
+
+
+def test_adding_an_undetermined_record_cannot_subtract_a_refusal(tmp_path):
+    """The masking defect, stated as the property it violates.
+
+    `flow_compliance_check` maps rc 2 -> VACUOUS_PASS (the step passes) and
+    rc 1 -> FAIL, so rc 2 is the larger integer and the WEAKER verdict.
+    Aggregating the corpus with `max()` therefore promoted a refusal to a pass:
+    a corpus holding one refused record returned rc 1, and dropping one further
+    record with an unmeasured axis beside it returned rc 2. Adding a record must
+    never be able to subtract a refusal.
+    """
+    only_refused = _corpus(tmp_path, "a", _refused_doc())
+    assert C.check_corpus(only_refused) == C.RC_REFUSED
+
+    masked = _corpus(tmp_path, "b", _refused_doc(), _undetermined_doc())
+    assert C.check_corpus(masked) == C.RC_REFUSED, (
+        "an undetermined record beside a refused one softened the refusal into "
+        "a vacuous pass — a defeat-the-gate primitive in the aggregator of the "
+        "one gate whose subject is claims that cannot be checked afterwards")
+
+
+def test_corpus_severity_order_is_refused_then_undetermined_then_ok(tmp_path):
+    """All three orderings, so the fix is not just 'always red'."""
+    assert C.check_corpus(_corpus(tmp_path, "ok", CLEAN)) == C.RC_OK
+    assert C.check_corpus(
+        _corpus(tmp_path, "u", CLEAN, _undetermined_doc())) == C.RC_UNDETERMINED
+    assert C.check_corpus(
+        _corpus(tmp_path, "r", CLEAN, _undetermined_doc(),
+                _refused_doc())) == C.RC_REFUSED
+    # order of discovery must not decide the verdict
+    assert C.check_corpus(
+        _corpus(tmp_path, "r2", _refused_doc(), _undetermined_doc(),
+                CLEAN)) == C.RC_REFUSED
+
+
+def test_worst_rc_is_severity_ordered_not_integer_ordered():
+    """The unit behind the corpus verdict, stated without files.
+
+    `max()` returns 2 here, and 2 is the verdict that PASSES. That single
+    substitution is the whole defect.
+    """
+    assert C.worst_rc([C.RC_REFUSED, C.RC_UNDETERMINED]) == C.RC_REFUSED
+    assert max([C.RC_REFUSED, C.RC_UNDETERMINED]) == C.RC_UNDETERMINED
+    assert C.worst_rc([C.RC_OK, C.RC_UNDETERMINED]) == C.RC_UNDETERMINED
+    assert C.worst_rc([C.RC_OK, C.RC_OK]) == C.RC_OK
+    assert C.worst_rc([]) == C.RC_OK
+    # An unknown code is not a pass: it is treated as the most severe thing.
+    assert C.worst_rc([7]) == C.RC_REFUSED
+
+
+def test_a_corpus_holding_only_good_records_still_passes(tmp_path):
+    """The paired half: the corpus fix must leave a clean corpus green, or the
+    four tests above are satisfied by a gate that refuses unconditionally."""
+    assert C.check_corpus(_corpus(tmp_path, "clean", CLEAN, CLEAN)) == C.RC_OK

@@ -100,6 +100,24 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # a RECORD rather than a design, and the corpus carries none yet (#1121's first
 # head-to-head has not run), so it is wired through the uncheckable channel: it
 # exits 2 and says so, rather than printing PASS over an empty population.
+#
+# THE CORPUS MOVED AND THIS LINE DID NOT FOLLOW IT. `benchmark-data` went to its
+# own repository in v1.10.56, so `$ROOT/benchmark-data` has not existed here
+# since — and `Path.glob` yields nothing for a missing directory, so this gate
+# printed `0 head-to-head record(s) found` and exited 2 exactly as a clean empty
+# corpus would. MEASURED: the two were byte-identical, which is a denominator
+# asserted over a population nobody searched.
+#
+# The checker now resolves its corpus through `_corpus_location` — the same seam
+# `L-doc field producer` and the two `tracked-symlink` gates use for the same
+# v1.10.56 breakage (vibe-ic#1710) — so $VIBE_IC_BENCHMARK_DATA now actually
+# aims this gate at a clone, and a pointer that is SET AND WRONG is UNDETERMINED
+# rather than laundered into an empty corpus.
+#
+# DELIBERATELY *NOT* `--corpus-may-be-absent`. That flag's outcome is rc 0
+# NO_CORPUS, and rc 0 here would be this gate printing a PASS over a population
+# it never opened — the one thing #1241 wired it through this channel to avoid.
+# Absent stays rc 2, which is what the declaration below already promises.
 uncheckable_until 2026-11-30 "validates a RECORD rather than a design, and the corpus carries none yet (#1121's first head-to-head has not run), so rc 2 says the population is empty instead of printing PASS over it. Goes live by itself on the first head-to-head committed"
 run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/benchmark-data"
