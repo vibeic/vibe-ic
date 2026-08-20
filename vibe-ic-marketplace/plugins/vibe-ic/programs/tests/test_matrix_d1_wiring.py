@@ -1146,7 +1146,26 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: ``skills/fpga-signaltap/SKILL.md`` with a board on the bench. If either ever
 #: gains a real automatic subject, wire it and delete its line here — this test
 #: reddens in that direction too.
+#: 2026-08-20, R5 — TWO ENTRIES ADDED, both of the same shape as step 9's
+#: ``synth_wrapper_gen``: a step's own PRODUCER, named in ``programs:``, while
+#: the step's ``gate`` names the JUDGE instead. Measured on this tree:
+#:
+#:   submission_template_ingest — step 0.5ic's producer. The step's gate is
+#:     ``submission_template_check`` (a different program), so the ingest is
+#:     named by no gate. `grep -c` over all eight ``programs/*one_shot_runner*.py``
+#:     returns 0 for it, and it is in no umbrella registry.
+#:   pad_ring_gen — step 15.5ic's producer, gate ``pad_ring_check``. Same
+#:     measurement, same zero.
+#:
+#: The wider fact behind both, and the reason they are DISCLOSED here rather
+#: than wired: `grep -rn '0\.5ic|15\.5ic|26\.5ic|37\.5ic|37\.5ip'` over those
+#: same eight runners returns ZERO lines. None of the five path-specific steps
+#: is dispatched by any runner at all, so there is no branch to hang either
+#: producer off; wiring one would mean inventing that dispatch, which is a flow
+#: change and not a pin repair. Being here is the DISCLOSURE, not permission.
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
+    ("0.5ic", "submission_template_ingest"),
+    ("15.5ic", "pad_ring_gen"),
     ("6", "debug_first_pass"),
     ("6", "fpga_test_harness_gen"),
     ("9", "synth_wrapper_gen"),
@@ -1160,10 +1179,10 @@ ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
 def test_probe_declared_programs_array_orphans_are_pinned():
     """The ``programs:`` array is OUT of this dimension's cell scope — pinned.
 
-    Dimension 1 as briefed asks about a step's GATE, so all 63 cells are
+    Dimension 1 as briefed asks about a step's GATE, so every cell is
     correctly green on the steps below: their gates are wired. But the step's
     ``programs:`` array is a second, independent wiring claim, and measured
-    live on this tree five of its entries resolve to a real
+    live on this tree nine of its entries resolve to a real
     ``programs/<name>.py`` while being named by no gate, registered in no
     umbrella registry, and dispatched by none of the one-shot runners.
 
@@ -1171,7 +1190,7 @@ def test_probe_declared_programs_array_orphans_are_pinned():
     cover it would have needed four new waivers and would have been the same
     substitution this campaign exists to stop — changing a predicate so a
     finding lands. So the finding is recorded HERE, pinned, outside the cell
-    grid: a sixth orphan appearing reddens this test, and one of these five
+    grid: a tenth orphan appearing reddens this test, and one of these nine
     getting wired also reddens it, so the population cannot drift in either
     direction unnoticed. It is reported as an open gap, not as coverage.
     """
