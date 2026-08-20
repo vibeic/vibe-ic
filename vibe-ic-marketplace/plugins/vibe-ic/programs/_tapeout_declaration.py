@@ -426,6 +426,42 @@ def route_of(doc: Dict[str, Any], has_slots: bool) -> str:
     return NOT_DETERMINED
 
 
+def route_on_disk(project: Path) -> str:
+    """Which route a PROJECT TREE is on, read from the router files themselves.
+
+    `route_of` answers the question from a declaration, which is what step
+    0.5ic needs while it is DECIDING. A consumer standing in a finished tree
+    needs the answer the tree already carries, and the tree carries it in the
+    one place every condition in the flow reads: the router file 0.5ic wrote.
+
+    WHY A CONSUMER NEEDS IT AT ALL. On the shuttle route the OPERATOR answers
+    questions this declaration also asks, and answers them with more authority
+    — so an unanswered field there is not this design failing to declare
+    something, it is a field somebody else owns. On the self-tape-out route
+    there is nobody else, so the same unanswered field IS a refusal. A consumer
+    that cannot tell the two routes apart must either refuse every shuttle
+    design or excuse every self-tape-out one.
+
+    Returns `ROUTE_SHUTTLE`, `ROUTE_SELF_TAPEOUT`, `ROUTE_IP`, or
+    `NOT_DETERMINED` when the tree carries no router file — which is 0.5ic
+    never having run, or having run and decided nothing. TWO router files at
+    once also reads `NOT_DETERMINED`: they are mutually exclusive by
+    construction, `tapeout_declaration_check` refuses that tree, and picking
+    one here would resolve by preference a contradiction somebody has to see.
+    """
+    import _submission_template as _ST                  # local: no import cycle
+    found = []
+    slots = project / _ST.SLOTS_DIR_REL
+    if slots.is_dir() and (sorted(slots.glob("*.yaml"))
+                           or sorted(slots.glob("*.yml"))):
+        found.append(ROUTE_SHUTTLE)
+    if (project / SELF_TAPEOUT_REL).is_file():
+        found.append(ROUTE_SELF_TAPEOUT)
+    if (project / _ST.NO_TEMPLATE_REL).is_file():
+        found.append(ROUTE_IP)
+    return found[0] if len(found) == 1 else NOT_DETERMINED
+
+
 def applicable(q: Question, deliverable: Any) -> bool:
     """Is `q` required for this deliverable?
 
