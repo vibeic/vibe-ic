@@ -4,7 +4,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Awesome](https://awesome.re/badge.svg)](https://github.com/vibeic/awesome-open-ic)
-[![Plugin v1.11.6](https://img.shields.io/badge/plugin-v1.11.6-brightgreen.svg)](vibe-ic-marketplace/README.md)
+[![Plugin v1.11.5](https://img.shields.io/badge/plugin-v1.11.5-brightgreen.svg)](vibe-ic-marketplace/README.md)
 [![MCP-EDA v1.0.0](https://img.shields.io/badge/mcp--eda-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md)
 
 > **Status: v1.11 — mature, benchmark-hardened.** The `vibe-ic` plugin is the
@@ -63,12 +63,12 @@ gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATU
 ```bash
 export VIBEIC_DESIGNS="/path/to/your/designs"  # ← your project / designs folder (must already exist)
 [ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
-docker pull ghcr.io/vibeic/vibeic-eda:0.3.16   # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:latest   # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
 docker run -d --name vibeic-eda --memory 48g --memory-swap 48g \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.3.16 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:latest --skip sleep infinity
 docker exec vibeic-eda yosys --version         # sanity check — should print a version
 ```
 
