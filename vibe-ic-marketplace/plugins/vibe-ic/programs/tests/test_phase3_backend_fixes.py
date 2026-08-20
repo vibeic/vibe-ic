@@ -476,20 +476,56 @@ class TestSiliconCriticalPnrBlocks:
         assert "VNB" in tcl
 
     # ---- v0.1.48 filler_placement --------------------------------------
-    def test_filler_masters_sky130_full_set(self):
+    def test_filler_masters_are_spacers_only(self):
+        """`filler_placement` gets SPACERS, and no decoupling capacitor.
+
+        THIS TEST USED TO ASSERT THE OPPOSITE, and the reason it was inverted
+        is a measurement, not a preference. It read: "Both decap-family and
+        fill-family must be present. Decap is the dynamic-IR margin; fill is
+        density-rule compliance." The first half of that is true only where the
+        decap's own well and substrate ties survive, and on a sparse die they
+        do not: the #684 guard prunes taps over silicon it has judged empty, and
+        the fill then runs over that same silicon.
+
+        MEASURED (agent g360, 2026-08-20, an open PDK, one die): with the
+        decaps-first master list, 7295 of 8317 inserted cells were decaps and
+        sign-off DRC went 360 -> 11964, 33x WORSE, with 99.5-100% of every new
+        violation sitting on a decap instance. The identical 8317 sites filled
+        with spacers only gave 360 -> 19, and all 19 pre-dated the fill.
+
+        A decap carries real active area, real contacts and extra metal1; a
+        spacer carries well/implant continuity and the two rails and NO device.
+        So the two are not interchangeable, and only one of them is safe to
+        drop onto silicon whose ties have been removed.
+
+        WHAT THIS TEST NO LONGER GUARANTEES, said out loud: the dynamic-IR
+        decoupling that the decaps provided is now absent. That is a real cost
+        and it is NOT paid for here. Restoring it needs decap insertion and tap
+        pruning to be decided TOGETHER -- decap only where tap coverage is
+        retained -- which is a change to the placement step, not to this list.
+        """
         masters = mod._filler_masters_for_pdk(self._sky130_pdk())
-        # Both decap-family and fill-family must be present. Decap is
-        # the dynamic-IR margin; fill is density-rule compliance.
-        decap = [m for m in masters if "decap" in m]
+        decap = [m for m in masters if "decap" in m or "dcap" in m]
         fill = [m for m in masters if m.startswith("sky130_fd_sc_hd__fill_")]
-        assert len(decap) >= 3, f"decap variants too few: {decap}"
+        assert decap == [], f"device-bearing fillers must not be offered: {decap}"
         assert len(fill) >= 3, f"fill variants too few: {fill}"
-        # Largest-first ordering (OpenROAD convention) for the largest
-        # decap variant and largest fill variant.
-        assert masters.index("sky130_fd_sc_hd__decap_12") < masters.index(
-            "sky130_fd_sc_hd__decap_3")
+        # Largest-first ordering (OpenROAD convention) is unchanged.
         assert masters.index("sky130_fd_sc_hd__fill_8") < masters.index(
             "sky130_fd_sc_hd__fill_1")
+
+    def test_filler_masters_exclusion_is_pdk_agnostic(self):
+        """The exclusion is by name SEGMENT, so it holds for any PDK's naming.
+
+        Both paths must agree: the hardcoded library shortcut and the LEF
+        discovery. A shortcut that quietly reinstated the decaps would put the
+        measured 33x regression back on exactly one PDK.
+        """
+        for name in ("DECAP8", "lib__decap_12", "sg13g2_dcap_4",
+                     "gf_fd_sc__fillcap_64"):
+            assert mod._FILLER_DECAP_RE.search(name), name
+        for name in ("lib__fill_8", "sg13g2_fill_1", "FILL64",
+                     "lib__filltie", "lib__endcap"):
+            assert not mod._FILLER_DECAP_RE.search(name), name
 
     def test_filler_masters_empty_when_unknown_pdk(self):
         masters = mod._filler_masters_for_pdk(self._no_tapcell_pdk())
