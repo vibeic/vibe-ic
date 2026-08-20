@@ -652,3 +652,70 @@ def test_a_declared_authority_order_overrides_the_default(tmp_path):
     document = json.loads((tmp_path / "contract.json").read_text())
     assert document["resolutions"][0]["winner"]["source"] == "l19_spec"
     assert document["resolutions"][0]["winner"]["value"] == 8.0
+
+
+def test_two_images_with_one_label_version_get_two_toolchain_identities(
+        tmp_path):
+    """MEASURED on this host, 2026-08-21, and it is why the version is not in
+    the digest.
+
+        docker image inspect ghcr.io/vibeic/vibeic-eda:0.3.18 :0.3.19 \\
+            --format '{{.Id}} {{index .Config.Labels
+                              "org.opencontainers.image.version"}}'
+        sha256:f34af8763eb0…  2026.06
+        sha256:c86afee96458…  2026.06
+
+    Two different releases of the composed EDA image carry the SAME
+    `org.opencontainers.image.version`, because the label is inherited from the
+    upstream base rather than set by the fork. So the label cannot tell two of
+    our toolchains apart, and a toolchain identity built on it would give two
+    different toolchains ONE identity — which is exactly the failure the
+    contract exists to prevent.
+
+    The DIGEST is what distinguishes them, so the digest is what is hashed and
+    the label rides alongside as provenance. This test is synthetic and offline;
+    it pins the RULE, not the two tags, so it keeps holding after the next
+    release."""
+    def build_with(ref):
+        decl = base_declaration()
+        decl["toolchain"]["images"][0]["ref"] = ref
+        name = ref.split(":")[-1][:12] + ".json"
+        proc = build_contract(tmp_path, decl, name=name)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return json.loads((tmp_path / name).read_text())
+
+    repo = "ghcr.io/vibeic-test/eda"
+    older = build_with(f"{repo}@sha256:{'a' * 64}")
+    newer = build_with(f"{repo}@sha256:{'b' * 64}")
+    assert (older["identities"]["toolchain"]["digest"]
+            != newer["identities"]["toolchain"]["digest"]), (
+        "two images with different digests produced ONE toolchain identity; "
+        "a comparison across them would report the tools as unchanged")
+    assert older["identities"]["problem"]["digest"] == \
+        newer["identities"]["problem"]["digest"], (
+        "moving the image moved the PROBLEM identity too, so the two "
+        "identities are not actually separable")
+
+
+def test_a_tag_is_refused_before_any_registry_is_consulted(tmp_path):
+    """Also measured on this host: `imagetools inspect` on a TAG failed with
+    `pull access denied … insufficient_scope`, while the SAME image by DIGEST
+    answered. A tag is not merely unstable, it is not even reliably readable —
+    one more reason `PPA-C-002` refuses one that carries a verdict.
+
+    The refusal does not depend on the network: no reader is consulted for a
+    reference that does not pin bytes."""
+    consulted = []
+
+    def reader(ref):
+        consulted.append(ref)
+        return "should never be used"
+
+    record = prov.image_record(
+        {"role": "eda", "ref": "ghcr.io/vibeic-test/eda:latest",
+         "verdict_bearing": True}, reader=reader)
+    assert consulted == [], (
+        "a registry was consulted for a floating reference; the refusal must "
+        "hold on a host with no network at all")
+    assert record["floating"] is True
+    assert record["version"]["status"] == "NOT_MEASURED"
