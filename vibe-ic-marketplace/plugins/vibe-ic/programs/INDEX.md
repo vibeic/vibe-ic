@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1134
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1134)
+- **Total programs (excluding helpers / shims):** 1137
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1137)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1125 |
+| `any` | 1128 |
 
 ## Alphabetical listing
 
@@ -250,6 +250,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cross_design_identity_check` | any | — | cross-design byte-identity gate (ORGANIC-20260606 #454). |
 | `cross_layer_reference_check` | any | — | ONE general gate over cross-layer ids. |
 | `cross_module_1cycle_handshake_check` | any | v0.116 | Detect 1-cycle pulse signals exported from one module and consumed by |
+| `crosslayer_rewrite_equivalence` | any | — | REWRITE-FIDELITY gate for a cross-layer PPA search (candidate RTL  ==  BASELINE RTL). |
+| `crosslayer_rewrite_equivalence_check` | any | — | the JUDGE for the rewrite-fidelity gate (`crosslayer_rewrite_equivalence.py` is the PRODUCER). |
+| `crosslayer_search_space` | any | — | the CROSS-LAYER PPA search space, and the citation that authorises every lever in it. |
 | `crypto_arch_extractor` | any | — | Extract crypto architecture parameters from README/text docs. |
 | `cts_quality_check` | any | — | Step 19 CTS substance gate. |
 | `cvdp_atomic_bridge` | any | — | a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi... |
@@ -1206,7 +1209,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1125 programs)
+### `any` (1128 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1429,6 +1432,9 @@ _(no programs in this group)_
 - `cross_design_identity_check` — cross-design byte-identity gate (ORGANIC-20260606 #454).
 - `cross_layer_reference_check` — ONE general gate over cross-layer ids.
 - `cross_module_1cycle_handshake_check` — Detect 1-cycle pulse signals exported from one module and consumed by  _[v0.116]_
+- `crosslayer_rewrite_equivalence` — REWRITE-FIDELITY gate for a cross-layer PPA search (candidate RTL  ==  BASELINE RTL).
+- `crosslayer_rewrite_equivalence_check` — the JUDGE for the rewrite-fidelity gate (`crosslayer_rewrite_equivalence.py` is the PRODUCER).
+- `crosslayer_search_space` — the CROSS-LAYER PPA search space, and the citation that authorises every lever in it.
 - `crypto_arch_extractor` — Extract crypto architecture parameters from README/text docs.
 - `cts_quality_check` — Step 19 CTS substance gate.
 - `cvdp_atomic_bridge` — a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi...

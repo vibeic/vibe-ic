@@ -761,6 +761,81 @@ steps:
     # now correctly reds every descendant of Step 1.
     blocks_on: [D1]
 
+  - id: 1.6x
+    name: "🔁 Cross-layer PPA search — rewrite fidelity (candidate RTL ≡ BASELINE RTL)"
+    stage: stage1
+    # WHY THIS STEP EXISTS, AND WHY IT IS NOT STEP 13.
+    #
+    # A cross-layer PPA search lets an agent REWRITE the design — pipelining,
+    # resource sharing, state encoding, arithmetic architecture, module
+    # hierarchy — to win a PPA objective. That is the one thing a place-and-route
+    # tuner structurally cannot do, and it is also the exact shape of every
+    # cheat this repository exists to prevent, so it needs a check that a
+    # rewritten candidate is still the specified chip.
+    #
+    # Step 13 cannot be that check, and this is MEASURED rather than argued.
+    # Step 13 is `RTL ≡ post-DFT netlist`: it compares each candidate against
+    # ITS OWN netlist, so a rewritten candidate passes it by construction.
+    # Three arms built from one published baseline RTL differing in a single
+    # line — the carry-save majority term of a serial multiplier — were run
+    # through the real step-13 producer and judge:
+    #
+    #   base       (m & s) | (m & c) | (s & c)   2577.47 um2   step 13 rc=0
+    #   cand_bad   (m & s)           | (s & c)   2419.82 um2   step 13 rc=0
+    #   cand_good  (m & (s | c))     | (s & c)   2603.75 um2   step 13 rc=0
+    #
+    # `cand_bad` computes a different product and is 6.12% SMALLER — it WINS
+    # the area objective — and step 13 returned exit 0 on it, 66/66 points
+    # proven. A cross-layer search gated only on step 13 would publish it.
+    #
+    # This step supplies the missing relation, candidate RTL ≡ BASELINE RTL,
+    # and NOTHING here weakens, narrows or excludes anything step 13 checks.
+    # Both relations are required; neither replaces the other.
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+    # UNCONDITIONAL, and that is a CORRECTION, not a default. The first draft
+    # made this step `condition: files_exist [reports/crosslayer/baseline_rtl]`
+    # so it applied only to designs that had actually run a search, and
+    # `flow_condition_reachability_check` refused that shape in one line:
+    #
+    #   FAIL: step 1.6x: condition ['reports/crosslayer/baseline_rtl'] —
+    #   a check disabled by exactly the situation it was written for
+    #
+    # It is right. A search that skipped the snapshot would have skipped the
+    # gate with it, which is the same hole one level up. So the step always
+    # runs, and the JUDGE decides applicability INSIDE the program where the
+    # decision is written to an artefact: a design that ran no cross-layer
+    # search gets an explicit NOT_APPLICABLE record, never a silent skip.
+    #
+    # The second draft also gated the search-space audit on that space's own
+    # existence, and the same checker named that too ("R1 self-gate: … is this
+    # step's own required_output"). The audit now lives inside the judge, so
+    # there is ONE gate command with nothing to condition.
+    closed_loop:
+      fallback_to: 1
+      trigger: >-
+        The candidate RTL is not the baseline RTL (refuted, unproven, or
+        nothing compared), or the search space that authorised the rewrite does
+        not survive its own citation audit. The candidate is DISCARDED and step
+        1's RTL stands; the check is never relaxed to admit it.
+    programs:
+      - crosslayer_search_space
+      - crosslayer_rewrite_equivalence
+      - crosslayer_rewrite_equivalence_check
+    # The judge writes its verdict on EVERY run, including the NOT_APPLICABLE
+    # one, so this artefact is always produced and a reader can always tell
+    # "not applicable" from "nobody looked".
+    required_outputs:
+      - "reports/crosslayer/rewrite_equivalence_check.json"
+    gate:
+      # The JUDGE, not the producer — the same producer/judge split step 13
+      # uses, which is what lets this command carry no design-specific
+      # argument. It FAILS when a rewrite happened and no proven-equivalent
+      # report exists, and it re-resolves the search space's citations.
+      program_exit_zero: "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"
+    blocks_on: [1]
+
   - id: 2
     name: "🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)"
     stage: stage1
