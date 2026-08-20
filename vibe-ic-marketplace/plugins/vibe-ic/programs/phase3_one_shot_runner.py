@@ -22831,7 +22831,8 @@ def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
 
 
 def _derive_metal_fill_density(pdk: "PdkConfig",
-                               container: str) -> Optional[Dict[str, Any]]:
+                               container: str,
+                               chip_die: bool = False) -> Optional[Dict[str, Any]]:
     """Chip-AGNOSTIC per-layer density metal-fill config, synthesized from the PDK's OWN
     declared files (streamout layermap + tech LEF + sign-off DRC deck) when no bridge
     declares one — so metal fill runs for EVERY PDK, not only a hand-configured one.
@@ -22872,7 +22873,24 @@ def _derive_metal_fill_density(pdk: "PdkConfig",
             metal_prefix=(getattr(pdk, "metal_prefix", None) or "metal"))
     except Exception:
         return None
-    if cfg:
+    if cfg and chip_die:
+        # ONLY on a full chip die. `space_to_scribe_line` is a clearance from
+        # the SAWING STREET, and a sawing street exists only at the chip's own
+        # edge. An IP macro's boundary is not a scribe line: it is placed in the
+        # interior of some larger chip, so subtracting a scribe band from its
+        # own outline protects nothing and simply deletes fill area.
+        #
+        # MEASURED, on the published gf180mcuD reference (a 240x240 um macro):
+        # ungated, the 26 um band removes 22256 of 57600 um2 -- 38.6% of the
+        # die -- and takes metal2 from density 0.3500 (target 0.35, reached) to
+        # 0.3499 (NOT reached). On the sealed 1936x2531 um chip die the same
+        # keep-out removes 129541 um2 of dummy metal from the real scribe band
+        # with every layer still reaching target. Same rule, opposite verdict,
+        # because only one of the two layouts has a scribe line.
+        #
+        # `chip_die` is the flow's own existing test -- a shuttle submission
+        # template declaring the slot -- not a size heuristic. No template, no
+        # scribe band claimed, and the emitted fill is byte-identical to before.
         _ko = _pdk_scribe_keepout_um(pdk, container)
         if _ko is not None:
             cfg["keepout_edge_um"] = _ko
@@ -23032,7 +23050,8 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
         # No bridge-declared config: synthesize one chip-AGNOSTICALLY from the PDK's own
         # declared files so per-layer density metal fill runs for EVERY PDK (e.g. the
         # open gf180mcuD / sky130A / ihp-sg13g2, none of which ship a bridge config).
-        mfd = _derive_metal_fill_density(pdk, container)
+        mfd = _derive_metal_fill_density(
+            pdk, container, chip_die=_slot_geometry(project) is not None)
         derived = mfd is not None
     if not mfd:
         return False, "no metal_fill_density config"

@@ -13,6 +13,7 @@ Magic 0-count must never be reported as a clean pass.
 import importlib
 import json
 import pathlib
+import sys
 
 import pytest
 
@@ -992,3 +993,86 @@ class TestSparseDieGuardIsNotApplicableToASlotPinnedCore:
     def test_no_masters_still_skips_by_name(self):
         assert "FILLER_SKIPPED" in mod._build_sparse_die_aware_filler_tcl(
             [], slot_pinned_core=True)
+
+
+class TestScribeKeepOutIsClaimedOnlyForAChipDie:
+    """A scribe band belongs to the chip edge, not to an IP macro's outline.
+
+    `space_to_scribe_line` is a clearance from the SAWING STREET. A macro is
+    placed in the interior of a larger chip and has no sawing street at its own
+    boundary, so subtracting the band there deletes fill area and protects
+    nothing. MEASURED on the published gf180mcuD reference macro (240x240 um):
+    ungated, the 26 um band removes 38.6% of the die and takes metal2 from
+    density 0.3500 (target 0.35, reached) to 0.3499 (not reached).
+    """
+
+    def _cfg(self, monkeypatch, chip_die):
+        calls = []
+
+        class _Pdk:
+            lefdef_layermap = "/x/lm.map"
+            tech_lef = "/x/tech.lef"
+            drc_deck = "/x/deck/main.rb"
+            metal_prefix = "metal"
+
+        monkeypatch.setattr(mod, "_docker_exec",
+                            lambda *a, **k: (0, "nonempty", ""))
+        monkeypatch.setattr(
+            mod, "_pdk_scribe_keepout_um",
+            lambda pdk, container: (calls.append(1), 26.0)[1])
+
+        import types
+        fake = types.ModuleType("metal_fill_config_gen")
+        fake.build_metal_fill_config = (
+            lambda *a, **k: {"layers": [{"name": "metal1"}]})
+        monkeypatch.setitem(sys.modules, "metal_fill_config_gen", fake)
+
+        return mod._derive_metal_fill_density(
+            _Pdk(), "c", chip_die=chip_die), calls
+
+    def test_an_IP_macro_gets_no_scribe_keepout(self, monkeypatch):
+        cfg, calls = self._cfg(monkeypatch, chip_die=False)
+        assert cfg is not None and cfg.get("layers")
+        assert "keepout_edge_um" not in cfg
+        # not merely absent from the config — never even asked for.
+        assert calls == []
+
+    def test_a_chip_die_does_get_it(self, monkeypatch):
+        cfg, _ = self._cfg(monkeypatch, chip_die=True)
+        assert cfg["keepout_edge_um"] == 26.0
+
+    def test_the_default_is_the_safe_one(self):
+        import inspect
+        sig = inspect.signature(mod._derive_metal_fill_density)
+        assert sig.parameters["chip_die"].default is False
+
+    def test_behavioural_red_the_plain_two_arg_call_claims_no_band(
+            self, monkeypatch):
+        """A red that does NOT depend on the new keyword existing.
+
+        Called exactly as the flow called it before this change --
+        `_derive_metal_fill_density(pdk, container)` -- the returned config must
+        carry no scribe band. Pre-gate this same two-argument call returns a
+        config containing `keepout_edge_um: 26.0`, which is what put a 26 um
+        band on the 240x240 um reference macro. So this assertion fails on the
+        old code for a behavioural reason, not a missing-symbol one.
+        """
+        class _Pdk:
+            lefdef_layermap = "/x/lm.map"
+            tech_lef = "/x/tech.lef"
+            drc_deck = "/x/deck/main.rb"
+            metal_prefix = "metal"
+
+        monkeypatch.setattr(mod, "_docker_exec",
+                            lambda *a, **k: (0, "nonempty", ""))
+        monkeypatch.setattr(mod, "_pdk_scribe_keepout_um",
+                            lambda pdk, container: 26.0)
+        import types
+        fake = types.ModuleType("metal_fill_config_gen")
+        fake.build_metal_fill_config = (
+            lambda *a, **k: {"layers": [{"name": "metal1"}]})
+        monkeypatch.setitem(sys.modules, "metal_fill_config_gen", fake)
+
+        cfg = mod._derive_metal_fill_density(_Pdk(), "c")
+        assert cfg is not None
+        assert "keepout_edge_um" not in cfg
