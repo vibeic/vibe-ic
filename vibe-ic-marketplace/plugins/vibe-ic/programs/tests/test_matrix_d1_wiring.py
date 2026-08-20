@@ -1163,8 +1163,35 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: is dispatched by any runner at all, so there is no branch to hang either
 #: producer off; wiring one would mean inventing that dispatch, which is a flow
 #: change and not a pin repair. Being here is the DISCLOSURE, not permission.
+#: 2026-08-20 — ONE ENTRY ADDED, the SECOND producer on a step whose FIRST
+#: producer is already three lines above this one.
+#:
+#:   tapeout_declaration_gen — step 0.5ic's other producer, and the writer of
+#:     two of that step's four declared `required_outputs`
+#:     (`input/submission_template/tapeout_declaration.json` and, with its
+#:     sibling checker, `reports/phase1/tapeout_declaration.json`). The step's
+#:     gate names `tapeout_declaration_check` — the JUDGE — so the generator is
+#:     named by no gate. `grep -c tapeout_declaration_gen programs/*one_shot_runner*.py`
+#:     returns 0 on all EIGHT runners, measured on this tree, and it is in no
+#:     umbrella registry. Landed unwired and unlisted in `00d9dc261` (v1.11.4),
+#:     which is what reddened this pin.
+#:
+#: Same shape and same reason as `submission_template_ingest` directly below:
+#: none of the five path-specific steps is dispatched by any runner, so there
+#: is no branch to hang the producer off, and inventing that dispatch is a flow
+#: change rather than a pin repair. Being here is the DISCLOSURE, not
+#: permission — #693's floor is that a shipped, gate-shaped program must never
+#: be both unwired and UNLISTED, and this is the register that lists it.
+#:
+#: WORTH READING TOGETHER: step 0.5ic now has BOTH of its declared producers in
+#: this list. Its four `required_outputs` therefore have no automatic writer at
+#: all, which is a stronger statement than either line makes alone. That is a
+#: dimension-3 question about 0.5ic, not a dimension-1 one, and it is recorded
+#: here rather than acted on because widening this predicate to answer it is
+#: the substitution this campaign exists to stop.
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("0.5ic", "submission_template_ingest"),
+    ("0.5ic", "tapeout_declaration_gen"),
     ("15.5ic", "pad_ring_gen"),
     ("6", "debug_first_pass"),
     ("6", "fpga_test_harness_gen"),
