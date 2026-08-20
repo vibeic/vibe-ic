@@ -344,7 +344,11 @@ def row_digest(row: Row) -> str:
     return cj.digest_of(row)
 
 
-def _withhold_reason(section_no_paths: bool, kind: str,
+#: What a `worst_slack` line that IS the infinity sentinel carries.
+_SENTINEL_REASON = "no_paths_analysed: OpenSTA reported the infinity sentinel"
+
+
+def _withhold_reason(check_no_paths: bool, kind: str,
                      value: Optional[float]) -> Optional[str]:
     """Why a parsed number must NOT be published as a measurement.
 
@@ -361,14 +365,31 @@ def _withhold_reason(section_no_paths: bool, kind: str,
     "an unreported view is indistinguishable from a met one", reproduced inside
     the reader that is supposed to prevent it.
 
+    MEASURED against the real tool (OpenSTA 2.7.0 f21d4a3878, from the image
+    family this checkout anchors), two designs, one liberty, one clock:
+
+        design with real reg-to-reg paths     design with no timing paths
+          tns max 0.00                          tns max 0.00
+          wns max 0.00                          wns max 0.00
+          worst slack max 0.19                  worst slack max INF
+
+    The first two lines are BYTE-IDENTICAL. Timing met with +0.19 ns of slack,
+    and nothing analysed at all, print the same summary -- both clamp to zero.
+    The `worst slack` line is the ONLY thing that separates them, which is why
+    the withholding decision is keyed on it and on nothing else.
+
+    PER CHECK, never per report. A report routinely carries a real setup slack
+    beside a hold analysis that found no paths, and withholding the setup
+    summary because the HOLD view was empty would suppress a measurement that
+    exists. Not hypothetical: that was this function's first shape, and the
+    real-tool output above is what exposed it.
+
     A NEGATIVE summary is never withheld. It cannot be an echo of infinity, and
     suppressing evidence of a violation is the one error worse than publishing
     a phantom pass.
     """
-    if not section_no_paths:
+    if not check_no_paths:
         return None
-    if kind == "worst_slack":
-        return "no_paths_analysed: OpenSTA reported the infinity sentinel"
     if value is not None and value < 0:
         return None
     return ("no_paths_analysed_in_view: this view's worst slack was the "
@@ -430,9 +451,12 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
                 "this report names no RC corner for the section; the RC axis "
                 "is reported by the multi-corner SPEF report, not this one")
 
-        # ── does the section's own worst slack say nothing was analysed? ───
-        section_no_paths = any(
-            m.kind == "worst_slack" and m.no_paths for m in sec.measurements)
+        # ── which CHECKS analysed nothing? Keyed per check, never per
+        # report: an unbannered report carries BOTH checks in one section, and
+        # a real setup slack must not be suppressed because hold was empty.
+        no_paths_by_check = {
+            (m.check or sec.check): True
+            for m in sec.measurements if m.kind == "worst_slack" and m.no_paths}
 
         # Which check(s) this section is about. A banner says so outright; the
         # unbannered dialect is described only by the max/min labels on its own
@@ -464,12 +488,14 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
                     continue
                 src = _source(project, path, parser_src_sha, m.line, m.raw)
                 if m.no_paths or m.value is None:
-                    rows.append(_row(metric, NOT_MEASURED, scope, src,
-                                     reason=_withhold_reason(True, m.kind, None)
-                                     or "the tool printed no usable number",
-                                     scope_gaps=gaps))
+                    rows.append(_row(
+                        metric, NOT_MEASURED, scope, src,
+                        reason=(_SENTINEL_REASON if m.no_paths
+                                else "the tool printed no usable number"),
+                        scope_gaps=gaps))
                     continue
-                why = _withhold_reason(section_no_paths, m.kind, m.value)
+                why = _withhold_reason(
+                    no_paths_by_check.get(check, False), m.kind, m.value)
                 if why:
                     rows.append(_row(metric, NOT_MEASURED, scope, src,
                                      reason=why, scope_gaps=gaps))

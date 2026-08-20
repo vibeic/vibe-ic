@@ -621,3 +621,122 @@ def test_the_schema_rejects_a_not_measured_row_that_carries_a_value():
     ok = dict(bad)
     del ok["value"]
     validator.validate(ok)
+
+
+# ── fixtures captured from the REAL tool, not reconstructed ────────────────
+#
+# Produced on this host by running OpenSTA 2.7.0 f21d4a3878 (from the image
+# family this checkout anchors) over two designs built from the same open PDK
+# liberty (sky130A `..__ss_100C_1v60.lib`) with one 1.0 ns clock:
+#
+#   A: two dfxtp_1 flops in series      -> real register-to-register paths
+#   B: one buf_1, no sequential element -> no timing paths at all
+#
+# Everything above this line is a reconstruction of the emitter's format. These
+# two are what the tool actually printed.
+
+REAL_WITH_PATHS = """\
+tns max 0.00
+wns max 0.00
+worst slack max 0.19
+worst slack min 0.64
+Startpoint: r1 (rising edge-triggered flip-flop clocked by clk)
+Endpoint: r2 (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.00    0.00   clock clk (rise edge)
+   0.00    0.00   clock network delay (ideal)
+   0.00    0.00 ^ r1/CLK (sky130_fd_sc_hd__dfxtp_1)
+   0.53    0.53 v r1/Q (sky130_fd_sc_hd__dfxtp_1)
+   0.00    0.53 v r2/D (sky130_fd_sc_hd__dfxtp_1)
+           0.53   data arrival time
+
+   1.00    1.00   clock clk (rise edge)
+   0.00    1.00   clock network delay (ideal)
+   0.00    1.00   clock reconvergence pessimism
+           1.00 ^ r2/CLK (sky130_fd_sc_hd__dfxtp_1)
+  -0.28    0.72   library setup time
+           0.72   data required time
+---------------------------------------------------------
+           0.72   data required time
+          -0.53   data arrival time
+---------------------------------------------------------
+           0.19   slack (MET)
+"""
+
+REAL_NO_PATHS = """\
+tns max 0.00
+wns max 0.00
+worst slack max INF
+worst slack min INF
+"""
+
+
+def test_met_timing_and_nothing_analysed_print_the_same_summary():
+    """The measurement that justifies this whole module, from the real tool.
+
+    A design that MET timing with +0.19 ns of slack, and a design where nothing
+    was analysed at all, print BYTE-IDENTICAL `tns`/`wns` summary lines --
+    because `wns = min(0, worst_slack)` clamps both to zero. Anything that reads
+    those two lines and stops has no way to tell a closed design from an empty
+    analysis. The `worst slack` line is the only discriminator there is.
+    """
+    def summary(text):
+        return [l.strip() for l in text.splitlines()
+                if l.strip().startswith(("tns ", "wns "))]
+    assert summary(REAL_WITH_PATHS) == summary(REAL_NO_PATHS) == [
+        "tns max 0.00", "wns max 0.00"]
+    # ...and the module tells them apart anyway
+    a = opensta.parse_report(REAL_WITH_PATHS).sections[0]
+    b = opensta.parse_report(REAL_NO_PATHS).sections[0]
+    a_ws = [m for m in a.measurements if m.kind == "worst_slack"]
+    b_ws = [m for m in b.measurements if m.kind == "worst_slack"]
+    assert [m.no_paths for m in a_ws] == [False, False]
+    assert [m.no_paths for m in b_ws] == [True, True]
+
+
+def test_real_tool_output_parses_to_the_numbers_it_printed(tmp_path):
+    """The reconstructions above are read out of the emitter. This one is what
+    OpenSTA actually wrote, and the parsed numbers must be its numbers."""
+    proj = _project(tmp_path, {"sta_spef_based.rpt": REAL_WITH_PATHS})
+    rows, _ = timing.timing_rows(proj)
+    assert _by_metric(rows, "timing.setup.worst_slack_ns")[0]["value"] == 0.19
+    assert _by_metric(rows, "timing.hold.worst_slack_ns")[0]["value"] == 0.64
+    assert _by_metric(rows, "timing.setup.wns_ns")[0]["value"] == 0.0
+    per_clock = _by_metric(rows, "timing.setup.worst_path_slack_ns")
+    assert len(per_clock) == 1
+    assert per_clock[0]["scope"]["clock"] == "clk"
+    assert per_clock[0]["value"] == 0.19
+
+
+def test_real_no_path_output_yields_no_measured_row(tmp_path):
+    proj = _project(tmp_path, {"sta_spef_based.rpt": REAL_NO_PATHS})
+    rows, _ = timing.timing_rows(proj)
+    assert rows
+    assert not [r for r in rows if r["status"] == timing.MEASURED]
+
+
+def test_an_empty_hold_view_does_not_suppress_a_real_setup_measurement(tmp_path):
+    """Withholding is PER CHECK. This module's first shape keyed it on the
+    whole section, so an unbannered report carrying a real setup slack beside
+    an empty hold analysis had its setup measurement suppressed -- inventing an
+    unmeasured view out of one that was measured. Both directions are wrong and
+    this is the one that loses evidence.
+    """
+    body = ("tns max 0.00\nwns max 0.00\n"
+            "worst slack max 0.19\nworst slack min INF\n")
+    proj = _project(tmp_path, {"sta_spef_based.rpt": body})
+    rows, _ = timing.timing_rows(proj)
+
+    setup_ws = _by_metric(rows, "timing.setup.worst_slack_ns")
+    assert setup_ws[0]["status"] == timing.MEASURED
+    assert setup_ws[0]["value"] == 0.19
+    # the setup SUMMARY lines are real evidence too: setup analysed paths
+    assert _by_metric(rows, "timing.setup.wns_ns")[0]["status"] == timing.MEASURED
+    assert _by_metric(rows, "timing.setup.tns_ns")[0]["status"] == timing.MEASURED
+    # and hold is still honestly unmeasured
+    assert _by_metric(rows, "timing.hold.worst_slack_ns")[0]["status"] \
+        == timing.NOT_MEASURED
