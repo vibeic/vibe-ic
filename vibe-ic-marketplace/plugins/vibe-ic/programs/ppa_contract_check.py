@@ -118,15 +118,42 @@ def schema_findings(document: Any, schema_dir: Path) -> List[Dict[str, Any]]:
             f"the contract schema could not be read ({reason}), so the "
             f"document's shape was NOT validated",
             schema_path=str(path))]
-    validator = jsonschema.Draft202012Validator(schema)
     out: List[Dict[str, Any]] = []
-    for err in sorted(validator.iter_errors(document), key=lambda e: list(e.path)):
-        where = "/".join(str(p) for p in err.path) or "<document root>"
+    out.extend(_apply(jsonschema, schema, document, "contract.v1",
+                      "<document root>"))
+
+    # The run manifest is embedded, and `contract.v1` types it only as an
+    # object. Validating it here is what stops `run_manifest.v1.schema.json`
+    # from being a file that ships and is never applied -- a schema nothing
+    # enforces states a rule that is not in force, which is worse than no
+    # schema because a reader believes it.
+    manifest_schema, reason = C.load_json(
+        Path(schema_dir) / "run_manifest.v1.schema.json")
+    if reason is not None:
         out.append(C.finding(
-            "PPA-C-010", C.SEV_FAIL,
-            f"the document violates contract.v1 at {where}: {err.message}",
-            path=where))
+            "PPA-C-010", C.SEV_UNDETERMINED,
+            f"the run-manifest schema could not be read ({reason}), so the "
+            f"embedded run manifest was NOT validated"))
+    else:
+        out.extend(_apply(jsonschema, manifest_schema,
+                          document.get("run_manifest"), "run_manifest.v1",
+                          "run_manifest"))
     return out
+
+
+def _apply(jsonschema, schema: Any, instance: Any, name: str,
+           root_label: str) -> List[Dict[str, Any]]:
+    """Every violation of one schema, as findings, sorted so reports diff."""
+    validator = jsonschema.Draft202012Validator(schema)
+    rows: List[Dict[str, Any]] = []
+    for err in sorted(validator.iter_errors(instance), key=lambda e: list(e.path)):
+        where = "/".join(str(p) for p in err.path)
+        where = f"{root_label}/{where}" if where else root_label
+        rows.append(C.finding(
+            "PPA-C-010", C.SEV_FAIL,
+            f"the document violates {name} at {where}: {err.message}",
+            path=where, schema_name=name))
+    return rows
 
 
 def main(argv=None) -> int:

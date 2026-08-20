@@ -764,3 +764,58 @@ def test_a_dangling_symlink_is_not_the_same_as_an_absent_file(tmp_path):
     assert absent["status"] == prov.NOT_MEASURED
     assert dangling["reason"] != absent["reason"]
     assert dangling["reason"] == "dangling symlink"
+
+
+def test_the_embedded_run_manifest_is_validated_against_its_own_schema(
+        tmp_path):
+    """`run_manifest.v1.schema.json` ships; something must APPLY it.
+
+    `contract.v1` types the embedded manifest only as `object`, so before this
+    the file was a schema nothing enforced — which states a rule that is not in
+    force and is worse than no schema, because a reader believes it.
+
+    The red case is the manifest's own load-bearing rule: an artefact row that
+    is NOT_MEASURED must not also carry a hash. If it could, "I could not read
+    it" and "I read it and it was empty" would be indistinguishable at the
+    schema layer even though the code keeps them apart."""
+    build_contract(tmp_path, base_declaration())
+    path = tmp_path / "contract.json"
+    document = json.loads(path.read_text())
+    document["run_manifest"]["artefacts"].append({
+        "role": "smuggled", "path": "sta/setup.rpt",
+        "status": "NOT_MEASURED", "reason": "could not read",
+        "sha256": "sha256:" + "0" * 64, "bytes": 0})
+    document["contract_digest"] = C.contract_digest_of(document)   # re-seal it
+    path.write_text(json.dumps(document))
+
+    checked = run_cli(CHECK, "--contract", str(path))
+    assert checked.returncode == 1, (
+        f"a NOT_MEASURED artefact carrying a hash passed the schema layer "
+        f"(rc={checked.returncode})\n{checked.stdout}\n{checked.stderr}")
+    text = checked.stdout + checked.stderr
+    assert "run_manifest.v1" in text, (
+        f"the finding does not say WHICH schema was violated:\n{text}")
+    assert "run_manifest/" in text
+
+
+def test_a_clean_contract_passes_both_schemas(tmp_path):
+    """The green twin: adding the second schema must not start refusing the
+    documents this lane itself produces."""
+    built = build_contract(tmp_path, base_declaration())
+    assert built.returncode == 0
+    checked = run_cli(CHECK, "--contract", str(tmp_path / "contract.json"))
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def test_an_unreadable_run_manifest_schema_does_not_report_clean(tmp_path):
+    build_contract(tmp_path, base_declaration())
+    only_contract = tmp_path / "half_schemas"
+    only_contract.mkdir()
+    (only_contract / "contract.v1.schema.json").write_text(
+        (SCHEMA_DIR / "contract.v1.schema.json").read_text())
+    checked = run_cli(CHECK, "--contract", str(tmp_path / "contract.json"),
+                      "--schema-dir", str(only_contract))
+    assert checked.returncode == 2, (
+        f"a missing run-manifest schema reported clean (rc="
+        f"{checked.returncode})\n{checked.stdout}\n{checked.stderr}")
+    assert "PPA-C-010" in codes(checked)
