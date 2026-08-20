@@ -46,6 +46,7 @@ proves the script mentions the program; it does not prove the landing stops.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -111,10 +112,41 @@ def _preflight_block() -> tuple[int, str]:
     return start + 1, "\n".join(lines[start:end + 1])
 
 
+#: The three test arms, by the name of the function that runs each one.
+_ARM_FUNCTIONS = ("run_pytest", "run_repo_tools_pytest",
+                  "run_unselectable_pytest")
+
+
 def _first_arm_line() -> int:
+    """The first line that CALLS a test arm — not the first line of a shape.
+
+    This used to be `next(… if line in {"  run_pytest", "run_pytest"})`. The
+    full tier's independent stages now run at the same time and the arms are
+    called from inside the lane bodies the window launches, so that generator
+    matched nothing and `next` raised StopIteration: the test reported a crash
+    where it meant to report a verdict, and "the preflight is not before the
+    first arm" and "I could not find the first arm" became the same red.
+    """
     lines = _land_lines()
-    return next(i + 1 for i, line in enumerate(lines)
-                if line in {"  run_pytest", "run_pytest"})
+    spans = []
+    for name in _ARM_FUNCTIONS:
+        define = next((i for i, line in enumerate(lines)
+                       if line.startswith(f"{name}() {{")), None)
+        assert define is not None, (
+            f"gatekeeper-land.sh no longer defines the test arm {name}")
+        close = next(i for i in range(define + 1, len(lines))
+                     if lines[i] == "}")
+        spans.append((define, close))
+    calls = [
+        i + 1 for i, line in enumerate(lines)
+        if not any(start <= i <= close for start, close in spans)
+        and not line.lstrip().startswith("#")
+        and any(re.search(rf"(?<![\w./-]){name}(?![\w(])", line)
+                for name in _ARM_FUNCTIONS)]
+    assert calls, (
+        "gatekeeper-land.sh defines the test arms but calls none of them — "
+        "there is no first arm for the preflight to come before")
+    return min(calls)
 
 
 #: Interpreter-path variables that route a SECOND copy of the runner into any
