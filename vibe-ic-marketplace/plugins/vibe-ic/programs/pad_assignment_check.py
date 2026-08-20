@@ -132,6 +132,39 @@ def _audit_skip(rep: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
+def _audit_refusal(project: Path) -> List[Dict[str, str]]:
+    """A refusal is contradicted by its own output still being on disk.
+
+    The producer deletes a stale config IT wrote before refusing, precisely so
+    `pad_ring_gen` cannot place a ring from geometry the run refused. If one is
+    there anyway — the unlink failed, or somebody restored it — the artefact has
+    outlived the evidence, and the next step in the flow will read it and build
+    a ring nobody accepted. `pad_ring_check` guards the same shape from the
+    other end (`PADRING_SKIP_CONTRADICTED`).
+
+    ONLY a config carrying the producer's stamp counts. An unstamped one is
+    somebody else's input, was one of the producer's SOURCES, and its presence
+    after a refusal is not a contradiction — the ring it produces is audited on
+    its own terms by `pad_ring_check`.
+    """
+    path = project / PR.ASSIGNMENT_REL
+    if not path.is_file():
+        return []
+    try:
+        doc = json.loads(path.read_text(errors="replace"))
+    except (ValueError, OSError):
+        return []
+    stamp = doc.get(GEN.PROVENANCE_KEY) if isinstance(doc, dict) else None
+    if not (isinstance(stamp, dict) and stamp.get("written_by") == GEN.PROGRAM):
+        return []
+    return [_finding(
+        "PAD_ASSIGNMENT_REFUSAL_CONTRADICTED",
+        f"the report does not accept this config, yet {PR.ASSIGNMENT_REL} is "
+        f"on disk carrying {GEN.PROVENANCE_KEY}.written_by="
+        f"{GEN.PROGRAM!r} — the producer's own output survived its refusal, "
+        f"and `pad_ring_gen` reads that file next")]
+
+
 def _audit_pass(project: Path, rep: Dict[str, Any]) -> List[Dict[str, str]]:
     """A PASS is believed only where the config on disk agrees with it."""
     out: List[Dict[str, str]] = []
@@ -247,8 +280,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     findings.append(_finding(
                         rules[0] if rules else "PAD_ASSIGNMENT_REFUSED",
                         reason))
+                    findings.extend(_audit_refusal(project))
                 elif v == "SKIP":
                     findings.extend(_audit_skip(producer))
+                    findings.extend(_audit_refusal(project))
                     if not findings:
                         verdict, rc = "SKIP", SKIP
                         reason = (
