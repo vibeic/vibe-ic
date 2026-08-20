@@ -267,6 +267,76 @@ def declared_period_ns(docs: Sequence[Path],
     return rep
 
 
+# ── the I/O delay a design declares as a FRACTION of its own period ──────────
+# The same document that keys its period by library states the I/O delay as a
+# DERIVATION rather than a number ("I/O delay is 20 % of the clock period",
+# with a worked example at one period). A reader written for the literal form
+# emits a fixed number that satisfies the derivation at exactly ONE period and
+# under- or over-constrains the I/O boundary at every other — a declared
+# RELATIONSHIP read as if it were a declared VALUE.
+_IO_TOKEN_RE = re.compile(
+    r"set_input_delay|set_output_delay|input\s+delay|output\s+delay|"
+    r"i/o\s*delay|輸入延遲|輸出延遲|輸入輸出延遲",
+    re.IGNORECASE)
+_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+_PERIOD_TOKEN_RE = re.compile(r"clock\s*period|period|時脈週期|週期",
+                              re.IGNORECASE)
+# How far past the I/O token the derivation may sit. One sentence / bullet.
+_IO_WINDOW = 240
+
+
+def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
+    """The fraction of the clock period the design declares as its I/O delay.
+
+    Returns ``fraction`` (e.g. 0.2) only when a statement naming an I/O delay
+    AND the clock period AND one percentage sits inside one window, and every
+    such statement across the docs agrees. Two different percentages is a
+    REFUSAL, not a vote — the same rule the period table follows.
+    """
+    rep: Dict[str, object] = {"fraction": None, "percent": None,
+                              "source": None, "line": None,
+                              "ambiguous": False, "note": ""}
+    found: List[Tuple[float, str, int, str]] = []
+    for d in docs:
+        try:
+            text = d.read_text(errors="ignore")
+        except Exception:
+            continue
+        for m in _IO_TOKEN_RE.finditer(text):
+            window = text[m.start():m.start() + _IO_WINDOW]
+            # The window must not run past a blank line into the next topic.
+            window = window.split("\n\n", 1)[0]
+            if not _PERIOD_TOKEN_RE.search(window):
+                continue
+            pcts = _PCT_RE.findall(window)
+            if len(pcts) != 1:
+                continue  # 0 = no derivation stated; >1 = not one statement
+            try:
+                pct = float(pcts[0])
+            except ValueError:
+                continue
+            if not (0.0 < pct < 100.0):
+                continue
+            line_no = text.count("\n", 0, m.start()) + 1
+            found.append((pct, str(d), line_no,
+                          window.splitlines()[0].strip()))
+    if not found:
+        rep["note"] = "no I/O delay stated as a fraction of the clock period"
+        return rep
+    pcts = sorted({round(f[0], 6) for f in found})
+    if len(pcts) > 1:
+        rep["ambiguous"] = True
+        rep["note"] = (f"AMBIGUOUS — the doc(s) state {pcts} % for the I/O "
+                       "delay; refusing to pick one")
+        return rep
+    pct, src, line, snippet = found[0]
+    rep.update({"fraction": pct / 100.0, "percent": pct, "source": src,
+                "line": line,
+                "note": (f"the design declares an I/O delay of {pct:g} % of the "
+                         f"clock period at {src}:{line} — {snippet}")})
+    return rep
+
+
 def docs_in(docs_dir: Path) -> List[Path]:
     """The constraint docs, most-authoritative first (L9 then L1, as the
     resolver's own priority chain already orders them)."""

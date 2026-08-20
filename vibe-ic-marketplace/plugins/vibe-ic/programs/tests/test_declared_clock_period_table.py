@@ -300,3 +300,88 @@ def test_no_chip_pdk_or_vendor_literal_in_the_program():
     lowered = code.lower()
     for lit in ("sky130", "gf180", "sg13g2", "nangate", "asap7", "spm"):
         assert lit not in lowered, f"chip/PDK literal {lit!r} in executable code"
+
+
+# ── the SAME document declares the I/O delay as a DERIVATION, not a number ───
+#
+# L9 9.1.3 states "I/O delay: 20 % of the clock period (e.g. 10 ns -> 2 ns)".
+# The auto-SDC emitted the literal `2` at EVERY period — a number that
+# satisfies the declaration at exactly one period and at no other. At the
+# 24 ns this design declares for its own library the declared delay is 4.8 ns,
+# so the fixed 2 UNDER-constrained every I/O path by 2.8 ns. A declared
+# RELATIONSHIP read as if it were a declared VALUE.
+
+L9_IO = L9.replace(
+    "- some prose that mentions a period but keys nothing",
+    "- `set_input_delay` / `set_output_delay`: use **20% of the clock period** "
+    "as the default (e.g. `sky130_fd_sc_hd` 10 ns -> 2 ns I/O delay)")
+
+
+def test_reads_the_declared_io_delay_fraction(tmp_path):
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, L9_IO)))
+    assert rep["fraction"] == pytest.approx(0.2)
+    assert rep["percent"] == 20.0
+    assert rep["source"].endswith("L9_constraints_floorplan.md")
+
+
+def test_no_declared_fraction_is_a_clean_miss(tmp_path):
+    """NEGATIVE CONTROL — the doc without the 9.1.3 statement must yield
+    nothing, so the caller keeps the historical literal."""
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, L9)))
+    assert rep["fraction"] is None and not rep["ambiguous"]
+
+
+def test_two_different_declared_fractions_are_refused(tmp_path):
+    txt = L9_IO + "\n\n- input delay: 30% of the clock period\n"
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] is None and rep["ambiguous"] is True
+
+
+def test_a_worked_example_number_is_not_mistaken_for_the_fraction(tmp_path):
+    """The declaration's own example contains `10 ns -> 2 ns`. Only the
+    PERCENTAGE may be read; a bare ns figure in the same sentence must not
+    become the fraction."""
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, L9_IO)))
+    assert rep["fraction"] == pytest.approx(0.2)
+
+
+def test_the_sdc_computes_the_io_delay_from_the_resolved_period(tmp_path):
+    _docs(tmp_path, L9_IO)
+    io_ns, note = runner._declared_io_delay_ns(tmp_path, 24.0)
+    assert io_ns == pytest.approx(4.8)
+    assert "VIBEIC_DECLARED_IO_DELAY" in note
+    for line in note.splitlines():
+        assert line.startswith("#")
+
+
+def test_the_emitted_sdc_carries_both_declared_constraints(tmp_path):
+    _docs(tmp_path, L9_IO)
+    out = runner._build_auto_silicon_sdc(
+        tmp_path, top="spm", liberty_path=GF_LIB, pdk_name="gf180mcuD")
+    text = out[0] if isinstance(out, tuple) else out
+    assert "create_clock -name clk -period 24.0" in text
+    assert "set_input_delay  4.8 -clock clk" in text
+    assert "set_output_delay 4.8 -clock clk" in text
+    assert "VIBEIC_DECLARED_PERIOD" in text and "VIBEIC_DECLARED_IO_DELAY" in text
+
+
+def test_a_design_that_declares_nothing_gets_the_historical_literal(tmp_path):
+    """REGRESSION GUARD — the fleet must not move.
+
+    A project with no declaration must emit the same `2` it always has, and no
+    disclosure line. This is what keeps every design that predates this change
+    byte-identical.
+    """
+    out = runner._build_auto_silicon_sdc(tmp_path, top="spm")
+    text = out[0] if isinstance(out, tuple) else out
+    assert "set_input_delay  2 -clock clk" in text
+    assert "set_output_delay 2 -clock clk" in text
+    assert "VIBEIC_DECLARED_IO_DELAY" not in text
+    assert "VIBEIC_DECLARED_PERIOD" not in text
+    assert "-period 20.0" in text
+
+
+def test_the_io_delay_does_not_fire_without_a_period(tmp_path):
+    _docs(tmp_path, L9_IO)
+    io_ns, note = runner._declared_io_delay_ns(tmp_path, 0)
+    assert io_ns is None and note == ""

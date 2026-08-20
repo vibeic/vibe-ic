@@ -2949,6 +2949,38 @@ def _declared_period_disclosure(project: Path, pdk_name: str,
     return ""
 
 
+def _declared_io_delay_ns(project: Path, clk_period_ns: float) -> tuple:
+    """(io_delay_ns, disclosure) for a design that declares its I/O delay as a
+    FRACTION of its own clock period, else (None, "").
+
+    The auto-SDC has always emitted a fixed `2` for both I/O delays. That
+    number satisfies a "20 % of the period" declaration at exactly one period
+    (10 ns) and at no other: at the 24 ns this design declares for its own
+    library the declared delay is 4.8 ns, so the fixed 2 UNDER-constrains every
+    I/O path by 2.8 ns — an optimistic sign-off on the boundary. A declared
+    RELATIONSHIP was being read as if it were a declared VALUE.
+
+    §4.05: returns None — and the caller keeps the historical literal,
+    byte-identical — unless the design's own docs state the fraction. Two
+    different fractions is a REFUSAL, not a vote.
+    """
+    try:
+        import declared_clock_period as _dcp
+        rep = _dcp.declared_io_delay_fraction(
+            _dcp.docs_in(project / "input" / "docs"))
+    except Exception:
+        return (None, "")
+    frac = rep.get("fraction")
+    if not frac or not clk_period_ns:
+        return (None, "")
+    io_ns = float(clk_period_ns) * float(frac)
+    note = ("# VIBEIC_DECLARED_IO_DELAY: the design states its I/O delay as a "
+            "fraction of its\n#   own clock period, so it is COMPUTED from the "
+            f"resolved period, not fixed. {rep.get('note', '')}\n"
+            f"#   {clk_period_ns:g} ns x {rep.get('percent')} % = {io_ns:g} ns\n")
+    return (io_ns, note)
+
+
 def _build_auto_silicon_sdc(project: Path, top: str = "",
                             drv_slew_ns: Optional[float] = None,
                             drv_cap_pf: Optional[float] = None,
@@ -3010,11 +3042,15 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     # period / I/O delays BYTE-IDENTICALLY to the pre-A4 SDC (`10.0`, `2`) so
     # sky130 / nangate output is unchanged; only the non-ns (e.g. ASAP7 ps)
     # case reformats via `:g` to carry the scaled value without a trailing `.0`.
+    _io_ns, _io_note = _declared_io_delay_ns(project, clk_period_ns)
+    # No declaration ⇒ the historical literal 2, byte-identical.
+    _io_val = 2.0 if _io_ns is None else float(_io_ns)
     if _tu_scale == 1.0:
-        _period_str, _io_str = f"{clk_period_ns}", "2"
+        _period_str = f"{clk_period_ns}"
+        _io_str = "2" if _io_ns is None else f"{_io_val:g}"
     else:
         _period_str = f"{clk_period_ns * _tu_scale:g}"
-        _io_str = f"{2 * _tu_scale:g}"
+        _io_str = f"{_io_val * _tu_scale:g}"
     _tu_note = (f"# time-unit scaling: liberty declares a non-ns time_unit; "
                 f"period {clk_period_ns:g} ns emitted as {_period_str} "
                 f"lib-time-units\n" if _tu_scale != 1.0 else "")
@@ -3033,6 +3069,7 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
         f"clk_port={clk_port_name})\n"
         + _staged_note
         + _declared_note
+        + _io_note
         + _tu_note +
         f"create_clock -name clk -period {_period_str} "
         f"[get_ports {clk_port_name}]\n"
