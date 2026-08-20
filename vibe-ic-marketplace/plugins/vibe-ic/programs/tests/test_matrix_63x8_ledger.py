@@ -76,15 +76,53 @@ from matrix_63x8 import waivers as W
 # note on CENSUS_BLOCKS_ON_NON_EMPTY below records that; the count that note
 # left at 62 is the one this change moves to 66.
 # ──────────────────────────────────────────────────────────────────────
-EXPECTED_CELLS = 544
-EXPECTED_STEPS = 68
+# ──────────────────────────────────────────────────────────────────────
+# 2026-08-21 — EVERY TRIPWIRE BELOW MOVES BY EXACTLY ONE, ON ONE CAUSE.
+#
+# `7fcbc7397` ("ppa(phase4): step 13 passes on a rewritten candidate") added
+# step 1.6x — the cross-layer rewrite-fidelity relation — to the flow yaml and
+# regenerated NONE of the 63x8 pins. `git show --stat 7fcbc7397` names eight
+# files: the yaml, INDEX.md, three new programs and their three tests. No
+# matrix, ledger, waiver or census file among them.
+#
+# Measured live off the yaml in this tree, not re-typed from the change:
+#
+#   EXPECTED_STEPS                68 -> 69   1.6x
+#   EXPECTED_CELLS               544 -> 552   69 x 8
+#   CENSUS_GATE_PRESENT           67 -> 68   1.6x declares a gate
+#   CENSUS_REQUIRED_OUTPUTS_...   66 -> 67   1.6x declares required_outputs
+#   CENSUS_BLOCKS_ON_PRESENT      68 -> 69   1.6x declares the key
+#   CENSUS_BLOCKS_ON_NON_EMPTY    66 -> 67   `blocks_on: [1]`, non-empty
+#   CENSUS_GATE_PROGRAMS_NON_...  66 -> 67   its gate names a program
+#
+# ALL SEVEN MOVE BY ONE AND IT IS THE SAME STEP. The raw yaml step count did
+# NOT change across this span — 77 before and 77 after — because `867de4289`
+# retired 37.5self in the same window. 37.5self was never in the matrix
+# population, so the matrix moved +1 while the file moved +1 -1. A reader who
+# checks `grep -c '^  - id:'` and sees no change has not checked this.
+#
+# THIS IS THE THIRD TIME. The notes below record the tripwire firing on a
+# legitimate flow change and then sitting red on main instead of being moved —
+# P0 (`332b9985`) and A1 (`73dfb68dd`). Measured on why nothing caught it this
+# time: the repository's own selector DOES reach here. Run against the culprit
+# diff, `ci_targeted_test_select.py --base 7fcbc7397~1` selects 325 tests
+# including 16 `test_matrix_*` files, this one among them. The tests were
+# selected and the red was not acted on, so the hole is not selection.
+#
+# THEY ARE NOT AUTO-DERIVED, AND THAT IS THE POINT. Deriving these from the
+# yaml would make every assertion below tautological and the ledger could then
+# drift in silence — which is the disease this file was written against. They
+# stay typed, in ONE place, so a flow change forces a reviewer to look.
+# ──────────────────────────────────────────────────────────────────────
+EXPECTED_CELLS = 552
+EXPECTED_STEPS = 69
 EXPECTED_DIMS = 8
 
 # Pinned census of the yaml as measured on 2026-07-27. These are TRIPWIRES, not
 # the definition: every structural assertion below derives its expectation live
 # from the yaml. If the flow legitimately changes, these numbers change with it
 # in ONE place and the reviewer is forced to look.
-CENSUS_GATE_PRESENT = 67
+CENSUS_GATE_PRESENT = 68
 # UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
 # was WITHDRAWN the same day: the only thing that made the declaration
 # satisfiable was `check_step` standing its early MISSING down so FS1's own
@@ -93,7 +131,7 @@ CENSUS_GATE_PRESENT = 67
 # artefacts have no producer outside its own gate, so dimension 7's W4 rule
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
-CENSUS_REQUIRED_OUTPUTS_PRESENT = 66
+CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
 # P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
 # P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
@@ -104,7 +142,7 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 66
 # `332b9985` also edited `flow_dependency_graph_check.py` and its test in the
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
-CENSUS_BLOCKS_ON_PRESENT = 68
+CENSUS_BLOCKS_ON_PRESENT = 69
 # 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
 # gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
 # D1 while carrying `blocks_on: []`, so the ordering edge its own inputs
@@ -125,11 +163,11 @@ CENSUS_BLOCKS_ON_PRESENT = 68
 # gives A1 an ordering edge moves BOTH sides together instead of reddening
 # this cell". Both sides DID move together. The cell reddened anyway, because
 # this count is a THIRD copy that neither side is tied to.
-CENSUS_BLOCKS_ON_NON_EMPTY = 66
+CENSUS_BLOCKS_ON_NON_EMPTY = 67
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
-CENSUS_GATE_PROGRAMS_NON_EMPTY = 66
+CENSUS_GATE_PROGRAMS_NON_EMPTY = 67
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -641,8 +679,13 @@ def test_output_entries_classify_into_the_four_kinds():
     # declared it and still does — what changed is that it is now written on
     # every path, including the paths where the operator was never asked.
     # = FILE 114 + 2 + 1 + 2 = 119; GLOB and ANY_OF untouched.
-    assert sum(seen.values()) == 161, seen
-    assert seen[F.FILE] == 119
+    # 2026-08-21: 161 -> 162, FILE 119 -> 120. The SIXTH change, and it is one
+    # entry: step 1.6x's `reports/crosslayer/rewrite_equivalence_check.json`,
+    # added by `7fcbc7397` with none of these pins moved. A plain FILE — no
+    # glob, no OR — so GLOB and ANY_OF are untouched, which is what makes the
+    # attribution checkable rather than asserted.
+    assert sum(seen.values()) == 162, seen
+    assert seen[F.FILE] == 120
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
@@ -1082,7 +1125,7 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
         C.rebuild()
 
         assert len(F.step_ids()) == EXPECTED_STEPS + 1
-        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 552
+        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 560
         assert len(C.cells_for(1)) == EXPECTED_STEPS + 1
 
         # The added step has no audit history at all — surfaced, not swallowed.
