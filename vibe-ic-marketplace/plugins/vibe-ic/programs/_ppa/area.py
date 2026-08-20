@@ -462,6 +462,20 @@ def compare(baseline: Mapping[str, Any], candidate: Mapping[str, Any]
                           f"{side} {bm} has status {rec.get('status')!r} — "
                           f"its value may not enter a numeric comparison",
                           **common)
+    for side, rec in (("baseline", baseline), ("candidate", candidate)):
+        v = rec.get("value")
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            # Reachable from the CLI: the record sets are read off disk and a
+            # hand-written one can claim MEASURED and carry no number. That is
+            # an UNDETERMINED comparison, never a crash and never a finding.
+            return _undet(C_STATUS_NOT_COMPARABLE,
+                          f"{side} {bm} claims status "
+                          f"{rec.get('status')!r} but carries no numeric value "
+                          f"(got {v!r})", **common)
+        if v != v or v in (float("inf"), float("-inf")):
+            return _undet(C_STATUS_NOT_COMPARABLE,
+                          f"{side} {bm} carries {v!r}, which is not a number a "
+                          f"comparison can use", **common)
     if baseline.get("unit") != candidate.get("unit"):
         return _undet(C_UNIT_MISMATCH,
                       f"{bm}: units differ "
@@ -684,6 +698,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"{_MARK_CANNOT} area: {ex}", file=sys.stderr)
         _write_json(args.json, doc)
         return 2
+    except Exception as ex:  # noqa: BLE001 - deliberate: see below
+        # An unhandled exception here would leave Python to exit 1, and 1 in
+        # this program means "the design is not smaller". A crash is an
+        # INTERNAL ERROR (rc=3), never a claim about silicon.
+        doc = {"schema": SCHEMA_VERDICT, "verdict": V_UNDETERMINED,
+               "code": "AREA_INTERNAL_ERROR",
+               "reason": f"{type(ex).__name__}: {ex}"}
+        print(f"{_MARK_CANNOT} area: internal error — {type(ex).__name__}: {ex}",
+              file=sys.stderr)
+        _write_json(args.json, doc)
+        return 3
 
     _write_json(args.json, doc)
     verdict, reason = doc["verdict"], doc["reason"]

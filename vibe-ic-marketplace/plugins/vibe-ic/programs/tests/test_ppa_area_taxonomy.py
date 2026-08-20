@@ -281,6 +281,24 @@ class TestCompare:
             scope={"stage": "pre_synthesis"}, assumptions={"f": "n*30"})
         assert A.compare(base, cand)["code"] == A.C_STATUS_NOT_COMPARABLE
 
+    def test_a_record_that_claims_measured_but_carries_no_number(self):
+        """Reachable from the CLI, where records are read off disk.
+
+        A hand-written record can say MEASURED and carry nothing. That is an
+        UNDETERMINED comparison — not a traceback, and not a finding.
+        """
+        good = _phys("area.physical.core_um2", CORE_UM2)
+        bad = dict(good)
+        bad.pop("value")
+        r = A.compare(good, bad)
+        assert r["relation"] == A.V_UNDETERMINED
+        assert r["code"] == A.C_STATUS_NOT_COMPARABLE
+
+    def test_a_record_carrying_a_string_where_a_number_belongs(self):
+        good = _phys("area.physical.core_um2", CORE_UM2)
+        bad = dict(good, value="12294")
+        assert A.compare(good, bad)["code"] == A.C_STATUS_NOT_COMPARABLE
+
     def test_a_non_positive_baseline_cannot_anchor_a_relative_claim(self):
         base = _phys("area.physical.core_um2", 0.0)
         r = A.compare(base, _phys("area.physical.core_um2", 1.0))
@@ -475,6 +493,32 @@ class TestCli:
     def test_bad_invocation_is_rc3_never_a_design_finding(self, tmp_path):
         r = _run("--baseline", str(tmp_path / "x.json"))
         assert r.returncode == 3
+
+    def test_a_malformed_record_file_is_rc2_not_a_finding(self, tmp_path):
+        """A file of objects that are not metric records. rc must not be 1."""
+        b = _write(tmp_path, "b.json", [{"metric": "area.physical.core_um2",
+                                         "status": "MEASURED"}])
+        c = _write(tmp_path, "c.json", [{"hello": "world"}])
+        r = _run("--baseline", b, "--candidate", c)
+        assert r.returncode == 2
+        assert "[CANNOT CHECK]" in r.stderr
+
+    def test_a_record_naming_an_unregistered_metric_is_rc2(self, tmp_path):
+        rec = {"schema": A.SCHEMA, "metric": "area.physical.invented_um2",
+               "status": "MEASURED", "value": 1.0, "unit": "um^2",
+               "scope": {"stage": "post_route"}, "source": {"path": "x"}}
+        b = _write(tmp_path, "b.json", [rec])
+        c = _write(tmp_path, "c.json", [dict(rec, value=0.5)])
+        r = _run("--baseline", b, "--candidate", c)
+        assert r.returncode == 2
+
+    def test_a_json_file_that_is_not_a_list_is_rc2(self, tmp_path):
+        p = tmp_path / "b.json"
+        p.write_text('{"nope": 1}', encoding="utf-8")
+        c = _write(tmp_path, "c.json", [_phys("area.physical.core_um2", 1.0)])
+        r = _run("--baseline", str(p), "--candidate", c)
+        assert r.returncode == 2
+        assert "neither a 'records' nor a 'metrics' list" in r.stderr
 
     def test_the_json_report_is_written_canonically(self, tmp_path):
         b = _write(tmp_path, "b.json", [_phys("area.physical.core_um2", CORE_UM2)])
