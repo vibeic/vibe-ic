@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1147
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1147)
+- **Total programs (excluding helpers / shims):** 1148
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1148)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1138 |
+| `any` | 1139 |
 
 ## Alphabetical listing
 
@@ -197,6 +197,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
 | `clock_scale_consistency_check` | any | — | Catch un-rescaled threshold values. |
 | `closed_loop_edge_check` | any | — | a declared `closed_loop` must be an edge something can actually take, or the declaration is decoration. |
+| `closed_loop_executable_coverage_check` | any | — | a line of YAML is not a loop. |
 | `cmd_arg_range_validation_check` | any | — | M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated... |
 | `cmd_argument_validation_present_check` | any | — | every opcode in L3_CMD_PROTOCOL.json that takes ≥2 inbound argument bytes must declare an `argument_validation_predicate` field referenci... |
 | `cmd_buf_index_semantic_consistency_check` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 37 | Wave 37 (v0.119.69). |
@@ -1219,7 +1220,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1138 programs)
+### `any` (1139 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1391,6 +1392,7 @@ _(no programs in this group)_
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
 - `clock_scale_consistency_check` — Catch un-rescaled threshold values.
 - `closed_loop_edge_check` — a declared `closed_loop` must be an edge something can actually take, or the declaration is decoration.
+- `closed_loop_executable_coverage_check` — a line of YAML is not a loop.
 - `cmd_arg_range_validation_check` — M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated...
 - `cmd_argument_validation_present_check` — every opcode in L3_CMD_PROTOCOL.json that takes ≥2 inbound argument bytes must declare an `argument_validation_predicate` field referenci...
 - `cmd_protocol_byte_exact_check` — gate that catches L3_CMD_PROTOCOL.json with symbolic/abstract entries in fields_tx instead of byte-exact bytes.

@@ -13,14 +13,14 @@ and the contribution guides for extending it.
 | | |
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
-| Plugin version | **1.11.29** |
+| Plugin version | **1.11.30** |
 | Deterministic programs | **1211** top level (`plugins/vibe-ic/programs/*.py`), of which **1138** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 | Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
 | Canonical flow | **68 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) — 26 of them conditional, including the cell/IP vs chip/IC split |
-| Plugin version | **1.11.29** |
+| Plugin version | **1.11.30** |
 | Deterministic programs | **1211** top level (`plugins/vibe-ic/programs/*.py`), of which **1138** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 | License | Apache-2.0 |
 
@@ -40,7 +40,7 @@ Design**: the AI agent is the core decision-maker; EDA tools are callable
 execution engines.
 
 It is also **program-first**. The product is the deterministic runner chain
-| Plugin version | **1.11.29** |
+| Plugin version | **1.11.30** |
 | Deterministic programs | **1211** top level (`plugins/vibe-ic/programs/*.py`), of which **1138** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 → MCP-EDA), not a prompt. **60 of the 63 flow steps are gated by a program
 whose exit code is the verdict**; the AI is the fall-through when a program
@@ -364,7 +364,7 @@ claude plugin install vibe-ic
 
 The MCP-EDA server lives **inside** the plugin
 (`plugins/vibe-ic/mcp-eda/`), so one install gets the skills, the agents,
-| Plugin version | **1.11.29** |
+| Plugin version | **1.11.30** |
 | Deterministic programs | **1211** top level (`plugins/vibe-ic/programs/*.py`), of which **1138** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 [`plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md`](plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md)
 for the container prerequisites.
@@ -467,7 +467,7 @@ auto-registered on install. Inventory of record:
 
 ---
 
-| Plugin version | **1.11.29** |
+| Plugin version | **1.11.30** |
 | Deterministic programs | **1211** top level (`plugins/vibe-ic/programs/*.py`), of which **1138** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 
 ```bash
@@ -550,7 +550,7 @@ vibe-ic-marketplace/
 ├── templates/partner-plugin-skeleton/
 ├── community/backlogs/
 └── plugins/
-    └── vibe-ic/                         ← the single plugin (v1.11.29)
+    └── vibe-ic/                         ← the single plugin (v1.11.30)
         ├── .claude-plugin/plugin.json
         ├── flow/
         │   └── phase1_phase2_phase3.yaml   ← 68-step source of truth
@@ -566,7 +566,7 @@ vibe-ic-marketplace/
         │   ├── flow_compliance_check.py ← final gate
         │   ├── stage{1,2,3,4}_compliance.py
         │   ├── pdk_registry.json, ic_class_registry.json
-| Plugin version | **1.11.29** |
+| Plugin version | **1.11.30** |
 | Deterministic programs | **1211** top level (`plugins/vibe-ic/programs/*.py`), of which **1138** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
         ├── mcp-eda/                     ← bundled MCP server, 56 tools
         ├── ip-catalog/                  ← reusable open-source IP index
