@@ -169,6 +169,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402
 from _ppa import power as _pw  # noqa: E402
 
 TOOL = "power_total_vs_budget_check"
@@ -440,7 +441,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n")
+        # PPA_INTERFACES.md §1: every CLI writes through `_atomic_artefact`, so
+        # the declared destination never exists half-written. A reader that
+        # finds the file finds a complete document or nothing.
+        _aa.write_text(out, json.dumps(rep, indent=2, ensure_ascii=False)
+                       + "\n")
 
     scope = _scope_line(rep)
 
