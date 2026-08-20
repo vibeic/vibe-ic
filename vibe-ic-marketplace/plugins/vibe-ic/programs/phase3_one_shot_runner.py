@@ -1890,7 +1890,9 @@ def _c4_l8_declared_period_ns(project: Path,
     return periods[0]
 
 
-def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
+def _resolve_clock_spec(project: Path, top: str = "",
+                        pdk_name: str = "",
+                        liberty_path: str = "") -> tuple:
     """v1.6.560 sub-defect B fix. Derive (clock_period_ns, clock_port_name)
     from project sources in priority order — **L9 spec wins over baseline
     config**, because L9 is the docs-authoritative target while baseline
@@ -1904,7 +1906,11 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     Wishbone/AXI/Caravel naming conventions (the majority of real
     open-source ICs) produces a valid SDC instead of "No paths found".
 
-    Period resolution (unchanged from v1.6.560):
+    Period resolution (unchanged from v1.6.560, plus the PDK-keyed table):
+      0. the design's own PDK-KEYED period table, when ``pdk_name`` /
+         ``liberty_path`` identify the library this run builds against
+         (:mod:`declared_clock_period`) — see the block below for why this
+         outranks the Phase-2 SDC inheritance
       1. L9 spec (input/docs/L9_*.md) for period
       2. L1 spec (input/docs/L1_*.md) for period (fallback if L9 silent)
       3. config.json CLOCK_PERIOD (project root) for period
@@ -1983,6 +1989,46 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     _sdc_primary = _sdc.primary_clock(project)
     if _sdc_primary is not None:
         return (_sdc_primary["period_ns"], port_name)
+
+    # --- The design's own PDK-KEYED period table. ---
+    # spm x gf180mcuD, 2026-08-20 (MEASURED): a constraint L-doc that targets
+    # several PDKs states the period as a PLACEHOLDER plus a table keyed by
+    # std-cell library —
+    #     create_clock [get_ports clk] -name core_clock -period <PERIOD>
+    #     | `sky130_fd_sc_hd` | 10 | ... |
+    #     | `gf180mcu_*`      | 24 | ... |
+    # — so the L9/L1 prose regex below finds no number next to `-period` (its
+    # neighbour is the literal string `<PERIOD>`) and the whole ladder fell
+    # through to the 20.0 ns last-resort default. The run then signed off spm
+    # at 20 ns (50 MHz) a design that DECLARES 24 ns (41.7 MHz) for this
+    # library — a silent 20 % OVER-constraint, and every setup verdict it
+    # produced was a verdict about a clock the design never asked for.
+    #
+    # Ranked ABOVE the Phase-2 inheritance directly below, and that ordering is
+    # the point: `_phase2_emitted_period_ns` takes the SMALLEST period any
+    # Phase-2 SDC states, with no idea which library it was emitted for. On
+    # exactly this kind of multi-PDK design that rule inherits another
+    # library's row (here it would take the 8 ns `sky130_fd_sc_hs` target into
+    # a gf180mcu build). A row the design keyed to THE LIBRARY THIS RUN IS
+    # BUILDING AGAINST is a more specific statement of the same contract, so it
+    # wins. It stays BELOW `_sdc_primary`: a real staged SDC is still ground
+    # truth.
+    #
+    # §4.05: nothing is fabricated — a period is returned only when a row of a
+    # real table in the design's own docs matches this run's resolved library
+    # or PDK, contradictory rows are REFUSED rather than picked by order, and
+    # the matched key + file:line travel with the value into the SDC header.
+    if pdk_name or liberty_path:
+        try:
+            import declared_clock_period as _dcp
+            _lib_name = _dcp.library_name_from_liberty(liberty_path)
+            _tbl = _dcp.declared_period_ns(
+                _dcp.docs_in(project / "input" / "docs"),
+                [c for c in (_lib_name, pdk_name) if c])
+            if _tbl.get("period_ns"):
+                return (float(_tbl["period_ns"]), port_name)
+        except Exception:
+            pass  # a table we cannot read must not break resolution
 
     # --- GAP-E2E-1: Phase-2 emitted SDC. When no design-staged SDC exists,
     # inherit the concrete `create_clock -period` Phase-2's deterministic
@@ -2872,6 +2918,37 @@ def _ensure_staged_sdc_io_delay(sdc_text: str, project: Path,
     return text + block, info
 
 
+def _declared_period_disclosure(project: Path, pdk_name: str,
+                                liberty_path: str) -> str:
+    """The SDC comment that discloses a period taken from the design's own
+    PDK-keyed table, or "" when no such row governed this run.
+
+    Applying a period the DESIGN declares for THIS library is using the stated
+    constraint, not relaxing one — but a reader of the SDC has to be able to
+    tell the two apart without re-deriving anything, so the matched key and the
+    doc file:line are written into the artefact next to the number.
+    """
+    if not (pdk_name or liberty_path):
+        return ""
+    try:
+        import declared_clock_period as _dcp
+        rep = _dcp.declared_period_ns(
+            _dcp.docs_in(project / "input" / "docs"),
+            [c for c in (_dcp.library_name_from_liberty(liberty_path),
+                         pdk_name) if c])
+    except Exception:
+        return ""
+    if rep.get("period_ns"):
+        return ("# VIBEIC_DECLARED_PERIOD: this period is the DESIGN's own, "
+                "read from its PDK-keyed constraint table — NOT the runner's "
+                "default. "
+                + str(rep.get("note", "")).replace("\n", " ") + "\n")
+    if rep.get("ambiguous"):
+        return ("# VIBEIC_DECLARED_PERIOD: REFUSED — " + str(rep.get("note", ""))
+                + "\n")
+    return ""
+
+
 def _build_auto_silicon_sdc(project: Path, top: str = "",
                             drv_slew_ns: Optional[float] = None,
                             drv_cap_pf: Optional[float] = None,
@@ -2906,7 +2983,8 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     Chip-AGNOSTIC: standard-SDC syntax only; no chip/vendor/PDK literals (the DRV
     numbers are read from the active PDK's liberty, not hard-coded).
     """
-    clk_period_ns, clk_port_name = _resolve_clock_spec(project, top=top)
+    clk_period_ns, clk_port_name = _resolve_clock_spec(
+        project, top=top, pdk_name=pdk_name, liberty_path=liberty_path)
     # benchmark-spm-asap7 — SDC numeric values are interpreted by OpenSTA in
     # the LIBRARY's own ``time_unit``. The resolved clock period / I/O delays
     # are in ns; when the PDK liberty declares ``time_unit : "1ps"`` (e.g.
@@ -2945,6 +3023,7 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     # nothing. When the design DID stage SDCs the resolver does not read, say
     # that instead — and name them. Byte-identical when it staged none.
     _staged_note = staged_sdc_note or _staged_sdc_not_consumed_note(project)
+    _declared_note = _declared_period_disclosure(project, pdk_name, liberty_path)
     _supplied_clause = ("no constraints/*.sdc supplied" if not _staged_note
                         else "design-staged SDC(s) present but NOT consumed "
                              "— see VIBEIC_STAGED_SDC_NOT_CONSUMED below")
@@ -2953,6 +3032,7 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
         f"({_supplied_clause}; clk_period_ns={clk_period_ns} "
         f"clk_port={clk_port_name})\n"
         + _staged_note
+        + _declared_note
         + _tu_note +
         f"create_clock -name clk -period {_period_str} "
         f"[get_ports {clk_port_name}]\n"
