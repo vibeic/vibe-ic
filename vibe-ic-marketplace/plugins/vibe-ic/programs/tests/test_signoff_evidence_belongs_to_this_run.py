@@ -199,6 +199,49 @@ def test_every_gate_verdict_carries_the_binding_disclosure(tmp_path):
     assert doc2["summary"]["evidence_binding"]["disclosure"]
 
 
+def test_the_gate_does_not_fail_on_its_OWN_verdict_document(tmp_path):
+    """The sharpest false-positive this binding could have had.
+
+    A gate given `--json` WRITES into the project, and the step ledger declares
+    that output path with the digest of the FIRST run's bytes. Every later run
+    writes different bytes there. If the gate re-discovered its own verdict
+    document as an input, the binding would report a MISMATCH and every
+    re-evaluation of an honest published cell would go red on the second run.
+
+    It does not, because `_discover` already excludes this program's own verdict
+    documents — but that exclusion is now load-bearing for a NEW reason, so it
+    is pinned here rather than left as an accident.
+
+    THIS IS A `clears` TEST and passes vacuously against a tree with no binding
+    at all, so it means nothing alone. Its pair is
+    `test_another_runs_report_is_REFUSED`, which proves the binding does fire;
+    together they say the gate refuses a foreign report and not its own output.
+    """
+    run = _build_run(tmp_path / "run", "A")
+    out = "reports/phase3/antenna_signoff.json"
+    # Declare the gate's own output in the ledger, as a real run's step record
+    # does, seeded with bytes that the gate is about to overwrite.
+    _write(run, out, json.dumps({"seed": True}) + "\n")
+    rec = run / "steps/phase3/stage3/26_antenna/STEP_RECORD.json"
+    doc = json.loads(rec.read_text(encoding="utf-8"))
+    doc["declared_outputs"].append({"rel": out, "sha256": _sha(run / out),
+                                    "in_cell": True})
+    rec.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+    seeded = doc["declared_outputs"][-1]["sha256"]
+    # `--json` is resolved against the CALLER's cwd, not the project, so the
+    # absolute path is required here: a relative one would write outside the
+    # fixture and leave the arm vacuous while still passing.
+    for attempt in range(3):
+        r = _run("antenna_report_check", run, "--mode", "antenna",
+                 "--json", str(run / out))
+        assert r.returncode == 0, (attempt, r.stdout[-2500:])
+        assert reb.RULE not in r.stdout, (attempt, r.stdout[-2500:])
+    # ...and the declared file really was rewritten with different bytes, so
+    # the binding had a live MISMATCH available to report and did not.
+    assert _sha(run / out) != seeded
+
+
 # --------------------------------------------------------------------------- #
 # REAL ARTEFACTS — §4: a suite made only of its own fixtures cannot tell itself
 # from its own absence.
