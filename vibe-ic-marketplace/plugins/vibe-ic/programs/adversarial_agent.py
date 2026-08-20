@@ -46,13 +46,13 @@ re-run A's gate — against `spm/v1.9.96_gf180mcuD` with 19 reports taken from
 
     antenna_report_check    rc 0 -> 0    SUCCEEDED
     erc_density_check       rc 0 -> 0    SUCCEEDED
-    lvs_report_check        rc 0 -> 0    SUCCEEDED
     drc_report_check        rc 0 -> 1    DEFENDED
     em_report_check         rc 0 -> 1    DEFENDED
     ir_drop_report_check    rc 0 -> 1    DEFENDED
+    lvs_report_check        rc 0 -> 1    DEFENDED
     sta_report_check        rc 0 -> 1    DEFENDED
 
-Three of seven sign-off gates still certify one design using another design's
+Two of seven sign-off gates still certify one design using another design's
 evidence. The other four object, which is what makes this an attack and not a
 tautology: a probe that "succeeds" against everything measures nothing.
 
@@ -64,10 +64,13 @@ negative slack that happened to be in the DONOR's numbers, and
 On the measurement above, seven of seven gates were blind to design identity and
 the table's one DEFENDED was luck. drc / em / ir_drop now defend for the stated
 reason — their reports declare a design and `eda_report_audit` compares it with
-the module names the project's own Verilog declares. The three still listed
-SUCCEEDED emit no design identity a reader could bind: netgen writes none, and
-neither does the antenna or density producer. That is a gap in the PRODUCERS and
-it is recorded here rather than papered over in the gates.
+the module names the project's own Verilog declares. lvs joined them once netgen's
+top-level "Device classes" line was read. The two still listed SUCCEEDED emit no
+design identity at all — and antenna's is the sharper case: its report is
+byte-identical between the cell and the donor, two designs on two PDKs, because
+it is a runner summary of a log the cell does not publish. Nothing on the gate
+side can bind evidence that carries no distinguishing byte. That is a gap in the
+PRODUCERS and it is recorded here rather than papered over in the gates.
 
 AND THE ATTACK THAT DOES NOT WORK, KEPT BECAUSE IT DOES NOT
 -----------------------------------------------------------

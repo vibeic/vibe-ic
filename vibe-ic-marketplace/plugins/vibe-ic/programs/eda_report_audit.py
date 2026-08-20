@@ -684,13 +684,34 @@ _VERILOG_MODULE_RE = re.compile(
 
 _DESIGN_NAME = r"([A-Za-z_][A-Za-z0-9_$]*)"
 
-#: The tool-written declarations of WHOSE design a report is about.
+#: The tool-written declarations of WHOSE design a report is about, each with
+#: how many of its matches count: ``"all"`` where every match is a top-level
+#: statement, ``"last"`` where the format states sub-circuits first and the
+#: design last.
 _REPORT_DESIGN_RES = (
     # KLayout report database (drc, erc/density)
-    re.compile(r"<top[-_]cell>\s*" + _DESIGN_NAME + r"\s*</top[-_]cell>"),
+    (re.compile(r"<top[-_]cell>\s*" + _DESIGN_NAME + r"\s*</top[-_]cell>"),
+     "all"),
     # OpenROAD ODB, e.g. "[INFO ODB-0128] Design: chip_top"
-    re.compile(r"(?im)(?:^|\])[ \t]*Design[ \t]*:[ \t]*" + _DESIGN_NAME
-               + r"[ \t]*$"),
+    (re.compile(r"(?im)(?:^|\])[ \t]*Design[ \t]*:[ \t]*" + _DESIGN_NAME
+                + r"[ \t]*$"), "all"),
+    # netgen LVS, e.g. "Device classes chip_top and chip_top are equivalent."
+    #
+    # LAST MATCH ONLY, and that is the whole reason this dialect is usable.
+    # netgen compares bottom-up: every standard cell gets one of these lines
+    # before the design does, so "all" would enrol the entire cell library and
+    # call a project foreign to its own PDK on any tree that does not also
+    # carry the library's Verilog. Measured on the published cell and its
+    # donor, in both `lvs.rpt` and `lvs_power_aware.rpt`, the last such line is
+    # the top-level comparison and sits immediately above `Final result:` —
+    # `chip_top` for the cell, `sha256` for the donor.
+    #
+    # This is NOT the `Circuit 1: ... |Circuit 2: ...` header, which was tried
+    # first and rejected: netgen pads those to a fixed column, so a name longer
+    # than the field arrives truncated and matches nothing that exists.
+    (re.compile(r"(?im)^[ \t]*Device classes[ \t]+" + _DESIGN_NAME
+                + r"[ \t]+and[ \t]+" + _DESIGN_NAME
+                + r"[ \t]+are equivalent"), "last"),
 )
 
 #: `NOT_DETERMINED` is a THIRD value beside True/False and is spelled out so a
@@ -727,8 +748,20 @@ def _project_design_names(project_dir: Path) -> set:
 def _report_declared_designs(text: str) -> set:
     """The design names a report states it is about. Empty when it states none."""
     out: set = set()
-    for rx in _REPORT_DESIGN_RES:
-        out.update(rx.findall(text))
+    for rx, which in _REPORT_DESIGN_RES:
+        found = rx.findall(text)
+        if not found:
+            continue
+        if which == "last":
+            found = found[-1:]
+        for item in found:
+            # A pattern with two groups (netgen names both sides of the
+            # comparison) yields a tuple; a mismatch between them is itself
+            # worth surfacing, so both are kept.
+            if isinstance(item, tuple):
+                out.update(n for n in item if n)
+            else:
+                out.add(item)
     return out
 
 

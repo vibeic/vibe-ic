@@ -61,11 +61,19 @@ OLDER = _corpus_cell("sha256", "clean_run_v1422_20260715")
 #: it was reading, and a clean donor would have walked straight past it. The
 #: campaign's own note read as though sta had caught the forgery. It had not.
 #:
-#: `lvs_report_check` is the FORGEABLE half now because it still is one: netgen
-#: writes no design identity this auditor can read (its `Circuit N:` lines name
-#: sub-circuits and are truncated to a fixed column), so nothing binds an LVS
-#: report to the tree it sits in.
-FORGEABLE = ("lvs_report_check", (".",))
+#: `antenna_report_check` is the FORGEABLE half, and it is the harder kind of
+#: open finding: its evidence is not merely missing an identity, it is
+#: IDENTICAL across designs. `reports/phase3/antenna.rpt` is byte-for-byte the
+#: same file in the published cell and in the sha256 donor — two designs on two
+#: PDKs — because it is a 487-byte summary the runner writes, carrying
+#: "0 net violations, 0 pin violations" and naming as its source
+#: `phase3/stage3/pnr/openroad.log`, which is not in the published cell at all.
+#: No gate-side check can bind that to a design; the producer has to emit one.
+#:
+#: `lvs_report_check` held this slot briefly and now defends: netgen's
+#: "Device classes X and X are equivalent." line, taken LAST, is the top-level
+#: comparison.
+FORGEABLE = ("antenna_report_check", (".", "--mode", "antenna"))
 DEFENDING = ("drc_report_check", (".",))
 
 #: The bound on every CLI subprocess below (vibe-ic#1241).
@@ -372,10 +380,25 @@ def test_PAIRED_the_ratchet_can_SEE_a_new_forgery():
     Plants a finding the record does not contain by pretending the ledger is
     empty, and requires the diff to report every live SUCCEEDED as newly forging.
     """
+    # A SYNTHETIC forgery first, so this twin does not depend on how many REAL
+    # findings are open. It used to assert `>= 6` live SUCCEEDED, which was a
+    # sample-size assumption dressed as a property: it was true at 13 findings,
+    # and closing 9 of them turned the twin red for measuring the defect count
+    # instead of the ratchet. At 0 open findings it would have had no way to
+    # demonstrate anything at all.
+    planted = AA.Attempt(
+        "A3_CROSS_DESIGN", "a gate certifies this design using another "
+        "design's reports", AA.SUCCEEDED,
+        "synthetic: this attempt was never run", "no_such_cell:no_such_gate")
+    seen = AA.ratchet_diff({"forging": []}, [planted])
+    assert seen["newly_forging"] == ["A3_CROSS_DESIGN no_such_cell:no_such_gate"], (
+        f"the ratchet did not report a planted SUCCEEDED pair that the record "
+        f"does not contain: {seen}")
+
     _led, attempts = _live_recorded_attacks()
     d = AA.ratchet_diff({"forging": []}, attempts)
     live_succeeded = [a for a in attempts if a.verdict == AA.SUCCEEDED]
-    assert len(d["newly_forging"]) == len(live_succeeded) >= 6, (
+    assert len(d["newly_forging"]) == len(live_succeeded), (
         f"the ratchet reported {len(d['newly_forging'])} new forgeries against "
         f"an empty record but {len(live_succeeded)} attacks SUCCEEDED; it cannot "
         f"see what it is supposed to catch")
