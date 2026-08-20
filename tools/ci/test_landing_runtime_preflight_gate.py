@@ -206,6 +206,67 @@ def _real_site_dir() -> Path:
     return Path(proc.stdout.strip()).resolve().parents[1]
 
 
+def _isolated_site_dirs() -> list[Path]:
+    """The directories an ISOLATED interpreter keeps on this installation.
+
+    `-I` suppresses the USER site directory and nothing else, so these are
+    exactly what the fleet's real lane consumer -- the system interpreter --
+    still sees after the lane is opened. Read from the interpreter rather than
+    spelled out, because the answer differs between a host and the image and a
+    literal would be right in one of them.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c",
+         "import sys" + chr(10) + "for e in sys.path: print(e)"],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        timeout=_QUICK, check=False)
+    assert proc.returncode == 0, proc.stderr
+    # SITE DIRECTORIES ONLY. The stdlib directories on that path are already on
+    # every interpreter's path, so naming them adds nothing the lane could
+    # supply and makes the value harder to read. `site-packages` /
+    # `dist-packages` is the naming both a host and the image use.
+    return [Path(line) for line in proc.stdout.split()
+            if line and Path(line).is_dir()
+            and Path(line).name in {"site-packages", "dist-packages"}]
+
+
+def _closure_lane() -> str:
+    """The lane value that names the runner's WHOLE import closure.
+
+    `_real_site_dir()` is where the runner itself lives, and naming only it was
+    this test's first shape. That measures the HOST rather than the gate on any
+    installation whose closure is SPLIT across site directories, and this fleet
+    is exactly that installation. MEASURED on 8HD-d at 46db018669::
+
+        pytest, _pytest, pluggy, iniconfig, packaging
+                                 -> ~/.local/lib/python3.12/site-packages
+        pygments                 -> /usr/lib/python3/dist-packages
+
+    `pytest` imports `pygments` lazily, at terminal-writer time, so a lane
+    naming only the first directory imports and then dies mid-session with
+    `No module named 'pygments'`. That is not this block failing: it is the lane
+    value being half a closure. The same half-closure lane leaves three of
+    `programs/tests/test_trusted_pytest_entry.py`'s own tests red on this fleet,
+    which is why `trusted_pytest_entry` now takes an `os.pathsep`-separated
+    value and this control names the whole thing.
+
+    The directories the ISOLATED interpreter would have kept are included
+    because the substituted interpreter keeps NONE of them, and the fleet's real
+    lane consumer keeps all of them. Naming them is what makes the substitution
+    a substitution rather than a harsher host.
+
+    It is NOT a way to pass. `test_the_full_tier_refuses_once_...` drives the
+    same block with no lane, and `test_a_lane_that_does_not_hold_the_runner_...`
+    drives it with a lane that resolves and is empty; both require the refusal.
+    """
+    seen: list[str] = []
+    for source in [_real_site_dir(), *_isolated_site_dirs()]:
+        item = str(source)
+        if source.is_dir() and item not in seen:
+            seen.append(item)
+    return os.pathsep.join(seen)
+
+
 def _run_block(block: str, tmp_path: Path, *, lane: str | None) -> subprocess.CompletedProcess:
     script = tmp_path / "block.sh"
     script.write_text(
@@ -268,12 +329,32 @@ def test_the_host_lane_lets_the_same_tree_record(tmp_path):
     entry cannot import the runner and the same block refuses.
     """
     _, block = _preflight_block()
-    proc = _run_block(block, tmp_path, lane=str(_real_site_dir()))
+    proc = _run_block(block, tmp_path, lane=_closure_lane())
     combined = proc.stdout + proc.stderr
 
     assert proc.returncode == 0, combined
     assert "REACHED_THE_FIRST_ARM" in combined, combined
     assert "host lane" in combined, combined
+
+
+def test_a_lane_that_does_not_hold_the_runner_still_refuses(tmp_path,
+                                                            tmp_path_factory):
+    """The lane is a directory that must HOLD the runner, not a token.
+
+    Without this, `test_the_host_lane_lets_the_same_tree_record` cannot tell an
+    honoured lane from an ignored one -- an entry that quietly fell back to the
+    host's own site directory would pass it, and that fallback is precisely what
+    `trusted_pytest_entry`'s docstring refuses to do ("a silent fallback to the
+    host's own site directory would dissolve the digest-pinned guarantee").
+    """
+    _, block = _preflight_block()
+    empty = tmp_path_factory.mktemp("lane_without_a_runner")
+    proc = _run_block(block, tmp_path, lane=str(empty))
+    combined = proc.stdout + proc.stderr
+
+    assert proc.returncode == 2, combined
+    assert "REACHED_THE_FIRST_ARM" not in combined, combined
+    assert "REFUSE" in combined, combined
 
 
 def test_the_preflight_is_asked_before_the_first_arm():

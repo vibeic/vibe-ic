@@ -147,6 +147,55 @@ def _real_site_dir() -> Path:
     return Path(proc.stdout.strip()).resolve().parents[1]
 
 
+def _isolated_site_dirs() -> list[Path]:
+    """The directories an ISOLATED interpreter keeps on this installation.
+
+    `-I` suppresses the USER site directory and nothing else, so these are what
+    the fleet's real lane consumer still sees. Read from the interpreter rather
+    than spelled out: the answer differs between a host and the pinned image and
+    a literal would be right in only one of them.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c",
+         "import sys" + chr(10) + "for e in sys.path: print(e)"],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    # SITE DIRECTORIES ONLY. The stdlib directories on that path are already on
+    # every interpreter's path, so naming them adds nothing the lane could
+    # supply and makes the value harder to read. `site-packages` /
+    # `dist-packages` is the naming both a host and the image use.
+    return [Path(line) for line in proc.stdout.split()
+            if line and Path(line).is_dir()
+            and Path(line).name in {"site-packages", "dist-packages"}]
+
+
+def _closure_lane() -> str:
+    """A lane value naming the runner's WHOLE import closure, runner dir first.
+
+    `_real_site_dir()` alone is HALF a closure on this fleet. MEASURED on 8HD-d
+    at 46db018669::
+
+        pytest, _pytest, pluggy, iniconfig, packaging
+                                 -> ~/.local/lib/python3.12/site-packages
+        pygments                 -> /usr/lib/python3/dist-packages
+
+    `pytest` imports `pygments` lazily, at terminal-writer time, so the entry
+    imports the runner and then dies mid-session with `No module named
+    'pygments'` — and the `-S` shim below keeps NO site directory, so nothing
+    else can supply it. Three tests in this file measured that host rather than
+    this entry until the lane learned to take more than one directory.
+
+    The runner's own directory stays FIRST, which is what the ordering and
+    provenance assertions below are about.
+    """
+    seen: list[str] = []
+    for source in [_real_site_dir(), *_isolated_site_dirs()]:
+        item = str(source)
+        if source.is_dir() and item not in seen:
+            seen.append(item)
+    return os.pathsep.join(seen)
+
+
 def _subject(tmp_path: Path) -> Path:
     subject = tmp_path / "subject"
     subject.mkdir()
@@ -178,7 +227,7 @@ def test_without_the_lane_a_siteless_isolated_entry_refuses(tmp_path):
 def test_the_named_lane_records_where_the_same_entry_refused(tmp_path):
     """THE REVERT GUARD. Remove the lane from `run()` and this goes red."""
     proc = _entry(_siteless_python(tmp_path), _subject(tmp_path),
-                  **{_HOST_LANE_ENV: str(_real_site_dir())})
+                  **{_HOST_LANE_ENV: _closure_lane()})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "1 passed" in proc.stdout
 
@@ -209,7 +258,7 @@ def test_the_lane_is_inserted_at_the_front_not_appended(tmp_path):
         "    assert pytest.__file__.startswith(LANE + '/'), pytest.__file__\n",
         encoding="utf-8")
     proc = _entry(_siteless_python(tmp_path), subject,
-                  **{_HOST_LANE_ENV: str(lane)})
+                  **{_HOST_LANE_ENV: _closure_lane()})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "2 passed" in proc.stdout, proc.stdout
 
@@ -283,9 +332,70 @@ def test_the_identity_record_still_shows_which_lane_answered(tmp_path):
         " rows\n",
         encoding="utf-8")
     proc = _entry(_siteless_python(tmp_path), subject,
-                  **{_HOST_LANE_ENV: str(lane)})
+                  **{_HOST_LANE_ENV: _closure_lane()})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "2 passed" in proc.stdout, proc.stdout
+
+
+def test_a_half_closure_lane_is_not_silently_completed(tmp_path):
+    """The refusal the widened value exists FOR, kept as a measurement.
+
+    A lane naming the runner's own directory and nothing else is exactly what
+    every caller wrote before, and on an installation whose closure is split it
+    imports the runner and then cannot report. The entry must not paper over
+    that by reaching for a directory nobody named — a silent fallback to the
+    host's own site directories is the thing the module docstring refuses.
+
+    On an installation whose closure IS one directory (the pinned image) there
+    is nothing to be half of, so the session records and this test says so
+    rather than asserting a refusal that cannot happen there.
+    """
+    runner_only = str(_real_site_dir())
+    proc = _entry(_siteless_python(tmp_path), _subject(tmp_path),
+                  **{_HOST_LANE_ENV: runner_only})
+    if runner_only == _closure_lane():
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "[NORECORD] trusted pytest entry:" in proc.stderr
+    # The cause is NAMED, so a reader is not left to infer which half is
+    # missing. MEASURED on 8HD-d: "No module named 'pygments'".
+    assert "No module named" in proc.stderr, proc.stderr
+
+
+def test_every_named_directory_answers_in_the_order_it_was_named(tmp_path):
+    """The widened value is a LIST, not a set and not one directory with noise.
+
+    Asserted from inside the recorded session on `sys.path` itself, because the
+    order is the whole contract: the first directory named must answer first,
+    which is what keeps the runner resolving from the directory the provenance
+    assertions above pin it to.
+    """
+    subject = _subject(tmp_path)
+    value = _closure_lane()
+    named = value.split(os.pathsep)
+    (subject / "test_ok.py").write_text(
+        "import sys\n"
+        f"NAMED = {named!r}\n"
+        "def test_each_named_directory_is_on_the_path_in_order():\n"
+        "    where = [sys.path.index(item) if item in sys.path else -1\n"
+        "             for item in NAMED]\n"
+        "    assert -1 not in where, (where, NAMED, sys.path)\n"
+        "    assert where == sorted(where), (where, NAMED, sys.path)\n",
+        encoding="utf-8")
+    proc = _entry(_siteless_python(tmp_path), subject,
+                  **{_HOST_LANE_ENV: value})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "1 passed" in proc.stdout, proc.stdout
+
+
+def test_an_empty_segment_in_the_lane_is_refused(tmp_path):
+    """`a::b` is a caller mistake, and an empty segment would resolve to cwd."""
+    proc = _entry(_siteless_python(tmp_path), _subject(tmp_path),
+                  **{_HOST_LANE_ENV: _closure_lane() + os.pathsep + ""
+                     + os.pathsep + str(_real_site_dir())})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "empty directory segment" in proc.stderr
 
 
 def test_an_unset_lane_leaves_the_pinned_image_path_unchanged(tmp_path):
