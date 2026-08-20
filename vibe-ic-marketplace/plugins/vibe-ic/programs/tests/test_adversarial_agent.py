@@ -13,6 +13,7 @@ can re-run the attack by hand and get the same answer.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import subprocess
@@ -420,6 +421,95 @@ def test_the_ledger_is_generated_not_hand_written():
         "the ledger claims to be generated and its generator is not in the tree")
 
 
+def _executable_python(text: str):
+    """`text` with comments and docstrings removed, or None if it will not parse.
+
+    Every OTHER string literal is KEPT, because that is how a real caller spells
+    one: `subprocess.run([..., "adversarial_agent.py"])` is a wiring and a line
+    crediting the program in a comment is not.
+
+    TOKEN FILTERING, NOT `str.replace`, AND THE REASON IS MEASURED. The first
+    version removed each comment span with `text.replace(span, "")`. One span in
+    `eda_report_audit.py` is the bare string `"#"`, so that call stripped the `#`
+    from EVERY comment in the file -- including the one being searched for --
+    and the comment's words then survived as bare text. The file was reported as
+    a caller on the strength of a comment the function believed it had removed.
+    """
+    import io
+    import tokenize as _tk
+    try:
+        toks = list(_tk.generate_tokens(io.StringIO(text).readline))
+        tree = ast.parse(text)
+    except (_tk.TokenError, IndentationError, SyntaxError, ValueError):
+        # FAIL SAFE: a file we cannot parse reads as a CALLER. The expensive
+        # direction of an error here is a disclosure claiming nothing invokes a
+        # program that something does.
+        return None
+    docstrings = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = getattr(node, "body", None)
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            c = body[0].value
+            docstrings.add((c.lineno, c.col_offset))
+    keep = []
+    for tok in toks:
+        if tok.type == _tk.COMMENT:
+            continue
+        if tok.type == _tk.STRING and tok.start in docstrings:
+            continue
+        keep.append(tok.string)
+    return "\n".join(keep)
+
+
+def _names_it_outside_prose(path: Path, name: str) -> bool:
+    """Does this file name the program somewhere that could REACH it?
+
+    THE DEFECT THIS REPLACES. The predicate was `name in p.read_text()`, over
+    every .py/.yaml/.json/.md under flow/, benchmark/ and programs/. That is not
+    the question the disclosure makes: `adversarial_agent`'s docstring claims it
+    "appears in no flow/*.yaml step, no benchmark/CAPTURE_ROUTING.json entry, no
+    runner, and none of flow_compliance_check.py's registered gates". A COMMENT
+    naming the program is none of those things.
+
+    MEASURED, and the reason this is being changed rather than worked around:
+    citing the campaign in the code it produced made this test declare the
+    program wired --
+
+        AssertionError: adversarial_agent is now referenced by
+        ['programs/eda_report_audit.py',
+         'programs/tests/test_evidence_binding_belongs_to_this_run.py']
+        -- it is wired. Delete the 'NOT WIRED YET' section
+
+    -- when both mentions are prose crediting where a finding came from. Under
+    the old predicate the only way to keep the suite green is to stop attributing
+    findings in comments, which is a worse repository.
+
+    IT IS NOT LOOSER WHERE IT MATTERS. Only Python comments and docstrings are
+    removed. Ordinary string literals stay, so `subprocess.run([...,
+    "adversarial_agent.py"])` and `import adversarial_agent` both still count,
+    and yaml/json/md are searched whole -- a flow step or a routing entry naming
+    the program is exactly the wiring this is looking for.
+    `test_PAIRED_the_wiring_detector_still_catches_a_REAL_caller` holds that.
+    """
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return False
+    if name not in text:
+        return False
+    if path.suffix != ".py":
+        return True
+    code = _executable_python(text)
+    if code is None:
+        return True
+    return name in code
+
+
 def test_the_unwired_state_is_disclosed_or_gone():
     """Wiring is MEASURED, and the disclosure dies with it.
 
@@ -440,11 +530,8 @@ def test_the_unwired_state_is_disclosed_or_gone():
                 continue
             if p.suffix not in (".py", ".yaml", ".yml", ".json", ".md"):
                 continue
-            try:
-                if name in p.read_text(errors="replace"):
-                    callers.append(p.relative_to(PLUGIN).as_posix())
-            except OSError:
-                continue
+            if _names_it_outside_prose(p, name):
+                callers.append(p.relative_to(PLUGIN).as_posix())
     disclosed = "NOT WIRED YET" in AA.__doc__
     if callers:
         assert not disclosed, (
@@ -547,3 +634,60 @@ def test_PAIRED_no_corpus_still_SKIPS_rather_than_inventing_one(
     assert mod._corpus.args[0] is True, (
         "with no corpus offered anywhere the mark must skip; a suite that runs "
         "these checks against nothing reports absence as a defect")
+
+
+def test_PAIRED_the_wiring_detector_still_catches_a_REAL_caller(tmp_path):
+    """The half that stops the fix above from being "check less".
+
+    Three spellings a genuine wiring uses, each in a file whose ONLY other
+    mention of the program is prose. If any of them stops counting, the
+    disclosure could go stale while something really did invoke it.
+    """
+    name = "adversarial_agent"
+    real = {
+        "an import": f"# credit: {name}\nimport {name}\n",
+        "a subprocess path": (
+            f'"""Docstring mentioning {name}."""\n'
+            f'import subprocess\n'
+            f'subprocess.run(["python3", "{name}.py"])\n'),
+        "an attribute call": (
+            f"# see {name}\nimport importlib\n"
+            f"m = importlib.import_module('{name}')\nm.run_campaign()\n"),
+    }
+    for label, body in real.items():
+        p = tmp_path / f"caller_{abs(hash(label))}.py"
+        p.write_text(body, encoding="utf-8")
+        assert _names_it_outside_prose(p, name) is True, (
+            f"{label}: a real caller stopped being detected, so the "
+            f"NOT WIRED disclosure could go stale while something invokes it")
+
+    prose_only = {
+        "a module docstring": f'"""This closes a finding {name} reported."""\n',
+        "a comment": f"# measured by {name}\nx = 1\n",
+        "a comment inside a function": f"def f():\n    # {name} found it\n    return 1\n",
+    }
+    for label, body in prose_only.items():
+        p = tmp_path / f"prose_{abs(hash(label))}.py"
+        p.write_text(body, encoding="utf-8")
+        assert _names_it_outside_prose(p, name) is False, (
+            f"{label}: attributing a finding in prose still reads as wiring")
+
+
+def test_a_flow_or_routing_file_naming_it_ALWAYS_counts(tmp_path):
+    """yaml / json / md are searched whole and deliberately so: those are the
+    three places the disclosure names, and there is no executable-vs-prose
+    distinction to draw in a flow declaration."""
+    name = "adversarial_agent"
+    for suffix in (".yaml", ".json", ".md"):
+        p = tmp_path / f"decl{suffix}"
+        p.write_text(f"# {name}\n", encoding="utf-8")
+        assert _names_it_outside_prose(p, name) is True, suffix
+
+
+def test_an_unparseable_python_file_is_treated_as_a_caller(tmp_path):
+    """Fail SAFE. A file this cannot tokenize must read as wiring, never as
+    prose: the expensive direction of this test's error is a stale disclosure
+    that says nothing invokes a program something does."""
+    p = tmp_path / "broken.py"
+    p.write_text("def f(:\n  # adversarial_agent\n", encoding="utf-8")
+    assert _names_it_outside_prose(p, "adversarial_agent") is True
