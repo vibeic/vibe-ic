@@ -56,6 +56,25 @@ means "this design staged a reference recipe", and a search writing that file
 would be dressing its own guess up as the design's declaration. Widening the
 space is a matter of giving those knobs their own CLI flags; it is not done here.
 
+A SEARCH RECORD IS NOT A HEAD-TO-HEAD RECORD, AND MUST NOT BE FED TO ONE
+=======================================================================
+`ppa_head_to_head_check` REFUSES any arm carrying a collapsed scalar (`score`,
+`ppa_score`, `figure_of_merit`, ...) — "area, timing and power trade against
+each other, so a single number is a proxy for the property and not the
+property", and it is refused for EXISTING because the scalar is what gets
+quoted. Every record here carries exactly such a scalar, deliberately: a search
+has to RANK, and ranking is what a scalar is for.
+
+The two artefacts answer different questions and have OPPOSITE rules. A search
+record says "of the configurations WE ran, this one scored best against OUR own
+default" — one flow, one design, an internal ordering. A head-to-head says "our
+silicon beats theirs", which is a claim about the world and is exactly where a
+collapsed number becomes a lie. Passing one of these records to that checker
+would either be refused (correctly) or, worse, dressed up into the claim it is
+not. If a head-to-head arm is ever derived from a search winner, it must be
+built from that run's TRIPLE — `ppa.area_um2` / `timing_wns_ns` / `power_mw` —
+and the score left behind.
+
 chip-AGNOSTIC / PDK-AGNOSTIC: the search space is expressed as multipliers and
 absolute knob values with no design, PDK, process, node or vendor literal. The
 project's own default run is the reference, so the search is anchored to

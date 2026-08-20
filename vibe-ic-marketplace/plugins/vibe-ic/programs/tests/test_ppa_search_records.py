@@ -262,3 +262,21 @@ def test_rerender_without_a_record_refuses_rather_than_writing_an_empty_one(
          "--rerender"], capture_output=True, text=True)
     assert proc.returncode != 0
     assert not (tmp_path / "SEARCH_REPORT.md").exists()
+
+
+def test_a_search_record_is_not_offered_as_a_head_to_head_arm():
+    """`ppa_head_to_head_check` refuses any arm carrying a collapsed scalar,
+    and every search record carries one BY DESIGN — a search has to rank. The
+    two artefacts answer different questions with opposite rules, and the only
+    thing that keeps them apart is that nobody confuses them. Pin the warning
+    where a future author will read it."""
+    src = (Path(__file__).resolve().parent.parent
+           / "ppa_search.py").read_text(encoding="utf-8")
+    assert "ppa_head_to_head_check" in src
+    assert "COLLAPSED_SCALAR" in src or "collapsed scalar" in src
+
+    h2h = (Path(__file__).resolve().parent.parent
+           / "ppa_head_to_head_check.py").read_text(encoding="utf-8")
+    assert '"score"' in h2h, (
+        "premise: the head-to-head checker really does refuse `score`; if it "
+        "stops doing so this warning is stale and must be re-read")
