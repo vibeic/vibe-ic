@@ -98,14 +98,33 @@ def test_the_new_stage_is_actually_wired(land_text):
     assert f"{_STAGE}()" in land_text, (
         f"{_STAGE} is not defined in tools/gatekeeper-land.sh — the "
         f"unselectable trees are still unreachable by a landing (#1424)")
-    # The call must be at top level, but it need not be a bare line. Since
-    # 7c376e348 (v1.10.69) every stage's rc is consumed by the landing record,
-    # so this one is called as `if run_unselectable_pytest; then`. Anchor on the
-    # name at the start of a line, optionally behind `if`, and exclude the
-    # DEFINITION by refusing a following `(`.
-    assert re.search(rf"^(?:if\s+){{0,1}}{_STAGE}(?![\w(])", land_text, re.M), (
-        f"{_STAGE} is defined but never CALLED — a stage that does not run "
-        f"cannot block anything")
+    # CALLED -- not called IN A PARTICULAR SHAPE. This used to anchor on
+    # the name at the start of a line, optionally behind `if`. The full tier's
+    # independent stages now run at the same time, so the stage is called from
+    # inside the lane body the window launches
+    # (`fn_capture "full:unselectable-tests" run_unselectable_pytest`) and the
+    # column-zero anchor matched nothing at all -- a rule that cannot fail is
+    # not a weaker version of the one it replaced, it is an absent one.
+    #
+    # That the call is REACHED from the top level is not dropped, it is owned
+    # once, by `ci_harness_timeout_ceiling_check`'s execution-prefix digest; a
+    # second copy of that rule here is the drift shape this repo keeps
+    # deleting. What is asserted here is what this file is about: exactly one
+    # call site exists outside the definition.
+    _lines = land_text.splitlines()
+    _define = next(i for i, line in enumerate(_lines)
+                   if line.startswith(f"{_STAGE}() {{"))
+    _close = next(i for i in range(_define + 1, len(_lines))
+                  if _lines[i] == "}")
+    _callers = [i + 1 for i, line in enumerate(_lines)
+                if not (_define <= i <= _close)
+                and not line.lstrip().startswith("#")
+                and re.search(rf"(?<![\w./-]){_STAGE}(?![\w(])", line)]
+    assert len(_callers) == 1, (
+        f"{_STAGE} is defined but is called {len(_callers)} times outside its "
+        f"definition; a stage that does not run cannot block anything, and a "
+        f"stage that runs twice is two lanes where the landing record expects "
+        f"one")
     assert _PROG.name in land_text, (
         f"{_STAGE} does not invoke {_PROG.name}; whatever corpus it runs is "
         f"not the one this issue measures")
