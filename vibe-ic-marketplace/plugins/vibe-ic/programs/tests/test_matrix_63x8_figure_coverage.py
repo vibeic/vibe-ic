@@ -52,6 +52,7 @@ Run::
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -320,3 +321,161 @@ def test_the_generated_census_block_is_guarded_exactly_as_before():
     # And the published total row still parses, which is what the sibling
     # freshness test asserts against the live census.
     assert "| **total** |" in block, block[:400]
+
+
+# ---------------------------------------------- 6. THE PROSE AROUND A FIGURE --
+# WHY THIS SECTION EXISTS (measured 2026-08-20).
+#
+# `--fix-figures` repairs a stale ANCHORED NUMBER. It cannot repair the
+# SENTENCE the number sits in, and a sentence can go false on its own — no
+# figure in it moves at all.
+#
+# MEASURED on origin/main 8e35c6439, three live instances, all saying the same
+# false thing:
+#
+#     matrix_63x8/README.md:147   "D1 and A1 declare it *empty* because they
+#                                  are the flow's genuine roots"
+#     matrix_63x8/flowref.py:44   "PRESENT-BUT-EMPTY on D1 and A1, the two
+#                                  genuine graph roots"
+#     matrix_63x8/flowref.py:48   "Any test that conflates the two will be
+#                                  wrong about D1 and A1."
+#
+# The live roots are `0.5ic` and `D1`. A1 stopped being a root on 2026-08-14
+# when vibe-ic#1258 gave it `blocks_on: [D1]`, and 0.5ic became one when #1744
+# declared it with `blocks_on: []`. Both landings moved the COUNT — which the
+# figure gate checks, and which was repaired — and neither moved the NAMES,
+# which nothing checked. So for two landings the substrate's own reader
+# documentation named a root that is not one and omitted a root that is, while
+# the freshness gate beside it reported the corpus fresh.
+#
+# This is the same disease the whole 63x8 campaign is named for: a check that
+# measures something ADJACENT to the question (the count) and is read as
+# answering the question (which steps).
+#
+# BLOCKING, per flow-change-acceptance §5. A false sentence in the substrate's
+# own docstring is read by every agent that writes a predicate against it; that
+# is precisely how a wrong predicate gets written with confidence. Advisory
+# would reproduce the failure it is aimed at.
+#
+# SCOPE, stated so it is not over-read: this guards the ROOT NAMES only. It is
+# not a general prose checker and does not pretend to be one. It exists because
+# the root set is the one named population in this corpus that a flow change
+# moves, that a reader acts on, and that no number tracks.
+_ROOT_PROSE_FILES = (
+    ("matrix_63x8", "README.md"),
+    ("matrix_63x8", "flowref.py"),
+)
+
+#: Any run of step ids joined by "and", followed within one sentence by prose
+#: calling them roots. Kept narrow on purpose: a looser pattern would match
+#: sentences that merely mention a root and start reporting findings it cannot
+#: judge.
+#:
+#: MATCHED ACROSS LINE BREAKS, and that is not cosmetic. The first version of
+#: this pattern was line-by-line and it MISSED the most visible of the three
+#: stale claims — README.md, where "D1 and A1" ends line 147 and "the flow's
+#: genuine roots" begins line 148. It caught one of two reachable instances and
+#: read as a working guard. A guard is only worth its commit if it fires on the
+#: case that motivated it, so the sentence, not the line, is the unit; `[^.]`
+#: still stops it at the sentence boundary, and the line number is recovered
+#: from the match offset.
+_ROOT_CLAIM_RE = re.compile(
+    r"([A-Za-z0-9_.]+(?:\s*,\s*[A-Za-z0-9_.]+)*\s+and\s+[A-Za-z0-9_.]+)"
+    r"[^.]{0,120}?\broots?\b",
+)
+
+
+def _looks_like_a_step_id(token: str) -> bool:
+    """Filter English out of the match, WITHOUT consulting the live step list.
+
+    MEASURED, and this filter is here because of what it caught: the pattern
+    without it reported `README.md:471 names ['is', 'ships']` and
+    `README.md:483 names ['directions', 'on']` — two ordinary sentences that
+    happen to contain "X and Y ... roots". A guard that cries on prose gets
+    switched off, and a guard that is switched off is silent absence.
+
+    NOT `token in step_ids()`, deliberately. Asking the live flow whether a
+    named step exists would make a sentence naming a DELETED step invisible —
+    exactly the sentence most worth catching. So this tests the lexical SHAPE
+    of an id in this flow instead: every id is either uppercase (`D1`, `FS1`,
+    `A1`, `P0`, `M2`) or contains a digit (`0.5ic`, `37.5self`, `15`). No
+    lowercase English word is either.
+    """
+    if not token:
+        return False
+    if any(ch.isdigit() for ch in token):
+        return True
+    return token.isupper()
+
+
+def _named_ids(fragment: str):
+    """The step-id-shaped tokens in a matched "X and Y" fragment."""
+    toks = (t.strip(" ,.`*\"'") for t in fragment.replace(" and ", ",").split(","))
+    return {t for t in toks if _looks_like_a_step_id(t)}
+
+
+def _live_roots():
+    """The steps that DECLARE `blocks_on` and declare it EMPTY, off the yaml."""
+    sys.path.insert(0, str(plugin_path("programs", "tests")))
+    from matrix_63x8 import flowref as F
+    return {str(F.normalize_id(s)) for s in F.step_ids()
+            if F.declares_blocks_on(s) and not F.blocks_on(s)}
+
+
+def test_prose_that_names_the_graph_roots_names_the_live_ones():
+    """A sentence naming the roots must name the roots this tree has.
+
+    Reddens in BOTH directions, which is what makes it a guard rather than a
+    spell-check: a root that stops being one leaves the sentence, and a new
+    root has to enter it.
+    """
+    roots = _live_roots()
+    assert roots, "no step declares an empty `blocks_on`; the premise is gone"
+
+    wrong = []
+    for parts in _ROOT_PROSE_FILES:
+        path = plugin_path("programs", "tests", *parts)
+        text = path.read_text(encoding="utf-8")
+        for m in _ROOT_CLAIM_RE.finditer(text):
+            named = _named_ids(m.group(1))
+            if not named:
+                continue  # ordinary English, not a claim about step ids
+            if named != roots:
+                lineno = text.count("\n", 0, m.start()) + 1
+                wrong.append(
+                    f"{parts[-1]}:{lineno}  names {sorted(named)}, "
+                    f"the yaml's roots are {sorted(roots)}")
+
+    assert not wrong, (
+        "prose in the substrate names a graph-root set the flow yaml does not "
+        "have. `--fix-figures` cannot see this: no figure in these sentences "
+        "moved.\n  " + "\n  ".join(wrong))
+
+
+def test_the_root_prose_guard_reddens_on_a_stale_sentence(tmp_path):
+    """The guard is falsifiable, proved against a copy — never the real file.
+
+    Without this, a regex that quietly stopped matching would report a clean
+    corpus forever, which is the silent-absence failure the README's "one rule"
+    names.
+    """
+    roots = _live_roots()
+    stale = tmp_path / "stale.py"
+    # Split over two lines ON PURPOSE: the line-by-line version of this
+    # pattern passed its fixture and missed the real README, so the fixture
+    # now has the shape that defeated it.
+    stale.write_text(
+        "PRESENT-BUT-EMPTY on ZZ_NOT_A_STEP and QQ_ALSO_NOT\n"
+        "are the two genuine graph roots)\n", encoding="utf-8")
+
+    hits = []
+    text = stale.read_text(encoding="utf-8")
+    for m in _ROOT_CLAIM_RE.finditer(text):
+        named = _named_ids(m.group(1))
+        if named and named != roots:
+            hits.append((text.count("\n", 0, m.start()) + 1, named))
+
+    assert hits, (
+        "the root-prose pattern matched NOTHING in a sentence written to be "
+        "caught; the guard above would report every corpus clean")
+    assert hits[0][1] == {"ZZ_NOT_A_STEP", "QQ_ALSO_NOT"}, hits
