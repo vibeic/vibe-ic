@@ -953,7 +953,12 @@ def test_d5_blocks_on_covers_the_real_dependency_graph(cell):
 def test_d5_covers_every_cell_exactly_once():
     """63 cells, each parametrized exactly once, in flow order."""
     ids = [F.normalize_id(p.values[0].step_id) for p in _params()]
-    assert len(ids) == len(F.step_ids()) == 68, (
+    # 68 -> 69: step `37.5self` (General Precheck) joined the flow. It is the
+    # chip path with NO operator — 37.5ic wants the shuttle's slot template and
+    # 37.5ip is the IP terminal, so a design taping itself out routed to neither
+    # and passed no submission check at all. Re-stated by hand, as the census
+    # comments here require: a new step must force a human to say the number.
+    assert len(ids) == len(F.step_ids()) == 69, (
         f"parametrized {len(ids)} cells over {len(F.step_ids())} flow steps"
     )
     assert ids == [F.normalize_id(s) for s in F.step_ids()], (
@@ -1003,7 +1008,12 @@ def test_d5_state_census_is_exhaustive():
         f"NA if and only if it declares neither a blocks_on key nor a gate, "
         f"and these disagree with that derivation"
     )
-    assert len(F.step_ids()) == 68, (
+    # 68 -> 69: step `37.5self` (General Precheck) joined the flow. It is the
+    # chip path with NO operator — 37.5ic wants the shuttle's slot template and
+    # 37.5ip is the IP terminal, so a design taping itself out routed to neither
+    # and passed no submission check at all. Re-stated by hand, as the census
+    # comments here require: a new step must force a human to say the number.
+    assert len(F.step_ids()) == 69, (
         f"the NA rationale was re-derived over {len(F.step_ids())} steps, not "
         f"63; the population moved and this census states a figure for a grid "
         f"it no longer describes"

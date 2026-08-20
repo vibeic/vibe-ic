@@ -797,6 +797,9 @@
           "alternative": "reports/phase3/drc_router.rpt",
           "path": "reports/phase3/drc_router.rpt",
           "size_bytes": 19208
+        },
+        "reports/phase3/drc_router.json": {
+          "status": "UNPROVEN"
         }
       }
     },
@@ -1226,6 +1229,17 @@
         "input/submission_template/slots/*.yaml"
       ]
     },
+    "37.5self": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "reports/phase3/general_precheck.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/SELF_TAPEOUT.txt"
+      ]
+    },
     "38": {
       "verdict": "ENFORCED",
       "entries": {
@@ -1464,10 +1478,16 @@
     "0.5ic": {
       "verdict": "ENFORCED",
       "entries": {
-        "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt": {
+        "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt": {
           "status": "UNPROVEN"
         },
         "reports/phase1/submission_template.json": {
+          "status": "UNPROVEN"
+        },
+        "input/submission_template/tapeout_declaration.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase1/tapeout_declaration.json": {
           "status": "UNPROVEN"
         }
       }

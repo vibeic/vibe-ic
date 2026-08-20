@@ -810,10 +810,20 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           crosstalk-delay verdict. It therefore has two ALL-of entries and
 #:           leaves this fewer-than-two population; retaining it would silently
 #:           disable the partial-evidence shape this pin exists to measure.
+#:   - "37.5self"  RE-DERIVED, not appended, 2026-08-20, on this instruction's own
+#:           terms ("re-derive the tuple rather than adding to it — appending is
+#:           how v1.10.38 shipped a 28-entry pin over a 27-step population"). The
+#:           whole population was recomputed from the flow as
+#:           `[id for step in steps if len(step.required_outputs) < 2]`, and the
+#:           result is the previous 27 in their previous order plus `37.5self`
+#:           in FLOW order after its sibling `37.5ic` — so the re-derivation also
+#:           says, as a by-product, that no member had gone stale. General
+#:           Precheck declares exactly one output, `reports/phase3/
+#:           general_precheck.json`, which is what puts it in this population.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
     "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5", "A7", "A9",
     "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37", "37.5ic",
-    "M4", "42", "44", "P0",
+    "37.5self", "M4", "42", "44", "P0",
 )
 
 

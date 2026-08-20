@@ -172,12 +172,19 @@ GRID_AS_MEASURED: Tuple[int, int, int] = (67, 8, 536)
 #: Both are verified by `test_matrix_d5_deps_correct.py`'s D5-FORWARD-EDGE and
 #: D5-MISSING-EDGE clauses, and the graph is still acyclic (D5-CYCLE, plus
 #: `test_d5_runtime_ordering_guard_loads_the_same_edges`).
+#: `37.5self` (General Precheck) joined after 37.5ic and before 38: the chip
+#: path with NO operator. 37.5ic's condition wants the shuttle's slot template
+#: and 37.5ip is the IP/hardmacro terminal, so a design taping ITSELF out
+#: matched neither and reached tape-out having passed no submission check.
+#: Declared where it runs — after step 37 writes the chip GDS, beside the two
+#: routes it is mutually exclusive with.
 STEP_IDS_AS_MEASURED: Tuple[str, ...] = (
     'D1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', 'FS1',
     'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8',
     'A9', '14', '15', '15.5ic', '16', '17', '18', '19', '20', '21', '22',
     'DT2', 'DT3', '23', '24', '25', '26', '26.5ic', '27', '28', '29', '30',
-    '31', '32', '33', '34', '35', '36', '37', '37.5ip', '37.5ic', '38',
+    '31', '32', '33', '34', '35', '36', '37', '37.5ip', '37.5ic', '37.5self',
+    '38',
     '39', 'M1', 'M2', 'M3', 'M4', '40', '41', '42', '43', '44', 'P0',
 )
 

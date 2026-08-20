@@ -217,6 +217,11 @@ _VERSION_READING_PROGRAMS = {
     # _ATTRIBUTION_KEYS.
     "flow_compliance_check",
     "foundry_handoff_pack_gen",
+    # The three programs of step 0.5ic / 37.5self. Each asks the manifest
+    # (`_pmd.emitted_by`) rather than restating a literal, which is the whole
+    # point of this pin: a precheck report that names a version it invented is
+    # a report nobody can trace to a build.
+    "general_precheck",
     "hold_fix_planner",
     "ir_drop_triage_classify",
     "l_doc_parity_diff",
@@ -242,6 +247,8 @@ _VERSION_READING_PROGRAMS = {
     "signoff_waiver_md_emit",
     "sta_triage_classify",
     "synth_doctor",
+    "tapeout_declaration_check",
+    "tapeout_declaration_gen",
     # #1744 — the live external-refusal gate. It stamps its report with
     # `_pmd.emitted_by` for the same reason the other emitters do: a verdict
     # about whether an outside party would accept a layout is worthless without

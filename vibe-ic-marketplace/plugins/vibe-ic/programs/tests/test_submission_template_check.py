@@ -588,16 +588,48 @@ def _selected(project: Path) -> set:
             if FCC._check_condition(project, cond)}
 
 
+def _routes_by_router_file():
+    """router-file suffix -> the step ids the FLOW selects with it.
+
+    THERE ARE THREE, and there used to be two. The step's outputs were a
+    binary — `slots/*.yaml` or `NO_TEMPLATE.txt` — which routed a design to
+    the operator's container or to the IP/hardmacro terminal. A CHIP doing its
+    OWN tape-out is neither: it has no operator template, so the container
+    step's condition excludes it, and it is a die rather than an IP, so the
+    hardmacro terminal is the wrong end for it. `SELF_TAPEOUT.txt` is its
+    router and the general precheck is its terminal.
+
+    Read out of the flow rather than listed here, so a route that appears or
+    disappears shows up as a change in this mapping instead of quietly
+    satisfying a hard-coded pair.
+    """
+    routed = _routed_conditions()
+    out = {}
+    for sid, cond in routed.items():
+        for pat in cond["files_exist"]:
+            key = str(pat).rsplit("/", 1)[-1]
+            out.setdefault(key, set()).add(sid)
+    return out
+
+
 def test_the_outputs_of_this_step_are_what_the_flow_routes_on():
     """If nothing routes on them any more, every assertion below is vacuous."""
     routed = _routed_conditions()
     assert routed, (
         "no flow step is conditional on this step's output — either the wiring "
         "moved or this test has stopped measuring anything")
-    ip = {sid for sid, c in routed.items()
-          if any(str(x).endswith("NO_TEMPLATE.txt") for x in c["files_exist"])}
-    chip = set(routed) - ip
-    assert ip and chip, f"expected both directions, got {routed}"
+    by_file = _routes_by_router_file()
+    assert set(by_file) == {"*.yaml", "NO_TEMPLATE.txt", "SELF_TAPEOUT.txt"}, (
+        "three router files select three terminals; got "
+        f"{sorted(by_file)}")
+    # MUTUALLY EXCLUSIVE, and that is the load-bearing property: `files_exist`
+    # cannot express "and not", so two routers present at once would select two
+    # terminals. No step may be reachable from more than one of them.
+    for a, sa in by_file.items():
+        for b, sb in by_file.items():
+            if a < b:
+                assert not (sa & sb), (
+                    f"{sorted(sa & sb)} is selected by BOTH {a} and {b}")
 
 
 def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
@@ -614,10 +646,12 @@ def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
     would select the IP path and the three states this step keeps apart would
     be collapsed back to two by the flow, whatever the report said.
     """
-    routed = _routed_conditions()
-    ip = {sid for sid, c in routed.items()
-          if any(str(x).endswith("NO_TEMPLATE.txt") for x in c["files_exist"])}
-    chip = set(routed) - ip
+    by_file = _routes_by_router_file()
+    ip = by_file["NO_TEMPLATE.txt"]
+    # The shuttle route only. `SELF_TAPEOUT.txt` is written by this step's
+    # sibling `tapeout_declaration_gen`, not by the ingest under test here, so
+    # an ingest-only run must select the operator's terminal and nothing else.
+    chip = by_file["*.yaml"]
     tmpl = _template(tmp_path)
     reason = ("Delivered as a hardmacro to an integrator and never submitted "
               "to a shuttle, so this design has no slot.")
@@ -662,17 +696,58 @@ def test_a_router_file_nobody_declared_is_named_in_the_refusal(tmp_path):
 
 
 def test_the_flow_declares_this_gate_exactly_as_it_is_invoked():
-    """The gate is what the flow SAYS it is, or the wiring is decoration."""
+    """The gate is what the flow SAYS it is, or the wiring is decoration.
+
+    STEP 0.5ic HAS TWO HALVES, and this pins both. `submission_template_ingest`
+    records what the OPERATOR published; `tapeout_declaration_gen` records what
+    the DESIGN declares about itself — the 18 questions a self-tape-out has
+    nobody else to answer for it. Both belong to the step that decides the
+    route, and each has its own gate clause, so neither can be added as a
+    program nobody judges.
+    """
     import yaml
+    import _tapeout_declaration as TD
     flow = yaml.safe_load(
         (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
     step = next(s for s in flow["steps"] if str(s.get("id")) == "0.5ic")
-    assert step["programs"] == ["submission_template_ingest"]
-    assert step["gate"]["program_exit_zero"] == (
-        f"submission_template_check . --json {ST.REPORT_REL}")
+    assert step["programs"] == ["submission_template_ingest",
+                                "tapeout_declaration_gen"]
+
+    # `all_of`, and the CONTAINER is pinned as hard as the clauses inside it.
+    # MEASURED: `flow_compliance_check._evaluate_gate` handed a bare LIST of the
+    # same two mappings returns `(False, ['gate spec unrecognized'])` — it runs
+    # NEITHER program, so writing the two clauses as a plain list would take the
+    # pre-existing `submission_template_check` gate out of service and leave this
+    # step unable to pass for any tree at all. Asserting the container name is
+    # what stops that shape coming back.
+    assert set(step["gate"]) == {"all_of"}, (
+        f"0.5ic's gate must be an `all_of` container; got {list(step['gate'])}")
+    clauses = [c["program_exit_zero"] for c in step["gate"]["all_of"]]
+    assert clauses == [
+        f"submission_template_check . --json {ST.REPORT_REL}",
+        f"tapeout_declaration_check . --json {TD.REPORT_REL}",
+    ]
+    # And the shape is not merely well-formed, it is EXECUTED: the enforcer
+    # names the program it invoked rather than declining to parse the gate.
+    import flow_compliance_check as FCC
+    import tempfile
+    _ok, _why = FCC._evaluate_gate(Path(tempfile.mkdtemp()), step["gate"])
+    assert any("__RAN_HINT__" in r for r in _why), (
+        f"the enforcer did not invoke either clause of 0.5ic's gate: {_why}")
+
     outs = step["required_outputs"]
-    assert f"{ST.SLOTS_DIR_REL}/*.yaml OR {ST.NO_TEMPLATE_REL}" in outs
+    # The OR is now THREE-way. Pinned verbatim so the third alternative cannot
+    # be dropped without this failing: without it a chip doing its own
+    # tape-out has no router file and reaches tape-out unchecked.
+    assert (f"{ST.SLOTS_DIR_REL}/*.yaml OR {ST.NO_TEMPLATE_REL} "
+            f"OR {TD.SELF_TAPEOUT_REL}") in outs
     assert ST.REPORT_REL in outs
+    assert TD.DECLARATION_REL in outs
+    assert TD.REPORT_REL in outs
+    # And the step still has NO condition: it is the step that decides the
+    # route, so every design passes through it — including the ones with no
+    # shuttle, which are exactly the ones that need it most.
+    assert step.get("condition") is None
 
 
 @pytest.mark.parametrize("mod", ["submission_template_ingest.py",

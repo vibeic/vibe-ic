@@ -643,14 +643,68 @@ steps:
           to say it was never fetched.
     programs:
       - submission_template_ingest
+      # THE OTHER HALF OF THE SAME STEP. `submission_template_ingest` records
+      # what the OPERATOR published; this records what the DESIGN declares
+      # about itself — the 18 questions of `_tapeout_declaration` (7 die size,
+      # 8 pad ring, 3 seal ring), every unanswered one `NOT_DETERMINED` and
+      # never a default. It belongs HERE, and not further down, for the reason
+      # this step has no `condition`: it is the step that decides the route, so
+      # it is the one step a design with no shuttle also passes through, and a
+      # self-tape-out has nobody else to write its numbers down for it.
+      - tapeout_declaration_gen
     required_outputs:
       # THE `OR` IS THE HONEST HALF. A design that targets no shuttle still has to
       # SAY so: this flow has no `optional:` key on an input, and a step that
       # silently produces nothing is indistinguishable from one that never ran.
-      - "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt"
+      #
+      # THE THIRD ALTERNATIVE IS NEW, AND IT CLOSES A MEASURED HOLE. Before it,
+      # this step wrote two router files for what are three routes:
+      # `slots/*.yaml` selected the operator's own container (37.5ic) and
+      # `NO_TEMPLATE.txt` selected the IP/hardmacro terminal (37.5ip). A CHIP
+      # doing its OWN tape-out has no operator template, so 37.5ic's condition
+      # excluded it, and it is a die rather than an IP, so 37.5ip was the wrong
+      # terminal for it — such a design reached tape-out having passed NO
+      # submission check of any kind. `SELF_TAPEOUT.txt` is its router, read by
+      # step 37.5self. NEITHER EXISTING CONDITION CHANGES: routing it onto
+      # `NO_TEMPLATE.txt` instead would have collided with the IP path, because
+      # `files_exist` cannot express "and not". Three files, three routes,
+      # mutually exclusive — and `tapeout_declaration_check` refuses the tree
+      # that carries two of them at once rather than resolving it by deleting
+      # one.
+      - "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt"
       - "reports/phase1/submission_template.json"
+      # ALWAYS WRITTEN, by every run, whatever the route. `tapeout_declaration_gen`
+      # with no `--answers` at all still emits a complete, well-formed,
+      # entirely `NOT_DETERMINED` declaration — which is a legal and useful
+      # result, and is what keeps this a required output rather than a
+      # conditional one. A run that produced no declaration is a run where
+      # nobody was asked.
+      - "input/submission_template/tapeout_declaration.json"
+      - "reports/phase1/tapeout_declaration.json"
     gate:
-      program_exit_zero: "submission_template_check . --json reports/phase1/submission_template.json"
+      # `all_of`, NOT a bare list. MEASURED: `flow_compliance_check._evaluate_gate`
+      # handed a bare list of two gate mappings returns
+      # `(False, ['gate spec unrecognized'])` — it executes NEITHER program, so
+      # the pre-existing `submission_template_check` gate would have been taken
+      # out of service by the act of adding a second one, and the step could
+      # never pass for any tree. `all_of` is the container the enforcer already
+      # walks (`_evaluate_gate`'s `all_of` branch, and `_declared_gate_commands`
+      # recurses it), and handed the same two clauses it emits `__RAN_HINT__:
+      # submission_template_check ...` — the proof it invoked the program rather
+      # than declining to parse the shape.
+      all_of:
+        - program_exit_zero: "submission_template_check . --json reports/phase1/submission_template.json"
+        # BLOCKING, and it refuses a MALFORMED declaration — never an incomplete
+        # one. `NOT_DETERMINED` in a field is the declaration working as
+        # intended; it is reported by the CONSUMING check, in the place where
+        # the reader can see which check went without which answer. Refusing
+        # incompleteness here instead would make the step that decides the
+        # route unpassable for every design that has not yet answered all 18,
+        # and a router that cannot route is worse than an honest
+        # NOT_DETERMINED downstream. What it DOES refuse: a question absent
+        # altogether, a rectangle that is not four numbers, an enum outside its
+        # choices, and a tree carrying more than one router file at once.
+        - program_exit_zero: "tapeout_declaration_check . --json reports/phase1/tapeout_declaration.json"
     blocks_on: []
     notes: >-
       Chip/IC path only: an IP is delivered as a hardmacro (37.5ip) and is never
@@ -3163,6 +3217,18 @@ steps:
       # this entry turns it MISSING, and that is the honest reading: the
       # mirror the gate's own `--under` scopes to really was not written.
       - "reports/phase3/drc_router.rpt"
+      # DECLARED because it became LOAD-BEARING, and D7 is what noticed.
+      # `drc_report_check` has always written this JSON here — the gate below
+      # names it with `--json reports/phase3/drc_router.json` — but nothing
+      # outside step 21 read it, so an undeclared output stayed latent.
+      # `general_precheck` delegates its KLayout-DRC rung to exactly this
+      # report, and the moment it did,
+      # `test_d7_required_outputs_list_is_complete[step21]` went red with
+      # `[W1:gate_output_read_elsewhere] ... written by drc_report_check; read
+      # by program:general_precheck`. The remedy for a load-bearing artefact a
+      # step does not declare is to DECLARE it — not to stop reading it, and
+      # not to waive the dimension that caught it.
+      - "reports/phase3/drc_router.json"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/routed.def"]
@@ -5275,6 +5341,74 @@ steps:
     # 0.5ic writes the template this step's condition reads, and the
     # precheck is run against the slot it names.
     blocks_on: [37, 0.5ic]
+
+  # ── chip path with NO operator — the design tapes itself out ─────────
+  # THE ROUTE THAT HAD NOTHING TO RUN. 37.5ic above is the right design for a
+  # design going to that shuttle: an outside party's refusal is the verdict,
+  # and a gate we wrote can be made to pass by editing it. But it is specific
+  # to ONE operator and ONE PDK. 37.5ip below it is the IP terminal, and an IP
+  # is delivered rather than fabricated. A CHIP doing its own tape-out is
+  # neither, and until this step it passed no submission check of any kind.
+  #
+  # THIS IS ASSEMBLY, NOT A NEW ENGINE. The operator's precheck is itself a
+  # LibreLane SequentialFlow whose custom step classes are mostly GENERAL:
+  # only its id encoding (`KLayout.GenerateID`) and its pad mask
+  # (`KLayout.CheckPadMask`) are the operator's, and `general_precheck`
+  # excludes exactly those two and names them in its report rather than
+  # dropping them silently. Everything else is the same ladder, in the same
+  # submission-failure order, sourced three ways: measured out of the GDSII
+  # stream (origin, top cell, zero-area polygons, database unit), DELEGATED to
+  # the in-tree checker that calls the PDK's own deck (DRC, density, antenna,
+  # Magic DRC — called, never reimplemented), or compared against the
+  # declaration 0.5ic wrote.
+  #
+  # THE ORIGIN CHECK IS THE ONE ADDITION, and it is justified by measurement,
+  # not taste. `tapeout_readiness_check.resolve_in_tree_coverage` recomputed on
+  # this tree reported `KLayout.CheckSize` UNCOVERED — no `die_slot_dimension_check`,
+  # no `seal_ring_check`, no `frame_dimension_check` existed. The known
+  # positive is published: `u_hawaii_adc` sky130A streams `phase3/stage4/gds/
+  # ldo.gds` with a flattened bbox starting at (-4.5, -223.305) um, and that
+  # file is byte-identical to `phase3/analog/hardmacro/ldo/ldo.gds`. An analog
+  # hardmacro was copied into the chip-GDS position; the negative origin is
+  # legal for the macro (its LEF declares `ORIGIN 4.500 223.305`) and is not
+  # legal for a die. The check fires there, and firing there is correct.
+  - id: 37.5self
+    name: "General Precheck — the tape-out check for a design with NO operator (chip/IC path, self tape-out)"
+    stage: stage4
+    condition:
+      files_exist: ["input/submission_template/SELF_TAPEOUT.txt"]
+    # D6 (vibe-ic#1744), same reading as its two siblings. `design_dependent`,
+    # not `setup_required`: this condition tests WHICH PATH the design is on,
+    # and step 0.5ic's required_outputs is the OR of exactly these three
+    # artefacts, so on any run where 0.5ic itself passed, precisely one of them
+    # exists. A chip on a shuttle legitimately has no SELF_TAPEOUT marker and
+    # an IP legitimately has neither — a silent skip is the correct reading.
+    # The "someone forgot" case is NOT lost to this default: it is 0.5ic never
+    # having run, which its own gate refuses as NEVER_LOOKED rather than
+    # leaving to be inferred from a downstream skip.
+    condition_kind: design_dependent
+    required_inputs:
+      - from: 37
+        path: "phase3/stage4/gds/*.gds"
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
+    required_outputs:
+      - "reports/phase3/general_precheck.json"
+    gate:
+      program_exit_zero: "general_precheck . --json reports/phase3/general_precheck.json"
+    # 0.5ic writes both the router file this step's condition reads AND the
+    # declaration the check compares the layout against.
+    blocks_on: [37, 0.5ic]
+    notes: >-
+      Three verdicts and no fourth, identical to 37.5ic so the two reports read
+      the same way: PASS only when every general ladder step carries passing
+      evidence; FAIL when a step refuses; NOT_DETERMINED when a declaration
+      question was left unanswered or a delegated checker could not run.
+      NOT_DETERMINED exits 1, the same as a refusal — a silence credited as a
+      pass is the defect this gate exists for. This step does NOT weaken
+      37.5ic: a design carrying an operator template routes there, and its
+      verdict stays the one we did not write.
+
   - id: 38
     name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
     stage: stage4

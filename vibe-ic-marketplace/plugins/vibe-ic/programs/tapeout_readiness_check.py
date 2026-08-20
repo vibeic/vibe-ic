@@ -265,8 +265,18 @@ _WAFER_SPACE_GF180MCU = Shuttle(
             # / below a byte threshold). It is NOT a die-DIMENSION gate and is
             # deliberately not claimed here: naming it would report coverage this
             # tree does not have.
-            covered_by=("die_slot_dimension_check", "seal_ring_check",
-                        "frame_dimension_check")),
+            #
+            # `general_precheck` IS claimed, and the claim is the point of
+            # recomputing this: it examines the SAME property — the flattened
+            # bounding box's lower-left against a declared origin, and its
+            # extent against a declared die area — for a design with no
+            # operator. Until it landed this step recomputed as UNCOVERED, and
+            # the artefact that proves the gap was real is published:
+            # `u_hawaii_adc` sky130A streams a `phase3/stage4/gds/ldo.gds`
+            # whose flattened box starts at (-4.5, -223.305) um, byte-identical
+            # to that design's own analog hardmacro.
+            covered_by=("general_precheck", "die_slot_dimension_check",
+                        "seal_ring_check", "frame_dimension_check")),
         LadderStep(
             "KLayout.CheckPadMask", "Check Pad Mask",
             "the pad openings do not match the pad mask for the slot",
@@ -288,7 +298,11 @@ _WAFER_SPACE_GF180MCU = Shuttle(
         LadderStep(
             "Checker.KLayoutZeroAreaPolygons", "Zero Area Polygons Checker",
             "the layout contains zero-area polygons",
-            covered_by=("zero_area_polygon_check",)),
+            # `general_precheck` counts them EXACTLY, from the integer shoelace
+            # area of every BOUNDARY/BOX in the stream — no tolerance, because
+            # a GDSII coordinate is an integer and a tolerance would be a
+            # threshold of ours that somebody could widen.
+            covered_by=("general_precheck", "zero_area_polygon_check")),
         LadderStep(
             "Checker.KLayoutAntenna", "Antenna Checker",
             "antenna ratio violations",

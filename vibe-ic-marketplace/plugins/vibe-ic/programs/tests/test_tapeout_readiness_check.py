@@ -116,23 +116,53 @@ def test_the_captured_refusal_is_actually_tracked():
     assert len(on_disk) == len([p for p in out.stdout.split("\0") if p])
 
 
-def test_submission_frame_steps_have_no_counterpart_in_this_tree(tmp_path):
+def test_the_remaining_gap_is_exactly_the_operator_specific_steps(tmp_path):
     """The measured gap, recomputed against the real programs/ directory.
 
-    Not an assertion that we have no frame check — a RESOLUTION. If somebody
-    lands `die_slot_dimension_check.py` or `frame_marker_check.py` this test
-    starts failing and the registry entry, not the claim, is what gets edited."""
+    Not an assertion — a RESOLUTION, and it has already moved once. When this
+    test was written it pinned `KLayout.CheckSize` and `KLayout.GenerateID` as
+    UNCOVERED and said: "if somebody lands `die_slot_dimension_check.py` this
+    test starts failing and the registry entry, not the claim, is what gets
+    edited." `general_precheck` landed, the registry entry was edited, and the
+    claim this file pins is now the NARROWER and more useful one.
+
+    WHAT THE GAP IS NOW, and why it is the right shape to be left at. The
+    operator's precheck is a LibreLane SequentialFlow whose custom steps are
+    mostly general; exactly two of them are the OPERATOR's own:
+
+        KLayout.CheckPadMask   their pad mask, published per purchasable slot
+        KLayout.GenerateID     their die-id fixtures and their ID encoding
+
+    Those two CANNOT have an in-tree counterpart, because a counterpart would
+    be a mask and an encoding we invented pretending to be theirs — and this
+    gate exists precisely because an outside party's rule is not ours to
+    write. Every other ladder step now resolves. So the assertion below is not
+    "the gap shrank"; it is "the gap is now exactly the part that must stay a
+    gap", which is a claim that can fail in both directions:
+
+      * if a general step regresses to UNCOVERED, the first block fails;
+      * if somebody lands a `pad_ring_mask_check` or a `die_id_marker_check`
+        that claims to check somebody else's mask or encoding, the second
+        block fails and that program gets read very carefully.
+    """
     proj = _project(tmp_path)
     rep = trc.evaluate(proj, rundir=_REAL_REFUSAL,
                        image_resolver=_resolves, runner=_no_op_runner(rc=1))
     uncovered = set(rep.uncovered_in_tree)
+    # The steps THIS RUN evaluated, not the whole registry: `CheckPadMask` is
+    # cob-only and is in the ladder only when --cob was set, so intersecting
+    # against the registry would demand a step this run never had.
+    evaluated = {s.step_id for s in rep.steps}
 
-    # The step that refused is the one with nothing of ours behind it.
-    assert "KLayout.CheckSize" in uncovered
-    assert "KLayout.GenerateID" in uncovered
+    operator_specific = {"KLayout.CheckPadMask", "KLayout.GenerateID"}
+    assert uncovered == (operator_specific & evaluated), (
+        "the uncovered set must be exactly the operator-specific steps; "
+        f"got {sorted(uncovered)}")
 
-    # And the gap is specific, not a blanket "we check nothing": the physical
-    # decks DO have in-tree counterparts, so the finding is about the frame.
+    # The two that moved, named so the change is legible rather than implied.
+    assert "KLayout.CheckSize" not in uncovered
+    assert "Checker.KLayoutZeroAreaPolygons" not in uncovered
+    # And the physical decks still resolve, as they always did.
     assert "Checker.MagicDRC" not in uncovered
     assert "Checker.KLayoutAntenna" not in uncovered
     assert "Checker.KLayoutDensity" not in uncovered

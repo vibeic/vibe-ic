@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1127
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1127)
+- **Total programs (excluding helpers / shims):** 1131
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1131)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1118 |
+| `any` | 1122 |
 
 ## Alphabetical listing
 
@@ -450,6 +450,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gds_topcell_name_check` | any | — | Deterministic GDSII top-cell-name verifier. |
 | `gen_program_inventory` | any | — | single source of truth for every stated count of this plugin's `programs/` population. |
 | `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
+| `general_precheck` | any | — | the tape-out precheck for a design with NO operator. |
 | `general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har... |
 | `generated_artifact_conflict_resolve` | any | — | resolve the merge conflicts that carry no information, and REFUSE every conflict that does. |
 | `gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family. |
@@ -1058,6 +1059,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `synth_wrapper_gen` | any | — | auto-generate synthesis wrapper for inout-port designs. |
 | `table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st... |
 | `tapeout_checklist_gen` | any | — | emit Step 36 (v2.3) reports/audit/tapeout_checklist.json. |
+| `tapeout_declaration_check` | any | — | judge the declaration step 0.5ic wrote. |
+| `tapeout_declaration_gen` | any | — | write down the 18 answers, and pick the route. |
+| `tapeout_docs_gen` | any | — | emit the release documents for a tape-out candidate. |
 | `tapeout_readiness_check` | any | — | the EXTERNAL refusal interface, pointed at a shuttle that still exists. |
 | `tapeout_signoff_check` | any | — | Tapeout signoff check — wrapper for signoff_audit --mode tapeout. |
 | `tb_timing_extremes_check` | any | — | LL-6. |
@@ -1199,7 +1203,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1118 programs)
+### `any` (1122 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1621,6 +1625,7 @@ _(no programs in this group)_
 - `gds_topcell_name_check` — Deterministic GDSII top-cell-name verifier.
 - `gen_program_inventory` — single source of truth for every stated count of this plugin's `programs/` population.
 - `gen_skill_inventory` — single source of truth for the AI-skill count.
+- `general_precheck` — the tape-out precheck for a design with NO operator.
 - `general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har...
 - `generated_artifact_conflict_resolve` — resolve the merge conflicts that carry no information, and REFUSE every conflict that does.
 - `gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family.
@@ -2226,6 +2231,9 @@ _(no programs in this group)_
 - `synth_wrapper_gen` — auto-generate synthesis wrapper for inout-port designs.
 - `table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st...
 - `tapeout_checklist_gen` — emit Step 36 (v2.3) reports/audit/tapeout_checklist.json.
+- `tapeout_declaration_check` — judge the declaration step 0.5ic wrote.
+- `tapeout_declaration_gen` — write down the 18 answers, and pick the route.
+- `tapeout_docs_gen` — emit the release documents for a tape-out candidate.
 - `tapeout_readiness_check` — the EXTERNAL refusal interface, pointed at a shuttle that still exists.
 - `tapeout_signoff_check` — Tapeout signoff check — wrapper for signoff_audit --mode tapeout.
 - `tb_timing_extremes_check` — LL-6.
