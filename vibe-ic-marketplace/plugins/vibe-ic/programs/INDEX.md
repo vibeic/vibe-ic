@@ -822,7 +822,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `power_domain_crossing_check` | any | — | M2 gate (substance-verifying). |
 | `power_domain_signal_crossing_check` | any | — | M2 gate (DERIVATION engine). |
 | `power_report_check` | any | — | Power report check — wrapper for eda_report_audit --mode power. |
-| `power_total_vs_budget_check` | any | — | the total power figure must reach a COMPARISON, or the step must REFUSE and name the budget it lacks. |
+| `power_total_vs_budget_check` | any | — | the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks. |
 | `ppa_area_threshold_check` | any | — | v1.0 plugin gate (ORGANIC #729). |
 | `ppa_contract_build` | any | — | build the measurement contract for one PPA run. |
 | `ppa_contract_check` | any | — | the validator, and what it must REFUSE. |
@@ -2008,7 +2008,7 @@ _(no programs in this group)_
 - `power_domain_crossing_check` — M2 gate (substance-verifying).
 - `power_domain_signal_crossing_check` — M2 gate (DERIVATION engine).
 - `power_report_check` — Power report check — wrapper for eda_report_audit --mode power.
-- `power_total_vs_budget_check` — the total power figure must reach a COMPARISON, or the step must REFUSE and name the budget it lacks.
+- `power_total_vs_budget_check` — the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks.
 - `ppa_area_threshold_check` — v1.0 plugin gate (ORGANIC #729).
 - `ppa_contract_build` — build the measurement contract for one PPA run.
 - `ppa_contract_check` — the validator, and what it must REFUSE.
