@@ -416,3 +416,47 @@ def test_the_generator_output_survives_the_checkers_strictest_mode(tmp_path):
     assert rc == chk.RC_OK, report.get("findings")
     assert report["sentences_read"] > 0
     assert report["claims_read"] > 0
+
+
+# ------------------------------------------- soft line breaks (measured bug)
+
+def test_a_hard_wrapped_sentence_keeps_its_citation(tmp_path):
+    """MEASURED while writing the corrected page for the live site.
+
+    Splitting on every newline put the number on one line and its
+    `[claim:<id>]` on the next, and `--cite-numbers` reported seven findings
+    against a page whose every number WAS cited. A gate that punishes the wrap
+    width is a gate nobody can satisfy — and one nobody can satisfy is one that
+    gets turned off, which is a worse outcome than the misses it was preventing.
+    """
+    doc = _claims({"id": "n", "text": "22 steps", "status": "MEASURED",
+                   "evidence": [{"path": "flow.yaml", "status": "MEASURED"}]})
+    wrapped = ("At the pinned base, 22 steps carried a closed_loop block\n"
+               "with both a fallback_to and a trigger `[claim:n]`.\n")
+    rc, report = _run(tmp_path, wrapped, doc, cite_numbers=True)
+    assert rc == chk.RC_OK, report.get("findings")
+
+
+def test_a_blank_line_still_ends_a_unit(tmp_path):
+    """The bound on how far a citation can reach. A citation in the NEXT
+    paragraph must not qualify a banned form in this one."""
+    doc = _claims({"id": "q", "text": "t", "status": "MEASURED",
+                   "scope": {"base": "v1.11.18"},
+                   "evidence": [{"path": "flow.yaml", "status": "MEASURED"}]})
+    page = ("It does not measure area at all.\n"
+            "\n"
+            "A separate paragraph `[claim:q]`.\n")
+    rc, report = _run(tmp_path, page, doc)
+    assert rc == chk.RC_REFUSED
+    assert "DOES_NOT_MEASURE_AREA" in {f["code"] for f in report["findings"]}
+
+
+def test_fenced_lines_are_not_joined_into_the_prose(tmp_path):
+    page = ("Prose before.\n"
+            "```\n"
+            "run --top 12\n"
+            "more 34\n"
+            "```\n"
+            "Prose after.\n")
+    rc, report = _run(tmp_path, page, _claims(), cite_numbers=True)
+    assert rc == chk.RC_OK, report.get("findings")

@@ -208,6 +208,7 @@ CITATION_RE = re.compile(r"\[claim:([A-Za-z0-9][A-Za-z0-9._-]*)\]")
 _TAG_RE = re.compile(r"<[^>]+>")
 _DROP_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.S | re.I)
 _WS_RE = re.compile(r"[ \t\r\f\v]+")
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
 # --------------------------------------------------------------------------
@@ -229,19 +230,59 @@ def page_text(raw: str) -> str:
     return text
 
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_BLANK_LINE_RE = re.compile(r"\n\s*\n")
+
+
+def _unwrap(text: str) -> str:
+    """Join soft line breaks inside a block; keep blank lines and fences.
+
+    MEASURED, and it is why this function exists rather than splitting on every
+    newline: a hard-wrapped sentence carries its `[claim:<id>]` on whichever
+    line it happened to fall on. Splitting per line put the number in one unit
+    and its citation in the next, and `--cite-numbers` reported seven findings
+    against a page whose every number WAS cited. A checker that punishes the
+    line-wrap width is a checker nobody can satisfy, and one nobody can satisfy
+    is one that gets turned off.
+
+    Lines inside a fenced block are never joined: their line structure is the
+    content, and joining them would also lose the fence markers the number
+    check uses to skip them.
+    """
+    out: List[str] = []
+    in_fence = False
+    for line in text.split("\n"):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            out.append("\n" + line.strip() + "\n")
+            continue
+        if in_fence:
+            out.append("\n" + line + "\n")
+            continue
+        if not line.strip():
+            out.append("\n\n")
+            continue
+        out.append(line.strip() + " ")
+    return "".join(out)
 
 
 def sentences(text: str) -> List[str]:
-    """Sentence-ish units.
+    """Sentence-ish units: a block, split at sentence terminators.
 
-    Deliberately crude, and deliberately crude in the SAFE direction: a split
-    that is too coarse groups a citation with a banned form that it was not
-    meant to qualify, which lets a violation through. Splitting on newlines as
-    well as terminators keeps units small, so a citation has to sit with the
-    sentence it qualifies rather than somewhere on the same page.
+    A unit is bounded by a blank line or a terminator, never by the width the
+    author happened to wrap at. Deliberately crude in the direction that keeps
+    a citation WITH the sentence it qualifies: a unit that is too small produces
+    findings against correctly-cited prose, which is the failure that gets a
+    gate switched off. A unit that is too large could let a neighbouring
+    citation qualify a banned form — bounded here by the blank line, which in
+    both Markdown and rendered HTML is where a new thought starts.
     """
-    return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    units: List[str] = []
+    for block in _BLANK_LINE_RE.split(_unwrap(text)):
+        for unit in _SENTENCE_SPLIT_RE.split(block):
+            if unit.strip():
+                units.append(unit.strip())
+    return units
 
 
 # --------------------------------------------------------------------------
@@ -346,7 +387,6 @@ def check_page(text: str, by_id: Dict[str, Dict[str, Any]]) -> List[Dict[str, An
 
 _NUMBER_RE = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?![\w.])")
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
-_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
 def _prose_only(sentence: str) -> str:
