@@ -381,6 +381,62 @@ class TestVerdict:
         assert doc["verdict"] == A.V_UNDETERMINED
         assert doc["code"] == A.C_DISAGREEING_PHYSICAL
 
+    def test_a_lower_utilisation_is_not_a_smaller_chip(self):
+        """A physical RATIO is measured, post-route, and still must not vote.
+
+        Utilisation is the fraction of the core the cells occupy. A candidate at
+        40% where the baseline was 59.2% is not smaller — it is the same core
+        with more empty space in it, which is usually WORSE. Letting the ratio
+        vote would reward the wrong direction, so it is reported and not voted.
+        """
+        base = [_phys("area.physical.utilization_pct", 59.2)]
+        cand = [_phys("area.physical.utilization_pct", 40.0)]
+        doc = A.area_verdict(base, cand)
+        assert doc["verdict"] == A.V_UNDETERMINED
+        assert doc["code"] == A.C_NO_PHYSICAL_EVIDENCE
+        assert doc["physical_comparisons"] == []
+        # it was seen and recorded, just not counted
+        assert [c["metric"] for c in doc["physical_ratios_not_voted"]] == [
+            "area.physical.utilization_pct"]
+        assert "ratio is never voted" in doc["reason"]
+
+    def test_a_ratio_cannot_rescue_an_extent_that_grew(self):
+        """Core grew 4%, utilisation improved. Still not smaller."""
+        base = [_phys("area.physical.core_um2", CORE_UM2),
+                _phys("area.physical.utilization_pct", 59.2)]
+        cand = [_phys("area.physical.core_um2", 12800.0),
+                _phys("area.physical.utilization_pct", 80.0)]
+        doc = A.area_verdict(base, cand)
+        assert doc["verdict"] == A.V_LARGER
+        assert doc["code"] == A.C_NOT_SMALLER
+
+    def test_only_extents_vote_and_the_registry_says_which(self):
+        """Guards the partition itself against a future metric being added.
+
+        If someone registers a new PHYSICAL ratio and forgets `is_extent=False`,
+        it silently starts voting. This names the ratios explicitly.
+        """
+        ratios = {m for m in A.AREA_METRICS if not A.is_extent(m)}
+        assert ratios == {"area.physical.utilization_pct",
+                          "area.proxy.cell_count_reduction_pct",
+                          "area.proxy.wire_count_reduction_pct"}
+        for m in ratios:
+            assert A.unit_of(m) == "%", m
+        for m in A.AREA_METRICS:
+            # the converse: nothing measured in % is allowed to be an extent
+            if A.unit_of(m) == "%":
+                assert not A.is_extent(m), m
+
+    def test_smaller_on_one_extent_and_equal_on_another_is_smaller(self):
+        """Nothing grew and something shrank. The reason must not overclaim."""
+        base = [_phys("area.physical.core_um2", CORE_UM2),
+                _phys("area.physical.die_um2", DIE_UM2)]
+        cand = [_phys("area.physical.core_um2", 11000.0),
+                _phys("area.physical.die_um2", DIE_UM2)]
+        doc = A.area_verdict(base, cand)
+        assert doc["verdict"] == A.V_SMALLER
+        assert "unchanged on area.physical.die_um2" in doc["reason"]
+
     def test_no_shared_metric_is_undetermined_not_smaller(self):
         doc = A.area_verdict([_phys("area.physical.core_um2", CORE_UM2)],
                              [_phys("area.physical.die_um2", 1.0)])

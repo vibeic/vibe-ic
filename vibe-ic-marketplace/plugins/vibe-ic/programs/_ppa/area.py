@@ -79,7 +79,8 @@ __all__ = [
     "DERIVED", "STATUSES", "COMPARABLE_STATUSES", "VALUE_BEARING_STATUSES",
     "AreaMetricSpec", "AREA_METRICS",
     "UnknownAreaMetric", "AreaRecordError", "IneligibleForPhysicalPPA",
-    "classify", "unit_of", "is_physical", "eligible_for_physical_ppa",
+    "classify", "unit_of", "is_physical", "is_extent",
+    "eligible_for_physical_ppa",
     "metrics_of_class", "area_record", "proxy_record", "physical_record",
     "digest_of_record", "assert_eligible_for_physical_ppa", "filter_physical",
     "scope_matches", "compare", "area_verdict", "main",
@@ -131,22 +132,32 @@ C_ABSENT_INPUT = "AREA_INPUT_ABSENT"
 
 
 class AreaMetricSpec:
-    """One area metric: what class it belongs to and what unit it is in."""
+    """One area metric: its class, its unit, and whether it is an EXTENT.
 
-    __slots__ = ("name", "metric_class", "unit", "what")
+    `is_extent` is the difference between "how big" and "what fraction".
+    `area.physical.utilization_pct` is PHYSICAL, post-route and measured — and
+    a candidate with a LOWER utilisation is not a smaller chip, it is the same
+    chip with more empty space in it. Letting a ratio vote in a smaller-than
+    verdict would reward exactly the wrong direction, so only extents vote.
+    """
 
-    def __init__(self, name: str, metric_class: str, unit: str, what: str):
+    __slots__ = ("name", "metric_class", "unit", "what", "is_extent")
+
+    def __init__(self, name: str, metric_class: str, unit: str, what: str,
+                 is_extent: bool = True):
         self.name = name
         self.metric_class = metric_class
         self.unit = unit
         self.what = what
+        self.is_extent = is_extent
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"AreaMetricSpec({self.name!r}, {self.metric_class!r})"
 
 
-def _spec(name: str, cls: str, unit: str, what: str) -> Tuple[str, AreaMetricSpec]:
-    return name, AreaMetricSpec(name, cls, unit, what)
+def _spec(name: str, cls: str, unit: str, what: str, is_extent: bool = True
+          ) -> Tuple[str, AreaMetricSpec]:
+    return name, AreaMetricSpec(name, cls, unit, what, is_extent)
 
 
 #: The registry. A metric that is not in here has no class, and a number with no
@@ -161,9 +172,9 @@ AREA_METRICS: Dict[str, AreaMetricSpec] = dict([
     _spec("area.proxy.wire_bit_count", RTL_PROXY, "wire_bits",
           "wire bits in a yosys netlist"),
     _spec("area.proxy.cell_count_reduction_pct", RTL_PROXY, "%",
-          "100*(orig-opt)/orig over cell counts"),
+          "100*(orig-opt)/orig over cell counts", is_extent=False),
     _spec("area.proxy.wire_count_reduction_pct", RTL_PROXY, "%",
-          "100*(orig-opt)/orig over wire counts"),
+          "100*(orig-opt)/orig over wire counts", is_extent=False),
     # --- SYNTH_PROXY: area-shaped, but pre-placement --------------------------
     _spec("area.synth.cell_area", SYNTH_PROXY, "lib_area_unit",
           "yosys `Chip area for module` — the liberty area of the mapped cells, "
@@ -187,7 +198,9 @@ AREA_METRICS: Dict[str, AreaMetricSpec] = dict([
           "area occupied by hard macros, post-route"),
     _spec("area.physical.utilization_pct", PHYSICAL, "%",
           "achieved placement utilisation, post-route (the LAST reported value, "
-          "never the first — the placer reprints it as it iterates)"),
+          "never the first — the placer reprints it as it iterates). A RATIO, "
+          "so it is reported but never voted: a lower utilisation is not a "
+          "smaller chip", is_extent=False),
 ])
 
 
@@ -220,6 +233,11 @@ def classify(metric: str) -> str:
 
 def unit_of(metric: str) -> str:
     return _spec_for(metric).unit
+
+
+def is_extent(metric: str) -> bool:
+    """Whether the metric measures HOW BIG rather than WHAT FRACTION."""
+    return _spec_for(metric).is_extent
 
 
 def is_physical(metric: str) -> bool:
@@ -547,10 +565,13 @@ def area_verdict(baseline: Sequence[Mapping[str, Any]],
 
     THE RULE, and the whole reason the module exists:
 
-      * every PHYSICAL comparison that can be formed is formed, and they must
-        AGREE. One physical metric saying LARGER outranks any number of proxies
-        saying SMALLER — that is the negative fixture: a candidate that wins on
-        cell count and loses on post-route core area is NOT smaller.
+      * every PHYSICAL EXTENT comparison that can be formed is formed, and they
+        must AGREE. One physical extent saying LARGER outranks any number of
+        proxies saying SMALLER — that is the negative fixture: a candidate that
+        wins on cell count and loses on post-route core area is NOT smaller.
+      * a physical RATIO (utilisation) is reported and NOT voted. A lower
+        utilisation is not a smaller chip; it is the same chip with more empty
+        space, and letting it vote would reward the wrong direction.
       * with no physical comparison available the verdict is UNDETERMINED. Not
         "SMALLER on the evidence we have". A proxy result is reported, clearly
         labelled, as advisory — it never becomes the verdict.
@@ -563,11 +584,12 @@ def area_verdict(baseline: Sequence[Mapping[str, Any]],
     shared = sorted(set(b_idx) & set(c_idx))
 
     physical_cmps: List[Dict[str, Any]] = []
+    ratio_cmps: List[Dict[str, Any]] = []
     proxy_cmps: List[Dict[str, Any]] = []
     refused: List[Dict[str, Any]] = []
     for m in shared:
         try:
-            cls = classify(m)
+            cls, extent = classify(m), is_extent(m)
         except UnknownAreaMetric as ex:
             refused.append({"metric": m, "code": C_METRIC_MISMATCH,
                             "reason": str(ex)})
@@ -576,11 +598,17 @@ def area_verdict(baseline: Sequence[Mapping[str, Any]],
         if cmp_["relation"] == V_UNDETERMINED:
             refused.append(cmp_)
             continue
-        (physical_cmps if cls == PHYSICAL else proxy_cmps).append(cmp_)
+        if cls != PHYSICAL:
+            proxy_cmps.append(cmp_)
+        elif extent:
+            physical_cmps.append(cmp_)
+        else:
+            ratio_cmps.append(cmp_)
 
     doc: Dict[str, Any] = {
         "schema": SCHEMA_VERDICT,
         "physical_comparisons": physical_cmps,
+        "physical_ratios_not_voted": ratio_cmps,
         "proxy_comparisons_advisory": proxy_cmps,
         "not_compared": refused,
         "physical_metrics_available": [c["metric"] for c in physical_cmps],
@@ -594,7 +622,7 @@ def area_verdict(baseline: Sequence[Mapping[str, Any]],
                     if c["relation"] == V_SMALLER]
             doc["code"] = C_PROXY_ONLY
             doc["reason"] = (
-                "no PHYSICAL area metric could be compared, so there is no "
+                "no PHYSICAL EXTENT metric could be compared, so there is no "
                 "area verdict. "
                 + (f"{len(wins)} proxy metric(s) ({', '.join(wins)}) are "
                    f"smaller; a proxy is a count or a pre-placement estimate "
@@ -604,7 +632,9 @@ def area_verdict(baseline: Sequence[Mapping[str, Any]],
         else:
             doc["code"] = C_NO_PHYSICAL_EVIDENCE
             doc["reason"] = (
-                "no area metric could be compared at all: "
+                (f"{len(ratio_cmps)} physical RATIO comparison(s) were formed "
+                 f"but a ratio is never voted; " if ratio_cmps else "")
+                + "no area EXTENT metric could be compared: "
                 + (f"{len(refused)} pair(s) refused "
                    f"({', '.join(sorted({str(r.get('code')) for r in refused}))})"
                    if refused else
@@ -633,11 +663,18 @@ def area_verdict(baseline: Sequence[Mapping[str, Any]],
                f"({', '.join(proxy_wins)}) being smaller, which is exactly the "
                f"substitution this check refuses" if proxy_wins else ""))
         return doc
+    # Everything left is SMALLER, or SMALLER mixed with EQUAL: nothing grew and
+    # at least one extent shrank. Say which is which — "smaller on every metric"
+    # would be false of the ones that only tied.
     doc["verdict"] = V_SMALLER
     doc["code"] = C_OK
-    doc["reason"] = ("smaller on every comparable physical area metric: "
-                     + ", ".join(f"{c['metric']} {c['delta_pct']:+.4f}%"
-                                 for c in physical_cmps))
+    shrank = [c for c in physical_cmps if c["relation"] == V_SMALLER]
+    tied = [c["metric"] for c in physical_cmps if c["relation"] == V_EQUAL]
+    doc["reason"] = (
+        "smaller on physical area: "
+        + ", ".join(f"{c['metric']} {c['delta_pct']:+.4f}%" for c in shrank)
+        + (f"; unchanged on {', '.join(tied)}" if tied else "")
+        + ("; nothing grew" if not tied else ""))
     return doc
 
 
