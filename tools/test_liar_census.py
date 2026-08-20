@@ -2072,7 +2072,29 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # tapeout_readiness_check -- one `program_exit_zero` each, and nothing was
     # removed. The PIN `swept == declared` never broke; only the shrink-detector
     # literal needed to follow the flow, which is what it is for.
-    assert pop["swept"] == pop["declared"] == 175, pop
+    # 175 -> 178. MEASURED the same way, over the flow YAML blob at each commit
+    # with `liar_census.population_report`, and the CLAUSE SET diffed rather than
+    # the count compared: 03f7b945d7 (the commit that last moved this literal)
+    # declared=175 swept=175, 46db018669 (origin/main) declared=178 swept=178.
+    # The three added clauses, attributed to the commits that added them, are
+    #   69ce9260d  program_exit_zero: tapeout_docs_gen --project . --out-dir
+    #                                 reports/phase3/docs
+    #   00d9dc261  program_exit_zero: general_precheck . --json
+    #                                 reports/phase3/general_precheck.json
+    #   00d9dc261  program_exit_zero: tapeout_declaration_check . --json
+    #                                 reports/phase1/tapeout_declaration.json
+    # and the REMOVED set is empty, so this is a grow and not a churn. `by_kind`
+    # moves 110 -> 113 `program_exit_zero` with `advisory` 37 and `optional` 28
+    # unchanged, and `unswept`/`unrecognised` stay empty on both trees.
+    #
+    # THIRD TIME THIS LITERAL HAS LAGGED THE FLOW (169->170, 170->175, 175->178).
+    # A hand-maintained number that must be remembered by an author who is
+    # editing a different file is prose wearing an assertion, and this file
+    # cannot fix that alone: making the detector derive its floor from the
+    # PREVIOUS flow blob would catch every shrink with nothing to remember, but
+    # it would also leave a DELIBERATE shrink no way to be authorised. That is a
+    # call for the flow's owner, so it is written down here rather than taken.
+    assert pop["swept"] == pop["declared"] == 178, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 
