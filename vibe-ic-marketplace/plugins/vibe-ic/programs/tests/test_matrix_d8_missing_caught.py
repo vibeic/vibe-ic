@@ -811,8 +811,12 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           leaves this fewer-than-two population; retaining it would silently
 #:           disable the partial-evidence shape this pin exists to measure.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
+    # 2026-08-20: 27 -> 26. Step 37.5ic LEFT this population when 69ce9260d made
+    # the release documents an output of it (1 entry -> 3). Re-DERIVED from the
+    # live flow, not edited by hand: the tuple below is exactly what
+    # `[k for k in steps if len(required_outputs(k)) < 2]` answers on this tree.
     "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5", "A7", "A9",
-    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37", "37.5ic",
+    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37",
     "M4", "42", "44", "P0",
 )
 
