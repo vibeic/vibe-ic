@@ -5253,10 +5253,25 @@ steps:
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
+    programs:
+      - tapeout_docs_gen
     required_outputs:
       - "reports/phase3/shuttle_precheck.json"
+      # THE RELEASE DOCUMENTS ARE AN OUTPUT OF THIS STEP, not a separate chore.
+      # Every fact they state -- per-checker verdict, per-corner slack, die
+      # geometry, the precheck's own stage results -- is ALREADY produced here.
+      # Leaving them as JSON in a run directory meant the only way to answer
+      # "what did we actually sign off?" was to read a metrics file, and the
+      # sign-off verdict existed nowhere as a sentence anyone could quote.
+      # The generator computes that verdict FROM the table rather than being
+      # told it, and writes NOT_MEASURED where an artefact is missing -- never
+      # a default, because a plausible number hides the gap a hole would show.
+      - "reports/phase3/docs/SIGNOFF.html"
+      - "reports/phase3/docs/BRIEF.html"
     gate:
-      program_exit_zero: "tapeout_readiness_check . --json reports/phase3/shuttle_precheck.json"
+      all_of:
+        - program_exit_zero: "tapeout_readiness_check . --json reports/phase3/shuttle_precheck.json"
+        - program_exit_zero: "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
     # 0.5ic writes the template this step's condition reads, and the
     # precheck is run against the slot it names.
     blocks_on: [37, 0.5ic]

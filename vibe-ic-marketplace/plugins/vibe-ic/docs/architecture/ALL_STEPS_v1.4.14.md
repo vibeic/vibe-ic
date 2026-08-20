@@ -16,10 +16,13 @@ M1–M4** — run alongside.
   (output+tapeout) · Stage 5 (manufacturing & test)
 - **Parallel** — Analog A1–A9 · Mixed-signal M1–M4
 
-**Two exit paths.** The numbered 1→44 sequence is common to both; four
+**Two exit paths.** The numbered 1→44 sequence is common to both; five
 path-specific steps are not, and they carry an `ip`/`ic` suffix instead of a
 number because they are not part of the sequential count.
 
+- **Which path** — decided at **0.5ic** (submission template ingest): a slot
+  template from a shuttle operator puts the design on the chip/IC path; a
+  stated `NO_TEMPLATE.txt` puts it on the cell/IP path.
 - **cell/IP path** — the deliverable is a block somebody else places. It
   terminates at **37.5ip** (Digital Hardmacro Generation: LEF + Liberty + GDS +
   Verilog). It does **not** continue to Step 38 or into Stage 5.
@@ -57,6 +60,12 @@ Flow: user free text → IC Expert Agent → finalised L-series documents.
 | D3 | Extended docs L14–L27 | Protocol, timing, power intent (L21), skeletons. | L1–L13 | `L14`–`L27` JSON | overlay extractor | — |
 | D4 | Protocol-class synthesis | Detect the IC's protocol class (86 classes) and synthesise class facts. | full input text | `ic_class` + protocol facts | is_<proto> + <proto>_synth | — |
 | D5 | Coverage report | Verify the input documents landed completely in the L docs. | input docs + L docs | parity / coverage report | parity reporter | — |
+
+### Tape-out route selection (chip/IC path)
+
+| # | Step | What it does | Input | Output | Tools (EDA) | Programs / Skills |
+|---|---|---|---|---|---|---|
+| 0.5ic | Submission template ingest (route selection) | Fetch and stage the shuttle operator's published project template — the slot geometry, the die-identification fixtures and that slot's pad list. This is the step that picks the route: a slot template puts the design on the chip/IC path (15.5ic · 26.5ic · 37.5ic); a stated `NO_TEMPLATE.txt` puts it on the cell/IP path (37.5ip). Declared external and unprobed, because it is fetched rather than produced — so the flow stays able to state it was never fetched. | the operator's published project template (external) | `input/submission_template/slots/*.yaml` (or a stated `NO_TEMPLATE.txt`) · `submission_template.json` | — (reads files; no EDA tool) | `submission_template_ingest`・`submission_template_check` |
 
 ### Architecture-exploration front-ends (optional, feed Step 1)
 
@@ -201,9 +210,10 @@ Trigger timing: runs once **A8 hardmacros are complete** and **Stage 3 is near c
 **44 sequential steps** (Stage 1: 1–6 · Stage 2: 7–14 · Stage 3: 15–32 ·
 Stage 4: 33–39 · Stage 5: 40–44), plus Phase 1 (Agent path & doc-gen path
 D1–D5) and the two parallel tracks (Analog A1–A9 · Mixed-signal M1–M4).
-Path-specific steps, outside the 1→44 count: 15.5ic · 26.5ic · 37.5ic (chip/IC
-path only) and 37.5ip (cell/IP path terminal). A design runs one path or the
-other, never both.
+Path-specific steps, outside the 1→44 count: 0.5ic (route selection) ·
+15.5ic · 26.5ic · 37.5ic (chip/IC path only) and 37.5ip (cell/IP path
+terminal). Step 0.5ic is what decides which of the two a design is on; it
+runs one path or the other, never both.
 Preflight: P0 (environment health check). Conditional lettered steps: FS1 (ISO-26262 FMEDA diagnostic-coverage,
 safety designs only) · DT1 (transition-delay-fault ATPG, scan designs only) · DT2 (path-delay-fault at-speed
 ATPG, scan designs after routing) · DT3 (small-delay-defect at-speed grade, after DT2).
