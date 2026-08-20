@@ -915,6 +915,10 @@ def main(argv=None) -> int:
     g.add_argument("--set", metavar="X.Y.Z", help="set VERSION and rewrite every live pointer")
     g.add_argument("--bump", choices=["patch", "minor", "major"], help="increment VERSION, then --set it")
     g.add_argument("--print", action="store_true", dest="print_", help="print the current VERSION")
+    g.add_argument("--list-owned-paths", action="store_true", dest="list_owned",
+                   help="print every repo-relative path --set may rewrite, one "
+                        "per line, VERSION first. The authority on what an "
+                        "anchor bump is allowed to touch.")
     ap.add_argument("--dry-run", action="store_true", help="with --set/--bump: show changes, write nothing")
     ap.add_argument("--json", metavar="PATH", dest="json_path",
                     help="with --report-upstream: also write the dated reading as JSON")
@@ -937,6 +941,23 @@ def main(argv=None) -> int:
 
     if args.print_:
         print(version)
+        return 0
+    if args.list_owned:
+        # THE ONE PLACE THAT KNOWS WHAT AN ANCHOR BUMP TOUCHES.
+        #
+        # vibe-ic's pre-push hook scopes its gate selection to an anchor-only
+        # push, and it must not keep a second copy of this list: two lists drift,
+        # and the direction that drift breaks in is a path this file rewrites
+        # that the hook does not recognise — which is exactly the push that then
+        # skips gates it needed. It asks here instead.
+        #
+        # Printed relative to the repo root, VERSION first. Candidates that
+        # carry no pointer today are still printed: they are paths `--set` MAY
+        # rewrite, and a scope that omitted them would refuse a legitimate
+        # anchor the moment one of them gained a pointer.
+        print(vf.relative_to(root).as_posix())
+        for rel in INSTALL_DOC_CANDIDATES:
+            print(rel)
         return 0
     if args.report_upstream:
         # THE INVARIANT IS ENFORCED HERE, NOT MERELY PROMISED IN A DOCSTRING

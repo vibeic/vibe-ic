@@ -95,6 +95,44 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   esac
 done
 
+# --- is this push EXACTLY an image-anchor bump? ------------------------------
+# The anchor advance is `tools/vibeic-eda/VERSION` plus the live pointers that
+# `sync_image_version.py --set` rewrites — a version STRING moving in a fixed
+# set of files, with no plugin logic in it. The expensive tier below audits the
+# plugin, so on that diff it asserts nothing; what DOES assert something is
+# `sync_image_version.py --check`, and the block below runs it in place of the
+# stamp. The cheap tier keeps running in full either way.
+#
+# SCOPED, NOT SKIPPED. The distinction is the whole point: this is not "anchor
+# pushes are trusted", it is "these gates have no assertion power over these
+# paths". One extra path in the diff and the push takes the full tier again, so
+# code cannot ride in on an anchor.
+#
+# THE OWNED LIST IS NOT COPIED HERE. `--list-owned-paths` is the authority;
+# a second copy would drift, and the direction it breaks in is a path `--set`
+# rewrites that this hook does not recognise — the exact push that would then
+# skip a tier it needed.
+#
+# FAILS CLOSED EVERYWHERE. Tool missing, tool errors, diff unreadable, VERSION
+# not among the changes, any path outside the list: ANCHOR_ONLY stays 0 and the
+# full tier runs. Every uncertainty resolves toward more checking.
+ANCHOR_ONLY=0
+if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
+  _sync="$REPO_ROOT/tools/vibeic-eda/sync_image_version.py"
+  _owned="$(python3 "$_sync" --list-owned-paths 2>/dev/null || true)"
+  _changed="$(git diff --name-only "$PUSH_BASE" HEAD 2>/dev/null || true)"
+  if [ -n "$_owned" ] && [ -n "$_changed" ] \
+     && printf '%s\n' "$_changed" | grep -qx 'tools/vibeic-eda/VERSION'; then
+    ANCHOR_ONLY=1
+    while IFS= read -r _p; do
+      [ -z "$_p" ] && continue
+      printf '%s\n' "$_owned" | grep -qxF -- "$_p" || { ANCHOR_ONLY=0; break; }
+    done <<ANCHOR_SCOPE_EOF
+$_changed
+ANCHOR_SCOPE_EOF
+  fi
+fi
+
 # --- the gates gatekeeper-ci.yml would have run as required status checks -----
 PROGRAMS="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
 PJSON="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
@@ -241,6 +279,26 @@ if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
   # so this looked for a stamp inside a path that is not a directory, found
   # none, and refused every push from a worktree. Same expression as the writer
   # in gatekeeper-land.sh — one way to name the stamp, so the two cannot drift.
+  if [ "$ANCHOR_ONLY" = "1" ]; then
+    # THE ONE GATE WITH ASSERTION POWER OVER THIS DIFF, run directly rather
+    # than waited for inside a 37-gate tier that would examine none of it.
+    # `--check` is BLOCKING and refuses exactly the two ways an anchor bump
+    # goes wrong: a pointer left disagreeing with VERSION (a half-rewrite), and
+    # an anchor moved BELOW what this repo already committed (a regression).
+    _sv_out="$(python3 "$REPO_ROOT/tools/vibeic-eda/sync_image_version.py" --check 2>&1)"
+    _sv_rc=$?
+    if [ "$_sv_rc" -eq 0 ]; then
+      echo "pre-push: PASS  image-anchor drift (anchor-only push: VERSION + live pointers, no plugin logic)"
+    else
+      echo "pre-push: FAILED — image-anchor drift (rc=$_sv_rc)" >&2
+      printf '%s\n' "$_sv_out" | tail -5 | sed 's/^/    /' >&2
+      FAILED=1
+    fi
+    # The publication of the tag itself is already proven upstream: the round
+    # only reaches the anchor after `verify_remote_immutable_publication` reads
+    # it back from the registry with `docker manifest inspect`. Re-asking here
+    # would be a second opinion from a less authoritative source.
+  else
   STAMP="$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   HEAD_SHA="$(git rev-parse HEAD)"
   if [ ! -f "$STAMP" ]; then
@@ -252,6 +310,7 @@ if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
     echo "    stamped: $(cut -c1-9 < "$STAMP")   pushing: ${HEAD_SHA:0:9}" >&2
     echo "    re-run:  tools/gatekeeper-land.sh" >&2
     FAILED=1
+  fi
   fi
 fi
 
