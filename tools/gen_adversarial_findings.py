@@ -1,5 +1,34 @@
-"""Generate programs/adversarial_findings.json from a LIVE campaign. argv: <plugin>"""
+"""Generate programs/adversarial_findings.json from a LIVE campaign. argv: <plugin>
+
+THE CORPUS IS RESOLVED THROUGH THE POINTER, and it was not. This spelled the
+corpus as `PLUGIN.parents[2]/"benchmark-data"/"ic"`, a path v1.10.56 moved out
+of the repository, and it never consulted `VIBE_IC_BENCHMARK_DATA`. The same
+defect was in `test_adversarial_agent.py`, where it had switched the findings
+ratchet off on every host.
+
+TWO OUTCOMES, BOTH MEASURED, and only the second is the dangerous one:
+
+  * bare checkout, nothing at the dead path -> FileNotFoundError out of
+    `attack_tamper_destructive`'s `copytree`, rc=1, ledger untouched. Ugly,
+    but safe.
+  * a corpus that EXISTS and holds the three cells as EMPTY directories ->
+    every attack returns UNAVAILABLE, and this script wrote
+
+        wrote .../adversarial_findings.json with 0 forging pair(s)   rc=0
+
+    erasing every recorded finding, in a file whose own comment says a pair
+    that goes UNAVAILABLE "is UNPROVEN, not fixed, and must not read as
+    progress". That is not a hypothetical shape: `_published_corpus` records a
+    measured run where `VIBE_IC_BENCHMARK_DATA=<empty dir>` turned a whole
+    corpus-backed set green by skipping.
+
+It now REFUSES on an unreachable cell rather than emitting an empty ledger: a
+generator that could not measure has said nothing, and an empty findings file
+is the loudest possible way to say the opposite.
+"""
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -7,10 +36,37 @@ PLUGIN = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(PLUGIN / "programs"))
 import adversarial_agent as AA  # noqa: E402
 
-IC = PLUGIN.parents[2] / "benchmark-data" / "ic"
 CELL = "spm/v1.9.96_gf180mcuD"
 DONOR = "sha256/clean_run_v1427_20260715"
 OLDER = "sha256/clean_run_v1422_20260715"
+CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+
+_env = os.environ.get(CORPUS_ENV)
+IC = (Path(_env) / "ic") if _env else (PLUGIN.parents[2] / "benchmark-data" / "ic")
+for _name in (CELL, DONOR, OLDER):
+    if not (IC / _name).is_dir():
+        sys.exit(
+            f"[REFUSED] gen_adversarial_findings: {IC / _name} is not there, so "
+            f"this campaign cannot be run and the ledger must not be rewritten. "
+            f"An empty `forging` list would read as thirteen findings closed. "
+            f"Point {CORPUS_ENV} at a clone of vibeic/benchmark-data.")
+
+
+def _measured_on() -> str:
+    """The commit this campaign actually ran against.
+
+    Was the hard-coded literal "a38902d1" -- so every regeneration re-stated the
+    commit of the FIRST campaign, and the field that exists to date the
+    measurement dated somebody else's.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(PLUGIN), "rev-parse", "--short=8",
+                              "HEAD"], capture_output=True, text=True, timeout=30)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "NOT DETERMINED"
 
 rows = []
 for attack, fn, kwargs in (
@@ -50,7 +106,7 @@ doc = {
         "silently 'close' every finding and the ratchet would measure the",
         "publication schedule instead of the gates.",
     ],
-    "measured_on": "a38902d1",
+    "measured_on": _measured_on(),
     "cell": CELL,
     "donor": DONOR,
     "older_run": OLDER,

@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -78,9 +79,16 @@ CELL = (IC / _LEDGER["cell"]) if IC else None
 DONOR = (IC / _LEDGER["donor"]) if IC else None
 OLDER = (IC / _LEDGER["older_run"]) if IC else None
 
-#: The gate that NOTICES, measured. Keeping the pair small keeps the test quick
+#: The gate that FORGES, measured. Keeping the pair small keeps the test quick
 #: while preserving the only property that matters: one of each colour.
-FORGEABLE = ("drc_report_check", (".",))
+#:
+#: WAS `drc_report_check`, AND MOVING IT IS THE RECORD OF A CLOSURE.
+#: `eda_report_audit` learned to compare a discovered report against the digest
+#: the run's own `provenance.jsonl` records for that path, and drc and lvs are
+#: the two modes whose reports that ledger covers on this cell -- so both now
+#: DEFEND against A2 and A3 alike, and the ledger went 13 -> 8. This constant
+#: has to name a gate that still forges or the test above it measures nothing.
+FORGEABLE = ("antenna_report_check", (".", "--mode", "antenna"))
 DEFENDING = ("sta_report_check", (".", "--mode", "sta"))
 
 #: The bound on every CLI subprocess below (vibe-ic#1241).
@@ -117,9 +125,16 @@ _corpus = pytest.mark.skipif(
 def test_the_adversary_finds_the_cross_design_forgery():
     """A gate certifies THIS design using ANOTHER design's reports.
 
-    Measured on v1.10.33: six of seven sign-off gates stay green after 149
-    artefacts are substituted from a different IC. A gate that cannot tell whose
-    report it read is signing a statement about a design it never examined.
+    Measured on v1.10.33: six of seven sign-off gates stayed green after 149
+    artefacts were substituted from a different IC. A gate that cannot tell
+    whose report it read is signing a statement about a design it never
+    examined.
+
+    FOUR of those six now DEFEND -- drc and lvs against both A2 and A3 -- since
+    `eda_report_audit` began comparing a discovered report against the digest
+    the run's own provenance.jsonl records for that path. The four that remain
+    are the modes whose reports that ledger does not cover, which is a gap in
+    what the PRODUCER records rather than in this gate.
     """
     got = AA.attack_cross_design(PLUGIN, CELL, DONOR, gates=(FORGEABLE,))
     assert len(got) == 1, got
@@ -350,8 +365,13 @@ def _live_recorded_attacks():
 
 @_corpus
 def test_the_findings_ratchet_holds_in_BOTH_directions():
-    """13 forged greens are recorded. A fourteenth is a regression; a twelfth is
-    progress that must be adjudicated, not absorbed."""
+    """8 forged greens are recorded. A ninth is a regression; a seventh is
+    progress that must be adjudicated, not absorbed.
+
+    It was 13 until the evidence-binding rule landed in `eda_report_audit`, and
+    this test is what forced that closure to be declared: it went red naming the
+    five pairs that had started DEFENDING and refused to absorb them.
+    """
     led, attempts = _live_recorded_attacks()
     d = AA.ratchet_diff(led, attempts)
     assert not d["newly_forging"], (
@@ -691,3 +711,36 @@ def test_an_unparseable_python_file_is_treated_as_a_caller(tmp_path):
     p = tmp_path / "broken.py"
     p.write_text("def f(:\n  # adversarial_agent\n", encoding="utf-8")
     assert _names_it_outside_prose(p, "adversarial_agent") is True
+
+
+def test_the_generator_REFUSES_rather_than_emitting_an_empty_ledger(tmp_path):
+    """Regenerating without the cells must not erase the findings.
+
+    `tools/gen_adversarial_findings.py` carried the same dead corpus path this
+    module did. MEASURED on the pre-fix script, two outcomes and only the second
+    is dangerous: a bare checkout crashes out of `copytree` with rc=1 and leaves
+    the ledger alone, but a corpus that EXISTS and holds the three cells as
+    EMPTY directories makes every attack return UNAVAILABLE and the script then
+    printed `wrote ... with 0 forging pair(s)` and exited 0 -- erasing every
+    recorded finding, which is precisely what the file's own comment forbids: a
+    pair that goes UNAVAILABLE "is UNPROVEN, not fixed, and must not read as
+    progress." `_published_corpus` records the same empty-pointer shape turning
+    a whole corpus-backed set green by skipping.
+
+    So it exits non-zero and writes nothing. Asserted on BOTH counts, because
+    refusing and then writing anyway is the failure that matters.
+    """
+    gen = REPO / "tools" / "gen_adversarial_findings.py"
+    before = (PLUGIN / "programs" / "adversarial_findings.json").read_bytes()
+    env = dict(os.environ)
+    env[CORPUS_ENV] = str(tmp_path / "no-corpus-here")
+    r = subprocess.run([sys.executable, str(gen), str(PLUGIN)],
+                       capture_output=True, text=True, timeout=_CLI_BOUND_S,
+                       env=env)
+    assert r.returncode != 0, (
+        f"the generator exited 0 with no corpus reachable. stdout={r.stdout!r}")
+    assert "REFUSED" in (r.stdout + r.stderr), (r.stdout, r.stderr)
+    after = (PLUGIN / "programs" / "adversarial_findings.json").read_bytes()
+    assert after == before, (
+        "the generator refused and rewrote the ledger anyway; a run that could "
+        "not measure must not be able to empty the findings list")

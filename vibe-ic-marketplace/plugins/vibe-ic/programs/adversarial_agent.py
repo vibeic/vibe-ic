@@ -56,6 +56,17 @@ Six of seven sign-off gates certified one design using another design's
 evidence. `sta_report_check` noticed, which is what makes this an attack and not
 a tautology: a probe that "succeeds" against everything measures nothing.
 
+RE-MEASURED after the evidence-binding rule landed in `eda_report_audit` (which
+compares a discovered report against the digest the run's own
+`provenance.jsonl` records for that path): `drc_report_check` and
+`lvs_report_check` now DEFEND against A2 and A3 alike, and A1 no longer forges
+anywhere. The ledger went 13 -> 8. The eight that remain are `antenna`, `em`,
+`erc_density` and `ir_drop` under both substitution attacks, and they remain for
+one reason worth stating plainly: that ledger records no digest for any report
+those four modes read, so the binding reports NO_COVERAGE and refuses to claim
+a defence it did not mount. Closing them needs the PRODUCER to record those
+paths. It is not a change to any gate.
+
 AND THE ATTACK THAT DOES NOT WORK, KEPT BECAUSE IT DOES NOT
 -----------------------------------------------------------
 `A1_TAMPER_DESTRUCTIVE` replaces the reports with nonsense. Measured: all five
@@ -104,7 +115,8 @@ and compares, and the third case below is the one that makes it honest:
     a recorded pair now UNAVAILABLE    -> the cell it needed is gone. The finding
                                           is UNPROVEN, not fixed.
 
-Without that third case a corpus prune would silently "close" all thirteen and
+Without that third case a corpus prune would silently "close" every one of them
+and
 the ratchet would be measuring the publication schedule instead of the gates —
 the exact defect #527 removed from dimension 3.
 
