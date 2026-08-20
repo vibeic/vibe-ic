@@ -393,12 +393,29 @@ def axis_discrimination(scored: List[Dict[str, Any]]) -> Dict[str, Any]:
         # a configuration winning on violations. That is a good outcome and it
         # is not evidence the refusal works; the unit tests are. Saying so here
         # keeps a clean sweep from reading as a demonstration.
-        vals = [(r["objective"]["terms"][axis] if axis in _obj.AXES
-                 else r["objective"]["drc_penalty"])
-                for r in scored if r.get("objective")]
+        vals: List[float] = []
+        unreadable = 0
+        for r in scored:
+            o = r.get("objective")
+            if not isinstance(o, dict):
+                unreadable += 1
+                continue
+            v = ((o.get("terms") or {}).get(axis) if axis in _obj.AXES
+                 else o.get("drc_penalty"))
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                # DEGRADE LOUDLY. A record whose objective does not carry this
+                # term — an older schema, a hand-edited file — is COUNTED, not
+                # skipped and not crashed on. Dropping it silently would shrink
+                # the denominator and could turn a discriminating axis into an
+                # "INERT" one on the strength of the records that happened to
+                # parse.
+                unreadable += 1
+                continue
+            vals.append(float(v))
         uniq = sorted({round(v, 9) for v in vals})
         out[axis] = {
             "samples": len(vals),
+            "unreadable": unreadable,
             "distinct": len(uniq),
             "min": min(vals) if vals else None,
             "max": max(vals) if vals else None,
@@ -468,9 +485,12 @@ def report_md(search: Dict[str, Any]) -> str:
                    else f"{a['min']:.3f} … {a['max']:.3f}")
             weight = (f"{w['weights'][axis]:g}" if axis in _obj.AXES
                       else "anti-cheat")
+            miss = a.get("unreadable") or 0
             lines.append(
                 f"| `{axis}` | {weight} | **{a.get('status')}** "
-                f"| {a.get('distinct')} | {rng} |")
+                f"| {a.get('distinct')} of {a.get('samples')} sample(s)"
+                + (f", {miss} record(s) carried no such term" if miss else "")
+                + f" | {rng} |")
         drc = axes.get("drc_penalty") or {}
         if drc.get("status") == "INERT" and drc.get("constant_value") == 0:
             lines += ["",
@@ -578,6 +598,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[ppa_search] no {src} to re-render from", file=sys.stderr)
             return RC_REFUSED
         search = json.loads(src.read_text(encoding="utf-8"))
+        # DERIVED fields are recomputed from the record, never carried over.
+        # `axis_discrimination` is a pure function of the ranking, so a record
+        # written before it existed (or before it covered a term) must not
+        # render a stale or half-empty table — the report would then be a view
+        # of two different things at once. Measured values are NEVER
+        # recomputed: nothing here re-reads a run tree.
+        search["axis_discrimination"] = axis_discrimination(
+            search.get("ranking") or [])
+        src.write_text(json.dumps(search, indent=2) + "\n", encoding="utf-8")
         (out / "SEARCH_REPORT.md").write_text(report_md(search),
                                               encoding="utf-8")
         print(f"[ppa_search] re-rendered {out / 'SEARCH_REPORT.md'} from "

@@ -251,7 +251,14 @@ def test_the_report_is_reproducible_from_the_record_alone(tmp_path):
         [_sys.executable, str(prog), str(tmp_path), "--out", str(tmp_path),
          "--rerender"], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
-    assert (tmp_path / "SEARCH_REPORT.md").read_text() == report_md(search)
+    # Compared against the record AS REWRITTEN: `--rerender` recomputes the
+    # derived disclosure from the ranking (see the test below), so the fixed
+    # point is "report == report_md(record on disk)", which is the property
+    # that actually matters — a reader with the record can reproduce the page.
+    on_disk = json.loads((tmp_path / "search.json").read_text())
+    assert (tmp_path / "SEARCH_REPORT.md").read_text() == report_md(on_disk)
+    assert on_disk["ranking"] == search["ranking"], (
+        "re-rendering must not touch the measured half of the record")
 
 
 def test_rerender_without_a_record_refuses_rather_than_writing_an_empty_one(
@@ -301,3 +308,52 @@ def test_a_search_that_did_hit_violations_carries_no_such_disclaimer():
     got = axis_discrimination(recs)
     assert got["drc_penalty"]["status"] == "DISCRIMINATING"
     assert "never fired" not in report_md(_search(axis_discrimination=got))
+
+
+def test_rerender_recomputes_the_derived_disclosure_and_touches_no_run_tree(
+        tmp_path):
+    """A record written before `axis_discrimination` covered a term must not
+    render a half-empty table — the report would be a view of two different
+    things at once. The disclosure is a pure function of the ranking, so it is
+    recomputed; the MEASURED values are not, and nothing re-reads a run tree."""
+    import subprocess
+    import sys as _sys
+
+    search = _search()
+    search.pop("axis_discrimination", None)
+    search["ranking"][0]["objective"]["terms"] = {
+        "performance": 0.0, "power": 0.0, "area": -3.0}
+    (tmp_path / "search.json").write_text(json.dumps(search))
+    prog = Path(__file__).resolve().parent.parent / "ppa_search.py"
+    proc = subprocess.run(
+        [_sys.executable, str(prog), str(tmp_path), "--out", str(tmp_path),
+         "--rerender"], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    rewritten = json.loads((tmp_path / "search.json").read_text())
+    assert rewritten["axis_discrimination"]["performance"]["status"] == "INERT"
+    assert "INERT" in (tmp_path / "SEARCH_REPORT.md").read_text()
+    # the measured half is untouched
+    assert rewritten["reference"]["metrics"] == search["reference"]["metrics"]
+
+
+def test_a_record_missing_a_term_is_counted_not_crashed_on_or_dropped():
+    """Degrade loudly. An older-schema or hand-edited record must not take the
+    disclosure down, and must not vanish from the denominator either — dropping
+    it silently could turn a DISCRIMINATING axis into an INERT one on the
+    strength of the records that happened to parse."""
+    recs = [_rec(1.0, 2.0, 3.0), {"objective": {"score": 5.0}},
+            _rec(4.0, 5.0, 6.0)]
+    got = axis_discrimination(recs)
+    assert got["performance"]["samples"] == 2
+    assert got["performance"]["unreadable"] == 1
+    assert got["performance"]["status"] == "DISCRIMINATING"
+    md = report_md(_search(axis_discrimination=got))
+    assert "carried no such term" in md
+
+
+def test_a_complete_disclosure_does_not_claim_missing_records():
+    got = axis_discrimination([_rec(1.0, 2.0, 3.0), _rec(4.0, 5.0, 6.0)])
+    assert all(got[a]["unreadable"] == 0 for a in got)
+    assert "carried no such term" not in report_md(
+        _search(axis_discrimination=got))
