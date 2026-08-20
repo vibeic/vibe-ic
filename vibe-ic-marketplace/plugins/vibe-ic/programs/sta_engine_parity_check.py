@@ -51,7 +51,7 @@ import _docker_memory as _dmem  # every `docker run` carries the ceiling
 
 RC_AGREE, RC_DISAGREE, RC_CANNOT_CHECK = 0, 1, 2
 
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.15"
+DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.16"
 
 #: Commands that exist ONLY on `vibeic/sta-timing-eco`, taken from its diff
 #: against upstream master rather than from memory. Every one must be reachable
