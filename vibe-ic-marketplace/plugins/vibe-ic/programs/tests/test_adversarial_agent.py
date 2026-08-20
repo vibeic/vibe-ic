@@ -18,6 +18,7 @@ went on saying it for the whole span in which the ratchet could not run.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -140,15 +141,46 @@ def test_PAIRED_a_gate_that_DOES_notice_is_reported_DEFENDED():
 
 
 @_corpus
-def test_the_stale_replay_is_a_separate_finding_from_cross_design():
-    """A2 — an EARLIER run of the same design, which is harder to notice.
+def test_the_stale_replay_refuses_a_donor_that_is_a_different_design():
+    """A2's premise is CHECKED, because the recorded campaign's was false.
 
-    Distinct from A3 on purpose: the artefact belongs to this design, so a check
-    keyed on design identity still passes and only a check keyed on WHICH RUN
-    produced it can object.
+    A2 is supposed to be distinct from A3: the artefact belongs to this design,
+    so a check keyed on design identity still passes and only a check keyed on
+    WHICH RUN produced it can object. The run it was given is not that::
+
+        cell   spm/v1.9.96_gf180mcuD            top-cell chip_top   gf180mcuD
+        older  sha256/clean_run_v1422_20260715  top-cell sha256     sky130A
+
+    So A2 was A3 with a second foreign donor, its six SUCCEEDED verdicts were
+    six duplicates, and the run-identity property it exists to measure has never
+    been measured. This test used to assert that SUCCEEDED — it pinned the
+    duplicate as though it were the distinct finding.
     """
     got = AA.attack_stale_replay(PLUGIN, CELL, OLDER, gates=(FORGEABLE,))
-    assert len(got) == 1 and got[0].verdict == AA.SUCCEEDED, got
+    assert len(got) == 1, got
+    assert got[0].verdict == AA.UNAVAILABLE, (
+        f"A2 ran against a donor that is not an earlier run of this design; "
+        f"whatever it reports is A3 measured twice: {got}")
+    assert got[0].evidence["cell_design"] != got[0].evidence["older_design"], got
+    assert "staleness" in got[0].detail, got[0].detail
+
+
+@_corpus
+def test_PAIRED_the_stale_replay_still_runs_when_its_premise_HOLDS(tmp_path):
+    """The twin. A precondition that refuses everything is a disabled attack.
+
+    The `older` run here is a copy of the cell, so it declares the same design
+    and the premise is satisfied. What the attack then REPORTS is not asserted —
+    replaying a tree over itself is a degenerate replay and its verdict is not
+    the point. That it is ATTEMPTED is.
+    """
+    older = tmp_path / "older_run"
+    shutil.copytree(CELL, older)
+    got = AA.attack_stale_replay(PLUGIN, CELL, older, gates=(FORGEABLE,))
+    assert len(got) == 1, got
+    assert got[0].verdict != AA.UNAVAILABLE, (
+        f"A2 refused a donor declaring the SAME design as the cell, so the "
+        f"premise check is a blanket refusal rather than a precondition: {got}")
     assert got[0].evidence["substituted"] > 0, got
 
 
@@ -367,6 +399,13 @@ def test_the_findings_ratchet_holds_in_BOTH_directions():
         f"these findings went UNAVAILABLE: {d['unproven']}. The cell they need "
         f"is gone, so they are UNPROVEN, not fixed. A corpus prune must never "
         f"read as security progress.")
+    assert not d["newly_attemptable"], (
+        f"these attacks are recorded UNPROVEN and now produce a verdict: "
+        f"{d['newly_attemptable']}. Whatever stopped them being attempted is "
+        f"gone, so what they say now is new information — adjudicate it and "
+        f"re-run tools/gen_adversarial_findings.py. An attack that comes back "
+        f"into range and reports nothing is the same silence in the other "
+        f"direction.")
     assert len(d["held"]) == len(led["forging"]), (
         f"{len(d['held'])} of {len(led['forging'])} recorded findings still "
         f"reproduce; the rest were neither closed nor unproven, which means the "

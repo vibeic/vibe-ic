@@ -308,6 +308,31 @@ def attack_cross_design(plugin: Path, cell: Path, donor: Optional[Path],
     return out
 
 
+def _declared_design(tree: Path) -> Optional[str]:
+    """The design a run tree's own sign-off reports say they are about.
+
+    Read with the same extractor the sign-off gates use, so "same design" means
+    here exactly what it means there. `None` when nothing in the tree declares
+    one — which is a reason to refuse a comparison, not to assume one.
+    """
+    try:
+        sys.path.insert(0, str(_HERE))
+        import eda_report_audit as ERA  # noqa: PLC0415
+    except ImportError:
+        return None
+    names: set = set()
+    for fp in sorted(tree.rglob("*.rpt")):
+        if not fp.is_file():
+            continue
+        try:
+            names |= ERA._report_declared_designs(fp.read_text(errors="replace"))
+        except OSError:
+            continue
+    if len(names) == 1:
+        return next(iter(names))
+    return None
+
+
 def attack_stale_replay(plugin: Path, cell: Path, older: Optional[Path],
                         gates=DEFAULT_GATES) -> List[Attempt]:
     """A2 — replay an EARLIER run of the SAME design.
@@ -315,12 +340,41 @@ def attack_stale_replay(plugin: Path, cell: Path, older: Optional[Path],
     Distinct from A3 and strictly harder to notice: the artefact belongs to this
     design, so any check keyed on the design's identity still passes. Only a
     check keyed on WHICH RUN produced it can object.
+
+    THE PREMISE IS NOW CHECKED, BECAUSE IT WAS FALSE. The recorded campaign ran
+    this attack with `older = sha256/clean_run_v1422_20260715` against
+    `cell = spm/v1.9.96_gf180mcuD`::
+
+        cell    top-cell chip_top   pdk gf180mcuD
+        older   top-cell sha256     pdk sky130A
+
+    A different design on a different PDK. So A2 was A3 with a second foreign
+    donor, and its six SUCCEEDED verdicts were six duplicates of A3's — the
+    recorded finding set overstated the number of DISTINCT defects by exactly
+    that much. The property the docstring above claims to isolate, that only a
+    run-keyed check can object, has never been measured at all: every gate that
+    "failed" A2 failed it for the design identity, and the two gates that still
+    fail it would fail A3 the same way.
+
+    An attack whose precondition does not hold must report UNAVAILABLE with the
+    reason. That is this module's own rule — "an attack nobody ran is not an
+    attack that failed" — and it had been applied to every absence except its
+    own premise.
     """
     obj = "a gate accepts an earlier run's artefacts as this run's evidence"
     if older is None or not older.is_dir():
         return [Attempt("A2_STALE_REPLAY", obj, UNAVAILABLE,
                         "no earlier run of the same design is available",
                         str(cell))]
+    mine, theirs = _declared_design(cell), _declared_design(older)
+    if mine is None or theirs is None or mine != theirs:
+        return [Attempt(
+            "A2_STALE_REPLAY", obj, UNAVAILABLE,
+            f"the run offered as an earlier run of this design declares "
+            f"{theirs!r} while the cell declares {mine!r}; replaying it would "
+            f"measure A3_CROSS_DESIGN a second time, not staleness",
+            f"{cell.name}",
+            {"cell_design": mine, "older_design": theirs})]
     return [a for a in _substitute_and_rerun(
         plugin, cell, older, gates, "A2_STALE_REPLAY", obj)]
 
@@ -637,11 +691,27 @@ def ratchet_diff(recorded: Dict[str, Any],
                                                                   went away; NOT
                                                                   a fix
         held            unchanged
+        newly_attemptable
+                        a pair the record lists as UNPROVEN now produced a
+                        verdict -> the reason it could not be attempted is gone.
+                        Whatever it says now is NEW information and has to be
+                        written down; leaving it out lets an attack come back
+                        into range and report nothing.
+
+    THE FIFTH LIST EXISTS BECAUSE THE RECORD GAINED AN `unproven` SECTION. Until
+    it did, an attack that stopped being attemptable simply vanished from
+    `forging`, which is spelled the same as all of its findings being fixed.
     """
     rec = {(f["attack"], f["target"]) for f in recorded.get("forging", ())}
+    rec_unproven = {(f["attack"], f["target"])
+                    for f in recorded.get("unproven", ())}
     live = {(a.attack, a.target): a.verdict for a in attempts}
     out: Dict[str, List[str]] = {"newly_forging": [], "closed": [],
-                                 "unproven": [], "held": []}
+                                 "unproven": [], "held": [],
+                                 "newly_attemptable": []}
+    for key, verdict in sorted(live.items()):
+        if key in rec_unproven and verdict != UNAVAILABLE:
+            out["newly_attemptable"].append(f"{key[0]} {key[1]} -> {verdict}")
     for key, verdict in sorted(live.items()):
         label = f"{key[0]} {key[1]}"
         if verdict == SUCCEEDED and key not in rec:
