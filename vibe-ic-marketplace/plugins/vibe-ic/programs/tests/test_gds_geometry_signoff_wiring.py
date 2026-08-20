@@ -164,9 +164,34 @@ def test_flow_condition_paths_match_the_programs_discovery_paths(flow):
 # HONEST DEGRADATION — never a PASS the checker did not earn
 # ---------------------------------------------------------------------------
 def _run(prog, *args, env=None):
+    """Run a gate WITH ITS CWD INSIDE THE SUBJECT, never inside this checkout.
+
+    Every call here passes the project directory as the gate's first argument,
+    and several pass a RELATIVE `--json`. The two gates in this file disagree
+    about what such a path is relative to: `gds_antenna_ratio_check` resolves it
+    against the project (which is why `_verdict` reads `proj/out.json` and
+    passes), while `antenna_report_check` resolves it against the CURRENT
+    WORKING DIRECTORY. With no `cwd=`, that directory is `programs/`, so
+    `--json reports/phase3/antenna.json` wrote into THIS REPOSITORY —
+    `programs/reports/phase3/antenna.json`, a tracked file whose only reason to
+    exist was this accident, and which nothing reads.
+
+    It went unnoticed for as long as the bytes it produced happened to equal the
+    bytes already committed there; the first change to any gate's verdict
+    document made `suite_write_guard` fail with
+    `WROTE INTO THE TREE — 1 path(s)`. Anchoring cwd to the subject fixes every
+    call in this file at once, and is the reason a new one cannot reintroduce
+    it. The gates' disagreement about relative `--json` is NOT fixed here: the
+    flow always invokes them with `.` as the project and the project as cwd, so
+    the two resolutions coincide there, and changing one of them is a separate
+    change with its own blast radius.
+    """
     full = dict(os.environ, **(env or {}))
+    subject = Path(str(args[0])) if args else None
+    cwd = str(subject) if subject is not None and subject.is_dir() else None
     return subprocess.run([sys.executable, str(prog), *map(str, args)],
-                          capture_output=True, text=True, env=full, timeout=60)
+                          capture_output=True, text=True, env=full, timeout=60,
+                          cwd=cwd)
 
 
 @pytest.mark.parametrize("prog", [ANTENNA_GATE, FILL_GATE])
