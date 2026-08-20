@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1141
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1141)
+- **Total programs (excluding helpers / shims):** 1143
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1143)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1132 |
+| `any` | 1134 |
 
 ## Alphabetical listing
 
@@ -827,6 +827,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ppa_contract_build` | any | — | build the measurement contract for one PPA run. |
 | `ppa_contract_check` | any | — | the validator, and what it must REFUSE. |
 | `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive the four ways such a claim goes wrong. vibe-ic#1121. |
+| `ppa_measurement_check` | any | — | The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided. |
+| `ppa_metric_extract` | any | — | Assemble metric records into ONE validated, indexed, canonically-identified bundle — and refuse the record set that cannot be one. |
 | `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
 | `ppa_problem_integrity_check` | any | — | were these two runs solving the same problem? |
 | `pr_base_reachability_check` | any | — | a PR that declares a dead base, or that merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable` reports CLEAN for bot... |
@@ -1213,7 +1215,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1132 programs)
+### `any` (1134 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2011,6 +2013,8 @@ _(no programs in this group)_
 - `ppa_contract_build` — build the measurement contract for one PPA run.
 - `ppa_contract_check` — the validator, and what it must REFUSE.
 - `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive the four ways such a claim goes wrong. vibe-ic#1121.
+- `ppa_measurement_check` — The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided.
+- `ppa_metric_extract` — Assemble metric records into ONE validated, indexed, canonically-identified bundle — and refuse the record set that cannot be one.
 - `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_
 - `ppa_problem_integrity_check` — were these two runs solving the same problem?
 - `pr_base_reachability_check` — a PR that declares a dead base, or that merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable` reports CLEAN for bot...
