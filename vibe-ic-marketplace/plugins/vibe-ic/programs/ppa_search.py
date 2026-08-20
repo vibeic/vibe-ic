@@ -83,12 +83,15 @@ whatever the design is rather than to a remembered number.
 from __future__ import annotations
 
 import argparse
+import atexit
 import concurrent.futures as _cf
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -100,6 +103,54 @@ import ppa_objective as _obj  # noqa: E402
 RC_OK = 0
 RC_NO_WINNER = 1
 RC_REFUSED = 2
+
+#: Every child `phase3_one_shot_runner` this process started, so stopping the
+#: search stops the search. MEASURED 2026-08-21: killing the search process left
+#: SIX runners alive, FOUR of them working in run directories the next
+#: invocation had already deleted (`/proc/<pid>/cwd` ended in "(deleted)") —
+#: roughly 26 cores of a 32-core host spent writing into dead inodes, while the
+#: relaunched search's `shutil.rmtree` raced them for the same paths.
+#: A `--jobs`-capped search whose parent dies uncapped is not capped.
+_CHILDREN: "set[subprocess.Popen]" = set()
+_CHILDREN_LOCK = threading.Lock()
+
+
+def _reap_children(_signum: Any = None, _frame: Any = None) -> None:
+    """Terminate every runner this process started, then exit if we got here
+    from a signal. Best-effort and idempotent.
+
+    HONEST ABOUT WHAT IT CANNOT DO: a runner drives its EDA tools INSIDE a
+    shared container, and those processes do NOT die with their host-side
+    parent — measured, two `openroad` processes outlived the python that
+    launched them and had to be killed by hand. This reaper removes the
+    host-side fleet, which is the part this program owns; the container-side
+    tail is the runner's own watchdog's business and is stated here rather than
+    silently assumed away.
+    """
+    with _CHILDREN_LOCK:
+        kids = list(_CHILDREN)
+        _CHILDREN.clear()
+    for proc in kids:
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+        except Exception:  # pragma: no cover — best effort by construction
+            pass
+    for proc in kids:
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    if kids:
+        print(f"[ppa_search] stopped {len(kids)} in-flight run(s); "
+              "any EDA process already running INSIDE the container is not "
+              "killed by this and may outlive the search",
+              file=sys.stderr)
+    if _signum is not None:
+        sys.exit(128 + int(_signum))
 
 #: The step ladder a phase-3 run declares for itself, and the artefact that
 #: declares it. `step` in the objective is how many of these PASSED.
@@ -245,15 +296,25 @@ def run_one(design: Path, out_root: Path, cfg: Dict[str, Any], top: str,
     log = out_root / "logs" / f"{cid}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
+    proc: Optional[subprocess.Popen] = None
     try:
         with log.open("w", encoding="utf-8") as fh:
-            proc = subprocess.run(argv, cwd=run_dir, stdout=fh,
-                                  stderr=subprocess.STDOUT, timeout=timeout_s)
-        rec["rc"] = proc.returncode
+            proc = subprocess.Popen(argv, cwd=run_dir, stdout=fh,
+                                    stderr=subprocess.STDOUT)
+            with _CHILDREN_LOCK:
+                _CHILDREN.add(proc)
+            rec["rc"] = proc.wait(timeout=timeout_s)
         rec["timed_out"] = False
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            proc.kill()
+            proc.wait()
         rec["rc"] = None
         rec["timed_out"] = True
+    finally:
+        if proc is not None:
+            with _CHILDREN_LOCK:
+                _CHILDREN.discard(proc)
     rec["wall_s"] = round(time.time() - t0, 2)
     rec["log"] = str(log.relative_to(out_root))
     return rec
@@ -477,6 +538,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--space", type=Path, default=None,
                    help="JSON {knob: [values]} overriding the default grid")
     args = p.parse_args(argv)
+
+    # Stopping the search has to stop the search. Installed before anything is
+    # launched, so there is no window in which a child exists and the reaper
+    # does not.
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _reap_children)
+        except (ValueError, OSError):  # not the main thread / unsupported
+            pass
+    atexit.register(_reap_children)
 
     design = args.design.resolve()
     out = args.out.resolve()
