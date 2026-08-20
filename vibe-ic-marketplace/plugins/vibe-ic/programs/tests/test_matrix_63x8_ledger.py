@@ -588,8 +588,19 @@ def test_output_entries_classify_into_the_four_kinds():
     #                        name is the design's, not the flow's)
     #   37.5ic +1  1 FILE   (shuttle_precheck.json)
     # = FILE +5 (107 -> 112), GLOB +4 (12 -> 16), ANY_OF +2 (22 -> 24).
-    assert sum(seen.values()) == 152, seen
-    assert seen[F.FILE] == 112
+    # 2026-08-20 (R9): 152 -> 153, one FILE, and it is a DECLARATION rather than
+    # a new step. Step 31 gained `reports/phase3/magic_illegal_overlap.json` to
+    # close the dimension-7 finding W1:gate_output_read_elsewhere — the gate
+    # program writes it and `phase3_one_shot_runner` reads it by name, so it was
+    # load-bearing and undeclared. Unlike `extraction_patterns.json` above, it
+    # does NOT resolve in any admissible run root (the gate postdates every
+    # published cell), so this one DOES move the finding from d7 to d3: the d3
+    # manifest records it UNPROVEN and the cell reports it unevidenced wherever
+    # a corpus is offered. That is the true statement of the gap, and it is
+    # stated here rather than left for a reader to discover from a red cell.
+    # = FILE +1 (112 -> 113), GLOB and ANY_OF untouched.
+    assert sum(seen.values()) == 153, seen
+    assert seen[F.FILE] == 113
     assert seen[F.GLOB] == 16
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

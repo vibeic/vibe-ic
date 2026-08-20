@@ -1080,6 +1080,10 @@
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",
           "size_bytes": 1188
+        },
+        "reports/phase3/magic_illegal_overlap.json": {
+          "status": "UNPROVEN",
+          "provenance_note": "declared 2026-08-20 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find` over the published corpus (vibeic/benchmark-data @ 146d665) and over every in-repo root returns nothing, and magic_illegal_overlap_check postdates every published cell. The UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
         }
       }
     },
