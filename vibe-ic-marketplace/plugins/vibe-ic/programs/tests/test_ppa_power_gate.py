@@ -312,3 +312,69 @@ def test_the_incomplete_sentinel_still_survives_the_flow_tail_cut(tmp_path):
         snippet = fcc.output_snippet(r.stdout, r.stderr)
         assert fcc._stdout_signals_token(
             snippet, fcc._INCOMPLETE_STDOUT_TOKEN), r.stdout
+
+
+def test_two_reports_on_different_bases_leave_a_basis_free_limit_nothing_to_bound(
+        tmp_path):
+    """Two readable power reports, two activity models, one basis-free budget.
+
+    Taking the maximum would be picking the worse of two numbers that are not
+    the same metric. The gate says so and refuses instead — and the refusal is
+    rc 2, because which of the two the budget was written for is unknown, not
+    wrong.
+    """
+    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=1000.0)
+    other = proj / "steps" / "33_power_analysis_pre_post_layout"
+    other.mkdir(parents=True)
+    (other / "power.rpt").write_text(_rpt("vector_vcd", annotated=4211))
+    r = _run(proj)
+    assert _refused(r), r.stdout + r.stderr
+    assert "more than one activity basis" in r.stdout
+    assert "VCD, VECTORLESS" in r.stdout
+
+
+def test_a_scoped_requirement_picks_its_own_basis_out_of_the_two(tmp_path):
+    """The paired positive. When the requirement NAMES the basis it was written
+    against there is no ambiguity to refuse: the record on the other basis is
+    not a candidate, and the one on its own basis is judged."""
+    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=None,
+                    contract=_contract(1.0e-03, basis=pw.BASIS_VECTORLESS))
+    other = proj / "steps" / "33_power_analysis_pre_post_layout"
+    other.mkdir(parents=True)
+    # A VCD report whose total is 10x over the limit. It is not this
+    # requirement's metric, so it must not decide the verdict.
+    (other / "power.rpt").write_text(
+        _rpt("vector_vcd", annotated=4211).replace("3.12e-04", "3.12e-02"))
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "VECTORLESS" in r.stdout
+
+
+def test_an_unusable_report_cannot_hide_behind_a_usable_one(tmp_path):
+    """A tree with one clean vectorless report AND one whose VCD label its own
+    transcript falsifies. The clean one is under the budget; the run is still
+    not certified, because the power axis is only as sound as the worst
+    readable report in the tree and this gate is not entitled to pick which
+    report to believe."""
+    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=1000.0)
+    other = proj / "steps" / "33_power_analysis_pre_post_layout"
+    other.mkdir(parents=True)
+    (other / "power.rpt").write_text(
+        _rpt("vector_vcd", fail="READ_VCD_FAIL: boom"))
+    r = _run(proj)
+    assert _refused(r), r.stdout + r.stderr
+    assert "CONTRADICTED" in r.stdout
+
+
+def test_the_selection_never_sorts_on_a_key_a_refusal_does_not_have(tmp_path):
+    """REGRESSION. `max(..., key=lambda r: r["value"])` crashed with a KeyError
+    on a tree holding two reports where the worse one was INVALID — a record
+    that is not MEASURED carries a reason and no `value` (§2). A refusal that
+    raises is a refusal the flow reads as an internal error, not a refusal."""
+    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=1000.0)
+    other = proj / "steps" / "33_power_analysis_pre_post_layout"
+    other.mkdir(parents=True)
+    (other / "power.rpt").write_text(_rpt("vector_vcd", annotated=0))
+    r = _run(proj)
+    assert "Traceback" not in r.stderr, r.stderr
+    assert r.returncode == 2, r.stdout + r.stderr

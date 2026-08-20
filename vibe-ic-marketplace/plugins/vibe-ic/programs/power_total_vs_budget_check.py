@@ -246,29 +246,71 @@ def _disclosure(rep: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
-def _worst_record(project: Path, reports: List[Dict[str, Any]]
-                  ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """The highest total-power record, and the report it came from.
+def _worst_record(project: Path, reports: List[Dict[str, Any]],
+                  requirement: Optional[Dict[str, Any]]
+                  ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]],
+                             Optional[str]]:
+    """The total-power record the requirement is entitled to judge.
 
-    Highest, because a limit is an upper bound and the run has to meet it
-    everywhere it states a total. A CONTRADICTED or UNSTATED basis does not
-    disqualify a record from being SELECTED — it disqualifies it from being
-    COMPARED, and those are different steps. Selecting only the records this
-    gate is able to judge would let a run hide an over-budget figure behind an
-    unlabelled report.
+    Highest of the eligible ones, because a limit is an upper bound and the run
+    has to meet it everywhere it states a total. Ordering is by the RAW parsed
+    total, never by the record's ``value``: a record that is not MEASURED
+    carries no ``value`` at all (§2 — a not-measured record carries a reason,
+    not a number), and sorting on a key that only some records have is how a
+    refusal turns into a crash.
+
+    AN UNUSABLE RECORD IS SELECTED, NOT SKIPPED. If any readable report in the
+    tree states a total this gate cannot compare — a contradicted activity
+    label, an unstated one — that report is what comes back, so the refusal is
+    reached with the bad record in hand. Skipping it would let a run hide an
+    unusable power report behind a usable one, and the whole tree's power axis
+    is only as sound as its worst readable report.
+
+    TWO BASES IN ONE TREE IS ITSELF A REFUSAL. When a requirement names the
+    activity basis it was written against, only records on that basis are
+    eligible. When it does not, and the readable reports span more than one
+    known basis, taking the maximum would be picking the worse of two numbers
+    that are not the same metric — so the gate says so instead.
+
+    Returns ``(record, report, conflict)``.
     """
-    best: Optional[Dict[str, Any]] = None
-    best_rep: Optional[Dict[str, Any]] = None
+    eligible: List[Tuple[float, Dict[str, Any], Dict[str, Any]]] = []
     for rep in reports:
         if rep.get("unreadable") or not rep.get("total_row"):
             continue
-        rec = _pw.total_record(rep, stage="phase3_signoff",
-                               scenario="default")
+        rec = _pw.total_record(rep, stage="phase3_signoff", scenario="default")
         if rec is None:                                # pragma: no cover
             continue
-        if best is None or rec["value"] > best["value"]:
-            best, best_rep = rec, rep
-    return best, best_rep
+        eligible.append((rep["total_row"]["total_w"], rec, rep))
+    if not eligible:
+        return None, None, None
+
+    unusable = [e for e in eligible if e[1].get("status") != _pw.STATUS_MEASURED]
+    if unusable:
+        worst = max(unusable, key=lambda e: e[0])
+        return worst[1], worst[2], None
+
+    req_basis = ((requirement or {}).get("scope") or {}).get("activity_basis")
+    if req_basis is not None:
+        matching = [e for e in eligible
+                    if (e[1].get("scope") or {}).get("activity_basis")
+                    == req_basis]
+        # Nothing on the requirement's basis: fall through with the worst
+        # record so `judge_against_requirement` states the mismatch itself.
+        if matching:
+            eligible = matching
+    else:
+        bases = sorted({(e[1].get("scope") or {}).get("activity_basis")
+                        for e in eligible})
+        if len(bases) > 1:
+            worst = max(eligible, key=lambda e: e[0])
+            return worst[1], worst[2], (
+                f"the readable power reports state totals on more than one "
+                f"activity basis ({', '.join(bases)}) and the requirement "
+                f"names none, so there is no one number for it to bound")
+
+    worst = max(eligible, key=lambda e: e[0])
+    return worst[1], worst[2], None
 
 
 def evaluate(project: Path, budget_override: Optional[float]
@@ -298,11 +340,17 @@ def evaluate(project: Path, budget_override: Optional[float]
                               if requirement and requirement.get("max_w")
                               else None)
 
-    record, source_rep = _worst_record(project, reports)
+    record, source_rep, basis_conflict = _worst_record(
+        project, reports, requirement)
     rep["selected_total"] = (
         {"file": source_rep["file"], "record": record} if record else None)
+    rep["activity_basis_conflict"] = basis_conflict
 
-    judged = _pw.judge_against_requirement(record, requirement)
+    if basis_conflict and requirement is not None:
+        judged = {"verdict": _pw.J_UNDETERMINED,
+                  "code": "ACTIVITY_BASIS_CONFLICT", "reason": basis_conflict}
+    else:
+        judged = _pw.judge_against_requirement(record, requirement)
     rep["judgement"] = judged
 
     if judged["verdict"] == _pw.J_UNDETERMINED:
@@ -429,7 +477,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # fabrication" has told the reader nothing about which one to go and fix.
     code = (rep.get("judgement") or {}).get("code")
     if code in ("ACTIVITY_BASIS_UNUSABLE", "TOTAL_NOT_MEASURED",
-                "ACTIVITY_BASIS_MISMATCH"):
+                "ACTIVITY_BASIS_MISMATCH", "ACTIVITY_BASIS_CONFLICT"):
         print(f"  A threshold was declared and the gate still will not apply "
               f"it, because a watt figure is only comparable to something "
               f"written against the SAME activity model: vectorless power and "
