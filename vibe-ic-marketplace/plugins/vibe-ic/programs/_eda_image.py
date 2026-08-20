@@ -56,6 +56,8 @@ LEGACY_IMAGE = "hpretl/iic-osic-tools:latest"
 _ENV_KEYS = ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE")
 _SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _TIMEOUT_S = 20
+#: A reference nobody else can move: a digest, or an X.Y.Z tag.
+_IMMUTABLE_REF = re.compile(r"(@sha256:[0-9a-f]{64}$|:\d+\.\d+\.\d+$)")
 
 
 def _run(*argv: str, timeout: int = _TIMEOUT_S):
@@ -121,6 +123,49 @@ def local_image(repo: str = IMAGE_REPO, env=None) -> Optional[str]:
     return LEGACY_IMAGE if r.returncode == 0 else None
 
 
+def anchor_image(env=None) -> Optional[str]:
+    """The image THIS CHECKOUT names — for gates whose verdict must not be
+    changeable by somebody else's push.
+
+    THE THIRD QUESTION, and the one I got wrong first (vibe-ic#927 got it right
+    long before). `resolve()` asks the registry, so what it returns changes when
+    anyone publishes. That is exactly right for RUNNING a tool and exactly wrong
+    for a gate that reports FAIL about the image's contents: a third party's push
+    would then change a blocking verdict with no commit in this tree.
+
+    So a verdict-bearing caller asks this. The answer comes from
+    `tools/vibeic-eda/VERSION`, which moves only by a commit here, and when that
+    file is absent the answer is None — the caller reports nothing-to-look-at.
+    It does NOT fall back to a floating tag, because that is the failure mode.
+
+    An explicit override is honoured, with a warning when it is mutable: the
+    caller asked for it, but they should know their gate can now move under them.
+
+    NOTE: `pdk_registry_selectable_check` carries the original of this logic and
+    still has its own copy; folding it into this one is a follow-up. Two copies
+    of a rule is the drift this module exists to end.
+    """
+    env = os.environ if env is None else env
+    for key in _ENV_KEYS:
+        override = (env.get(key) or "").strip()
+        if override:
+            if not _IMMUTABLE_REF.search(override):
+                _note(f"{override} is a floating reference: what a gate using "
+                      f"it reports can change without any commit in this tree.")
+            return override
+    here = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        candidate = os.path.join(here, "tools", "vibeic-eda", "VERSION")
+        if os.path.isfile(candidate):
+            with open(candidate, encoding="utf-8") as fh:
+                version = fh.read().strip()
+            return f"{IMAGE_REPO}:{version}" if version else None
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        here = parent
+
+
 def _note(message: str) -> None:
     print(f"_eda_image: {message}", file=sys.stderr)
 
@@ -129,8 +174,8 @@ def resolve(env=None, *, repo: str = IMAGE_REPO) -> str:
     """A runnable image reference for the vibeic-eda toolchain.
 
     Order: explicit override → the registry's current `latest`, by digest →
-    the newest locally-present tag (announced) → the legacy upstream image
-    (announced). Never returns a bare `:latest`, which is the one answer that
+    the newest locally-present tag → the anchor this checkout names → the
+    legacy upstream image. Every step past the registry is announced. Never returns a bare `:latest`, which is the one answer that
     can silently mean "whatever this machine happened to pull months ago".
     """
     env = os.environ if env is None else env
@@ -149,8 +194,21 @@ def resolve(env=None, *, repo: str = IMAGE_REPO) -> str:
               f"({tags[0]}). It may be older than what is published.")
         return f"{repo}:{tags[0]}"
 
-    _note(f"registry unreachable and no local {repo} image; falling back to "
-          f"{LEGACY_IMAGE}, which does NOT carry the forked tools.")
+    # THE ANCHOR BEFORE THE LEGACY IMAGE. Dropping straight to upstream here
+    # was a regression I shipped and a test caught: with docker unavailable the
+    # old resolver still named the vibeic-eda tag this checkout knows, while
+    # mine named an image that does NOT carry the forked tools — so a DFT step
+    # would run against a toolchain missing Fault and the patched yosys. Being
+    # unable to ASK which image is current is not a reason to forget which one
+    # this tree names.
+    anchored = anchor_image(env)
+    if anchored:
+        _note(f"registry unreachable and no local {repo} image; using the "
+              f"anchor this checkout names ({anchored}).")
+        return anchored
+
+    _note(f"registry unreachable, no local {repo} image and no anchor; falling "
+          f"back to {LEGACY_IMAGE}, which does NOT carry the forked tools.")
     return LEGACY_IMAGE
 
 
