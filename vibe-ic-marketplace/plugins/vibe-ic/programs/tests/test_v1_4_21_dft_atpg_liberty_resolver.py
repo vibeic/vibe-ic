@@ -100,7 +100,15 @@ def test_source_flop_presence_blocks_false_not_applicable():
 # PI/PO pairs, 0 residual flops — so DT1/DT2 measure real coverage instead of a
 # false N/A. Skipped when the vibeic-eda container is unavailable.
 # ---------------------------------------------------------------------------
-import pytest  # noqa: E402
+import pytest
+
+import _eda_image as _img
+
+
+def _local_eda_image():
+    """The probe must name an image this machine actually has — a pinned
+    literal went stale the moment the anchor stopped being written."""
+    return _img.local_image() or _img.IMAGE_REPO + ":latest"  # noqa: E402
 # vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
@@ -116,7 +124,7 @@ PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERS
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 _IMAGE_STATE, _IMAGE_DETAIL = probe(
-    ["docker", "image", "inspect", "ghcr.io/vibeic/vibeic-eda:0.3.15"])
+    ["docker", "image", "inspect", _local_eda_image()])
 
 
 @pytest.mark.skipif(
