@@ -1134,19 +1134,23 @@ def test_unattributable_findings_are_surfaced_not_dropped():
 
 
 def test_every_cell_lands_in_exactly_one_state():
-    """69 cells; ENFORCED + WAIVED + NA == 69, and no cell is in two states.
+    """68 cells; ENFORCED + WAIVED + NA == 68, and no cell is in two states.
 
     The census is derived live, not written down: a step added to the yaml
     lands here as ENFORCED and this arithmetic keeps holding, while a waiver
     for a step that has stopped failing is caught by its own ``strict=True``.
     """
     cells = cells_for(DIM)
-    # 68 -> 69: step `37.5self` (General Precheck) joined the flow. It is the
-    # chip path with NO operator — 37.5ic wants the shuttle's slot template and
-    # 37.5ip is the IP terminal, so a design taping itself out routed to neither
-    # and passed no submission check at all. Re-stated by hand, as the census
-    # comments here require: a new step must force a human to say the number.
-    assert len(cells) == len(F.step_ids()) == 69
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    assert len(cells) == len(F.step_ids()) == 68
 
     state = Counter()
     for cell in cells:
@@ -1159,12 +1163,16 @@ def test_every_cell_lands_in_exactly_one_state():
         )
         state["NA" if is_na else ("WAIVED" if is_waived else "ENFORCED")] += 1
 
-    # 68 -> 69: step `37.5self` (General Precheck) joined the flow. It is the
-    # chip path with NO operator — 37.5ic wants the shuttle's slot template and
-    # 37.5ip is the IP terminal, so a design taping itself out routed to neither
-    # and passed no submission check at all. Re-stated by hand, as the census
-    # comments here require: a new step must force a human to say the number.
-    assert sum(state.values()) == 69, state
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    assert sum(state.values()) == 68, state
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
     # dimension has stopped enforcing anything and should be redesigned.

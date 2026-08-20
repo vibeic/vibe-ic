@@ -2329,12 +2329,16 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
         f"manifest/flow step-set mismatch: only in flow {sorted(live - recorded)}, "
         f"only in manifest {sorted(recorded - live)}"
     )
-    # 68 -> 69: step `37.5self` (General Precheck) joined the flow. It is the
-    # chip path with NO operator — 37.5ic wants the shuttle's slot template and
-    # 37.5ip is the IP terminal, so a design taping itself out routed to neither
-    # and passed no submission check at all. Re-stated by hand, as the census
-    # comments here require: a new step must force a human to say the number.
-    assert len(cells_for(DIM)) == len(live) == 69
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    assert len(cells_for(DIM)) == len(live) == 68
 
 
 @needs_corpus
@@ -2797,7 +2801,7 @@ def test_d3_waivers_meet_the_registry_bar():
 
 
 def test_d3_cell_states_partition_all_steps():
-    """ENFORCED + WAIVED + NA == 69, computed live, with no cell in two states."""
+    """ENFORCED + WAIVED + NA == 68, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -2812,12 +2816,16 @@ def test_d3_cell_states_partition_all_steps():
         else:
             enforced.append(sid)
             assert rec["verdict"] == "ENFORCED"
-    # 68 -> 69: step `37.5self` (General Precheck) joined the flow. It is the
-    # chip path with NO operator — 37.5ic wants the shuttle's slot template and
-    # 37.5ip is the IP terminal, so a design taping itself out routed to neither
-    # and passed no submission check at all. Re-stated by hand, as the census
-    # comments here require: a new step must force a human to say the number.
-    assert len(enforced) + len(waived) + len(na) == 69, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    assert len(enforced) + len(waived) + len(na) == 68, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
