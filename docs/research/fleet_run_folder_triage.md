@@ -13,7 +13,7 @@ records what was actually applied.
 | REDUNDANT | 30 | 3.1 GB |
 | **total** | **466** | **144.6 GB** |
 
-**Applied:** 57 folders removed, 8.84 GB freed; 0 already gone; 47 skipped.
+**Applied:** 57 folders removed, 8.84 GB; 47 held by the owner hard stop of §2.0; 0 already gone. A further 0.88 GB came back from pruning the layout copies of §2.5 once the hard stop had held every folder they were protecting — **9.72 GB total**.
 
 ## 1. The inherited classification compared against the wrong thing
 
@@ -211,18 +211,27 @@ A first version of this test also flagged `_jw7_tmp` / `_jw7_base_tmp` — five 
 would have been a false alarm, so the layout test runs the same class filter as
 everything else.
 
-**Treatment: preserve the layout, then reap the folder.** Each at-risk GDS was copied
-to `~/_kept_layouts/<original path>` **on its own host** — 43 files, 0.877 GB, no
-0.9 GB dragged through a three-hop ssh chain — re-hashed after the copy, and recorded
-in `~/_kept_layouts/MANIFEST.tsv` with its run identity (IC, PDK, plugin version,
-run_at, gate counts). A copy that did not verify would have been removed and reported,
-never left there. All 43 verified.
+**Treatment as first built: preserve the layout, then reap the folder.** Each at-risk
+GDS was copied to `~/_kept_layouts/<original path>` **on its own host** — 43 files,
+0.877 GB — re-hashed after the copy, and recorded in `~/_kept_layouts/MANIFEST.tsv`
+with its run identity. All 43 verified. `bin/verdict.py` refuses to reap any folder
+holding an artefact-class layout that is neither durable, nor in a surviving folder,
+nor in that kept set.
 
-This is **not** a durability claim: `~/_kept_layouts` is exactly as durable as the
-folder the file came from. The honest statement is "the layout is kept and labelled,
-the run tree around it is gone". The rule is in the program, not in prose —
-`bin/verdict.py` refuses to reap any folder holding an artefact-class layout that is
-neither durable, nor in a surviving folder, nor in `evidence/kept_layouts.txt`.
+**And then §2.0 made all of it moot, which is worth stating plainly.** Of the 29
+folders whose layouts this preserved, the owner hard stop held **29** and the sweep
+removed **0**. The two rules aim at the same folders and the owner's is strictly
+stronger: this guard lets a folder go once the layout is safe somewhere, the owner's
+does not let it go at all while the layout is unpublished. So the 43 copies duplicated
+files that are all still at their original paths, and were costing 0.877 GB.
+
+`bin/prune_kept.py` therefore turned `~/_kept_layouts` from a COPY into an INDEX. It
+removes a copy only after re-hashing the ORIGINAL at its recorded path and confirming
+sha256 and size still match; a missing, unreadable or changed original means the copy
+is the last one and it stays, reported as HELD. 43 pruned, 0 held, 0.877 GB back. What
+survives on each host is 12 KB: which layouts there have never been published, where
+each one is, and which run made it — the input to the harvest step. Publishing one to
+`benchmark-data` is exactly what makes its folder reapable.
 
 *Negative control* — empty `kept_layouts.txt`, i.e. pretend the copies never happened:
 
@@ -270,6 +279,9 @@ strict byte test alone                     34 folders    4.41 GB removable
   - at-risk-layout guard                  -20 folders   (bought back by preserving 43 GDS)
   - owner hard stop: unpublished layout   -47 folders   -18.2 GB
   = applied                                57 folders   8.84 GB
+  + pruning the now-redundant layout copies         + 0.88 GB
+  ----------------------------------------------------------
+  reclaimed                                           9.72 GB
 ```
 
 Per host, from the sweeper logs, verified afterwards against the disk:
