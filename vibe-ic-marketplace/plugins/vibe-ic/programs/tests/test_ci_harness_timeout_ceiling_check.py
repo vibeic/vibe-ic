@@ -28,6 +28,7 @@ ceiling the gate itself computes — a test file that policed the corpus while
 breaking the rule would be its own counter-example.
 """
 import json
+import re
 import subprocess
 import sys
 import textwrap
@@ -210,6 +211,57 @@ def _semantic_checkout(tmp_path: Path, *, lane_suffix: str = "",
     return root
 
 
+def _span(lines: list, population: str) -> tuple:
+    """(first, last) 0-based indices of `population`'s shipped function body."""
+    define = next(i for i, line in enumerate(lines)
+                  if line.startswith(f"{population}() {{"))
+    close = next(i for i in range(define + 1, len(lines)) if lines[i] == "}")
+    return define, close
+
+
+def _call_index(lines: list, population: str) -> int:
+    """The one line that CALLS `population`, wherever it is called from.
+
+    THE MUTATIONS BELOW USED TO NAME A LITERAL: `"  run_pytest\n"`, or
+    `f"if {population}; then\n"`. When the tier's independent stages started
+    running at the same time those lines stopped existing — the populations are
+    called from inside the lane bodies the window launches — and every
+    `str.replace(<literal>, …, 1)` silently became a no-op. The tests did not go
+    red: the checker was returning rc=1 for an unrelated reason and printing the
+    phrase they assert on, so six negative controls passed while mutating
+    nothing. Locating the call structurally is the fix; `_mutated` below is the
+    guard that makes the next such drift LOUD.
+    """
+    define, close = _span(lines, population)
+    return next(
+        i for i, line in enumerate(lines)
+        if not (define <= i <= close)
+        and not line.lstrip().startswith("#")
+        and re.search(rf"(?<![\w./-]){population}(?![\w(])", line))
+
+
+def _driver_index(lines: list, population: str) -> int:
+    """The line that begins `population`'s canonical semantic-driver command."""
+    define, close = _span(lines, population)
+    return next(i for i in range(define, close + 1)
+                if "pytest_per_file_junit.py" in lines[i]
+                or lines[i].lstrip().startswith('out="$(')
+                or lines[i].lstrip().startswith('if out="$('))
+
+
+def _mutated(land, text: str, new: str) -> None:
+    """Write a mutation, refusing to write one that changed nothing.
+
+    A negative control whose stimulus does not apply is not a negative control;
+    it is a test that reports on the unmutated tree. MEASURED: six of them in
+    this file at once.
+    """
+    assert new != text, (
+        "the mutation did not change gatekeeper-land.sh — the shape this test "
+        "reaches for is gone, so it is no longer a negative control")
+    land.write_text(new, encoding="utf-8")
+
+
 def test_semantic_landing_harness_has_no_elapsed_ceiling(tmp_path):
     root = _semantic_checkout(tmp_path)
     out = tmp_path / "semantic.json"
@@ -324,20 +376,15 @@ def test_a_driver_command_in_dead_control_flow_is_not_a_lane(
     root = _semantic_checkout(tmp_path)
     land = root / "tools" / "gatekeeper-land.sh"
     text = land.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    driver = _driver_index(lines, "run_repo_tools_pytest")
     if dead_prefix.startswith("false"):
-        text = text.replace(
-            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1',
-            'false && out="$( cd "$ROOT" && '
-            'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1', 1)
+        lines[driver] = "false && " + lines[driver].lstrip()
     else:
-        text = text.replace(
-            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1',
-            'if false; then\n'
-            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1', 1)
-        start = text.index("run_repo_tools_pytest() {")
-        end = text.index("\n}", start)
-        text = text[:end] + "\nfi" + text[end:]
-    land.write_text(text, encoding="utf-8")
+        lines[driver] = "if false; then\n" + lines[driver].lstrip()
+        _, close = _span(lines, "run_repo_tools_pytest")
+        lines.insert(close, "fi")
+    _mutated(land, text, "\n".join(lines) + "\n")
     proc = subprocess.run([sys.executable, str(_PROG), str(root)],
                           capture_output=True, text=True, timeout=_T)
     assert proc.returncode == 1, proc.stdout + proc.stderr
@@ -364,13 +411,10 @@ def test_an_exact_lane_call_cannot_be_made_dead(tmp_path, population):
     root = _semantic_checkout(tmp_path)
     land = root / "tools" / "gatekeeper-land.sh"
     text = land.read_text(encoding="utf-8")
-    needle = ("  run_pytest\n" if population == "run_pytest"
-              else f"if {population}; then\n")
-    replacement = ("false && run_pytest\n"
-                   if population == "run_pytest"
-                   else f"if false && {population}; then\n")
-    text = text.replace(needle, replacement, 1)
-    land.write_text(text, encoding="utf-8")
+    lines = text.splitlines()
+    call = _call_index(lines, population)
+    lines[call] = "false && " + lines[call].lstrip()
+    _mutated(land, text, "\n".join(lines) + "\n")
     proc = subprocess.run([sys.executable, str(_PROG), str(root)],
                           capture_output=True, text=True, timeout=_T)
     assert proc.returncode == 1, proc.stdout + proc.stderr
@@ -395,9 +439,9 @@ def test_a_post_lane_success_exit_cannot_launder_a_red_lane(tmp_path):
     root = _semantic_checkout(tmp_path)
     land = root / "tools" / "gatekeeper-land.sh"
     text = land.read_text(encoding="utf-8")
-    marker = "if run_unselectable_pytest; then\n"
-    land.write_text(text.replace(marker, marker + "  exit 0\n", 1),
-                    encoding="utf-8")
+    lines = text.splitlines()
+    lines.insert(_call_index(lines, "run_unselectable_pytest") + 1, "exit 0")
+    _mutated(land, text, "\n".join(lines) + "\n")
     proc = subprocess.run([sys.executable, str(_PROG), str(root)],
                           capture_output=True, text=True, timeout=_T)
     assert proc.returncode == 1, proc.stdout + proc.stderr
@@ -412,11 +456,10 @@ def test_a_lane_cannot_be_redefined_before_its_reviewed_call(
     root = _semantic_checkout(tmp_path)
     land = root / "tools" / "gatekeeper-land.sh"
     text = land.read_text(encoding="utf-8")
-    call = ("  run_pytest\n" if population == "run_pytest"
-            else f"if {population}; then\n")
-    text = text.replace(call,
-                        f"function {population} {{ :; }}\n" + call, 1)
-    land.write_text(text, encoding="utf-8")
+    lines = text.splitlines()
+    lines.insert(_call_index(lines, population),
+                 f"function {population} {{ :; }}")
+    _mutated(land, text, "\n".join(lines) + "\n")
     proc = subprocess.run([sys.executable, str(_PROG), str(root)],
                           capture_output=True, text=True, timeout=_T)
     assert proc.returncode == 1, proc.stdout + proc.stderr
