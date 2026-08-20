@@ -191,7 +191,21 @@ def test_the_counts_sum_to_what_was_attempted():
     s = _search()
     assert s["scored"] + s["not_measured"] + s["refused"] == s["attempted"]
     md = report_md(s)
-    assert "**3**" in md and "**1**" in md
+    assert "**3 of 50**" in md and "**1**" in md
+
+
+def test_a_partial_run_shows_its_denominator():
+    """`n of N`, never rounded up. A silent cap reads as 'we covered
+    everything' when it did not."""
+    md = report_md(_search(attempted=3, space_size=50))
+    assert "covered 3 of 50" in md
+
+
+def test_a_complete_run_carries_no_partial_warning():
+    md = report_md(_search(attempted=50, scored=48, not_measured=1,
+                           refused=1, space_size=50))
+    assert "covered 50 of 50" not in md
+    assert "**50 of 50**" in md
 
 
 def test_an_inherited_ratio_says_so_in_the_human_report():
@@ -219,3 +233,32 @@ def test_the_step_semantics_deviation_is_in_the_report():
 def test_an_empty_ranking_does_not_render_as_a_result():
     md = report_md(_search(ranking=[], scored=0, not_measured=2))
     assert "| 1 |" not in md
+
+
+def test_the_report_is_reproducible_from_the_record_alone(tmp_path):
+    """`--rerender` exists because the report is a VIEW. A report that can only
+    be produced by re-running the search is a report nobody can check after the
+    renderer changes — and the renderer DID change mid-campaign here."""
+    import subprocess
+    import sys as _sys
+
+    search = _search()
+    (tmp_path / "search.json").write_text(json.dumps(search))
+    prog = Path(__file__).resolve().parent.parent / "ppa_search.py"
+    proc = subprocess.run(
+        [_sys.executable, str(prog), str(tmp_path), "--out", str(tmp_path),
+         "--rerender"], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "SEARCH_REPORT.md").read_text() == report_md(search)
+
+
+def test_rerender_without_a_record_refuses_rather_than_writing_an_empty_one(
+        tmp_path):
+    import subprocess
+    import sys as _sys
+    prog = Path(__file__).resolve().parent.parent / "ppa_search.py"
+    proc = subprocess.run(
+        [_sys.executable, str(prog), str(tmp_path), "--out", str(tmp_path),
+         "--rerender"], capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert not (tmp_path / "SEARCH_REPORT.md").exists()

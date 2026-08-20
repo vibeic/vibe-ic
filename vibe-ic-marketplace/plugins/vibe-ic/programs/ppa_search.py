@@ -334,7 +334,9 @@ def report_md(search: Dict[str, Any]) -> str:
     lines = [
         f"# PPA configuration search — `{search['design_name']}`",
         "",
-        f"- attempted **{search['attempted']}** configuration(s); "
+        f"- attempted **{search['attempted']} of "
+        f"{search.get('space_size', search['attempted'])}** configuration(s) "
+        f"in the declared space; "
         f"**{search['scored']}** scored, "
         f"**{search['not_measured']}** NOT_MEASURED, "
         f"**{search['refused']}** refused",
@@ -413,6 +415,13 @@ def report_md(search: Dict[str, Any]) -> str:
                          f"{str(why.get('detail', ''))[:160]} |")
     else:
         lines.append("_none — every attempted configuration was scored._")
+    space = search.get("space_size")
+    if isinstance(space, int) and search["attempted"] < space:
+        lines += ["",
+                  f"> **This run covered {search['attempted']} of {space} "
+                  "configurations in the declared space.** The remainder were "
+                  "not attempted. A search reported without its denominator "
+                  "reads as \"we covered everything\" when it did not."]
     lines += ["", "## Verdict", "", search["verdict_line"], ""]
     return "\n".join(lines)
 
@@ -434,6 +443,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "The report still names the total, so a limited run "
                         "cannot read as a complete one.")
     p.add_argument("--timeout-s", type=int, default=3600)
+    p.add_argument("--rerender", action="store_true",
+                   help="re-render SEARCH_REPORT.md from an existing "
+                        "search.json and stop. Runs nothing and measures "
+                        "nothing: the report is a VIEW of the record, so it "
+                        "must be reproducible from the record alone — "
+                        "including after the renderer changes.")
     p.add_argument("--space", type=Path, default=None,
                    help="JSON {knob: [values]} overriding the default grid")
     args = p.parse_args(argv)
@@ -441,6 +456,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     design = args.design.resolve()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
+
+    if args.rerender:
+        src = out / "search.json"
+        if not src.exists():
+            print(f"[ppa_search] no {src} to re-render from", file=sys.stderr)
+            return RC_REFUSED
+        search = json.loads(src.read_text(encoding="utf-8"))
+        (out / "SEARCH_REPORT.md").write_text(report_md(search),
+                                              encoding="utf-8")
+        print(f"[ppa_search] re-rendered {out / 'SEARCH_REPORT.md'} from "
+              f"{src} — no run was made and no metric was re-read")
+        return RC_OK
 
     l19, l19_rel, unreadable = _obj.load_l19(design)
     if unreadable:
