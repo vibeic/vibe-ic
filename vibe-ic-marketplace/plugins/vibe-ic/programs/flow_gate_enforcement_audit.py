@@ -1558,6 +1558,91 @@ def declared_intent(programs: Path, gate: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# THE FOURTH VENUE — a gate the flow names DISPATCHES another gate (2026-08-20)
+#
+# The three venues above answer "is this program named by the flow, by the CI
+# shell suite, or by a repo-gate runner". A program can be reachable by a fourth
+# route that none of them can see: a gate the flow DOES name runs it as a
+# subprocess. Step 37.5ic is the case that surfaced it — its gate names
+# `tapeout_precheck`, which runs `general_precheck` and `tapeout_readiness_check`
+# as its two ARMS. Both were reported ORPHANED ("reachable from nothing at all")
+# while being dispatched on every evaluation of that step, which is a FALSE
+# claim of the exact kind #886 added `repo_gate_source` to stop making.
+#
+# CLOSURE, NOT ONE HOP. A delegate of a delegate is still reached; stopping at
+# one hop would answer a question adjacent to the one being asked. The closure
+# is seeded ONLY by programs already reachable through another venue, so a
+# cluster of programs that reference each other and are named by nothing cannot
+# bootstrap itself into being wired — the seed is what makes the claim true, and
+# an unseeded component contributes nothing.
+#
+# IT USES `_invoked`, THE SAME PREDICATE THE OTHER VENUES USE: a bare mention in
+# a comment does not count; the program has to be named as a `<stem>.py`
+# subprocess argument or called as `<stem>.main(...)`. A weaker rule here would
+# excuse orphans by prose, and "widening the population without widening what
+# counts as wired" is the failure this file already records twice.
+# ---------------------------------------------------------------------------
+def dispatched_by_reachable_gates(programs: Path,
+                                  seeds: "set[str]") -> "set[str]":
+    """Every program stem transitively DISPATCHED by an already-reachable one.
+
+    Returns the closure MINUS the seeds, so a caller can tell "reached only via
+    this venue" from "was already reachable". An unreadable source file is
+    skipped rather than treated as empty: a file we could not read is a file we
+    did not look in, and crediting it with naming nothing would be this repo's
+    recurring "could not read == read and empty" defect.
+    """
+    stems = {f.stem for f in programs.glob("*.py")}
+    reached = set(seeds) & stems
+    frontier = set(reached)
+    while frontier:
+        nxt: "set[str]" = set()
+        for stem in frontier:
+            f = programs / f"{stem}.py"
+            try:
+                src = f.read_text(errors="replace")
+            except OSError:
+                # A FILE WE COULD NOT READ IS A FILE WE DID NOT LOOK IN. It
+                # contributes nothing, which is the strict direction: the worst
+                # this can do is fail to clear an orphan, never invent a wiring.
+                continue
+            # CANDIDATES FIRST, `_invoked` SECOND. Asking `_invoked` about all
+            # ~1100 stems per source is ~1.2M regex searches over the whole
+            # directory and does not finish in a usable time — measured, the
+            # audit ran past 900 s. So the names are EXTRACTED in two linear
+            # passes over the same regions `_invoked` looks at, and every
+            # candidate is then confirmed with `_invoked` itself. The predicate
+            # that decides is unchanged; only the number of times it is asked.
+            for cand in _dispatch_candidates(src) & (stems - reached):
+                if _invoked(src, cand):
+                    nxt.add(cand)
+        reached |= nxt
+        frontier = nxt
+    return reached - set(seeds)
+
+
+#: One quoted string region, exactly the span `_invoked`'s first rule searches
+#: (an opening quote up to the next quote or newline).
+_QUOTED_REGION_RE = re.compile(r"[\"'][^\"'\n]*")
+_DOT_PY_RE = re.compile(r"\b(\w+)\.py\b")
+_ENTRY_CALL_RE = re.compile(r"\b(\w+)\s*\.\s*(?:main|check|audit)\s*\(")
+
+
+def _dispatch_candidates(src: str) -> "set[str]":
+    """Every program stem this source could possibly be naming.
+
+    A SUPERSET by construction — it is a cheap pre-filter, and `_invoked` is
+    what actually decides. Under-collecting here would silently create orphans,
+    so the two rules mirror `_invoked`'s two rules and nothing narrower.
+    """
+    out: "set[str]" = set(_ENTRY_CALL_RE.findall(src))
+    for region in _QUOTED_REGION_RE.findall(src):
+        out.update(_DOT_PY_RE.findall(region))
+    return out
+
+
+
 def audit(flow: Path, programs: Path) -> dict:
     clauses = clauses_in_flow(flow)
     # A clause the walk reached but could not name is NOT dropped. Silently
@@ -1625,9 +1710,16 @@ def audit(flow: Path, programs: Path) -> dict:
     # where it looked cannot be checked by the person it accuses.
     src_ci = repo_gate_source(programs)
     src_gate_runner = repo_gate_runner_source(programs)
+    # The fourth venue. Seeded by the flow definition ONLY, so the closure
+    # cannot be bootstrapped by a cluster of programs nothing else names.
+    dispatched = dispatched_by_reachable_gates(
+        programs, {r["gate"] for r in rows}
+        | {r["gate"][:-3] for r in rows if r["gate"].endswith(".py")})
     for f in sorted(programs.glob("*.py")):
         stem = f.stem
         if stem in in_flow or f"{stem}.py" in in_flow:
+            continue
+        if stem in dispatched:
             continue
         if _invoked_by_suite(src_ci, stem):
             continue
@@ -1656,6 +1748,11 @@ def audit(flow: Path, programs: Path) -> dict:
         {"venue": "tools/ci/*.sh", "present": bool(src_ci.strip())},
         {"venue": "/".join(_REPO_GATE_RUNNERS),
          "present": bool(src_gate_runner.strip())},
+        # PRESENT is the count, not a boolean, because "no gate dispatches
+        # another" and "we never computed the closure" are different facts and
+        # a bare False would read as both.
+        {"venue": "dispatched by a gate the flow names (transitive)",
+         "present": bool(dispatched), "reached": sorted(dispatched)},
     ]
     return {
         "orphan_venues": orphan_venues,

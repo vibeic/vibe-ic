@@ -5517,24 +5517,66 @@ steps:
     blocks_on: [37, 0.5ic]
 
   # ── chip/IC path only ────────────────────────────────────────────────
-  # THE ONE INTERFACE WHERE SOMEBODY ELSE'S REFUSAL IS THE VERDICT. Every
-  # other gate in this tree we wrote, and a gate we wrote can be made to pass
-  # by editing it. `tapeout_readiness_check` runs the shuttle operator's own
-  # container and reports its exit code — and until now NOTHING IN THE FLOW
-  # CALLED IT. The program has existed and no step invoked it, so the only
-  # external bar this project has was never applied to a run.
+  # THE STEP WITH TWO ARMS, AND ONE OF THEM IS NOT OURS. Every other gate in
+  # this tree we wrote, and a gate we wrote can be made to pass by editing it.
+  # `tapeout_readiness_check` runs the SHUTTLE OPERATOR's own container and
+  # reports its exit code — that is the one interface where somebody else's
+  # refusal is the verdict.
+  #
+  # 2026-08-20 — `37.5self` IS RETIRED AS A STEP AND FOLDED IN HERE.
+  # It used to be a THIRD ROUTE: `general_precheck`, our own ladder, reached
+  # only by a design carrying `SELF_TAPEOUT.txt`. That made the two checks
+  # ALTERNATIVES, and a design routed to one was never shown the other. It is
+  # not an alternative. It is an ARM:
+  #
+  #   * OUR ladder (`general_precheck`) runs on EVERY design that reaches this
+  #     step — shuttle or self tape-out, always, no condition.
+  #   * The OPERATOR's container runs IN ADDITION, whenever the PDK ships a
+  #     shuttle precheck AND that operator's template was actually fetched.
+  #
+  # This is strictly MORE checking than the three-route shape: a shuttle design
+  # used to get only the operator's verdict, and now it gets two independent
+  # authorities on the same GDS. A PDK with no shuttle precheck is NOT a
+  # different route — it is this same step with one fewer arm.
+  #
+  # THE CONDITION IS `any_of`, AND THE REASON IS STRUCTURAL. `files_exist`
+  # cannot express "and not", and `NO_TEMPLATE.txt` is ALREADY 37.5ip's
+  # condition (the IP/hardmacro terminal), so this step cannot condition on
+  # "chip and not IP" directly. `slots/*.yaml` OR `SELF_TAPEOUT.txt` — the two
+  # chip-path router files 0.5ic writes — together ARE the chip-path marker.
+  # `SELF_TAPEOUT.txt` survives as a FILE and keeps its meaning; only the STEP
+  # that read it in isolation is gone.
+  #
+  # DISAGREEMENT IS THE MOST VALUABLE OUTCOME AND IT FAILS THIS STEP. When both
+  # arms judge the same ladder step and reach opposite conclusive verdicts, one
+  # of the two checks is wrong. `tapeout_precheck` records that as a finding of
+  # its own and refuses; it never resolves it by preferring an arm, because
+  # preferring one is how the wrong one survives.
+  #
+  # EVERY FINDING NAMES ITS AUTHORITY. The whole point of the operator's arm is
+  # that its verdict is NOT one we wrote. Merging the arms into one step must
+  # not blur that, so every line of the merged report carries the authority
+  # that produced it and an `authority_is_ours` boolean beside it.
   - id: 37.5ic
-    name: "Shuttle Precheck — the operator's own refusal (chip/IC path only)"
+    name: "Tape-out Precheck — our general ladder, plus the operator's own refusal where the PDK ships one (chip/IC path only)"
     stage: stage4
     condition:
-      files_exist: ["input/submission_template/slots/*.yaml"]
+      # `any_of`, not the default ALL-of: these are two MUTUALLY EXCLUSIVE
+      # router files and no tree ever carries both (`tapeout_declaration_check`
+      # refuses the tree that does). An ALL-of reading would make this step
+      # unreachable for every design.
+      any_of: true
+      files_exist:
+        - "input/submission_template/slots/*.yaml"
+        - "input/submission_template/SELF_TAPEOUT.txt"
     # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
     # condition tests WHICH PATH the design is on, and step 0.5ic's
-    # required_outputs is the OR of exactly these two artefacts, so on any run
-    # where 0.5ic itself passed, precisely one of them exists. A chip
-    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
-    # seal ring or shuttle precheck — a silent skip is the correct reading. The
-    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
+    # required_outputs is the OR of exactly the three router artefacts, so on
+    # any run where 0.5ic itself passed, precisely one of them exists. The two
+    # named here are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the IP
+    # terminal 37.5ip owns, and an IP legitimately has no pad ring, no seal
+    # ring and no tape-out precheck — a silent skip is the correct reading.
+    # The "someone forgot" case is NOT lost to this default: it is 0.5ic never
     # having run, which its own gate refuses as NEVER_LOOKED rather than
     # leaving to be inferred from a downstream skip. Stated rather than left to
     # the default so the reading is the step's, not the consumer's fallback.
@@ -5542,9 +5584,28 @@ steps:
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
+      # OUR arm compares the layout against what the design DECLARED about
+      # itself. 0.5ic writes that declaration on every route, including the one
+      # with no operator, so this input exists wherever this step runs.
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
     programs:
       - tapeout_docs_gen
     required_outputs:
+      # THE MERGED RECORD — which arms ran, what each concluded, every finding
+      # labelled with the authority that produced it, and every disagreement
+      # between the two named rather than resolved.
+      - "reports/phase3/tapeout_precheck.json"
+      # OUR arm's own artefact, written by `general_precheck` itself. Declared
+      # separately from the merge because a summary of a verdict and the
+      # verdict are not the same document, and the arm's own report is the one
+      # that carries its per-ladder-step evidence.
+      - "reports/phase3/general_precheck.json"
+      # THE OPERATOR's arm, written by `tapeout_readiness_check` itself. It is
+      # written on EVERY path this step takes, including the paths where the
+      # operator was never asked — a run that did not ask says so in this file
+      # rather than leaving it absent, because an absent artefact and a
+      # NOT_APPLICABLE one are read identically by everything downstream.
       - "reports/phase3/shuttle_precheck.json"
       # THE RELEASE DOCUMENTS ARE AN OUTPUT OF THIS STEP, not a separate chore.
       # Every fact they state -- per-checker verdict, per-corner slack, die
@@ -5564,79 +5625,28 @@ steps:
       - "reports/phase3/docs/BRIEF_*.html"
     gate:
       all_of:
-        - program_exit_zero: "tapeout_readiness_check . --json reports/phase3/shuttle_precheck.json"
+        # ONE CLAUSE FOR BOTH ARMS, on purpose. Splitting them into two
+        # `program_exit_zero` clauses was measured against the requirement and
+        # fails it twice: `tapeout_readiness_check` alone cannot tell "this PDK
+        # ships no shuttle precheck" (one fewer arm, legitimate) from "it ships
+        # one and nobody fetched it" (NOT_DETERMINED), and nothing that sees
+        # only one arm can report a disagreement between them.
+        - program_exit_zero: "tapeout_precheck . --json reports/phase3/tapeout_precheck.json"
         - program_exit_zero: "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
-    # 0.5ic writes the template this step's condition reads, and the
-    # precheck is run against the slot it names.
-    blocks_on: [37, 0.5ic]
-
-  # ── chip path with NO operator — the design tapes itself out ─────────
-  # THE ROUTE THAT HAD NOTHING TO RUN. 37.5ic above is the right design for a
-  # design going to that shuttle: an outside party's refusal is the verdict,
-  # and a gate we wrote can be made to pass by editing it. But it is specific
-  # to ONE operator and ONE PDK. 37.5ip below it is the IP terminal, and an IP
-  # is delivered rather than fabricated. A CHIP doing its own tape-out is
-  # neither, and until this step it passed no submission check of any kind.
-  #
-  # THIS IS ASSEMBLY, NOT A NEW ENGINE. The operator's precheck is itself a
-  # LibreLane SequentialFlow whose custom step classes are mostly GENERAL:
-  # only its id encoding (`KLayout.GenerateID`) and its pad mask
-  # (`KLayout.CheckPadMask`) are the operator's, and `general_precheck`
-  # excludes exactly those two and names them in its report rather than
-  # dropping them silently. Everything else is the same ladder, in the same
-  # submission-failure order, sourced three ways: measured out of the GDSII
-  # stream (origin, top cell, zero-area polygons, database unit), DELEGATED to
-  # the in-tree checker that calls the PDK's own deck (DRC, density, antenna,
-  # Magic DRC — called, never reimplemented), or compared against the
-  # declaration 0.5ic wrote.
-  #
-  # THE ORIGIN CHECK IS THE ONE ADDITION, and it is justified by measurement,
-  # not taste. `tapeout_readiness_check.resolve_in_tree_coverage` recomputed on
-  # this tree reported `KLayout.CheckSize` UNCOVERED — no `die_slot_dimension_check`,
-  # no `seal_ring_check`, no `frame_dimension_check` existed. The known
-  # positive is published: `u_hawaii_adc` sky130A streams `phase3/stage4/gds/
-  # ldo.gds` with a flattened bbox starting at (-4.5, -223.305) um, and that
-  # file is byte-identical to `phase3/analog/hardmacro/ldo/ldo.gds`. An analog
-  # hardmacro was copied into the chip-GDS position; the negative origin is
-  # legal for the macro (its LEF declares `ORIGIN 4.500 223.305`) and is not
-  # legal for a die. The check fires there, and firing there is correct.
-  - id: 37.5self
-    name: "General Precheck — the tape-out check for a design with NO operator (chip/IC path, self tape-out)"
-    stage: stage4
-    condition:
-      files_exist: ["input/submission_template/SELF_TAPEOUT.txt"]
-    # D6 (vibe-ic#1744), same reading as its two siblings. `design_dependent`,
-    # not `setup_required`: this condition tests WHICH PATH the design is on,
-    # and step 0.5ic's required_outputs is the OR of exactly these three
-    # artefacts, so on any run where 0.5ic itself passed, precisely one of them
-    # exists. A chip on a shuttle legitimately has no SELF_TAPEOUT marker and
-    # an IP legitimately has neither — a silent skip is the correct reading.
-    # The "someone forgot" case is NOT lost to this default: it is 0.5ic never
-    # having run, which its own gate refuses as NEVER_LOOKED rather than
-    # leaving to be inferred from a downstream skip.
-    condition_kind: design_dependent
-    required_inputs:
-      - from: 37
-        path: "phase3/stage4/gds/*.gds"
-      - from: 0.5ic
-        path: "input/submission_template/tapeout_declaration.json"
-    required_outputs:
-      - "reports/phase3/general_precheck.json"
-    gate:
-      program_exit_zero: "general_precheck . --json reports/phase3/general_precheck.json"
-    # 0.5ic writes both the router file this step's condition reads AND the
-    # declaration the check compares the layout against.
+    # 0.5ic writes the router files this step's condition reads, the template
+    # the operator's arm is run against, and the declaration our arm compares
+    # the layout to.
     blocks_on: [37, 0.5ic]
     notes: >-
-      Three verdicts and no fourth, identical to 37.5ic so the two reports read
-      the same way: PASS only when every general ladder step carries passing
-      evidence; FAIL when a step refuses; NOT_DETERMINED when a declaration
-      question was left unanswered or a delegated checker could not run.
-      NOT_DETERMINED exits 1, the same as a refusal — a silence credited as a
-      pass is the defect this gate exists for. This step does NOT weaken
-      37.5ic: a design carrying an operator template routes there, and its
-      verdict stays the one we did not write.
-
+      Three verdicts and no fourth, and the merge inherits them unchanged from
+      both arms: PASS only when every arm that ran carries passing evidence for
+      every one of its ladder steps; FAIL when either arm refuses or when the
+      two arms disagree; NOT_DETERMINED when an arm could not reach a verdict —
+      a declaration question left unanswered, a delegated checker that could not
+      run, an operator container that could not be resolved, or a PDK whose
+      shuttle precheck exists and was never fetched. NOT_DETERMINED exits 1, the
+      same as a refusal: a silence credited as a pass is the defect this step
+      exists for.
   - id: 38
     name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
     stage: stage4

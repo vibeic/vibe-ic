@@ -2094,7 +2094,45 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # PREVIOUS flow blob would catch every shrink with nothing to remember, but
     # it would also leave a DELIBERATE shrink no way to be authorised. That is a
     # call for the flow's owner, so it is written down here rather than taken.
-    assert pop["swept"] == pop["declared"] == 178, pop
+    # 178 -> 180 -> 179, and the middle step is not mine. RE-DERIVED the way
+    # the block above derives its own: `discover_clauses` over the flow yaml at
+    # `03f7b945d` (the commit that last moved this literal), at `053eecd27`
+    # (main) and on this branch, CLAUSE SETS diffed rather than counts compared.
+    #
+    #   pin @03f7b945d  175      main @053eecd27  180      branch  179
+    #
+    # FIVE clauses arrived since the literal was last moved and NONE of them
+    # moved it, which is the FOURTH time this file records that happening:
+    #   + 0.5ic    program_exit_zero           tapeout_declaration_check
+    #   + 37.5ic   program_exit_zero           tapeout_docs_gen
+    #   + 37.5self program_exit_zero           general_precheck    (retired below)
+    #   + 9        program_exit_zero           area_total_vs_budget_check   (ppa-loop)
+    #   + 36       optional_program_exit_zero  ppa_head_to_head_check       (ppa-h2h)
+    # and the REMOVED set against the pin is empty. The last two landed after
+    # this literal was last touched and are the reason main itself measures 180
+    # against a literal of 178 — main is RED here right now, and that is not
+    # this change's doing.
+    #
+    # THIS CHANGE retires step `37.5self` and folds the general precheck into
+    # `37.5ic` as a second ARM, so 37.5ic's gate names ONE program that runs
+    # both ladders:
+    #   + 37.5ic   program_exit_zero  tapeout_precheck
+    #   - 37.5ic   program_exit_zero  tapeout_readiness_check
+    #   - 37.5self program_exit_zero  general_precheck
+    # 180 + 1 - 2 = 179. `by_kind` moves 114 -> 113 `program_exit_zero` with
+    # `advisory` 37 and `optional` 29 unchanged; `unswept`/`unrecognised` stay
+    # empty on both trees.
+    #
+    # A SHRINK IS EXACTLY WHAT THIS LITERAL EXISTS FOR, and the block above
+    # states the open question as "a DELIBERATE shrink has no way to be
+    # authorised". This is one, and the authorisation is written here:
+    # TWO GATES STOPPED BEING FLOW CLAUSES WITHOUT STOPPING BEING RUN. Both are
+    # now ARMS that `tapeout_precheck` dispatches, and the venue that proves
+    # they are still reached is `flow_gate_enforcement_audit`'s FOURTH venue —
+    # a transitive dispatch closure seeded only by the flow definition, added
+    # in this same change. Before it, that audit reported both of them
+    # `ORPHANED`, i.e. "reachable from nothing at all", which was false.
+    assert pop["swept"] == pop["declared"] == 179, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 
