@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """pad_assignment_check — the gate on step 15.5ic's config producer.
 
+ENFORCEMENT: advisory here — this gate is not in
+``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
+it inline. It runs when ``flow_compliance_check`` evaluates step 15.5ic's first
+``program_exit_zero`` clause, so its rc IS half of that step's verdict —
+"advisory" names the RUNNER channel it is absent from, not a verdict this gate
+cannot reach. Declared for the same reason `pad_ring_check`, its sibling clause
+on the same step, declares it: vibe-ic#886 counts an undeclared AUDIT_ONLY gate
+as an enforcement decision nobody made, and wiring it into the runner would
+change what a real run blocks on, which is the flow owner's call and is
+recorded here rather than taken here. Kept in the first 4 kB: `declared_intent`
+reads only `text[:4000]`.
+
 WHY A SEPARATE GATE, AND NOT JUST `pad_ring_check`
 ==================================================
 Without this clause the producer's verdict reaches the flow only as an ABSENCE:
