@@ -154,7 +154,19 @@ DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8,)
 #: the silent shape to refuse. A new step means eight new cells whose predicates
 #: nobody has looked at, so the count change must redden HERE, by name, and be
 #: acknowledged in the same commit that adds the step.
-GRID_AS_MEASURED: Tuple[int, int, int] = (67, 8, 536)
+#: RE-MEASURED 2026-08-20: 67 -> 68 steps, 536 -> 544 cells. Step `0.5ic`
+#: (Submission Template Ingest) entered the flow and brought eight new cells with
+#: it. They were reviewed dimension by dimension before this number moved --
+#: `pytest -k 0.5ic` over all eight modules answers `1 failed, 11 passed`:
+#:   d1 d2 d4 d5 d6 d7 d8   live and green
+#:   d3                     RED, and left red on purpose. Neither of the step's
+#:                          two required_outputs resolves in any of the ten
+#:                          admissible run roots, so the cell is UNEVIDENCED.
+#:                          Closing it means publishing a run that carries the
+#:                          artefacts, not editing a predicate; pinning the grid
+#:                          does not paper over it, because the d3 cell stays red
+#:                          in its own module and in the census join.
+GRID_AS_MEASURED: Tuple[int, int, int] = (68, 8, 544)
 
 #: The flow's step ids, in declaration order, as measured 2026-07-28. Pinned
 #: alongside the count so a rename or an add-plus-remove — which leaves the
@@ -173,12 +185,12 @@ GRID_AS_MEASURED: Tuple[int, int, int] = (67, 8, 536)
 #: D5-MISSING-EDGE clauses, and the graph is still acyclic (D5-CYCLE, plus
 #: `test_d5_runtime_ordering_guard_loads_the_same_edges`).
 STEP_IDS_AS_MEASURED: Tuple[str, ...] = (
-    'D1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', 'FS1',
-    'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8',
-    'A9', '14', '15', '15.5ic', '16', '17', '18', '19', '20', '21', '22',
-    'DT2', 'DT3', '23', '24', '25', '26', '26.5ic', '27', '28', '29', '30',
-    '31', '32', '33', '34', '35', '36', '37', '37.5ip', '37.5ic', '38',
-    '39', 'M1', 'M2', 'M3', 'M4', '40', '41', '42', '43', '44', 'P0',
+    'D1', '0.5ic', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11',
+    'FS1', 'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7',
+    'A8', 'A9', '14', '15', '15.5ic', '16', '17', '18', '19', '20', '21',
+    '22', 'DT2', 'DT3', '23', '24', '25', '26', '26.5ic', '27', '28', '29',
+    '30', '31', '32', '33', '34', '35', '36', '37', '37.5ip', '37.5ic',
+    '38', '39', 'M1', 'M2', 'M3', 'M4', '40', '41', '42', '43', '44', 'P0',
 )
 
 #: Written to a scratch dir and loaded with ``-p``; dumps what pytest really
