@@ -80,6 +80,54 @@ def _placeholder(rel: str) -> bytes:
             f"never executed\n").encode("utf-8")
 
 
+#: Config that must be pinned OFF in a synthetic repository, because each of
+#: these makes the WORKING TREE bytes differ from the BLOB bytes — and
+#: `trusted_worktree_attest` compares exactly those two, on purpose. Its own
+#: docstring names the reason: "A clean/smudge filter, sparse index, alternate
+#: gitdir, or staged replacement must not be able to make later gates consume a
+#: different population after raw worktree bytes were attested."
+#:
+#: MEASURED, and this is why the list is a list and not a comment: on a host
+#: whose GLOBAL git config carries `core.autocrlf = true`, git checks `x\n` out
+#: as `x\r\n`, the attester refuses "raw bytes differ from expected blob:
+#: candidate_marker", no receipt can be built, and EVERY case in
+#: `tools/test_gatekeeper_land_differential.py` that expects a clean run
+#: refuses as PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED. Eleven of its
+#: twenty-five did exactly that on a maintainer's host while all twenty-five
+#: passed on two others, and the only difference was one line of `~/.gitconfig`.
+#:
+#: The gate is right and does not move. What was wrong is that this fixture
+#: built its repository with `git init` and then inherited whatever the host
+#: said about byte transformation — the same class of defect this module
+#: already documents for `$USER`: THE HARNESS'S OWN ENVIRONMENT MUST NOT DECIDE
+#: THE VERDICT. These are set at the LOCAL level, which outranks `--global` and
+#: `--system`, so a host may carry any of them and this tuple still attests.
+BYTE_TRANSFORM_OFF = (
+    ("core.autocrlf", "false"),
+    ("core.eol", "lf"),
+    ("core.safecrlf", "false"),
+)
+
+
+def harden(root: Path) -> None:
+    """Make a synthetic repository's checkout byte-identical to its blobs.
+
+    Call once, straight after `git init`, BEFORE anything is staged.
+    """
+    for key, value in BYTE_TRANSFORM_OFF:
+        subprocess.run(["git", "-C", str(root), "config", key, value],
+                       check=True, capture_output=True)
+    # A GLOBAL `core.attributesFile` can switch a clean/smudge filter on for a
+    # tree that carries no `.gitattributes` of its own, which is the same defect
+    # wearing a different hat. Point the setting at an empty file this fixture
+    # owns; it lives under `.git/`, so it is not part of the attested worktree.
+    empty = root / ".git" / "fixture-empty-attributes"
+    empty.write_text("", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "config",
+                    "core.attributesFile", str(empty)],
+                   check=True, capture_output=True)
+
+
 def install(root: Path) -> list[str]:
     """Materialise every path the shipped manifest names, and return them.
 
