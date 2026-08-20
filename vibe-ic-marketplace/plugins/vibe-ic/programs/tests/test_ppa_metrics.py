@@ -535,3 +535,16 @@ def test_the_refusal_NAMES_the_sentinel_it_found():
     assert "sentinel" not in msg, (
         "42.5 is not a sentinel; calling it one would teach a reader that the "
         "rule is about three magic numbers rather than about the key existing")
+
+
+def test_the_whole_bundle_document_has_one_identity_whatever_the_read_order():
+    """`records_digest` was already order-independent while the `records` array
+    it describes was not, so two assemblers reading the same files in different
+    directory order produced two documents with the same digest inside and
+    different bytes outside. Two artefacts describing one set must not disagree
+    about whether order matters."""
+    a = M.measured("area.die_um2", 12000.0, "um^2", SCOPE_SYNTH, SRC)
+    b = M.measured("power.total_mw", 3.0, "mW", SCOPE_ROUTE, SRC)
+    one, two = M.bundle(_idx(a, b)), M.bundle(_idx(b, a))
+    assert cj.dumps(one) == cj.dumps(two)
+    assert one["records_digest"] == two["records_digest"]

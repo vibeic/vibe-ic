@@ -783,9 +783,23 @@ def bundle(index: "MetricIndex",
     to supply the denominator from somewhere else, and in practice supplies it
     from the record set itself, which always agrees with itself.
     """
+    # RECORDS ARE EMITTED IN CANONICAL ORDER, and this is the one place in the
+    # PPA contract where a list is sorted. §3 is explicit that list order IS
+    # part of a fact -- a corner list, a path, a sequence of stages -- and that
+    # is why `canonical_json` sorts keys and stops there.
+    #
+    # This list is the exception because it is a SET, not a sequence: the index
+    # refuses two records claiming one identity, so no two entries here are the
+    # same fact and their order carries no information. Emitting them in
+    # producer order would make the DOCUMENT's identity depend on the order the
+    # assembler happened to read files in, while `records_digest` -- which is
+    # already order-independent -- said it did not. Two artefacts describing one
+    # set, disagreeing about whether order matters, is the kind of drift this
+    # contract exists to remove, so the two are made to agree here rather than
+    # left for a reader to discover.
     doc: Dict[str, Any] = {
         "schema": BUNDLE_SCHEMA_ID,
-        "records": index.records(),
+        "records": sorted(index.records(), key=cj.dumps),
         "records_digest": index.digest(),
     }
     if expected is not None:
