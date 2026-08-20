@@ -578,3 +578,20 @@ def test_the_tree_digest_does_not_follow_a_symlink_into_equality(tmp_path):
     (root / "b.txt").unlink()
     (root / "b.txt").symlink_to(root / "a.txt")
     assert closure.tree_digest(root) != with_files
+
+
+def test_the_metric_scope_carries_no_absolute_path(bench):
+    """docs/PPA_INTERFACES.md §2: two numbers are comparable only if their SCOPE
+    matches. WHERE the measurement ran is provenance and lives in `source`; if
+    it lived in `scope`, the same measurement of the same design would become
+    incomparable with itself the moment the tree moved."""
+    reg, ctl = bench([_p(reduce_by=3)], start=3)
+    rec = ctl.run_edge("20").to_record()
+    for name, m in list(rec["baseline_all"].items()) + list(rec["final_all"].items()):
+        flat = json.dumps(m["scope"])
+        assert "/" not in flat, (name, flat)
+        assert str(bench.impl) not in flat
+        assert m["source"]["implementation_root"] == str(bench.impl.resolve()), (
+            "and it IS recorded, in source, where provenance belongs")
+    assert rec["baseline_all"]["fix.primary"]["scope"] == {
+        "stage": "closure_loop", "at": "baseline"}

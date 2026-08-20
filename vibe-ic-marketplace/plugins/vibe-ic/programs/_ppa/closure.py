@@ -1094,6 +1094,12 @@ class Measurement:
     reason: str = ""
     argv: Tuple[str, ...] = ()
     stdout_tail: str = ""
+    #: WHERE the measurement ran. Provenance, so it belongs in `source`. It is
+    #: deliberately NOT in `scope`: docs/PPA_INTERFACES.md §2 says two numbers
+    #: are comparable only if their SCOPE matches, and putting an absolute path
+    #: there would make the same measurement of the same design incomparable
+    #: with itself as soon as the tree moved.
+    implementation_root: str = ""
 
     def usable(self) -> bool:
         """docs/PPA_INTERFACES.md §2: only MEASURED and DERIVED may enter a
@@ -1108,6 +1114,7 @@ class Measurement:
             "unit": self.unit,
             "scope": dict(scope),
             "source": {"parser": "_ppa/closure.py",
+                       "implementation_root": self.implementation_root,
                        "argv": list(self.argv), "rc": self.rc},
         }
         if self.usable():
@@ -1249,6 +1256,7 @@ class ClosureController:
     def measure(self, domain: Domain, tag: str) -> Measurement:
         if domain.binding is not Binding.EXECUTABLE:
             return Measurement(
+                implementation_root=str(self.impl_root),
                 domain=domain.name, metric=domain.metric, status="NOT_MEASURED",
                 value=None, unit=domain.unit, rc=None,
                 formula="", reason=(
@@ -1261,6 +1269,7 @@ class ClosureController:
                                   timeout=600, cwd=str(self.impl_root))
         except (OSError, subprocess.SubprocessError) as exc:
             return Measurement(
+                implementation_root=str(self.impl_root),
                 domain=domain.name, metric=domain.metric, status="NOT_MEASURED",
                 value=None, unit=domain.unit, rc=None, formula="",
                 reason=f"measurement command could not be executed: {exc}",
@@ -1271,6 +1280,7 @@ class ClosureController:
             # that honestly is the whole point; turning it into a number here
             # would launder a refusal into a fact.
             return Measurement(
+                implementation_root=str(self.impl_root),
                 domain=domain.name, metric=domain.metric, status="NOT_MEASURED",
                 value=None, unit=domain.unit, rc=proc.returncode, formula="",
                 reason=(f"measurement exited {proc.returncode} (declared "
@@ -1278,6 +1288,7 @@ class ClosureController:
                 argv=tuple(argv), stdout_tail=tail)
         if not json_out.is_file():
             return Measurement(
+                implementation_root=str(self.impl_root),
                 domain=domain.name, metric=domain.metric, status="NOT_MEASURED",
                 value=None, unit=domain.unit, rc=proc.returncode, formula="",
                 reason=(f"measurement exited {proc.returncode} but wrote no "
@@ -1289,6 +1300,7 @@ class ClosureController:
             doc = _json.loads(json_out.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             return Measurement(
+                implementation_root=str(self.impl_root),
                 domain=domain.name, metric=domain.metric, status="INVALID",
                 value=None, unit=domain.unit, rc=proc.returncode, formula="",
                 reason=f"measurement artefact exists but cannot be parsed: {exc}",
@@ -1296,6 +1308,7 @@ class ClosureController:
         value, formula = domain.extract.extract(doc)  # type: ignore[union-attr]
         if value is None:
             return Measurement(
+                implementation_root=str(self.impl_root),
                 domain=domain.name, metric=domain.metric, status="NOT_MEASURED",
                 value=None, unit=domain.unit, rc=proc.returncode, formula=formula,
                 reason=f"the artefact does not carry the number: {formula}",
@@ -1305,11 +1318,12 @@ class ClosureController:
         status = "DERIVED" if domain.extract.kind != "json_pointer" else "MEASURED"
         return Measurement(domain=domain.name, metric=domain.metric, status=status,
                            value=value, unit=domain.unit, rc=proc.returncode,
-                           formula=formula, argv=tuple(argv), stdout_tail=tail)
+                           formula=formula, argv=tuple(argv), stdout_tail=tail,
+                           implementation_root=str(self.impl_root))
 
     def _scope(self, tag: str) -> Dict[str, Any]:
-        return {"stage": "closure_loop", "implementation_root": str(self.impl_root),
-                "at": tag}
+        """What makes two of these numbers comparable, and nothing else."""
+        return {"stage": "closure_loop", "at": tag}
 
     # -- snapshot / restore -----------------------------------------------
     def _snapshot(self, index: int) -> Path:
