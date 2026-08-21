@@ -1296,9 +1296,9 @@ fills fixed-size evidence windows) and OUTSIDE `$HOME` (the hermetic runner
 refuses a subject under it). `/tmp/ps` satisfies both; the descriptive path I
 used for most of this job satisfies neither.
 
-### The six instrument defects, consolidated
+### The seven instrument defects, consolidated
 
-That section covered one rule. By the end there were six, and **every one of them
+That section covered one rule. By the end there were seven, and **every one of them
 produced a confident, plausible, WRONG answer rather than an error.** That is the
 property worth internalising: a broken instrument almost never announces itself:
 
@@ -1310,12 +1310,16 @@ property worth internalising: a broken instrument almost never announces itself:
 | 4 | a test-ID set-difference cannot distinguish RENAMED from FIXED | reported a renamed test as "now green" | check the collected-count invariant alongside the ID diff |
 | 5 | a verification grep written from REMEMBERED phrasing rather than the actual string | two present changes read as MISSING | check the query before believing an absence |
 | 6 | `cd X && CMD &` backgrounds the whole list, not just `CMD` | two files written into the operator's checkout | absolute paths in anything backgrounded |
+| 7 | `tail -N` as a CAPTURE truncates the `FAILED` list | diffed against a complete baseline it invented a difference and reported **"fixed by my change"** — a fix I had not made | capture the full list; `tail` is for looking, never for comparing |
 
-**The common shape:** 1 and 6 fail loudly and cost time. **2, 3, 4 and 5 fail
+**The common shape:** 1 and 6 fail loudly and cost time. **2, 3, 4, 5 and 7 fail
 QUIETLY and cost correctness** — each returned an answer of exactly the form I
-was expecting. Number 3 is the worst of them, because the answer it would have
-produced was the one I was hoping for, about my own work, and nothing downstream
-would have questioned it.
+was expecting. Numbers 3 and 7 are the worst, because the answer each would have
+produced was the one I was hoping for, about my own work, and nothing
+downstream would have questioned it. **Three of the seven — 3, 4 and 7 —
+did not merely err; they FLATTERED**, reporting my changes as more
+successful than they were. A tool that fails toward good news is the one to
+distrust first.
 
 The rule that covers all six, and it is the same rule this document applies to
 the code under test: **a measurement is not evidence until the apparatus has its
