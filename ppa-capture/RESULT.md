@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 14 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 15 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 12 | deterministic rules — the default, and every one names its predicate |
+| **A** | 13 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 1 | the predicate is trivial; the provenance plumbing it must read is not |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -163,6 +163,11 @@ lane's records went:
   which is why a producer one key short survives it (**A-2**).
 
 Both are set differences over tables that already exist. Neither needs a fixture.
+
+And one level up from all three sits **A-13**: the reason a per-module suite
+cannot see any of them is that a contract relation leaves no import edge, so
+neither the module graph nor a per-module test can reach the pair. That is the
+asymmetry the brief calls the richest material, as a rule.
 
 ---
 
@@ -465,6 +470,41 @@ the screen cannot see the flag. It is quoted for sizing and the record says so.
 **(o)** yes. **(d)** yes — the rule is per attribute of any optionally-imported
 name, so it covers a dependency this layer adopts next, not the one that bit.
 
+### A-13 · a contract relation is not an import edge and owes a pair test · `repo.test_population`
+
+**This is the record for the asymmetry the brief names as the richest material in
+the repo** — every one of the eighteen passed its own module's tests and was
+caught only end to end. I had recorded the individual rules and never the
+asymmetry itself.
+
+The reason those defects are end-to-end-only is structural, not accidental. Two
+modules agree on a document shape; neither imports the other, because the writer
+builds a plain mapping and the reader receives one. **The relation lives in the
+shared vocabulary and nowhere in the code.** Measured on this layer:
+
+    module pairs sharing a schema identifier          47
+      ...of which have an import edge                  0
+    after excluding the ONE token >2 modules carry      6 contract pairs
+      with an import edge                               0 of 6
+      with a test importing BOTH sides                  5 of 6
+      with NEITHER                                      1 of 6   <-- live
+
+So a dependency-graph check finds **none** of them — and the five that are
+covered were covered by the lanes that repaired the seam defects, one pair at a
+time, after each was found the expensive way.
+
+**The rule makes a live prediction on this tree**, which is the test of whether
+it generalizes rather than describes the past: one pair — a document identifier
+shared by exactly two modules — has neither an import edge nor a pair test, and
+it is the same shape that produced four of the eighteen findings.
+
+The detector's own denominator is part of the rule. Without excluding the token
+that most modules carry, this layer reports 47 pairs and the 6 that matter are
+indistinguishable from the 41 that do not.
+**(o)** yes — four of the eighteen sit on pairs this enumerates, and it names
+them without knowing anything about what went wrong.
+**(d)** yes, demonstrably: it is already naming one nobody has looked at.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -551,6 +591,7 @@ to main.
 | `jrecords_record-shape-reconcile` | the producer-census instance under A-3 |
 | `jreq_lander-three` | its three requests are landed; nothing left to distil |
 | using the emitter this brief mandates | A-9, A-10 |
+| the brief's own line that the ASYMMETRY is the richest material | **A-13** — the one I had read and not acted on |
 
 ## The one thing I could not settle
 
