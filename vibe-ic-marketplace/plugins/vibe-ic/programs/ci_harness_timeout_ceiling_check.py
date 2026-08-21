@@ -294,7 +294,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "df1eba037a67a4abfe634f201b1ed6791edd332faacd21321b0eae4efc3c8b7a"
+    "cfc5dabcce04cd9a335114b36e6e565f4d9198996d457c917181f8a3f2bef419"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -352,10 +352,36 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 #     affect whether the three populations run, and the prefix exists to pin
 #     exactly that.
 #
+#
+# RE-PINNED AGAIN, same day, because the two paragraphs above describe a wiring
+# that did not survive its own gates. `--hygiene-record-in` was a command-line
+# way to hand `gatekeeper_review`'s hygiene gate a substitute for running it,
+# and two gates that exist for exactly that were red about it. Both digests
+# moved again; the three `_LANDING_LANE_SHA256` bodies did NOT, which is again
+# this file's own independent witness that no lane body was touched.
+#
+# WHAT MOVED, reviewed rather than absorbed:
+#   * INSIDE the prefix: the caller's `GATEKEEPER_HYGIENE_REPORT` is passed to
+#     `--summary-json` at the call site again instead of through a `:-`
+#     default, and the record stays unconditional in the other branch — the
+#     two are different contracts and only the first has a reader outside this
+#     process. `lane_emit_window` LOST the `GK_HYG_RC="$EMIT_RC"` assignment
+#     the paragraph above added, because the only thing that read it was the
+#     flag that is gone. Neither removes, reorders nor rewrites a lane;
+#     neither adds an exit; the window still launches and joins exactly the
+#     same lanes.
+#   * AFTER the anchor: `full:gatekeeper-review` no longer passes a record to
+#     the review, so the review runs the hygiene set, and the budget it is
+#     given moved from 240 s to 1800 s — `repo_hygiene_gate`'s own
+#     `_HYGIENE_STALL_GRACE_S`, below which this `timeout` would kill runs the
+#     gate itself still considers alive. A timeout is still rc 2 UNDETERMINED
+#     and still blocking; that half did not move and is what
+#     `tools/test_gatekeeper_land_review_budget.py` drives.
+#
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "dad5d0f10c8c4f030d71770f2521133a3ba6d430a33646bd652aa2575c0b2d9f"
+    "29810dbbeae15c4ced70fcd2708b96a2a9ff5a7640d49350b93b2c4473b6e630"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
