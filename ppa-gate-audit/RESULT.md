@@ -554,3 +554,17 @@ refs scanned, 0 carry that path. The only `readjudication` matches anywhere are
 four unrelated test files under `programs/tests/`. What it describes is what
 `ppa-crosslayer/records/trials/*/{contract,candidates,feasibility_report}.json`
 holds, and that is what every number in this report was measured against.
+
+## The two STILL-CANNOT gates, checked against the whole repository
+
+The exemptions for gates 3 and 5 rest on a claim about absence, so the absence was
+measured over every ref this repository has, not just `main`:
+
+    1524 remote refs scanned
+      frontier.json               0 branches
+      ppa/coverage.json           0 branches
+      ppa-crosslayer/eco-readjudication/   0 branches
+
+Neither artefact has ever been published on any branch of this repository. That is
+the difference between an exemption that says "not yet" because nobody looked and
+one that says it after looking everywhere there is to look.
