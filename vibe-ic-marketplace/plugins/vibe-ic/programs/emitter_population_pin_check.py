@@ -217,12 +217,72 @@ def emitted_script(text: str) -> str:
 
 
 def phrases(text: str) -> Dict[str, Set[Tuple[str, int]]]:
-    """``{tail: {(value, lineno)}}`` from every EMITTED string in `text`."""
+    """``{tail: {(value, lineno)}}`` -- every population phrase the emitter CAN
+    print.
+
+    NOT ASKED FOR POLARITY, and the asymmetry with `pins` below is measured, not
+    stylistic. This set is the answer to "what values does this emitter state?",
+    and a value missing from it makes a CORRECT pin look stale. An emitter that
+    prints `puts "no repair applied; 0 of 3 repairs refused"` does state
+    `of 3 repairs refused`; suppressing it because the same message also says
+    "no" would refuse a correct test -- the same false refusal `pins` exists to
+    stop, pointed the other way.
+    """
     out: Dict[str, Set[Tuple[str, int]]] = {}
     for lineno, _, value in _emitted_strings(text):
         for m in PHRASE.finditer(value):
             out.setdefault(m.group(2).strip(), set()).add((m.group(1), lineno))
     return out
+
+
+def pins(text: str) -> Tuple[Dict[str, Set[Tuple[str, int]]],
+                             List[Tuple[str, int, str]]]:
+    """``({tail: {(value, lineno)}}, [(phrase, lineno, denial)])`` -- what a test
+    PINS, and what it turned out to be DENYING instead.
+
+    A pin is an ASSERTION that the emitter states the value. This is not one:
+
+        assert "of 3 repairs refused" not in script()
+
+    It asserts the opposite -- that the emitter no longer says it -- and it is
+    how a test correctly records that a population MOVED. Read as a pin it is
+    compared against an emitter that now says 4, and the guard refuses a correct
+    test for "the population moved and the pin did not" when the test is
+    asserting exactly that the population moved. MEASURED against a
+    self-consistent 4-site emitter: rc=1, one finding, both files correct. Same
+    shape as #706, on the pin side.
+
+    THE DENIAL IS IN THE CODE, NOT IN THE STRING. `not in` is spelled outside
+    the literal, so `is_denied` on the literal's own value cannot see it. The
+    scope is taken over the SOURCE STATEMENT the literal begins in, anchored at
+    the start of its line and bounded by `sentence_scope` with the same record
+    break `counters` declares -- a Python statement is line-structured the way
+    an emitted script is. Anchoring on the LINE rather than on the literal's
+    column is deliberate: `col_offset` is measured in UTF-8 bytes, so a line
+    carrying a multi-byte character ahead of the literal would push the anchor
+    past the end of its own statement.
+
+    WHAT IT REFUSES IS RETURNED, not dropped -- a pin the guard declined to
+    compare is a pin it did not check, and this file prints its reach.
+    """
+    kept: Dict[str, Set[Tuple[str, int]]] = {}
+    refused: List[Tuple[str, int, str]] = []
+    starts, acc = [], 0
+    for raw in text.splitlines(keepends=True):
+        starts.append(acc)
+        acc += len(raw)
+    for lineno, _, value in _emitted_strings(text):
+        anchor = starts[lineno - 1] if 0 < lineno <= len(starts) else 0
+        lo, hi = sentence_scope(text, anchor, min(anchor + 1, len(text)),
+                                extra_breaks=_RECORD_BREAKS)
+        word = is_denied(text[lo:hi])
+        for m in PHRASE.finditer(value):
+            tail = m.group(2).strip()
+            if word:
+                refused.append((f"of {m.group(1)} {tail}", lineno, word))
+                continue
+            kept.setdefault(tail, set()).add((m.group(1), lineno))
+    return kept, refused
 
 
 def counters(text: str) -> Tuple[List[Tuple[str, int, List[Tuple[str, int]]]],
@@ -355,7 +415,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         rows, refused = counters(src)
         for what, matched, word in refused:
-            denied.append({"program": sources[stem].name, "what": what,
+            denied.append({"where": sources[stem].name, "what": what,
                            "matched": matched, "denial": word})
         for name, sites, dens in rows:
             for kind, value in dens:
@@ -384,7 +444,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         em = emitter_phrases(stem)
         if not em:
             continue
-        for tail, values in phrases(text).items():
+        pinned, pin_refused = pins(text)
+        for phrase, lineno, word in pin_refused:
+            denied.append({"where": f"{test}:{lineno}", "what": "test pin",
+                           "matched": phrase, "denial": word})
+        for tail, values in pinned.items():
             if tail not in em:
                 continue
             emitted = {v for v, _ in em[tail]}
@@ -411,7 +475,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         _atomic.write_json(args.json, report)
 
     for d in denied:
-        print(f"  [POLARITY] {d['program']}: {d['what']} `{d['matched']}` sits "
+        print(f"  [POLARITY] {d['where']}: {d['what']} `{d['matched']}` sits "
               f"in a statement that DENIES it (\"{d['denial']}\") and is NOT "
               f"counted")
 

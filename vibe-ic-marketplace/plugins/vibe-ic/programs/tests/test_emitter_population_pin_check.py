@@ -343,6 +343,92 @@ def test_what_polarity_refused_is_printed_not_quietly_dropped(tmp_path):
     assert "1 match(es) not counted" in r.stdout, r.stdout
 
 
+# ── POLARITY on the PIN side: `not in` is a denial, not a pin ────────────────
+#
+# A pin is an ASSERTION that the emitter states the value. `assert "..." not in
+# script()` asserts the opposite, and it is how a test correctly records that a
+# population MOVED. Read as a pin it is compared against the emitter's new
+# number and refuses a correct test for "the population moved and the pin did
+# not" -- while the test is asserting exactly that the population moved.
+
+EMITTER_FOUR = '''\
+def script() -> str:
+    return (
+        "  set _n 0\\n"
+        "  if {[catch {a}]} {{ incr _n }}\\n"
+        "  if {[catch {b}]} {{ incr _n }}\\n"
+        "  if {[catch {c}]} {{ incr _n }}\\n"
+        "  if {[catch {d}]} {{ incr _n }}\\n"
+        "  puts \\"PARTIAL: $_n of 4 repairs refused\\"\\n"
+        "  if {$_n >= 4} {{ puts ALL }}\\n"
+    )
+'''
+
+#: A CORRECT test: it records that the emitter no longer says the OLD number.
+PIN_DENIES_THE_OLD_NUMBER = '''\
+from thing_emit import script
+
+
+def test_the_old_three_repair_wording_is_gone():
+    assert "of 3 repairs refused" not in script()
+'''
+
+#: An emitter whose own message denies something ELSE in the same breath. It
+#: still states `of 3 repairs refused` -- that is one of the strings it prints.
+EMITTER_DENIAL_IN_THE_MESSAGE = '''\
+def script() -> str:
+    return (
+        "  set _n 0\\n"
+        "  if {[catch {a}]} {{ incr _n }}\\n"
+        "  if {[catch {b}]} {{ incr _n }}\\n"
+        "  if {[catch {c}]} {{ incr _n }}\\n"
+        "  puts \\"NOT_APPLIED: no repair applied, 0 of 3 repairs refused\\"\\n"
+        "  if {$_n >= 3} {{ puts ALL }}\\n"
+    )
+'''
+
+
+def test_a_test_that_DENIES_a_phrase_is_not_a_pin(tmp_path):
+    """MEASURED before the fix: a self-consistent 4-site emitter and a correct
+    test that asserts the 3-repair wording is GONE produced rc=1 and one
+    finding, with both files correct. The denial is spelled in the CODE (`not
+    in`), outside the literal, so the polarity question is asked over the source
+    STATEMENT the literal begins in."""
+    progs, tests = _tree(tmp_path, EMITTER_FOUR, PIN_DENIES_THE_OLD_NUMBER)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, (
+        "a test DENYING a phrase was read as pinning it:\n" + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["findings"] == [], doc
+    assert doc["pins_examined"] == 0, doc
+    assert [(d["what"], d["denial"]) for d in doc["denied_by_polarity"]] == [
+        ("test pin", "not")], doc
+
+
+def test_the_emitter_side_is_NOT_asked_the_same_question(tmp_path):
+    """THE ASYMMETRY, PINNED, because it is the one thing about this fix that a
+    later reader would most reasonably try to "tidy up" into symmetry.
+
+    `phrases` answers "what values does this emitter state?" and a value missing
+    from that set makes a CORRECT pin look stale. This emitter prints
+    `no repair applied, 0 of 3 repairs refused` -- it DOES state
+    `of 3 repairs refused`. Ask it for polarity and the tail leaves the emitted
+    set entirely, `tail not in em` skips the comparison, and the guard silently
+    checks NOTHING while still printing PASS. The return code cannot see that,
+    so the REACH is what is asserted."""
+    progs, tests = _tree(tmp_path, EMITTER_DENIAL_IN_THE_MESSAGE,
+                         PIN_2.replace("of 2", "of 3"))
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["denied_by_polarity"] == [], (
+        "the emitter side was asked for polarity and dropped a value it really "
+        "does print:\n" + json.dumps(doc, indent=2))
+    assert doc["pins_examined"] == 1, (
+        "the pin was not compared at all -- CHECK B is disarmed:\n"
+        + json.dumps(doc, indent=2))
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
