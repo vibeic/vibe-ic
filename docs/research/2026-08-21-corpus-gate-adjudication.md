@@ -155,3 +155,87 @@ binds the corpus will see a ninth red (`an argued direction is pinned`) that has
 no row. That is not an argument for a ninth row written blind; it is an argument
 for the landing path to state which corpus it measured against, which the
 hygiene record already does.
+
+---
+
+# ADDENDUM — the third corpus gate, `published-evidence index honest`
+
+Adjudicated 2026-08-22, on the same terms as the two above. It was the one red I
+reported as "not mine and it has no row", and leaving it named-but-unmeasured
+was not an answer.
+
+## VERDICT: A REAL FINDING, AND NO ROW IS POSSIBLE FOR IT
+
+**Real.** With the corpus bound, the committed index disagrees with the index
+regenerated from the walked corpus: rows for `sha256/`, `ibex/`, `subservient/`,
+`caravel_user_project/` and `opentitan_aes/` cells are listed as `UNSTATED …
+record only`, and regeneration produces *"None — the corpus was walked and no
+published cell falls into this classification."* The cells are all still present;
+what changed is their measured state. That is a published index claiming a
+classification the evidence no longer supports, which is the same "reads as true
+and is not" class the rest of this document is about.
+
+**And no row is possible.** Not because it is unimportant — because `since` is
+undefined for it:
+
+* the file that must change is `ic/INDEX.md`, and it lives **only** in
+  `vibeic/benchmark-data`, which is its own git repository (`146d665`). This
+  repo tracks a different `INDEX.md` (`programs/INDEX.md`);
+* so no commit in **this** repo made it red, and
+  `gate_red_since.git_age(since)` is `git rev-list --count <sha>..HEAD` **in
+  this repo**. There is no commit here to name.
+
+That is the same argument that fixed the grace at 0 for an unacknowledged red:
+the clock is commits in this repository, and where there is no first-red commit
+here, only 0 and infinity are computable. Writing a row with a plausible-looking
+`since` would be inventing the number that sets the deadline — the one thing the
+whole mechanism exists to prevent.
+
+## WHAT WAS FIXED HERE, BECAUSE IT WAS ACTIONABLE
+
+The gate printed `Fix: re-run with --write and commit the result.` That
+sentence was written when the index lived in this repository. It now can live in
+the corpus clone — the code that formats the path twelve lines above already
+knows this and prints an absolute path for exactly that case — while the gate
+itself is run from vibe-ic. A reader who follows the remedy commits in the wrong
+repository, finds nothing to commit, and is left with a red gate over a correct
+tree.
+
+It now names the repository:
+
+    Fix: re-run with --write, then commit /…/benchmark-data/ic/INDEX.md in the
+    corpus clone that owns it — NOT this repository, which does not track that
+    file.
+
+A printed remedy is executed, not read; naming the wrong place and failing to
+run are the same defect to whoever tries it. Pinned by
+`test_evidence_index_remedy_names_its_repo.py`, including that it does not name
+the path twice — which the first version of this fix did.
+
+## ONE THING FOR THE OWNER, MEASURED AND NOT ACTED ON
+
+The three `--corpus-may-be-absent` gates do not agree about what an absent
+corpus means:
+
+    corpus absent entirely      l_doc_field_producer_check        rc 2 UNDETERMINED
+                                evidence_citation_resolves_check  rc 2 UNDETERMINED
+                                benchmark_evidence_index          rc 0   <-- PASS
+    pointer at an empty dir     benchmark_evidence_index          rc 2 UNDETERMINED
+
+So `benchmark_evidence_index` distinguishes "you did not point me anywhere"
+(pass) from "you pointed me at nothing" (undetermined), while its two siblings
+call both undetermined. Its own message on the rc 0 path says **"NOTHING WAS
+SCANNED"**, and the dispatcher records that as PASS.
+
+On a landing host with no corpus bound — which is the normal state, since the
+cells left this repo — this blocking gate therefore always passes without
+checking anything. That is why `published-evidence index honest` reads green on
+main while the index it is named after is stale.
+
+**Not changed here, deliberately.** Returning rc 2 would make it NOT_CHECKED on
+every unbound host, and it is dispatched with a plain blocking `run`, under which
+rc 2 is a FAIL — so flipping it reddens main for everyone until it is either
+re-dispatched as `run_tolerating_uncheckable` with a dated `uncheckable_until`,
+or the corpus is bound on the landing path. That is a wiring decision with a
+blast radius, and it is the owner's, in the same way the deadline's was. The
+measurement is here so it can be made with the number in front of you.
