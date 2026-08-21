@@ -1,3 +1,11 @@
+*** SUPERSEDED -- DO NOT USE AS A TARGET ***
+This "golden" was DERIVED from what the argument names appeared to mean. They do
+not mean that: the tool documents "horizontal" as the horizontally-ORIENTED
+PADS, which sit on the east and west rows. Under the documented convention the
+measured table is already correct and this file describes a state that would be
+WRONG. Kept as the artefact of a withdrawn record, not as a target.
+See `f3_bucket_T_WITHDRAWN.txt`.
+
 GOLDEN — what the measured table must look like once the fork is fixed.
 
 DERIVED, NOT OBSERVED, and labelled that way deliberately: the tool ships no

@@ -1,3 +1,9 @@
+*** THE NUMBERS BELOW ARE CORRECT. THE CONCLUSION DRAWN FROM THEM WAS NOT. ***
+These measurements stand -- separate processes per argument pair, row identity
+confirmed by die position. What was wrong is the reading: the tool's documented
+convention makes every number here its intended behaviour. Read
+`f3_bucket_T_WITHDRAWN.txt` before drawing anything from this file.
+
 ########## ROTH=R0 ROTV=R0
 ##### roth=R0 rotv=R0  (die 0..2262 um)
   pw0 row-claim orient=MXR90  xMin=26.0 yMin=500.0  dx=350.0 dy=75.0
