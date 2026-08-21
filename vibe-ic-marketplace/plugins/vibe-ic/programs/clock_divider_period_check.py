@@ -41,7 +41,7 @@ False-alert guards
 
 Silent in any of:
   - No matching toggle-divider pattern found.
-  - <sig> has no declared target frequency in L1-L9 (gate cannot
+  - <sig> has no declared target frequency in L1-L23 (gate cannot
     verify; not a false alert because there's nothing to check).
   - L8 declares the source clock but no `<sig>_freq_mhz` /
     `<sig>_freq_hz` / `<sig>_period_ns` annotation. (Plain free-running

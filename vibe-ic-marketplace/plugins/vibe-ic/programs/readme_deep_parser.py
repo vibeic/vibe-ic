@@ -5,7 +5,7 @@ The Phase 1 (doc-extraction) v1.6.94 README parser only extracts ``ic_name`` +
 README prose (key sizes / block width / S-box parallelism / supported
 cipher modes / cited public-standards URLs) end up either in the
 unstructured catch-all or nowhere at all. The ten thin-input projects
-all have L1-L13 structured fields at zero, even though a human reader
+all have L1-L23 structured fields at zero, even though a human reader
 of the same README extracts ten times more.
 
 This module ships in v1.6.95 as the deeper README parser. Each regex

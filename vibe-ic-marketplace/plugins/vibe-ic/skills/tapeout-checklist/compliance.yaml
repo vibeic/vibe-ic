@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: full_markdown
 
-# Compliance spec for skill 'tapeout-checklist' (vibe-ic-d v0.40)
+# Compliance spec for skill 'tapeout-checklist' (v0.40)
 # Enhanced: must cover 8 signoff categories with status and waiver documentation
 skill: tapeout-checklist
 

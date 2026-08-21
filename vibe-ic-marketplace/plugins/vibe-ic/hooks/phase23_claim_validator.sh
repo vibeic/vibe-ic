@@ -131,11 +131,16 @@ EOF
 fi
 
 # Locate the audit gate.
+# PORTABILITY: every candidate is derived from THIS script's own location (or an
+# explicit env override). Absolute paths under a personal home directory used to
+# be listed here; they resolved on one machine only and were dead weight
+# everywhere else.
 GATE=""
+_HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 for candidate in \
-  "$(dirname "$0")/../programs/phase23_completion_self_audit_check.py" \
-  "/home/user/AI_IC_design/opensource_repo/vibe-ic-marketplace/plugins/vibe-ic-d/programs/phase23_completion_self_audit_check.py" \
-  "/home/user/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic-d/programs/phase23_completion_self_audit_check.py"
+  ${VIBE_IC_PROGRAMS_DIR:+"$VIBE_IC_PROGRAMS_DIR/phase23_completion_self_audit_check.py"} \
+  "$_HOOK_DIR/../programs/phase23_completion_self_audit_check.py" \
+  "$_HOOK_DIR/../../vibe-ic/programs/phase23_completion_self_audit_check.py"
 do
   if [[ -f "$candidate" ]]; then
     GATE="$candidate"
@@ -247,7 +252,7 @@ not valid until \`flow_compliance_check.py --strict\` returns
 Required next actions:
   1. Identify the missing / failing canonical steps (see audit output).
   2. Either complete them, OR add a justified entry to
-     $PROJECT_DIR/waivers.json (see vibe-ic-core/flow/phase1_phase2_phase3.yaml
+     $PROJECT_DIR/waivers.json (see vibe-ic/flow/phase1_phase2_phase3.yaml
      for the schema).
   3. Re-run:
          python3 vibe-ic-d/programs/phase23_completion_self_audit_check.py \\

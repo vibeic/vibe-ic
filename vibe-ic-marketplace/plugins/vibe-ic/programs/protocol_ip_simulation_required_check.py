@@ -115,7 +115,7 @@ def _is_protocol_ip(project: Path) -> tuple[bool, str]:
             if isinstance(pl, str) and pl.lower() not in ("", "auto"):
                 return True, f"L9.protocol_layer={pl}"
 
-    # Token scan over L1-L9
+    # Token scan over L1-L23
     for f in (
         list(project.glob("phase1/generated_docs/L*.json"))
         + list(project.glob("L*.json"))

@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Compliance spec for skill 'lvs-triage' (vibe-ic-d v0.40)
+# Compliance spec for skill 'lvs-triage' (v0.40)
 # Enhanced: must categorize mismatches, provide layer+coordinate fixes, and report counts
 skill: lvs-triage
 

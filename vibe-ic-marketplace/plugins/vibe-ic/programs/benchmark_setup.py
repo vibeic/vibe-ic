@@ -2,7 +2,7 @@
 """benchmark_setup.py — environment check + dataset-clone helper for open benchmarks.
 
 Companion to /vibe-ic-benchmark. Verifies the host has the tools each registry
-entry needs (iverilog, iic-eda container, MCP server, optionally docker), and
+entry needs (iverilog, vibeic-eda container, MCP server, optionally docker), and
 prints the clone command for the requested benchmark's dataset (NEVER auto-runs
 git clone — explicit user consent for third-party data).
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys
 from pathlib import Path
 
-HARNESS = Path(__file__).resolve().parent.parent / "benchmark-harness"
+HARNESS = Path(__file__).resolve().parent.parent / "benchmark"
 REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
 
 
@@ -37,7 +37,7 @@ def _docker_ps() -> set[str]:
 def _mcp_alive() -> bool:
     if not _has("pgrep"):
         return False
-    return subprocess.run(["pgrep", "-fa", "mcp-eda-server"],
+    return subprocess.run(["pgrep", "-fa", "mcp-eda/src/bootstrap"],
                           capture_output=True).returncode == 0
 
 
@@ -47,7 +47,7 @@ def env_summary() -> dict:
         "iverilog": _has("iverilog"),
         "yosys": _has("yosys"),
         "docker": _has("docker"),
-        "iic_eda_running": "iic-eda" in ps,
+        "iic_eda_running": "vibeic-eda" in ps,
         "mcp_server_alive": _mcp_alive(),
         "git": _has("git"),
         "python3": _has("python3"),

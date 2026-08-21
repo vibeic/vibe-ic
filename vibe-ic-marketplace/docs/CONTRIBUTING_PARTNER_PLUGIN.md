@@ -8,7 +8,7 @@ required, no core changes required.
 This guide covers the four common contribution shapes:
 
 1. **New IC class** (e.g. RFIC, MCU, sensor) — generator + reference TB
-2. **New PDK / foundry** (e.g. KeyFoundry HP18E80, TSMC 65) — registry + sign-off decks
+2. **New PDK / foundry** (e.g. commercial_foundry commercial_pdk, TSMC 65) — registry + sign-off decks
 3. **New device / tester / scope** (e.g. ACME-9000 tester) — driver + manifest
 4. **New methodology / skill** (e.g. specialised analog flow) — SKILL.md + agents
 
@@ -25,7 +25,7 @@ plugins/
     skills/                         (optional NL skills)
     agents/                         (optional sub-agents)
     programs/                       (optional deterministic Python)
-    mcp-eda-server/ + .mcp.json     (optional vendor MCP tools)
+    mcp-eda/ + .mcp.json     (optional vendor MCP tools)
     pdk_local/<vendor>/             (optional PDK + IP macros)
     devices/<class>/<vendor>/       (optional device drivers)
     README.md
@@ -33,8 +33,8 @@ plugins/
 ```
 
 Naming: `partner-<vendor>-<topic>` (lowercase). Examples:
-- `partner-keyfoundry-hp18e80`
-- `partner-emory-otp-eo0128x8`
+- `partner-commercial_foundry-commercial_pdk`
+- `partner-memvendor-otp128x8`
 - `partner-tsmc-65nm`
 - `partner-acme-tester-md9000`
 - `community-class-rfic`
@@ -48,7 +48,7 @@ Implement at minimum:
 | File | Role |
 |---|---|
 | `programs/<class>_rtl_gen.py` | Deterministic RTL generator (chip-AGNOSTIC within the class) |
-| `tools/protocol_tb/<class>_reference_tb.v` | Reference TB used by phase2b runner |
+| `tools/protocol_tb/<class>_reference_tb.v` | Reference TB used by the Phase 2 runner |
 | `programs/<class>_class_profile.py` | Detection + applicability rules |
 | `skills/<class>-spec-extract/SKILL.md` | NL fallback for unfamiliar variants |
 
@@ -82,15 +82,15 @@ new projects.
 ## 3. Add a new device / tester / scope
 
 ```
-mcp-eda-server/src/devices/<class>/<vendor>/
+mcp-eda/src/devices/<class>/<vendor>/
   driver.py                         (or driver.js / driver.go — exec'd by MCP server)
   manifest.json                     (name, schema, modes, permissions)
   README.md
 ```
 
 `manifest.json` schema mirrors the existing
-`mcp-eda-server/src/devices/tester/vendor-usb_hid_tester/manifest.json` and
-`mcp-eda-server/src/devices/fpga/terasic-de10lite/manifest.json`.
+`mcp-eda/src/devices/tester/vendor-usb_hid_tester/manifest.json` and
+`mcp-eda/src/devices/fpga/terasic-de10lite/manifest.json`.
 Plugin's `.mcp.json` lists the additional MCP servers if you ship more
 than just driver wrappers.
 

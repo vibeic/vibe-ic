@@ -107,6 +107,111 @@ RX_SIGNAL_RE = re.compile("|".join(RX_SIGNAL_PATTERNS))
 
 SILENCE_RE = re.compile(r"//\s*periodic-timer-rx-reset-ok\b")
 
+# Clock-divider recognition (mirrors sdc_gen._find_register_divided_clocks,
+# which recognises  always @(posedge clk) DIV <= ~DIV ).  A register that is
+# toggled (`reg <= ~reg`) by the counter's expiry path is a DIVIDED CLOCK, not
+# an autonomous TX event.  Likewise a 1-cycle tick (`tick <= 1'b1`) that only
+# *derives* such a divided clock is a clock-divider artifact.
+#
+# This is the false-fire we must exclude GENERALLY: a `_cnt` register whose
+# expiry path only toggles a clock-like reg or pulses a 1-cycle tick, and which
+# does NOT gate a TX / output-enable / packet-send event, is a clock divider,
+# not a periodic-TX wake/keepalive timer.
+TOGGLE_RE = re.compile(
+    r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*<=\s*~\s*\1\b",
+)
+# A 1-cycle tick assignment: `<reg> <= 1'b1;` / `<reg> <= 1;` / `<reg> <= 1'd1;`
+TICK_SET_RE = re.compile(
+    r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*<=\s*(?:1\s*'[bhdoBHDO]\s*1|1)\s*;",
+)
+
+# Names that denote a genuine TX / drive / send / output-enable event — if the
+# counter's expiry path gates ANY of these, it is a real periodic-TX timer and
+# we must NOT silence it.  chip-AGNOSTIC, name-shape based.
+TX_EVENT_NAME_RE = re.compile(
+    r"(tx|wake|keepalive|hb_|heartbeat|drive|send|"
+    r"_oe\b|oe_|output_en|out_en|_pulse\b|pulse_|req\b|_req|"
+    r"frame_start|sof\b|packet|presence|expired|expire)",
+    re.IGNORECASE,
+)
+
+
+def _reg_is_divided_clock(body: str, reg: str) -> bool:
+    """Return True when `reg` (the counter) is, structurally, the prescaler of
+    a register-divided clock — i.e. the counter's expiry path only toggles a
+    clock-like reg (`clk_reg <= ~clk_reg`) and/or pulses a 1-cycle tick that is
+    used to derive that divided clock, and does NOT gate a TX/output-enable/
+    packet-send event.
+
+    Mirrors sdc_gen._find_register_divided_clocks (which keys on the
+    `DIV <= ~DIV` toggle).  Structural & chip-AGNOSTIC.
+    """
+    # The block must contain a self-toggle `X <= ~X` (the divided clock).  No
+    # toggle anywhere in the block ⇒ not a clock divider.
+    toggles = [m.group(1) for m in TOGGLE_RE.finditer(body)
+               if m.group(1) != reg]
+    if not toggles:
+        return False
+
+    # Locate the counter's expiry branch: `if (<reg> == ...)`.  This is where
+    # a periodic timer would fire its event.  If we cannot find an explicit
+    # compare on `reg`, fall back to "the block contains a toggle" (a pure
+    # `DIV <= ~DIV` divider with no compare) — that is still a divider.
+    expiry_re = re.compile(
+        rf"\b{re.escape(reg)}\s*==", )
+    em = expiry_re.search(body)
+    if em is None:
+        # No `reg == N` compare; the only way `reg` matters is as the toggle
+        # prescaler.  Already proven a toggle exists ⇒ clock divider.
+        return True
+
+    # Slice the statement that the expiry compare guards.  We take the body
+    # from the matching `if (...)` through the next branch keyword / block end
+    # so we can inspect exactly what the expiry path does.
+    if_start = body.rfind("if", 0, em.start())
+    if if_start < 0:
+        if_start = em.start()
+    region = body[if_start:]
+    # Cut the region at the next `end else` / `else if` / trailing `end` so we
+    # examine only the expiry branch's assignments.  Rough but structural.
+    cut = len(region)
+    for kw in (r"\bend\s+else\b", r"\belse\s+if\b", r"\belse\b"):
+        m = re.search(kw, region[len(reg):])
+        if m:
+            cut = min(cut, len(reg) + m.start())
+    expiry_branch = region[:cut]
+
+    # Collect everything ASSIGNED (NBA) in the expiry branch.
+    assigned = set(
+        m.group(1)
+        for m in re.finditer(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*<=", expiry_branch)
+    )
+    # Names the expiry path drives, excluding the counter itself.
+    driven = {a for a in assigned if a != reg}
+
+    # If the expiry path gates a TX / output-enable / packet-send event, it is
+    # a REAL periodic-TX timer — do NOT treat as a clock divider.
+    for name in driven:
+        if TX_EVENT_NAME_RE.search(name):
+            return False
+
+    # Every driven signal must be either the clock-like toggle reg or a tick
+    # set to a 1-cycle pulse (clock-derivation artifact). If something else is
+    # driven that we can't classify as clock/tick, be conservative and do NOT
+    # silence.
+    toggle_set = set(toggles)
+    tick_set = set(m.group(1) for m in TICK_SET_RE.finditer(expiry_branch))
+    for name in driven:
+        if name in toggle_set:
+            continue
+        if name in tick_set:
+            continue
+        # Unknown driven signal in the expiry path ⇒ not a pure clock divider.
+        return False
+    # Expiry path only toggles a clock reg and/or pulses a derivation tick, and
+    # gates no TX event ⇒ this is a clock divider, not a periodic-TX timer.
+    return len(driven) > 0
+
 
 def _strip_comments_keep_silence(src: str) -> tuple[str, set[int]]:
     src_no_block = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
@@ -175,6 +280,58 @@ def _counter_has_rx_reset(body: str, reg: str) -> bool:
     return False
 
 
+def _counter_gates_tx_event(reg: str, body: str, file_src: str) -> bool:
+    """Return True only when `reg` actually GATES a TX / drive / send / wake /
+    keepalive / output-enable event — the necessary precondition for the
+    periodic-collision hazard this check guards against (module docstring:
+    'a periodic counter that fires autonomous TX events').
+
+    Without this, the check false-positives on every NBA-self-incremented
+    counter unrelated to a shared bus — a CPU's bit-serial operation-cycle
+    counter (SERV `o_cnt`), a generic loop/index counter, a datapath
+    accumulator. Those gate internal sequencing, not autonomous TX, so an
+    RX-reset on them is meaningless.
+
+    Two coupling shapes (chip-AGNOSTIC, name-shape based):
+      (1) the counter's EXPIRY branch (`if (reg == N)` / `reg >= N`) drives a
+          TX-event-named signal — the classic wake/keepalive expiry pulse. The
+          compare and the TX-drive are typically SEPARATE statements within the
+          same branch, so we slice the branch and scan its NBA targets.
+      (2) reg co-occurs with a TX-event name in a single expression (e.g. a
+          continuous assign `assign tx_send = (reg == N);`).
+    """
+    reg_re = re.escape(reg)
+
+    # (1) Expiry-branch drive: find `if (... reg <relop> N ...)` and inspect the
+    #     branch it guards for a TX-event-named NBA target.
+    for em in re.finditer(rf"\b{reg_re}\s*(?:==|>=|>|<=|<)\s*\w", body):
+        if_start = body.rfind("if", 0, em.start())
+        start = if_start if if_start >= 0 else em.start()
+        region = body[start:]
+        cut = len(region)
+        for kw in (r"\bend\s+else\b", r"\belse\s+if\b", r"\belse\b"):
+            m = re.search(kw, region[len(reg):])
+            if m:
+                cut = min(cut, len(reg) + m.start())
+        branch = region[:cut]
+        for am in re.finditer(r"\b([a-zA-Z_]\w*)\s*<=", branch):
+            tgt = am.group(1)
+            if tgt != reg and TX_EVENT_NAME_RE.search(tgt):
+                return True
+
+    # (2) Single-expression coupling anywhere in the module (continuous assign /
+    #     combinational gate of a TX-named signal by reg).
+    for stmt in re.split(r"[;\n]", file_src):
+        if not re.search(rf"\b{reg_re}\b", stmt):
+            continue
+        residual = re.sub(rf"\b{reg_re}\s*<=", "", stmt)  # drop reg's own NBA
+        residual = re.sub(rf"\b{reg_re}\b", "", residual)
+        if TX_EVENT_NAME_RE.search(residual) and ("==" in stmt or ">=" in stmt
+                                                  or "assign" in stmt):
+            return True
+    return False
+
+
 def check_file(path: Path) -> list[Finding]:
     raw = path.read_text(errors="replace")
     src, silence_lines = _strip_comments_keep_silence(raw)
@@ -193,6 +350,21 @@ def check_file(path: Path) -> list[Finding]:
             if inc_line in silence_lines:
                 continue
             if _counter_has_rx_reset(body, reg):
+                continue
+            # Exclude clock-divider counters generally: a counter whose expiry
+            # path only toggles a clock-like reg (`reg <= ~reg`) or pulses a
+            # 1-cycle derivation tick, and which gates no TX/output-enable/
+            # packet-send event, is a clock divider — not a periodic-TX
+            # wake/keepalive timer. (Mirrors sdc_gen._find_register_divided
+            # _clocks.)
+            if _reg_is_divided_clock(body, reg):
+                continue
+            # v0.2.55 — REQUIRE TX-coupling. The collision hazard only exists if
+            # the counter gates an autonomous TX/drive/send/wake/keepalive event
+            # on a shared bus. A counter that gates no TX event (CPU cycle
+            # counter, loop index, accumulator) is not a periodic-TX timer and
+            # must not be flagged. chip-AGNOSTIC: name-shape coupling only.
+            if not _counter_gates_tx_event(reg, body, src):
                 continue
             findings.append(Finding(
                 "WARN", "periodic_timer_no_rx_reset",

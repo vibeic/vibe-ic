@@ -1,7 +1,7 @@
 class: any-ic
 layer: L10
 # L10 TEST_CASES — deterministic CMD->RSP byte vectors used by
-# `cmd_response_conformance_check.py` (Phase 2b) to drive RTL via iverilog.
+# `cmd_response_conformance_check.py` (Phase 2) to drive RTL via iverilog.
 # Phase 1 collects the spec-implied set; Phase 2 may add discovered cases.
 # Path convention: L10.test_cases[i].{id, category, cmd_hex, expected_rsp_hex, notes}
 qbank:
