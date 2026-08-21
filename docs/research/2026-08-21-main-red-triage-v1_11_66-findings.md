@@ -2848,6 +2848,50 @@ REASONING about the reds was current. None asked whether the REDS were. **The
 freshest-looking part of a stale report is the part nobody thought to date.**
 
 
+## M48 — the flow-gate audit has TWO failure clauses. I recorded one. M29 is incomplete.
+
+The liveness sweep (M47) reached the flow-gate trio. All three are still red, and
+running the audit directly — the same move that settled the d3 parity gate —
+shows why my account of it has been incomplete since the beginning:
+
+```
+[FAIL] 1 NEW gate(s) declare an intent they are not wired for:
+   orphan::silent_decline_audit
+[FAIL] 2 NEW gate(s) are AUDIT_ONLY and declare no intent at all …:
+   undeclared::area_total_vs_budget_check
+   undeclared::tapeout_docs_gen
+```
+
+**Two clauses. I recorded the second and never the first.**
+
+**So M29's conclusion is incomplete.** M29 established — correctly — that
+`program_exit_zero` executes nowhere, so `ENFORCEMENT: advisory` contradicts
+nothing and is truthful for the two UNDECLARED gates. But it then said advisory
+*"closes all four today"*. **It does not.** It closes the second clause only.
+`orphan::silent_decline_audit` is the OTHER failing shape — a gate that
+**declares an intent it is not wired for** — and a declaration cannot fix it.
+That one needs WIRING, which is the very thing M29 struck out as unnecessary.
+
+**Someone acting on M29 would declare `advisory` on two gates, re-run, and still
+be red.** That is a worse outcome than the vague escalation it replaced, because
+it looks like a completed fix.
+
+**Corrected statement of the flow-gate item:**
+
+| clause | what fails | fix |
+|---|---|---|
+| undeclared × 2 | `area_total_vs_budget_check`, `tapeout_docs_gen` declare no `ENFORCEMENT` | one line each — `advisory` is truthful (M29) |
+| orphan × 1 | `silent_decline_audit` declares an intent nothing wires | **wiring**, or withdrawing the declaration |
+
+**Two different defects sharing one audit.** My "one defect in four places" framing
+grouped them because they print together — the same mistake as M43's flat ledger,
+where co-location in one output was read as a shared cause.
+
+**Third correction to this item** (M29 fixed the premise, this fixes the scope),
+and it exists only because M47's liveness sweep sent me back to a red I had
+already "explained".
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2931,7 +2975,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 
 | item | what is missing | kind |
 |---|---|---|
-| **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
+| **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **TWO clauses, see M48 — declaring `advisory` does NOT close it.** (a) `area_total_vs_budget_check` + `tapeout_docs_gen` declare no `ENFORCEMENT`: one line each, `advisory` truthful (M29). (b) `orphan::silent_decline_audit` **declares an intent nothing wires** — needs WIRING or withdrawal, which no declaration fixes. | **policy + a wiring job** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. **Fix the FIXTURE** so Step 4 has no vacuous members, making the waiver branch reachable. Owner's call. | **answered + a fix to avoid** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
