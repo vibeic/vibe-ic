@@ -65,6 +65,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports resolve however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import canonical_json as cj  # the ONLY serializer for anything hashed
 
 RC_OK = 0
@@ -677,10 +678,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="write claims.json here")
     ap.add_argument("--json", default=None, metavar="PATH",
                     help="write the machine-readable run record here")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     if not args.metrics:
-        ap.error("give a metrics file or directory")
+        return cli_exit.refuse(ap.prog, "give a metrics file or directory")
 
     rc, result = generate(Path(args.metrics))
 
