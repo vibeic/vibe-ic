@@ -429,6 +429,51 @@ def test_the_emitter_side_is_NOT_asked_the_same_question(tmp_path):
         + json.dumps(doc, indent=2))
 
 
+def test_the_gate_clears_phrases_on_SPELLING_not_on_the_argument():
+    """`phrases`' docstring claims the polarity gate clears it for a MECHANICAL
+    reason rather than for the argument written above that claim. A claim a
+    reader has to take on faith is the shape vibe-ic#712 exists to remove, so it
+    is checked here.
+
+    IF THIS GOES RED because the gate's predicate was widened, the fix is to
+    update that paragraph in `phrases` -- the clearance has stopped being
+    mechanical and the function now needs adjudicating on its merits. Do NOT
+    relax this test; its whole job is to make that moment visible."""
+    import ast
+    import sys
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import prose_polarity_consulted_check as G
+
+    fn = {n.name: n for n in ast.walk(ast.parse(PROG.read_text(encoding="utf-8")))
+          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}["phrases"]
+
+    assert G._searches_prose(fn), "phrases no longer reads prose at all"
+    assert G._match_derived_names(fn) == set(), (
+        "`m` now enters `derived` -- the for-target gap named in the docstring "
+        "has been closed")
+    assert G._writes_a_declared_value(fn) is False, (
+        "the gate now sees this write; the docstring's account of WHY it was "
+        "cleared is stale and must be rewritten, not this assertion")
+
+    # ... and it is only spelling: the record really is keyed AND filled by the
+    # match, which is the #706 shape written through `setdefault(...).add(...)`.
+    writes = [n for n in ast.walk(fn)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+              and n.func.attr == "add"
+              and isinstance(n.func.value, ast.Call)
+              and isinstance(n.func.value.func, ast.Attribute)
+              and n.func.value.func.attr == "setdefault"]
+    assert len(writes) == 1, f"expected one setdefault(...).add(...): {writes}"
+    groups = sorted({sub.args[0].value for sub in ast.walk(writes[0])
+                     if isinstance(sub, ast.Call)
+                     and isinstance(sub.func, ast.Attribute)
+                     and sub.func.attr == "group"
+                     and sub.args and isinstance(sub.args[0], ast.Constant)})
+    assert groups == [1, 2], (
+        "the key and the value no longer both come out of the match, so the "
+        f"docstring's 'only spelling' account no longer holds: {groups}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

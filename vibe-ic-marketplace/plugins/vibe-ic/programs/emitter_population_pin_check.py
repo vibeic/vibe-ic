@@ -227,6 +227,34 @@ def phrases(text: str) -> Dict[str, Set[Tuple[str, int]]]:
     `of 3 repairs refused`; suppressing it because the same message also says
     "no" would refuse a correct test -- the same false refusal `pins` exists to
     stop, pointed the other way.
+
+    AND THE POLARITY GATE CLEARS THIS FUNCTION FOR A MECHANICAL REASON, NOT FOR
+    THAT ARGUMENT. Recorded here because the two are easily confused and the
+    argument is the load-bearing one. `prose_polarity_consulted_check` asks
+    `_searches_prose and _writes_a_declared_value`; the second half returns
+    False here for two reasons that are both about SPELLING:
+
+      * `m` is bound by a `for` TARGET, and `_match_derived_names` walks only
+        `ast.Assign`, so the match never enters `derived` and the predicate
+        returns False before it looks at any write at all; and
+      * the write is `out.setdefault(KEY, set()).add(VALUE)`, and the predicate
+        reads `setdefault`'s DEFAULT (`args[1:]`) but neither its key nor the
+        value pushed into the container it returns.
+
+    MEASURED over this tree, by widening each in turn: the first alone reveals
+    35 further polarity-blind extractors, the second alone 35, and both together
+    80 (224 -> 304 findings). Only with BOTH closed does the scan reach this
+    function. So the clearance is an artefact of how the write is spelled, and
+    a reader must not take it as the gate having agreed with the paragraph
+    above.
+
+    IF THAT PREDICATE IS EVER WIDENED, this function will be flagged and NEITHER
+    of the gate's two registers fits it. `_NOT_PROSE` is for input in a formal
+    grammar with no negation form, and this is real English. The baseline is a
+    debt register of extractors that SHOULD consult polarity and do not, and
+    this one measurably should not. The honest resolution at that point is a
+    third answer -- "reads prose, and correctly does not honour a denial" -- not
+    a stretched entry in either.
     """
     out: Dict[str, Set[Tuple[str, int]]] = {}
     for lineno, _, value in _emitted_strings(text):
