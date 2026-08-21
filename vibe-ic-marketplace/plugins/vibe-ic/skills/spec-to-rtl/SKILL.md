@@ -504,13 +504,17 @@ waveform-only prompt does not supply).
 
 ## Behavioral-prose Moore FSM — extract the table, let the PROGRAM emit (2026-06-23)
 
-A FSM whose states + transitions are stated in NARRATIVE PROSE (Lemmings "if bumped
-on the left it walks right; if it falls for >20 cycles it splatters"; a PS/2 byte-
-boundary search; a sliding-window counter; a multi-phase controller) is the case
-where reading prose → structure genuinely needs a language model — no deterministic
-parser extracts it (so `spec_artifact_registry.generate()` correctly SKIPs it). But
-once the structure is a COMPLETE enumerated table, emitting correct RTL is a pure
-formula. So DO NOT hand-author the always-blocks — split the work:
+Most FSMs whose states + transitions are stated in NARRATIVE PROSE (Lemmings with
+dig/splat/counter precedence; a PS/2 byte-boundary search; a sliding-window counter;
+a multi-phase controller) still need a language model to read prose into structure.
+One strict basic carve-out is already program-solved: when a directional bump+fall
+walker explicitly states both direction mappings, both-side behavior, fall/resume
+memory, all three bump/fall boundary priorities, Moore outputs, reset, and clock
+edge, `behavioral_fsm_synth.py` parses those facts into a complete four-state table
+and the registry emits it. Missing any fact or adding dig/splat/timer behavior is a
+safe SKIP. For every remaining narrative shape, once the AI extracts a COMPLETE
+enumerated table, emitting correct RTL is a pure formula. So DO NOT hand-author the
+always-blocks — split the work:
 
 1. **You (AI) extract the COMPLETE canonical Moore-FSM table from the prose** — every
    state, every Moore output per state, the reset (state + sync/async + level), and

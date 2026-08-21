@@ -112,6 +112,122 @@ def test_self_reported_skip_becomes_step_skip(tmp_path):
     assert "no formal proof tool" in " ".join(r.reasons)
 
 
+# ── #433(c) continued: the self-reported FAIL channel ─────────────────────
+#
+# The SKIPPED-CONDITION test above and these tests read the SAME field of the
+# SAME already-parsed document. Until 2026-08-19 only one value of that field
+# was acted on, so a declared output whose own verdict said the run FAILED was
+# opened, parsed, read, and reported green.
+#
+# MEASURED (63x9 matrix, dimension 8): over the 16 steps whose REAL gate
+# reaches a PASS tier on a synthesized tree, rewriting every declared JSON
+# output to self-report SKIPPED-CONDITION moved 3 verdicts (every step that
+# reaches a plain PASS); rewriting the same files, at the same field, to
+# self-report FAIL moved 0 of 16.
+
+def test_self_reported_fail_verdict_fails_the_step(tmp_path):
+    """PRESENT, PARSEABLE, WELL-FORMED, AND WRONG — and the step goes red.
+
+    This is the whole point: nothing is missing, nothing is 0 bytes, nothing
+    is stub-tagged, no pointer dangles. The artefact is a perfectly good JSON
+    document that says the run failed.
+    """
+    _mk(tmp_path, "reports/x.json", json.dumps({
+        "verdict": "FAIL", "violations": 3,
+        "tool": "checker-1.0", "reason": "3 conclusive violations"}))
+    r = F.check_step(tmp_path, _step(), waivers={})
+    assert r.status == "FAIL", r
+    joined = " ".join(r.reasons)
+    assert "VERDICT_SELF_REPORTS_FAIL" in joined, joined
+    # The reason must NAME the artefact and the value, or a reader cannot tell
+    # this FAIL from any other FAIL.
+    assert "reports/x.json" in joined and "FAIL" in joined, joined
+
+
+def test_self_reported_fail_is_recognised_case_and_separator_insensitively(tmp_path):
+    """The same normalisation the SKIPPED-CONDITION branch already applies."""
+    for value in ("fail", "Failed", "FAILURE", "failed"):
+        proj = tmp_path / value
+        _mk(proj, "reports/x.json", json.dumps({"verdict": value}))
+        r = F.check_step(proj, _step(), waivers={})
+        assert r.status == "FAIL", (value, r)
+
+
+def test_a_passing_verdict_artifact_is_untouched(tmp_path):
+    """NEGATIVE CONTROL — the rule must not fire on a healthy artefact.
+
+    Same file, same field, same shape as the test above; only the value
+    differs. Without this the FAIL test could be satisfied by a rule that
+    fails every step with a verdict key.
+    """
+    _mk(tmp_path, "reports/x.json", json.dumps({
+        "verdict": "PASS", "violations": 0, "tool": "checker-1.0"}))
+    r = F.check_step(tmp_path, _step(), waivers={})
+    assert r.status == "PASS", r
+    assert "VERDICT_SELF_REPORTS_FAIL" not in " ".join(r.reasons)
+
+
+def test_the_fail_vocabulary_is_narrow_and_says_so(tmp_path):
+    """A verdict this rule does not claim to understand must NOT be read as a
+    failure. `_SELF_FAIL_VERDICTS` is deliberately three values; a verdict
+    outside it leaves the step exactly where the gate put it."""
+    assert F._SELF_FAIL_VERDICTS == frozenset({"FAIL", "FAILED", "FAILURE"}), \
+        F._SELF_FAIL_VERDICTS
+    for value in ("UNKNOWN", "PARTIAL", "ERROR", "PASS_WITH_WAIVERS"):
+        proj = tmp_path / value
+        _mk(proj, "reports/x.json", json.dumps({"verdict": value}))
+        r = F.check_step(proj, _step(), waivers={})
+        assert r.status == "PASS", (value, r)
+
+
+def test_a_recorded_failure_is_not_deferrable_by_another_artefacts_stub_tag(tmp_path):
+    """PRECEDENCE. One declared output self-reports FAIL, a second is
+    stub-tagged. Stub-backed evidence downgrades to WAIVED — a DEFERRAL — and
+    a deferral must not absorb a failure the run actually recorded."""
+    _mk(tmp_path, "reports/x.json", json.dumps({"verdict": "FAIL"}))
+    _mk(tmp_path, "reports/y.json", json.dumps({
+        "verdict": "PASS", "extraction_strategy": "deterministic_stub"}))
+    r = F.check_step(tmp_path, _step(outputs=["reports/x.json", "reports/y.json"]),
+                     waivers={})
+    assert r.status == "FAIL", r
+    assert "VERDICT_SELF_REPORTS_FAIL" in " ".join(r.reasons)
+
+
+def test_a_zero_byte_artefact_still_reports_evidence_missing_alongside(tmp_path):
+    """The pre-existing EVIDENCE_MISSING reason is not swallowed.
+
+    Both buckets resolve to FAIL, so both reasons are recorded. An `elif`
+    here would have silently dropped one of the two while the status stayed
+    identical — the failure mode this repo calls a silent decline.
+    """
+    _mk(tmp_path, "reports/x.json", json.dumps({"verdict": "FAIL"}))
+    _mk(tmp_path, "reports/y.json", "")
+    r = F.check_step(tmp_path, _step(outputs=["reports/x.json", "reports/y.json"]),
+                     waivers={})
+    assert r.status == "FAIL", r
+    joined = " ".join(r.reasons)
+    assert "VERDICT_SELF_REPORTS_FAIL" in joined, joined
+    assert "EVIDENCE_MISSING" in joined, joined
+
+
+def test_the_rule_only_ever_demotes_a_plain_pass(tmp_path):
+    """BLAST-RADIUS BOUND, asserted rather than claimed.
+
+    `_evidence_integrity_scan` returns untouched unless the status is a plain
+    PASS, so the rule cannot create, promote or waive a verdict. Pinned here
+    because the scan is now the flow's only content-driven FAIL and the bound
+    is what makes it safe to enable everywhere.
+    """
+    for start in ("FAIL", "MISSING", "WAIVED", "SKIPPED-CONDITION",
+                  "VACUOUS_PASS", "DEFERRED-BY-UPSTREAM"):
+        _mk(tmp_path, "reports/x.json", json.dumps({"verdict": "FAIL"}))
+        res = F.StepResult(id=21, name="s", stage="stage3", status=start,
+                           reasons=[], evidence=["reports/x.json"])
+        out = F._evidence_integrity_scan(tmp_path, res)
+        assert out.status == start, (start, out.status)
+        assert not out.reasons, (start, out.reasons)
+
+
 # ── #433(a)/(c): phase2 manifest emitter shapes (source pins) ──────────────
 
 def test_formal_manifest_never_copies_tb_results():

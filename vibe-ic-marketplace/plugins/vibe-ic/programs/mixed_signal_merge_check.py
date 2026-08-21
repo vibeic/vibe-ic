@@ -30,6 +30,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 def _load_waivers(project):
@@ -152,7 +153,7 @@ def main(argv=None):
     if args.json:
         out_path = Path(args.json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out_path, json.dumps(out, indent=2, ensure_ascii=False) + "\n")
     print(f"=== {_GATE_NAME} ({project.name}) ===")
     print(f"  verdict: {verdict}")
     if missing:
