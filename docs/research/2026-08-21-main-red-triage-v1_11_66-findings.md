@@ -3147,6 +3147,39 @@ fifty sections finding in the landing guard**, and the hygiene suite has been
 reporting it by name the whole time.
 
 
+## M54 — the liar-census pin: do NOT bump it. The file already says why, and says it better.
+
+M53 measured this red as a stale pin (181 declared vs 179 pinned, `unswept: []`).
+The obvious fix is to change 179 to 181. **Reading the literal's own comment
+first — which is the lesson of M46 — shows that would be the FIFTH time someone
+did that:**
+
+> **THIRD TIME THIS LITERAL HAS LAGGED THE FLOW (169→170, 170→175, 175→178).**
+> A hand-maintained number that must be remembered by an author who is editing a
+> different file is **prose wearing an assertion**, and this file cannot fix that
+> alone: making the detector derive its floor from the PREVIOUS flow blob would
+> catch every shrink with nothing to remember, but it would also leave a
+> DELIBERATE shrink no way to be authorised. **That is a call for the flow's
+> owner, so it is written down here rather than taken.**
+
+With tonight's 179→181 that is the **fourth lag and the fifth bump**. Every
+previous author treated the symptom; the last one stopped, diagnosed it, and
+deferred the cure to the person who can authorise a shrink.
+
+**So the red is neither a coverage gap nor a defect to fix here.** It is a
+recurring maintenance cost with a known cure that requires an owner's decision:
+derive the floor from the previous flow blob, and accept that a deliberate shrink
+then needs an explicit authorisation path.
+
+**"Prose wearing an assertion"** belongs beside *"a green cell with no reachable
+red is a certificate, not a measurement"*. Both are this repository describing,
+in its own artefacts, the exact class of defect I was sent to find. **Twice
+tonight the best sentence available was already written inside a red I had
+recorded as a label.**
+
+**Not bumped. Not baselined. Recorded.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3237,6 +3270,9 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — an acquisition, not engineering.** | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | the ratios this document claims to record and does not (M36). Deliberately not re-measured — load-sensitive, shared host. | **an honest gap** |
+| **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. | **wiring decision** |
+| **`declaration scans strip comments`** | 5 declaration regexes scanning text no stripper touched (M49). Not investigated further. | **unexamined** |
+| **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
 
 ## D. Corrections to my own earlier reports — the complete list
 
