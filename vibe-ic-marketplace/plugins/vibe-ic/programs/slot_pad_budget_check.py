@@ -342,6 +342,15 @@ _PORT_INIT_RE = re.compile(r"=\s*[^=].*$", re.S)
 #: the name, and unlike a packed range they MULTIPLY the port's bit count.
 _UNPACKED_RE = re.compile(r"((?:\s*\[[^\]]*\])+)\s*$")
 _DIM_RE = re.compile(r"\[([^\]]*)\]")
+#: A packed range written with NO SPACE around it -- `output reg [3:0]one`, or
+#: `input wire[7:0]bus` with the type glued on too. Both legal.
+#: Legal Verilog, and the range then arrives glued to the identifier as one
+#: token, so a last-token read returns `[3:0]one` as the port's name. The WIDTH
+#: is unaffected (the range reader searches, it does not tokenise); this is a
+#: name-only defect, and a wrong name mis-fires the clk/rst exclusion and the
+#: fold-candidate match, both of which key on it. Measured on 4 real ports.
+_GLUED_NAME_RE = re.compile(
+    r"^(?:[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)?(?:\[[^\]]*\])+([A-Za-z_]\w*)$")
 
 
 def split_port_tail(tail: str) -> Tuple[str, List[str]]:
@@ -530,6 +539,9 @@ def parse_top_ports(text: str, top: str,
         if not toks:
             continue
         name = toks[-1].strip(";,")
+        glued = _GLUED_NAME_RE.match(name)
+        if glued:
+            name = glued.group(1)
         width = _width(head, params)
         if unpacked:
             n = unpacked_count(unpacked, params)

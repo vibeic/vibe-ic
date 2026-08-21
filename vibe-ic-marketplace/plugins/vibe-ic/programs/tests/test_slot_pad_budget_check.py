@@ -702,3 +702,52 @@ def test_the_undercount_would_have_been_a_FALSE_FITS():
     ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
     bits = S.interface_budget(ports)["signal_bits"]
     assert bits == 34 * 4 + 64 + 1        # clk rides a dedicated pad
+
+
+# --------------------------------------------------------------------------- #
+# a packed range with no whitespace around it  (the third and fourth shapes)
+# --------------------------------------------------------------------------- #
+# `output reg [3:0]one` and `input wire[7:0]bus` are both legal: whitespace
+# around a packed range is optional. The range then arrives glued to the
+# identifier as ONE token, so a last-token read returns `[3:0]one` as the name.
+#
+# The WIDTH is unaffected — the range reader searches rather than tokenising —
+# so this is a name-only defect. It still matters: the clk/rst exclusion and
+# the fold-candidate match both key on the NAME, so a glued clock would be
+# counted against the signal budget instead of riding its dedicated pad.
+#
+# Four real ports in the published corpus carried it. Measured after the fix:
+# malformed names 174 -> 0, and zero widths moved.
+
+def test_a_packed_range_glued_to_the_name_still_yields_the_name():
+    """Verbatim shape from the corpus."""
+    rtl = ("module Binary2BCD(input [7:0] num, output reg [3:0]thousand,\n"
+           "  output reg [3:0]hundred, output reg [3:0]ten, output reg [3:0]one);\n"
+           "endmodule\n")
+    ports = S.parse_top_ports(rtl, "Binary2BCD")
+    assert [p["name"] for p in ports] == ["num", "thousand", "hundred", "ten", "one"]
+    assert all(p["width"] == 4 for p in ports if p["name"] != "num")
+
+
+def test_a_type_glued_to_the_range_too_still_yields_the_name():
+    rtl = "module chip_top(input wire[7:0]bus, output wire done);\nendmodule\n"
+    assert [(p["name"], p["width"]) for p in S.parse_top_ports(rtl, "chip_top")] \
+        == [("bus", 8), ("done", 1)]
+
+
+def test_a_glued_clock_still_rides_its_dedicated_pad():
+    """The reason a name-only defect is not cosmetic: `_CLK_RST_RE` matches on
+    the NAME, so a mis-named clock is charged to the signal budget."""
+    rtl = "module chip_top(input wire[0:0]clk_i, output wire done);\nendmodule\n"
+    b = S.interface_budget(S.parse_top_ports(rtl, "chip_top"))
+    assert b["on_dedicated_pads"] == ["clk_i"]
+    assert b["signal_bits"] == 1          # `done` only
+
+
+def test_ordinary_spacing_and_qualified_types_are_untouched():
+    """The regression guard for the glued-name rule: it must fire only when a
+    bracket group actually precedes the identifier."""
+    rtl = ("module chip_top(input wire [7:0] bus, input pkg::cfg_t c,\n"
+           "  output wire done);\nendmodule\n")
+    assert [(p["name"], p["width"]) for p in S.parse_top_ports(rtl, "chip_top")] \
+        == [("bus", 8), ("c", 1), ("done", 1)]
