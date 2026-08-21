@@ -18,6 +18,7 @@ match to avoid '8' silently matching '88').
 import importlib
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -85,8 +86,10 @@ def test_value_mismatch_drops_on_real_amba_axi(tmp_path):
     """Re-run l_doc_parity_diff with R20 on the real AMBA AXI generated_docs
     and confirm VALUE_MISMATCH is materially lower than the v0.1.65 baseline
     of 52 (most were partial-match cases)."""
-    arm_prog = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
-    arm_agnt = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/claude_extracted")
+    arm_prog = require_repo("benchmark-data/evaluation/phase1_parity/"
+                            "arm_aix/phase1/generated_docs")
+    arm_agnt = require_repo("benchmark-data/evaluation/phase1_parity/"
+                            "arm_aix/phase1/claude_extracted")
     if not arm_prog.is_dir() or not arm_agnt.is_dir():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")

@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "package": "tools/ci",
+  "role": "The landing authority: the scripts and programs that decide whether a change may reach main.",
+  "invariants": [
+    {
+      "id": "ci.no-bypass-flag-in-a-gate-command",
+      "statement": "No script in this package may invoke git or gh with a gate-bypass flag (--no-verify, --admin, --force).",
+      "why": "This package IS the gate. A bypass flag used from inside it does not skip a check for one commit, it removes the check for everyone, silently and permanently. Documenting the flag is fine and stays legal; running it is not, which is why the pattern matches a command position and not a mention.",
+      "rule": {
+        "kind": "forbid_regex",
+        "include": [
+          "*.sh",
+          "*.py"
+        ],
+        "exclude": [
+          "test_*.py",
+          "test_*.sh"
+        ],
+        "regex": "(^|[;&|(]|\\$\\()[ \\t]*(git|gh)[ \\t][^\\n]*(--no-verify|--admin|--force)",
+        "flags": [
+          "MULTILINE"
+        ]
+      },
+      "counterexample": [
+        {
+          "path": "land_it.sh",
+          "proves": "--force is caught",
+          "content": "#!/bin/bash\nset -e\ngit push --force origin main\n"
+        },
+        {
+          "path": "land_it.sh",
+          "proves": "--no-verify is caught",
+          "content": "#!/bin/bash\ngit commit --no-verify -m skip\n"
+        },
+        {
+          "path": "land_it.sh",
+          "proves": "--admin is caught, including behind a pipe",
+          "content": "#!/bin/bash\necho y | gh pr merge 1 --admin --squash\n"
+        }
+      ]
+    },
+    {
+      "id": "ci.every-gate-module-states-its-contract",
+      "statement": "Every non-test Python module in this package opens with a module docstring.",
+      "why": "A gate whose contract is not written at the top of the file gets re-derived from its code by the next reader, and re-derived wrong. Every module here already carries one; the rule keeps that from eroding one hurried file at a time.",
+      "rule": {
+        "kind": "require_regex",
+        "include": [
+          "*.py"
+        ],
+        "exclude": [
+          "test_*.py"
+        ],
+        "regex": "\\A(?:#![^\\n]*\\n)?(?:[ \\t]*(?:#[^\\n]*)?\\n)*(?:\"\"\"|''')"
+      },
+      "counterexample": {
+        "path": "silent_gate.py",
+        "content": "import sys\n\n\ndef main():\n    return 0\n"
+      }
+    }
+  ]
+}

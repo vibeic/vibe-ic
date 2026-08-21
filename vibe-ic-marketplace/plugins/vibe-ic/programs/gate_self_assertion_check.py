@@ -64,8 +64,12 @@ def _collect_predicates(gate) -> tuple[list, bool]:
                     jft.append(v)
                 elif k == "program_exit_zero":
                     has_pez = True
-                elif k in ("optional_program_exit_zero",):
-                    # optional gate is NOT a real backing checker
+                elif k in ("optional_program_exit_zero",
+                           "advisory_program_exit_zero"):
+                    # Neither is a real backing checker: `optional` may never
+                    # run, and `advisory` (#306) runs but cannot fail the step.
+                    # A json_field_true that trusts an artifact's own PASS
+                    # still needs a BLOCKING program behind it.
                     pass
                 else:
                     rec(v)
@@ -116,11 +120,27 @@ def main(argv=None) -> int:
     ap.add_argument("--json", default=None)
     a = ap.parse_args(argv)
 
+    # Accept a flow YAML path OR a PLUGIN DIRECTORY. `plugin_full_audit`
+    # invokes this guard as `[python, gate_self_assertion_check.py, <plugin>]`,
+    # and until vibe-ic#220 the directory form fell through to `Path(<plugin>)`,
+    # which is not a file — so the guard exited 2 on EVERY audit run while
+    # audit_d2 recorded a finding only on exit 1. The anti-fabrication guard was
+    # therefore inert in the full audit, silently, for the same reason this
+    # issue is about: a not-run result read as a clean one.
+    _default = Path(__file__).resolve().parent.parent / "flow" / \
+        "phase1_phase2_phase3.yaml"
     if a.flow_yaml:
         flow = Path(a.flow_yaml)
+        if flow.is_dir():
+            cand = flow / "flow" / "phase1_phase2_phase3.yaml"
+            if not cand.is_file():
+                for sub in flow.glob(
+                        "plugins/*/flow/phase1_phase2_phase3.yaml"):
+                    cand = sub
+                    break
+            flow = cand
     else:
-        flow = Path(__file__).resolve().parent.parent / "flow" / \
-            "phase1_phase2_phase3.yaml"
+        flow = _default
 
     if not flow.is_file():
         print(f"SKIP: flow YAML not found at {flow}", file=sys.stderr)
