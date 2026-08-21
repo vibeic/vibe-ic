@@ -222,6 +222,22 @@ touches the probe directory. **RED before, GREEN after**, and the green is
 earned: it is stronger than what it replaces, because a marker proved an arm
 STARTED and a record proves it COMPLETED.
 
+**Full-file A/B on the host lane, by test ID:**
+
+```
+before   10 failed, 124 passed
+after     9 failed, 125 passed      134 collected, unchanged
+newly red: none
+```
+
+One precision, because my own diff tool conflated two things: the ID list shows
+the OLD name as "now green", but it is not green — it no longer exists, because I
+renamed it. The honest reading is *old ID absent (renamed), new ID passing, total
+collected unchanged at 134*, which together prove no test was dropped by the
+rename. A set-difference over test IDs cannot tell "renamed" from "fixed" and
+will happily report the first as the second — worth knowing before anyone uses
+that diff on a rename again.
+
 **The assertions discriminate** — this is not a green that cannot fail.
 `base_total == 0` is an explicitly guarded and disclosed condition
 (`landing_merge_verdict.py:121`, `:848`), and `base_land is None` is a real
