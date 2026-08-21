@@ -29,7 +29,7 @@ is what surfaced them.
 | 1-6 | `d3_outputs_produced::test_d3_required_outputs_are_produced[15,17,19,20,30,32]` | NOT_MEASURED (evidence) | VERIFIED absent, see below. Owned by `jfindings-63x8` |
 | 7-9 | `matrix_mutation_ledger` — `[0.5ic]`, `[1.6x]`, `coverage_is_complete` | NOT_MEASURED | reason recorded below; closes with the fourth-state ruling |
 | 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | **REAL FINDING — FIXED** | thin margin (2.1x); killed BETWEEN collections, not at startup — see below |
-| 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED (quiet host) | PASSES at load 3.45. It is also the test that PINS the fail-closed-fast choice — see 10, 11, 13 below |
+| 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED — 1 observation, 0 reproductions | never reproduced in 8 attempts incl. load 48.5; it is also the test that PINS fail-closed-fast — see below |
 | 12 | `63x8_coverage::..._nested_outcome_run_outlives_old_fixed_bound...` | **REAL FINDING — FIXED** | zero margin by construction; fixed + negative control added |
 | 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED — cause NAMED | one d3 item is 18.95 s against a 60 s window; no intra-item heartbeat exists — see below |
 | 14 | `63x8_coverage::test_every_na_cell_asserts_a_live_precondition` | REAL FINDING | already fixed on `jfindings-63x8`'s branch; not duplicated |
@@ -227,7 +227,44 @@ a contended one; that is the relaxation this campaign exists to refuse. Red 13
 stays open, but it is now a named mechanism with numbers rather than a shrug at
 the machine.
 
-## 11 — the host, proved rather than asserted
+## 11 — one observation, never reproduced, and I should not have said "proved"
+
+Red 10 and red 13 both turned out to have causes their own text named while I
+had classified them from behaviour. Red 11 got the same audit, and the result is
+different again: **it does not reproduce at all.**
+
+```
+full-file run, load 3.45                      green
+3 concurrent full-file runs, load 53.18       green x3
+isolated, load 8.79  (24 CPU spinners)        green
+isolated, load 48.52 (80 CPU spinners) x3     green x3
+```
+
+Eight attempts after the original, zero reproductions — and CPU load alone does
+not do it. Whatever produced the single observed failure needed the specific
+process/fork contention of this file's own nested pytest runs, not a busy CPU.
+
+So the honest statement is **one observation, no reproduction**, not "proved to
+be the host". An earlier revision of this file used the word "proved" for reds
+10, 11 and 13 together; that word was earned for none of them, and two turned
+out not to be the host at all.
+
+**What does NOT depend on any of this** is the pinning argument that red 11
+carries, because that rests on the test's assertions, which are read directly
+rather than inferred from a failure:
+
+```
+assert elapsed < 3          # the kill must BEAT the impostor
+assert "WATCHDOG_STALLED:" in message
+assert "COLLECT_CHATTER"  in message
+```
+
+Those three lines pin fail-closed-fast whether or not the test ever goes red
+again, and they are why a startup grace cannot simply be added. That argument
+stands; the classification of the red beneath it is now stated at the strength
+the evidence actually supports.
+
+
 
 All three pass without any change to the repository once the box is not being
 saturated by this file's own nested pytest children: 10 and 11 in the full-file
