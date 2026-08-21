@@ -575,6 +575,36 @@ def evaluate(slots: Dict[str, Dict[str, Any]], ports: List[Dict[str, Any]]
     }
 
 
+#: Where the flow's own step 1 writes the RTL this gate reads. Declared here
+#: rather than in the gate clause on purpose -- see `_discover_rtl`.
+_RTL_DIR_REL = ("phase2", "stage1", "rtl")
+
+
+def _discover_rtl(project: str) -> List[str]:
+    """The step-1 RTL of `project`, when the caller named no `--rtl`.
+
+    WHY THE PROGRAM GLOBS AND NOT THE GATE CLAUSE (vibe-ic#1347)
+    -----------------------------------------------------------
+    The obvious wiring is `--rtl phase2/stage1/rtl/*.v` in the flow clause.
+    It is a trap. `flow_compliance_check._resolve_program_cmd` expands globs
+    in a clause into SEPARATE argv tokens, `--rtl` consumes exactly one, and
+    every remaining file arrives as an extra positional. argparse rejects
+    that with **exit 2** -- and exit 2 is this flow's VACUOUS_PASS tier. The
+    gate would report a disclosed skip on every multi-file design, forever,
+    and the skip would look like the ordinary "no slots ingested" one.
+
+    So the clause carries no glob and the expansion happens here, where a
+    directory that does not exist is an ANSWER (`[]` -> rc 2 UNDECIDED with a
+    reason naming the directory) rather than a usage error wearing the same
+    exit code as a skip.
+    """
+    d = os.path.join(project, *_RTL_DIR_REL)
+    if not os.path.isdir(d):
+        return []
+    return [os.path.join(d, fn) for fn in sorted(os.listdir(d))
+            if fn.lower().endswith((".v", ".sv"))]
+
+
 def _load_slots(project: str) -> Dict[str, Dict[str, Any]]:
     d = os.path.join(project, "input", "submission_template", "slots")
     out: Dict[str, Dict[str, Any]] = {}
@@ -628,8 +658,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 2
 
     slots = _load_slots(a.project)
+    # An explicit --rtl always wins; discovery is the fallback the flow uses.
+    rtl_files = list(a.rtl) or _discover_rtl(a.project)
     ports: Optional[List[Dict[str, Any]]] = None
-    for f in a.rtl:
+    for f in rtl_files:
         try:
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 ports = parse_top_ports(fh.read(), a.top, params)
@@ -641,7 +673,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not slots or not ports:
         why = ("no slot files under input/submission_template/slots — step "
                "0.5ic has not run" if not slots else
-               f"top module '{a.top}' not found in {a.rtl or '(no --rtl given)'}")
+               f"top module '{a.top}' not found in "
+               f"{rtl_files or '(no --rtl given and no RTL under ' + os.path.join(*_RTL_DIR_REL) + ')'}")
         rep = {"check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
                "reason": why,
                "note": "a question that could not be asked has not passed"}
