@@ -151,4 +151,5 @@ every transferred file and then reading one back through the pushed ref.
 
 Those rows belong to `jharvest-triage` and `jharv2`. I have not edited their
 verdict files. The measurement, the rescue and what the owners should change are
-in `FALSE_LANDED_shards_a_b.md`.
+in `FALSE_LANDED_shards_a_b.md`. All four are shard A rows; shard B came through
+clean.

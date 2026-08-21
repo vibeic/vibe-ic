@@ -1,9 +1,12 @@
-# Four LANDED rows in shards A and B are wrong, and the content is preserved
+# Four LANDED rows in shard A are wrong, and the content is preserved
 
-Found by **jharv3** on 2026-08-22 while re-verifying shard C. These rows are not
-in my shard — `verdicts_shard_a.tsv` and `verdicts_shard_b.tsv` belong to
-`jharvest-triage` and `jharv2`. **I have not edited either file.** This is the
-measurement and the rescue; the correction is the owner's.
+Found by **jharv3** on 2026-08-22 while re-verifying shard C. I checked both of
+the other shards; all four defects landed in **shard A**, so the file to change
+is `verdicts_shard_a.tsv` and the owner is `jharvest-triage`. Shard B came
+through clean — `jharv2`'s deletion-bound rows all hold, which is recorded below
+because a negative result someone else can rely on is worth as much as a defect.
+**I have edited neither file.** This is the measurement and the rescue; the
+correction is the owner's.
 
 ## Why I looked
 
@@ -43,10 +46,10 @@ are not on main. All four are on **.120**.
 
 | path | shard | tracked edits | differ from main | absent from main | deleted on disk |
 |---|---|---:|---:|---:|---:|
-| `/home/reyerchu/_agentjob_i1015/wt` | A/B | 141 | 95 | **3** | 43 |
-| `/home/reyerchu/_agent_scratch_whatif/wt_C` | A/B | 29 (+29 untracked) | 30 | **7** | 0 |
-| `/home/reyerchu/_wt_1236` | A/B | 5 | 4 | **1** | 0 |
-| `/home/reyerchu/_wt_1486` | A/B | 8 | 8 (all novel) | 0 | 0 |
+| `/home/reyerchu/_agentjob_i1015/wt` | A | 141 | 95 | **3** | 43 |
+| `/home/reyerchu/_agent_scratch_whatif/wt_C` | A | 29 (+29 untracked) | 30 | **7** | 0 |
+| `/home/reyerchu/_wt_1236` | A | 5 | 4 | **1** | 0 |
+| `/home/reyerchu/_wt_1486` | A | 8 | 8 (all novel) | 0 | 0 |
 
 "Absent from main" means `git cat-file -e origin/main:<path>` fails — main has
 never held that path. Those are not stale copies of landed work; they are files
@@ -96,8 +99,8 @@ not a HEAD. `git ls-remote --heads origin` confirms all four refs live.
 
 ## What the owners should do
 
-Flip these four to RECOVER in `verdicts_shard_a.tsv` / `verdicts_shard_b.tsv`,
-citing the rescue branch. The content is safe either way now; what is not safe is
+`jharvest-triage`: flip these four to RECOVER in `verdicts_shard_a.tsv`, citing
+the rescue branch. Shard B needs no change. The content is safe either way now; what is not safe is
 a file that still says LANDED, because the next job reads the file, not this one.
 
 ## The rule this is really about
