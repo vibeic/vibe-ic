@@ -822,18 +822,25 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           is that answer. The recomputation also says, as a by-product, that
 #:           no other member had gone stale in the meantime.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
+    # 2026-08-21: 26 -> 27 members. Step 1.6x JOINED — `7fcbc7397` added it with
+    # exactly one required_output (`reports/crosslayer/rewrite_equivalence
+    # _check.json`), which is what this population means. 37.5ic and 37.5self
+    # are still out of it for the reasons below; nothing else moved.
+    #
+    # RE-DERIVED, not appended: this tuple is exactly what
+    # `[k for k in step_ids() if len(required_outputs(k)) < 2]` answers on this
+    # tree, in flow order. The file's own note says why that matters — a
+    # hand-edited tuple is how v1.10.38 shipped a 28-entry pin over a 27-step
+    # population.
+    #
     # 2026-08-20: 26 members. Step 37.5ic LEFT this population when 69ce9260d
     # made the release documents an output of it (1 entry -> 3) and is further
     # out of it now (5 entries); step 37.5self JOINED at v1.11.4 with one output
     # and LEFT with the step itself when the general precheck became 37.5ic's
-    # second ARM. The tuple below is exactly what
-    # `[k for k in steps if len(required_outputs(k)) < 2]` answers on this tree,
-    # in flow order: 26 members, re-derived rather than hand-edited, because a
-    # hand-edited tuple is how v1.10.38 shipped a 28-entry pin over a 27-step
-    # population.
-    "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5", "A7", "A9",
-    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37",
-    "M4", "42", "44", "P0",
+    # second ARM.
+    "1", "1.6x", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5",
+    "A7", "A9", "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36",
+    "37", "M4", "42", "44", "P0",
 )
 
 
@@ -1416,8 +1423,14 @@ def test_d8_cell_census_is_complete():
 #: MISSING downgrade fires, so one more cell's enforcement is measurable rather
 #: than substituted-gate-only.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "D1", "1", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
-    "30", "32", "35", "38",
+    # 2026-08-21: GAINED "1.6x", lost nothing. `7fcbc7397` added the step and
+    # its real gate reaches a PASS tier on the seeded fixture, so it joins the
+    # population this pin exists to watch. The direction matters and is worth
+    # restating: a SHRINKING set is the alarming shape (production gates losing
+    # the tier at which the MISSING downgrade fires); a growing one is a new
+    # step arriving, which is this.
+    "D1", "1", "1.6x", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8",
+    "14", "28", "30", "32", "35", "38",
 )
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
 # compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml
@@ -1672,6 +1685,12 @@ def _content_arm_sweep() -> Dict[str, Dict[str, Any]]:
 #: owns, and duplicating it would report one defect as two.
 CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
     "D1": _CONTENT_UNMOVED, "1": _CONTENT_UNMOVED, "2": _CONTENT_UNMOVED,
+    # 1.6x JOINS the population (`7fcbc7397`). MEASURED, not assumed: UNMOVED —
+    # corrupting the content of `reports/crosslayer/rewrite_equivalence_check
+    # .json` does not move step 1.6x's verdict. That is a content channel the
+    # flow HAS and does not act on, recorded here rather than hidden, which is
+    # the whole purpose of this arm.
+    "1.6x": _CONTENT_UNMOVED,
     # 4 REJOINS the population with `_COVERAGE_BODY`. Measured, not assumed:
     # UNMOVED — corrupting the coverage artefact's content does not move step 4's
     # verdict, because the gate that reads it (`verilator_coverage_measure`) is
