@@ -1,11 +1,25 @@
 # `matrix_63x8` — shared substrate for the flow-step × dimension coverage matrix
 
+<<<<<<< HEAD
 The Vibe-IC flow has **69<!--figure:flow_steps--> steps**. The 2026-07 audit
 asked **8<!--figure:matrix_dimensions--> questions** of each one.
 69<!--figure:flow_steps--> × 8<!--figure:matrix_dimensions--> =
 **552<!--figure:ledger_cells--> cells**. This package is the substrate that
 all eight dimension test-modules import so they agree on what a step is, what
+=======
+The Vibe-IC flow has **69<!--figure:flow_steps--> steps**, and the matrix asks
+**9<!--figure:matrix_dimensions--> questions** of each one.
+69<!--figure:flow_steps--> × 9<!--figure:matrix_dimensions--> =
+**621<!--figure:ledger_cells--> cells**. This package is the substrate that
+every dimension test-module imports so they agree on what a step is, what
+>>>>>>> origin/jm9/d9-verdict-consumed
 a gate says, and which cells exist.
+
+The 2026-07 audit asked the first EIGHT of those questions, and that is why
+`cells.AUDIT_FIELDS` is eight long and must stay so. A dimension added after
+the audit has no record in `.audit_63x8.json` and reads `ABSENT_FROM_AUDIT`;
+padding the field list to keep the index arithmetic tidy would hand the new
+dimension a verdict recorded about a different question.
 
 Five of those steps are PATH-SPECIFIC and do not run for every design: 0.5ic,
 15.5ic, 26.5ic and 37.5ic belong to the chip/IC path, 37.5ip is the cell/IP
@@ -53,7 +67,11 @@ Four specific forms of it, all of which an adversarial verifier will catch:
 
 ## The three-state rule
 
+<<<<<<< HEAD
 Every one of the 552<!--figure:ledger_cells--> cells must end in **exactly
+=======
+Every one of the 621<!--figure:ledger_cells--> cells must end in **exactly
+>>>>>>> origin/jm9/d9-verdict-consumed
 one** of these, all machine-checkable:
 
 ### `ENFORCED`
@@ -94,7 +112,7 @@ unconditionally is forbidden** — that is silent absence wearing a hat.
 
 ---
 
-## The eight dimensions
+## The dimensions
 
 | # | name | the question |
 |---|------|--------------|
@@ -106,12 +124,45 @@ unconditionally is forbidden** — that is silent absence wearing a hat.
 | 6 | `skip_discipline` | Is every skip / vacuous-pass disclosed rather than counted as a pass? |
 | 7 | `outputs_list_complete` | Is `required_outputs` complete — does the step emit artefacts it never declares? |
 | 8 | `missing_caught` | When a declared output IS missing, which mechanism catches it? |
+| 9 | `verdict_consumed` | When this step FAILs, does the verdict reach the exit code — or is it reported and discarded? |
 
-Dimensions **1–7 ask about the GATE**. Dimension **8 asks about the CATCHER**,
-which is a different *kind* of question, so it sits last and the number equals
-display order. **The audit JSON is already in this numbering.** There is no
-legacy mapping to apply and none must be introduced — a maintained old/new
+Dimensions **1–7 ask about the GATE**. Dimension **8 asks about the CATCHER**.
+Dimension **9 asks about the CONSUMER** — the walk from a step's own FAIL to
+`ok=False` to `overall="FAIL"` to a non-zero exit. Each is a different *kind* of
+question, so they sit last in that order and the number equals display order.
+**The audit JSON is already in this numbering** for 1–8. There is no legacy
+mapping to apply and none must be introduced — a maintained old/new
 cross-reference is exactly the maintenance burden this renumbering removes.
+
+### Why the ninth is not a restatement of the second (added 2026-08-21)
+
+Dimension 2 proves a gate CAN reach a genuine FAIL. It stops at the CLAUSE, and
+says so. Whether that clause's FAIL becomes the STEP's FAIL, and whether the
+step's FAIL survives the verdict pass, are two further edges nothing in 1–8
+traverses — and `flow_compliance_check` carries three live mechanisms that drop
+a real FAIL before the exit code:
+
+* `INFORMATIONAL_GATES` (4<!--figure:informational_gates--> entries) —
+  `_step_failure_is_informational_only` removes a step from `failing` when every
+  FAIL reason cites one. The module's own note on the `l25_…` entry names the
+  risk: *"'advisory' becomes the same 'FAIL and the flow continued anyway'
+  mistake"*.
+* `advisory_program_exit_zero` —
+  37<!--figure:gate_clauses_advisory_program_exit_zero--> of
+  213<!--figure:gate_clauses_total--> clauses. A FAIL there never becomes the step's
+  FAIL at all.
+* `structural_only_verdict` — under `--phase 2 --strict-structural`, `scoped`
+  collapses to P0 plus the analog track and every other step's verdict is, in
+  the module's own words, *"REPORTED but NOT factored into Overall"*.
+
+**What dimension 9 does NOT cover, stated here rather than discovered later.**
+The campaign's motivating example was `prose_polarity_consulted_check`, red for
+35 commits while landings continued. That gate occurs **zero times** in
+`flow/phase1_phase2_phase3.yaml` — it is invoked from
+`tools/ci/repo_hygiene_gates.sh`. The matrix's unit is a FLOW STEP, so a
+repo-hygiene gate has no cell here and never will. That hole is real and it is
+somewhere else; letting a reader believe this dimension covered it would be
+measuring something adjacent and reporting it as if it answered the question.
 
 ---
 
@@ -156,7 +207,11 @@ Things that will bite you if you skip the docstring:
 * **No `program_exit_zero` form exists in `required_outputs`** — all 162<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
+<<<<<<< HEAD
 ### `cells.py` — the 552<!--figure:ledger_cells-->-cell ledger
+=======
+### `cells.py` — the 621<!--figure:ledger_cells-->-cell ledger
+>>>>>>> origin/jm9/d9-verdict-consumed
 `ALL_CELLS` is the cross product of `flowref.step_ids()` × `DIMENSIONS`, built
 **live from the yaml, never from the audit JSON**. Add or delete a step and the
 ledger changes with the repo; `test_matrix_63x8_ledger.py` notices.
@@ -287,7 +342,11 @@ thread-parallel test execution.
 Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
 eight modules through pytest's own machinery, asks each module the state of the
 cells it owns, and then RUNS those modules and joins the answer against what
+<<<<<<< HEAD
 each cell's predicate actually did. **552<!--figure:ledger_cells--> / 552<!--figure:ledger_cells--> cells present,
+=======
+each cell's predicate actually did. **621<!--figure:ledger_cells--> / 621<!--figure:ledger_cells--> cells present,
+>>>>>>> origin/jm9/d9-verdict-consumed
 exactly once.**
 
 **The census has TWO axes, and the first is not quotable on its own.** A cell's

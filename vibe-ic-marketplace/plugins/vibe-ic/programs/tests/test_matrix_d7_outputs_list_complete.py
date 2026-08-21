@@ -1147,6 +1147,7 @@ def test_every_cell_lands_in_exactly_one_state():
     for a step that has stopped failing is caught by its own ``strict=True``.
     """
     cells = cells_for(DIM)
+<<<<<<< HEAD
     # 68 -> 69, and the previous number was wrong rather than stale. Two steps
     # moved and only one of them was counted:
     #   `1.6x` ARRIVED at v1.11.15 (ppa(phase4): wire step 1.6x to an executor)
@@ -1161,6 +1162,22 @@ def test_every_cell_lands_in_exactly_one_state():
     # make loud, so the number is re-derived rather than adjusted: the live
     # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
     # A step arriving OR leaving must force a human to say the number out loud.
+=======
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+>>>>>>> origin/jm9/d9-verdict-consumed
     assert len(cells) == len(F.step_ids()) == 69
 
     state = Counter()
@@ -1174,6 +1191,7 @@ def test_every_cell_lands_in_exactly_one_state():
         )
         state["NA" if is_na else ("WAIVED" if is_waived else "ENFORCED")] += 1
 
+<<<<<<< HEAD
     # 68 -> 69, and the previous number was wrong rather than stale. Two steps
     # moved and only one of them was counted:
     #   `1.6x` ARRIVED at v1.11.15 (ppa(phase4): wire step 1.6x to an executor)
@@ -1188,6 +1206,22 @@ def test_every_cell_lands_in_exactly_one_state():
     # make loud, so the number is re-derived rather than adjusted: the live
     # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
     # A step arriving OR leaving must force a human to say the number out loud.
+=======
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+>>>>>>> origin/jm9/d9-verdict-consumed
     assert sum(state.values()) == 69, state
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
