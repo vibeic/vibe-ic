@@ -87,3 +87,40 @@ UNTIL THAT RETURNS THE STATUS IS UNDETERMINED, and my earlier write-up
 overstated it: I called the red environmental on wall-clock evidence alone, which
 is the wrong instrument on a contended host. That sentence is corrected here
 rather than left standing.
+
+--- THE POSITIVE CONTROL, AND THE RESOLUTION ---
+
+`gate_is_wired_check` -- the SIBLING in the same parametrised test, which PASSED
+in the same run -- measured under the same load:
+
+    User 25.20 s + Sys 0.32 s  ->  25.52 s CPU   (wall 46.19 s, 55% of a core)
+    load at start 78.64  ->  load at end 77.27
+
+Side by side, each against its own documented baseline:
+
+    program                          CPU time   baseline      inflation
+    checker_execution_wiring_audit    39.65 s   18.9-20.3 s     ~2.02x
+    gate_is_wired_check  (CONTROL)    25.52 s   14.3-14.7 s     ~1.76x
+
+THE CONTROL IS INFLATED TOO, BY A COMPARABLE FACTOR. So user time DOES inflate
+substantially on this host under contention -- the premise I doubted one step
+ago -- and the failing program is not anomalous against a program that passed.
+The residual 15% between the two ratios tracks the failing program's much larger
+footprint (592 MB peak RSS, which is more cache and memory pressure to lose).
+
+RESOLUTION: explanation (b). The red is environmental, and it is now ESTABLISHED
+by a control rather than asserted from wall clock. There is no leftover anomaly
+that a code regression would be needed to explain.
+
+WHAT THE DETOUR WAS WORTH. My first write-up called it environmental on
+wall-clock evidence, which is the wrong instrument on a contended host. The
+load-independent number then pointed AWAY from that answer, and only a positive
+control brought it back. The first answer was right and the reasoning for it was
+not, and those are different things: had the control come back near its
+baseline, the same red would have been a real regression on main and I would
+have shipped "environmental" over the top of it.
+
+STATUS: environmental, established. NOT a regression, and not attributable to
+this branch -- which was already proven independently, since the failing program
+contains zero references to the one shipped file this branch changes. The 55s
+bound was never raised.

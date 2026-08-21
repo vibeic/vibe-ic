@@ -810,8 +810,20 @@ long the program may take. Raising it to turn a red green is the one move
 forbidden here, and most of all when the red is environmental and the bound is
 correct.
 
-So the honest status of that one suite is **UNDETERMINED under load, with the
-named cause** — not green, and not a regression. The other three suites and
+**Established by a positive control, not asserted.** Wall clock is the wrong
+instrument on a contended host, so I measured CPU time, which does not inflate
+the same way — and it came back at ~2× the program's documented baseline, which
+pointed *away* from the load explanation. Only a control settled it: the sibling
+program in the same test, which **passed**, is inflated ~1.76× on the same host
+against its own baseline, versus ~2.02× for the failing one. The control is
+inflated too, by a comparable factor, so the failing program is not anomalous
+against a passing one; the residual 15 % tracks its 592 MB peak RSS.
+
+So the status of that one suite is **environmental, established** — not green on
+a loaded host, and not a regression. Worth noting what the detour bought: had
+the control come back near its baseline, the same red would have been a real
+performance regression on `main`, and my first write-up would have shipped
+"environmental" straight over the top of it. The other three suites and
 every gate in this capture are unaffected and were re-run green. A reader
 reproducing this on a busy host should expect the same timeout and should read
 the load before reading the verdict.
