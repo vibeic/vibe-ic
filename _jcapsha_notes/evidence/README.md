@@ -44,7 +44,10 @@ upstream's source, not our measurement.
 | `probe.def`, `one.tcl`, `run.sh` | the two-arm probe: one argument pair per process, so no row from an earlier pass can be reused by a later one. |
 | `rotation_two_arm_MEASURED.txt` | the result: varying the HORIZONTAL argument moves WEST/EAST, varying the VERTICAL argument moves SOUTH/NORTH. The two are applied to each other's rows. |
 | `loc.tcl`, `run2.sh`, `rotation_row_identity_MEASURED.txt` | row identity confirmed by DIE POSITION rather than by trusting the row names — the west-row pad sits at the offset from the low-X edge, the south-row pad at the offset from the low-Y edge. |
-| `rotation_arguments_GOLDEN.txt` | the golden, labelled DERIVED not observed, with the two things it is derived from: the argument names, and the tool's own script layer dumped from the running binary. |
+| `openroad_pad_README_at_pinned_commit.md` | the tool's DOCUMENTED contract, fetched at the pinned commit — the page that refutes the withdrawn Bucket-T record. |
+| `openroad_makeIORow_row_assignment.txt` | the tool's source assigning rows: north/south from the vertical argument, east/west from the horizontal one. Not crossed. |
+| `f3_bucket_T_WITHDRAWN.txt` | the full withdrawal: what I filed, what refutes it, how I got it wrong, and the real defect it was masking. |
+| `rotation_arguments_GOLDEN.txt` | SUPERSEDED. The 'golden' was derived from the argument names, and the names do not mean what it assumed. Kept as the artefact of the withdrawn record, not as a target. |
 | `f3b_population_MEASURED.txt` | the unhonoured-knob class has FOUR instances on this tree, in four subsystems (77 raw hits → 12 narrowed → 4 read by hand). |
 | `f3b_contract_status_MEASURED.txt` | of those four, **0 carry the non-honouring as a machine-readable record** — all four wrote it as prose in whichever module found it. |
 

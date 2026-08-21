@@ -44,3 +44,14 @@ def rule_component_vocabulary_admits_its_namespace(sample_text, ports):
     # Expected signal: ERROR
     # Suggested fix action: Enumerate each namespace from its declared source and assert the validator accepts every member, as a test that fails when either the regex or the namespace changes. Do NOT simply widen the character class in isolation: the test is what keeps the two in step, and the widening without it would drift again the next time a namespace gains a character.
     return []  # list of findings — TODO implement
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
+# Pattern: A step re-implements a tool's interface and inverts one of its CONVENTIONS -- which of two symmetric cases a named input applies to. Both names exist on both sides and both sides accept both values, so nothing type-checks and nothing errors. It is invisible wherever the two inputs carry the same value, which is the default, so the defect ships and waits for the first author who sets exactly one of them. Every downstream artefact is then internally consistent and disagrees with the tool.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_upstream_convention_not_inverted(sample_text, ports):
+    """A re-implementation must not invert its upstream's convention. Where an upstream input selects between two symmetric cases, the case our step applies it to must be the case the upstream documents it for. The comparison is between two enumerable mappings and it is a program's decision once the upstream mapping is declared -- which is the same declare-then-check shape the arithmetic pin in this batch arrives at."""
+    # Expected signal: ERROR
+    # Suggested fix action: Declare the upstream mapping beside our own and assert they agree, and take the upstream half from the tool's DOCUMENTED contract rather than from the argument names. Here, measured side by side: ours sends the horizontal-named variable to the south and north sides and the vertical-named one to the west and east sides; the tool documents the opposite for both. The two mappings are four entries each, so the check is a dict comparison.
+    return []  # list of findings — TODO implement

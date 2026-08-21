@@ -1,5 +1,21 @@
 # CONVERGE / CAPTURE / DISTILL of the pad-site recovery
 
+> **READ THIS FIRST — the Bucket-T record in this capture is WITHDRAWN.**
+> I filed a defect against a forked EDA tool claiming it applied two named
+> rotation arguments to each other's rows. Every measurement behind that claim
+> is correct. The inference from them was not: the tool's own documentation, at
+> the pinned commit, defines "horizontal" as the horizontally-**oriented pads**,
+> which sit on the east and west rows. Under that convention every number I
+> measured is documented behaviour. **The tool is right and I was wrong**, and I
+> reasoned about what the argument names must mean without fetching the page
+> that defines them.
+>
+> The real defect is **ours and it is worse**: our step's side-to-variable
+> mapping is **inverted** with respect to the tool's contract, and the shipped
+> pad-ring fix on the un-landed branch is built on that inversion. Sections
+> below are corrected; `evidence/f3_bucket_T_WITHDRAWN.txt` has the full
+> account.
+
 Agent `jcapsha`, 8HD-d, 2026-08-22.
 Branch: **`jcapsha/pad-site-capture`**, off `origin/main` @ `a00f53f20`.
 Source read in full before anything was written: `_jpadsite_priv/RESULT.md` on
@@ -19,7 +35,7 @@ Deliverable: `recoveries.json` (5 records) emitted through
 |---|---------|--------|----------------------|
 | F1 | the step read the wrong PDK view | **A** | a set difference over the view directories that exist on disk — see the correction below; the rule this table first carried was refuted by its own sweep |
 | F2 | the extent came from the oriented footprint | **A** | a taint walk over one function's assignments |
-| F3a | the tool does not honour the rotation variable | **T** (OpenROAD) | the plugin does not place the rows; anything it did here would be a second guess on top of a wrong one |
+| F3a | ~~the tool does not honour the rotation variable~~ | **D — WITHDRAWN** | refuted by the tool's own documented contract; replaced by F3c |
 | F3b | the degradation contract for a knob the tool ignores | **A** | drive the step twice and read the exit code and the report keys |
 | F4 | *(found while capturing)* an advertised component form no step id can express | **A** | enumerate the namespace, assert the validator accepts every member |
 
@@ -617,12 +633,68 @@ Of the five rules proposed, measured honestly:
 |---|---|
 | F1 | correct, single-site (population 1 of 10) |
 | F2 | does not generalise as detection; becomes *declare the correspondence, then check it* |
-| F3a | a measured, reproducible defect in a forked tool — the strongest item here |
+| F3a | **WITHDRAWN** — the tool was behaving as documented; replaced by the convention-inversion record, which is ours |
 | F3b | a real class with **four** instances and zero absorbed — the most valuable rule |
 | F4 | correct, single instance (population 1 of 1232) |
 
 The item most worth someone's time is **F3b**, and it is the one I first
 dismissed as having no population.
+
+---
+
+## CORRECTION — the Bucket-T record is withdrawn, and the real defect is ours
+
+I called this "the strongest item in the capture". It was the weakest, and it
+was weak in the way that matters most: the numbers were real and the reading of
+them was mine.
+
+**What the tool documents**, fetched at the exact pinned commit:
+
+| argument | documented meaning |
+|---|---|
+| `-horizontal_site` | the site for the horizontal pads — **east and west** |
+| `-vertical_site` | the site for the vertical pads — **north and south** |
+| `-rotation_horizontal` | applied to the horizontal sites; default `MXR90` **when the same site is given for both** |
+| `-rotation_vertical` | applied to the vertical sites; default `R0` for the southern row |
+
+"Horizontal" names the horizontally-**oriented pads**, not the horizontal rows.
+Under that convention **every number in my two-arm table is the documented
+behaviour** — including the `MXR90` I measured on the western pad at the
+default, which the table above predicts exactly, because the caller passes the
+same site to both arguments. The source assigns rows the same way and is not
+crossed.
+
+**How I got it wrong.** I dumped the tool's script layer, confirmed it passes
+the two arguments in declared order, and then reasoned about what the argument
+*names* must mean — without ever fetching the page that defines them. Calling
+that "measured" because the numbers beneath it were measured is the failure.
+
+### What is actually wrong — and it is ours
+
+```
+ours   PAD_ROTATION_HORIZONTAL -> SOUTH / NORTH      PAD_ROTATION_VERTICAL -> WEST / EAST
+tool   rotation_horizontal     -> EAST  / WEST       rotation_vertical     -> NORTH / SOUTH
+```
+
+**Inverted on both axes**, on the current tree and on the fix branch alike, and
+invisible at the default because both variables carry `R0` there. That is the
+same class as the other two findings — a re-implementation drifting from its
+upstream — this time on the **convention** rather than the input set or the
+arithmetic. It is now its own Bucket-A record.
+
+### What this does to the shipped fix, stated plainly
+
+The pad-ring fix on the un-landed branch is built on the inverted premise. It
+concludes the vertical-named variable is **inert** because changing it did not
+move the west and east sides. Correct observation, wrong conclusion: it moves
+the north and south sides, exactly as documented. The fix then pins the west and
+east orientation to a measured constant and **refuses `rc 2`** when that
+variable is declared non-default — refusing a run the tool would have honoured.
+
+The geometry it produces at the default is still right. The reason recorded for
+it is not, and the refusal is wrong. This **supersedes my own earlier claim**
+that the shipped fix merely guards the wrong one of the two variables; the
+premise underneath it is what is wrong.
 
 ---
 
