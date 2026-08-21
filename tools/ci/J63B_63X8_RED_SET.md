@@ -87,6 +87,28 @@ belongs in `pytest_per_file_junit.py`, the driver every tier runs through, and
 showing it harms nothing needs the full `programs/tests` suite this host cannot
 carry. It is written down here rather than half-landed.
 
+### Why 10 and 11 were NOT given 12's fix, though the technique fits
+
+Both were read for the same zero-margin defect. Neither has it, and the numbers
+are recorded so the next reader does not have to re-derive them:
+
+* **10** drives 7 collections of `0.14` s against a `0.30` s window — a **2.1x**
+  renewal margin, not 12's 1.0x — and asserts `elapsed > 0.8` against a `0.98` s
+  total, a 1.22x margin. Thin, but real, which is why it goes green on an idle
+  box and 12 does not.
+* **11** is not a margin problem at all. Its subject is that captured stdout
+  cannot impersonate a transition, so it asserts `COLLECT_CHATTER` appears in
+  the kill message. Under load the child is killed by the `0.25` s window
+  BEFORE it has printed anything, so there is no chatter to quote and the
+  assertion fails on the right kill for the wrong reason. No arrangement of the
+  fixture beats interpreter startup; only a startup budget in the driver does.
+
+12 was fixed because it stays red on an idle host — that is proof of a defect.
+These two are not, so their windows were left alone. Widening `0.30` or `0.25`
+until a saturated host fits under them is the relaxation this campaign exists
+to refuse, and it is not made acceptable by the fact that a real weakness sits
+underneath.
+
 ## 7-9 — NOT_MEASURED, with the reason field filled in
 
 Steps `0.5ic` and `1.6x` are ENFORCED in dimension 3 and no entry in
