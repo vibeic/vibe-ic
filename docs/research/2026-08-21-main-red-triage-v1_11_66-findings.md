@@ -1278,7 +1278,7 @@ Every remaining red is now attributed to one of four causes, none of which is
 
 | n | reds | disposition |
 |--:|---|---|
-| 11 | matrix family | **narrowed, M34.** 3 = the mutation-ledger reds measured in M32 (incl. `[step0.5ic]`, newly recorded); 2 = `63x8_coverage`, not re-examined; 6 = `d3_outputs_produced`, whose records cite **home-kind** roots this dimension does not search, with NO published/repo root here carrying the artefacts. Needs a published run tree or a registry waiver — a requirement, not an owner. |
+| 11 | matrix family | **narrowed, M34.** **M35: 8 of the 11 are ONE cause.** 2 = `63x8_coverage`, now examined — the census records the SAME six steps as `ENFORCED` while the live run fails, so it is the census layer of the same defect, not a separate family; 3 = mutation-ledger reds measured in M32 (incl. `[step0.5ic]`); 6 = `d3_outputs_produced`, whose records cite **home-kind** roots this dimension does not search, with NO published/repo root here carrying the artefacts. Needs a published run tree or a registry waiver — a requirement, not an owner. |
 | 2 | coverage bridge | **jmain-green's 38**, red since v1.11.18. ~~a verdict-vocabulary DESIGN question~~ — **narrowed, see M33: both terms are established (1485 / 215 uses) and asymmetric. `WAIVED-DEFERRED` requires a recorded waiver id + owner reason; absent one it is not available and the pass is vacuous. The open item is "is there a waiver?", a lookup — not a vocabulary choice.** |
 | 3 | flow-gate enforcement audit | a POLICY call — but SMALLER than stated here, see **M29**. ~~the flow's `program_exit_zero` clauses make either choice wrong~~: those clauses execute NOWHERE, so `advisory` contradicts nothing and is truthful today. The real question is only whether these two SHOULD be able to stop a step. |
 | 2 | manifest parity | ~~EVIDENCE this host lacks~~ — **WRONG, see M30/M32. 10 of the 15 declared roots ARE here, two carry the artefact. FIXED: 3 reds closed.** |
@@ -2193,6 +2193,55 @@ is the point — the audit was worth running BECAUSE it could come back either w
 And even the survivor improved: *"the 54-ID agent's lane"* told a reader who to
 bother; *"needs a published run tree carrying these six named artefacts, or a
 registry waiver"* tells them what to do.
+
+
+## M35 — the matrix family is ONE cause with two layers, not three groups
+
+M34 left 2 reds "not re-examined". Examining them collapses the group.
+
+`test_matrix_63x8_coverage` fails with:
+
+```
+15/d3 (outputs_produced): reported ENFORCED — which claims its predicate
+                          passed — but the live run says failed
+17/d3, 19/d3, 20/d3, 30/d3, 32/d3: same
+0.5ic/d3:                 reported ENFORCED — but the live run says skipped
+```
+
+**Those are the SAME six steps as the six `d3_outputs_produced` reds.** The
+coverage test is not an independent family — it is the CENSUS layer noticing that
+its recorded verdict (`ENFORCED`, i.e. the predicate passed) disagrees with what
+the predicate actually does now. One cause, two layers:
+
+* **layer 1 — the predicate cannot be satisfied here.** Each record cites a run
+  root of a kind this dimension does not search, and no `published`/`repo` root
+  on this host carries the artefacts (M34, measured).
+* **layer 2 — the census still records those cells as `ENFORCED`.** So the matrix
+  claims a passing predicate for six cells whose live predicate fails.
+
+Layer 2 is the more interesting half, and it is the ONE THING IN THIS ENGAGEMENT
+WHERE THE RECORDED STATE IS MORE OPTIMISTIC THAN REALITY. Everywhere else I found
+guards that could not fail; here is a census asserting six passes that a live run
+contradicts — and, to its credit, **a test that catches exactly that disagreement
+and says so in those words.** The coverage test is doing its job. It is the
+census that is stale.
+
+**Revised decomposition of the 11:**
+
+| n | group | cause |
+|--:|---|---|
+| 6 | `d3_outputs_produced[15/17/19/20/30/32]` | records cite unsearchable roots (M34) |
+| 2 | `63x8_coverage` | **the same six**, seen from the census layer — recorded `ENFORCED`, live says failed |
+| 3 | `mutation_ledger` | `[1.6x]` (flow grew 68→69, no pin regeneration), `[0.5ic]`, and the coverage count |
+
+**So 8 of the 11 are one cause, not three groups**, and closing layer 1 — a
+published run tree carrying those six artefacts — should close layer 2 with it,
+because the census and the live run would then agree.
+
+`0.5ic` appears in BOTH the coverage list (`d3` reported ENFORCED, live
+**skipped**) and the mutation ledger. That is the second time tonight this
+step has surfaced as an unnamed thread, and it remains the least-documented
+item in the whole triage.
 
 
 # ===== REQUESTS TO THE LANDER =====
