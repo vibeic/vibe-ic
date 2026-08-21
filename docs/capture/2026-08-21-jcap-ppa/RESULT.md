@@ -20,8 +20,9 @@ Tree distilled against: `origin/main` @ `a00f53f20`, plugin **v1.11.66**; then
 merged up to `81cd5321b`, plugin **v1.11.68**. What that re-pin does and does not
 claim, precisely: the live gate figures, both quoted pytest figures and every
 record/table tally WERE re-run on the merged tree, and one of each was wrong
-(619 gates, `18 passed`, two `26`s). The **corpus-sweep figures in the table
-below are dated to the base** and were not re-derived, because each needs the
+(619 gates, `18 passed`, two `26`s), as were the near-duplicate figures. The
+**corpus-sweep figures — both in the table below and inside the record
+narratives — are dated to the base** and were not re-derived, because each needs the
 exact screen that produced it and a guessed screen returns a confident wrong
 number — which is the failure `A-27` records. The drift is bounded instead: of
 1238 plugin `.py` files, main changed **12** (six new programs, six tests) and
@@ -505,6 +506,14 @@ emitted backlogs were refused, and the corpus shows it is not just me:
 Each side self-consistent, each side's tests green, refusal arriving from a
 different tool in a different run — F-4's shape exactly, inside the capture
 tooling.
+
+**Re-measured after merging main, and it got worse: 10 of 33.** All four new
+failures are the three SIBLING capture lanes that landed the same night — the
+same loop, the same emitter — carrying component values like a stage description
+or a bare word. This lane's three backlogs pass, and only because the refusal is
+what produced this record: I hit it on my first two and changed the values. Three
+authors who did not happen to run the sibling validator shipped artefacts it
+rejects, and nothing in the emit path told them.
 **(o)** yes. **(d)** yes — the rule is "import the validator's shapes into the
 writer", so it covers every field the validator constrains, not this one field.
 
