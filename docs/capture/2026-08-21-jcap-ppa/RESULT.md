@@ -28,7 +28,7 @@ number — which is the failure `A-27` records. The drift is bounded instead: of
 none is in the PPA layer, so no swept population moved by more than six. Main moved 30 commits under this branch while it was open,
 and one of them (`506ff68c1`) landed this bundle's own earlier snapshot at the
 canonical path — so this branch UPDATES that bundle rather than adding a second
-copy, and the fourteen records it carried are a subset of the thirty here.
+copy, and the fourteen records it carried are a subset of the thirty-one here.
 Sources: `ppa-e2e/FINDINGS.md` (F-1..F-18), `ppa-e2e/RESULT.md` (13 requests),
 `ppa-crosslayer/RESULT.md` (10 requests), and six lane records in
 `/tmp/capture_lanes/`.
@@ -444,8 +444,10 @@ that path** — sharing a docstring with it is not attachment, which is the enti
 branch where the artefact was found missing is correct by construction, and the
 two survivors are exactly that.
 
-**This rule runs CLEAN on the tree today — the only one of the thirteen
-Bucket-A rules that does.** Its motivating instance was fixed at its one site. It is worth having
+**This rule runs CLEAN on the tree today.** That was measured when there were
+thirteen Bucket-A rules, and it was the only one of the thirteen with no real
+hit; it has NOT been re-derived across the twenty-eight, so read the uniqueness
+as dated and the cleanliness as current. Its motivating instance was fixed at its one site. It is worth having
 anyway: that site was guarded by hand for one string, and nothing stops the next
 stub from carrying the next one.
 **(o)** yes: the claim reduces to a path, the path resolves, the check is a file
@@ -1436,9 +1438,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 29 records**:
+the patterns were unchecked by anything. Over **all 31 records**:
 
-    pairs compared                      406
+    pairs compared                      465
     maximum similarity                 0.38
     pairs above 0.40                      0
 
@@ -1848,7 +1850,7 @@ rather than in a command line that would fail for whoever tried it.
 **STATUS**: 31 records emitted and validated — 28 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (39 fast + 4 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (40 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -2026,7 +2028,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            39 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            40 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -2046,7 +2048,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     39 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     40 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other

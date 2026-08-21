@@ -579,6 +579,22 @@ _bad = [x for x, rest in _tally if int(x) != _nA and "(" not in rest]
 check("prose tallies match the live Bucket-A count", not _bad,
       f"{len(_tally)} tally line(s), live count {_nA}" + (f", stale: {_bad}" if _bad else ""))
 
+# 40. the near-duplicate figures QUOTED in the report, bound to the live ones.
+# The check computed them and the prose stated them, and nothing joined the two:
+# "pairs compared 406" is C(29,2) and survived two records being added, because
+# a figure that was right when written looks identical to one that still is.
+import itertools as _it
+_np = len(list(_it.combinations(RECS, 2)))
+_mx = max(sim(a["pattern"], b["pattern"]) for a, b in _it.combinations(RECS, 2))
+_qp = re.search(r"^ {4,}pairs compared\s+(\d+)\s*$", MD, re.M)
+_qm = re.search(r"^ {4,}maximum similarity\s+([\d.]+)\s*$", MD, re.M)
+control("quoted-similarity", _np == len(RECS) * (len(RECS) - 1) // 2)
+check("the quoted near-duplicate figures are the live ones",
+      bool(_qp) and bool(_qm) and int(_qp.group(1)) == _np
+      and abs(float(_qm.group(1)) - _mx) < 0.005,
+      f"live {_np} pairs / {_mx:.2f} max; quoted "
+      f"{_qp.group(1) if _qp else '-'} / {_qm.group(1) if _qm else '-'}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
