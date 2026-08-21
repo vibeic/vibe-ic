@@ -1248,6 +1248,27 @@ predicate and a population, in words my list did not happen to contain. So the
 answer is **zero**, and it took a control plus a read to get there rather than
 one regex.
 
+## No near-duplicates — the risk the brief names, measured two-directionally
+
+The brief warns that *"a fabricated near-duplicate is worse"* than a missing
+record. The emitter enforces that only for the buckets that write a backlog; the
+26 Bucket-A patterns are unchecked by anything. Measured over all 325 pairs:
+
+    pairs compared                      325
+    maximum similarity                 0.07
+    pairs above 0.60                      0
+
+**With both controls, because one direction proves nothing.** A record against
+itself scores 1.00 — that only shows the apparatus detects identity. The control
+that matters is the negative one: a deliberately near-duplicated pattern, three
+words changed, scores **0.97**, and an unrelated pair **0.02**. So the instrument
+separates the two cases by a wide margin, and 0.07 across the real pairs is a
+result rather than an artefact of a metric that cannot see similarity.
+
+Without the negative control the same 0.07 would have been unusable — indeed it
+looked implausibly low for prose on related subjects, which is what prompted the
+second control rather than a confident report.
+
 ---
 
 ## Summary
