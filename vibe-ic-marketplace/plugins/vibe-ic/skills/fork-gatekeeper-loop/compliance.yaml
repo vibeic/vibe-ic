@@ -1,0 +1,54 @@
+skill: fork-gatekeeper-loop
+
+# Compliance requirements for fork-gatekeeper-loop output.
+#
+# The skill's checkable, text-shaped outputs are GitHub-facing: an issue-
+# closing comment (duty 2) and a convergence report (duty 1). Both have a
+# real incident behind each rule below, not a hypothetical:
+#
+#   R1/R2/R3 (closing comment) — an issue was closed in this session with a
+#     comment that named no commit, gave no test evidence, and (twice) was
+#     written in Chinese, violating the plugin's own English-on-GitHub rule.
+#   R4 (convergence report) — "converged to 0" was asserted from a clean
+#     `git merge` before a bisect caught a new-looking test failure; the
+#     rule requires the actual rev-list numbers, not the adjective "clean".
+#
+# Save the candidate comment/report body to a file and run:
+#     python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+#         --requirements compliance.yaml <file>
+
+requirements:
+  - id: R1_closing_comment_cites_a_commit
+    description: >-
+      An issue-closing comment must cite the fixing commit as a 7-40 hex
+      character sha, not just "fixed" or a PR-number reference — the sha is
+      what lets a later reader verify the fix actually landed.
+    pattern: '\b[0-9a-f]{7,40}\b'
+
+  - id: R2_closing_comment_cites_tests
+    description: >-
+      An issue-closing comment must name concrete test evidence (a test
+      file, a pass count, or an explicit red-then-green statement) — "fixed"
+      with no evidence is not a closing comment, it is a claim.
+    pattern: '(?i)(test|passed|PASS|red-then-green|reproduced)'
+
+  - id: R3_convergence_report_has_the_numbers
+    description: >-
+      A "converged to 0" claim must show the actual rev-list measurement
+      (three counts, or the literal command), not just the word "converged"
+      or "clean" — see the SKILL.md pitfall about clean merges proving
+      nothing about semantics.
+    pattern: '(rev-list --count|gap.{0,10}=?\s*0|0/0|0\s+behind|\b0\b.{0,15}\bahead\b)'
+
+cross_checks:
+  - id: R4_github_content_is_english_only
+    rule: no_forbidden_patterns
+    description: >-
+      GitHub-facing content (issue/PR bodies, closing comments, commit
+      messages) must be English only — violated twice in the session that
+      wrote this skill, before the rule was made explicit and binding here.
+      Owner-facing conversational replies are Traditional Chinese and are
+      NOT what this check runs against; only run it against the GitHub
+      body/comment/commit-message text itself.
+    patterns:
+      - '[一-鿿]'
