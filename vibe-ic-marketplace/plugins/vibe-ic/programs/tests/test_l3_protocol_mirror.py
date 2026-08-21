@@ -17,6 +17,7 @@ for bus_interconnect_protocol (other classes keep their L3 untouched).
 import re
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 RUNNER = PROGRAMS / "phase1_doc_one_shot_runner.py"
@@ -89,8 +90,8 @@ def test_l3_mirror_fail_open():
 def test_real_amba_axi_l3_now_carries_channels():
     """After v0.1.66, the AMBA AXI L3 must carry .channels mirrored from L17."""
     import json
-    l3_path = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/"
-                    "generated_docs/L3_CMD_PROTOCOL.json")
+    l3_path = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix/"
+                           "phase1/generated_docs/L3_CMD_PROTOCOL.json")
     if not l3_path.is_file():
         import pytest
         pytest.skip("AMBA AXI generated_docs not present on this host")

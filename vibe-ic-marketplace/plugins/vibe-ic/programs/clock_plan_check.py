@@ -68,6 +68,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _path_layout as _pl  # noqa: E402
+import _waiver_entries as _we  # noqa: E402
+
 
 _GATE_NAME = "clock_plan_check"
 _GATE_LABEL = "clock_plan"
@@ -108,13 +112,14 @@ _GET_OBJ_RE = re.compile(
 # waiver plumbing (mirrors sibling wafer_sort_yield_check.py)
 # ----------------------------------------------------------------------
 def _load_waivers(project: Path):
-    p = project / "waivers.json"
-    if not p.is_file():
-        return []
-    try:
-        return json.loads(p.read_text()).get("waived_steps") or []
-    except Exception:
-        return []
+    """#519 — via the ONE shared reader, so this gate sees waiver entries under
+    BOTH canonical keys. It read `waived_steps` only, so a waivers.json written
+    by `phase3_one_shot_runner` (which emits `waivers`) looked EMPTY here and
+    every step reported as un-waived. Measured over the corpus this changes no
+    verdict — the `waivers`-shaped entries carry no `id`, and `_step_waived`
+    matches on `id`/`ticket` — so adopting the union grants nothing new; it
+    removes a blind spot rather than relaxing a gate."""
+    return _we.load(project)
 
 
 def _step_waived(project: Path, step_label: str):
@@ -251,6 +256,58 @@ def _extract_clocks(plan):
 # ----------------------------------------------------------------------
 # SDC create_clock harvesting (for dropped-clock detection)
 # ----------------------------------------------------------------------
+# ----------------------------------------------------------------------
+# Plan freshness — CONTENT-keyed, and only when the plan recorded its inputs
+# ----------------------------------------------------------------------
+# An earlier attempt at this keyed freshness on MTIME: the plan was called
+# stale when any *.sdc — or `floorplan.def` / `placed.def` — had a newer
+# mtime. Two things were wrong with it, and both are load-bearing:
+#
+#   1. MTIME DOES NOT SURVIVE COPYING. git does not restore mtimes, so on a
+#      fresh checkout the ordering is whatever order the checkout wrote the
+#      files in. Over the 17 tracked `clock_plan.json` files in this repo
+#      (`git ls-files benchmark-data`), the mtime rule fired on SIX in one
+#      reviewer's checkout and on FIVE in another worktree of the same commit —
+#      identical bytes, different answer — every hit naming
+#      `phase3/stage3/pnr/constraint.sdc`. A finding whose count depends on the
+#      order git happened to write files in is not measuring the artefact.
+#      Clone, copy, rsync and archive extraction are how this corpus and every
+#      user project are distributed, so an mtime-keyed provenance finding is
+#      noise on nearly every tree that reads it. Content-keyed, the same 17
+#      files yield 0 findings deterministically, on every tree.
+#   2. A DEF IS NOT AN INPUT TO THIS PLAN. The plan's clock records are built
+#      from `create_clock` statements in the SDCs and from nothing else, so a
+#      newer `floorplan.def` cannot make the plan wrong. Including the DEFs was
+#      also the half of the producer/checker disagreement that lived on this
+#      side (the producer compared against `primary_def`, the checker against
+#      floorplan/placed).
+#
+# What replaces it: the plan RECORDS what it was derived from. The producer
+# writes `derived_from` = {project-relative SDC path: sha256}, and this checker
+# re-hashes exactly those recorded paths. Both sides use one definition
+# (`_pl.clock_plan_input_sdcs` / `_pl.clock_plan_sdc_digests`), the comparison
+# is on CONTENT, and a plan that records nothing yields NO finding — an absent
+# provenance record is an absence of evidence, not evidence of staleness.
+
+
+def _stale_inputs(project: Path, plan):
+    """Recorded inputs whose CONTENT changed, plus SDCs added since, sorted.
+
+    Returns [] when the plan records no `derived_from` provenance (nothing can
+    be concluded) and when the plan is genuinely fresh.
+    """
+    if not isinstance(plan, dict):
+        return []
+    recorded = plan.get("derived_from")
+    if not isinstance(recorded, dict) or not recorded:
+        return []
+    current = _pl.clock_plan_sdc_digests(project)
+    changed = [rel for rel, digest in recorded.items()
+               if current.get(rel) != digest]
+    added = [rel for rel in current if rel not in recorded]
+    return sorted(set(changed) | set(added))
+
+
 def _find_sdc_files(project: Path):
     seen = []
     for rel in _SDC_DIR_CANDIDATES:
@@ -468,6 +525,27 @@ def main(argv=None):
             "severity": "INFO", "rule": "NO_SDC",
             "message": "no SDC create_clock found — dropped-clock cross-check "
                        "skipped (plan substance still verified)",
+        })
+
+    # ---- freshness DISCLOSURE (advisory) -------------------------------
+    # Fires ONLY when the plan recorded a `derived_from` digest map AND an
+    # SDC's content has since changed (or an SDC appeared that the plan was not
+    # derived from). A plan with no provenance record produces no finding: this
+    # gate reports what it can prove, and it can prove nothing about a plan that
+    # never said what it read. See `_stale_inputs` for why this is not mtime.
+    #
+    # ADVISORY, not blocking. rc is unchanged: the producer re-derives the plan
+    # in the same condition, so a blocking slot here would fail already-complete
+    # runs for a provenance fact rather than a wrong answer.
+    stale_against = _stale_inputs(project, plan)
+    if stale_against:
+        findings.append({
+            "severity": "WARNING", "rule": "CLOCK_PLAN_STALE",
+            "message": f"{plan_rel} records `derived_from` digests that no "
+                       f"longer match the project's SDCs: {stale_against}. The "
+                       f"plan was derived from different constraint CONTENT "
+                       f"than is present now; a period or clock changed since "
+                       f"would not be reflected here.",
         })
 
     verdict = "PASS" if ok else "FAIL"
