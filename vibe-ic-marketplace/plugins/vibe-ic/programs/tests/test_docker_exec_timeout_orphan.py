@@ -29,7 +29,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from conftest import func_src
+from _source_pin import func_src
 
 import pytest
 

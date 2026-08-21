@@ -68,14 +68,33 @@ def test_write_l_doc_imports_scrub_l_doc():
         "_write_l_doc must import the scrubber to invoke it on every emit.")
 
 
+def _content_write_pos(src: str) -> int:
+    """Where `_write_l_doc` serialises `content`, or -1.
+
+    Two spellings are accepted. Since vibe-ic#522 every L-document write
+    goes through the shared chokepoint that records the producing release
+    (`_stamp.dump(out, content)`); before that it was an inline
+    `out.write_text(json.dumps(content …))`. The assertions below are
+    about ORDERING — scrub first, then write — and naming one particular
+    spelling of the write is what made them break when it was factored,
+    not any change to the ordering they exist to protect.
+    """
+    return max(src.find("_stamp.dump(out, content)"),
+               src.find("out.write_text(json.dumps(content"))
+
+
 def test_write_l_doc_invokes_scrubber_before_writing_disk():
-    """The scrub call must come BEFORE the `out.write_text(...)` call so the
-    on-disk JSON reflects the scrubbed content, not the pre-scrub original."""
+    """The scrub call must come BEFORE the serialisation of `content`, so
+    the on-disk JSON reflects the scrubbed content, not the pre-scrub
+    original."""
     src = RUNNER.read_text()
     scrub_pos = src.find("_scrub_l_doc(content, name)")
-    write_pos = src.find("out.write_text(json.dumps(content")
+    write_pos = _content_write_pos(src)
     assert scrub_pos > 0, "scrubber invocation missing"
-    assert write_pos > 0, "out.write_text(json.dumps(content...)) missing"
+    assert write_pos > 0, (
+        "no recognised serialisation of `content` found in _write_l_doc — "
+        "if the write was renamed again, teach _content_write_pos the new "
+        "spelling rather than deleting the ordering assertion")
     assert scrub_pos < write_pos, (
         "scrubber must be invoked BEFORE the disk write so the on-disk JSON "
         f"is the scrubbed version. scrub_pos={scrub_pos} write_pos={write_pos}")
@@ -89,7 +108,8 @@ def test_write_l_doc_records_audit_trail():
     assert "hallucination_scrub_v0_1_60" in src
     # And the attach-to-content code path must come before the write
     attach_pos = src.find("hallucination_scrub_v0_1_60")
-    write_pos = src.find("out.write_text(json.dumps(content")
+    write_pos = _content_write_pos(src)
+    assert write_pos > 0
     assert attach_pos < write_pos
 
 

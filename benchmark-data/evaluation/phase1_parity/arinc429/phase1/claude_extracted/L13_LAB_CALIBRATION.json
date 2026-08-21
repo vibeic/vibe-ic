@@ -1,5 +1,0 @@
-{
-  "ic_name": "ARINC 429 (Mark 33 DITS)",
-  "lab_calibration_present": false,
-  "notes": "ARINC 429 (Mark 33 DITS) is a wire-level protocol; no analog reference / trim / calibration loop is defined at the protocol layer. The bipolar return-to-zero (BRZ) waveform has only three line states (HI, LO, NULL) with thresholds in fixed ±2.5 V receiver bands, so receiver-side calibration is unnecessary. Oscillator tolerance is a system-integration concern but is loose enough (±1 % per side comfortably fits the BRZ eye at 100 kbit/s, even tighter at 12.5 kbit/s) that no per-bus calibration is required. Transmitter-side drive-level calibration (±10 V differential, ±5 V single-ended) and voltage rise/fall time bounding are device-level (transceiver IP) concerns covered by per-device datasheets, not by ARINC 429."
-}

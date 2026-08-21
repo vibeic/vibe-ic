@@ -10,9 +10,12 @@ candidate (vector-self-shift-fold) was NOT promoted: passing solutions
 legitimately use the idiom it flags.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
@@ -20,6 +23,21 @@ from _specrtl_common import Port, extract_spec_contract, parse_rtl_ports, strip_
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
+
+#: Same shape, same reason, same wording as the already-gated sibling
+#: `test_v0_2_50_msbfirst_direction_rule`: the tests below RUN `gates_atomic.py`
+#: and then read the `gates.json` it writes. Without iverilog the harness dies at
+#: `run(["iverilog", ...])` and writes no report, so the read fails with
+#: `FileNotFoundError` on `.../gates.json` — a failure whose text names an absent
+#: ARTEFACT and never the absent TOOL, so a reader triaging it reasonably
+#: concludes a producer defect (vibe-ic#1357). The rule-function tests in the
+#: first half of this file are pure and need no toolchain, so this is applied per
+#: test and never as `pytestmark`.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="runs gates_atomic.py and reads the gates.json it writes; without "
+           "iverilog the harness cannot run and writes nothing")
 
 
 # ── onebased-port-range tightenings ──────────────────────────────────────
@@ -142,9 +160,10 @@ def _run_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbT",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
+@_needs_gate
 def test_gate_blocks_mealy_under_moore_spec(tmp_path):
     ds, run = _stage(tmp_path,
         "module TopModule(input clk, input in, output out);\n"
@@ -162,6 +181,7 @@ def test_gate_blocks_mealy_under_moore_spec(tmp_path):
     assert not (run / "samples" / "ProbT_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_after_fix(tmp_path):
     ds, run = _stage(tmp_path,
         "module TopModule(input clk, input in, output out);\n"
@@ -228,9 +248,10 @@ def _run_fold_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbF",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
+@_needs_gate
 def test_gate_blocks_or_fold_when_prompt_requires_zero_boundary(tmp_path):
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL)
     r = _run_fold_gate(ds, run)
@@ -241,6 +262,7 @@ def test_gate_blocks_or_fold_when_prompt_requires_zero_boundary(tmp_path):
     assert not (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_advisory_not_block_when_boundary_dontcare(tmp_path):
     # OR 形 fire，但 prompt 宣告邊界 don't-care → advisory、照常 emit
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_DONTCARE, _FOLD_BUG_RTL)
@@ -253,6 +275,7 @@ def test_gate_advisory_not_block_when_boundary_dontcare(tmp_path):
     assert (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_correct_fold_fix(tmp_path):
     # 正確寫法（兩運算元皆移位、邊界顯式擺 0）→ 不 fire、emit
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_GOOD_RTL)
@@ -285,6 +308,7 @@ def test_fold_mirrored_sliced_ident_not_matched():
     assert rhl.rule_vector_self_shift_fold(src, "t.sv") == []
 
 
+@_needs_gate
 def test_gate_blocks_mirrored_or_fold_when_required_zero(tmp_path):
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL_MIRRORED)
     r = _run_fold_gate(ds, run)
@@ -295,6 +319,7 @@ def test_gate_blocks_mirrored_or_fold_when_required_zero(tmp_path):
     assert not (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_mirrored_and_fold(tmp_path):
     # 鏡像 AND 形 = 合法遮蔽 idiom → WARN-only、照常 emit
     rtl = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
@@ -333,6 +358,7 @@ def test_fold_xor_contiguous_ones_assertion_is_warn_not_error():
     assert len(fs) == 1 and fs[0].severity == "WARN", fs
 
 
+@_needs_gate
 def test_gate_emits_xor_leading_one_detector(tmp_path):
     # End-to-end: the XOR edge idiom must NOT block the structural-emit gate.
     rtl = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
@@ -345,6 +371,7 @@ def test_gate_emits_xor_leading_one_detector(tmp_path):
     assert (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_still_blocks_or_fold_negative_control(tmp_path):
     # NEGATIVE CONTROL: the OR-form real bug (Prob092) MUST still block ERROR.
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL)

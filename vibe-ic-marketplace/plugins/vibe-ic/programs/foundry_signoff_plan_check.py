@@ -95,13 +95,13 @@ def _root_waiver_ids(waivers_doc: Dict[str, Any]) -> List[Any]:
     return out
 
 
-def main():
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=(
         "Verify foundry_signoff_plan.yaml provides closure plan for every waiver."
     ))
     ap.add_argument("project_dir")
     ap.add_argument("--json", nargs="?", const="-", default=None)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
     if not project.is_dir():

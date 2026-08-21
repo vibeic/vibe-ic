@@ -192,6 +192,59 @@ def test_build_result_exceeds_static_vs_external_static():
     assert r["dynamic_vs_static_ratio"] == round(106.0 / 50.0, 3)
 
 
+# ── V→mV at the EMIT seam (the caller, not build_result) ───────────────────────
+# build_result's own tests pass mV in by hand, so none of them can see a caller
+# that forgets the V→mV conversion. These drive `emit()` with docker stubbed out,
+# so the PSM log is the only input and the payload is the only output — exactly
+# the path that produced the published deliverables.
+
+def _emit_on_log(tmp_path, log_text, static_json=None):
+    """Run E.emit() with `docker exec` replaced by a canned PSM stdout."""
+    import subprocess as _sp
+
+    class _Proc:
+        returncode = 0
+        stdout = log_text
+        stderr = ""
+
+    def _fake_run(*_a, **_kw):
+        return _Proc()
+
+    def_file = tmp_path / "routed.def"
+    def_file.write_text("SPECIALNETS 1 ;\n    - VDD ( * VDD ) + USE POWER\nEND SPECIALNETS\n")
+    out_json = tmp_path / "reports" / "dynamic_ir.json"
+    real_run = _sp.run
+    E.subprocess.run = _fake_run
+    try:
+        rc, payload = E.emit(
+            def_file=def_file, tech_lef=tmp_path / "t.lef",
+            cell_lef=tmp_path / "c.lef", liberty=tmp_path / "l.lib",
+            macro_lefs=[], sdc=None, out_json=out_json, power_net="VDD",
+            container="none", metal_prefix="Metal", static_json=static_json,
+            budget_pct=15.0, period_ns=10.0, steps=100, decap_cap=None)
+    finally:
+        E.subprocess.run = real_run
+    return rc, payload
+
+
+def test_emit_static_from_transient_is_millivolts_not_volts(tmp_path):
+    # The log's "Worst static IR drop: 5.30e-02 V" is 53.0 mV. A caller that
+    # forwards the parser's VOLTS straight into the `_mv` field publishes 0.053
+    # — wrong by 1000x. This assertion fails when that defect is present.
+    _rc, r = _emit_on_log(tmp_path, _TRANSIENT_LOG)
+    assert r["static_from_transient_mv"] == 53.0, r["static_from_transient_mv"]
+
+
+def test_emit_without_external_static_keeps_ratio_dimensionally_sane(tmp_path):
+    # With no Step-24 ir_drop.json, static_ir_mv falls back to the transient
+    # report's own static. The V/mV mixup made dynamic_vs_static_ratio 2000x
+    # instead of the tool's own "Dynamic/static ratio : 2.00".
+    _rc, r = _emit_on_log(tmp_path, _TRANSIENT_LOG, static_json=None)
+    assert r["static_ir_mv"] == 53.0, r["static_ir_mv"]
+    assert r["dynamic_vs_static_ratio"] == 2.0, r["dynamic_vs_static_ratio"]
+    assert r["max_dynamic_drop_mv"] == 106.0
+
+
 def test_build_result_package_droop_recorded_when_present():
     r = E.build_result(
         worst_dyn_mv=72.0, vdd_v=1.8, static_tr_mv=40.0, ratio=1.8,

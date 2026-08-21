@@ -3,6 +3,32 @@
 l9_submodule_conformance_check.py — cross-check the SUBMODULE half of the
 L9 Integration Spec against the actual RTL emitted under <project>/rtl/.
 
+ENFORCEMENT: advisory — and unlike this repo's other `advisory` declarations
+this one is advisory on BOTH axes, which is why it needs no caveat. No runner
+spawns the gate inline, so it cannot stop step 2 as step 2 runs; and step 2
+wires it in `advisory_program_exit_zero`, the flow's non-blocking slot, so
+`flow_compliance_check` records an rc 1 as a finding and passes the step.
+
+THE REASON IS A MEASUREMENT, AND IT ALREADY EXISTED — in the flow definition,
+where #1006 wrote it, and nowhere this audit could read it. Re-measured on
+2ec8fc2f with `tools/d9_corpus_baseline.py --only l9_submodule_conformance_
+check`: 8 of 107 published roots red, 3 CLEAN, 96 NO-INPUT. All 8 reds were
+opened by hand. Six are the L9 EXTRACTOR turning a prose token into a declared
+submodule (`signed` — a Verilog reserved keyword; `Checks`; `min_distance`;
+two 8b/10b comma characters), so the finding is true and its label points at
+the RTL for a defect in the producer. One (usb_pd) is a real design-side gap.
+One (edge_llm_matmul_accel) is a WRONG RULER: the RTL implements the same
+function under a different, valid decomposition against an L9 whose submodules
+carry no evidence and no confidence. One demonstrable wrong ruler in 8 is on
+its own enough to keep this out of the blocking slot.
+
+PROMOTION CONDITION, so this is a re-measurement and not a standing opinion:
+repair the L9 submodule extractor so a prose token cannot become a declared
+submodule, decide whether the decomposition is a CONTRACT or a SUGGESTION (see
+the `layer-contract-doctrine` skill), then re-run the command above. When the
+red count is driven by designs rather than by the extractor, this declaration
+becomes `blocking` and the flow row becomes `program_exit_zero`.
+
 Catches the failure modes of CLAUDE.md rule #1 ("Single-agent RTL generation
 — multi-agent fails on port naming") and rule #3 ("No stub modules — DTOP
 must instantiate everything") at the artefact level. The rule itself is
@@ -27,11 +53,32 @@ strictly below that line):
 
 Generality: works for ANY IC project with an L9_INTEGRATION_SPEC.json
 plus an rtl/ directory. Pure Python, no EDA-tool dependency. Class-
-AGNOSTIC (no aid_class / chip-specific assumptions). Conforms to the
-v1.6.16 / Wave 93 VACUOUS_PASS contract: when L9 is missing or carries
-no submodules, the gate emits VACUOUS_PASS rather than FAIL — the wider
-flow_compliance_check catches an absent L9 separately via L1-L23
-presence checks.
+AGNOSTIC (no aid_class / chip-specific assumptions).
+
+VACUOUS_PASS IS DECIDED ON THE EXAMINED SET, NOT ON THE CONTAINER
+-----------------------------------------------------------------
+The v1.6.16 / Wave 93 contract said: when L9 is missing or carries no
+submodules, emit VACUOUS_PASS rather than FAIL. That is right and stays.
+It was written on the CONTAINER being empty, and the three checks below
+each skip entries the gate cannot assert on — a bare-string entry (no
+identifier to look for), a `low_confidence` entry (a naming-delegated
+functional contract), an entry with no name. When those skips consumed
+the WHOLE list the container was still non-empty, so control fell
+through to `PASS` and the gate printed "L9 conformance OK (0 findings)"
+having asserted on nothing.
+
+Measured on the tracked corpus: 130 declared submodules across 36 L-doc
+sets, 62 examinable; 16 of the 36 have an EMPTY examinable set, and 6 of
+those reached the PASS arm (they declare 4 to 16 submodules each and
+have an rtl/ directory). None of the individual skips is wrong — a bare
+string really is prose and a delegated name really is not an RTL
+assertion — so the remedy is not to examine more. It is that the verdict
+and the report follow the EXAMINED set: an empty one is VACUOUS_PASS
+with a reason that names the counts, and every arm (PASS included)
+discloses `submodule_census` = declared / examined / skipped-by-reason.
+A sibling gate's docstring states that this gate "proves each declared
+submodule exists and is instantiated"; without the census a reader has
+no way to see when it proved nothing of the kind.
 
 Usage:
     python3 l9_submodule_conformance_check.py <project_dir> [--json <out>]
@@ -269,22 +316,95 @@ class Finding:
     message: str
 
 
+# --- Which declared submodules can this gate actually assert on? ------------
+# Every check below skips the same three shapes. Until this landing each one
+# open-coded the skip, and NOTHING counted them: a document could declare N
+# submodules, have all N skipped, and the gate still reported
+# "PASS: L9 conformance OK (0 findings)". A PASS that examined nothing is
+# indistinguishable from a PASS that examined everything, and a sibling gate
+# states in its own docstring that this one "proves each declared submodule
+# exists and is instantiated" — a premise the reader has no way to check.
+#
+# Measured on the tracked corpus at the time of this landing: 36 L-doc sets
+# carry a non-empty `submodules` list, 130 entries between them, of which
+# this gate can assert on 62. In 16 of the 36 the examinable set is EMPTY,
+# and 6 of those reach the `PASS` arm rather than `VACUOUS_PASS` because the
+# container is non-empty and rtl/ exists. So the fix is not to examine more —
+# each skip is individually correct — it is to make the VERDICT and the
+# report a function of the EXAMINED set rather than of the container, and to
+# disclose the denominator on every arm.
+SKIP_NOT_AN_OBJECT = "not_an_object"
+SKIP_NAMING_DELEGATED = "naming_delegated_low_confidence"
+SKIP_NO_NAME = "no_name"
+
+_SKIP_REASON_TEXT = {
+    SKIP_NOT_AN_OBJECT:
+        "declared as a bare string rather than an object, so it carries no "
+        "`name` field to assert on (the string is prose, not an identifier)",
+    SKIP_NAMING_DELEGATED:
+        "tagged low_confidence — a naming-delegated FUNCTIONAL contract, not "
+        "a literal RTL module-name assertion (v0.1.85)",
+    SKIP_NO_NAME:
+        "an object with no `name` field",
+}
+
+
+def classify_submodules(l9: dict) -> Tuple[List[dict], Dict[str, object]]:
+    """Split `L9.submodules` into what this gate can assert on and what it
+    cannot, and count both.
+
+    Returns ``(examinable, census)``. `census` carries ``declared``,
+    ``examined`` and ``skipped`` (reason -> count); it is the denominator
+    every verdict below discloses.
+
+    The three skips are UNCHANGED in effect — a bare string has no
+    identifier to look for in rtl/, a `low_confidence` entry is a functional
+    contract whose RTL name the Plugin chooses, and an object with no name
+    asserts nothing. What is new is that they are counted rather than
+    silently dropped.
+    """
+    examinable: List[dict] = []
+    skipped: Dict[str, int] = {}
+    declared = 0
+
+    def _skip(reason: str) -> None:
+        skipped[reason] = skipped.get(reason, 0) + 1
+
+    for s in l9.get("submodules", []) or []:
+        declared += 1
+        if not isinstance(s, dict):
+            _skip(SKIP_NOT_AN_OBJECT)
+            continue
+        if s.get("low_confidence") is True:
+            _skip(SKIP_NAMING_DELEGATED)
+            continue
+        if not s.get("name"):
+            _skip(SKIP_NO_NAME)
+            continue
+        examinable.append(s)
+    return examinable, {"declared": declared,
+                        "examined": len(examinable),
+                        "skipped": skipped}
+
+
+def describe_census(census: Dict[str, object]) -> str:
+    """One human sentence naming the denominator and every skip."""
+    parts = ["%s of %s declared submodule(s) examined"
+             % (census.get("examined"), census.get("declared"))]
+    skipped = census.get("skipped") or {}
+    if isinstance(skipped, dict):
+        for reason, n in sorted(skipped.items()):
+            parts.append("%d skipped: %s"
+                         % (n, _SKIP_REASON_TEXT.get(reason, reason)))
+    return "; ".join(parts)
+
+
 def check_submodule_presence(l9: dict,
                              rtl_ports: Dict[str, List[Tuple[str, str]]]
                              ) -> List[Finding]:
     findings: List[Finding] = []
-    for s in l9.get("submodules", []) or []:
-        if not isinstance(s, dict):
-            continue
-        # v0.1.85 — skip naming-delegated functional submodules. A submodule
-        # documented in a "Plugin chooses naming/hierarchy" spec (tagged
-        # low_confidence) is a FUNCTIONAL contract, not a literal RTL module-
-        # name assertion; do not require `module <prose name>` in rtl/.
-        if s.get("low_confidence") is True:
-            continue
+    for s in classify_submodules(l9)[0]:
         name = s.get("name")
-        if not name:
-            continue
         if name not in rtl_ports:
             findings.append(Finding(
                 rule="SUBMODULE_FILE_MISSING", severity="ERROR", module=name,
@@ -315,18 +435,8 @@ def check_submodule_instantiation(l9: dict,
                                   rtl_ports: Dict[str, List[Tuple[str, str]]]
                                   ) -> List[Finding]:
     findings: List[Finding] = []
-    for s in l9.get("submodules", []) or []:
-        if not isinstance(s, dict):
-            continue
-        # v0.1.85 — skip naming-delegated functional submodules. A submodule
-        # documented in a "Plugin chooses naming/hierarchy" spec (tagged
-        # low_confidence) is a FUNCTIONAL contract, not a literal RTL module-
-        # name assertion; do not require `module <prose name>` in rtl/.
-        if s.get("low_confidence") is True:
-            continue
+    for s in classify_submodules(l9)[0]:
         name = s.get("name")
-        if not name:
-            continue
         if name not in rtl_ports:
             # Already flagged by SUBMODULE_FILE_MISSING; skip dead-code
             # check to keep findings non-redundant.
@@ -354,18 +464,10 @@ def check_submodule_ports_v1(l9: dict,
     """Schema v1 carries per-submodule .ports field. When present, cross-
     check it against the actual RTL module port list."""
     findings: List[Finding] = []
-    for s in l9.get("submodules", []) or []:
-        if not isinstance(s, dict):
-            continue
-        # v0.1.85 — skip naming-delegated functional submodules. A submodule
-        # documented in a "Plugin chooses naming/hierarchy" spec (tagged
-        # low_confidence) is a FUNCTIONAL contract, not a literal RTL module-
-        # name assertion; do not require `module <prose name>` in rtl/.
-        if s.get("low_confidence") is True:
-            continue
+    for s in classify_submodules(l9)[0]:
         name = s.get("name")
         decl_ports = s.get("ports")
-        if not name or not isinstance(decl_ports, list) or not decl_ports:
+        if not isinstance(decl_ports, list) or not decl_ports:
             continue
         if name not in rtl_ports:
             continue  # already flagged by SUBMODULE_FILE_MISSING
@@ -403,11 +505,27 @@ def check_submodule_ports_v1(l9: dict,
 
 # --- Main -------------------------------------------------------------------
 
-def audit(project: Path) -> Tuple[str, List[Finding]]:
-    """Return (verdict, findings). Verdict: PASS / FAIL / VACUOUS_PASS."""
+_EMPTY_CENSUS: Dict[str, object] = {"declared": 0, "examined": 0, "skipped": {}}
+
+
+def audit_report(project: Path) -> Tuple[str, List[Finding], Dict[str, object],
+                                         str]:
+    """Return (verdict, findings, census, reason).
+
+    Verdict: PASS / FAIL / VACUOUS_PASS. `census` is the denominator — how
+    many submodules the document DECLARES against how many this gate could
+    assert on — and it is reported on every arm, PASS included. `reason` is
+    non-empty only for VACUOUS_PASS and names which of the three vacuity
+    causes fired, so "no L9" and "an L9 whose every entry this gate must
+    skip" are not both reported as the same nothing.
+    """
     l9 = load_l9(project)
     if l9 is None or not l9.get("submodules"):
-        return "VACUOUS_PASS", []
+        return ("VACUOUS_PASS", [], dict(_EMPTY_CENSUS),
+                "L9 missing or carries no submodules to cross-check; gate "
+                "inapplicable")
+
+    examinable, census = classify_submodules(l9)
 
     rtl_ports = collect_module_ports(project)
     if not rtl_ports:
@@ -415,7 +533,24 @@ def audit(project: Path) -> Tuple[str, List[Finding]]:
         # incomplete project — flow_compliance_check catches absent
         # rtl/ at the L9-presence step. Vacuous here keeps signals
         # non-redundant.
-        return "VACUOUS_PASS", []
+        return ("VACUOUS_PASS", [], census,
+                "L9 declares %d submodule(s) but no `module` declaration was "
+                "found under rtl/; nothing to cross-check against"
+                % census["declared"])
+
+    if not examinable:
+        # THE ARM THIS LANDING ADDS. The container is non-empty and rtl/
+        # exists, so control used to fall straight through to the PASS at
+        # the bottom with an empty finding list — a gate reporting success
+        # after asserting on zero of the entries it was pointed at. Each
+        # individual skip stays correct; what changes is that the verdict
+        # now follows the EXAMINED set. Measured: 6 published cells reach
+        # here, declaring 4 to 16 submodules each.
+        return ("VACUOUS_PASS", [], census,
+                "L9 declares %d submodule(s), none of which this gate can "
+                "assert on — %s. Nothing was checked, so this is NOT a "
+                "clean bill of health for the submodule half of L9."
+                % (census["declared"], describe_census(census)))
 
     rtl_text = collect_rtl_text(project)
     findings: List[Finding] = []
@@ -424,6 +559,16 @@ def audit(project: Path) -> Tuple[str, List[Finding]]:
     if l9.get("schema_version") in (1, "1", 1.0):
         findings.extend(check_submodule_ports_v1(l9, rtl_ports))
     verdict = "PASS" if not findings else "FAIL"
+    return verdict, findings, census, ""
+
+
+def audit(project: Path) -> Tuple[str, List[Finding]]:
+    """Return (verdict, findings). Verdict: PASS / FAIL / VACUOUS_PASS.
+
+    Thin wrapper over `audit_report` so there is ONE place that decides a
+    verdict. Callers that need the denominator use `audit_report`.
+    """
+    verdict, findings, _census, _reason = audit_report(project)
     return verdict, findings
 
 
@@ -439,16 +584,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: project dir not found: {project}", file=sys.stderr)
         return 2
 
-    verdict, findings = audit(project)
+    verdict, findings, census, reason = audit_report(project)
 
     report = {
         "verdict": verdict,
         "project": str(project),
         "findings": [asdict(f) for f in findings],
+        # Reported on EVERY arm, PASS included: without it a PASS over 0 of
+        # 16 declared submodules reads exactly like a PASS over 16 of 16.
+        "submodule_census": census,
     }
-    if verdict == "VACUOUS_PASS":
-        report["reason"] = ("L9 missing or carries no top_module/submodules "
-                            "to cross-check; gate inapplicable")
+    if reason:
+        report["reason"] = reason
 
     if args.json:
         out = Path(args.json)
@@ -459,9 +606,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"VACUOUS_PASS: {report['reason']}")
         return 0
     if verdict == "PASS":
-        print(f"PASS: L9 conformance OK ({len(findings)} findings)")
+        print(f"PASS: L9 conformance OK ({len(findings)} findings) — "
+              f"{describe_census(census)}")
         return 0
-    print(f"FAIL: {len(findings)} L9-conformance finding(s):", file=sys.stderr)
+    print(f"FAIL: {len(findings)} L9-conformance finding(s) — "
+          f"{describe_census(census)}:", file=sys.stderr)
     for f in findings:
         print(f"  [{f.rule}] {f.module}: {f.message}", file=sys.stderr)
     return 1

@@ -64,9 +64,27 @@ CONVERGED variant, FAIL on MODEL_INACCURACY / BACK_TO_PHASE1, SKIP on no data).
 
 ### `analog/<block>/hw_tuning_report.json`
 Schema (block_name, converged, total_iterations.{spice,hardware}, per-metric
-final_comparison.{spec,spice,hw,discrepancy_pct}, convergence_status ∈
-{IDEAL,CONVERGED,WARNING}) is **structurally validated by
-`programs/analog_hil_report_schema_check.py`**.
+final_comparison.{spec,spice,hw,discrepancy_pct}, convergence_status) is
+**structurally validated by `programs/analog_hil_report_schema_check.py`**.
+
+**`convergence_status` accepts EITHER vocabulary**, because this document
+defines two and never said which one to write:
+
+| written as | meaning | `converged` must be |
+|---|---|---|
+| `IDEAL` | all three agree within 10 % (see Convergence criteria) | `true` |
+| `CONVERGED` | hardware in spec, HW-vs-SPICE < 20 % | `true` |
+| `WARNING` / `CONVERGED_WARNING` | in spec, HW-vs-SPICE ≥ 20 % | either |
+| `MODEL_INACCURACY` | hardware out of spec — add margin, re-sim + re-measure | not `true` |
+| `BACK_TO_PHASE1` | SPICE itself out of spec — should not have reached Phase 2 | not `true` |
+
+The right-hand four are exactly what the decision table above produces and what
+`programs/analog_hil_three_way_verdict.py` computes from the same
+`final_comparison` block. The validator used to accept only the first three, so
+a report carrying the honest `MODEL_INACCURACY` outcome came back as a SCHEMA
+violation — a real bench finding reported as a format complaint. Writing a
+non-converged verdict together with `"converged": true` is still a FAIL: that
+is a self-contradiction, not a vocabulary choice.
 ```json
 {
   "block_name": "ldo_1v8",
@@ -86,6 +104,25 @@ final_comparison.{spec,spice,hw,discrepancy_pct}, convergence_status ∈
 - Do not exceed 3 hardware iterations — enforced by `programs/analog_hil_iteration_cap_check.py` (escalate a model-accuracy issue instead of iterating)
 - Do not assume breadboard is pre-built — always display wiring guide and wait for user confirmation (interactive human-in-the-loop gate — kept as judgment)
 - Do not adjust more than 1 component per hardware iteration — enforced by `programs/analog_hil_single_knob_check.py` (records sizing-per-iteration in `analog/<block>/hw_sizing_history.json`)
+
+## Enforcement status (read this before trusting a green A9)
+
+The three programs above are wired into flow step **A9** as
+`advisory_program_exit_zero` — they RUN and their verdicts are printed and
+carried into the step's JSON report, but they cannot fail the step yet.
+
+The reason is a producer gap, and it is measured: **nothing in this repository
+writes `hw_tuning_report.json` or `hw_sizing_history.json`** — zero files
+repo-wide, no program emits them, and this document is the only place that
+describes their shape. So all three report **exit 2 = NOT CHECKED** on every
+published run, which the flow renders as `n/a (input not present)` rather than
+`ok`. A blocking gate over an artefact with no producer would certify nothing.
+
+**When you author these two files** (that is your job in Phase 2 above — they
+are agent-authored by design), the gates start judging real content. Once a
+runner step emits them, promote all three to `program_exit_zero` in
+`flow/phase1_phase2_phase3.yaml`: they already return exit 1 for every defect,
+including a malformed report.
 
 ## Handoff
 

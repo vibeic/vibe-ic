@@ -70,6 +70,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
+import _published_tree as _pt
+
 
 # --------------------------------------------------------------------------
 # What counts as a home path
@@ -248,18 +250,57 @@ def scan_file(path: Path, rel: Path,
 
 
 def iter_source_files(root: Path) -> Iterable[Path]:
-    for p in sorted(root.rglob("*")):
-        if not p.is_file():
-            continue
-        if any(part in _SKIP_DIR_NAMES for part in p.parts):
-            continue
-        if p.suffix.lower() in _SCAN_EXTS:
-            yield p
+    """The population is what the COMMIT carries, not what this disk holds.
+
+    SHIPPED means committed. A walk answers "what is on this machine", and the
+    two diverge the moment anyone runs the suite: generated fixtures under
+    `programs/tests/fixtures/` are ignored by `.gitignore`, so `git status
+    --untracked-files=all` does not show them, and they entered this scan
+    silently. Measured at the commit that landed this, same commit both sides:
+
+        working checkout    3654 file(s) scanned
+        fresh worktree      3595
+
+    59 files, all of them generated, none of them shipped. The verdict happened
+    to agree — but a fixture written with an absolute path would have made this
+    gate FAIL on its author's machine and PASS in CI, for a file that is in
+    neither commit. `_published_tree` was built for exactly this class and
+    already records three earlier instances; this is the fourth.
+
+    `_SKIP_DIR_NAMES` stays as the fallback's filter, and is no longer the only
+    thing standing between the scan and `__pycache__`: it was a hand-maintained
+    approximation of `.gitignore`, which is a second copy of a value it cannot
+    see. Asking git makes it redundant rather than adding a mechanism beside it.
+    """
+    walked = [p for p in sorted(root.rglob("*"))
+              if p.is_file()
+              and not any(part in _SKIP_DIR_NAMES for part in p.parts)
+              and p.suffix.lower() in _SCAN_EXTS]
+    # `None` is "not a published tree", NEVER "published and empty" — a user's
+    # own project directory publishes nothing, and there presence on disk is
+    # the honest answer. Collapsing the two would turn "I could not look" into
+    # "I looked and there is nothing".
+    if _pt.published_paths(root) is None:
+        SCAN_CENSUS["enumeration"] = "filesystem-walk"
+        return walked
+    SCAN_CENSUS["enumeration"] = "git-tracked"
+    return _pt.filter_to_published(root, walked)
+
+
+# Filled by `scan_tree` on every call: how many files this guard actually read.
+# A PASS with no denominator cannot be told apart from a PASS that scanned
+# NOTHING (vibe-ic#447), and the repo's own empty-tree probe refuses to let a
+# gate be wired into CI without one — it caught this program when it was
+# wired, which is the probe working.
+SCAN_CENSUS: dict = {}
 
 
 def scan_tree(root: Path, extra_allowed: Sequence[str] = ()) -> List[Finding]:
     findings: List[Finding] = []
+    SCAN_CENSUS.clear()
+    SCAN_CENSUS["files_read"] = 0
     for p in iter_source_files(root):
+        SCAN_CENSUS["files_read"] += 1
         findings.extend(scan_file(p, p.relative_to(root), extra_allowed))
     return findings
 
@@ -293,13 +334,27 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"ERROR: cannot write --json: {e}", file=sys.stderr)
             return 2
 
+    _read = SCAN_CENSUS.get("files_read", 0)
+    # NAMED IN THE VERDICT, not merely recorded. A fallback nobody can see is
+    # how the defect this fixes stayed invisible: the walk and the tracked set
+    # give the same sentence, so the only way to tell which one answered is for
+    # the sentence to say. `filesystem-walk` is legitimate — it is what a user's
+    # own project gets — but it must never be indistinguishable from the other.
+    _how = SCAN_CENSUS.get("enumeration", "unknown")
+    if not findings and _read == 0:
+        # Scanning nothing and finding nothing is what a WRONG ROOT looks like.
+        print(f"shipped_path_portability_check: NOTHING_SCANNED — read 0 "
+              f"scannable file(s) under {root}. A clean result over an empty "
+              f"scan is not a clean result; check the plugin_root argument.",
+              file=sys.stderr)
+        return 2
     if not findings:
-        print("shipped_path_portability_check: PASS "
-              "(no personal absolute paths in shipped source)")
+        print(f"shipped_path_portability_check: PASS ({_read} file(s) scanned, "
+              f"{_how}) — no personal absolute paths in shipped source")
         return 0
 
     print(f"shipped_path_portability_check: FAIL — {len(findings)} "
-          f"non-portable path(s)")
+          f"non-portable path(s) in {_read} file(s) scanned ({_how})")
     for f in findings:
         print(f"  {f.file}:{f.line} [{f.rule}] {f.path}\n      {f.reason}")
     return 1

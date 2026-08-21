@@ -540,6 +540,19 @@ def main(argv=None) -> int:
     print(out)
     if args.warn_only:
         return 0
+    if status == "SKIP-no-handshake":
+        # The JSON already said SKIP; the exit code said success (#564).
+        # `n_error` is 0 because nothing was examined, not because a handshake
+        # was checked and found stable, and rc 0 is what the P0 umbrella
+        # aggregates.
+        #
+        # Measured over 60 corpus projects: 4 answer CHECKED (real work), 31
+        # answer SKIP-no-handshake, 25 already exit 2 via the no-targets path.
+        # So this gate can distinguish; only this branch could not.
+        print("VACUOUS_PASS: handshake_livelock_result_stability_check "
+              "examined nothing (reason: no handshake found in any target) — "
+              "n_error 0 is not a stability result", file=sys.stderr)
+        return 2
     return 1 if summary["n_error"] > 0 else 0
 
 

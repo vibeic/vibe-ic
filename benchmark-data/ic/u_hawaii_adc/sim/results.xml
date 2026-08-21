@@ -1,9 +1,0 @@
-{
-  "verdict": "SKIP",
-  "reason": "no substantiating reference-TB evidence — refusing a verdict-only PASS (#433): reference_tb step verdict=SKIP; transcripts found=0",
-  "design_identity": {
-    "design": "u_hawaii_adc",
-    "ic_name": "u_hawaii_adc",
-    "top": "u_hawaii_adc"
-  }
-}

@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 
 PROG = Path(__file__).resolve().parent.parent / "benchmark_evidence_publish.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _pdk_revision_fixture as _pdk_fixture  # noqa: E402
 
 _GDS_BYTES = b"GDSII-FAKE-STREAM-" * 64
 _RESULT_PASS = "# RESULT\n\n## VERDICT\n\n**PASS_WITH_WAIVERS.** re-derived.\n"
@@ -61,6 +63,11 @@ def _make_run(base: Path, verdict: str = "PASS_WITH_WAIVERS",
     if with_gds:
         (run / "phase3" / "stage4" / "gds").mkdir(parents=True, exist_ok=True)
         (run / "phase3" / "stage4" / "gds" / "top.gds").write_bytes(_GDS_BYTES)
+    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
+    # revision it signed off against (W6). The record is produced by the
+    # REAL resolver over a synthesized tree — never hand-written — so this
+    # fixture cannot drift from the program that writes it in production.
+    _pdk_fixture.write_run_pdk_revision(run)
     return run
 
 
@@ -108,14 +115,36 @@ def test_manifest_has_correct_size_and_sha(tmp_path):
     assert manifest == f"top.gds {len(_GDS_BYTES)}B sha256:{exp_sha}"
 
 
-def test_raw_geometry_excluded(tmp_path):
+def test_small_layout_artefacts_are_staged(tmp_path):
+    """#419 — this asserted the OPPOSITE until v1.6.61, and that assertion is
+    why a cell published by this program carried LESS evidence than the
+    hand-staged cells it replaced. `.gitignore` accepts layout artefacts
+    under `benchmark-data/ic/**`; dropping them by extension threw away the
+    0.8 MB artefact a reviewer wants in order to avoid a 105 MB one."""
     run = _make_run(tmp_path)
     dest_root = tmp_path / "benchmark-data"
     assert _run(_base_args(run, dest_root)).returncode == 0
     cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
-    raws = [p for p in cell.rglob("*")
-            if p.suffix.lower() in (".gds", ".def", ".spef", ".oas")]
-    assert raws == [], f"raw geometry leaked into publish: {raws}"
+    shipped = sorted(p.name for p in cell.rglob("*")
+                     if p.suffix.lower() in (".gds", ".def", ".spef", ".oas"))
+    assert "dump.def" in shipped and "parasitics.spef" in shipped, shipped
+
+
+def test_an_oversized_layout_artefact_is_still_excluded(tmp_path):
+    """The paired half — the reason the rule exists at all. Above the ceiling
+    the file cannot be committed, so staging it would only produce a cell
+    whose push is rejected."""
+    run = _make_run(tmp_path)
+    big = run / "reports" / "phase3" / "huge.def"
+    big.parent.mkdir(parents=True, exist_ok=True)
+    with big.open("wb") as fh:
+        fh.truncate(51 * 1000 * 1000)        # sparse: st_size without the disk
+    dest_root = tmp_path / "benchmark-data"
+    assert _run(_base_args(run, dest_root)).returncode == 0
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    assert not (cell / "reports" / "phase3" / "huge.def").exists()
+    # and the small ones beside it are unaffected — the rule is about size
+    assert (cell / "reports" / "phase3" / "dump.def").exists()
 
 
 def test_dry_run_writes_nothing(tmp_path):
@@ -134,7 +163,11 @@ def test_json_summary(tmp_path):
     assert _run(_base_args(run, dest_root) + ["--json", str(out)]).returncode == 0
     data = json.loads(out.read_text())
     assert data["verdict"] == "PASS_WITH_WAIVERS"
-    assert data["excluded_raw_files"] >= 2
+    # #419: nothing in this fixture is over the ceiling, so nothing is
+    # excluded. The field must still be REPORTED — a publish that silently
+    # dropped an artefact and said nothing is what made the shortfall in the
+    # published cells invisible for four versions.
+    assert data["excluded_raw_files"] == 0, data
 
 
 # --------------------------------------------------------------------------

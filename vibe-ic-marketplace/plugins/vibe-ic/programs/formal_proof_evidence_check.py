@@ -97,30 +97,47 @@ def _sby_file_refs(txt: str):
     return out
 
 
-def _resolve(formal_dir: Path, project: Path, token: str):
-    """A referenced file may be relative to the .sby dir or the project, OR
-    (ORGANIC #550 (a)) it may only exist where SymbiYosys STAGED it: a
-    `[files]` entry is copied into the task workdir as `<task>/src/<basename>`,
-    so after a real run the original source path can be gone while the proof
-    evidence lives under src/. Resolve in that order."""
+def _resolve(sby_dir: Path, formal_dir: Path, project: Path, token: str):
+    """Resolve a `.sby` reference the way SymbiYosys would.
+
+    #418. This function's docstring already said "relative to the .sby dir",
+    and the code had never used the .sby dir — it resolved against
+    `formal_dir`. For a `.sby` at the top of `formal/` those are the same
+    directory, so the difference was unobservable until #412 made NESTED
+    `.sby` files discoverable. After that, `reset_safety/spm_reset_safety.sby`
+    naming a bare `spm.v` — which SymbiYosys reads as `reset_safety/spm.v`,
+    absent — resolved to `formal/spm.v` one level up, and a `.sby` that
+    `sby -f` could not run was reported as elaboratable. The gate's own words
+    for what it checks are "an elaboratable .sby".
+
+    The unrestricted `formal_dir.rglob(basename)` last resort is gone with
+    it: any file of the right NAME anywhere beneath `formal/` used to satisfy
+    a reference, which is not evidence the `.sby` could elaborate. Measured
+    across every `.sby` in the published corpus before removing it: 7
+    references resolve from the `.sby`'s own directory, 3 from the staging
+    fallback below, 1 only from `formal_dir` (the false clean above), 2 are
+    genuinely unresolved — and ZERO used the unrestricted rglob.
+
+    ORGANIC #550 (a) IS KEPT, and it is the reason this is not simply
+    tightened: a `[files]` entry is copied into the task workdir as
+    `<task>/src/<basename>`, so after a real run the original source path can
+    be gone while the proof evidence lives under `src/`. Three references in
+    the corpus depend on that. Removing it would false-FAIL genuinely proved
+    cells — the opposite error, in the direction that costs more.
+    """
     if any(ch in token for ch in "*?["):
-        hits = list(formal_dir.glob(token)) + list(project.glob(token))
+        hits = (list(sby_dir.glob(token)) + list(project.glob(token)))
         return hits[0] if hits else None
-    for base in (formal_dir, project):
+    for base in (sby_dir, project):
         p = base / token
         if p.is_file():
             return p
-    # sby staging fallback: the file copied to <task>/src/<basename>.
+    # #550(a) staging fallback: the file copied to <task>/src/<basename>.
     basename = Path(token).name
     if basename:
         staged = sorted(formal_dir.rglob(f"src/{basename}"))
         if staged:
             return staged[0]
-        # last resort: any file with that basename under formal/ (the
-        # staged copy under a task workdir).
-        anywhere = sorted(formal_dir.rglob(basename))
-        if anywhere:
-            return anywhere[0]
     return None
 
 
@@ -184,9 +201,48 @@ def _sibling_env_gap(formal_dir: Path):
     return None
 
 
+def _authored_sby_files(formal_dir):
+    """Every AUTHORED `.sby` under `formal/`, recursively.
+
+    ORGANIC #412 — discovery was INCONSISTENT: transcripts were found with
+    `rglob`, `.sby` and `results.json` only at the top level. A cell whose
+    evidence is organised one level down (`formal/<campaign>/`,
+    `formal/<property>/`) therefore got "results.json absent — nothing claims
+    a proof" for evidence this same function had already located. Measured on
+    the published ihp-sg13g2 cell: `.sby`, `.sby.log` and `results.json` all
+    present under `campaign_v1558/`, verdict FAIL / NO_RESULTS.
+
+    SymbiYosys writes its OWN copy of the config into each task workdir as
+    `config.sby`, so a bare `rglob("*.sby")` would count the tool's generated
+    artefact as a second authored proof. One is tracked in this repo today.
+    Skipped STRUCTURALLY — `config.sby` beside a `status` or `logfile.txt`
+    is a workdir, not an authored task — rather than by name alone, so an
+    authored file that happens to be called `config.sby` still counts.
+    """
+    out = []
+    for f in sorted(formal_dir.rglob("*.sby")):
+        if f.name == "config.sby" and (
+                (f.parent / "status").exists()
+                or (f.parent / "logfile.txt").exists()):
+            continue
+        out.append(f)
+    return out
+
+
+def _first_results_json(formal_dir):
+    """`formal/results.json`, else the first one found recursively (#412)."""
+    top = formal_dir / "results.json"
+    if top.is_file():
+        return top
+    for f in sorted(formal_dir.rglob("results.json")):
+        if f.is_file():
+            return f
+    return top          # non-existent top-level path, for the message
+
+
 def audit(project: Path) -> dict:
     formal_dir = _pl.formal_dir(project)
-    results_path = formal_dir / "results.json"
+    results_path = _first_results_json(formal_dir)
     rep = {"program": "formal_proof_evidence_check", "version": "1.0.0",
            "findings": []}
 
@@ -264,7 +320,7 @@ def audit(project: Path) -> dict:
     # (a) an elaboratable .sby ----------------------------------------------
     sby_ok = False
     sby_missing_refs = []
-    sby_files = sorted(formal_dir.glob("*.sby"))
+    sby_files = _authored_sby_files(formal_dir)
     sby_no_refs = []
     for sby in sby_files:
         txt = sby.read_text(errors="replace")
@@ -272,11 +328,16 @@ def audit(project: Path) -> dict:
         if not refs:
             sby_no_refs.append(sby.name)
             continue
-        missing = [t for t in refs if _resolve(formal_dir, project, t) is None]
+        missing = [t for t in refs
+                   if _resolve(sby.parent, formal_dir, project, t) is None]
         if not missing:
-            sby_ok = True
-            rep["sby"] = str(sby.relative_to(project))
-            break
+            # #417: record the FIRST intact chain, but do NOT break. The loop
+            # used to stop here, so every later .sby went unexamined and its
+            # dangling references could not be reported at all.
+            if not sby_ok:
+                sby_ok = True
+                rep["sby"] = str(sby.relative_to(project))
+            continue
         sby_missing_refs.append(f"{sby.name}: {', '.join(missing[:4])}")
     if not sby_ok:
         # #453 — message split: "no .sby at all" vs ".sby present but no
@@ -292,6 +353,27 @@ def audit(project: Path) -> dict:
         rep["findings"].append(
             "SBY_CHAIN_BROKEN (#448): no .sby whose referenced files all "
             "exist" + detail)
+    elif sby_missing_refs:
+        # #417. SBY_CHAIN_BROKEN quantifies over ALL .sby ("no .sby whose
+        # refs all exist"), so one intact chain made it unreachable for every
+        # other chain in the directory, however broken. Landing #415 walked
+        # straight through that hole: the gate had been naming TWO broken
+        # chains in spm/v1.5.58_ihp-sg13g2, #415 restored the DUT for one of
+        # them, and the other went silent without having changed.
+        #
+        # The VERDICT stays quantified the way it was, deliberately. What the
+        # gate answers is whether results.json's `all_proved` stands up, and
+        # it stands up on the chain results.json actually cites; a separate,
+        # later regeneration that happens to live under formal/ is not the
+        # claim being made, and failing the cell for it would fail cells for
+        # artefacts their own manifest never claimed. What was wrong was not
+        # the quantifier on the verdict — it was that a true, previously
+        # reported fact had no way to be said once some other chain was fine.
+        rep["findings"].append(
+            f"SBY_REFS_DANGLING (#417, non-verdict): the verdict rests on "
+            f"{rep.get('sby', '(an intact .sby)')}, but "
+            f"{len(sby_missing_refs)} other .sby reference file(s) that do "
+            f"not exist — {'; '.join(sby_missing_refs[:3])}")
 
     # (b) a SymbiYosys log with PASS status ---------------------------------
     log_ok = False

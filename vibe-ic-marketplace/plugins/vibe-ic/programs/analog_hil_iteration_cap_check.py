@@ -18,19 +18,33 @@ node / bench may justify a different bar; the constant lives here, not in prose)
 
 PASS  iff every block's hardware iteration count is an integer in [0, max].
 FAIL  iff any block exceeds the cap (real defect: an un-converging loop that
-      should have been escalated).
-SKIP  (exit 0 + INFO) iff there are no hw_tuning_report.json files.
-ERROR (exit 2) iff a report exists but its hardware-iteration field is missing /
-      non-integer — a malformed report must NOT silently pass.
+      should have been escalated), OR a report exists but its
+      hardware-iteration field is missing / non-integer / negative.
+NOT CHECKED (exit 2) iff there are no hw_tuning_report.json files.
+
+EXIT-CODE CONTRACT (repaired — the two tiers used to be the wrong way round)
+---------------------------------------------------------------------------
+This program's docstring has always said "a malformed report must NOT silently
+pass", and it returned exit 2 for that case. Measured against the consumer:
+`flow_compliance_check.__check_program_exit_zero` maps exit 2 to
+`__VACUOUS_HINT__` and returns True — i.e. a PASS
+(`pass_count = counts["PASS"] + counts["VACUOUS_PASS"]`); the advisory slot
+renders exit 2 as "n/a (input not present)". So under EVERY wiring, the exact
+case this gate was written to refuse to pass was reported as a pass, and the
+no-artefact case (exit 0) was reported as "ran and found nothing wrong".
+
+The two tiers are therefore swapped to match what the consumer means:
+    * malformed / uncountable report -> 1 (a defect, and it blocks)
+    * no report present at all       -> 2 (disclosed cannot-judge)
 
 Usage:
     python3 analog_hil_iteration_cap_check.py <project_dir> [--max-iters N] [--json <out>]
     python3 analog_hil_iteration_cap_check.py --file <report.json> [--max-iters N] [--json <out>]
 
 Exit codes:
-    0  PASS / SKIP
-    1  FAIL (cap exceeded)
-    2  argument / I/O / malformed-report error
+    0  PASS
+    1  FAIL (cap exceeded, or malformed / uncountable report)
+    2  NOT CHECKED (no report present) / argument / I/O error
 """
 from __future__ import annotations
 
@@ -40,6 +54,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     import _path_layout as _pl
@@ -171,16 +186,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out, json.dumps(report, indent=2, ensure_ascii=False) + "\n")
 
     verdict = report["verdict"]
-    print(f"[{verdict}] analog_hil_iteration_cap_check (cap={args.max_iters})")
+    label = "NOT CHECKED" if verdict == "SKIP" else verdict
+    print(f"[{label}] analog_hil_iteration_cap_check (cap={args.max_iters})"
+          + (f" — {report.get('reason', 'nothing to count')}"
+             if verdict == "SKIP" else ""))
     for b in report["blocks"]:
         print(f"  [{b['verdict']}] block={b['block']} hw_iters={b['hw_iterations']}: {b['reason']}")
 
-    if verdict == "ERROR":
+    # 0 PASS / 1 FAIL (incl. ERROR) / 2 NOT CHECKED — see the module docstring
+    # for the measurement that swapped the ERROR and no-artefact tiers.
+    if verdict == "SKIP":
         return 2
-    return 0 if verdict in ("PASS", "SKIP") else 1
+    return 0 if verdict == "PASS" else 1
 
 
 if __name__ == "__main__":

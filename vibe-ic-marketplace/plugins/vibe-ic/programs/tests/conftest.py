@@ -87,42 +87,24 @@ def load_real_fixture(name: str) -> str:
     return (_REAL_BENCHMARK_DIR / name).read_text(encoding="utf-8")
 
 
-def func_src(src: str, name: str) -> str:
-    """Source of exactly ONE function `name`, resolved with `ast`.
+# func_src now lives in _source_pin.py — see that module for WHY.
+from _source_pin import func_src  # noqa: E402,F401
 
-    Source-pin tests assert that a program's implementation still contains some
-    token. They used to scope that with a magic character count
-    (``src[i:i + 6800]``), which is wrong in BOTH directions as the file evolves:
 
-      * window too SHORT -> **false FAIL**. `_report_check_types_tcl` grew to
-        1845 chars, so a 1200-char window stopped before the marker it asserts
-        (offset 1763) and the test failed on correct code.
-      * window too LONG  -> **false PASS**. A 6800-char window over
-        `_emit_spef_sta` (really 6323) bled 477 chars into the NEXT function, so
-        an assertion could be satisfied by a neighbouring function's text —
-        precisely the regression a source-pin exists to catch.
-      * on a NEGATIVE (`not in`) pin the SHORT direction is the dangerous one:
-        a 6000-char window over `_emit_mcorner_ocv_sta` (really 6951) left its
-        last ~950 chars unchecked for the very construct it forbids.
-
-    `ast` is used rather than text scanning because two text approaches both
-    break on real code here:
-      * `src.index(f"def {name}")` is a PREFIX match — asking for `_run` would
-        happily return `_run_oracle_tb`;
-      * scanning forward to the next ``\\ndef`` assumes a TOP-LEVEL definition,
-        but e.g. `_auto` in phase3_one_shot_runner is nested at col_offset=4, so
-        that scan would run to the next top-level def thousands of lines later.
-
-    A missing name raises rather than returning something plausible — a
-    source-pin that silently pins nothing is worse than one that fails.
-    """
-    tree = ast.parse(src)
-    hits = [n for n in ast.walk(tree)
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name]
-    if not hits:
-        raise AssertionError(f"func_src: no function named {name!r} in this source")
-    # Prefer a top-level definition when a nested helper shares the name;
-    # otherwise take the first in source order. Deterministic either way.
-    node = next((n for n in hits if n.col_offset == 0), hits[0])
-    lines = src.splitlines()
-    return "\n".join(lines[node.lineno - 1:node.end_lineno])
+# vibe-ic#1037 — a test that claims to examine REAL data must say WHICH file it
+# examined, in the suite's own output, so the next reader sees the premise
+# rather than trusting the test's name. `_real_data.select` records every
+# selection and every refusal; this prints them on EVERY run, pass or fail,
+# with no flag. A `real-data provenance` section that is missing a test you
+# expected to see is itself the finding.
+def pytest_terminal_summary(terminalreporter, exitstatus, config):  # noqa: ARG001
+    try:
+        from _real_data import ledger_lines
+    except Exception:  # pragma: no cover - the suite must not die on disclosure
+        return
+    lines = ledger_lines()
+    if not lines:
+        return
+    terminalreporter.write_sep("-", "real-data provenance")
+    for line in lines:
+        terminalreporter.write_line(line)

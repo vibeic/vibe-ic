@@ -23,7 +23,7 @@ correlate with the STA timing model. Three verification axes:
      (LDO, PLL, OSC, bandgap, ADC, DAC, comparator), verifies that each has
      a corresponding SPICE simulation result.
 
-Self-skips (exit 0 + INFO) when:
+Self-skips when:
   - No extracted parasitics (SPEF) exist (Step 20 not reached)
   - No STA results exist (Step 21 not reached)
 
@@ -32,9 +32,16 @@ Usage:
     python3 spice_correlation_check.py <project_dir> --json reports/gates/spice_correlation.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: SPEF + STA both exist and the SPICE evidence correlates with
+        the timing model
     1 = FAIL (correlation mismatch or missing analog SPICE)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — the design has not reached Step 20
+        (no SPEF) or Step 21 (no STA), so there is no post-layout timing to
+        correlate against. #521: both used to be rc 0, on 197 of the 200
+        tracked project roots. Note that the DIFFERENT case — SPEF and STA
+        both present but no SPICE run at all — is deliberately NOT vacuous:
+        it sets `skipped: False` and FAILs NO_SPICE_VERIFICATION, and that is
+        unchanged here. Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -49,6 +56,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 import _path_layout as _pl
+import _vacuous_exit as _vx
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 
 
@@ -2111,14 +2119,20 @@ def main(argv: list = None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if not args.json:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] spice_correlation_check")
+        print(_vx.verdict_line("spice_correlation_check", result.passed,
+                               skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

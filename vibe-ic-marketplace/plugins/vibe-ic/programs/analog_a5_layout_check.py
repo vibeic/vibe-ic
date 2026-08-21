@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""analog_a5_layout_check.py — A5 deterministic gate (v1.6.35).
+"""analog_a5_layout_check.py — A5 deterministic gate.
 
 Verifies that the upstream `analog-layout` skill has emitted the
-canonical per-block A5 artefacts:
+canonical per-block A5 artefact:
 
     analog/<block>/layout.mag   (Magic source) OR
     analog/<block>/<block>.gds  (streamed GDS)
-    analog/<block>/drc_clean.flag
-    analog/<block>/lvs_match.flag
 
 with substance:
 
@@ -23,18 +21,119 @@ with substance:
     now parses the .mag (paint `rect` / instance `use` lines) or walks
     the .gds record stream (BOUNDARY/PATH/SREF/AREF/BOX records) and
     rejects a geometry-empty or `deterministic_stub`-marked layout.
-  * `drc_clean.flag` present (any non-empty file)
-  * `lvs_match.flag` present (any non-empty file)
+
+SCOPE — WHY THIS GATE DOES NOT JUDGE DRC/LVS SIGN-OFF
+-----------------------------------------------------
+This gate used to ALSO require `<block>/drc_clean.flag` and
+`<block>/lvs_match.flag` to carry clean verdicts. Those two files are
+step A6's DECLARED required_outputs, and A6 declares `blocks_on: [A5]`,
+so the declared ordering ran A6 -> A5 while the gate's read ran A5 -> A6:
+a literal dependency cycle that no `blocks_on` value can express.
+
+The cycle was broken on the A5 side, and here is how the direction was
+decided rather than guessed:
+
+  * A6 CANNOT run without A5's output. `analog_a6_block_pv_check` reports
+    `A6_PV_BLOCK_DIR_MISSING` ("A5 layout did not run for this block")
+    when the layout dir is absent — DRC and LVS are run ON the layout.
+    A5 -> A6 is a DATA dependency.
+  * A5 does not need PV evidence to PRODUCE a layout. The flag reads were
+    a verification-SCOPE choice, not a data need.
+  * The flags are physically written by the A6 step, not the A5 step:
+    `analog_one_shot_runner._emit_deterministic_stub` writes them under
+    `step_name == "A6_block_pv"`, and writes `layout.mag` under
+    `"A5_layout"`. The runner executes A5_layout BEFORE A6_block_pv, so
+    with the flag rules in place A5 reported FAIL on every correct
+    single-pass run, for a condition A5 itself cannot satisfy.
+
+So the PV verdict now lives ONLY in A6, where a STRICTER version of the
+same rules already ran: `analog_a6_block_pv_check` prefers real DRC/LVS
+REPORTS over the flags, rejects a bare/verdict-less flag, and FAILs
+(never SKIPs) on a block directory with no evidence. See
+`programs/tests/test_analog_a5_layout_check.py`, section "A5 -> A6 PV
+OWNERSHIP", which re-runs the inputs this gate used to reject through the
+A6 gate and asserts rc=1.
+
+WHAT THE HANDOVER DID **NOT** PRESERVE ON ITS OWN, corrected 2026-07-28
+rather than left as an over-broad claim. Old A5 read the FLAGS
+(`drc_clean.flag` / `lvs_match.flag`); A6 prefers the REPORT and only
+falls back to the flag. Two consequences follow, and they are different:
+
+  * A block whose FLAG CONTRADICTS ITS REPORT was rejected rc=1 by old A5
+    and, for a while, accepted rc=0 by BOTH gates. Measured on
+    `drc_clean.flag: "violations: 5"` beside `drc.report: "total
+    violations: 0"`, and `lvs_match.flag: "lvs: mismatch"` beside
+    `lvs.report: "netlists match"`: baseline A5 rc=1; after the cycle fix
+    and before the repair, A5 rc=0 and A6 rc=0 with no findings at all.
+    That is CLOSED — `analog_a6_block_pv_check._witness_disagreements`
+    now FAILs on it (A6_PV_DRC_WITNESS_DISAGREEMENT /
+    A6_PV_LVS_WITNESS_DISAGREEMENT), and it is non-waivable, because a
+    waiver accepts a measured risk and here the measurement is in dispute.
+    Re-measured on all 23 tracked analog run roots: A6's rc is unchanged
+    on 23 of 23, so the rule bought no false alarm.
+  * A block carrying a CLEAN REPORT and NO FLAG is rejected by old A5
+    (A5_DRC_FLAG_MISSING / A5_LVS_FLAG_MISSING) and accepted by A6. That
+    is DELIBERATE and is NOT called a lost defect class: the report is the
+    tool's own output and is richer evidence than a flag file; demanding
+    a flag beside it was A5 over-reaching, not A5 catching anything.
+
+ONE THING DID CHANGE, and it is not "no defect class". This gate never
+had a waiver code path, so it was a second, independently
+NON-SILENCEABLE gate on per-block DRC/LVS; A6 carries the flow-wide
+waiver path, so a project-side `waived_steps: [{id: analog_block_pv}]`
+entry now reaches the class. The asymmetry that matters is closed in A6
+(`_NON_WAIVABLE_RULES`): a waiver may suppress a MEASURED defect
+(DRC count > 0, LVS mismatch) — a ticketed accepted risk, which is what
+the flow's waiver mechanism is for and what waivers_schema_check /
+waiver_legitimacy_check / foundry_signoff_plan_check police — but it can
+never suppress an ABSENT measurement (block dir missing, no parseable
+DRC/LVS result). So the exact claim is: every input this gate used to
+reject is still rejected rc=1 by A6, and for the evidence-ABSENCE
+classes that holds even under a project-side step waiver.
+
+WHAT THE GEOMETRY RULES CANNOT SEE — the matching disclosure
+------------------------------------------------------------
+Every rule above answers "is there a layout?". None of them answers "is it
+the layout this block needed?", and the gate one step later cannot either:
+A6's netgen compare is TOPOLOGY-only, so N isolated devices in N slots close
+it exactly as green as a common-centroid quad, and dummies — the thing the
+authoring skill mandates two of per side — actively HURT the compare.
+
+So this gate now also reads the block's own record of its matching structure,
+`layout_matching.json`, and puts the answer in its report on EVERY verdict
+path. `matching_style: "none"` is a legitimate, certifying answer; what is
+recorded is the DIFFERENCE between a block that says so and one that says
+nothing. The rules below fire only on a record that EXISTS, so writing one
+costs nothing but having to mean it. See `_analog_layout_matching`.
 
 Failure rules:
   A5_LAYOUT_MISSING        — neither layout.mag nor <block>.gds present
   A5_LAYOUT_TOO_SMALL      — layout source < 200 bytes (stub)
   A5_LAYOUT_EMPTY_GEOMETRY — layout source has no placed geometry (empty
                              stream or padded/deterministic stub)
-  A5_DRC_FLAG_MISSING      — drc_clean.flag absent
-  A5_LVS_FLAG_MISSING      — lvs_match.flag absent
+  A5_MATCHING_DISCLOSURE_MALFORMED
+                           — layout_matching.json exists and answers nothing
+  A5_MATCHING_STYLE_GROUPS_CONTRADICT
+                           — `matching_style` and `matched_groups` disagree
+  A5_MATCHING_GROUP_DUMMIES_INSUFFICIENT
+                           — a matched group declares < 2 dummies per side
+  A5_MATCHING_DUMMIES_LVS_UNRECONCILED
+                           — dummies declared, no `lvs_dummy_waiver` names how
+                             the A6 LVS compare reconciles them
+  A5_DEVICE_PARTITION_WIDTH_MISMATCH
+                           — an N-way device split whose layout widths do not
+                             sum to `w_um x m`
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
+Project-level verdicts (no `--block`):
+  VACUOUS_PASS — no `analog_block_list.json` under `phase3/analog/` or
+                 `phase1/analog/`, or it declares no blocks; or EVERY
+                 declared block is still missing its layout (the step
+                 has not run at all → defer to skill `analog-layout`).
+  INCOMPLETE   — SOME declared blocks produced a layout and others produced
+                 none (exit 1). A5's own requirement was never met for the
+                 uncovered blocks, so the gate must not certify the step:
+                 it names the uncovered blocks instead of reporting PASS.
+  PASS         — every declared block cleared every check.
 chip-AGNOSTIC.
 """
 from __future__ import annotations
@@ -45,13 +144,31 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
+    BLOCK_LIST_ABSENT_REASON,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
-    artefact_missing_for_block, emit_pass, emit_fail,
+    artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
 )
+import _analog_layout_matching as _lm
 
 GATE = "analog_a5_layout_check"
 SKILL = "analog-layout"
 MIN_LAYOUT_BYTES = 200
+
+
+# Project-level INCOMPLETE (exit 1) — some declared blocks produced a layout
+# and others produced none — is emitted by the SHARED
+# `_analog_a_check_common.emit_incomplete`, the same emitter A1-A4 use.
+#
+# An earlier fix shipped a byte-local copy of that emitter here, because the
+# shared helper was landing on a sibling branch at the same time and three
+# branches adding an identically-named function to one file would have
+# collided. Those branches have landed. The local copy produced a REPORT that
+# differed from A1-A4's for the same verdict: it carried no
+# `incomplete_blocks`, no `suggested_skill` and no `reason`, so a consumer
+# reading an A5 INCOMPLETE report could not learn which blocks were uncovered
+# or which skill to invoke, while the A1-A4 report told it both. Same verdict
+# string and same exit code, so nothing that keys on those is affected.
+
 
 # ORGANIC #144 — real-geometry parsing.
 # A stub / empty-geometry layout carries a size but NO placed geometry.
@@ -117,12 +234,11 @@ def _layout_has_real_geometry(path: Path) -> tuple[bool, str]:
 
 
 def _check_block(project: Path, block: str
-                 ) -> tuple[Optional[str], List[dict]]:
+                 ) -> tuple[Optional[str], List[dict], "_lm.Disclosure"]:
     bdir = project / "phase3" / "analog" / block
     mag = bdir / "layout.mag"
     gds = bdir / f"{block}.gds"
-    drc_flag = bdir / "drc_clean.flag"
-    lvs_flag = bdir / "lvs_match.flag"
+    disclosure = _lm.read_disclosure(bdir, block)
 
     findings: List[dict] = []
     layout_path: Optional[Path] = None
@@ -131,12 +247,14 @@ def _check_block(project: Path, block: str
     elif gds.is_file():
         layout_path = gds
     if layout_path is None:
-        # Treat as MISSING (not FAIL) so --block mode → WAIVED.
+        # Treat as MISSING (not FAIL) so --block mode → WAIVED. A block with
+        # no layout at all is not asked about its matching structure: there is
+        # nothing drawn to have one.
         return "MISSING", [{
             "block": block, "rule": "A5_LAYOUT_MISSING",
             "rel_path": str(bdir.relative_to(project)),
             "detail": "neither layout.mag nor <block>.gds present",
-        }]
+        }], _lm.Disclosure(_lm.DISCLOSURE_UNDISCLOSED, None, [], [])
     try:
         size = layout_path.stat().st_size
     except OSError:
@@ -160,21 +278,18 @@ def _check_block(project: Path, block: str
                 "rel_path": str(layout_path.relative_to(project)),
                 "detail": f"{size}B but no real placed geometry: {geo_detail}",
             })
-    if not drc_flag.is_file():
-        findings.append({
-            "block": block, "rule": "A5_DRC_FLAG_MISSING",
-            "rel_path": str(drc_flag.relative_to(project)),
-            "detail": "drc_clean.flag absent (DRC not signed off)",
-        })
-    if not lvs_flag.is_file():
-        findings.append({
-            "block": block, "rule": "A5_LVS_FLAG_MISSING",
-            "rel_path": str(lvs_flag.relative_to(project)),
-            "detail": "lvs_match.flag absent (LVS not signed off)",
-        })
+    # NOTE: per-block DRC / LVS sign-off is deliberately NOT judged here —
+    # see the module docstring's "SCOPE" section. It is step A6's verdict,
+    # over A6's own (richer) evidence, at the point in the flow where that
+    # evidence exists.
+    #
+    # The MATCHING record is read here, where the layout is. Its findings join
+    # this block's list; its CLASS is reported by `main` on every path,
+    # including this one's failures.
+    findings.extend(disclosure.findings)
     if findings:
-        return "FAIL", findings
-    return "PASS", []
+        return "FAIL", findings, disclosure
+    return "PASS", [], disclosure
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -188,8 +303,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            BLOCK_LIST_ABSENT_REASON)
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:
@@ -198,8 +312,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     findings: List[dict] = []
     blocks_pass = 0
     missing_seen: List[dict] = []
+    # Only blocks that HAVE a layout are asked what structure it has — a block
+    # with nothing drawn has no answer to give, and counting it as "did not
+    # say" would report the A5 gap twice under two different names.
+    disclosures: dict = {}
     for block in blocks:
-        status, fs = _check_block(project, block)
+        status, fs, disc = _check_block(project, block)
+        if status != "MISSING":
+            disclosures[block] = disc
         if status == "PASS":
             blocks_pass += 1
         elif status == "MISSING":
@@ -212,8 +332,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         "blocks_pass": blocks_pass,
         "blocks_missing": len(missing_seen),
         "blocks_fail": len(findings),
+        **_lm.summarise(disclosures),
     }
 
+    rc = _verdict(args, findings, missing_seen, blocks_pass, summary)
+    # LAST, and on every path — same contract as `structure_only_disclosure`.
+    _lm.matching_disclosure(GATE, disclosures)
+    return rc
+
+
+def _verdict(args, findings: List[dict], missing_seen: List[dict],
+             blocks_pass: int, summary: dict) -> int:
     if args.block:
         if findings:
             return emit_fail(GATE, args, findings, summary)
@@ -229,6 +358,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         return vacuous_pass(GATE, args,
                             f"all {len(missing_seen)} block(s) missing "
                             f"layout artefacts; defer to skill `{SKILL}`.")
+    # PARTIAL COVERAGE (d2) — some declared blocks have a layout, others have
+    # none at all. This used to fall through to emit_pass, so a project that
+    # laid out 1 of N declared analog blocks was CERTIFIED "A5 done": the
+    # step's declaration (`phase3/analog/*/layout.mag OR .../*.gds`) is a glob
+    # that ONE matching block satisfies, so only this per-block gate can see
+    # the uncovered blocks. Refuse to certify; name them instead.
+    if missing_seen:
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 

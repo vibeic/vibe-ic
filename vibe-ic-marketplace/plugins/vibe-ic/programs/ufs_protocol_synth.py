@@ -64,6 +64,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -74,7 +77,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def _ensure_dict(d: dict, key: str) -> dict:
@@ -819,7 +824,7 @@ def _l9(gd: Path) -> None:
         "the UFSHCI register file behind a system bus (AXI/AHB) and a "
         "UniPro+M-PHY hard-macro PHY.")
     # Force-override SD/MMC top_module + integration_overview.
-    d["top_module"] = "UFS_Device"
+    _ptm.apply(d, "UFS_Device")
     for stale in ("integration_overview", "pull_up_resistors"):
         d.pop(stale, None)
     d["integration_overview"] = {

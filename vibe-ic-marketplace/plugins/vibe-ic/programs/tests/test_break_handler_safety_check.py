@@ -117,7 +117,7 @@ endmodule
     assert len(errors) >= 1
 
 
-# -- Test: self-skip when no break signals --
+# -- Test: no break signals is VACUOUS (rc 2), not a PASS (#515) --
 
 def test_skip_no_break_signals(tmp_path):
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
@@ -128,7 +128,28 @@ module mac(input clk, output reg [3:0] state);
 endmodule
 """)
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
+    assert rpt["summary"]["reason"] == "no_break_signals"
+
+
+# -- #515 — the silent branch: a project with no RTL file at all --
+
+def test_vacuous_when_no_rtl_files(tmp_path):
+    (tmp_path / "docs").mkdir()
+    r = _run(tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    rpt = _load_report(tmp_path)
+    assert rpt["summary"] == {"skipped": True, "reason": "no_rtl_files"}
+
+
+# -- #515 — the disclosure is emitted even under --json (stdout is the
+#    report document there, so the sentinel goes to stderr).
+
+def test_vacuous_sentinel_on_stderr_under_json(tmp_path):
+    (tmp_path / "docs").mkdir()
+    r = _run(tmp_path)
+    assert "VACUOUS_PASS:" in r.stderr, r.stderr
+    assert "VACUOUS_PASS:" not in r.stdout, r.stdout

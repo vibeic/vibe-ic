@@ -111,7 +111,7 @@ def test_path_b_project_five_ports_zero_phantom_submodules(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
          str(proj), "--ic-name", "mul32"],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout[-1200:] + r.stderr[-1200:]
     l9 = json.loads(
         (proj / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json")

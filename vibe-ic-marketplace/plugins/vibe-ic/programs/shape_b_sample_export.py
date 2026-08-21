@@ -313,6 +313,45 @@ def guard_export(sample: Path, prompt_text: str = "") -> Tuple[bool, List[str]]:
         except Exception:
             pass
 
+    # E. clock divider / generator WAVEFORM-MEASUREMENT oracle. Builds a
+    #    spec-derived self-TB, MEASURES the produced divide ratio / duty / reset
+    #    value, and BLOCKs an UNAMBIGUOUS mismatch — the property class the hidden
+    #    TB checks that the structural gates cannot see (check C is only the odd
+    #    two-edge-OR self-toggle PHASE form; this catches a wrong RATIO / DUTY /
+    #    reset value at any structural form — the freq_divbyeven / freq_divbyfrac
+    #    false certificates). It SKIPs on any ambiguity / tool failure / non-divider
+    #    spec, so it never false-blocks; purely additive (can only add a BLOCK).
+    if prompt_text:
+        try:
+            import clock_divider_ratio_oracle_check as _cdr  # noqa: E402
+            _wf = _cdr.analyze(txt, prompt_text)
+            if _wf.get("verdict") == "BLOCK":
+                problems.append(
+                    f"clock-divider/generator waveform oracle: {_wf.get('reason', '')} "
+                    f"— the spec-stated ratio/duty/reset is not what the RTL produces "
+                    f"(measured via a spec-derived self-testbench, not the hidden TB).")
+        except Exception:
+            pass
+
+    # F. multi-bit RAMP / triangle / sawtooth WAVEFORM oracle. MEASURES where the
+    #    ramp turns, its step size and its peak dwell against what the spec states.
+    #    `spec_conformance_check`'s `waveform-peak-hold-dropped` is the STRUCTURAL
+    #    layer for this family and covers only the hold, by proxy; this is the
+    #    measurement layer, standing to it as check E stands to check C. SKIPs on
+    #    any ambiguity / tool failure / non-ramp spec, so it never false-blocks.
+    if prompt_text:
+        try:
+            import ramp_waveform_oracle_check as _rwo  # noqa: E402
+            _rw = _rwo.analyze(txt, prompt_text)
+            if _rw.get("verdict") == "BLOCK":
+                problems.append(
+                    f"ramp waveform oracle: {_rw.get('reason', '')} — the "
+                    f"spec-stated ramp bounds/step/dwell are not what the RTL "
+                    f"produces (measured via a spec-derived self-testbench, "
+                    f"not the hidden TB).")
+        except Exception:
+            pass
+
     # A. standalone compile. An unavailable tool is a NOTE, never a hard FAIL —
     # the structural completeness check (B) still governs the verdict.
     notes: List[str] = []
@@ -1279,10 +1318,41 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
             tb_note += " | reorder failed the standalone guard → shipped verbatim"
 
     ok, problems = guard_export(dst, spec_text)
+    repair_note = None
     if not ok:
-        # The guard FAILed — REJECT: do not leave a broken sample that scores as
-        # a false-green gate. Remove it so the scorer reports no_sample (honest)
-        # rather than compile_error on a half-shipped file.
+        # ── GATE-DIRECTED REPAIR (the guard names the defect; act on it) ─────
+        # Rejecting here used to be the end of the road: the guard had already
+        # identified the defect precisely and the flow then shipped nothing.
+        # `gate_directed_rtl_repair` consumes that verdict and, for a defect
+        # class that has an INDEPENDENT MEASURING oracle, applies a
+        # deterministic source transform. The repaired text is accepted ONLY if
+        # that spec-derived oracle returns an explicit PASS *and* the full
+        # guard below re-passes — the guard is the acceptance test, unchanged,
+        # so a repair can never weaken it. A declined or rejected repair leaves
+        # the original rejection exactly as it was.
+        if spec_text:
+            try:
+                import gate_directed_rtl_repair as _gdr  # noqa: E402
+                _rr = _gdr.repair(dst.read_text(errors="replace"), spec_text)
+                if _rr.get("verdict") == "REPAIRED":
+                    _cand = _rr["rtl"]
+                    _prev = dst.read_text(errors="replace")
+                    dst.write_text(_cand)
+                    ok, problems = guard_export(dst, spec_text)
+                    if ok:
+                        repair_note = (
+                            f"gate-directed repair applied: {_rr['defect']} via "
+                            f"{_rr['transform']}, accepted by the spec-derived "
+                            f"oracle and re-verified by the full export guard")
+                    else:
+                        dst.write_text(_prev)   # repair did not clear the guard
+            except Exception:
+                pass
+    if not ok:
+        # The guard FAILed and no repair cleared it — REJECT: do not leave a
+        # broken sample that scores as a false-green gate. Remove it so the
+        # scorer reports no_sample (honest) rather than compile_error on a
+        # half-shipped file.
         try:
             dst.unlink()
         except OSError:
@@ -1310,6 +1380,7 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
             "reorder_applied": (reordered != original),
             "reorder_reverted": reorder_reverted,
             "param_injected": param_injected,
+            "repair_note": repair_note,
             "guard_notes": [p for p in problems if p.startswith("NOTE:")]}
 
 

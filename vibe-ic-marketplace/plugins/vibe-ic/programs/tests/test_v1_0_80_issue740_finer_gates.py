@@ -54,6 +54,7 @@ import rtl_hygiene_lint as HY            # noqa: E402
 import latency_conformance_check as LAT  # noqa: E402
 import clause_smoke_tb as CS             # noqa: E402
 import iface_conformance_v2 as IF        # noqa: E402
+from _sim_tools import NEEDS_SIM  # noqa: E402
 
 HAVE_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 
@@ -197,7 +198,7 @@ def test_g3_cli_second_output_is_advisory_does_not_change_rc(tmp_path):
     r0 = subprocess.run(
         [sys.executable, str(PROGRAMS / "latency_conformance_check.py"),
          "--rtl", str(p), "--top", "m", "--event", "start", "--output", "done",
-         "--expect", "1"], capture_output=True, text=True, timeout=120)
+         "--expect", "1"], capture_output=True, text=True, timeout=60)
     assert r0.returncode == 0, (r0.stdout, r0.stderr)
     assert "latency-conformance ok" in r0.stdout
     # WITH --second-output: same primary verdict + an ADVISORY note; rc unchanged.
@@ -205,7 +206,7 @@ def test_g3_cli_second_output_is_advisory_does_not_change_rc(tmp_path):
         [sys.executable, str(PROGRAMS / "latency_conformance_check.py"),
          "--rtl", str(p), "--top", "m", "--event", "start", "--output", "done",
          "--expect", "1", "--second-output", "out2", "--expect-second", "3",
-         "--json", str(jp)], capture_output=True, text=True, timeout=120)
+         "--json", str(jp)], capture_output=True, text=True, timeout=60)
     assert r1.returncode == 0, (r1.stdout, r1.stderr)
     assert "latency-conformance ok" in r1.stdout
     assert "SECOND-OUTPUT-LATENCY (advisory)" in r1.stdout
@@ -251,6 +252,7 @@ def test_g5_context_satisfies_prompt_named_submodule_port():
     assert not any(x.kind == "MISSING-PORT" and "wr_ptr" in x.message for x in f1)
 
 
+@NEEDS_SIM
 def test_g5_embedded_call_passes_extracted_code_and_context(tmp_path, monkeypatch):
     """END-STATE: the embedded iface-check inside cvdp_gate routes through the
     extracted RTL + the record's context RTL — proven by capturing the args the
@@ -404,17 +406,17 @@ def test_g2_good_rtl_passes_bug_rtl_blocks(tmp_path):
                    " assign y=(a<b); endmodule\n")
     rg = subprocess.run([sys.executable, str(CS_PROG), "--prompt", str(pp),
                          "--rtl", str(good)], capture_output=True, text=True,
-                        timeout=120)
+                        timeout=60)
     assert rg.returncode == 0, (rg.stdout, rg.stderr)
     assert "clause-smoke ok" in rg.stdout
     rb = subprocess.run([sys.executable, str(CS_PROG), "--prompt", str(pp),
                          "--rtl", str(bug)], capture_output=True, text=True,
-                        timeout=120)
+                        timeout=60)
     assert rb.returncode == 1, (rb.stdout, rb.stderr)
     assert "BLOCK" in rb.stdout + rb.stderr
     rw = subprocess.run([sys.executable, str(CS_PROG), "--prompt", str(pp),
                          "--rtl", str(bug), "--warn"], capture_output=True,
-                        text=True, timeout=120)
+                        text=True, timeout=60)
     assert rw.returncode == 0, (rw.stdout, rw.stderr)
 
 
@@ -483,7 +485,7 @@ def test_g2_offset_repro_returns_not_applicable_not_block(tmp_path):
                   "assign y=(a>(b+8'd2)); endmodule\n")
     r = subprocess.run([sys.executable, str(CS_PROG), "--prompt", str(pp),
                         "--rtl", str(rp)], capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "NOT-APPLICABLE" in r.stdout
     assert "BLOCK" not in (r.stdout + r.stderr)
@@ -504,11 +506,11 @@ def test_g2_clean_relation_still_catches_wrong_rtl_after_fix(tmp_path):
                    " assign y=(a<b); endmodule\n")
     rg = subprocess.run([sys.executable, str(CS_PROG), "--prompt", str(pp),
                          "--rtl", str(good)], capture_output=True, text=True,
-                        timeout=120)
+                        timeout=60)
     assert rg.returncode == 0 and "clause-smoke ok" in rg.stdout, (rg.stdout, rg.stderr)
     rb = subprocess.run([sys.executable, str(CS_PROG), "--prompt", str(pp),
                          "--rtl", str(bug)], capture_output=True, text=True,
-                        timeout=120)
+                        timeout=60)
     assert rb.returncode == 1 and "BLOCK" in (rb.stdout + rb.stderr), (rb.stdout, rb.stderr)
 
 
@@ -516,7 +518,7 @@ def test_g2_clean_relation_still_catches_wrong_rtl_after_fix(tmp_path):
 def test_chip_agnostic_source():
     guard = PROGRAMS / "source_chip_agnostic_check.py"
     r = subprocess.run([sys.executable, str(guard), str(PLUGIN)],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

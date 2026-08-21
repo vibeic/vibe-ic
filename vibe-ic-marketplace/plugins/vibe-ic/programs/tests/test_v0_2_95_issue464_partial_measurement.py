@@ -110,11 +110,36 @@ def _install_docker_shim(monkeypatch, ngspice_log):
 
 
 def _make_project(tmp_path, block, btype):
+    """A project with NO delivered netlist, on purpose.
+
+    What these end-to-end tests measure — `analysis_status["ac"]`,
+    `analysis_status["tran"]`, the `ugbw` metric — are properties of the
+    BUILT-IN template deck for this block type. A delivered netlist would (
+    correctly) become the subject of measurement and the assertions would be
+    about a different circuit, so the fixture leaves the upstream output absent
+    and the tests take the explicit opt-in below. The sweep will not reach the
+    simulator without it; that refusal is covered elsewhere."""
     bdir = tmp_path / "phase3" / "analog" / block
     bdir.mkdir(parents=True, exist_ok=True)
     bl = tmp_path / "phase3" / "analog" / "analog_block_list.json"
     bl.write_text(json.dumps({"blocks": [{"name": block, "type": btype}]}))
     return bdir
+
+
+def _exercise_builtin_template(monkeypatch):
+    """Opt in to the built-in table deliberately, the one way it is reachable.
+
+    Returns nothing; the caller asserts the resulting artefact is LABELLED as
+    built-in, so this suite is also a live guard on that labelling."""
+    monkeypatch.setenv("ANALOG_ALLOW_BUILTIN_NETLIST", "1")
+
+
+def _assert_labelled_builtin(cr):
+    assert cr["design_traceable"] is False, (
+        "a deck this program authored must never read as design-traceable")
+    assert cr["netlist_provenance"] == "builtin_template"
+    assert "BUILT-IN" in cr["deck_authored_by"]
+    assert cr["builtin_override"] == "ANALOG_ALLOW_BUILTIN_NETLIST"
 
 
 # ─────────────────── (1) unit: the per-log failure scanner ───────────────────
@@ -172,10 +197,12 @@ def test_run_block_partial_downgrades_provenance(tmp_path, monkeypatch):
     block = "u_block_partial"
     _make_project(tmp_path, block, "delta_sigma")
     _install_docker_shim(monkeypatch, _PARTIAL_LOG)
+    _exercise_builtin_template(monkeypatch)
     rc = M.run_block(tmp_path, block, "c", "sky130", "auto")
     assert rc == 0  # transient gives a usable vout, so the block still completes
     cr = json.loads((tmp_path / "phase3" / "analog" / block
                      / "corner_results.json").read_text())
+    _assert_labelled_builtin(cr)
     # provenance is DOWNGRADED (the headline #464 fix)
     assert cr["_provenance"] == "real_ngspice_partial"
     # first-class partial-measurement evidence is present
@@ -197,10 +224,12 @@ def test_run_block_clean_keeps_full_provenance(tmp_path, monkeypatch):
     block = "u_block_clean"
     _make_project(tmp_path, block, "delta_sigma")
     _install_docker_shim(monkeypatch, _CLEAN_LOG)
+    _exercise_builtin_template(monkeypatch)
     rc = M.run_block(tmp_path, block, "c", "sky130", "auto")
     assert rc == 0
     cr = json.loads((tmp_path / "phase3" / "analog" / block
                      / "corner_results.json").read_text())
+    _assert_labelled_builtin(cr)
     assert cr["_provenance"] == "real_ngspice"
     assert cr["partial_measurement"] is False
     assert cr["sim_warnings"] == []
@@ -216,9 +245,11 @@ def test_results_json_mirrors_partial_provenance(tmp_path, monkeypatch):
     block = "u_block_partial2"
     _make_project(tmp_path, block, "delta_sigma")
     _install_docker_shim(monkeypatch, _PARTIAL_LOG)
+    _exercise_builtin_template(monkeypatch)
     M.run_block(tmp_path, block, "c", "sky130", "auto")
     rj = json.loads((tmp_path / "phase3" / "analog" / block
                      / "sizing_loop" / "results.json").read_text())
+    assert rj["netlist_provenance"] == "builtin_template"
     assert rj["_provenance"] == "real_ngspice_partial"
     assert rj["partial_measurement"] is True
     assert rj["sim_warnings"]

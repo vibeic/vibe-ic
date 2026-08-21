@@ -148,6 +148,43 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
+from _ppa import area as _ppa_area  # noqa: E402  (PPA-009 taxonomy labels)
+
+# ─── WHAT CLASS OF NUMBER THIS GATE PRODUCES (PPA-009, spec §7.3) ────────────
+# Everything this program measures is a COUNT off a yosys netlist: cells and
+# wires, and the percentage reductions computed from them. Not one of those is
+# an area. On a real completed run (`spm`, gf180mcuD) the three numbers that all
+# get called "the area" were
+#
+#     synthesis chip area   4703.5296  library area units, PRE-placement
+#     post-route core area  12294      um^2
+#     die area              20164.00   um^2
+#
+# — the synthesis figure is 2.61x under the core and 4.29x under the die, and it
+# is not even in the same unit. This gate's counts sit BELOW even that figure in
+# the chain of things that determine silicon area. So the report is stamped
+# RTL_PROXY / not eligible for physical PPA, and `_ppa.area` refuses to promote
+# a record carrying that stamp. The stamp is taken FROM `_ppa.area` rather than
+# spelled out here, so that exactly one registry decides what is physical.
+# The registry names for the four numbers this gate reports. Naming them here
+# means a reader (or a promoter) can look each one up and find RTL_PROXY, rather
+# than having to infer a class from the field name.
+_PROXY_METRICS = (
+    "area.proxy.cell_count",
+    "area.proxy.wire_count",
+    "area.proxy.cell_count_reduction_pct",
+    "area.proxy.wire_count_reduction_pct",
+)
+_METRIC_CLASS = _ppa_area.RTL_PROXY
+_ELIGIBLE_FOR_PHYSICAL_PPA = False
+_PROXY_NOTE = (
+    "cells/wires are COUNTS off a yosys netlist, taken before placement, "
+    "routing, filler and the die envelope exist. A cell-count win is not an "
+    "area win: this verdict may never be reported as, promoted to, or "
+    "substituted for post-route core/die/standard-cell area. See "
+    "docs/PPA_INTERFACES.md §2 and programs/_ppa/area.py.")
+
 # ─── prompt threshold parse ──────────────────────────────────────────────────
 # The metric a threshold binds. "both" is the conservative default for an
 # area-reduction spec (cells AND wires must both clear the bar).
@@ -1138,6 +1175,14 @@ def run_ppa_area_threshold(
     """
     report: Dict = {
         "program": "ppa_area_threshold_check",
+        # PPA-009 taxonomy stamp. Written FIRST, before any early return, so
+        # that every exit path — NOT_APPLICABLE, BLOCK, PASS, tool-absent —
+        # carries it. A label that only appears on the happy path is a label a
+        # promoter never sees.
+        "metric_class": _METRIC_CLASS,
+        "eligible_for_physical_ppa": _ELIGIBLE_FOR_PHYSICAL_PPA,
+        "metrics_reported": sorted(_PROXY_METRICS),
+        "physical_area_note": _PROXY_NOTE,
         "original": str(original),
         "optimized": str(optimized),
         "top": top,
@@ -1293,6 +1338,64 @@ def run_ppa_area_threshold(
     return 0, report
 
 
+def as_metric_records(report: Dict) -> List[Dict]:
+    """This gate's numbers as canonical `vibeic.ppa.metric.v1` records.
+
+    THIS IS THE WIRING THAT MAKES THE LABEL LOAD-BEARING (PPA-009). A consumer
+    that wants these numbers in canonical form has exactly one way to get them,
+    and it goes through `_ppa.area.proxy_record`, which RAISES on a physical
+    metric name. So a future extractor cannot accidentally hand a cell count to
+    a physical-area comparison: the record it would need does not exist and
+    cannot be built from here.
+
+    Numbers that were not measured come back as NOT_MEASURED WITH A REASON, not
+    as an omitted row and never as a 0 — "I could not synthesise" and "the
+    optimised netlist has zero cells" must not produce the same record.
+    """
+    scope = {
+        "stage": "synth_mapped",
+        "tool": "yosys",
+        "top": report.get("top"),
+        "container": report.get("container"),
+    }
+    source = {
+        "path": str(report.get("optimized") or ""),
+        "baseline_path": str(report.get("original") or ""),
+        "tool": "yosys",
+        "parser": "ppa_area_threshold_check.py",
+    }
+    out: List[Dict] = []
+    for metric, key in (
+            ("area.proxy.cell_count_reduction_pct", "cells_reduction_pct"),
+            ("area.proxy.wire_count_reduction_pct", "wires_reduction_pct")):
+        value = report.get(key)
+        if value is None:
+            out.append(_ppa_area.proxy_record(
+                metric, _ppa_area.NOT_MEASURED, scope=scope,
+                reason=(f"{key} is absent from the report "
+                        f"(verdict={report.get('verdict')!r}: "
+                        f"{report.get('reason', 'no reason recorded')})")))
+        else:
+            out.append(_ppa_area.proxy_record(
+                metric, _ppa_area.DERIVED, value=float(value), scope=scope,
+                source=source,
+                formula="100*(original-optimized)/original over the yosys "
+                        "technology-mapped counts"))
+    for metric, key in (("area.proxy.cell_count", "cells"),
+                        ("area.proxy.wire_count", "wires")):
+        value = (report.get("optimized_stat") or {}).get(key)
+        if value is None:
+            out.append(_ppa_area.proxy_record(
+                metric, _ppa_area.NOT_MEASURED, scope=scope,
+                reason=(f"the optimized technology-mapped stat has no {key!r} "
+                        f"row (verdict={report.get('verdict')!r})")))
+        else:
+            out.append(_ppa_area.proxy_record(
+                metric, _ppa_area.MEASURED, value=value, scope=scope,
+                source=source))
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=("DETERMINISTIC PPA area-reduction-threshold gate (#729): "
@@ -1323,30 +1426,31 @@ def main(argv=None) -> int:
     ap.add_argument("--container", default="vibeic-eda",
                     help="docker container with yosys (default vibeic-eda)")
     ap.add_argument("--json", default=None, help="optional JSON report path")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     original = Path(args.original)
     optimized = Path(args.optimized)
     reference = Path(args.reference) if args.reference else None
     if not original.is_file():
-        print(f"ERROR: --original not found: {original}", file=sys.stderr)
-        return 2
+        print(f"{cli_exit.MARK_CANNOT_CHECK} --original not found: {original}. Nothing was opened, so no area was compared. rc=2 — this is NOT a pass.", file=sys.stderr)
+        return cli_exit.RC_UNDETERMINED
     if not optimized.is_file():
-        print(f"ERROR: --optimized not found: {optimized}", file=sys.stderr)
-        return 2
+        print(f"{cli_exit.MARK_CANNOT_CHECK} --optimized not found: {optimized}. Nothing was opened, so no area was compared. rc=2 — this is NOT a pass.", file=sys.stderr)
+        return cli_exit.RC_UNDETERMINED
     if reference is not None and not reference.is_file():
-        print(f"ERROR: --reference not found: {reference}", file=sys.stderr)
-        return 2
+        print(f"{cli_exit.MARK_CANNOT_CHECK} --reference not found: {reference}. Nothing was opened, so no area was compared. rc=2 — this is NOT a pass.", file=sys.stderr)
+        return cli_exit.RC_UNDETERMINED
     if args.threshold_pct is None and args.prompt is None:
-        print("ERROR: provide --threshold-pct or --prompt", file=sys.stderr)
-        return 2
+        return cli_exit.refuse(ap.prog, "provide --threshold-pct or --prompt; without one there is no declared threshold to adjudicate against")
 
     prompt_text = None
     if args.prompt is not None:
         pp = Path(args.prompt)
         if not pp.is_file():
-            print(f"ERROR: --prompt not found: {pp}", file=sys.stderr)
-            return 2
+            print(f"{cli_exit.MARK_CANNOT_CHECK} --prompt not found: {pp}. The threshold could not be read, so nothing was adjudicated. rc=2.", file=sys.stderr)
+            return cli_exit.RC_UNDETERMINED
         prompt_text = pp.read_text(errors="replace")
 
     rc, report = run_ppa_area_threshold(
@@ -1376,6 +1480,11 @@ def main(argv=None) -> int:
     # version). A LOCAL yosys of a different version can give an OPPOSITE-SIGN
     # area delta for the SAME RTL pair, so a local re-measure is not a valid
     # cross-check of this verdict.
+    # PPA-009: the class travels with the verdict on stdout too, because the
+    # thing that gets copied into a summary is the printed line, not the JSON.
+    print(f"  metric_class={_METRIC_CLASS} "
+          f"eligible_for_physical_ppa={str(_ELIGIBLE_FOR_PHYSICAL_PPA).lower()} "
+          f"— {_PROXY_NOTE}")
     if verdict in ("BLOCK", "PASS"):
         print("  hint (#744): this area verdict is valid ONLY from the "
               "in-container measurement (pinned yosys); a local yosys of a "

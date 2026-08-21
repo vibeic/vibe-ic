@@ -153,17 +153,24 @@ handoff** below), THEN file a complete verified bundle:
 2. **Admit the bundle** through the new admission gate before filing
    anything:
    ```bash
-   python3 plugins/vibe-ic/programs/handoff_bundle_check.py \
-       --bundle <bundle_dir>
-   #   exit 0  → bundle is admissible (0 residual × 2 rounds,
+   python3 <plugin_root>/programs/handoff_bundle_check.py <bundle_dir>
+   #   the bundle dir is POSITIONAL — there is no --bundle flag
+   #   exit 0  → ADMIT: bundle is admissible (0 residual × 2 rounds,
    #             chip-AGNOSTIC candidate, per-LAYER tests, Step-2.7 run)
-   #   exit !0 → NOT admissible; the printed reason names the missing
+   #   exit 1  → INCOMPLETE; the printed reason names the missing
    #             criterion — fix it in the sandbox and re-run
+   #   exit 2  → the bundle / manifest could not be read at all (this is
+   #             a usage or I/O error, NOT a verdict about the bundle)
    ```
    A bundle that does not pass this gate is NOT filed — it is still
    a surface symptom, not a converged resolution.
 3. For the gap, write the backlog YAML
-   `<plugin_root>/community/backlogs/ORGANIC-<YYYYMMDD>-<slug>.yaml`
+   `<repo_root>/vibe-ic-marketplace/community/backlogs/ORGANIC-<YYYYMMDD>-<slug>.yaml`
+   (ORGANIC #794 — this used to read `<plugin_root>/community/backlogs/`,
+   which resolves to `plugins/vibe-ic/community/backlogs/` and does not
+   exist. That is the ONE directory `agent_checkin_scope_guard.ZONE_BACKLOG`
+   and the `--audit tracked` hygiene gate watch; a file written anywhere else
+   is watched by nothing.)
    using the schema in the `community-backlog-submit` skill, and
    describe **all** layers the bundle resolves (not just the surface
    one), so the gatekeeper reviews the converged whole.
@@ -472,13 +479,25 @@ it — only when ALL of:
 Run the gate before filing (see Step 2):
 
 ```bash
-python3 plugins/vibe-ic/programs/handoff_bundle_check.py --bundle <bundle_dir>
-#   exit 0  → admissible; file the bundle
-#   exit !0 → NOT admissible; the printed reason names the missing
+python3 <plugin_root>/programs/handoff_bundle_check.py <bundle_dir>
+#   the bundle dir is POSITIONAL — there is no --bundle flag
+#   exit 0  → ADMIT; file the bundle
+#   exit 1  → INCOMPLETE; the printed reason names the missing
 #             criterion (residual not 0×2 / not chip-agnostic /
 #             missing layer test / no Step-2.7 record) — fix in the
 #             sandbox and re-run
+#   exit 2  → the bundle / manifest could not be read (usage / I/O
+#             error, NOT a verdict about the bundle)
 ```
+
+> **Known limitation, measured — read this before treating an INCOMPLETE on
+> `root_cause_not_surface` as your bug.** That item admits only a
+> `fix_surface_classify` verdict of `PRODUCER`. Over the 200 most recent
+> `origin/main` commits fed in as candidate bodies the classifier returned
+> `PRODUCER` **0** times (`CONSUMER_ONLY` 85, `MIXED` 115). If that item is
+> the ONLY red one, the bundle is very likely fine and the PRODUCER registry
+> is what needs widening — say so in the handoff instead of reshaping the fix
+> to satisfy the classifier.
 
 ### CRITICAL guardrails — do NOT over-rotate
 
@@ -635,6 +654,10 @@ host lessons for keeping that hand-off clean:
   "then write RESULT.md" step never runs. The runner's OWN outputs
   (`reports/final_summary.md` / orchestrator `*_one_shot.json` verdict /
   GDS/SPEF artifacts) exist, but the synthesis deliverable is never
+  written. All three beliefs that make yielding feel safe are impossible
+  (vibe-ic#558): the harness does not **re-invoke** a finished turn; a
+  background waiter can only wake a turn that is **still alive**; and a monitor
+  **notifies the DISPATCHER**, not the agent, so it cannot resume you.
   written — observed 3× in one session (two idled pre-write; one flow
   finished but RESULT.md had to be hand-authored from artifacts). Rules:
   1. **Run the long tool through the BLOCKING `_watchdog.run_supervised`**
@@ -757,6 +780,29 @@ verification round) — all are now standing rules for EVERY fix audit:
    `-`). Fix any `MISSING_ACCEPTANCE` / `ACCEPTANCE_NARRATIVE_ONLY` /
    `NO_DEFECT_ARTIFACT` warning (the last one points at the flow #487
    snapshot helper) BEFORE `gh issue create`.
+
+4. **A published L document is the output of a PAST run — ask it which
+   one.** (2026-07-28, #522.) On one day three issues were filed against
+   `benchmark-data/**/generated_docs/L*.json` produced ~70 releases
+   earlier and read as the current state of the flow; one was written by
+   someone holding this exact rule in the brief they had just handed out.
+   Discipline was not enough because the documents said nothing about
+   their own vintage. They do now. RULE: before quoting a count from a
+   published L document, calling a gate on it a blocker, or filing an
+   issue whose premise is what it contains, run
+
+   ```bash
+   python3 programs/l_doc_generator_stamp.py <design-or-corpus-dir>
+   ```
+
+   `CURRENT` — same release and same L-doc taxonomy as your checkout;
+   read it as current. `STALE` / `NEWER` — the report gives the version
+   distance. `UNSTAMPED` — produced before the stamp existed, vintage
+   unknown: **re-derive through the canonical entry before concluding
+   anything**, and if you file anyway, say which version you measured.
+   The same applies to your own audit of a `core-closed` fix: a
+   `## 驗收` command run against a stale artefact reproduces the past,
+   not the fix.
 
 ## Reference
 

@@ -13,17 +13,20 @@ Validates that analog SPICE netlists follow correct PDK conventions:
      known-model set is sourced from programs/pdk_registry.json (per-PDK
      `device_models`), NOT a hardcoded literal in this file.
 
-Self-skips (exit 0 + INFO) when:
-  - No .sp files under analog/
+Self-skips when:
+  - No analog/ directory, or no .sp files under it
 
 Usage:
     python3 analog_netlist_pdk_check.py <project_dir>
     python3 analog_netlist_pdk_check.py <project_dir> --json reports/gates/analog_pdk.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: at least one .sp deck was read and its PDK conventions hold
     1 = FAIL (PDK convention violation)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no analog/ directory, or no .sp file
+        in it, so no model include and no body connection was ever inspected.
+        #521: both used to be rc 0, on 197 of the 200 tracked project roots.
+        Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -35,7 +38,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 import _path_layout as _pl
+import _waiver_entries as _we
+import _vacuous_exit as _vx
 from _analog_stub_marker import is_stub_text  # v1.6.177 (#72 P1-6)
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 GF180_MODEL_MARKERS = ("design.ngspice", "sm141064.ngspice")
@@ -218,7 +224,9 @@ def _pdk_mismatch_waived(project: Path) -> bool:
         data = json.loads(wpath.read_text(errors="replace"))
     except (OSError, ValueError):
         return False
-    entries = (data.get("waived_steps") or []) + (data.get("waivers") or [])
+    # #519 — via the ONE shared reader. This site already unioned both keys
+    # by hand; the union now has a single definition all consumers share.
+    entries = _we.entries(data)
     for w in entries:
         if not isinstance(w, dict):
             continue
@@ -396,11 +404,39 @@ def _native_model_include_ok(text: str, rel_path: str, native_libset: Set[str],
     return False
 
 
+def _analog_roots(project: Path) -> list:
+    """Every analog root this audit must read.
+
+    `_pl.analog_dir` is the CANONICAL root (`phase3/analog/`) — where the
+    analog runner writes every block artefact. But `_path_layout` also splits
+    the layout by phase (`phase2_analog_block_dir` == `phase2/analog/`, "A2-A4
+    analog frontend") and `flow/phase1_phase2_phase3.yaml` declares A3's
+    required_output as `phase2/analog/*/*.sp` — the very files this gate is
+    wired to judge. Reading only `phase3/analog/` meant a project laid out
+    exactly as its own flow declares (or migrated by `migrate_to_layout_p.py`)
+    returned SKIP_NO_ANALOG_DIR / SKIP_NO_SP_FILES with `passed=True`: the A3
+    gate of record certified the step having opened no file at all.
+    chip-AGNOSTIC: pure path resolution, no chip / vendor literal."""
+    roots = [_pl.analog_dir(project),
+             project / "phase2/analog",
+             project / "phase1/analog"]
+    seen: set = set()
+    out = []
+    for r in roots:
+        key = str(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        if r.is_dir():
+            out.append(r)
+    return out
+
+
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
 
-    analog_dir = _pl.analog_dir(project)
-    if not analog_dir.is_dir():
+    analog_roots = _analog_roots(project)
+    if not analog_roots:
         result.findings.append(Finding(
             rule="SKIP_NO_ANALOG_DIR",
             severity="INFO",
@@ -409,7 +445,15 @@ def run_audit(project: Path) -> AuditResult:
         result.summary = {"skipped": True, "reason": "no_analog_dir"}
         return result
 
-    sp_files = sorted(analog_dir.rglob("*.sp"))
+    sp_seen: set = set()
+    sp_files = []
+    for root in analog_roots:
+        for sp in sorted(root.rglob("*.sp")):
+            key = str(sp.resolve())
+            if key in sp_seen:
+                continue
+            sp_seen.add(key)
+            sp_files.append(sp)
 
     if not sp_files:
         result.findings.append(Finding(
@@ -601,16 +645,22 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
+
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
 
     if not args.json:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] analog_netlist_pdk_check")
+        print(_vx.verdict_line("analog_netlist_pdk_check", result.passed,
+                               skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

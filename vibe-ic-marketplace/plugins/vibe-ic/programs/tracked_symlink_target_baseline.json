@@ -1,0 +1,4 @@
+{
+  "_comment": "Tracked symlinks under the corpus whose target exists nowhere. MAY ONLY SHRINK: a new one FAILS, and one that starts resolving also FAILS so the register cannot become standing permission. Repairing these is the benchmark-agent's commit under NO-MIX, never this plugin's (vibe-ic#555).",
+  "known": []
+}
