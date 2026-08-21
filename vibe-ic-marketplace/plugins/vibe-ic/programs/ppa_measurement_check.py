@@ -47,6 +47,31 @@ not name a winner even for a valid comparison unless the caller declares which
 direction is better — that is domain policy (smaller area, MORE POSITIVE slack,
 less power), and "lower is better" is wrong for slack and for frequency.
 
+CORPUS MODE — THE THIRD QUESTION, WHICH IS THE FIRST TWO OVER A POPULATION
+=========================================================================
+`--coverage` and `--compare` name EXACT documents, so a bundle filed anywhere
+the caller did not name was never measured. `--corpus DIR` runs the coverage
+question over every metric bundle under DIR, resolved through
+`_corpus_location` — the same seam `ppa_head_to_head_check` uses, so both
+follow `$VIBE_IC_BENCHMARK_DATA` to a cloned corpus.
+
+Bundles are selected by their DECLARED SCHEMA and never by filename: a record
+under an unexpected name going unjudged is the defect this mode closes, and a
+filename glob is a smaller version of that same defect.
+
+AN EMPTY CORPUS IS rc=2 WITH THE ROOT NAMED. This program refuses to compute
+coverage without a denominator precisely because a coverage number derived from
+the records alone can only ever be 100%; a corpus mode that reported PASS over
+zero bundles would have rebuilt that vacuous 100% one level up.
+
+TWO BUNDLES CLAIMING ONE MEASUREMENT IS A CONFLICT. `MetricIndex.add` already
+refuses two records for one `(metric, scope)` INSIDE a bundle. The corpus scan
+applies the same identity ACROSS bundles and names both paths: taking the first
+match would pick a winner on directory order, which is the exact thing
+`CONFLICTING_RECORD` exists to prevent one level down.
+
+`--corpus` with `--coverage` or `--compare` is rc=3, a bad invocation.
+
 EXIT CODES (PPA_INTERFACES §1)
 ==============================
     0  every expected measurement is present and usable / the comparison holds
@@ -56,7 +81,7 @@ EXIT CODES (PPA_INTERFACES §1)
        denominator, or a comparison across differing scope. Always with a
        printed `[CANNOT CHECK]` / `[REFUSE]` marker, so a 2 can never be read
        as a silent skip.
-    3  bad invocation
+    3  bad invocation, including --corpus given with --coverage or --compare
 
 rc=2 IS NOT A PASS. A flow step that treats it as green has a gate that cannot
 fail.
@@ -73,6 +98,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports resolve however this is invoked
+import _ppa_corpus as corpus_seam  # one seam for all corpora
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 from _ppa import metrics as M
 
@@ -232,6 +258,76 @@ def run_compare(a_path: Path, b_path: Path,
     return rc, report
 
 
+#: What this gate would have examined, for the NO_CORPUS / VACUOUS line.
+_GATE = "PPA measurement records"
+_SCANNED = "published metric bundle(s)"
+
+
+def is_bundle(doc: Any) -> bool:
+    """A corpus record for THIS gate, decided on the document, not its name."""
+    return (isinstance(doc, dict)
+            and doc.get("schema") == M.BUNDLE_SCHEMA_ID)
+
+
+def check_corpus(named: Path, may_be_absent: bool = False,
+                 json_out: Optional[str] = None) -> int:
+    """Coverage over every metric bundle under `named`, aggregated by severity.
+
+    The corpus-wide conflict scan keys on `_ppa.metrics.record_key` — the
+    identity of a MEASUREMENT, `(metric, scope_digest)`, not the metric name,
+    because two records naming one metric under different scope are different
+    facts and both belong in one corpus.
+    """
+    corpus, rc = corpus_seam.open_corpus(named, _GATE, _SCANNED, may_be_absent)
+    if corpus is None:
+        return rc
+    scan = corpus_seam.collect(corpus, is_bundle)
+    print(f"ppa_measurement_check --corpus {corpus}: "
+          f"{scan.denominator(_SCANNED)}")
+    unread_rc = corpus_seam.report_unreadable(_GATE, scan)
+    if not scan.records:
+        return corpus_seam.worst_rc(
+            [corpus_seam.vacuous(_GATE, corpus, _SCANNED, scan), unread_rc])
+
+    rows: List[Any] = []
+    unkeyed = 0
+    for path, doc in scan.records:
+        for rec in doc.get("records") or []:
+            if not isinstance(rec, dict):
+                unkeyed += 1
+                continue
+            metric, scope = M.record_key(rec)
+            rows.append((path, f"{metric} @ {scope}", rec))
+    if unkeyed:
+        print(f"[{_GATE}] NOTE: {unkeyed} entr(ies) in the corpus are not "
+              f"metric objects and could not be keyed for the conflict scan; "
+              f"the per-bundle run still refuses them.", file=sys.stderr)
+    conflicts, copies = corpus_seam.identity_conflicts(
+        rows, _GATE, "measurement")
+    conflict_rc = corpus_seam.print_conflicts(_GATE, conflicts, copies)
+
+    rcs = [main(["--coverage", str(path)]) for path, _ in scan.records]
+    worst = corpus_seam.worst_rc(rcs + [conflict_rc, unread_rc])
+    refused = sum(1 for r in rcs if r == corpus_seam.RC_REFUSED)
+    undet = sum(1 for r in rcs if r == corpus_seam.RC_UNDETERMINED)
+    print(f"ppa_measurement_check --corpus {corpus}: {len(rcs)} bundle(s), "
+          f"{refused} refused, {undet} undetermined, "
+          f"{len(rcs) - refused - undet} accepted, {len(conflicts)} "
+          f"measurement conflict(s) -> rc={worst}")
+    if json_out:
+        atomic_write_text(Path(json_out), json.dumps({
+            "program": "ppa_measurement_check.py", "mode": "corpus",
+            "corpus": str(corpus), "files_opened": scan.files,
+            "bundles": [str(path) for path, _ in scan.records],
+            "unreadable": [{"path": str(p), "why": w}
+                           for p, w in scan.unreadable],
+            "measurement_conflicts": conflicts,
+            "measurement_copies": copies,
+            "rc": worst,
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return worst
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Coverage over a PPA record set, and the comparison "
@@ -246,12 +342,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--better", choices=("lower", "higher"), default=None,
                     help="which direction wins for this metric. Domain "
                          "policy; without it no winner is named.")
+    ap.add_argument("--corpus", metavar="DIR", default=None,
+                    help="run the coverage question over every metric bundle "
+                         "under DIR; exits 2 when the corpus carries none")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="this repository need not carry the published "
+                         "corpus. Turns 'nothing anywhere' into a stated "
+                         "NO_CORPUS that names its zero, and NEVER excuses a "
+                         "$VIBE_IC_BENCHMARK_DATA that is set and unreadable.")
     ap.add_argument("--json", metavar="FILE", default=None,
                     help="write the machine-readable report here")
     args = ap.parse_args(argv)
 
+    if args.corpus is not None:
+        if args.coverage is not None or args.compare is not None:
+            return corpus_seam.both_given(
+                "ppa_measurement_check",
+                "--coverage/--compare", "--corpus")
+        return check_corpus(Path(args.corpus).resolve(),
+                            args.corpus_may_be_absent, args.json)
     if (args.coverage is None) == (args.compare is None):
-        ap.error("give exactly one of --coverage BUNDLE or --compare A B")
+        ap.error("give exactly one of --coverage BUNDLE, --compare A B, or "
+                 "--corpus DIR")
 
     try:
         if args.coverage is not None:
