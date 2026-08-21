@@ -4790,6 +4790,53 @@ server.tool(
   }
 );
 
+// A container ceiling is set at CREATE time and nowhere else. `docker rm -f` +
+// `docker run` on a newer image — which is exactly how the documented upgrade
+// path moves the MCP — starts from nothing but its own flags, so it drops the
+// ceiling the operator had been running with. Nothing fails at that moment; the
+// host simply becomes killable by the next runaway synthesis or place-and-route
+// run, and killing a timed-out `docker exec` does NOT kill the tool still
+// running inside, so the ceiling has to be on the container and not the caller.
+//
+// SOFT, deliberately. An uncapped container runs every flow correctly; what is
+// at risk is the HOST, not this session. Failing eda_doctor hard would block
+// users who have been running uncapped for months over a risk they may have
+// accepted. A named warning they can act on is the whole point.
+const _BYTES_PER_GIB = 1024 * 1024 * 1024;
+function _containerMemoryCeiling(inspect = _spawnSync) {
+  const r = inspect("docker",
+    ["inspect", CONTAINER, "--format",
+     "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}"],
+    { encoding: "utf-8", timeout: 3000 });
+  if (!r || r.status !== 0 || !r.stdout) {
+    return { ok: false, detail: `could not read ${CONTAINER}'s memory settings` };
+  }
+  const parts = String(r.stdout).trim().split(/\s+/);
+  const mem = Number(parts[0]);
+  const swap = Number(parts[1]);
+  // NOT-KNOWN IS NOT CAPPED. An unparseable answer must read as a warning, never
+  // as a clean bill of health for a container nobody measured.
+  if (!Number.isFinite(mem) || !Number.isFinite(swap)) {
+    return { ok: false,
+      detail: `${CONTAINER}'s memory settings did not parse: ${String(r.stdout).trim()}` };
+  }
+  const gib = (n) => `${(n / _BYTES_PER_GIB).toFixed(0)} GiB`;
+  if (mem === 0) {
+    return { ok: false, detail:
+      `${CONTAINER} has NO memory ceiling. One runaway tool can exhaust the host. ` +
+      `Recreate it with --memory=<N>g --memory-swap=<N>g (equal values disable swap, ` +
+      `so an over-budget run fails fast instead of thrashing the disk). Note that a ` +
+      `recreate drops these flags, which is how an upgrade removes the ceiling silently.` };
+  }
+  if (swap !== mem) {
+    return { ok: false, detail:
+      `${CONTAINER} is capped at ${gib(mem)} but swap is NOT disabled ` +
+      `(--memory-swap ${swap < 0 ? "unlimited" : gib(swap)}). An over-budget run ` +
+      `thrashes the disk for hours instead of failing. Set --memory-swap equal to --memory.` };
+  }
+  return { ok: true, detail: `${gib(mem)}, swap disabled` };
+}
+
 // ─── Tool: eda_doctor (v2.5.0) ───
 server.tool(
   "eda_doctor",
@@ -4818,6 +4865,17 @@ server.tool(
       detail: probe.ok ? "container reachable" : probe.hint,
     });
     if (!probe.ok) allOk = false;
+
+    // 1b. Container memory ceiling (only meaningful once docker answers).
+    if (probe.ok) {
+      const ceiling = _containerMemoryCeiling();
+      checks.push({
+        check: "container_memory_ceiling",
+        ok: ceiling.ok,
+        detail: ceiling.detail,
+        soft: ceiling.ok ? undefined : true,
+      });
+    }
 
     // 2. Per-tool binaries (only if docker ok). v0.26.5 (was v2.6.5): SOFT_TOOLS now maps
     //    tool → hint string explaining what flow needs it. v2.6.4 only carried
