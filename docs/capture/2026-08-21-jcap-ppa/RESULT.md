@@ -792,15 +792,29 @@ than the note suggests. Measured across both published record trees:
 
     absolute  source.path     6867      of which host-prefixed:  6867
     relative  source.path     6674
+    (as first measured; the screen was not recorded, see the correction below)
 
     always relative   opensta · yosys · signoff
     always absolute   openroad · power
 
-**The split is perfectly per producer** — so it is invisible from inside any one
-of them, each being flawlessly consistent with itself, and it is exactly the
-two-authors-one-interface shape this whole cluster is about. **Every one of the
-6867 absolute paths embeds a host home directory**, in a field a reader trusts as
-neutral.
+**Corrected by an independent re-measurement, and the correction cuts against
+what this record originally argued.** The figures above were taken with a screen
+this report never stated — which is `A-27`'s defect, in this report — so they do
+not reproduce. Re-run over both trees, grouping on `source.tool`, the field that
+actually names the producing tool, and again on the metric family:
+
+    by source.tool      absolute 6804 (host-prefixed 6804)   relative 5330
+                        MIXED: openroad, opensta
+    by metric family    MIXED: area, power, timing
+
+So the split is **not** perfectly per producer. It is inconsistent *within*
+producers, under both groupings available. That is worse than the original
+reading, not better: the excuse that no single author could have seen it is gone,
+and a per-producer fix would not converge. What reproduces exactly is the part
+with a consequence — **every absolute path embeds a host home directory, 6804 of
+6804**, in a field a reader trusts as neutral. The rule therefore attaches to the
+FIELD, checked per record, because grouping by producer is precisely what hid the
+inconsistency.
 
 The existing portability guard cannot see any of it: it walks emitted scripts by
 file suffix (`.tcl`, `.sh`) and never opens a record. So the F-14 class was fixed
@@ -1938,7 +1952,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-10 | — | population of **1** | real defect, but the guard protects one site |
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
 | A-16 | — | 5 admitted, 0 counted | verified on the published document |
-| A-17 | — | 6867 / 6674 | split is perfectly per producer; all 6867 host-prefixed |
+| A-17 | — | **6804 / 5330** | **corrected**: NOT per producer — mixed within two tools and three metric families; 6804/6804 host-prefixed reproduces |
 | A-18 | — | 0 mentions | the ranking layer has no word for the property it deletes |
 | A-19 | — | order INVERTED | the cheap rung's top candidate places third |
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
