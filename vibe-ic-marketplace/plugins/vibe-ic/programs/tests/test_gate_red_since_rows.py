@@ -486,7 +486,7 @@ def test_the_two_endpoints_produce_visibly_different_output(tmp_path):
 # A GATE THAT DID NOT RUN IN THIS RECORD CANNOT BE ADJUDICATED.
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("state", [G._LISTED, G._OTHER_SHARD])
+@pytest.mark.parametrize("state", [G._LISTED, G._OTHER_SHARD, "OUT_OF_SCOPE", "QUEUED"])
 def test_a_gate_that_did_not_run_is_never_reported_expired(tmp_path, state):
     """MEASURED: a real shard record carries 79 OTHER_SHARD beside 8 FAIL, and
     every one of the 79 was counted red — so a row could be failed as EXPIRED
@@ -500,7 +500,7 @@ def test_a_gate_that_did_not_run_is_never_reported_expired(tmp_path, state):
     assert "g" not in known and "g" not in new
 
 
-@pytest.mark.parametrize("state", [G._LISTED, G._OTHER_SHARD])
+@pytest.mark.parametrize("state", [G._LISTED, G._OTHER_SHARD, "OUT_OF_SCOPE", "QUEUED"])
 def test_a_gate_that_did_not_run_is_not_counted_red(tmp_path, state):
     _, _, new = G.adjudicate(
         _record({"other": state}), [], G.git_age(tmp_path, "HEAD"))
@@ -530,3 +530,34 @@ def test_the_cli_names_the_rows_it_could_not_adjudicate(tmp_path):
     out = _cli(r, rec, "--ledger", str(led)).stdout
     assert "NOT ADJUDICABLE" in out, out
     assert "g" in out
+
+
+def test_the_ran_set_agrees_with_the_shared_one():
+    """One name for one thing, checked. If `hygiene_finding_delta` learns a new
+    process state and this file does not, a gate that ran would stop being
+    adjudicated — silently, and in the permissive direction."""
+    import hygiene_finding_delta as H
+    assert tuple(G._RAN) == tuple(H.PROCESS_STATES), (G._RAN, H.PROCESS_STATES)
+
+
+def test_every_state_the_dispatcher_can_record_is_classified():
+    """THE GUARD THAT MAKES THIS A RULE AND NOT A LIST. Parsed from
+    `_gate_dispatch.sh` itself, so a state added there fails HERE rather than
+    quietly becoming overdue-by-default in a landing."""
+    import re
+    disp = (REPO / "tools" / "ci" / "_gate_dispatch.sh").read_text(encoding="utf-8")
+    states = set(re.findall(r'GATE_STATES\+=\("([A-Z_]+)"', disp))
+    assert states, "no states parsed — the dispatcher's shape changed"
+    for s in states:
+        ran = s in G._RAN
+        assert ran != G._did_not_run(s), (
+            f"{s!r} is classified inconsistently: in _RAN={ran}, "
+            f"_did_not_run={G._did_not_run(s)}")
+    # and the ones that are NOT process states must be the not-run kind
+    assert {s for s in states if not G._did_not_run(s)} <= set(G._RAN)
+
+
+def test_an_unrecognised_state_is_not_adjudicable_rather_than_overdue():
+    """The fail-safe direction: 'I do not recognise this state' must mean 'I
+    cannot judge it', never 'it is red'."""
+    assert G._did_not_run("SOME_STATE_INVENTED_LATER")

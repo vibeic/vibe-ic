@@ -109,20 +109,32 @@ _LISTED = "LISTED"
 #: run in it.
 _OTHER_SHARD = "OTHER_SHARD"
 
-#: STATES THAT MEAN "THIS GATE DID NOT RUN IN THIS RECORD", and which therefore
-#: cannot be adjudicated in either direction (measured 2026-08-22).
+#: STATES A GATE REACHES BY ACTUALLY RUNNING A PROCESS. Mirrors
+#: `hygiene_finding_delta.PROCESS_STATES`, and `test_gate_red_since_rows`
+#: asserts the two agree — one name for one thing, checked rather than hoped.
 #:
-#: Before this, anything that was not PASS and not LISTED fell through to the
-#: deadline check — so a row whose gate carried OTHER_SHARD could be reported
-#: EXPIRED for a gate that WAS NEVER EXECUTED in that record. That is the
-#: "I could not look" / "I looked and it was bad" collapse this repo removes
-#: from gates one at a time, and sharding made it reachable: a real shard
-#: record here carries 79 OTHER_SHARD beside 8 FAIL, and all 79 were counted
-#: as red.
+#: THE RULE IS "DID IT RUN", NOT A LIST OF EXCEPTIONS (measured 2026-08-22).
+#: This started as `s not in (_PASS, _LISTED)`, which made `OTHER_SHARD` count
+#: as red — a real shard record carries 79 of them beside 8 FAIL — and, worse,
+#: let a row be reported EXPIRED for a gate that was never executed. Adding
+#: `OTHER_SHARD` to the exception list fixed that instance and left the rule:
+#: the dispatcher also records `OUT_OF_SCOPE` (a declared skip) and `QUEUED` (a
+#: gate still waiting), and both would have fallen through the same way.
 #:
-#: They are SKIPPED rather than failed, and reported by the CLI rather than
-#: dropped: a row nobody adjudicated must not read as a row that passed.
-_NOT_RUN = (_LISTED, _OTHER_SHARD)
+#: Stated as the positive set so a state added to `_gate_dispatch.sh` later is
+#: NOT adjudicable by default rather than silently overdue by default. The
+#: fail-safe direction for "I do not recognise this state" is "I cannot judge
+#: it", never "it is red".
+_RAN = ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")
+
+
+def _did_not_run(state: Optional[str]) -> bool:
+    """True when the record says this gate did not reach a verdict of its own.
+
+    Neither `expired` nor `stale` is something such a record could honestly say
+    about the gate, so this program says neither and names the row instead.
+    """
+    return state is not None and state not in _RAN
 
 #: Ledger location, relative to the repository root.
 LEDGER_REL = "tools/ci/gate_red_since.json"
@@ -291,7 +303,7 @@ def adjudicate(record: Dict[str, Any],
                 "row in the commit that fixed the gate — a row that outlives "
                 "its truth is believed by the next reader"))
             continue
-        if state in _NOT_RUN:
+        if _did_not_run(state):
             # NOT ADJUDICABLE, and deliberately not a finding in either
             # direction: this record does not say whether the gate is red, so
             # neither "expired" nor "stale" is a thing it could honestly
@@ -328,7 +340,7 @@ def adjudicate(record: Dict[str, Any],
                 f"{row.get('owner') or 'nobody'} owns it"))
 
     red = sorted(l for l, s in states.items()
-                 if s != _PASS and s not in _NOT_RUN)
+                 if s != _PASS and not _did_not_run(s))
     known = [l for l in red if l in acknowledged_gates]
     new = [l for l in red if l not in acknowledged_gates]
     return findings, known, new
@@ -545,7 +557,7 @@ def main(argv: Optional[List[str]] = None) -> int:
              if args.ledger_ref
              else f"the working tree at {args.ledger or (args.repo / LEDGER_REL)}"))
     _unrun = sorted({str(r.get("gate")) for r in ledger
-                     if _states(record).get(str(r.get("gate"))) in _NOT_RUN})
+                     if _did_not_run(_states(record).get(str(r.get("gate"))))})
     if _unrun:
         print("  NOT ADJUDICABLE in this record (the gate did not run here, so "
               "this run says nothing about it): " + ", ".join(_unrun))
