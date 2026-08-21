@@ -265,30 +265,40 @@ them.
 total runtime.** Measured 46.06 s and 64.98 s on two idle runs, so it also
 varies by 40% run to run.
 
-What follows is INFERENCE and is marked as such, because the experiment that
-settles it was not run: a nested run in which this item is the only thing
-executing has nothing to renew the window with, and would be killed as hung at
-60 s on an idle machine. It survives today because the driver runs several files
-and progress from the OTHERS renews the shared window while d6's long item
-grinds. That would make the true rule **not** "item vs window" but "does anything
-else emit during this item" — and it explains red 13's `stage=running` stall
-exactly: three files concurrent, the short ones finish, the long one is left
-alone with nothing renewing.
+**THE EXPERIMENT WAS RUN, AND IT REFUTES THE INFERENCE.** The paragraph that
+stood here predicted that a nested run containing only this item would be killed
+as hung, because "pytest emits no transition during an item". Driving
+`_run_outcome_reports` on `test_matrix_d6_skip_discipline.py` ALONE, at the real
+`60 s` window, load 20.4:
 
-To settle it, drive `_run_outcome_reports` on `test_matrix_d6_skip_discipline.py`
-ALONE and see whether it is killed. That is a five-minute experiment and it is
-named here rather than guessed at.
+```
+window in force: 60 s
+RESULT: completed in 62.6s, 82 item(s) reported  —  NOT killed
+```
 
-That reframes red 13. It is not a d3 curiosity, and it is not really about
-`test_the_census_block_is_fresh`: the census and coverage runs drive all nine
-modules through the same nested driver, so the margin they actually run on is set
-by the WORST item in the set, which is d6's 46.06 s — **14 seconds of headroom
-before a stall kill, before any contention at all.**
+A run whose single longest item exceeds the window completed unkilled. **So
+something renews the window DURING an item on this path, and the premise this
+report leaned on — "no intra-item transition exists" — is false here.**
 
-Nothing here says d6's item is wrong to be slow; it was not investigated and may
-be irreducible exactly as d3's proved to be. What is now measured is that the
-intra-item blind spot has a much smaller margin than red 13's own section
-implies, and that the number to watch is 46.06 s and not 18.95 s.
+Three things are retracted with it:
+
+* that red 13's stall is explained by "one long item with nothing to renew";
+* that the remedy is "an intra-item heartbeat", which may already exist in some
+  form on this path;
+* the framing, repeated in several sections above, that any item exceeding the
+  window is indistinguishable from a hang.
+
+What SURVIVES is only what was measured: red 13 did stall once with
+`terminal event missing (stage=running)`; d6 carries an item at 46-65 s; four
+modules carry items above a quarter of the window; and the driver did not kill a
+lone 62.6 s run. The mechanism connecting the first fact to the others is now
+**unknown**, and saying so is the honest end of this line of investigation
+rather than a better story.
+
+The next probe for whoever picks it up: find what advances the progress token
+during a long item — `run_owned` passes an `output_progress` probe and a
+`domain_progress_probe`, and one of them is plainly renewing — then ask why that
+renewal was absent in red 13's three-way concurrent run.
 
 ## 13 — not "the host". One item, 18.95 s, against a 60 s window
 
