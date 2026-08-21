@@ -1322,9 +1322,9 @@ fills fixed-size evidence windows) and OUTSIDE `$HOME` (the hermetic runner
 refuses a subject under it). `/tmp/ps` satisfies both; the descriptive path I
 used for most of this job satisfies neither.
 
-### The seven instrument defects, consolidated
+### The nine instrument defects, consolidated
 
-That section covered one rule. By the end there were seven, and **every one of them
+That section covered one rule. By the end there were nine, and **every one of them
 produced a confident, plausible, WRONG answer rather than an error.** That is the
 property worth internalising: a broken instrument almost never announces itself:
 
@@ -1336,6 +1336,8 @@ property worth internalising: a broken instrument almost never announces itself:
 | 4 | a test-ID set-difference cannot distinguish RENAMED from FIXED | reported a renamed test as "now green" | check the collected-count invariant alongside the ID diff |
 | 5 | a verification grep written from REMEMBERED phrasing rather than the actual string | two present changes read as MISSING | check the query before believing an absence |
 | 6 | `cd X && CMD &` backgrounds the whole list, not just `CMD` | two files written into the operator's checkout | absolute paths in anything backgrounded |
+| 8 | grepping pytest's `...`-elided `repr` as if it were the run's output | two probes returned two of eleven gate lines; the missing nine were simply not in the string | dump the output to a file; a `repr` is not a capture |
+| 9 | **backticks inside a heredoc'd commit message run as command substitution** | `` `ifdef/`endif `` in a `git commit -F -` body silently became `endif`; bash printed `ifdef/: No such file or directory` to stderr and the commit went through with altered text | quote the heredoc delimiter (`<<'EOF'` is not enough when the body is built by a preceding shell expansion) or avoid backticks in messages |
 | 7 | `tail -N` as a CAPTURE truncates the `FAILED` list | diffed against a complete baseline it invented a difference and reported **"fixed by my change"** — a fix I had not made | capture the full list; `tail` is for looking, never for comparing |
 
 **The common shape:** 1 and 6 fail loudly and cost time. **2, 3, 4, 5 and 7 fail
@@ -3274,6 +3276,33 @@ subject.
 **If the mechanism above is right, the finding belongs to the gate**, and the
 count 175-vs-170 is 5 sites of which at least 2 may be sound. **Which makes the
 baseline itself suspect**, and I am explicitly not touching that either.
+
+
+## M57 — instrument defect #9, committed into the record itself
+
+The M56 commit emitted `/bin/bash: line 148: ifdef/: No such file or directory`
+and committed anyway. **Backticks inside the heredoc'd commit body ran as command
+substitution**, so `` `ifdef/`endif directives `` was recorded as
+`endif directives`. The commit is `88601fd74`; its meaning survives, its accuracy
+does not.
+
+**I am not force-pushing to amend it.** The branch is pushed, the degradation is
+one clause in one message, and rewriting published history to fix a typo is a
+worse trade than recording it — the document is the durable artefact, and it now
+says what the message should have.
+
+**Why this belongs in the catalogue rather than in a footnote.** It is the ninth
+instrument defect, and like #3, #4, #7 and #8 it **produced output rather than an
+error**: the commit succeeded, the push succeeded, and the only signal was one
+stderr line I happened to read. Had I not, the record would carry a subtly wrong
+claim about which directives the reassignment concerns — in the very section
+arguing for reading the analyser before editing the subject.
+
+**Nine defects, and the distribution is the finding:** two failed loudly (#1, #6),
+**seven failed quietly**, and of those, four actively flattered — reporting my work
+as better, or my record as more accurate, than it was. **A tool that fails toward
+plausibility is the one to instrument first**, and I have now had that lesson from
+a shell heredoc, a `git stash`, a `tail`, a `repr`, and an ID diff.
 
 
 # ===== REQUESTS TO THE LANDER =====
