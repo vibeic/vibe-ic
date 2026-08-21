@@ -378,3 +378,42 @@ reader of the fix arm alone does not charge it to the fix.
 
 The three repo-root files are counted separately because they are outside
 every plugin-scoped selection: 32 passed, on the fix.
+
+### A third arm, because "two new reds" was a premise I had not checked
+
+The differential above compares the fix to the BATCH, which answers "did the
+fix break anything". It does not answer the question the batch's landing
+actually turns on: were there only ever TWO new reds? The brief said so, my
+own base arm reported twelve failures, and ten of them I had labelled
+"pre-existing" on the strength of belonging to files this branch does not
+touch. That is an argument, not a measurement, so it was measured.
+
+Clean `origin/main` at `a00f53f20`, its own worktree under `$HOME`, same
+selection. Two of the seventeen files do not exist on main —
+`test_gate_red_since_rows.py` and `test_hygiene_record_handover.py`, both
+added by the batch — so main runs fifteen. Neither contributes a failure on
+any arm, so their absence cannot move the comparison.
+
+```
+MAIN   a00f53f20  (15 files) : 10 failed, 441 passed, 5 skipped
+BATCH  546487a8a  (17 files) : 12 failed, 461 passed, 5 skipped
+FIX    caee6baaf  (17 files) : 10 failed, 463 passed, 5 skipped
+```
+
+Compared BY NAME SET, `MAIN \ FIX` and `FIX \ MAIN` are **both empty**: the
+fix's failures are exactly main's, neither more nor fewer. The batch's twelve
+are those same ten plus the two this branch exists to remove.
+
+The pass arithmetic closes on the same fact rather than being waved at: the
+two batch-added files collect 22 tests, and 441 + 22 = 463. Every test that
+passes on main still passes here.
+
+So the brief's premise holds, and it holds as a measurement now: within this
+selection the batch introduced exactly two reds, and this branch returns it to
+main's failure set. The ten carried failures — nine in
+`test_landing_merge_verdict.py` (`KeyError: 'corpus_transitions'` and a
+merge-path verification that returns 0 where 2 is expected) and
+`checker_execution_wiring_audit` reporting 630 checker-shaped programs of 1234
+— are red on clean main and are nobody's regression in this batch. They are
+named so that a re-measurement finding twelve does not read the ten as
+collateral from this fix, and finding ten does not read them as fixed by it.
