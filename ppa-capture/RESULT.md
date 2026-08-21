@@ -100,9 +100,9 @@ rather than a symptom.
 | 11 | A required-view list must be per axis: one unmeasured row on a shared list poisons every axis on it. | program |
 | 12 | An artefact that varies with the implementation may not sit in the identity that must match; and a published claim that a named artefact is absent must be rechecked against the tree. | program, **A-7** |
 | 13 | Same rule as 12's first clause, stated for the contract: the measurement CONFIGURATION is the identity, never the measurement's output. | program |
-| 14 | Nothing that enters a hash identity may carry a path that differs between runs of the same configuration. | program |
+| 14 | Nothing that enters a hash identity may carry a path that differs between runs of the same configuration. | program **for emitted scripts**; the same class is LIVE for records — **A-17** |
 | 15 | An axis must prove from the names its evidence actually prints, or declare itself unprovable — not from a name no artefact emits. | program |
-| 16 | A proof must name the artefact the downstream consumer consumed; a proof about an upstream intermediate does not satisfy an axis scoped to the final one. | program; the tool error behind it is **unsettled** |
+| 16 | A proof must name the artefact the downstream consumer consumed; a proof about an upstream intermediate does not satisfy an axis scoped to the final one. | program — and the tool error behind it is **settled**: the step's own setup, not the tool, which is where **A-15** came from |
 | 17 | A verdict token read from an artefact must be matched against a CLOSED enum, and a token outside it is not-measured with the token quoted — never a pass, never the nearest neighbour. | program |
 | 18 | Where a schema offers two ways to state a check, the consumer must accept both; a verdict-valued check may not be required to produce a count. | program |
 
