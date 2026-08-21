@@ -61,9 +61,16 @@ shared cross-project ledger). Steps:
    numeric/boolean rules:
 
    ```bash
-   python3 programs/waivers_schema_check.py <project> --strict-review-required
+   python3 programs/waivers_schema_check.py <project> --strict-review-required --strict-ids
    python3 programs/waiver_legitimacy_check.py <project> --strict
    ```
+
+   `--strict-ids` (#526) is what makes "this waiver names a step that does
+   not exist" a nonzero exit HERE. It is off by default because the same
+   findings are consumed by `flow_compliance_check`, which turns any schema
+   error into `SystemExit(1)` — an inert waiver must cost the reader one
+   warning line, not the entire compliance report. Standalone, the exit code
+   is the whole signal, so ask for it.
 
    The only residual judgment left to you: is each rationale *substantive
    and correct* (vs. plausible-but-wrong)? Read the rationale against the
