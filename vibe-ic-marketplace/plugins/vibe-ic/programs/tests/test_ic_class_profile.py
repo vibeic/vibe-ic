@@ -51,10 +51,12 @@ def test_aid_class_half_duplex_from_protocol_type(tmp_path: Path) -> None:
     assert profile["ic_class"] == "aid_class_half_duplex"
     assert profile["protocol_class"] == "aid_class"
     assert profile["has_command_protocol"] is True
-    # All 13 layers stay mandatory.
+    # All 13 L1-L13 layers stay mandatory. #157: the opt-in completeness
+    # layers L24-L27 are conditional-guarded on flags no detector sets, so
+    # they resolve to skip (never false-fail) — the L1-L13 floor is unchanged.
     layers = required_layers(profile)
     assert len(layers["mandatory"]) == 13
-    assert layers["skip"] == []
+    assert set(layers["skip"]) == {"L24", "L25", "L26", "L27"}
 
 
 def test_aid_class_via_inout_id_bus_alone(tmp_path: Path) -> None:
@@ -272,4 +274,7 @@ def test_required_layers_contract() -> None:
         "L1", "L10", "L11", "L12", "L13", "L2", "L3",
         "L4", "L5", "L6", "L7", "L8", "L9",
     ]
-    assert spec["skip"] == []
+    # #157: L24-L27 are opt-in completeness layers guarded on flags absent
+    # from this profile → they resolve to skip; the L1-L13 mandatory set is
+    # byte-unchanged (still the 13 above).
+    assert set(spec["skip"]) == {"L24", "L25", "L26", "L27"}

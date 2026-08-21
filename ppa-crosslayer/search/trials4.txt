@@ -1,0 +1,8 @@
+w01 csa_mux auto 0.60 0.02 none
+w02 csa_mux auto 0.60 0.00 ks
+w03 csa_mux auto 0.50 0.00 none
+w04 csa_mux auto 0.30 0.02 rab
+w05 csa_mux_hier auto 0.60 0.00 none
+w06 csa_mux_hier auto 0.30 0.02 none
+w07 csa_mux auto 0.60 0.00 sk
+w08 csa_mux auto 0.40 0.00 none
