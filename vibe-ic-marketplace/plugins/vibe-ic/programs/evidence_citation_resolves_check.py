@@ -51,6 +51,49 @@ baseline file and this gate FAILs on:
 Regenerate it deliberately with `--write-baseline` (and only ever to a
 SMALLER set — the gate re-checks that on the next run).
 
+WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (#1710's treatment, applied)
+-------------------------------------------------------------------------
+The scan root was the first ancestor directory holding `benchmark-data/ic`, and
+the BASELINE lives with the data it describes (`root.parent/` — see
+`_BASELINE_NAME`). v1.10.56 moved the published corpus to its own repository, so
+BOTH went at once and the gate answered:
+
+    [SKIP] evidence_citation_resolves_check: no scan root
+           (benchmark-data/ic not found).                            rc 2
+
+That refusal was CORRECT for what it was asked — `run` in `_gate_dispatch.sh`
+maps rc 2 to FAIL, so a check that could not look did not pass — but it was asked
+the wrong question. `$VIBE_IC_BENCHMARK_DATA` now names the benchmark-data ROOT,
+this gate scans `ic/` below it, and the register is picked up from that same
+clone, so the debt and the tree it describes stay together. FOUR outcomes, and
+collapsing any two of them is the defect:
+
+    pointer set + unreadable          -> UNDETERMINED (rc 2). Never excused.
+    pointer set + present but NOT a
+      git checkout                    -> UNDETERMINED (rc 2). See below.
+    nothing anywhere + the CALL SITE
+      opted in                        -> NO_CORPUS (rc 0). Nothing scanned and
+                                         NOTHING CLAIMED to have been scanned.
+    nothing anywhere + nobody said so -> UNDETERMINED (rc 2). Unchanged.
+
+A DIRECTORY IS NOT A CHECKOUT, AND THIS GATE READS GIT'S INDEX
+---------------------------------------------------------------
+`tracked_files()` returns None when `git ls-files` cannot answer, and `scan()`
+then enumerates with `root.rglob("*.md")` and satisfies citations from the DISK.
+That fallback is disclosed and is tolerable for a root somebody named on the
+command line. It is NOT tolerable for a corpus that arrived through the pointer:
+the corpus lives in its own repository now, so a tarball fetch, an archive
+export, a `git clone` that died or a worktree without `.git` all produce a tree
+that is PRESENT and has no index — and over it an untracked local artefact
+satisfies a citation the published tree does not ship. That is a failed fetch
+CERTIFYING a corpus, which is strictly worse than NO_CORPUS: NO_CORPUS at least
+states that nothing was scanned. So a pointer that does not resolve to a git
+checkout is UNDETERMINED.
+
+AND ZERO DOCUMENTS IS NOT ZERO FINDINGS. A scan root that exists and holds no
+Markdown produced `[PASS] every cited evidence artifact resolves` over nothing
+at all. An empty result is not a zero: rc 2.
+
 chip-AGNOSTIC: pure Markdown/filesystem structure. No design, PDK, vendor or
 value literal appears here.
 
@@ -58,13 +101,18 @@ USAGE
 -----
     python3 evidence_citation_resolves_check.py [ROOT] [--json OUT]
                                                 [--write-baseline]
+                                                [--corpus-may-be-absent]
+    VIBE_IC_BENCHMARK_DATA=/path/to/benchmark-data-clone \
+        python3 evidence_citation_resolves_check.py
 
 EXIT CODES
 ----------
     0 = PASS (every citation resolves, or the unresolved set is within a
-        baseline that has not grown)
+        baseline that has not grown), or NO_CORPUS (opted in, and it says
+        nothing was scanned)
     1 = FAIL (a new dangling citation, or the baseline grew / went stale)
-    2 = SKIP (no scan root — nothing to check)
+    2 = UNDETERMINED (no scan root, a corpus pointer that is set and wrong, a
+        supplied corpus that is not a git checkout, or zero documents scanned)
 """
 from __future__ import annotations
 
@@ -76,6 +124,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import _corpus_location as _corpus         # sibling program, one seam for all
+import _semantic_child_progress as _semantic_progress
 
 # Extensions that carry sign-off EVIDENCE. Deliberately narrow: this gate
 # judges "the proof you pointed at is missing", not "every path in prose".
@@ -180,6 +231,19 @@ _BASELINE_NAME = "evidence_citation_baseline.json"
 # believe a result points at the artifact that backs it.
 _DEFAULT_ROOT_REL = "benchmark-data/ic"
 
+#: Where a caller may point us at a clone of the published corpus. Taken from
+#: `_corpus_location` rather than re-spelled here: one name for one thing.
+CORPUS_ENV = _corpus.CORPUS_ENV
+
+#: The pointer names the benchmark-data ROOT — that is the repository that moved,
+#: and it is what carries this gate's BASELINE beside the data it describes. The
+#: scan root is the `ic` subtree below it, the same suffix `_DEFAULT_ROOT_REL`
+#: carries. `programs/tests/_published_corpus` composes it the same way.
+_CORPUS_SUBDIR = "ic"
+
+#: What this gate would have examined, for the NO_CORPUS line.
+_SCANNED = "published sign-off document(s)"
+
 # OUT OF SCOPE BY DEFAULT, stated here rather than left as a silent narrowing:
 # `benchmark-data/evaluation/` holds PER-TASK, machine-generated run outputs
 # (one summary document per benchmark item, regenerated wholesale on every
@@ -193,6 +257,56 @@ _DISCLOSED_OUT_OF_SCOPE = (
     "benchmark-data/evaluation",
     "per-task generated run outputs; reports not retained by design "
     "(measured 2026-07-26: 124 of 129 citations unresolved)")
+
+PROGRESS_SCOPE = "issue1710:evidence-citation-resolves"
+_ACTIVE_PROGRESS = None
+
+
+def _checkpoint(unit: str) -> None:
+    if _ACTIVE_PROGRESS is not None:
+        _ACTIVE_PROGRESS.checkpoint(unit)
+
+
+def _routing_paths(root: Path, tracked: Optional[set]) -> List[Path]:
+    names = ([t for t in tracked if t.endswith("/" + _ROUTING_NAME)]
+             if tracked is not None else
+             [str(p.relative_to(root)) for p in root.rglob(_ROUTING_NAME)])
+    return [root / rel for rel in sorted(names)]
+
+
+def _markdown_paths(root: Path, tracked: Optional[set]) -> List[Path]:
+    return (sorted(root / t for t in tracked if t.lower().endswith(".md"))
+            if tracked is not None else sorted(root.rglob("*.md")))
+
+
+def _json_paths(root: Path, tracked: Optional[set]) -> List[Path]:
+    return (sorted(root / t for t in tracked if t.lower().endswith(".json"))
+            if tracked is not None else sorted(root.rglob("*.json")))
+
+
+def semantic_progress_units(root: Path, *, write_baseline: bool = False,
+                            require_checkout: bool = False,
+                            scope_expanded: Optional[str] = None
+                            ) -> List[str]:
+    """Exact finite work manifest for a trusted parent invoking this gate."""
+    tracked = tracked_files(root)
+    units = ["index:tracked-files"]
+    if require_checkout and tracked is None:
+        units.append("checkout:tracked-root")
+        return units
+    routing = _routing_paths(root, tracked)
+    markdown = _markdown_paths(root, tracked)
+    json_docs = _json_paths(root, tracked)
+    for kind, paths in (("routing", routing), ("document", markdown),
+                        ("document", json_docs)):
+        for path in paths:
+            units.extend(_semantic_progress.file_progress_units(
+                path, f"{kind}:{path.relative_to(root).as_posix()}"))
+    if (write_baseline and (markdown or json_docs)
+            and (scope_expanded is None
+                 or len(scope_expanded.strip()) >= 30)):
+        units.append("index:working-tree")
+    return units
 
 
 def tracked_files(root: Path) -> Optional[set]:
@@ -213,9 +327,11 @@ def tracked_files(root: Path) -> Optional[set]:
     """
     try:
         r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
-                           capture_output=True, timeout=120)
+                           capture_output=True)
     except (OSError, subprocess.SubprocessError):
+        _checkpoint("index:tracked-files")
         return None
+    _checkpoint("index:tracked-files")
     if r.returncode != 0:
         return None
     out = r.stdout.decode("utf-8", "replace")
@@ -396,11 +512,13 @@ def resolve_citation(md: Path, cite: str, root: Path,
 _VERDICT_KEY = "verdict"
 
 
-def _json_artifact_refs(path: Path) -> List[Tuple[str, str]]:
+def _json_artifact_refs(path: Path,
+                        text: Optional[str] = None) -> List[Tuple[str, str]]:
     """[(field, cited_path)] for a JSON GATE REPORT — a dict carrying a
     `verdict`. Anything else is data, not a claim, and is not judged."""
     try:
-        data = json.loads(path.read_text(errors="replace"))
+        data = json.loads(path.read_text(errors="replace")
+                          if text is None else text)
     except (OSError, ValueError):
         return []
     if not isinstance(data, dict) or _VERDICT_KEY not in data:
@@ -459,14 +577,17 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
     TRACKED routing file. Untracked records are ignored: a disclosure that is
     not published cannot inform a reader."""
     out: Dict[Tuple[str, str], str] = {}
-    names = ([t for t in tracked if t.endswith("/" + _ROUTING_NAME)]
-             if tracked is not None else
-             [str(p.relative_to(root)) for p in root.rglob(_ROUTING_NAME)])
-    for rel in sorted(names):
-        cell = (root / rel).parent
+    for path in _routing_paths(root, tracked):
+        rel = path.relative_to(root).as_posix()
+        identity = f"routing:{rel}"
+        cell = path.parent
         try:
-            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+            text = _semantic_progress.read_text_chunks(
+                path, identity, _ACTIVE_PROGRESS)
         except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
             continue
         for line in text.splitlines():
             s = line.strip()
@@ -481,15 +602,25 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
             except ValueError:
                 continue
             out[(key_doc, cited.strip())] = decision
+        _checkpoint(_semantic_progress.file_judged_unit(path, identity))
     return out
 
 
 def scan(root: Path, tracked: Optional[set] = None
          ) -> Tuple[List[Dict[str, str]], int, int, List[str],
                     List[Dict[str, str]], List[Dict[str, str]],
-                    List[Dict[str, str]]]:
+                    List[Dict[str, str]], int]:
     """`(dangling, cited_total, docs_scanned, zero_citation_docs, oversize,
-    unjudged, outside)`.
+    unjudged, outside, files_enumerated)`.
+
+    `files_enumerated` IS THE DENOMINATOR, and it is NOT `docs_scanned`.
+    `docs_scanned` counts files that CONTRIBUTED — every Markdown file read,
+    plus only those JSON reports that declare a verdict and name an artefact —
+    so a tree of configuration JSON legitimately scores 0 there while having
+    been fully examined. Returning the enumerated count from HERE rather than
+    re-deriving it in `main()` keeps one enumeration: a second `rglob`/`tracked`
+    filter typed out beside this one would be a count that looks authoritative
+    and tracks nothing, which this repo has already paid for once.
 
     The last three are DISCLOSURE channels, never folded into the verdict:
     `oversize` is a token past the expansion bound, `unjudged` a dangling
@@ -525,12 +656,16 @@ def scan(root: Path, tracked: Optional[set] = None
     # baseline is a set of digests, so any enumeration difference between
     # where it is WRITTEN and where it is CHECKED shows up as phantom
     # "resolved" entries. One source of truth for what exists.
-    _mds = (sorted(root / t for t in tracked if t.lower().endswith(".md"))
-            if tracked is not None else sorted(root.rglob("*.md")))
+    _mds = _markdown_paths(root, tracked)
     for md in _mds:
+        _identity = f"document:{md.relative_to(root).as_posix()}"
         try:
-            text = md.read_text(errors="replace")
+            text = _semantic_progress.read_text_chunks(
+                md, _identity, _ACTIVE_PROGRESS)
         except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
             continue
         docs += 1
         _contributed = 0
@@ -568,10 +703,19 @@ def scan(root: Path, tracked: Optional[set] = None
                     dangling.append({"doc": _d, "citation": tok})
         if not _contributed:
             zero_docs.append(str(md.relative_to(root)))
-    _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
-              if tracked is not None else sorted(root.rglob("*.json")))
+        _checkpoint(_semantic_progress.file_judged_unit(md, _identity))
+    _jsons = _json_paths(root, tracked)
     for js in _jsons:
-        refs = _json_artifact_refs(js)
+        _identity = f"document:{js.relative_to(root).as_posix()}"
+        try:
+            text = _semantic_progress.read_text_chunks(
+                js, _identity, _ACTIVE_PROGRESS)
+        except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
+            continue
+        refs = _json_artifact_refs(js, text)
         if refs:
             docs += 1
         for field, tok in refs:
@@ -581,7 +725,9 @@ def scan(root: Path, tracked: Optional[set] = None
                 if (_d, tok) in disclosed:
                     continue
                 dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
-    return dangling, cited, docs, zero_docs, oversize, unjudged, outside
+        _checkpoint(_semantic_progress.file_judged_unit(js, _identity))
+    return (dangling, cited, docs, zero_docs, oversize, unjudged, outside,
+            len(_mds) + len(_jsons))
 
 
 def _working_tree_dirt(root: Path) -> List[str]:
@@ -589,10 +735,11 @@ def _working_tree_dirt(root: Path) -> List[str]:
     when the tree is clean or git is unavailable (the caller degrades)."""
     try:
         r = subprocess.run(["git", "-C", str(root), "status", "--porcelain",
-                            "--", "."], capture_output=True, text=True,
-                           timeout=120)
+                           "--", "."], capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError):
+        _checkpoint("index:working-tree")
         return []
+    _checkpoint("index:working-tree")
     if r.returncode != 0:
         return []
     return [ln[3:] for ln in r.stdout.splitlines() if ln.strip()]
@@ -645,25 +792,83 @@ def main(argv=None) -> int:
                          "regression). Requires a reason, which is recorded "
                          "in the baseline beside the previous size — a "
                          "deliberate, auditable act, never a bypass flag.")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the "
+                         "published corpus. Turns 'no scan root discoverable "
+                         "anywhere' from UNDETERMINED into NO_CORPUS (rc 0), "
+                         "which STATES that nothing was scanned. It does NOT "
+                         f"excuse a pointer that is set and broken: ${CORPUS_ENV} "
+                         "aimed at something unreadable, at a clone with no "
+                         "`ic/` in it, or at a directory that is not a git "
+                         "checkout is UNDETERMINED with or without this flag.")
     args = ap.parse_args(argv)
 
     here = Path(__file__).resolve()
     explicit_root = bool(args.root)
-    if args.root:
-        root = Path(args.root)
-    else:
-        root = next((b / _DEFAULT_ROOT_REL for b in here.parents
-                     if (b / _DEFAULT_ROOT_REL).is_dir()), None)
-    if root is None or not root.is_dir():
-        print("[SKIP] evidence_citation_resolves_check: no scan root "
-              f"({args.root or _DEFAULT_ROOT_REL} not found).")
-        return 2
+
+    # WHERE THE CORPUS IS, ASKED THROUGH THE ONE SEAM THAT ANSWERS IT (#1710).
+    # `_corpus_location.resolve` follows $VIBE_IC_BENCHMARK_DATA only when the
+    # NAMED path carries no corpus, and announces either way — so a developer
+    # who has the pointer exported still runs the gate CI runs when they name a
+    # readable root, and still learns which tree produced the verdict.
+    named = (Path(args.root) if args.root else
+             next((b / _DEFAULT_ROOT_REL for b in here.parents
+                   if (b / _DEFAULT_ROOT_REL).is_dir()),
+                  Path(_DEFAULT_ROOT_REL)))
+    root, origin = _corpus.resolve(named, subdir=_CORPUS_SUBDIR,
+                                   gate="evidence_citation_resolves_check",
+                                   announce=True)
+    if not root.is_dir():
+        return _corpus.refuse("evidence_citation_resolves_check", named, root,
+                              origin, args.corpus_may_be_absent, _SCANNED)
 
     baseline_path = (Path(args.baseline) if args.baseline
                      else root.parent / _BASELINE_NAME)
+    if origin == _corpus.ENV:
+        # THE REGISTER TRAVELS WITH THE DATA IT DESCRIBES. Said out loud because
+        # a debt register read from somewhere other than the tree it was
+        # measured over reports paid debts that were never paid.
+        print(f"note: register read from {baseline_path}", file=sys.stderr)
     tracked = tracked_files(root)
-    dangling, cited, docs, zero_docs, oversize, unjudged, outside = scan(
-        root, tracked)
+    # A SUPPLIED CORPUS MUST BE A CHECKOUT. `tracked_files` returns None when
+    # git cannot answer, and `scan()` then walks the DISK and lets an untracked
+    # local artefact satisfy a citation — a weaker question, answered under the
+    # same name. Tolerated for a root a human typed (the WARNING below says so);
+    # never for one a fetch produced, because a dead clone would then certify a
+    # corpus instead of reporting that it could not be read.
+    if origin == _corpus.ENV and tracked is None:
+        semantic = (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled)
+        reason = _corpus.not_a_checkout_reason(
+            root, "tracked documents",
+            timeout=None if semantic else 60, strict=semantic)
+        _checkpoint("checkout:tracked-root")
+        reason = reason or (
+            f"{root} is a git checkout but git tracks no regular file under it, "
+            f"so this gate enumerated nothing from the index.")
+        print(f"UNDETERMINED: {reason} This gate judges whether the REPOSITORY "
+              f"ships the proof, never whether this machine happens to hold it. "
+              f"Point {CORPUS_ENV} at a clone.", file=sys.stderr)
+        return 2
+    dangling, cited, docs, zero_docs, oversize, unjudged, outside, enumerated \
+        = scan(root, tracked)
+    # AN EMPTY POPULATION IS NOT A CLEAN ONE. A scan root that exists and holds
+    # nothing this gate reads yields no citation, no finding, and — before this
+    # — the sentence "[PASS] every cited evidence artifact resolves" over
+    # nothing at all.
+    #
+    # THE TEST IS ON `enumerated`, NOT ON `docs`. `docs` counts files that
+    # CONTRIBUTED a citation, and a tree of verdict-less configuration JSON
+    # legitimately contributes none while having been completely read; failing
+    # that would be measuring a proxy and reporting it as the property.
+    if enumerated == 0:
+        print(f"UNDETERMINED: {root} is a directory but this gate enumerated 0 "
+              f"file(s) it can read there (no .md, no .json), so 0 citation(s) "
+              f"were checked. Nothing enumerated is 'I found nothing to read', "
+              f"which cannot support a verdict about whether cited artefacts "
+              f"resolve — and it would report every recorded debt as paid.",
+              file=sys.stderr)
+        return 2
     now = sorted({_key(d) for d in dangling})
 
     if args.write_baseline:
@@ -728,6 +933,10 @@ def main(argv=None) -> int:
     result = {
         "program": "evidence_citation_resolves_check",
         "docs_scanned": docs,
+        # THE ENUMERATED POPULATION, beside the contributing one. A reader who
+        # sees only `docs_scanned: 0` cannot tell "read nothing" from "read a
+        # thousand files, none of which cited anything".
+        "files_enumerated": enumerated,
         "citations_checked": cited,
         "unresolved_total": len(now),
         # THE DENOMINATOR, per vibe-ic#1044. A gate that says PASS without
@@ -750,8 +959,9 @@ def main(argv=None) -> int:
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(result, indent=2) + "\n")
 
-    print(f"evidence_citation_resolves_check: {docs} doc(s), "
-          f"{cited} citation(s) checked under {root}")
+    print(f"evidence_citation_resolves_check: {docs} contributing doc(s) of "
+          f"{enumerated} file(s) enumerated, {cited} citation(s) checked "
+          f"under {root}")
     if outside:
         print(f"  OUT OF SCOPE   : {len(outside)} citation(s) resolve against the "
               f"repository but ABOVE this gate's scan root — the document is "
@@ -815,5 +1025,15 @@ def main(argv=None) -> int:
     return 1
 
 
+def _entrypoint() -> int:
+    global _ACTIVE_PROGRESS
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        _ACTIVE_PROGRESS = progress
+        try:
+            return main()
+        finally:
+            _ACTIVE_PROGRESS = None
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_entrypoint())

@@ -380,6 +380,29 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # one-file diff that switches the mechanism off (`max_commits:
     # 9999999`): 16 tests selected, this guard NOT among them. ~3 s.
     "test_gate_red_since_check.py",
+    # vibe-ic#1734 — same reachability argument, MEASURED twice on this tree
+    # with the real selector, at 7c376e348, one throwaway commit each:
+    #
+    #   adding `pytestmark = pytest.mark.timeout(2700)` to ONE test file
+    #     -> 18 files selected, this guard NOT among them
+    #   raising `DEFAULT_STALL_AFTER` in `programs/pytest_per_file_junit.py`
+    #     -> 43 files selected, this guard NOT among them
+    #
+    # The first is the defect itself: `ci_harness_timeout_ceiling_check.py`
+    # exists to stop a test declaring a bound it can outlive, and the PR that
+    # reintroduces an exemption is a one-line edit to a test file, which
+    # selects the test named after that file and not this one. The second is
+    # the ceiling's own input — the stall window is resolved from the driver,
+    # so a diff that raises it moves this gate's verdict without selecting it.
+    #
+    # For completeness, because the negative matters as much: a diff touching
+    # `tools/gatekeeper-land.sh` DOES select it (72 files), via
+    # `_REPO_TOOL_DIRS` below. That lane was already covered; these two were
+    # not. The program additionally self-checks before every scan, so the two
+    # layers are independent — this roster entry covers the case where the
+    # program's own test is what must run, and the self-check covers the case
+    # where the program runs at all.
+    "test_ci_harness_timeout_ceiling_check.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose

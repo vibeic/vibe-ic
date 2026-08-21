@@ -1,0 +1,18 @@
+{
+  "trial": "y03",
+  "levers": {
+    "rtl_variant": "nr_csel16",
+    "synthesis_strategy": "hc"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.30",
+    "spare_cell_density": "0.02"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 259.853,
+    "cpu_seconds": 358.27,
+    "peak_rss_mb": 579.9
+  }
+}

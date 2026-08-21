@@ -33,6 +33,8 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent / "benchmark_evidence_publish.py"
 sys.path.insert(0, str(PROG.parent))
 import benchmark_evidence_publish as B  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _pdk_revision_fixture as _pdk_fixture  # noqa: E402
 
 _GDS_BYTES = b"GDSII-FAKE-STREAM-" * 64
 _RESULT_PASS = "# RESULT\n\n## VERDICT\n\n**PASS_WITH_WAIVERS.** re-derived.\n"
@@ -86,6 +88,11 @@ def _make_run(base: Path, ledger: dict | None) -> Path:
     (run / "phase3" / "stage4" / "gds" / "top.gds").write_bytes(_GDS_BYTES)
     if ledger is not None:
         (run / "reports" / "write_ledger.json").write_text(json.dumps(ledger))
+    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
+    # revision it signed off against (W6). The record is produced by the
+    # REAL resolver over a synthesized tree — never hand-written — so this
+    # fixture cannot drift from the program that writes it in production.
+    _pdk_fixture.write_run_pdk_revision(run)
     return run
 
 
