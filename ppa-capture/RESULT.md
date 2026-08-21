@@ -1673,6 +1673,22 @@ run the command.
 
     python3 ppa-capture/verify.py     21 checks, exit 0 = every claim holds
 
+**It was held to the two invocation properties this batch records about other
+people's tools.** A-14 is about a documented command that does not run, and A-6
+about a command that writes into the installed tree; both apply to a script
+handed to a lander who will invoke it from wherever they happen to be:
+
+    run from the repository root, the lane directory, the marketplace
+      directory and an unrelated temporary directory        rc 0 in all four
+    run from INSIDE the installed programs directory        rc 0, and the
+      working tree carries the same zero entries afterwards
+
+Cwd-independence comes from resolving every path against the script's own
+location rather than the caller's, and the one temporary file it needs — the
+malformed backlog its sanitiser control requires — is created and removed inside
+a temporary directory. A verifier that fails from the wrong directory, or leaves
+a file behind, would be an instance of two of the records it is verifying.
+
 **Next: implement the 13 Bucket-A rules** — a separate lane, per the brief. Take
 `pattern` and `fix_action` from `ppa-capture/recoveries.json`; the emitted
 sketches in `ppa-capture/candidates/` are already filed beside the program that
