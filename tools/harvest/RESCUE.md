@@ -77,3 +77,38 @@ ref that is the commit, alongside `is a parent of`), the auditor's regex knew on
 reported two good rows as `UNPARSEABLE`. That reads exactly like a defect and was not one. An
 auditor that does not understand the thing it audits produces findings indistinguishable from
 real ones.
+
+## A host's view of origin is not origin — 161 rows would have carried a false warning
+
+jharv3 found that survivability measured **on** a host reads *that host's* `refs/remotes`, not
+origin. A clone that never fetched a branch reports its commit as local-only while origin has
+held it all along. Measured here: **114 rows** the host called `ON_LOCAL_REF_ONLY` and **47** it
+called `UNREFERENCED` are in fact on origin. The error is in the safe direction — it over-warns
+and would have caused pushes of commits origin already had — but the rows would have said
+something false.
+
+Fixed by resolving the split **once, on one machine**, against a clone holding all 627 origin
+refs, from heads collected host-side. `bin_jharv2/resolve_origin.sh`.
+
+## Final survivability, origin-resolved
+
+| | |
+|---|---|
+| heads resolved | 824 |
+| **ON_REMOTE** | **822** |
+| ON_LOCAL_REF_ONLY | 0 |
+| UNREFERENCED | 0 |
+| no resolvable HEAD (nothing to preserve) | 2 |
+
+Every worktree in all four files whose head exists is now safe to delete without losing the
+commit. Getting there took 30 more anchors on `.102`, 3 on `.114`/`.112`, and 2 stragglers that
+had moved *after* the first rescue ran.
+
+## The residual, stated plainly
+
+**458 pruned checkouts hold content that exists nowhere but their own directory.** Their worktree
+registration was pruned, so there is no HEAD, no branch, no commit — the files on disk are the
+whole of it. No ref can be pushed for a commit that does not exist. Those rows say
+`**DELETING THIS DIRECTORY DESTROYS THE CONTENT**` and they mean it literally. Preserving them
+would mean committing their trees into somebody's repository, which is a decision for the owner
+and not for a triage job.
