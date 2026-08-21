@@ -544,7 +544,9 @@ it holds for any document class this layer gains, and the third disclosed number
 it requires (files that would not parse) is the half neither denominator gate
 asks for.
 
-### C-2 · an optional dependency needs a version matrix — **demoted from Bucket A by its own sweep**
+### C-2 · An optional dependency needs a version matrix, because present-but-too-old is the arm nothing tests · `repo.host_independence`
+
+**Demoted from Bucket A by its own sweep.**
 
 This began as a Bucket-A static rule and its own corpus sweep disproved it. The
 narrowing went four rounds and every one over-reported:
@@ -1017,7 +1019,7 @@ that quotes a count without naming the control.
 **(d)** yes — every future batch quotes counts, and none of them will have an
 expected value either.
 
-### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
+### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
 > compare the claim against the input list — but no emitter records the inputs it
@@ -1033,7 +1035,7 @@ its own input list would have contradicted.
 is indifferent to what the claim is about; it covers a corner, a basis, a
 liberty, or an activity model equally.
 
-### T-1 · post-route repair faults after routing completes · `phase3.pnr_setup_repair` · OpenROAD
+### T-1 · Post-route design-rule repair faults on a netlist shape after routing completes · `phase3.pnr_setup_repair` · OpenROAD
 
 > **why_not_bucket_a**: The fault is inside the forked tool's post-route repair
 > stage; the flow's classification and resume path already behave correctly — they
@@ -1423,6 +1425,21 @@ copies of one string disagreed. My audits counted sections and counted defs;
 nothing asked whether a def could *find* its section. The fix is to make the
 heading quote the record verbatim, which is now true for all 26 and is
 mechanically checkable — a heading is either a `rule_name` or it is not.
+
+**And then the same defect turned up in the population I had not looked at.**
+Having fixed the 26 Bucket-A headings I declared traceability closed. The check
+I wrote only walked `A-`; the three C and T headings had drifted too, all three
+of them:
+
+    C-2  heading dropped the clause naming what the arm tests
+    C-1  "...the inputs the session opened" for "...actually opened"
+    T-1  "post-route repair faults" for "post-route design-rule repair faults
+         on a netlist shape"
+
+Fixing the population under examination and leaving the adjacent one is **A-3
+and A-4's own lesson**, committed here by their author one section after writing
+it down. All 29 headings now quote their record verbatim, and the check walks
+all three buckets rather than the one I happened to be thinking about.
 
 ---
 
