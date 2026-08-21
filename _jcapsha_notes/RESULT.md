@@ -228,7 +228,10 @@ sets exactly one of them** — which is the case the ruling was written to catch
 **F3a is Bucket T, OpenROAD.** It is inside a forked tool; the plugin does not
 place the rows; anything the plugin did here would be a correction stacked on a
 wrong one. That is Bucket T's own test, taken literally.
-Emitted: `candidates/bucket_T_forked_tool/ORGANIC-20260822-io-row-rotation-arguments-applied-to-opposite-rows.yaml`,
+~~Emitted as a forked-tool backlog.~~ **WITHDRAWN** — the record is now a Bucket-D
+discard, so no forked-tool backlog is emitted and the directory no longer exists.
+The withdrawal and its reason are in `candidates/bucket_D_discarded.md` and
+`evidence/f3_bucket_T_WITHDRAWN.txt`. What follows described the withdrawn record:
 with `golden_sample` (derived, and labelled as derived — the tool ships no
 reference output) and `bad_sample` (the measured table).
 
@@ -752,8 +755,8 @@ On a clean tree (`git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`):
 # the capture itself
 python3 vibe-ic-marketplace/plugins/vibe-ic/programs/enhancement_emit.py \
     --records _jcapsha_notes/recoveries.json --out-dir _jcapsha_notes/candidates
-python3 vibe-ic-marketplace/plugins/vibe-ic/programs/backlog_sanitize_check.py \
-    --file _jcapsha_notes/candidates/bucket_T_forked_tool/*.yaml
+# (no forked-tool backlog is emitted any more -- the record was withdrawn to
+#  Bucket D. `backlog_sanitize_check` is the gate that would read one.)
 
 # the pre-fix reproduction and the AST pin
 python3 _jcapsha_notes/evidence/repro_f1.py
