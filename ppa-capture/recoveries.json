@@ -1,0 +1,115 @@
+[
+  {
+    "step": "ppa.feasibility",
+    "design": "one routed digital core, open PDK; identifier withheld per capture honesty rule",
+    "bucket": "A",
+    "rule_name": "gate proof vocabulary has a producer",
+    "pattern": "A gate proves each of its axes from a fixed set of canonical measurement names, and the modules that emit measurements each carry their own name table. Nothing relates the two tables. When no emitting module carries any name an axis proves from, that axis is structurally unprovable: every run reports it as not determined, the gate's overall verdict can never be reached, and no candidate can ever be promoted. Every per-module test stays green throughout, because each module is only ever tested against its own table.",
+    "docstring": "Every measurement name a gate proves from must appear in at least one emitting module's declared name table. An axis whose whole proof vocabulary is unproduced is not a strict gate; it is a gate that cannot be answered, and the flow reports it as undetermined forever while looking healthy. The check is a set difference between two tables that already exist, so it costs one pass and it covers a name added tomorrow the day it lands.",
+    "expected_signal": "ERROR",
+    "fix_action": "Build the union of the emitting modules' declared name tables (the physical sign-off source list, the power category map, the area taxonomy, and a name table the timing module must gain because it composes its names with a format string today). Compare that union against the gate's per-axis proof vocabulary. Refuse, naming the axis and every name in it, when no group of an axis has a single produced name. Report the same difference in the other direction as a warning: a produced name no gate proves from is a measurement nobody reads."
+  },
+  {
+    "step": "ppa.head_to_head",
+    "design": "one routed digital core, open PDK; identifier withheld per capture honesty rule",
+    "bucket": "A",
+    "rule_name": "required scope keys are emitted by their producer",
+    "pattern": "A comparison gate declares, per axis, the set of measurement-condition keys two numbers must both carry before they may be compared. The module that emits that axis fills the keys it happens to have. Nothing relates the two sets. A producer short of one key makes every comparison over its numbers refuse, on both arms at once, before any value is looked at — and the refusal names a key, not a producer, so it reads as a caller mistake rather than as the emitting module's gap.",
+    "docstring": "Each key a comparison gate requires of an axis must be emitted by the module that produces that axis, or that module must record, beside the scope it did not fill, the reason it could not. The two-sided rule matters: a key filled with an empty or null placeholder is worse than an absent one, because two placeholders compare equal and two numbers taken under conditions nobody recorded then pass as taken under the same conditions.",
+    "expected_signal": "ERROR",
+    "fix_action": "For each axis of the comparison gate's required-keys table, construct the producing module's scope on a fixture and diff the key sets. Refuse when a required key is neither emitted nor accounted for by a recorded gap reason. Refuse separately, and with a distinct code, when a required key is present with a null or empty value."
+  },
+  {
+    "step": "benchmark.verify_claim_done",
+    "design": "plugin test suite, layer-wide; no design involved",
+    "bucket": "A",
+    "rule_name": "population guard asserts equality not a floor",
+    "pattern": "A suite parametrises over a population it DISCOVERS (a glob, a registry walk) but drives each member with an invocation it DECLARES (a hand-maintained table). The guard against an empty population is written as a floor — at least N — with N frozen at the count on the day the two numbers happened to agree. The floor then passes forever while the two sets drift apart, so a member added later is silently uncovered, and an entry left behind for a member since deleted is invisible in the other direction. The guard's own message keeps quoting the old count.",
+    "docstring": "A population guard over a discovered set must assert EQUALITY against the declared set and print the symmetric difference, never a lower bound. A lower bound answers a question nobody asked — is the population non-empty — while the question that matters is whether every discovered member is declared and every declared member still exists. A floor cannot see either drift, and it reads as coverage while holding neither.",
+    "expected_signal": "ERROR",
+    "fix_action": "Replace the floor assertion with a set-equality assertion between the discovered population and the declared invocation table, whose message prints both counts and both directions of the difference. Emit it ONCE for the whole population rather than once per member, so the reader gets the list instead of N single names. Where two declared tables cover one discovered population, assert both against it and assert the two tables agree with each other."
+  },
+  {
+    "step": "benchmark.verify_claim_done",
+    "design": "plugin test suite, layer-wide; no design involved",
+    "bucket": "A",
+    "rule_name": "layer membership is declared not inferred from a filename prefix",
+    "pattern": "A suite that enforces a LAYER-wide property selects its population with a filename-prefix glob, because in the layer's first week the prefix and the layer were the same set. They stop being the same set as soon as the layer gains a module inside its own package, or a program that imports the layer under a different name. Every such executable is outside the population, so the layer property is unenforced on it — and the defect the suite exists to catch survives there untouched, with the suite green.",
+    "docstring": "Membership of a layer is a RELATION — the executable imports the layer's package, or cites the layer's interface document — and it must be computed from that relation, never from how the file happens to be named. A naming convention standing in for a boundary silently shrinks the population every time the layer grows in a direction the convention did not anticipate, and the shrinkage is invisible because the members that fell out were never counted.",
+    "expected_signal": "ERROR",
+    "fix_action": "Define the population as every executable that imports the layer's package or cites the layer's interface document, and take the prefix glob as one contributor rather than as the definition. Assert that the relation-derived population is a superset of the glob-derived one, and drive every arm of the layer property over the relation-derived set."
+  },
+  {
+    "step": "ppa.head_to_head",
+    "design": "one routed digital core, open PDK; identifier withheld per capture honesty rule",
+    "bucket": "A",
+    "rule_name": "two input selectors given together must refuse",
+    "pattern": "A tool grows a second way to name its input — a directory of many alongside the single positional one — and the two are wired as independent options rather than as alternatives. Given both, the later branch wins and the other input is never opened. Nothing is printed about the input that was dropped, so a caller who names a failing record and adds the directory flag is told the directory's verdict and never learns the record was not read. The exit code changes with it, from a finding to a could-not-check, which reads as an improvement.",
+    "docstring": "Two selectors that name the same input in different ways are ALTERNATIVES and must be declared as such: given both, refuse as a bad invocation and name both. Silently letting one shadow the other converts a real verdict into a different verdict on an unrelated population, and the caller has no way to tell — the output is well-formed and describes work that was genuinely done, just not on the thing they named.",
+    "expected_signal": "ERROR",
+    "fix_action": "Put the single-target and the collection selectors in one mutually exclusive group so the argument parser itself refuses both, and return the bad-invocation exit code rather than the could-not-check one. Where an existing caller depends on passing both, adjudicate BOTH populations and aggregate under the most-severe rule; never pick one silently. Add the both-given case to the layer's bad-invocation arm so every tool in the layer is covered by the same test rather than this one."
+  },
+  {
+    "step": "ppa.artefact_write",
+    "design": "shipped plugin tree, any host; no design involved",
+    "bucket": "A",
+    "rule_name": "a runtime output path may not resolve inside the installed tree",
+    "pattern": "A tool takes an output path from the caller and writes it as given. A relative path is resolved against the process working directory, which for a tool invoked from inside the installation is the installation. The write then creates directories and files inside the INSTALLED product, where they survive the run, appear as untracked additions, and can be picked up by the next hygiene or packaging pass as if they were shipped content. The failure is invisible to the caller because the write succeeds.",
+    "docstring": "An artefact written on behalf of a caller belongs to that caller's run, so its resolved destination must lie outside the installed product tree. Resolve the destination before opening it and refuse when it falls inside the installation, naming both the resolved path and the installation root. The refusal must happen BEFORE any directory is created: a run that refuses and still leaves a directory behind has done the damage it declined to do, which is worse than either outcome alone.",
+    "expected_signal": "ERROR",
+    "fix_action": "In the shared atomic writer, resolve the destination and compare it against the installation root computed from the module's own location. Refuse with the bad-invocation code before creating any parent directory. Two properties must be tested rather than assumed: that the refusal fires on a relative path when the working directory is the installation, and that after a refusal the tree carries no new entry — the measured case refused with the could-not-check code AND still wrote the file and its parent directory."
+  },
+  {
+    "step": "ppa.search",
+    "design": "one routed digital core, open PDK; identifier withheld per capture honesty rule",
+    "bucket": "A",
+    "rule_name": "a published absence claim is rechecked against the tree",
+    "pattern": "A placeholder implementation carries an explanatory string saying WHY it cannot answer, and that string names a module or artefact as not yet present. The named thing lands later, in a different change, and the string is never revisited — it is a literal in a file nobody had reason to reopen. The stale claim is then copied verbatim into every document the placeholder publishes, where it reads as a current statement about the tree and is believed, because a provenance note is exactly the field a reader does not audit.",
+    "docstring": "A published explanation that asserts a named artefact is ABSENT must be re-evaluated against the tree at the moment it is published, not written as a literal. Where the claim can be reduced to a path, the check is a file test and the refusal is unambiguous. Where it cannot, the string must not make the claim at all: a placeholder may say it has no evidence without saying why the evidence does not exist, and the version that says less is the version that cannot go stale.",
+    "expected_signal": "ERROR",
+    "fix_action": "Extract every repository-relative path mentioned in a published reason string, together with the absence verb attached to it. Refuse to publish when a path asserted absent resolves to an existing file. Apply it at the publish boundary rather than at each authoring site, so a reason string copied into a new publisher inherits the check."
+  },
+  {
+    "step": "ppa.search",
+    "design": "one routed digital core, open PDK; identifier withheld per capture honesty rule",
+    "bucket": "A",
+    "rule_name": "a metric constant across arms that differ is not measured under that lever",
+    "pattern": "A sweep turns a lever and records an objective on each arm. One axis of the objective is computed by a session whose inputs the lever cannot reach — it reads an upstream intermediate rather than the artefact the lever rewrote. The axis then returns the SAME value on every arm while every arm's actual artefacts differ. No individual number looks wrong, no gate fires, and the sweep publishes the axis as searched. A reader concludes the lever does not affect that axis, which is the exact opposite of what happened.",
+    "docstring": "Across a set of arms whose implementations provably differ, an axis that takes ONE distinct value on every arm is not evidence that the lever does not move it; it is evidence that the axis was not measured downstream of the lever. Refuse to publish such an axis as searched. The invariance is stronger evidence than any single arm's magnitude error, and it is available without a reference measurement, which is what makes it checkable in the flow rather than only in a review.",
+    "expected_signal": "ERROR",
+    "fix_action": "At sweep publication, for each objective axis over the set of arms that RAN: count distinct values, and separately count distinct implementation identities. Refuse when the arms carry two or more implementation identities and the axis carries exactly one value. Name the axis, the shared value, and the number of arms. Two arms are enough for the rule to be non-vacuous, so it must not be gated behind a minimum sweep size; a sweep of one arm is skipped and SAYS it was skipped."
+  },
+  {
+    "step": "phase3.sta",
+    "design": "one routed digital core, open PDK; identifier withheld per capture honesty rule",
+    "bucket": "C",
+    "title": "A generated report header must be derived from the inputs the session actually opened",
+    "why_not_bucket_a": "A program can decide this and the predicate is trivial — compare the claim against the input list — but no emitter records the inputs it opened, so today the check has nothing to read. The work is the provenance plumbing across every emitter, not the predicate, which is why this is a backlog item rather than a rule someone can add to one file.",
+    "pattern": "A generated document describes its own basis in a header written as prose literals, while the session that produced it takes its inputs from variables resolved at run time. The two drift the first time a caller reaches the emitter by a path the header's author did not have in mind, and the document then states a basis the session never had. Nothing downstream can detect it: the header is well-formed, the numbers are real numbers produced by the real tool, and the only witness is the input list, which the document does not carry.",
+    "suggested_fix": "Give every emitter a recorded list of the inputs it opened, and derive every self-describing line of the header from that list rather than from a literal. Then a single gate can assert, for any generated document, that each basis claim in its header is entailed by its own input list — and an emitter that claims a basis it cannot support fails at emission rather than at review. The degradation rule comes with it: when the intended input is missing, the emitter falls back AND the header, the stamp and the provenance envelope all name what was actually linked.",
+    "backlog_slug": "generated-header-derived-from-recorded-inputs",
+    "backlog_type": "enhancement",
+    "severity": "P1",
+    "component": "phase3 report emitters, shared provenance",
+    "session_context": "Raised while distilling an end-to-end drive of the measurement layer over one routed core. The instance that produced it has since been fixed in its own emitter by exactly this technique, which is what makes the general form worth building: the technique is known to work and is applied in one place out of many."
+  },
+  {
+    "step": "phase3.pnr_setup_repair",
+    "design": "twelve arms of a seventy-arm cross-layer sweep, open PDK",
+    "bucket": "T",
+    "tool": "OpenROAD",
+    "problem": "OpenROAD is killed by signal 11 during post-route design-rule repair, AFTER detailed routing has printed its own completion line, on every arm whose accumulator is non-redundant. Ten of ten such arms crash; none of the fifty-two arms that preserve the state encoding crash. The process exit is 139, the route itself completed, and the crash is therefore in the post-route repair stage rather than in routing.",
+    "golden_sample": "ppa-crosslayer/records/trials/c02/ — a state-encoding-preserving arm of the same sweep, same tool build, same PDK, same script, which completes the post-route tail normally",
+    "bad_sample": "ppa-crosslayer/records/trials/x03/ and x04, x11, x12, x13, y03, y04, y08, z24, z25 — ten reproductions of the same crash",
+    "tool_enhancement": "Post-route design-rule repair must not fault on the netlist shape these arms produce; a repair pass that cannot proceed on a given instance is required to report that instance and continue or exit with a diagnostic, never to fault. The correlation is the lead: every crashing arm carries a non-redundant accumulator and no preserving arm crashes, so the reproduction is a netlist property rather than a floorplan or a random seed. Two properties the fix must hold: the ten samples above complete the post-route tail, and the tool exits non-zero with a named diagnostic rather than a signal on any instance it still cannot repair.",
+    "why_not_bucket_a": "The fault is inside the forked tool's post-route repair stage; the flow's own classification and resume path already behave correctly — they name the crash, distinguish it from a routing failure, and re-run the tail with the faulting pass omitted. Any further plugin-side rule could only widen that workaround, and on two arms the resume already consumed the whole trial budget.",
+    "title": "Post-route design-rule repair faults on a netlist shape after routing completes",
+    "pattern": "A tool stage that runs AFTER the stage whose success it depends on faults rather than diagnosing, so the flow sees a signal instead of a message. The flow can classify it and route around it, but every arm carrying the triggering netlist property pays the cost of the workaround, and on the slowest arms the workaround consumes the budget the arm needed to produce a number at all.",
+    "suggested_fix": "See the tool enhancement field: the faulting stage must degrade to a named diagnostic. The correlated netlist property in the samples is the reproduction path.",
+    "backlog_slug": "postroute-repair-faults-after-route-completes",
+    "backlog_type": "bug",
+    "severity": "P1",
+    "component": "forked place-and-route tool, post-route repair stage",
+    "session_context": "Ten of ten reproductions in one seventy-arm cross-layer sweep, all in the same design family, none in the fifty-two arms of the other family. Samples are committed in the sweep's own record tree."
+  }
+]
