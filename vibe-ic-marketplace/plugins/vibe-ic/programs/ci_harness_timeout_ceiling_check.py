@@ -378,10 +378,16 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 #     and still blocking; that half did not move and is what
 #     `tools/test_gatekeeper_land_review_budget.py` drives.
 #
+# RE-PINNED a third time, and ONLY the whole-file digest: the edit is a comment
+# BELOW the `lane_emit_window` anchor, correcting what 1800 s bounds (the
+# review's supervisor, not the hygiene set's 300 s shard watchdog). The
+# execution-prefix digest did NOT move, which is this file's own witness that
+# the change is downstream of the anchor and touches no control flow.
+#
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "e9d42ab4bdb44d26db7aef8052b159f945fb82c0f455cb03f6c949b8cd1219bb"
+    "466a820a222afbbc1c9492d8a0a52ced3577cf99f2e267a83bb42f1ba62a34f2"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver

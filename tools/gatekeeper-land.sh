@@ -1558,9 +1558,25 @@ fi
 # window has joined. Four minutes cannot contain that, and a deadline that can
 # only ever expire is not a deadline; it is an unconditional refusal wearing
 # one. 1800 s is the outer bound because it is `repo_hygiene_gate`'s own
-# `_HYGIENE_STALL_GRACE_S`: below it, this `timeout` kills runs that the gate
-# itself still considers alive, and the kill would be reported here as the
-# review's verdict.
+# `_HYGIENE_STALL_GRACE_S`: below it, this `timeout` kills runs that the
+# REVIEW'S OWN SUPERVISOR still considers alive, and the kill would be reported
+# here as the review's verdict.
+#
+# THAT IS NOT THE GRACE THAT GOVERNS THE SET, and the earlier wording here said
+# it was. Measured 2026-08-22: there are TWO watchdogs and they differ 6x.
+# `repo_hygiene_gate` passes `stall_grace` to a supervisor it wraps around the
+# subprocess; it does NOT pass `--stall-grace` to the runner, which therefore
+# uses `repo_hygiene_parallel.DEFAULT_STALL_GRACE_S` = 300 s for every shard.
+# A shard that goes 300 s without a completed gate record is killed as hung,
+# its attestation truncates, and the coverage protocol reports
+# PROGRESS_PROTOCOL_INCOMPLETE / rc 199 — which arrives here as
+# `ERROR parallel hygiene incomplete`, a refusal about the HOST rather than
+# about the tree. Reproduce with `--stall-grace 5` on any tree (~70 s).
+#
+# 1800 remains the right value for THIS timeout: it is an outer bound, it is
+# above every observed complete run, and a landing must never kill a review
+# that is still deciding. The correction is only to what the number means —
+# it bounds the review, not the hygiene set.
 #
 # The half of the ruling that is load-bearing is untouched: a review that did
 # not decide arrives as rc 2 and BLOCKS, never as rc 0. That is what the case
