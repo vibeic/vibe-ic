@@ -229,19 +229,42 @@ branch. **And the test does control benchmark-data:** `_verify()` already passes
 `_BENCHMARK_TEST["checkout"]` / `["remote"]`, a repository the fixture owns. It
 could publish a cell there.
 
-**The one unknown left, and it is now a single question rather than a model:**
-a run measures ONE `$BENCHMARK_SHA` and both arms receive it, so how does an
-EMPTY→expanded transition arise inside a single verification at all? Either the
-A2 arm enumerates its own corpus independently under the base's plugin tree, or
-the transition is only ever produced across two verifications. **That is worth
-one experiment, not another paragraph of mine** — publish a cell into the
-fixture's benchmark-data remote, run `..._trusted_verifier_supplies...`, and read
-whether `corpus_transitions` appears.
+**AND THE LAST UNKNOWN IS ANSWERED TOO — the arms enumerate for themselves.**
 
-I did not run it: M11 measured the published corpus as empty upstream, so the
-fixture would need a cell authored for it, and authoring benchmark content to
-make a test go green is exactly the move this engagement exists to prevent unless
-the cell is real.
+```
+tools/ci/repo_hygiene_gates.sh:695:  python3 "$HERE/routed_def_corpus.py" --repo "$ROOT"
+```
+
+That is the NON-manifest path — no `--checkout`, no `--subject-repo`, no
+`--benchmark-sha`. Every arm running the hygiene gates enumerates its own corpus
+from its own `$ROOT`. So an EMPTY→expanded transition arises inside one
+verification not because the verifier supplies two corpora, but because **A2 and
+B2 each enumerate independently**, under their own plugin trees, and
+`hygiene_finding_delta` compares the gate sets that result.
+
+The verifier's single `_manifest()` call is therefore the parent-owned
+CROSS-CHECK of the candidate's enumeration, not the source of either side's
+population. My three failed models all assumed the verifier computed the
+comparison; it does not — the arms do, and the verifier audits.
+
+**What this means for D, concretely:** the two sides differ when the two plugin
+trees enumerate differently against the corpus each can see. That is reachable
+from the subject branch, which crosses. D is implementable in principle, and the
+mechanism is now fully described rather than guessed.
+
+**I still did not build it**, and the constraint is unchanged: M11 measured the
+published corpus as EMPTY upstream, so the fixture needs a real published cell
+before either corpus test can exercise a real transition. Authoring benchmark
+content in order to turn a test green is precisely the move this engagement
+exists to prevent — the same rule as never hand-editing a GDS to obtain a pass.
+A cell authored for that purpose would make the test green and the guarantee
+weaker.
+
+**Four models, three wrong, one confirmed from source.** Every wrong one shared
+an assumption I never checked: that the verifier computes the base-vs-candidate
+comparison. It audits; the arms compute. Worth stating because the same
+assumption is what makes the two corpus tests look re-foundable when they are
+not.
 
 **The general rule this earns, and it applies to B and C as well as D:** every
 "just express it through channel X" claim in this document needs channel X
