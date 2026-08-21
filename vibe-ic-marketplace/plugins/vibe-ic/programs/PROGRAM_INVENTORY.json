@@ -35,8 +35,8 @@
     },
     "skill_compliance_test_files": {
       "definition": "Every test_*.py under plugins/vibe-ic/skills/*/tests/ \u2014 the per-skill compliance regressions. A DIFFERENT corpus from test_files, which is programs/tests/ only.",
-      "count": 68,
-      "sha256_of_sorted_paths": "837259d9b8f47d464ed2a0b4e9001d35dded18cc6bb7fa091d29a918fe472e57"
+      "count": 81,
+      "sha256_of_sorted_paths": "d343f0374a14583454071e79fe01fcbfb69173eee70af98b1125964babc93e25"
     },
     "gate_programs_check_suffix": {
       "definition": "Top-level programs whose filename ends in _check.py. A SUBSET of gate_programs_check_audit_lint \u2014 quoting one where the other is meant is a different measurement, not a correction.",
