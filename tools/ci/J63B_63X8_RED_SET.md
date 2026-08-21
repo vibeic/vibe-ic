@@ -160,6 +160,28 @@ exist **nowhere** in the corpus, in any cell, at any version. The classification
 "needs evidence this repository does not hold" is confirmed by search, not
 inherited.
 
+## The three fixes were re-verified with the corpus BOUND as well
+
+A fix measured only in the configuration that hides most of the population is
+half a measurement, so all three were re-run against the pre-withdrawal clone —
+the configuration in which 22 further reds are visible:
+
+```
+test_flow_manifest_declaration_parity          12 passed        (reds 16, 17)
+..._nested_outcome_run_outlives_old_fixed...   passed           (red 12)
+..._nested_outcome_run_is_killed_when_no_...   passed           (its control)
+test_matrix_63x8_ledger                        52 passed
+test_matrix_63x8_figure_coverage               12 passed
+test_matrix_d7_outputs_list_complete           99 passed, 5 xfailed
+```
+
+None of the three is corpus-dependent, and the manifest entry added for step 31
+resolves correctly when the corpus IS present — which is the only configuration
+that can exercise its `PRODUCED_BY_RUN` branch at all. The four coverage
+failures under BOUND are `test_every_na_cell_...`,
+`test_no_cell_is_counted_enforced_...` (both owned elsewhere) and two revealed
+by the corpus, not by this branch.
+
 ## The structural question, answered properly — and the answer is inverted
 
 The brief's premise was "seven are stuck behind ONE d8 red; if that d8 is a
