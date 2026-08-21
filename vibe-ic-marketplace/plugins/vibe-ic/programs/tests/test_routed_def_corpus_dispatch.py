@@ -550,6 +550,17 @@ def test_the_shipped_producer_over_an_empty_corpus_blocks_and_never_passes(
     assert proc.returncode == 2, text
     assert attestations and attestations[0]["returncode"] == 2
 
+    # THE ATTESTED BODY MUST STAY HOST-INDEPENDENT. `gatekeeper-verify-merge.sh`
+    # compares the two arms' semantic records BYTE FOR BYTE, so an absolute path
+    # or a producer diagnostic reaching the attestation would make a correct
+    # transition fail on nothing but a differing tmpdir. `_gate_dispatch.sh`
+    # deliberately does not re-execute the producer for the refusal, and the
+    # producer's own explanation of its measured zero goes to stderr — this is
+    # the assertion that both stay true.
+    blob = json.dumps(attestations)
+    assert str(external) not in blob and str(tmp_path) not in blob, blob
+    assert "0 routed DEF(s)" not in blob and "EMPTY POPULATION" not in blob, blob
+
 
 def test_a_corpus_that_was_read_and_holds_none_says_so(tmp_path):
     """The state the landing path is IN was the one that printed nothing.
