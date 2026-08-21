@@ -470,14 +470,92 @@ def test_integrity_conflicting_identity_is_refused(tmp_path, contract_doc,
     assert "claimed by 2 documents that DISAGREE" in r.stderr
 
 
-def test_integrity_exact_and_corpus_together_is_bad_invocation(
+def test_integrity_two_population_sources_together_is_bad_invocation(
         tmp_path, contract_doc):
+    """WHAT SURVIVED THE 2026-08-22 RULING, and what did not.
+
+    This test used to pin `--baseline X --corpus Y` as a bad invocation. That
+    rule is GONE and it was replaced rather than dropped: `--corpus Y` alone
+    and `--baseline X --corpus Y` are two DIFFERENT questions -- every pair
+    within a problem identity, versus every contract against one named
+    baseline -- and the flag combination is how a caller says which one is
+    being asked. `test_integrity_baseline_against_corpus_*` below drive that.
+
+    What is still a refusal is naming TWO POPULATION SOURCES, and the reason is
+    unchanged: `--candidate` names ONE document and `--corpus` names a
+    population, so accepting both means the caller asked about one subject and
+    was answered about another. That holds whether or not a baseline came with
+    them, so BOTH shapes are driven here, and the message must NAME every flag
+    it was given -- a refusal that lists two of the three flags the caller
+    typed is a refusal the caller cannot act on.
+    """
     c = corpus(tmp_path, "both")
     one = put(tmp_path / "one.json", contract_doc)
     put(c / "a.json", contract_doc)
-    r = gate(INTEGRITY_GATE, "--baseline", str(one), "--corpus", str(c))
+
+    # --candidate with --corpus: two population sources, no baseline.
+    r = gate(INTEGRITY_GATE, "--candidate", str(one), "--corpus", str(c))
     assert r.returncode == 3, r.stdout + r.stderr
     assert "bad invocation" in r.stderr
+    assert "--candidate" in r.stderr and "--corpus" in r.stderr
+
+    # All three: the pair question and the corpus question at once.
+    r = gate(INTEGRITY_GATE, "--baseline", str(one), "--candidate", str(one),
+             "--corpus", str(c))
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "bad invocation" in r.stderr
+    for flag in ("--baseline", "--candidate", "--corpus"):
+        assert flag in r.stderr, f"the refusal does not name {flag}"
+
+
+def test_integrity_baseline_against_corpus_is_a_question_not_a_mistake(
+        tmp_path, contract_doc, second_contract_doc):
+    """`--baseline X --corpus Y`: the baseline against every OTHER contract.
+
+    The baseline is NEVER paired with itself -- a contract compared against
+    itself matches on every identity by construction, so counting it would let
+    a corpus of one document look checked."""
+    c = corpus(tmp_path, "against")
+    base = put(c / "base.json", contract_doc)
+    put(c / "arm-b.json", second_contract_doc)
+    r = gate(INTEGRITY_GATE, "--baseline", str(base), "--corpus", str(c))
+    assert r.returncode != 3, r.stdout + r.stderr
+    assert "1 to pair against the baseline" in (r.stdout + r.stderr), r.stdout
+    assert "1 pair(s)" in (r.stdout + r.stderr), r.stdout
+
+
+def test_integrity_baseline_against_a_corpus_holding_only_itself_is_rc2(
+        tmp_path, contract_doc):
+    """VACUOUS SURVIVES THE SECOND MODE. A baseline WAS read, so the temptation
+    is to call this a clean run; it is not one. No comparison was made."""
+    c = corpus(tmp_path, "solo-against")
+    base = put(c / "base.json", contract_doc)
+    r = gate(INTEGRITY_GATE, "--baseline", str(base), "--corpus", str(c))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS" in r.stderr and str(c) in r.stderr
+
+
+def test_integrity_baseline_against_an_empty_corpus_is_rc2_not_rc0(
+        tmp_path, contract_doc):
+    c = corpus(tmp_path, "empty-against")
+    base = put(tmp_path / "outside.json", contract_doc)
+    r = gate(INTEGRITY_GATE, "--baseline", str(base), "--corpus", str(c))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS" in r.stderr and str(c) in r.stderr
+
+
+def test_integrity_baseline_against_corpus_keeps_the_unreadable_verdict(
+        tmp_path, contract_doc, second_contract_doc):
+    """UNREADABLE IS NOT ABSENT, in the baseline mode too. A file nobody could
+    parse was not established to hold no record, and the roll-up must say so
+    rather than silently shrink the denominator."""
+    c = corpus(tmp_path, "unread-against")
+    base = put(c / "base.json", contract_doc)
+    put(c / "arm-b.json", second_contract_doc)
+    (c / "broken.json").write_text('{"schema": "vibeic', encoding="utf-8")
+    r = gate(INTEGRITY_GATE, "--baseline", str(base), "--corpus", str(c))
+    assert "1 unreadable" in (r.stdout + r.stderr), r.stdout + r.stderr
+    assert "broken.json" in r.stderr
 
 
 # ===========================================================================

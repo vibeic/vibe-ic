@@ -286,8 +286,11 @@ def main(argv=None) -> int:
                             args.contract, args.no_waivers,
                             args.corpus_may_be_absent, args.json)
     if args.candidates is None:
-        print(f"{MARK_REFUSE} give --candidates CANDIDATES.json or --corpus "
-              f"DIR (rc=3, bad invocation)", file=sys.stderr)
+        # Every mode this gate has is NAMED. A refusal that lists two of three
+        # is how a caller concludes the third does not exist.
+        print(f"{MARK_REFUSE} give --candidates CANDIDATES.json, or --corpus "
+              f"DIR, or --corpus DIR --corpus-may-be-absent "
+              f"(rc=3, bad invocation)", file=sys.stderr)
         return feas.RC_BAD_INVOCATION
 
     cand_doc = _load(args.candidates, "candidates")

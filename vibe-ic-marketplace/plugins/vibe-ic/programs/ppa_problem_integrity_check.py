@@ -362,6 +362,109 @@ def check_corpus(named: Path, require_impl_differs: bool = False,
     return worst
 
 
+def check_corpus_against_baseline(named: Path, baseline: str,
+                                 require_impl_differs: bool = False,
+                                 may_be_absent: bool = False,
+                                 json_out: Optional[str] = None) -> int:
+    """The NAMED baseline against every OTHER contract under `named`.
+
+    TWO QUESTIONS, NOT TWO SPELLINGS OF ONE (owner ruling, 2026-08-22).
+    `--corpus DIR` alone asks "does every arm of each problem agree with every
+    other arm" — more comparisons, no arbitrary baseline. `--baseline X
+    --corpus DIR` asks "does every published contract agree with THIS one" —
+    fewer comparisons, but the baseline is the thing under test. The flag
+    combination is how the caller says which question is being asked; it is not
+    a bad invocation and it is not a third contract.
+
+    THE CORPUS IS READ THROUGH THE SAME SEAM IN BOTH MODES. ABSENT, VACUOUS and
+    UNREADABLE keep their own verdicts here, because the property that stops an
+    empty corpus becoming a pass does not belong to one of the two questions —
+    it belongs to reading a corpus at all. An empty corpus is rc 2 whether or
+    not a baseline was named.
+
+    THE BASELINE IS NEVER PAIRED WITH ITSELF. A contract compared against
+    itself matches on every identity by construction, so counting it would be
+    the gate writing its own evidence and would make a corpus of ONE document
+    look checked.
+    """
+    corpus, rc = corpus_seam.open_corpus(named, _GATE, _SCANNED, may_be_absent)
+    if corpus is None:
+        return rc
+
+    base_path = Path(baseline)
+    base_doc, reason = C.load_json(base_path)
+    if reason is not None:
+        print(f"[CANNOT CHECK] ppa_problem_integrity_check: baseline "
+              f"{reason} No comparison was attempted, so this run establishes "
+              f"nothing about the corpus at {corpus}. rc=2.", file=sys.stderr)
+        return corpus_seam.RC_UNDETERMINED
+    if not isinstance(base_doc, dict):
+        print(f"[CANNOT CHECK] ppa_problem_integrity_check: baseline "
+              f"{base_path} holds a {type(base_doc).__name__}, not a contract. "
+              f"rc=2.", file=sys.stderr)
+        return corpus_seam.RC_UNDETERMINED
+
+    scan = corpus_seam.collect(corpus, is_contract)
+    unread_rc = corpus_seam.report_unreadable(_GATE, scan)
+    resolved_base = base_path.resolve()
+    arms = [(path, doc) for path, doc in scan.records
+            if path.resolve() != resolved_base]
+    print(f"ppa_problem_integrity_check --baseline {base_path} --corpus "
+          f"{corpus}: {scan.denominator(_SCANNED)}, {len(arms)} to pair "
+          f"against the baseline")
+    if not arms:
+        # VACUOUS, and it stays rc 2 even though a baseline WAS read: a gate
+        # that has never met a second arm cannot have cleared a comparison.
+        return corpus_seam.worst_rc(
+            [corpus_seam.vacuous(_GATE, corpus, _SCANNED, scan), unread_rc])
+
+    rcs: List[int] = [unread_rc]
+    pair_rows: List[Dict[str, Any]] = []
+    for path, doc in sorted(arms, key=lambda r: str(r[0])):
+        findings = compare_contracts(base_doc, doc, require_impl_differs)
+        # BOTH arms get their own mutation clause, exactly as the pair loop in
+        # `check_corpus` does; the baseline is an arm too.
+        seen = {(f["code"], f["message"]) for f in findings}
+        for extra in C._check_mutations(base_doc):
+            if (extra["code"], extra["message"]) not in seen:
+                findings.append(extra)
+        findings.sort(key=lambda f: (f["code"], f["message"]))
+        pair_rc = C.rc_from(findings)
+        rcs.append(pair_rc)
+        stream = sys.stdout if pair_rc == 0 else sys.stderr
+        print(f"{C.marker_for(pair_rc)} ppa_problem_integrity_check: "
+              f"{base_path} vs {path} — {len(findings)} finding(s)",
+              file=stream)
+        for line in C.format_findings(findings):
+            print(line, file=stream)
+        pair_rows.append({"baseline": str(base_path), "candidate": str(path),
+                          "rc": pair_rc, "findings": findings})
+
+    worst = corpus_seam.worst_rc(rcs)
+    refused = sum(1 for r in pair_rows if r["rc"] == 1)
+    undet = sum(1 for r in pair_rows if r["rc"] == 2)
+    print(f"ppa_problem_integrity_check --baseline {base_path} --corpus "
+          f"{corpus}: {len(pair_rows)} pair(s), {refused} refused, "
+          f"{undet} undetermined, "
+          f"{len(pair_rows) - refused - undet} comparable -> rc={worst}")
+    if refused:
+        print(f"REFUSED: {refused} of {len(pair_rows)} pair(s) were not solving "
+              f"the same problem as {base_path.name}, so those comparisons may "
+              f"not be quoted. An undetermined pair beside a refused one does "
+              f"not soften it.", file=sys.stderr)
+    if json_out:
+        atomic_write_text(Path(json_out), json.dumps({
+            "program": "ppa_problem_integrity_check", "mode": "baseline+corpus",
+            "corpus": str(corpus), "baseline": str(base_path),
+            "files_opened": scan.files,
+            "contracts": [str(path) for path, _ in scan.records],
+            "unreadable": [{"path": str(pp), "why": w}
+                           for pp, w in scan.unreadable],
+            "pairs": pair_rows, "rc": worst,
+        }, indent=2) + "\n")
+    return worst
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--baseline", default=None)
@@ -384,9 +487,33 @@ def main(argv=None) -> int:
         return _rc
 
     if args.corpus is not None:
-        if args.baseline is not None or args.candidate is not None:
-            return corpus_seam.both_given("ppa_problem_integrity_check",
-                                          "--baseline/--candidate", "--corpus")
+        # OWNER RULING 2026-08-22. `--corpus` alone and `--baseline X --corpus`
+        # are two DIFFERENT questions and the flag combination says which one.
+        # What is still a bad invocation is naming TWO POPULATION SOURCES, or
+        # asking both questions in one command:
+        #   * `--candidate Y --corpus Z` -- Y is a population of one and Z is a
+        #     population; running either silently reports a verdict about
+        #     something the caller did not ask about.
+        #   * `--baseline X --candidate Y --corpus Z` -- both questions at once.
+        # Both are rc 3, and the message names every flag that was given.
+        if args.candidate is not None:
+            given = ["--candidate", "--corpus"]
+            if args.baseline is not None:
+                given.insert(0, "--baseline")
+            return cli_exit.refuse(
+                "ppa_problem_integrity_check",
+                f"{', '.join(given)} were given together. --candidate names "
+                f"ONE document and --corpus names a population, so this asks "
+                f"for a verdict about two different subjects at once. Give "
+                f"--baseline A.json --candidate B.json for the pair, "
+                f"--corpus DIR for every pair within each problem identity, "
+                f"or --baseline A.json --corpus DIR for that baseline against "
+                f"the corpus")
+        if args.baseline is not None:
+            return check_corpus_against_baseline(
+                Path(args.corpus).resolve(), args.baseline,
+                args.require_implementation_differs,
+                args.corpus_may_be_absent, args.json_out)
         return check_corpus(Path(args.corpus).resolve(),
                             args.require_implementation_differs,
                             args.corpus_may_be_absent, args.json_out)
