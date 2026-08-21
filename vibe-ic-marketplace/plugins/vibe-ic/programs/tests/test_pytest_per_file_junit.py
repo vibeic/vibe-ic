@@ -57,10 +57,28 @@ _T = 50
 #: Test-only no-progress window. It is not a cap on healthy runtime.
 _STALL = 1
 
-#: pytest-timeout's per-test bound inside these tests. Must be BELOW `_KILL` for
-#: the "pytest-timeout fires first" fixture and ABOVE it for the import-hang
-#: fixture, which is the whole distinction the two shapes exist to draw.
-_INNER_TIMEOUT = 4
+#: The bound the ONE-SESSION arm of `test_one_session_loses_the_whole_record_
+#: and_per_file_does_not` puts on ITSELF, as `subprocess.run(timeout=...)`.
+#:
+#: It replaces `-p pytest_timeout --timeout=4 --timeout-method=thread`, which
+#: this file used to hand to every child it launched. That idiom is RETIRED in
+#: this repo (`programs/pytest_per_file_junit.py`: "There is deliberately no
+#: pytest-timeout guard on the landing path"; `tools/ci/test_phase_b_activated_
+#: parity.py` and `tools/ci/test_repo_tools_tests_gate.py` both forbid its
+#: return), and MEASURED on 2026-08-20 the plugin is absent from the anchored
+#: runtime `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…d01ff` AND from the newer
+#: 0.3.13 tag: `-p <missing plugin>` is a HARD import that dies in pytest's
+#: pre-parse, so all 26 tests in this file that reached the child through
+#: `_pytest_cmd` were red in the image and green on a host that happened to
+#: carry an ambient pip package nothing in this tree declares.
+#:
+#: NOTHING IS LEFT UNBOUNDED THAT WAS BOUNDED. Every other child in this file
+#: goes through the driver, whose `--stall-after {_STALL}` supervision fires at
+#: 1 s -- a quarter of the 4 s the retired plugin was set to -- so the plugin
+#: could never have been the bound that fired there. The single-session arm is
+#: the ONE child with no driver above it, and it now carries its own explicit
+#: kill instead of borrowing one from a plugin.
+_SINGLE_SESSION_KILL = 8
 
 _GREEN = "def test_i_am_green():\n    assert 1 == 1\n"
 
@@ -426,10 +444,15 @@ def _md5(p: Path) -> str:
 
 
 def _pytest_cmd():
-    """The harness command, pinned the way the landing gate pins it."""
-    return [sys.executable, "-m", "pytest", "-q", "-p", "pytest_timeout",
-            f"--timeout={_INNER_TIMEOUT}", "--timeout-method=thread",
-            "-p", "no:cacheprovider"]
+    """The harness command, pinned the way the landing gate pins it.
+
+    The landing gate declares SEMANTIC PROGRESS and no elapsed-time verdict, so
+    this argv carries no `--timeout` and names no timeout plugin. Keeping the
+    two in step is not left to a reader:
+    `test_the_landing_harness_argv_shape_is_the_one_this_file_pins` below
+    asserts it against the shipped `tools/ci/hermetic_test_arm_entry.sh`.
+    """
+    return [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
 
 
 def _run_driver(corpus: Path, junit: Path, *extra, pytest_extra=()):
@@ -462,12 +485,33 @@ def test_one_session_loses_the_whole_record_and_per_file_does_not(tmp_path):
     before = {p.name: _md5(p) for p in sorted(corpus.glob("test_*.py"))}
 
     # ---- ARM 1: one session, exactly the shape gatekeeper-land.sh used ----
+    #
+    # The kill is EXTERNAL and explicit. It used to come from
+    # `-p pytest_timeout --timeout=4 --timeout-method=thread`, and #1654's
+    # measurement is that the thread method cannot interrupt the blocking
+    # `waiter.acquire()` this fixture hangs in either -- it dumps stacks and
+    # takes the PROCESS down. Both routes kill the same process at the same
+    # point; only one of them needs a plugin the anchored runtime does not
+    # carry. The claim under test is unchanged and is asserted below: a session
+    # killed while one of its files hangs writes NO junit, so the two files that
+    # had already PASSED lose their record too.
     single = tmp_path / "single.xml"
-    subprocess.run(
-        _pytest_cmd() + ["-o", "junit_family=xunit1", f"--junitxml={single}",
-                         "test_green_neighbour.py", "test_hangs_like_replay.py",
-                         "test_green_after.py"],
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    killed = False
+    try:
+        subprocess.run(
+            _pytest_cmd() + ["-o", "junit_family=xunit1",
+                             f"--junitxml={single}",
+                             "test_green_neighbour.py",
+                             "test_hangs_like_replay.py",
+                             "test_green_after.py"],
+            cwd=str(corpus), capture_output=True, text=True,
+            timeout=_SINGLE_SESSION_KILL)
+    except subprocess.TimeoutExpired:
+        killed = True
+    assert killed, (
+        "the single-session arm exited on its own inside "
+        f"{_SINGLE_SESSION_KILL} s — the hang fixture no longer hangs and this "
+        "test proves nothing")
     assert not single.exists(), (
         "the single-session arm wrote a junit — the hang fixture no longer "
         "reproduces #1654 and this test proves nothing")
@@ -2088,6 +2132,42 @@ def test_the_landing_harness_declares_semantic_progress_not_elapsed_time():
     assert contract["declared"] is True, contract
     assert contract["errors"] == [], contract
     assert len(contract["lanes"]) >= 3, contract
+
+
+def test_the_landing_harness_argv_shape_is_the_one_this_file_pins():
+    """`_pytest_cmd` must stay the shipped landing argv, option for option.
+
+    THE DEFECT THIS EXISTS FOR, measured 2026-08-20 at `9cc09b863` (v1.11.5).
+    `_pytest_cmd` still carried `-p pytest_timeout --timeout=4
+    --timeout-method=thread` and called itself "pinned the way the landing gate
+    pins it" — long after `tools/ci/hermetic_test_arm_entry.sh` had dropped the
+    idiom. Nothing compared the two, so the drift was invisible until it showed
+    up as colour: the same 90 cases gave **30 red in the anchored image and 3 on
+    a host**, a 28-test set difference whose entire cause was that the image
+    does not carry the plugin and the host happened to.
+
+    A prose claim of "pinned the way the landing gate pins it" is not a pin.
+    This is.
+    """
+    root = _repo_root()
+    entry = root / "tools" / "ci" / "hermetic_test_arm_entry.sh"
+    if not entry.is_file():
+        pytest.skip("the landing scripts are not shipped in this tree")
+    body = entry.read_text(encoding="utf-8", errors="replace")
+    cmd = _pytest_cmd()
+
+    # The retired idiom, in BOTH directions: gone from the shipped entry AND
+    # gone from what this file hands its children.
+    assert "pytest_timeout" not in body, body
+    assert "--timeout" not in body, body
+    assert "pytest_timeout" not in cmd, cmd
+    assert not any(a.startswith("--timeout") for a in cmd), cmd
+
+    # The options the entry DOES declare must be the ones this file uses, or
+    # these tests are measuring a harness nobody runs.
+    assert "-p no:cacheprovider" in body, body
+    assert cmd[cmd.index("-p") + 1] == "no:cacheprovider", cmd
+    assert "-q" in body and "-q" in cmd, (body, cmd)
 
 
 def test_this_files_final_test_safety_bound_is_inside_the_ceiling():

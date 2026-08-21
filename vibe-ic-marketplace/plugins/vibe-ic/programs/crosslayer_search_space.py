@@ -77,6 +77,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The ONE negation vocabulary and the ONE sentence reach (vibe-ic#712, #790).
+# `classify_line` decides what a SENTENCE authorises, so a sentence that denies
+# its own marker is the one reading it must not get wrong. See `marker_denials`
+# for why the consult cannot be a bare `is_denied(line)` here.
+from _prose_polarity import (  # type: ignore  # noqa: E402
+    is_denied as _is_denied, sentence_scope as _sentence_scope)
 
 PROGRAM = "crosslayer_search_space"
 DEFAULT_JSON_REL = "reports/crosslayer_search_space.json"
@@ -222,9 +228,26 @@ _LEVER_RE = {k: re.compile("|".join(v), re.IGNORECASE)
 # ---------------------------------------------------------------------------
 # pure helpers — the tests drive these directly, no filesystem needed
 # ---------------------------------------------------------------------------
-def classify_line(line: str) -> Dict[str, Dict[str, object]]:
-    """`{lever: {"status": ..., "bound": int|None}}` for one line of spec text.
+#: The three status markers, by the name `marker_denials` reports them under.
+_STATUS_MARKER_RE: Dict[str, "re.Pattern[str]"] = {
+    "free": _FREEDOM_RE, "pin": _PINNING_RE, "bound": _BOUND_RE,
+}
 
+
+def _read_line(line: str) -> Tuple[Dict[str, Dict[str, object]],
+                                   Dict[str, str]]:
+    """Both halves of reading ONE line of spec text, in one pass:
+
+        [0] `{lever: {"status": ..., "bound": int|None}}` — what it ASSERTS
+        [1] `{"free"|"pin"|"bound": <denial word>}`       — which of its status
+                                                            markers its own
+                                                            sentence DENIES
+
+    ONE function, two public views (`classify_line`, `marker_denials`), because
+    the second decides the first. Computing them in two places is how one
+    vocabulary becomes two — the divergence `_prose_polarity` exists to end.
+
+    -- WHAT IT ASSERTS ------------------------------------------------------
     A line counts for a lever only when it carries BOTH a freedom / pin / bound
     marker AND a word that is about that lever. Requiring both is what stops a
     generic "the implementation may choose" sentence from authorising every
@@ -232,15 +255,85 @@ def classify_line(line: str) -> Dict[str, Dict[str, object]]:
 
     Precedence on a single line is PIN > BOUND > FREE, because a sentence that
     both frees a structure and puts a ceiling on it has done the more specific
-    thing, and a sentence that fixes a value has overridden both."""
+    thing, and a sentence that fixes a value has overridden both.
+
+    -- WHAT ITS SENTENCE DENIES (vibe-ic#712) -------------------------------
+    EVERY STATUS MARKER ON THE LINE IS BLANKED BEFORE THE CONSULT — not just
+    the one being judged — and that is the whole subtlety of doing this here.
+    Half this file's vocabulary is negative BY CONSTRUCTION — `不指定`,
+    `不超過`, `does not specify`, `not specified`, `no more than` — so a bare
+    `is_denied(line)` would report every freedom and every ceiling sentence as
+    denied and this program would admit no lever at all. That would be a call
+    that ALWAYS fires, which is no better than the call that never fires
+    `prose_polarity_consulted_check` warns about.
+
+    Blanking only the marker under test is not enough either, and that failure
+    is MEASURED, not hypothetical. On this file's own fixture
+
+        - ❌ 不指定 pipeline 深度與精確 latency(僅上限 4096 cycles)
+
+    the bound marker `上限` is clean, but the FREEDOM marker `不指定` three
+    words earlier lends it a `不`, the ceiling is dropped, the line reads FREE
+    and the 4096 cap disappears — caught by
+    `test_measured_ceiling_is_BOUNDED_and_carries_its_number`. One
+    vocabulary's built-in negation must not become another's denial. What is
+    asked, therefore, is whether a denial sits OUTSIDE EVERY marker, inside the
+    sentence the marker sits in: that is what turns "must be exactly 4 cycles"
+    into "must NOT be exactly 4 cycles", and "at most 4096" into "there is NO
+    upper bound".
+
+    The reach is `_prose_polarity.sentence_scope` — the repo's single rule for
+    how far a sentence reaches — applied to the line, so a line carrying two
+    sentences does not let one lend its polarity to the other. No private scope
+    rule is defined here; three private copies of one is how this class of
+    divergence happened before.
+
+    WHICH WAY A MISREAD COSTS, because it is not symmetric and a reader should
+    not have to work it out. Suppressing a denied FREE or a denied BOUND
+    removes permission, which is the direction this program already errs in
+    ("Silence is not permission"). Suppressing a PIN removes a refusal, so a
+    FALSE denial on a pin could admit a lever the spec fixed — but only where
+    some OTHER line frees the same lever, i.e. only where the document already
+    contradicts itself, and the admitted lever must still survive
+    `crosslayer_rewrite_equivalence`. Against that stands the measured cost of
+    NOT consulting: this file's own `_PINNING_MARKERS` comment records a modal
+    read as a pin refusing "the very lever the document had explicitly freed",
+    and a denied modal is that same defect with the denial spelled out.
+
+    Every suppression is CITED, never silent: `scan_document` collects them and
+    `main` publishes them as `polarity_refusals`. "No sentence said this" and
+    "a sentence said it and was denied" are opposite findings.
+    """
+    # --- polarity: which markers this line's own sentence retracts ---------
+    denied: Dict[str, str] = {}
+    # Length-preserving, so the offsets `sentence_scope` returns for the
+    # ORIGINAL line index this text unchanged.
+    chars = list(line)
+    for rx in _STATUS_MARKER_RE.values():
+        for m in rx.finditer(line):
+            for i in range(m.start(), m.end()):
+                chars[i] = " "
+    blanked = "".join(chars)
+    for kind, rx in _STATUS_MARKER_RE.items():
+        m = rx.search(line)
+        if not m:
+            continue
+        lo, hi = _sentence_scope(line, m.start(), m.end())
+        word = _is_denied(blanked[lo:hi])
+        if word:
+            denied[kind] = word
+
+    # --- what is left standing --------------------------------------------
     out: Dict[str, Dict[str, object]] = {}
-    free = bool(_FREEDOM_RE.search(line))
-    pin = bool(_PINNING_RE.search(line)) and bool(_CONCRETE_VALUE_RE.search(line))
+    free = bool(_FREEDOM_RE.search(line)) and "free" not in denied
+    pin = (bool(_PINNING_RE.search(line))
+           and bool(_CONCRETE_VALUE_RE.search(line)) and "pin" not in denied)
     bm = _BOUND_VALUE_RE.search(line)
     bound = int(bm.group(1)) if bm else None
-    bounded = bool(_BOUND_RE.search(line)) and bound is not None
+    bounded = (bool(_BOUND_RE.search(line)) and bound is not None
+               and "bound" not in denied)
     if not (free or pin or bounded):
-        return out
+        return out, denied
     for lever, rx in _LEVER_RE.items():
         if not rx.search(line):
             continue
@@ -250,16 +343,49 @@ def classify_line(line: str) -> Dict[str, Dict[str, object]]:
             out[lever] = {"status": STATUS_BOUNDED, "bound": bound}
         else:
             out[lever] = {"status": STATUS_FREE, "bound": None}
-    return out
+    return out, denied
 
 
-def scan_document(text: str, rel_path: str) -> List[Dict[str, object]]:
-    """Every (lever, status, citation) this document supports."""
+def classify_line(line: str) -> Dict[str, Dict[str, object]]:
+    """`{lever: {"status": ..., "bound": int|None}}` for one line of spec text.
+
+    A marker its own sentence DENIES asserts nothing; see `_read_line`, which
+    is where both this answer and that judgement are computed."""
+    return _read_line(line)[0]
+
+
+def marker_denials(line: str) -> Dict[str, str]:
+    """`{"free"|"pin"|"bound": <the denial word>}` for every status marker on
+    this line whose OWN SENTENCE denies it. See `_read_line`."""
+    return _read_line(line)[1]
+
+
+def scan_document(text: str, rel_path: str,
+                  refusals: Optional[List[Dict[str, object]]] = None
+                  ) -> List[Dict[str, object]]:
+    """Every (lever, status, citation) this document supports.
+
+    `refusals`, when given, also collects every line whose status marker its own
+    sentence DENIES, with the same citation shape. A suppressed statement that
+    left no trace would be indistinguishable from a document that never made it
+    — the silent direction `_prose_polarity` names — so the caller publishes
+    these next to the space it emitted."""
     hits: List[Dict[str, object]] = []
     for n, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
         if not stripped:
             continue
+        if refusals is not None:
+            for kind, word in sorted(marker_denials(stripped).items()):
+                # Only a marker that would OTHERWISE have said something is a
+                # refusal worth publishing: a lever-less line asserts nothing
+                # either way and would flood the record.
+                if not any(rx.search(stripped) for rx in _LEVER_RE.values()):
+                    continue
+                refusals.append({
+                    "marker": kind, "denial": word,
+                    "path": rel_path, "line": n,
+                    "literal": stripped[:300]})
         for lever, info in classify_line(stripped).items():
             hits.append({"lever": lever, "status": info["status"],
                          "bound": info["bound"],
@@ -364,14 +490,69 @@ def build_space(verdict: Dict[str, Dict[str, object]]) -> Dict[str, object]:
         "admitted_count": len(admitted),
         "refused_count": len(levers) - len(admitted),
         "admitted_levers": [l["lever"] for l in admitted],
-        "pnr_levers_excluded_on_purpose": [
-            "core_utilisation", "core_aspect_ratio", "cell_padding",
-            "placement_density", "cts_cluster_size", "cts_cluster_diameter",
-            "routing_layer_adjust", "clock_period"],
+        **_pnr_exclusion(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# the PnR levers this program withholds -- and WHO owns them, MEASURED
+# ---------------------------------------------------------------------------
+#: The program that emits the place-and-route space. Named once.
+PNR_OWNER = "ppa_pnr_search_space.py"
+
+#: The names withheld when the owner cannot be asked. This list is a FALLBACK,
+#: not the source of truth: when the owner is present its own lever table is
+#: used, so the two cannot drift apart in the direction that matters (a lever
+#: named here that the owner never emits is a lever no program owns).
+_PNR_LEVERS_FALLBACK = (
+    "core_utilisation", "core_aspect_ratio", "cell_padding",
+    "placement_density", "cts_cluster_size", "cts_cluster_diameter",
+    "routing_layer_adjust", "clock_period")
+
+
+def _pnr_exclusion() -> Dict[str, object]:
+    """Which PnR levers are withheld, and the reason -- CHECKED as it is written.
+
+    THE DEFECT THIS REPLACES. This program used to publish, as the reason for
+    withholding eight levers:
+
+        "these are the place-and-route knobs the PnR-only search already owns"
+
+    and MEASURED on the tree that shipped it, there was no PnR-only search: no
+    program emitted a space containing those levers, so the sentence named an
+    owner that did not exist and a reader who went looking found nothing. That
+    is the same failure as a stub excuse that outlives its cause -- a sentence
+    about another program, published as a fact, never checked.
+
+    So the owner is looked for at the moment the sentence is written. If it is
+    there its own lever names are used and the reason cites it; if it is not,
+    the reason SAYS the levers are unowned rather than claiming an owner.
+    """
+    owner = Path(__file__).resolve().parent / PNR_OWNER
+    if not owner.is_file():
+        return {
+            "pnr_levers_excluded_on_purpose": list(_PNR_LEVERS_FALLBACK),
+            "pnr_owner": None,
+            "pnr_exclusion_reason": (
+                f"these place-and-route knobs are not searched here, and "
+                f"{PNR_OWNER} is NOT present on this tree, so no program "
+                f"emits a space containing them. They are UNOWNED, not "
+                f"delegated — checked when this sentence was written."),
+        }
+    try:
+        sys.path.insert(0, str(owner.parent))
+        import ppa_pnr_search_space as _pnr             # noqa: WPS433
+        names = sorted(str(l["lever"]) for l in _pnr.LEVERS)
+    except Exception:                                   # pragma: no cover
+        names = sorted(_PNR_LEVERS_FALLBACK)
+    return {
+        "pnr_levers_excluded_on_purpose": names,
+        "pnr_owner": PNR_OWNER,
         "pnr_exclusion_reason": (
-            "these are the place-and-route knobs the PnR-only search already "
-            "owns; a cross-layer arm that also moved them would not be "
-            "measuring the cross-layer contribution"),
+            f"these are the place-and-route knobs {PNR_OWNER} owns and emits "
+            f"a space for; a cross-layer arm that also moved them would not "
+            f"be measuring the cross-layer contribution. The owner was "
+            f"checked for, and its own lever names are the ones listed."),
     }
 
 
@@ -520,16 +701,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     hits: List[Dict[str, object]] = []
+    refusals: List[Dict[str, object]] = []
     for rel, f in docs:
         try:
             hits.extend(scan_document(
-                f.read_text(encoding="utf-8", errors="replace"), rel))
+                f.read_text(encoding="utf-8", errors="replace"), rel,
+                refusals))
         except OSError as exc:
             print(f"[{PROGRAM}] warning: {rel} unreadable: {exc}",
                   file=sys.stderr)
     space = build_space(resolve_levers(hits))
     space["status"] = "MEASURED"
     space["documents_read"] = [rel for rel, _ in docs]
+    # vibe-ic#712: a statement READ AND REFUSED on polarity is a finding, and a
+    # different one from a statement never made. It is published rather than
+    # dropped so a reader can see which sentences were retracted and by which
+    # word, and go and look at the line.
+    space["polarity_refusals"] = refusals
     problems = audit_space(space)
     space["self_audit_problems"] = problems
     p = _write(project, args.json, space)
@@ -539,6 +727,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     for l in space["levers"]:
         if not l["admitted"]:
             print(f"[{PROGRAM}]   REFUSED {l['lever']}: {l['status']}")
+    for r in refusals:
+        print(f"[{PROGRAM}]   POLARITY {r['path']}:{r['line']} — "
+              f"'{r['denial']}' denies the {r['marker']} marker, so this "
+              f"sentence asserts nothing")
     print(f"[{PROGRAM}] report: {p}")
     if problems:
         for pr in problems:

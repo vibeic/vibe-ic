@@ -54,6 +54,87 @@ class TestClassifyLine:
         assert got["pipelining"]["bound"] == 4096
 
 
+class TestPolarity:
+    """vibe-ic#712 — a sentence that DENIES its own status marker asserts
+    nothing. Every case here is red against the classifier as it shipped in
+    v1.11.15, which read only the marker and never its polarity."""
+
+    def test_a_denied_pin_does_not_pin(self):
+        line = "The pipeline depth must not be exactly 3 stages."
+        assert mod.classify_line(line).get(
+            "pipelining", {}).get("status") != mod.STATUS_PINNED
+        assert mod.marker_denials(line)["pin"] == "not"
+
+    def test_a_denied_pin_loses_to_a_freedom_sentence_elsewhere(self):
+        """The whole point. Precedence is PINNED > FREE, so a denied pin that
+        still counted would go on refusing a lever the document freed — the
+        defect `_PINNING_MARKERS` already records once, with the denial now
+        spelled out in the sentence itself."""
+        hits = mod.scan_document(
+            "- The pipeline depth shall NOT be exactly 3 stages.\n"
+            "- ❌ 不指定 pipeline 深度\n", "d.md")
+        v = mod.resolve_levers(hits)
+        assert v["pipelining"]["status"] == mod.STATUS_FREE
+
+    def test_a_denied_freedom_does_not_free(self):
+        got = mod.classify_line(
+            "The implementation is never free to choose the FSM encoding.")
+        assert "state_encoding" not in got
+
+    def test_a_denied_ceiling_does_not_bound(self):
+        got = mod.classify_line(
+            "There is no upper bound of 4096 cycles on the latency.")
+        assert got.get("pipelining", {}).get("status") != mod.STATUS_BOUNDED
+
+    def test_a_negative_vocabulary_marker_is_not_its_own_denial(self):
+        """NEGATIVE CONTROL, and the reason the consult blanks the markers.
+        Half this file's vocabulary is negative by construction; a consult that
+        read `不指定` or `not specified` as a denial would fire on EVERY
+        freedom sentence and admit no lever at all."""
+        assert mod.marker_denials("- ❌ 不指定 FSM state 數量或編碼") == {}
+        assert mod.marker_denials(
+            "The pipeline depth is not specified.") == {}
+        assert mod.marker_denials(
+            "latency of no more than 4096 cycles") == {}
+        # …and the classification that depends on it still stands.
+        assert (mod.classify_line("- ❌ 不指定 FSM state 數量或編碼")
+                ["state_encoding"]["status"] == mod.STATUS_FREE)
+
+    def test_one_markers_built_in_negation_is_not_anothers_denial(self):
+        """MEASURED while writing the consult: blanking only the marker under
+        test let `不指定` (a FREEDOM marker) lend its `不` to the bound marker
+        `上限` four words later, and the 4096 ceiling vanished."""
+        line = "- ❌ 不指定 pipeline 深度與精確 latency(僅上限 4096 cycles)"
+        assert mod.marker_denials(line) == {}
+        assert mod.classify_line(line)["pipelining"]["bound"] == 4096
+
+    def test_a_denial_in_a_LATER_sentence_does_not_reach_back(self):
+        """The reach is `_prose_polarity.sentence_scope`, so one sentence does
+        not lend its polarity to another on the same line."""
+        line = ("The pipeline depth shall be exactly 3 stages. "
+                "The reset polarity is not relevant here.")
+        assert mod.classify_line(line)["pipelining"]["status"] == \
+            mod.STATUS_PINNED
+
+    def test_a_suppressed_statement_is_published_not_dropped(self):
+        """"No sentence said this" and "a sentence said it and was denied" are
+        opposite findings; a silent suppression would make them one."""
+        refusals = []
+        mod.scan_document(
+            "- The pipeline depth must not be exactly 3 stages.\n", "d.md",
+            refusals)
+        assert len(refusals) == 1
+        assert refusals[0]["marker"] == "pin"
+        assert refusals[0]["path"] == "d.md" and refusals[0]["line"] == 1
+        assert refusals[0]["denial"]
+
+    def test_a_denied_line_with_no_lever_word_is_not_published(self):
+        refusals = []
+        mod.scan_document(
+            "- The die area must not be exactly 1200 um.\n", "d.md", refusals)
+        assert refusals == []
+
+
 class TestResolveLevers:
     def _hit(self, lever, status, line=1, bound=None):
         return {"lever": lever, "status": status, "bound": bound,
