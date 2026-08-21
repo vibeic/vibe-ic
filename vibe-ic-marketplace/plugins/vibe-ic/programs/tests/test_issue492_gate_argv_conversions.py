@@ -12,25 +12,42 @@ CANDIDATES. Repairing an argv must not turn a silent skip into a universal FAIL
 (the `l9_completeness_check` trap: 196/196). But it must also not turn a silent
 skip into a PASS OVER AN EMPTY DENOMINATOR, which is a false PASS and is worse
 than the skip it replaces — the umbrella would be certifying a check that
-examined nothing. Both halves were measured; only two gates clear both.
+examined nothing. Both halves were measured; only three gates clear both.
 
 MEASUREMENT PROVENANCE, stated so it reproduces rather than described. The
-denominator is 107:
+denominator is 108:
 
     git ls-files benchmark-data | grep -E '/rtl/[^/]+\\.(v|sv)$' \\
-        | sed -E 's#/rtl/[^/]+$##' | sort -u | wc -l      -> 107
+        | sed -E 's#/rtl/[^/]+$##' | sort -u | wc -l      -> 108
 
-The sweep itself covered 108 directories, because the filter used
-`flow_compliance_check`'s OWN rtl_dir alternation ("phase2/stage1/rtl", "rtl",
-"src", "hdl") rather than the name `rtl`, which additionally picks up
-`benchmark-data/ic/subservient/phase2/stage1/formal/subservient/src`. That
-directory is a vendored formal copy, not a project root the flow is pointed at,
-so every number here is quoted on the reproducible 107. Including the 108th
-changes no verdict for either converted gate (0 FAIL either way); it moves three
-of the REFUSAL counts by one, and those are recorded at their 107 values below.
+It was 107 when this was first measured at v1.7.69 and became 108 in cdc54d32f
+(2026-08-02), which added
+`benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage1/rtl`. The
+whole sweep was RE-RUN over the 108 rather than the pin raised to match: three
+rows claim "0 FAIL over ALL of them", and raising the number alone would assert
+that about a directory no gate had been pointed at. What moved, and why nine of
+the fifteen rows had rotted while this pin stayed green, is recorded in the
+comment block above `P0_RTL_DIR_GROUP_MEASUREMENT` in `flow_compliance_check`.
+
+Do not read this 108 as the v1.7.69 sweep's 108, which was a DIFFERENT set: that
+one applied `flow_compliance_check`'s OWN rtl_dir alternation ("phase2/stage1/
+rtl", "rtl", "src", "hdl") to a 107-dir corpus, and its extra member was
+`benchmark-data/ic/subservient/phase2/stage1/formal/subservient/src` — a
+vendored formal copy, not a project root the flow is pointed at. The numbers
+below are quoted on the 108 directories NAMED `rtl`, which is the set the test
+at the bottom of this file reconstructs.
 
 Every gate CLI was run against a scratch MIRROR of those directories, never
 against the tracked tree, which stays byte-clean.
+
+THAT ONE-LINER NOW SPANS TWO TREES. The published cells moved to
+https://github.com/vibeic/benchmark-data; the design INPUTS stayed in vibe-ic.
+Neither half alone reconstructs the 108 — the corpus carries 105 and this
+checkout carries the 3 under `ic/*/input/**/rtl` — and the two sets are
+disjoint, so the denominator is the union and the reconstruction below takes it.
+Run `git ls-files` in this checkout alone and you get 3, which is not a smaller
+corpus but a half-read one; with no corpus to read at all the reconstruction
+SKIPS naming it (`_published_corpus`) instead of reporting a corpus that shrank.
 """
 import importlib.util
 import subprocess
@@ -43,6 +60,31 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import _gate_invocation as GI  # noqa: E402
+import _published_tree  # noqa: E402  (the ONE tracked-ness resolver)
+
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
+#: The half of the published tree that stayed in vibe-ic: the design inputs.
+_INPUT_HALF = PROGRAMS.parents[3] / "benchmark-data"
+
+
+def _tracked_rtl_dirs(root: Path) -> set:
+    """Directories NAMED `rtl` that hold published Verilog, root-relative.
+
+    Tracked-ness, not disk presence, is what "published" means here, so this
+    goes through `_published_tree` rather than asking this machine's checkout —
+    otherwise a stray local run directory joins a denominator that three rows
+    describe as "0 FAIL over ALL of them". Its `None` means "not a published
+    tree", which is answered from disk rather than read as "published and
+    empty".
+    """
+    if not root.is_dir():
+        return set()
+    tracked = _published_tree.published_paths(root)
+    if tracked is None:
+        tracked = [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()]
+    return {str(Path(f).parent) for f in tracked
+            if Path(f).parent.name == "rtl" and Path(f).suffix in (".v", ".sv")}
 
 
 def _load_flow():
@@ -119,14 +161,15 @@ def test_converted_gates_are_no_longer_reported_as_skipped(tmp_path):
 
 
 
-# Gates wanting ONLY `--rtl-dir` — a value the umbrella already derives. All 14
-# were measured over the 107 tracked RTL directories under benchmark-data, on a
-# scratch MIRROR of the corpus (no gate CLI was pointed at the tracked tree).
+# Gates wanting ONLY `--rtl-dir` — a value the umbrella already derives — plus the
+# one wanting `--rtl --strict`. All 15 were re-measured over the 108 tracked RTL
+# directories under benchmark-data, on a scratch MIRROR of the corpus (no gate CLI
+# was pointed at the tracked tree).
 # Two bars must BOTH be cleared: converting must not turn the gate red, and the
 # gate must actually EXAMINE something, because a PASS over an empty denominator
 # is a false PASS and is worse than the skip it replaces.
 #
-#   gate                              new FAIL/107   projects w/ denominator>0
+#   gate                              new FAIL/108   projects w/ denominator>0
 
 
 def _dangling_symlink_rtl_dir(tmp_path):
@@ -259,21 +302,21 @@ def test_umbrella_records_the_vacuous_project_as_a_skip_not_a_pass(tmp_path):
         assert gate not in joined_fails, f"{gate} blamed the design for no input"
 
 
+@needs_corpus
 def test_the_published_denominator_is_the_one_a_reader_reconstructs():
     """The corpus size is the LICENCE for both conversions ("0 FAIL and a
     non-zero denominator on ALL of them"), so it has to be the number an
     independent reviewer gets from the tracked tree — not a near-miss. A
     denominator stated one larger than it is would mean the sweep either
     skipped a directory or double-counted one, and "I measured all of them" is
-    exactly the claim a wrong denominator quietly breaks."""
-    repo = PROGRAMS.parents[3]
-    if not (repo / "benchmark-data").is_dir():
-        pytest.skip("benchmark-data corpus not present in this checkout")
-    tracked = subprocess.run(["git", "ls-files", "benchmark-data"], cwd=repo,
-                             capture_output=True, text=True).stdout.splitlines()
-    rtl_dirs = {str(Path(f).parent) for f in tracked
-                if Path(f).parent.name == "rtl"
-                and Path(f).suffix in (".v", ".sv")}
+    exactly the claim a wrong denominator quietly breaks.
+
+    Reconstructed from BOTH halves of the published tree (see the module
+    docstring): the cells in `vibeic/benchmark-data` and the design inputs still
+    here. Both are keyed benchmark-data-relative, so a tree that carries both
+    halves reconstructs to the same set rather than to twice it.
+    """
+    rtl_dirs = _tracked_rtl_dirs(corpus_root()) | _tracked_rtl_dirs(_INPUT_HALF)
     assert len(rtl_dirs) == _CORPUS_DENOMINATOR, (
         f"corpus moved: {len(rtl_dirs)} rtl/ dirs now, table says "
         f"{_CORPUS_DENOMINATOR} — re-run the measurement before trusting it")

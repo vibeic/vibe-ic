@@ -46,7 +46,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
+import math
 import os
 import re
 import shlex
@@ -58,9 +60,10 @@ import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 import _path_layout as _pl
 import _reference_flow_boundary as _rfb
+import _source_record_merge as _srm  # per-source merge: silence cannot erase
 import floorplan_contract as _fpc  # design-declared fixed floorplan + DRV limits
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
@@ -71,12 +74,17 @@ import extraction_input_capability_check as _eicap  # extraction-input precondit
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
+import magic_illegal_overlap_check as _mio  # W2.3 — magic's extraction feedback channel, gated at 0
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
 import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
+import step_metrics as _sm  # vibe-ic#1080 — the ONE per-step metrics mechanism
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
+import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
+import emitted_script_portability_check as _esp  # the ONE host-path predicate
+import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -323,6 +331,141 @@ def _to_container_path(host_path: str, container: str) -> str:
     return p
 
 
+#: Where a step records that one artefact is a COPY of another it wrote.
+#: Read by `_ppa/timing.py` so a mirrored report is not counted twice.
+ARTEFACT_MIRRORS_REL = "reports/phase3/artefact_mirrors.json"
+
+
+def _publish_artefact_mirror(src: Path, dst: Path, project: Path,
+                             produced_by: str) -> List[str]:
+    """Copy `src` to `dst` AND record that `dst` is a MIRROR of `src`.
+
+    MEASURED DEFECT: this flow publishes each sign-off STA report into two
+    directories, because five shipped checkers read the `reports/phase3/`
+    copy and the step writes the `phase3/stage3/sta/` one. `_ppa/timing.py`
+    reads both directories, so one measurement arrived as two records under one
+    scope, and ALL 20 (metric, scope) groups in the timing document collided as
+    CONFLICTING_RECORD:
+
+        sha256(phase3/stage3/sta/sta_spef_based.rpt)
+            == sha256(reports/phase3/sta_spef_based.rpt)
+
+    The emitter is not where that is fixed: both locations are load-bearing,
+    and dropping either one breaks a consumer. But the READER cannot tell a
+    mirror from a genuine second measurement that happens to agree to the
+    byte — and collapsing by content hash alone would erase the second one,
+    which is a real reading of a real artefact. Only the step that made the
+    copy knows it is a copy, so the step says so here.
+
+    Idempotent: keyed on the mirror path, so a re-run replaces its entry
+    rather than growing the list. Returns the paths written."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    # BYTES, not decoded text: a mirror that is not byte-exact is not a mirror,
+    # and the digest below is the one an auditor reproduces with `sha256sum`.
+    body = src.read_bytes()
+    dst.write_bytes(body)
+    manifest = project / ARTEFACT_MIRRORS_REL
+    doc: Dict[str, object] = {"schema": "vibeic.artefact_mirrors.v1",
+                              "mirrors": []}
+    if manifest.is_file():
+        try:
+            loaded = json.loads(manifest.read_text())
+            if isinstance(loaded, dict) and isinstance(loaded.get("mirrors"), list):
+                doc = loaded
+        except (OSError, ValueError):
+            # A manifest we cannot parse is replaced, not appended to: a
+            # half-read list would silently drop entries a consumer needs.
+            pass
+    rel_mirror = str(dst.relative_to(project))
+    rel_of = str(src.relative_to(project))
+    entries = [e for e in doc["mirrors"]                     # type: ignore[index]
+               if not (isinstance(e, dict) and e.get("mirror") == rel_mirror)]
+    entries.append({
+        "mirror": rel_mirror,
+        "of": rel_of,
+        # The digest AT THE MOMENT OF COPYING. A consumer that finds either
+        # file no longer matching must NOT collapse the pair: they have
+        # diverged, and two different contents are two facts.
+        # `sha256:<hex>`, the spelling `_ppa/backends/opensta.file_digest`
+        # already publishes, so the consumer compares like with like instead of
+        # stripping a prefix one side happens not to write.
+        "sha256": "sha256:" + hashlib.sha256(body).hexdigest(),
+        "declared_by": produced_by,
+    })
+    doc["mirrors"] = sorted(entries, key=lambda e: e["mirror"])
+    _aa.write_text(manifest, json.dumps(doc, indent=2) + "\n")
+    return [str(dst), str(manifest)]
+
+
+def _emitted_script_root_tcl(script_path: Path, project: Path) -> str:
+    """Tcl prologue defining `$RUN_ROOT` from the script's OWN location.
+
+    MEASURED DEFECT: an emitted analysis script is emitted so a reviewer can
+    RE-RUN the measurement, and 26 of 34 emitted scripts on one real run tree
+    hard-coded an absolute path back into the directory they were written for.
+    Such a script re-runs nowhere else, and any hash-based identity over it is
+    defeated by the run directory — two runs of a byte-identical measurement
+    configuration hash differently because they ran in different places.
+
+    `info script` is set by every Tcl `source`, including the one that
+    `sta -no_init -exit <file>` performs (verified in the pinned image: it
+    returns the script's own path). So this resolves correctly whether the
+    project is bind-mounted at its host path or at a canonical one, which is
+    exactly the case a hard-coded path cannot survive.
+
+    The number of `..` levels is computed from where the script is being
+    written, never assumed."""
+    if not _path_is_under(script_path, project):
+        # The deck is being written OUTSIDE the run tree, so it has no fixed
+        # relationship to the run root and `$RUN_ROOT` cannot be resolved from
+        # its own location. Emit no prologue; `_run_root_tcl_path` sees the
+        # same condition and falls back to absolute container paths, which is
+        # the pre-fix behaviour and is correct for a deck that is not part of
+        # the tree it measures.
+        return ""
+    rel = os.path.relpath(_norm_abs(project), _norm_abs(script_path.parent))
+    parts = [q for q in rel.split(os.sep) if q not in ("", ".")]
+    expr = ("[file join [file dirname [info script]] %s]" % " ".join(parts)
+            if parts else "[file dirname [info script]]")
+    return (
+        "# PORTABLE PATHS — every path under the run root below is resolved\n"
+        "# against THIS script's own location, so the script re-runs from a\n"
+        "# copy of the run tree, on another host, and inside a container that\n"
+        "# mounts the project somewhere else. Paths OUTSIDE the run root (the\n"
+        "# PDK, the tool install) are the environment's and are left alone.\n"
+        f"set RUN_ROOT [file normalize {expr}]\n"
+    )
+
+
+def _norm_abs(p) -> str:
+    return os.path.normpath(os.path.abspath(str(p)))
+
+
+def _path_is_under(path, root) -> bool:
+    """True when `path` is `root` or lies inside it. One definition, because
+    the prologue and the path speller must agree: a `$RUN_ROOT/...` path in a
+    deck that never defines `$RUN_ROOT` reads the empty string as a directory
+    and the tool measures the wrong thing without saying so."""
+    p, r = _norm_abs(path), _norm_abs(root)
+    return p == r or p.startswith(r.rstrip("/") + "/")
+
+
+def _run_root_tcl_path(host_path, project: Path, container: str,
+                       script_path: Path) -> str:
+    """A path as the emitted script at `script_path` should spell it.
+
+    `$RUN_ROOT/<relative>` when BOTH the deck and the target sit inside the
+    run root — portable, and the deck can resolve the variable. Otherwise the
+    container path, unchanged: a PDK or tool path is not this run's to
+    relativise, and rewriting it would break the script rather than port it."""
+    if (_path_is_under(script_path, project)
+            and _path_is_under(host_path, project)):
+        rel = os.path.relpath(_norm_abs(host_path),
+                              _norm_abs(project)).replace(os.sep, "/")
+        return "$RUN_ROOT/" + rel
+    return _to_container_path(str(host_path), container)
+
+
 def _container_path_covered(host_path: str, container: str) -> bool:
     """ORGANIC #551 — True when `host_path` is covered by a bind mount of
     `container` (i.e. it actually resolves inside the container). Used by the
@@ -396,6 +539,22 @@ class StepResult:
 # `_aggregate_verdict`.
 _VERDICT_TIERS = ("PASS", "FAIL", "BLOCKED", "SKIP", "WAIVED",
                   "ENV_UNAVAILABLE")
+
+
+def _preflight_refusal(name: str):
+    """Build this runner's OWN refusal row for `step_preflight.gate`.
+
+    `BLOCKED` is deliberate and is the word already defined three comments
+    above: the tool is present, but an INPUT cannot support the operation, so
+    NOTHING is known about the design — and `_aggregate_verdict` names BLOCKED
+    explicitly in its non-green bucket. `extras.finding` is what lets a reader
+    separate "refused for want of input, never ran" from "ran and produced
+    nothing" (`flow_compliance`'s MISSING) and from "ran and did not pass"
+    (FAIL).
+    """
+    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
+        return StepResult(name, _spf.REFUSAL_STATUS, 0.0, detail, extras=extras)
+    return _mk
 
 
 # --- per-invocation provenance (vibe-ic#365, third ask) --------------------
@@ -740,6 +899,60 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
 # on is a separate change with a separate blast radius.
 _LOG_SINK_PIPE = "| tee "
 _PIPEFAIL_PREFIX = "set -o pipefail; "
+
+
+
+def _log_surviving_artefact(outputs, *, produced_by: str,
+                            marker: str | None = None) -> None:
+    """Record artefacts AFTER the verdict that decides whether they survive.
+
+    vibe-ic#1330. `_docker_exec(..., outputs=[...])` hashes the declared paths
+    the instant the tool returns, which is correct for the ~17 call sites whose
+    artefact is meant to survive. It is wrong for a call site that may DESTROY
+    its own output on inspection: `_emit_multi_corner_sta` unlinks the per-corner
+    report when OpenSTA black-boxed a master (#437(c) — `rc == 0` plus a written
+    report is not evidence anything was timed), and the ledger was left asserting
+    a digest for a file deliberately removed three statements later. The record
+    could not be audited either way: present digest, absent artefact.
+
+    Splitting the declaration off the invocation is what lets BOTH rules hold —
+    #437(c) still destroys a falsely-clean report, and ORGANIC-443 still forbids
+    a declared output being removed later in the same function, because nothing
+    is declared until it is known to survive.
+
+    A SEPARATE record kind, deliberately. Calling `_log_invocation` a second
+    time would emit two `invocation` rows for one tool run, which is a worse
+    misstatement than the one being fixed. `record: "artefact"` is additive: a
+    consumer reading `invocation` rows sees exactly what it saw before.
+
+    Silent when nothing survived — `_hash_declared_outputs` already omits paths
+    that do not exist, so an unlinked report simply produces no row. That is the
+    honest outcome and it needs no special case.
+    """
+    sink = _PROV_SINK
+    if sink is None:
+        return
+    _outs = _hash_declared_outputs(sink, outputs)
+    if not _outs:
+        return
+    entry = {
+        "record": "artefact",
+        "produced_by": produced_by,
+        "outputs": _outs,
+        "measured": True,
+        # Same idiom as _log_invocation: `_dt` is a FUNCTION-local alias
+        # elsewhere in this file, so referencing it here would NameError.
+        "timestamp": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if marker:
+        entry["marker"] = marker
+    try:
+        with (Path(sink) / "provenance.jsonl").open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:  # noqa: BLE001 — logging must never break the run
+        pass
 
 
 def _tool_status_not_the_log_sinks(cmd: str) -> str:
@@ -1203,9 +1416,16 @@ _ASIC_TOP_MODULE_BODY_RE = re.compile(
     r"\bmodule\s+([A-Za-z_]\w*)\b(.*?)\bendmodule\b", re.S)
 
 
-def _asic_top_strip_v_comments(text: str) -> str:
+def _strip_v_comments(text: str) -> str:
     """Remove // and /* */ comments so a module name mentioned only in a
-    comment is never mistaken for a declaration or an instantiation."""
+    comment is never mistaken for a declaration or an instantiation.
+
+    Shared: the ASIC-top resolver and `_sta_blackboxed_masters` both read
+    a name out of text that may carry comments, so neither carries its own
+    copy. Renamed from `_asic_top_strip_v_comments` when the second caller
+    arrived — the old name asserted a scope this helper no longer has.
+    Line-bounded for `//`, so stripping one line can never reach the next.
+    """
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
     text = re.sub(r"//[^\n]*", " ", text)
     return text
@@ -1232,7 +1452,7 @@ def _resolve_asic_top_structural(project: Path, top_name: str,
     for ext in (".v", ".sv"):
         for f in sorted(rtl_dir.rglob(f"*{ext}")):
             try:
-                raw = _asic_top_strip_v_comments(f.read_text(errors="replace"))
+                raw = _strip_v_comments(f.read_text(errors="replace"))
             except OSError:
                 continue
             for m in _ASIC_TOP_MODULE_HEADER_RE.finditer(raw):
@@ -1806,7 +2026,9 @@ def _c4_l8_declared_period_ns(project: Path,
     return periods[0]
 
 
-def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
+def _resolve_clock_spec(project: Path, top: str = "",
+                        pdk_name: str = "",
+                        liberty_path: str = "") -> tuple:
     """v1.6.560 sub-defect B fix. Derive (clock_period_ns, clock_port_name)
     from project sources in priority order — **L9 spec wins over baseline
     config**, because L9 is the docs-authoritative target while baseline
@@ -1820,7 +2042,11 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     Wishbone/AXI/Caravel naming conventions (the majority of real
     open-source ICs) produces a valid SDC instead of "No paths found".
 
-    Period resolution (unchanged from v1.6.560):
+    Period resolution (unchanged from v1.6.560, plus the PDK-keyed table):
+      0. the design's own PDK-KEYED period table, when ``pdk_name`` /
+         ``liberty_path`` identify the library this run builds against
+         (:mod:`declared_clock_period`) — see the block below for why this
+         outranks the Phase-2 SDC inheritance
       1. L9 spec (input/docs/L9_*.md) for period
       2. L1 spec (input/docs/L1_*.md) for period (fallback if L9 silent)
       3. config.json CLOCK_PERIOD (project root) for period
@@ -1899,6 +2125,46 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     _sdc_primary = _sdc.primary_clock(project)
     if _sdc_primary is not None:
         return (_sdc_primary["period_ns"], port_name)
+
+    # --- The design's own PDK-KEYED period table. ---
+    # spm x gf180mcuD, 2026-08-20 (MEASURED): a constraint L-doc that targets
+    # several PDKs states the period as a PLACEHOLDER plus a table keyed by
+    # std-cell library —
+    #     create_clock [get_ports clk] -name core_clock -period <PERIOD>
+    #     | `sky130_fd_sc_hd` | 10 | ... |
+    #     | `gf180mcu_*`      | 24 | ... |
+    # — so the L9/L1 prose regex below finds no number next to `-period` (its
+    # neighbour is the literal string `<PERIOD>`) and the whole ladder fell
+    # through to the 20.0 ns last-resort default. The run then signed off spm
+    # at 20 ns (50 MHz) a design that DECLARES 24 ns (41.7 MHz) for this
+    # library — a silent 20 % OVER-constraint, and every setup verdict it
+    # produced was a verdict about a clock the design never asked for.
+    #
+    # Ranked ABOVE the Phase-2 inheritance directly below, and that ordering is
+    # the point: `_phase2_emitted_period_ns` takes the SMALLEST period any
+    # Phase-2 SDC states, with no idea which library it was emitted for. On
+    # exactly this kind of multi-PDK design that rule inherits another
+    # library's row (here it would take the 8 ns `sky130_fd_sc_hs` target into
+    # a gf180mcu build). A row the design keyed to THE LIBRARY THIS RUN IS
+    # BUILDING AGAINST is a more specific statement of the same contract, so it
+    # wins. It stays BELOW `_sdc_primary`: a real staged SDC is still ground
+    # truth.
+    #
+    # §4.05: nothing is fabricated — a period is returned only when a row of a
+    # real table in the design's own docs matches this run's resolved library
+    # or PDK, contradictory rows are REFUSED rather than picked by order, and
+    # the matched key + file:line travel with the value into the SDC header.
+    if pdk_name or liberty_path:
+        try:
+            import declared_clock_period as _dcp
+            _lib_name = _dcp.library_name_from_liberty(liberty_path)
+            _tbl = _dcp.declared_period_ns(
+                _dcp.docs_in(project / "input" / "docs"),
+                [c for c in (_lib_name, pdk_name) if c])
+            if _tbl.get("period_ns"):
+                return (float(_tbl["period_ns"]), port_name)
+        except Exception:
+            pass  # a table we cannot read must not break resolution
 
     # --- GAP-E2E-1: Phase-2 emitted SDC. When no design-staged SDC exists,
     # inherit the concrete `create_clock -period` Phase-2's deterministic
@@ -1979,6 +2245,22 @@ _LIB_DEFAULT_MAX_CAP_RE = re.compile(
     r"default_max_capacitance\s*:\s*([0-9.]+)", re.IGNORECASE)
 _LIB_PIN_MAX_CAP_RE = re.compile(
     r"\bmax_capacitance\s*:\s*([0-9.]+)", re.IGNORECASE)
+# spm x ihp-sg13g2, 2026-08-07: `default_max_transition` / `default_max_capacitance`
+# above already close the slew/cap DRV confounder by reading the ACTIVE liberty
+# unconditionally — `default_max_fanout` did not get the same treatment, and
+# `_l9_declared_max_fanout` (design-declared only) has no PDK-default fallback
+# that covers every PDK: librelane's own shipped `pdk_compat.py` MAX_FANOUT_
+# CONSTRAINT is guarded to `sky130*`/`gf180mcu*` ONLY, so a PDK outside that
+# pair (ihp-sg13g2 measured) gets no cap from EITHER path even though its own
+# liberty declares one. MEASURED: sg13g2_stdcell_typ_1p20V_25C.lib line 36
+# states `default_max_fanout : 8` — a real, characterised, library-wide ceiling
+# on the SAME liberty already used for slew/cap/STA sign-off, not a fabricated
+# design preference — yet CTS built an H-tree leaf (`sg13g2_buf_4`) fanning out
+# to 16 sinks, and post-route sign-off (which DOES read the liberty attribute,
+# same as OpenSTA always has) correctly flagged `-8 (VIOLATED)`. Completing the
+# fallback the same way slew/cap already work closes exactly that gap.
+_LIB_DEFAULT_MAX_FANOUT_RE = re.compile(
+    r"default_max_fanout\s*:\s*([0-9.]+)", re.IGNORECASE)
 
 
 def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, object]:
@@ -1992,7 +2274,15 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
         library (a real PDK-derived drive ceiling — no net should exceed the
         strongest characterised driver's rated load). None if the lib declares
         neither.
-      * ``slew_source`` / ``cap_source`` — where each value came from (disclosure).
+      * ``max_fanout``         — the library-level ``default_max_fanout``, or None
+        if the lib declares none. Unlike slew/cap this has NO per-pin fallback:
+        a per-pin ``max_fanout`` override is a narrower, cell-specific fact the
+        SDC-wide default cannot safely generalise from (a library commonly ships
+        ONE conservative default plus tighter overrides only on unusually weak
+        drivers), so absent a library-wide default this stays honestly None
+        rather than guessing from whichever pin the grep happens to see first.
+      * ``slew_source`` / ``cap_source`` / ``fanout_source`` — where each value
+        came from (disclosure).
       * ``note`` — a human-readable one-liner for the SDC comment.
 
     §4.05: every value is READ from the real liberty; a lib that declares no
@@ -2002,8 +2292,8 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
     Best-effort: any read/parse failure returns all-None (never a fabricated DRV).
     """
     out: Dict[str, object] = {
-        "max_transition_ns": None, "max_capacitance_pf": None,
-        "slew_source": None, "cap_source": None, "note": "",
+        "max_transition_ns": None, "max_capacitance_pf": None, "max_fanout": None,
+        "slew_source": None, "cap_source": None, "fanout_source": None, "note": "",
     }
     if not liberty_path:
         out["note"] = ("no PDK liberty resolved; NO DRV limit emitted "
@@ -2017,13 +2307,14 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
             text = hp.read_text(errors="replace")
             src = str(hp.name)
         elif container:
-            # Container-side: grep only the two DRV token families (a full read of
+            # Container-side: grep only the DRV token families (a full read of
             # a 12 MB liberty over docker exec is wasteful). default_* first hit +
             # every max_capacitance value (we take the max).
             lib_c = _to_container_path(liberty_path, container)
             rc, gout, _ = _docker_exec(
                 container,
                 "grep -iE 'default_max_transition|default_max_capacitance|"
+                "default_max_fanout|"
                 f"max_capacitance' {shlex.quote(lib_c)} 2>/dev/null || true",
                 timeout=120)
             text = gout or ""
@@ -2039,6 +2330,13 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
         try:
             out["max_transition_ns"] = float(m.group(1))
             out["slew_source"] = f"{src}:default_max_transition"
+        except ValueError:
+            pass
+    mf = _LIB_DEFAULT_MAX_FANOUT_RE.search(text)
+    if mf:
+        try:
+            out["max_fanout"] = int(float(mf.group(1)))
+            out["fanout_source"] = f"{src}:default_max_fanout"
         except ValueError:
             pass
     mc = _LIB_DEFAULT_MAX_CAP_RE.search(text)
@@ -2061,10 +2359,11 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
             out["cap_source"] = (f"{src}:max characterised output-pin "
                                  "max_capacitance (PDK-derived ceiling; no "
                                  "library default_max_capacitance declared)")
-    if out["max_transition_ns"] is None and out["max_capacitance_pf"] is None:
-        out["note"] = ("PDK liberty declares neither default_max_transition nor "
-                       "max_capacitance; NO DRV limit emitted (§4.05 — no "
-                       "fabricated limit)")
+    if (out["max_transition_ns"] is None and out["max_capacitance_pf"] is None
+            and out["max_fanout"] is None):
+        out["note"] = ("PDK liberty declares neither default_max_transition, "
+                       "max_capacitance nor default_max_fanout; NO DRV limit "
+                       "emitted (§4.05 — no fabricated limit)")
     else:
         parts = []
         if out["slew_source"]:
@@ -2073,6 +2372,9 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
         if out["cap_source"]:
             parts.append(f"max_capacitance={out['max_capacitance_pf']} pF "
                          f"(from {out['cap_source']})")
+        if out["fanout_source"]:
+            parts.append(f"max_fanout={out['max_fanout']} "
+                         f"(from {out['fanout_source']})")
         out["note"] = "DRV limits derived from the PDK liberty: " + "; ".join(parts)
     return out
 
@@ -2266,6 +2568,128 @@ def _reconcile_staged_sdc_drv(sdc_text: str, active_pdk_name: str,
     return _stamp_sdc_provenance(out, active_pdk_name)
 
 
+def _extract_driving_cell_name(line: str) -> Optional[str]:
+    """Return the library-cell name a `set_driving_cell` line names, or None.
+
+    Handles both spellings a reference-flow SDC uses:
+      * explicit  `set_driving_cell [all_inputs] -lib_cell BUF_X2`  → BUF_X2
+      * bare      `set_driving_cell BUF_X2`                          → BUF_X2
+    In the bare form the cell is the first POSITIONAL token (not an option flag,
+    not the VALUE of an option flag, not a `[...]`/`{...}` collection). Best-effort
+    and conservative: an unrecognised shape returns None so the line is left
+    untouched. chip/PDK-AGNOSTIC — no cell-name literal is hardcoded."""
+    m = re.search(r"-lib_cell\s+(\S+)", line)
+    if m:
+        return m.group(1)
+    toks = line.split()
+    prev_opt = False
+    for t in toks[1:]:  # drop the leading `set_driving_cell`
+        if t.startswith("-"):
+            prev_opt = True
+            continue
+        if (t.startswith("[") or t.startswith("{")
+                or "]" in t or "}" in t):
+            prev_opt = False
+            continue
+        if prev_opt:            # this token is an option VALUE, not the cell
+            prev_opt = False
+            continue
+        return t                # first positional token → the cell name
+    return None
+
+
+def _liberty_declares_cell(liberty_path: str, cell_name: str,
+                           container: str = "") -> Optional[bool]:
+    """True/False iff the ACTIVE liberty declares a top-level `cell (<cell_name>)`.
+
+    Returns None when the liberty cannot be read/parsed (UNKNOWN) — the caller
+    then leaves the SDC byte-identical (degrade loudly, never drop a line on a
+    read failure). Matches BOTH the quoted (`cell ("<name>")`, the production
+    spelling) and unquoted (`cell (<name>)`) forms. Reads host-side when the path
+    is a file, else via a container-side grep (the built-in PDK lives in the
+    container fs) — same host/container discipline as `_liberty_drv_limits`.
+    chip/PDK-AGNOSTIC."""
+    if not liberty_path or not cell_name:
+        return None
+    pat = re.compile(r'cell\s*\(\s*"?' + re.escape(cell_name) + r'"?\s*\)')
+    try:
+        hp = Path(liberty_path)
+        if hp.is_file():
+            return bool(pat.search(hp.read_text(errors="replace")))
+        if container:
+            lib_c = _to_container_path(liberty_path, container)
+            rc, gout, _ = _docker_exec(
+                container,
+                "grep -E "
+                + shlex.quote(r'cell *\( *"?' + re.escape(cell_name) + r'"?')
+                + f" {shlex.quote(lib_c)} 2>/dev/null | head -1 || true",
+                timeout=120)
+            return bool((gout or "").strip())
+    except Exception:
+        return None
+    return None
+
+
+def _reconcile_staged_sdc_driving_cell(sdc_text: str, active_liberty: str,
+                                       container: str = "") -> str:
+    """A9 sibling of :func:`_reconcile_staged_sdc_drv` for the driving-cell NAME.
+
+    A staged / design-supplied SDC (e.g. a reference-flow `*.nangate.sdc`) may
+    name a `set_driving_cell` library cell from its ORIGINATING PDK — a Nangate
+    `BUF_X2` in the OpenTitan AES reference flow. Re-used verbatim under a
+    DIFFERENT active PDK, that cell name is ABSENT from the active liberty and
+    OpenSTA/OpenROAD ABORT the entire flow at `read_sdc`:
+
+        [ERROR STA-0453] 'BUF_X2' not found.
+        Error: constraint.sdc, 5 STA-0453
+
+    — floorplan / place / route never run. The DRV-limit reconcile above already
+    re-derives `set_max_transition` / `set_max_capacitance` across PDKs (#169) and
+    re-stamps the SDC with the active PDK's provenance, asserting it is now
+    active-PDK-correct; but it never validates the `set_driving_cell` cell NAME, so
+    a foreign-PDK cell survives into a file the flow labels for the active PDK and
+    which then aborts every active-PDK tool.
+
+    Fix (same doctrine as the DRV-limit DROP path): when the named driving cell is
+    DEFINITIVELY absent from the active liberty, DROP the `set_driving_cell` line
+    and leave a disclosure comment. Dropping a driving-cell aid can only WEAKEN the
+    constraint set — inputs fall back to the tool's default drive — so it can NEVER
+    manufacture a PASS; it only removes the fatal STA-0453. A cell PRESENT in the
+    active liberty is left untouched (a hand-authored active-PDK SDC is never
+    modified). §4.05: never substitutes a fabricated cell. Degrades loudly: an
+    unreadable liberty (UNKNOWN presence) leaves the line untouched. chip/PDK-
+    AGNOSTIC — validates whatever cell the SDC names against whatever liberty is
+    active; no cell/PDK literal is hardcoded."""
+    if not sdc_text or "set_driving_cell" not in sdc_text:
+        return sdc_text
+    out_lines: List[str] = []
+    dropped: List[str] = []
+    for line in sdc_text.split("\n"):
+        if line.lstrip().startswith("set_driving_cell"):
+            cell = _extract_driving_cell_name(line)
+            if cell is not None:
+                present = _liberty_declares_cell(active_liberty, cell, container)
+                if present is False:  # definitively absent (not merely unreadable)
+                    out_lines.append(
+                        f"# A9 driving-cell reconcile: DROPPED `set_driving_cell "
+                        f"... {cell}` — that cell is absent from the ACTIVE PDK "
+                        f"liberty (a foreign-PDK reference-flow cell name). Kept it "
+                        f"would abort read_sdc with STA-0453 and stop the backend. "
+                        f"Inputs fall back to the tool default drive; §4.05 — no "
+                        f"fabricated substitute cell.")
+                    dropped.append(cell)
+                    continue
+        out_lines.append(line)
+    if dropped:
+        try:
+            print("[phase3][sdc-driving-cell] dropped foreign-PDK driving "
+                  f"cell(s) {dropped} absent from the active liberty "
+                  "(would abort read_sdc / STA-0453).", file=sys.stderr)
+        except Exception:
+            pass
+    return "\n".join(out_lines)
+
+
 # ── TAPEOUT-SIGNOFF (DRV) — parity for a DESIGN-SUPPLIED SDC ─────────────────
 # The DRV block above is appended by `_build_auto_silicon_sdc`, which `step_pnr`
 # calls ONLY on the else-branch — i.e. only when the project stages NO
@@ -2338,6 +2762,24 @@ def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
                       or _rtl_replication_fanout_bound(project))
         except Exception:
             fanout = None
+    if not have_fanout and fanout is None:
+        # No design-level cap declared anywhere (L9 / RTL replication bound)
+        # AND no PDK-family default from librelane's shipped pdk_compat.py
+        # (that table is guarded to sky130*/gf180mcu* only — measured
+        # 2026-08-07, ihp-sg13g2 has no entry). Fall back to the ACTIVE
+        # liberty's own `default_max_fanout`, exactly as slew/cap already do
+        # above (`drv.get("max_transition_ns")` / `drv.get("max_capacitance_pf")`
+        # are unconditional liberty reads) — a library-wide characterised
+        # ceiling on the SAME liberty STA sign-off already measures against is
+        # a real fact, not a fabricated design preference (§4.05: reading is
+        # not inventing). A design-declared cap is still NEVER overridden —
+        # this only fires when have_fanout is False and nothing was declared.
+        fanout = drv.get("max_fanout")
+        if fanout is not None:
+            _LAST_FANOUT_SOURCE["note"] = (
+                "no design/RTL/PDK-family cap declared; using the ACTIVE "
+                f"liberty's own {drv.get('fanout_source', 'default_max_fanout')}"
+                " (a real characterised limit, not fabricated)")
 
     if slew is None and cap is None and fanout is None:
         info["note"] = (
@@ -2612,6 +3054,69 @@ def _ensure_staged_sdc_io_delay(sdc_text: str, project: Path,
     return text + block, info
 
 
+def _declared_period_disclosure(project: Path, pdk_name: str,
+                                liberty_path: str) -> str:
+    """The SDC comment that discloses a period taken from the design's own
+    PDK-keyed table, or "" when no such row governed this run.
+
+    Applying a period the DESIGN declares for THIS library is using the stated
+    constraint, not relaxing one — but a reader of the SDC has to be able to
+    tell the two apart without re-deriving anything, so the matched key and the
+    doc file:line are written into the artefact next to the number.
+    """
+    if not (pdk_name or liberty_path):
+        return ""
+    try:
+        import declared_clock_period as _dcp
+        rep = _dcp.declared_period_ns(
+            _dcp.docs_in(project / "input" / "docs"),
+            [c for c in (_dcp.library_name_from_liberty(liberty_path),
+                         pdk_name) if c])
+    except Exception:
+        return ""
+    if rep.get("period_ns"):
+        return ("# VIBEIC_DECLARED_PERIOD: this period is the DESIGN's own, "
+                "read from its PDK-keyed constraint table — NOT the runner's "
+                "default. "
+                + str(rep.get("note", "")).replace("\n", " ") + "\n")
+    if rep.get("ambiguous"):
+        return ("# VIBEIC_DECLARED_PERIOD: REFUSED — " + str(rep.get("note", ""))
+                + "\n")
+    return ""
+
+
+def _declared_io_delay_ns(project: Path, clk_period_ns: float) -> tuple:
+    """(io_delay_ns, disclosure) for a design that declares its I/O delay as a
+    FRACTION of its own clock period, else (None, "").
+
+    The auto-SDC has always emitted a fixed `2` for both I/O delays. That
+    number satisfies a "20 % of the period" declaration at exactly one period
+    (10 ns) and at no other: at the 24 ns this design declares for its own
+    library the declared delay is 4.8 ns, so the fixed 2 UNDER-constrains every
+    I/O path by 2.8 ns — an optimistic sign-off on the boundary. A declared
+    RELATIONSHIP was being read as if it were a declared VALUE.
+
+    §4.05: returns None — and the caller keeps the historical literal,
+    byte-identical — unless the design's own docs state the fraction. Two
+    different fractions is a REFUSAL, not a vote.
+    """
+    try:
+        import declared_clock_period as _dcp
+        rep = _dcp.declared_io_delay_fraction(
+            _dcp.docs_in(project / "input" / "docs"))
+    except Exception:
+        return (None, "")
+    frac = rep.get("fraction")
+    if not frac or not clk_period_ns:
+        return (None, "")
+    io_ns = float(clk_period_ns) * float(frac)
+    note = ("# VIBEIC_DECLARED_IO_DELAY: the design states its I/O delay as a "
+            "fraction of its\n#   own clock period, so it is COMPUTED from the "
+            f"resolved period, not fixed. {rep.get('note', '')}\n"
+            f"#   {clk_period_ns:g} ns x {rep.get('percent')} % = {io_ns:g} ns\n")
+    return (io_ns, note)
+
+
 def _build_auto_silicon_sdc(project: Path, top: str = "",
                             drv_slew_ns: Optional[float] = None,
                             drv_cap_pf: Optional[float] = None,
@@ -2646,7 +3151,8 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     Chip-AGNOSTIC: standard-SDC syntax only; no chip/vendor/PDK literals (the DRV
     numbers are read from the active PDK's liberty, not hard-coded).
     """
-    clk_period_ns, clk_port_name = _resolve_clock_spec(project, top=top)
+    clk_period_ns, clk_port_name = _resolve_clock_spec(
+        project, top=top, pdk_name=pdk_name, liberty_path=liberty_path)
     # benchmark-spm-asap7 — SDC numeric values are interpreted by OpenSTA in
     # the LIBRARY's own ``time_unit``. The resolved clock period / I/O delays
     # are in ns; when the PDK liberty declares ``time_unit : "1ps"`` (e.g.
@@ -2672,11 +3178,15 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     # period / I/O delays BYTE-IDENTICALLY to the pre-A4 SDC (`10.0`, `2`) so
     # sky130 / nangate output is unchanged; only the non-ns (e.g. ASAP7 ps)
     # case reformats via `:g` to carry the scaled value without a trailing `.0`.
+    _io_ns, _io_note = _declared_io_delay_ns(project, clk_period_ns)
+    # No declaration ⇒ the historical literal 2, byte-identical.
+    _io_val = 2.0 if _io_ns is None else float(_io_ns)
     if _tu_scale == 1.0:
-        _period_str, _io_str = f"{clk_period_ns}", "2"
+        _period_str = f"{clk_period_ns}"
+        _io_str = "2" if _io_ns is None else f"{_io_val:g}"
     else:
         _period_str = f"{clk_period_ns * _tu_scale:g}"
-        _io_str = f"{2 * _tu_scale:g}"
+        _io_str = f"{_io_val * _tu_scale:g}"
     _tu_note = (f"# time-unit scaling: liberty declares a non-ns time_unit; "
                 f"period {clk_period_ns:g} ns emitted as {_period_str} "
                 f"lib-time-units\n" if _tu_scale != 1.0 else "")
@@ -2685,6 +3195,7 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     # nothing. When the design DID stage SDCs the resolver does not read, say
     # that instead — and name them. Byte-identical when it staged none.
     _staged_note = staged_sdc_note or _staged_sdc_not_consumed_note(project)
+    _declared_note = _declared_period_disclosure(project, pdk_name, liberty_path)
     _supplied_clause = ("no constraints/*.sdc supplied" if not _staged_note
                         else "design-staged SDC(s) present but NOT consumed "
                              "— see VIBEIC_STAGED_SDC_NOT_CONSUMED below")
@@ -2693,6 +3204,8 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
         f"({_supplied_clause}; clk_period_ns={clk_period_ns} "
         f"clk_port={clk_port_name})\n"
         + _staged_note
+        + _declared_note
+        + _io_note
         + _tu_note +
         f"create_clock -name clk -period {_period_str} "
         f"[get_ports {clk_port_name}]\n"
@@ -2835,6 +3348,248 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         f"  puts \"TAPCELL_INSERTED: master={pdk.tapcell_master} "
         f"distance={pdk.tapcell_distance_um}um\"\n"
         f"}}\n")
+
+
+def _build_unplaceable_master_cap_tcl() -> str:
+    """Forbid every master too WIDE to have a legal site on this floorplan.
+
+    Measured field failure: a flow shipped a `routed.def` carrying 563 signal
+    nets of which NOT ONE was routed, and DRC / LVS / EM were then all measured
+    on a design with no interconnect. Core utilization was 27 %.
+
+    The chain:
+
+        `tapcell -distance D` inserts WELLTAP cells FIXED in EVERY std-cell
+          row.  The longest contiguous run of FREE sites in any row is
+          therefore bounded by (tap pitch - tap width) -- measured on the
+          failing floorplan: a 2-site tap every 50 sites, over all 64 rows.
+        `repair_design` / `repair_timing` / `clock_tree_synthesis` choose a
+          repeater master from the library's whole buffer family.  The widest
+          members of that family were 50 and 62 sites -- i.e. AS WIDE AS or
+          WIDER than any free run on the die.
+        `detailed_placement` can never legalize such an instance.  It raised
+          DPL-0701, and because it ABORTS, the cells it had already moved were
+          left illegal too: `check_placement` on the same database afterwards
+          reported 37 overlap + 37 padding + 22 site-align violations, against
+          the legalizer's own claim of "Violations remain: 2".
+        `detailed_route` then aborted DRT-0073 "No access point" on 18
+          instances and wrote NO signal routing at all.
+
+    Utilization is irrelevant to this: the taps are FIXED, so a master wider
+    than the inter-tap run has no legal site at 27 % or at 90 %.  The only way
+    not to lose the design is to never let the optimizer choose such a master.
+
+    This block runs right after `tapcell`, MEASURES the longest free-site run
+    from the LIVE fixed-instance grid (not from a formula, so a pruned or
+    macro-blocked floorplan is measured as it really is), and `set_dont_use`s
+    every core master above it.
+
+    WHAT IS SCANNED, AND WHY IT IS THE ROWS (#966).  The first version of this
+    block iterated the `yMin` buckets of the FIXED INSTANCES.  A row holding no
+    fixed instance was therefore never visited at all -- and such a row is a
+    full-width free run, i.e. usually the LONGEST run on the die.  The bound
+    came out too small and `set_dont_use` then took away masters that did have
+    a legal site: measured on a two-row floorplan (both rows 0..1000 dbu, 10
+    dbu site) whose first row carried a 20 dbu obstruction every 200 dbu and
+    whose second row was empty, the true longest free run is 1000 dbu = 100
+    sites, and the block reported `PLACEABLE_WIDTH_BOUND: 200 dbu = 20 site(s)`
+    and excluded two masters that fit in the empty row with 600 dbu to spare.
+    That is the exact failure this docstring used to promise was impossible.
+    It was inert on the floorplan #951 was measured against only because
+    `tapcell -distance D` had put a tap in every one of its 64 rows.
+
+    The scan is now driven by `getRows`: EVERY row the design declares is
+    visited, each row is measured against its OWN extent and its OWN fixed
+    set, and a row with no fixed instance contributes its own full span.  The
+    global "nothing is fixed anywhere" special case is gone -- it is simply the
+    case where every row is free, and the row scan already answers it.
+
+    It also REPORTS (without changing) any master already instantiated in the
+    linked netlist that exceeds the bound -- that is a synthesis-side residual
+    the resizer cannot fix, and the operator needs to see it named.
+
+    WHERE THE MEASUREMENT IS STILL APPROXIMATE, AND IN WHICH DIRECTION.  These
+    simplifications are deliberate and they all err the SAME way -- toward a
+    LARGER bound, i.e. toward excluding LESS:
+
+      * a fixed instance is bucketed into the row of its `yMin` only, so a
+        multi-row hard macro obstructs one row here instead of all the rows it
+        really covers.  Under a ROW scan that omission can only leave the other
+        covered rows looking freer than they are, i.e. raise the maximum;
+      * a fixed instance whose `yMin` coincides with no declared row (a macro
+        placed off the row grid) is counted in no row at all -- again, freer;
+      * area blockages / obstructions that are not instances are not counted;
+      * site alignment is not enforced: the comparison is dbu against dbu, so a
+        run that no site boundary can actually fit the master into is still
+        credited in full.
+
+    Every one of those can therefore only FAIL to forbid a master that is in
+    fact unplaceable; none of them can forbid one that is placeable.  That is
+    the correct direction to be wrong in: an over-large bound leaves the prior
+    behaviour, while an over-small bound would take away masters the design can
+    legitimately use.  The bound is also compared STRICTLY (`> bound` is
+    forbidden), so a master exactly as wide as the longest free run stays legal.
+
+    THE THREE GUARDS, AND WHAT EACH ONE NOW GUARANTEES.  They are deliberately
+    at different layers and none of them stands in for another:
+
+      * MEASUREMENT (the row scan above) is the only thing that guarantees the
+        bound is not too small.  Nothing downstream can recover a bound that
+        was measured wrong -- which is the whole lesson of #966;
+      * DEGENERATE-MEASUREMENT FLOOR (`_wc_run <= 0`): if no row has a single
+        free dbu, exclude NOTHING and say so.  A floorplan with no free space
+        is a floorplan problem; forbidding the entire library cannot fix it and
+        would only destroy the run in a second way;
+      * BUFFER-POOL FLOOR (`_wc_keepbuf < 1`): never leave the resizer and CTS
+        with zero usable buffers.  This is a floor on the CONSEQUENCE, not a
+        check on the measurement -- it fires only when a bound is wrong enough
+        to wipe the whole buffer family, so a MODERATELY wrong bound passes it
+        by construction.  It must never be read as evidence that the bound is
+        right;
+      * ERROR FLOOR (`catch`): any error degrades to a NONFATAL note and the
+        prior behaviour, so the cap can never itself kill a PnR run.
+
+    Emits, on stdout, exactly one of:
+
+        PLACEABLE_WIDTH_BOUND: <dbu> dbu = <n> site(s); fixed obstructions=<m>;
+            rows=<r>
+        UNPLACEABLE_MASTERS_NONE: ...            nothing exceeded the bound
+        UNPLACEABLE_MASTERS_EXCLUDED: <k> ...    k masters set_dont_use'd
+        UNPLACEABLE_MASTERS_SKIPPED: ...         guard tripped, pool preserved
+        UNPLACEABLE_INSTANCES_PRESENT: <k> ...   report-only, already in netlist
+        UNPLACEABLE_MASTERS_NONFATAL: <err>      degraded to prior behaviour
+
+    chip-AGNOSTIC: standard OpenROAD/odb commands only; no design, PDK, cell or
+    dimension literal appears -- every number comes from the floorplan that was
+    just built.
+    """
+    return (
+        "# === unplaceable-master width cap (measured from the LIVE tap grid) ===\n"
+        "# FIXED taps bound the longest contiguous free-site run in every row.\n"
+        "# A master wider than that bound has NO legal site at ANY utilization;\n"
+        "# if the resizer/CTS inserts one, detailed_placement can never legalize\n"
+        "# it and detailed_route then aborts DRT-0073 and writes a DEF with zero\n"
+        "# signal routing. Measure the bound, then forbid the masters above it\n"
+        "# BEFORE the first buffer is inserted.\n"
+        "if {[catch {\n"
+        "  set _wc_blk [ord::get_db_block]\n"
+        "  set _wc_rows [$_wc_blk getRows]\n"
+        "  if {[llength $_wc_rows] > 0} {\n"
+        "    set _wc_sw [[[lindex $_wc_rows 0] getSite] getWidth]\n"
+        "    array unset _wc_fx\n"
+        "    set _wc_nfixed 0\n"
+        "    foreach _wc_i [$_wc_blk getInsts] {\n"
+        "      set _wc_st [$_wc_i getPlacementStatus]\n"
+        "      if {$_wc_st ne \"FIRM\" && $_wc_st ne \"LOCKED\" && "
+        "$_wc_st ne \"FIXED\"} { continue }\n"
+        "      set _wc_bb [$_wc_i getBBox]\n"
+        "      lappend _wc_fx([$_wc_bb yMin]) [list [$_wc_bb xMin] [$_wc_bb xMax]]\n"
+        "      incr _wc_nfixed\n"
+        "    }\n"
+        "    # #966: scan the ROWS, not the fixed-instance buckets. A row with\n"
+        "    # no fixed instance is a FULL-WIDTH free run -- usually the longest\n"
+        "    # on the die -- and bucket iteration never visited it, so the bound\n"
+        "    # came out too small and forbade masters that were placeable.\n"
+        "    # Each row is measured against its OWN extent and its OWN fixed set.\n"
+        "    set _wc_run 0\n"
+        "    foreach _wc_r $_wc_rows {\n"
+        "      set _wc_rb [$_wc_r getBBox]\n"
+        "      set _wc_x0 [$_wc_rb xMin]\n"
+        "      set _wc_x1 [$_wc_rb xMax]\n"
+        "      set _wc_y [$_wc_rb yMin]\n"
+        "      set _wc_own {}\n"
+        "      if {[info exists _wc_fx($_wc_y)]} { set _wc_own $_wc_fx($_wc_y) }\n"
+        "      set _wc_cur $_wc_x0\n"
+        "      foreach _wc_p [lsort -integer -index 0 $_wc_own] {\n"
+        "        set _wc_g [expr {[lindex $_wc_p 0] - $_wc_cur}]\n"
+        "        if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
+        "        if {[lindex $_wc_p 1] > $_wc_cur} { set _wc_cur [lindex $_wc_p 1] }\n"
+        "      }\n"
+        "      set _wc_g [expr {$_wc_x1 - $_wc_cur}]\n"
+        "      if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
+        "    }\n"
+        "    puts \"PLACEABLE_WIDTH_BOUND: $_wc_run dbu = "
+        "[expr {$_wc_run / $_wc_sw}] site(s); fixed obstructions=$_wc_nfixed; "
+        "rows=[llength $_wc_rows]\"\n"
+        "    set _wc_kill {}\n"
+        "    set _wc_keepbuf 0\n"
+        "    if {$_wc_run > 0} {\n"
+        "      foreach _wc_lib [[ord::get_db] getLibs] {\n"
+        "        foreach _wc_m [$_wc_lib getMasters] {\n"
+        "          if {![$_wc_m isCore]} { continue }\n"
+        "          if {[$_wc_m getWidth] > $_wc_run} { lappend _wc_kill [$_wc_m getName] }\n"
+        "        }\n"
+        "      }\n"
+        "      # GUARD: never take away the last usable buffer.\n"
+        "      foreach _wc_c [get_lib_cells -quiet *] {\n"
+        "        if {[catch {set _wc_ib [get_property $_wc_c is_buffer]}]} { continue }\n"
+        "        if {!$_wc_ib} { continue }\n"
+        "        if {[catch {set _wc_du [get_property $_wc_c dont_use]}]} { set _wc_du 0 }\n"
+        "        if {$_wc_du} { continue }\n"
+        "        if {[lsearch -exact $_wc_kill [get_name $_wc_c]] >= 0} { continue }\n"
+        "        incr _wc_keepbuf\n"
+        "      }\n"
+        "    }\n"
+        "    # GUARD: a non-positive bound is a broken floorplan, not a library\n"
+        "    # problem -- forbidding every master cannot give it free space.\n"
+        "    if {$_wc_run <= 0} {\n"
+        "      puts \"UNPLACEABLE_MASTERS_SKIPPED: measured free-site run is "
+        "$_wc_run dbu -- no row has free space; excluding masters cannot "
+        "create any -- left enabled\"\n"
+        "    } elseif {[llength $_wc_kill] == 0} {\n"
+        "      puts \"UNPLACEABLE_MASTERS_NONE: every core master fits the "
+        "measured free-site run\"\n"
+        "    } elseif {$_wc_keepbuf < 1} {\n"
+        "      puts \"UNPLACEABLE_MASTERS_SKIPPED: excluding "
+        "[llength $_wc_kill] master(s) would empty the buffer pool "
+        "(survivors=$_wc_keepbuf) -- left enabled\"\n"
+        "    } else {\n"
+        "      set _wc_n 0\n"
+        "      foreach _wc_nm $_wc_kill {\n"
+        "        set _wc_lc [get_lib_cells -quiet $_wc_nm]\n"
+        "        if {[llength $_wc_lc] == 0} { continue }\n"
+        "        if {[catch {set_dont_use $_wc_lc}]} { continue }\n"
+        "        incr _wc_n\n"
+        "      }\n"
+        "      puts \"UNPLACEABLE_MASTERS_EXCLUDED: $_wc_n master(s) wider than "
+        "[expr {$_wc_run / $_wc_sw}] site(s); buffers still usable=$_wc_keepbuf "
+        "-- $_wc_kill\"\n"
+        "    }\n"
+        "    # REPORT-ONLY: masters the netlist already instantiates that the\n"
+        "    # floorplan cannot legalize. set_dont_use cannot undo those.\n"
+        "    set _wc_pre {}\n"
+        "    if {$_wc_run > 0} {\n"
+        "      foreach _wc_i [$_wc_blk getInsts] {\n"
+        "        if {[[$_wc_i getMaster] getWidth] > $_wc_run} {\n"
+        "          lappend _wc_pre [$_wc_i getName]\n"
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "    if {[llength $_wc_pre] > 0} {\n"
+        "      puts \"UNPLACEABLE_INSTANCES_PRESENT: [llength $_wc_pre] "
+        "instance(s) already in the netlist exceed the bound -- $_wc_pre\"\n"
+        "    }\n"
+        "  }\n"
+        "} _wc_err]} { puts \"UNPLACEABLE_MASTERS_NONFATAL: $_wc_err\" }\n")
+
+
+def _build_tapcell_and_placeability_tcl(pdk: "PdkConfig") -> str:
+    """`tapcell` insertion followed by the unplaceable-master width cap.
+
+    ORDER IS THE POINT and is why these two are composed in one place rather
+    than emitted independently: it is the FIXED tap grid that bounds the
+    longest contiguous free-site run, so the cap must be measured AFTER
+    `tapcell` has run -- measuring before it would measure an empty die and
+    exclude nothing.  Both must land BEFORE `buffer_ports` / `repair_design` /
+    `clock_tree_synthesis`, which are the commands that choose a repeater
+    master; a cap applied after the fact changes nothing.
+
+    Returning the composition as a VALUE (rather than concatenating at the
+    call site) is deliberate: the ordering contract is then testable by calling
+    this function, with no need to inspect the emitter's source.
+    """
+    return _build_tapcell_tcl(pdk) + _build_unplaceable_master_cap_tcl()
+
 
 
 def _build_tapcell_prune_tcl(pdk: "PdkConfig",
@@ -3625,11 +4380,11 @@ def _macro_pg_ports_from_lef(
     return out
 
 
-def _macro_pdn_grid_plan(
+def _macro_pdn_grid_outcome(
         macro_lef_texts: Sequence[str],
         tech_lef_text: Optional[str],
         stripes: Sequence[Dict[str, Any]],
-        followpin_layer: str) -> Optional[Dict[str, Any]]:
+        followpin_layer: str) -> Dict[str, Any]:
     """Plan the MACRO grid — the construct that puts a conductor on a placed
     hard macro's supply pins.
 
@@ -3673,9 +4428,49 @@ def _macro_pdn_grid_plan(
        2*width+spacing, so a port narrower than that CANNOT be reached by any
        legal pattern. Those ports are reported, not silently missed.
 
-    Returns None when there is nothing to do (no macros, no PG pins, no strap
-    layer above the pin layer, no port a legal pattern can cross) so a design
-    without hard macros produces a BYTE-IDENTICAL pnr.tcl.
+    WHY THIS RETURNS AN OUTCOME AND NOT JUST A PLAN (#701)
+    ======================================================
+    Through v1.9.78 this function returned `Optional[dict]`, and `None` carried
+    TWO different facts about the world:
+
+        "this design has no hard macros"                 -> nothing to do
+        "this design has a hard macro whose supply the
+         grid cannot reach on any legal layer"           -> something to do,
+                                                            and it was not done
+
+    `_build_macro_pdn_grid_tcl(None)` emits the empty string for both, so the
+    run's PDN note for the second case was BYTE-IDENTICAL to a macro-free
+    design. Reproduced on PUBLIC sky130A material (a 1kbyte SRAM macro + the
+    sky130_fd_sc_hd tech LEF): with the vendor also declaring the layers above
+    the pin layer unroutable across the whole footprint — an ordinary stance
+    for NVM and high-voltage macros — the planner returned None, 0 bytes of
+    Tcl and an empty note, exactly like a design containing no macro at all.
+    The dropped macro first surfaced several steps later as PSM-0038/0039/0069,
+    where nothing tied it back to the plan that refused it.
+
+    The `refused_for_blockage` field already existed to report precisely this,
+    and could only ever be populated on the SUCCESS path: when the rule that
+    removes unusable strap layers removed ALL of them, the plan was None and
+    the reason was discarded before anyone could report it.
+
+    So the return is now TOTAL — a dict, never None — and the two facts land on
+    two different values:
+
+        {"plan": <dict>, "refusals": []}       a macro grid was planned
+        {"plan": None,   "refusals": []}       NOTHING TO DO: no hard-macro
+                                               POWER/GROUND port exists at all
+        {"plan": None,   "refusals": [rec…]}   something to do, and it could
+                                               not be done — each record names
+                                               the master(s), a stable machine
+                                               `reason` token, and a sentence
+
+    "Something to do" is defined as: at least one POWER/GROUND port was read
+    off a macro LEF. That is the flow's own evidence that a hard macro needs
+    supply, and it is the only definition available at this point.
+
+    NOT a repair. The refusal is a REPORT — this deliberately does NOT route
+    over a macro whose OBS forbids it. See `_build_macro_pdn_refusal_tcl` for
+    why the refusal is loud but not fatal.
 
     chip-AGNOSTIC: masters, pin layers and every dimension come from the
     design's own LEFs; no PDK name, no layer-name convention, no literal."""
@@ -3684,29 +4479,93 @@ def _macro_pdn_grid_plan(
     # Derived here rather than taken as a parameter so every existing caller
     # gets the rule without being changed; a rule only new callers get is one
     # the existing runs do not have.
+    #
+    # The OBS merge is NOT `dict.update`. `_macro_obs_layers_from_lef` emits a
+    # record for every MACRO it finds, and a LEF that declares the macro but
+    # carries no `OBS` section emits `{"blocked": {}, "size": (...), ...}` --
+    # a TRUTHY record that says nothing about obstructions. Last-wins would let
+    # that record erase another LEF's real blockage list, and which LEF wins is
+    # decided by the order `macro_lefs` was harvested in (dedup upstream is by
+    # FILE STEM, so two files declaring the same MACRO both survive it).
+    #
+    # `content=` is required here for exactly that reason: the emptiness is one
+    # level down, in `blocked`, and the record's own truthiness cannot see it.
+    #
+    # `on_conflict="richer"` -- the OPPOSITE of the sibling rule in
+    # `macro_obs_geometry_intersect_check.merge_macro_obs`, and deliberately.
+    # That one is a BLOCKING gate, where an over-read FABRICATES a violation
+    # and stops a clean design, so it takes the floor. This is a PLANNER whose
+    # over-read costs a refusal record that is loud, named and explicitly
+    # non-fatal (see the block comment below), while its under-read straps
+    # supply straight across metal the macro declares blocked. The asymmetry
+    # runs the other way, so the choice does.
     obs: Dict[str, Dict[str, Any]] = {}
+    _obs_per_lef: List[Dict[str, Dict[str, Any]]] = []
     for t in (macro_lef_texts or []):
         ports.extend(_macro_pg_ports_from_lef(t))
-        obs.update(_macro_obs_layers_from_lef(t))
+        _obs_per_lef.append(_macro_obs_layers_from_lef(t))
+    obs = _srm.merge_source_records(
+        _obs_per_lef, content=lambda e: (e or {}).get("blocked"),
+        on_conflict="richer")[0]
+    # NOTHING TO DO — and this is the ONLY branch that may say so. Every other
+    # exit below has already seen a hard-macro supply port, i.e. work the grid
+    # was supposed to do.
     if not ports:
-        return None
+        return {"plan": None, "refusals": []}
+    _masters = sorted({p["master"] for p in ports})
+
+    def _refuse(reason: str, detail: str, *, pin_layer: str = "",
+                candidates: Sequence[str] = (),
+                blocked: Sequence[str] = (),
+                ring_alternative: Optional[Dict[str, Any]] = None
+                ) -> Dict[str, Any]:
+        """One refusal record. `reason` is a STABLE machine token (grep-able,
+        never reworded); `detail` is the sentence a human reads. The masters
+        are named because "a macro was dropped" without a name is the same
+        silence this exists to end, one step quieter."""
+        return {"plan": None, "refusals": [{
+            "masters": list(_masters),
+            "reason": reason,
+            "detail": detail,
+            "pin_layer": pin_layer,
+            "candidate_layers": sorted(candidates),
+            "blocked_layers": sorted(blocked),
+                    "ring_alternative": ring_alternative,
+        }]}
+
     layers = _techlef_routing_layers(tech_lef_text or "")
     if not layers:
-        return None
+        return _refuse(
+            "NO_ROUTING_LAYERS_IN_TECH_LEF",
+            "the tech LEF declares no parseable TYPE ROUTING layer, so no "
+            "strap layer can be chosen for the macro grid")
     order = {n.lower(): i for i, (n, _d, _p, _w) in enumerate(layers)}
     dirs = {n.lower(): d for n, d, _p, _w in layers}
     pin_layers = sorted({p["layer"] for p in ports},
                         key=lambda l: order.get(l.lower(), 10 ** 6))
     pin_layer = pin_layers[0]
     if pin_layer.lower() not in order:
-        return None
+        return _refuse(
+            "PIN_LAYER_NOT_A_ROUTING_LAYER",
+            f"the macro declares its supply pins on {pin_layer}, which the "
+            "tech LEF does not declare as a TYPE ROUTING layer, so no strap "
+            "can be connected down to them",
+            pin_layer=pin_layer)
     pin_i = order[pin_layer.lower()]
     strap_by_layer = {s.get("layer", "").lower(): s for s in (stripes or [])
                       if s.get("layer")}
     above = [s for s in (stripes or [])
              if order.get(str(s.get("layer", "")).lower(), -1) > pin_i]
     if not above:
-        return None
+        return _refuse(
+            "NO_CORE_STRAP_ABOVE_PIN_LAYER",
+            f"no core strap layer sits above the macro supply-pin layer "
+            f"{pin_layer} (core straps: "
+            f"{', '.join(str(s.get('layer')) for s in (stripes or [])) or 'none'}"
+            "), so the grid has nothing to drop onto the pins from",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in (stripes or [])
+                        if s.get("layer")])
     above.sort(key=lambda s: order[str(s["layer"]).lower()])
     # Rule 0 (ORGANIC #685): never strap a layer the macro declares BLOCKED
     # across its whole footprint. The planner read the macro's PIN entries and
@@ -3731,10 +4590,73 @@ def _macro_pdn_grid_plan(
                 _blocked_lc.add(_lay.lower())
     _refused = [s for s in above
                 if str(s.get("layer", "")).lower() in _blocked_lc]
+    _candidates_before_obs = [str(s.get("layer")) for s in above]
     above = [s for s in above
              if str(s.get("layer", "")).lower() not in _blocked_lc]
     if not above:
-        return None
+        # THE DEFECT (#701). Rule 0 just removed every remaining candidate, so
+        # this macro's supply cannot be reached on ANY layer the macro itself
+        # permits. Returning a bare None here made that fact indistinguishable
+        # from "there are no hard macros" for every observer downstream.
+        #
+        # The answer is still NO GRID — routing over an OBS the vendor drew
+        # across the whole footprint is not a repair, it is a violation — but
+        # the REASON now travels with it.
+        # The construct that DOES reach these pins, measured rather than
+        # suggested (#844). A macro whose OBS blocks every layer above its pin
+        # layer still exposes pin-access WINDOWS: on a real post-route project
+        # the pin-layer obstruction covered 99.79% of the footprint and the
+        # remaining 0.21% decomposed into 30 disjoint free regions, every one
+        # touching the boundary, with every supply pin inside one at zero OBS
+        # overlap. A conductor approaching from OUTSIDE the footprint lands on
+        # the pin without crossing anything the vendor declared, and the detail
+        # router already does exactly that for signal -- 16 of 28 signal pins
+        # were reached through those same windows while 0 of 3 supply pins were.
+        #
+        # Measured with a boundary ring on the pin layer, same DEF, same LEFs:
+        #
+        #     the PDN this flow emits today      VDD 0/2   VSS 0/2
+        #     + a pin-layer macro ring           VDD 0/2   VSS 2/2
+        #
+        # AND ITS LIMIT, which is why this is a recommendation and not an
+        # automatic emission: a ring is CONCENTRIC, so two nets get two radii,
+        # while every supply pin sits at the SAME depth from the edge -- that is
+        # what a pin-access window IS. The inner ring lands; the outer is one
+        # ring-pitch too far, and widening pushes it further out (widths 1.0,
+        # 2.0, 3.0 and 4.0 give an identical answer). One ring serves ONE net.
+        # The construct that serves both is a per-pin stub, which OpenROAD's PDN
+        # has no primitive for -- so the honest output here is the measurement
+        # and the limit, not a grid that silently powers half the macro.
+        _ring = {
+            "construct": "add_pdn_ring",
+            "layer": pin_layer,
+            "why": "the vendor's pin-access windows abut the boundary and carry "
+                   "no OBS, so a conductor approaching from outside lands on the "
+                   "pin without crossing anything the macro declared",
+            "measured_reach": "one supply net per ring",
+            "limit": "a ring is concentric and every supply pin sits at the same "
+                     "depth from the edge, so the second net is one ring-pitch "
+                     "short and no width or offset closes it; both nets need a "
+                     "per-pin stub, which OpenROAD PDN has no primitive for",
+            "not_measured": "IR drop and DRC were not run on the ring arms -- "
+                            "pin coverage is a geometric statement, not a "
+                            "current-carrying one",
+        }
+        return _refuse(
+            "ALL_CANDIDATE_LAYERS_BLOCKED_BY_MACRO_OBS",
+            f"every core strap layer above the supply-pin layer {pin_layer} "
+            f"({', '.join(_candidates_before_obs)}) is declared blocked across "
+            f"the macro's whole footprint by its own OBS, so no legal strap "
+            f"can reach its supply pins. MEASURED alternative: a boundary ring "
+            f"on {pin_layer} reaches the pins through the vendor's own "
+            f"pin-access windows -- but a concentric ring serves ONE supply net, "
+            f"because every supply pin sits at the same depth from the edge. "
+            f"Both nets need a per-pin stub, which OpenROAD PDN cannot express; "
+            f"see `ring_alternative` for what was measured and what was not",
+            pin_layer=pin_layer,
+            candidates=_candidates_before_obs,
+            blocked=_blocked_layers,
+            ring_alternative=_ring)
     # Rule 1: the macro's strap must have a PARTNER strap layer of the opposite
     # direction in the core plan, and the macro grid must use only one of them.
     strap = None
@@ -3750,10 +4672,25 @@ def _macro_pdn_grid_plan(
         if strap:
             break
     if not strap:
-        return None
+        return _refuse(
+            "NO_PERPENDICULAR_PARTNER_STRAP",
+            f"no core strap layer runs perpendicular to a usable strap above "
+            f"{pin_layer} ({', '.join(str(s.get('layer')) for s in above)}), "
+            "so a macro grid built here would bond only to itself and leave "
+            "the macro supply on an electrical island",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in above],
+            blocked=_blocked_layers)
     sw = float(strap.get("width") or 0.0)
     if sw <= 0:
-        return None
+        return _refuse(
+            "STRAP_WIDTH_UNUSABLE",
+            f"the core strap plan gives layer {strap['layer']} a width of "
+            f"{strap.get('width')!r}, which cannot be rendered as a macro "
+            "strap",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in above],
+            blocked=_blocked_layers)
     s_dir = dirs.get(str(strap["layer"]).lower(), "")
     # min spacing of the strap layer, from the tech LEF's own WIDTH for it
     s_minw = next((w for n, _d, _p, w in layers
@@ -3766,9 +4703,21 @@ def _macro_pdn_grid_plan(
     reachable = [p for p in ports if _across(p) >= floor]
     unreachable = [p for p in ports if _across(p) < floor]
     if not reachable:
-        return None
+        # Same silence, different cause: EVERY supply port is narrower across
+        # the strap than the smallest legal pitch. The partial version of this
+        # is already reported as MACRO_PDN_PORT_UNREACHABLE — but that marker
+        # lives on the plan, so the total version emitted nothing at all.
+        return _refuse(
+            "NO_PORT_WIDE_ENOUGH_FOR_ANY_LEGAL_PITCH",
+            f"every macro supply port measures less than {floor}um across the "
+            f"{strap['layer']} strap direction, which is the smallest pitch "
+            f"pdngen will accept for that strap (2*width+spacing), so no strap "
+            f"pattern can be guaranteed to cross any of them",
+            pin_layer=pin_layer,
+            candidates=[str(strap["layer"])],
+            blocked=_blocked_layers)
     pitch = round(max(floor, min(_across(p) for p in reachable)), 3)
-    return {
+    return {"plan": {
         "masters": sorted({p["master"] for p in ports}),
         "pin_layer": pin_layer,
         "strap_layer": strap["layer"],
@@ -3782,12 +4731,82 @@ def _macro_pdn_grid_plan(
         "refused_for_blockage": sorted({str(s.get("layer")) for s in _refused}),
         "unreachable": sorted({(p["master"], p["pin"],
                                 round(_across(p), 3)) for p in unreachable}),
-    }
+    }, "refusals": []}
+
+
+def _macro_pdn_grid_plan(
+        macro_lef_texts: Sequence[str],
+        tech_lef_text: Optional[str],
+        stripes: Sequence[Dict[str, Any]],
+        followpin_layer: str) -> Optional[Dict[str, Any]]:
+    """The BUILDABLE macro-grid plan alone, or None.
+
+    NARROW ACCESSOR, kept because "give me the grid to render" is a real
+    question with a real answer. It is NOT the question a caller deciding what
+    to REPORT should ask: this `None` cannot distinguish "no hard macros" from
+    "a hard macro the grid could not reach", and that conflation is exactly the
+    defect #701 fixed. Anything that reports, notes or gates must call
+    `_macro_pdn_grid_outcome` and read `refusals`."""
+    return _macro_pdn_grid_outcome(
+        macro_lef_texts, tech_lef_text, stripes, followpin_layer)["plan"]
+
+
+def _tcl_puts_safe(s: Any) -> str:
+    """Strip the characters that make a bare `puts "..."` argument stop being
+    one literal string. Names in this marker come out of a third-party LEF, and
+    a `$`, `[`, `"` or backslash in one would turn a diagnostic line into a Tcl
+    substitution and take the whole pnr.tcl down with it."""
+    return re.sub(r'[\\"\[\]${}\r\n]', "_", str(s))
+
+
+# ── A refusal that reaches the run, or it did not happen ────────────────────
+#
+# REPORTED, LOUD, NAMED — and deliberately NOT FATAL. The argument is about
+# what the flow can know AT THIS POINT, and it can know less than it looks:
+#
+#   * `macro_lef_texts` comes from `pdk.macro_lefs`, a CONFIG list of LEFs made
+#     available to the run. Nothing here consults the netlist or the placement.
+#     A master whose LEF is on that list need not be instantiated at all, and
+#     failing the run for an unreachable supply on a macro the design never
+#     places would be a failure manufactured out of configuration.
+#   * the supply may legitimately arrive by a route this planner does not model
+#     — a PDN ring, a pre-routed shape carried in the macro's own abstract, or
+#     a wrapper that re-exposes the pins. This function models exactly one
+#     construct (`define_pdn_grid -macro`) and must not speak for the others.
+#   * there is a gate downstream that CAN see the truth, on geometry rather
+#     than on config: `_pnr_pdn_grid_verdict` reads the emitted DEF, and
+#     PSM-0038/0039/0069 fire on the real connectivity check. Those already
+#     block. What they could not do was explain themselves — which macro, and
+#     why. This marker is what makes them traceable.
+#
+# So: never green-washed, never silent, and never a stop the run cannot clear.
+# If a later change teaches this planner to read the PLACEMENT, the same record
+# is the right thing to escalate to a FAIL — the record is the part that was
+# missing, not the severity.
+def _build_macro_pdn_refusal_tcl(refusals: Sequence[Dict[str, Any]]) -> str:
+    """`puts` lines naming every macro whose supply the grid refused to reach,
+    and why. Empty string for no refusals, so a design with nothing to refuse
+    still emits a BYTE-IDENTICAL pnr.tcl."""
+    out = ""
+    for rec in (refusals or []):
+        for master in (rec.get("masters") or ["<unnamed>"]):
+            out += (
+                f"  puts \"MACRO_PDN_GRID_REFUSED: {_tcl_puts_safe(master)} "
+                f"pin_layer={_tcl_puts_safe(rec.get('pin_layer') or '?')} "
+                f"reason={_tcl_puts_safe(rec.get('reason') or 'UNSPECIFIED')} "
+                f"-- {_tcl_puts_safe(rec.get('detail') or '')}. NO macro PDN "
+                f"grid was built for this master and its OBS was NOT "
+                f"overridden; its supply pins are not reached by this grid.\"\n")
+    return out
 
 
 def _build_macro_pdn_grid_tcl(plan: Optional[Dict[str, Any]]) -> str:
     """Render `_macro_pdn_grid_plan` as Tcl. Empty string for an empty plan, so
-    a design with no hard macros emits a BYTE-IDENTICAL pnr.tcl."""
+    a design with no hard macros emits a BYTE-IDENTICAL pnr.tcl.
+
+    An empty plan is NOT on its own evidence that there was nothing to do —
+    see `_build_macro_pdn_refusal_tcl`, which is what says which of the two
+    happened."""
     if not plan:
         return ""
     cells = " ".join(plan["masters"])
@@ -3943,21 +4962,39 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
         _mg_tcl = ""
         _mg_note = ""
         _mg_plan = None
+        _mg_refusals: List[Dict[str, Any]] = []
         if _stripes:
             _mg_lefs = [t for t in
                         (_read_pdk_text(m, container)
                          for m in (getattr(pdk, "macro_lefs", None) or [])) if t]
-            _mg_plan = _macro_pdn_grid_plan(
+            # #701 — the OUTCOME, not the plan. `plan is None` alone cannot
+            # tell "no hard macros" from "a hard macro this grid cannot reach",
+            # and reading only the plan is how the second one shipped silent.
+            _mg_outcome = _macro_pdn_grid_outcome(
                 _mg_lefs, _read_pdk_text(getattr(pdk, "tech_lef", None),
                                          container),
                 _stripes, fpl)
+            _mg_plan = _mg_outcome["plan"]
+            _mg_refusals = _mg_outcome["refusals"]
             _mg_tcl = _build_macro_pdn_grid_tcl(_mg_plan)
             if _mg_plan:
-                _mg_note = (f" + macro_grid({_mg_plan['pin_layer']}->"
-                            f"{_mg_plan['strap_layer']}@{_mg_plan['pitch']}"
+                _mg_note = (f" + macro_grid("
+                            f"{_tcl_puts_safe(_mg_plan['pin_layer'])}->"
+                            f"{_tcl_puts_safe(_mg_plan['strap_layer'])}"
+                            f"@{_mg_plan['pitch']}"
                             + (f", {len(_mg_plan['unreachable'])} port(s) "
                                "narrower than any legal pitch"
                                if _mg_plan["unreachable"] else "") + ")")
+            elif _mg_refusals:
+                # The PDN note itself must differ from a macro-free design's.
+                # That byte-identity WAS the defect; a marker further down the
+                # log does not undo a headline that reads the same either way.
+                _mg_note = (" + macro_grid_REFUSED("
+                            + "; ".join(
+                                f"{_tcl_puts_safe(m)}:{r['reason']}"
+                                for r in _mg_refusals
+                                for m in (r.get("masters") or ["<unnamed>"]))
+                            + ")")
         # NEVER report success for a grid with no straps. `pdngen` returns 0
         # for a follow-pin-only grid, so the old code printed
         # PDN_INSERTED_ADAPTIVE and every downstream consumer read that as a
@@ -3970,9 +5007,17 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
         if _mg_plan and _mg_plan["unreachable"]:
             # A port a legal pitch cannot cross is reported, never left to be
             # discovered as a PSM-0038 three steps downstream.
+            #
+            # `_tcl_puts_safe` on the LEF-derived names is #701 incidental: a
+            # master or pin containing `$`, `[` or `"` made this `puts` a Tcl
+            # substitution and aborted pnr.tcl. MEASURED under a real tclsh
+            # while building the refusal marker below, on a macro renamed to
+            # `B$AD["x"]`: `can't read "AD": no such variable`. Same one-line
+            # scrub, same emitter, so it is fixed here rather than left live.
             for _m, _p, _ext in _mg_plan["unreachable"]:
                 _mg_unreach += (
-                    f"  puts \"MACRO_PDN_PORT_UNREACHABLE: {_m}/{_p} port "
+                    f"  puts \"MACRO_PDN_PORT_UNREACHABLE: "
+                    f"{_tcl_puts_safe(_m)}/{_tcl_puts_safe(_p)} port "
                     f"extent {_ext}um across the strap is below the smallest "
                     f"legal pitch {_mg_plan['pitch_floor']}um — no strap "
                     f"pattern can be guaranteed to cross it\"\n")
@@ -3985,6 +5030,11 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
             f"width={w}{well_note} — {_no_strap_why}, so the per-row rails "
             f"are ISOLATED (no straps, no vias). This is NOT a usable power "
             f"grid. Declare `pdn_straps` for this PDK to override.\"\n")
+        # #701 — appended OUTSIDE the strap_tcl conditional on purpose. A run
+        # that reached the planner and got a refusal must say so on BOTH
+        # markers; hanging it off the success branch alone would restore the
+        # silence for exactly the runs already in the worst shape.
+        _ok_marker += _build_macro_pdn_refusal_tcl(_mg_refusals)
         return (
             "# === PDK-adaptive PDN: discovered PG pins + met1 follow-pins"
             + (" + upper-metal straps ===\n" if strap_tcl else " ===\n")
@@ -4044,6 +5094,11 @@ _SKY130_FILLER_MASTERS = [
 # NW.b1, i.e. nwell notches at the unfilled row gaps. With fillers inserted
 # the same design checks clean.
 _FILLER_MACRO_RE = re.compile(r'^\s*MACRO\s+(\S+)\s*$', re.MULTILINE)
+#: The device-bearing half of the filler families (see
+#: `_FILLER_SPACERS_ONLY_REASON`). Same name-segment matching as
+#: `_FILLER_FAMILY_RE`, so it is PDK-agnostic.
+_FILLER_DECAP_RE = re.compile(r'(?:^|_)(DECAP|DCAP|FILLCAP)(?:_?\d+)?(?:_|$)',
+                              re.IGNORECASE)
 # Family token as a name segment; trailing digits (if any) are the drive/size.
 _FILLER_FAMILY_RE = re.compile(
     r'(?:^|_)(DECAP|DCAP|FILLCAP|FILLER|FILL)(?:_?(\d+))?(?:_|$)',
@@ -4051,12 +5106,20 @@ _FILLER_FAMILY_RE = re.compile(
 
 
 def _discover_filler_masters_from_lef(cell_lef: Optional[str],
-                                      container: Optional[str] = None
+                                      container: Optional[str] = None,
+                                      spacers_only: bool = False
                                       ) -> List[str]:
-    """Discover decap+fill filler-cell masters from a cell LEF, ordered
-    OpenROAD-style (decaps largest→smallest first, then fills largest→smallest
-    — greedy tiling packs the big cells first). Returns [] on no LEF / no
-    fillers. Name-pattern based (no vendor literal).
+    """Discover filler-cell masters from a cell LEF, largest→smallest (greedy
+    tiling packs the big cells first). Returns [] on no LEF / no fillers.
+    Name-pattern based (no vendor literal).
+
+    `spacers_only` returns the fill family ALONE — the list `filler_placement`
+    is given on a die whose ties the #684 tap prune has already removed (see
+    `_FILLER_SPACERS_ONLY_REASON` for the measurement). It is deliberately NOT
+    the default: where the prune did not fire the decaps are tied, and they are
+    the dynamic-IR decoupling the design is signed off with. WHICH list a run
+    gets is decided at fill time by the SAME utilization test that decides the
+    prune — see `_build_sparse_die_aware_filler_tcl`.
 
     `cell_lef` is normally a path INSIDE the EDA container (/foss/pdks/...),
     which does not exist on the host filesystem. Reading it with a plain host
@@ -4083,7 +5146,31 @@ def _discover_filler_masters_from_lef(cell_lef: Optional[str],
             fills.append((size, name))
     decaps.sort(reverse=True)
     fills.sort(reverse=True)
+    if spacers_only:
+        return [n for _, n in fills]
     return [n for _, n in decaps] + [n for _, n in fills]
+
+
+#: A decap is a DEVICE. Measured (agent g360, spm x this PDK, 2026-08-20) on a
+#: die whose taps the #684 sparse-die prune had removed: run with this
+#: function's own decaps-first order, 7295 of the 8317 inserted cells were
+#: decaps and the die went 360 -> 11964 sign-off DRC violations, 33x WORSE,
+#: with 99.5-100% of every new violation sitting on a decap instance
+#: (DF.13_MV 8124 at 99.8%, DF.14_MV 1971 at 99.5%, M1.2a 1787 at 100%,
+#: M1.1 82 at 100%). The same 8317 sites filled with SPACERS ONLY gave
+#: 360 -> 19, and all 19 were already present before the fill: zero new
+#: violations. Measured contents of the two families: fill_* carries NWELL /
+#: PPLUS / NPLUS / DUALGATE and the two rails and has 0.000 um^2 of gate area;
+#: fillcap_* carries real COMP, POLY2, contacts and extra metal1.
+#:
+#: The two halves of #684 are mutually inconsistent: it prunes taps because
+#: empty silicon carries no devices, and then fills that same silicon with
+#: devices. Until decap insertion and tap pruning are decided TOGETHER — decap
+#: only where tap coverage is retained — `filler_placement` gets spacers.
+_FILLER_SPACERS_ONLY_REASON = (
+    "spacers only: a decap is a device, and the sparse-die tap prune has "
+    "already removed the taps that would tie it (measured 360 -> 11964 with "
+    "decaps, 360 -> 19 with spacers, same 8317 sites)")
 
 
 # v1.3.93 — an antenna-diode cell is marked in LEF with `CLASS CORE ANTENNACELL`
@@ -4138,6 +5225,17 @@ def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
     if pdk.tapcell_master and "sky130_fd_sc_hd" in pdk.tapcell_master:
         return list(_SKY130_FILLER_MASTERS)
     return _discover_filler_masters_from_lef(pdk.cell_lef)
+
+
+def _spacer_masters_of(masters: Sequence[str]) -> List[str]:
+    """The device-free half of a filler master list, order preserved.
+
+    Same name-segment matching as the discovery, so it is PDK-agnostic — and
+    it agrees with the shuttle operator's own per-run `resolved.json`, which
+    likewise separates `FILL_CELLS` (`*__fill_*`) from `DECAP_CELLS`
+    (`*__fillcap_*`) and treats `filltie` / `endcap` as neither.
+    """
+    return [m for m in masters if not _FILLER_DECAP_RE.search(m)]
 
 
 # ── #684 — sparse-die fill guard ──────────────────────────────────────
@@ -4284,7 +5382,8 @@ def _load_sparse_die_skip(project: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
+def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
+                                       slot_pinned_core: bool = False) -> str:
     """Return a Tcl block that runs `filler_placement {<masters>}` ONLY
     when post-place CORE utilization ≥ the sparse-die threshold; otherwise
     SKIP the full-die decap/fill tiling (emitting a SPARSE_DIE_FILL_SKIPPED
@@ -4302,7 +5401,79 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
                 "this PDK; dynamic-IR margin + density-fill rules must be "
                 "handled out-of-band\"\n")
     masters_tcl = " ".join(filler_masters)
+    spacers = _spacer_masters_of(filler_masters)
+    spacers_tcl = " ".join(spacers)
     thr = _sparse_die_fill_threshold_pct()
+    # === fix 2's precondition — A SLOT-PINNED CORE IS NOT AN EMPTY WRAPPER ===
+    # #684 guards against tiling silicon that is not the design's placeable
+    # area: a small design hardened into a much larger MANDATED die, where the
+    # fill buys nothing and explodes the GDS. That shape needs the wrapper to be
+    # INSIDE the die OpenROAD is filling.
+    #
+    # With the shuttle slot's CORE_AREA as the floorplan rectangle (fix 1) it no
+    # longer is. The band between CORE_AREA and DIE_AREA — where the ring, the
+    # pads and the identification cells go — is outside the die the router and
+    # the filler see, so there is no empty wrapper left to flood. What remains
+    # inside is the rectangle the OPERATOR pinned as placeable, and the same
+    # foundry whose template pinned it also requires that rectangle to meet
+    # implant, n-well and diffusion density rules.
+    #
+    # So the utilization skip has nothing left to protect here, and firing it
+    # costs the six rules the fill exists to satisfy. MEASURED (agent g360, this
+    # design, this PDK): with the fill withheld, PP.2 87, NP.2 83, NW.2a_LV 39,
+    # NW.2b_LV 35, NW.2b_MV 9, DV.5 28 — all six go to ZERO once spacers are
+    # placed over the same silicon, and NWELL islands go 3305 -> 128.
+    #
+    # This is why the fixes are ORDERED. Without fix 1 this exemption would hand
+    # `filler_placement` the whole 1936x2531 slot and reinstate the explosion;
+    # with it, the die being filled is the operator's own core rectangle.
+    #
+    # WHAT THE BELOW-THRESHOLD ARM IS GIVEN, AND WHY IT IS NOT THE WHOLE LIST.
+    # `_discover_filler_masters_from_lef` orders decaps largest-first and fills
+    # after them, so greedy tiling consumes the empty sites with DECAPS. A decap
+    # is a device, and this arm is BY DEFINITION the arm in which the #684 tap
+    # prune has just removed the ties over that same silicon: the two halves of
+    # #684 contradict each other. MEASURED (agent g360, 2026-08-20, spm on an
+    # open PDK, one die): with the decaps-first list 7295 of the 8317 inserted
+    # cells were decaps and sign-off DRC went 360 -> 11964, 33x WORSE, with
+    # 99.5-100% of every new violation sitting on a decap instance. The
+    # identical 8317 sites filled with SPACERS gave 360 -> 19, all 19 of which
+    # pre-dated the fill. Re-measured end-to-end through this flow: 145 -> 2,
+    # seven rules to zero, zero new violations.
+    #
+    # The exclusion is scoped to THIS arm on purpose. Above the threshold the
+    # prune did not fire, the decaps are tied, and they are the dynamic-IR
+    # decoupling the design was signed off with — the published gf180mcuD
+    # reference die carries 968 of them and passes the operator's precheck. The
+    # else-arm below therefore keeps the historical list verbatim, so that
+    # reference is not merely "probably fine", it is unchanged.
+    #
+    # DISCLOSED COST: on a sparse slot-pinned die there is now no decoupling
+    # capacitance from the filler at all. Recovering it needs decap insertion
+    # and tap pruning to be decided TOGETHER — decap only where tap coverage was
+    # retained — which is a change to the placement step, not to this list.
+    if slot_pinned_core and spacers:
+        below_arm = (
+            "  puts \"SPARSE_DIE_FILL_NOT_APPLICABLE: core_util="
+            "$_sd_fill_util% is below the threshold, but the floorplan "
+            "rectangle is the shuttle slot's own CORE_AREA, so the die being "
+            "filled IS the operator's placeable area and there is no empty "
+            "fixed wrapper inside it to flood; the utilization skip is "
+            "withheld and a DEVICE-FREE fill runs.\"\n"
+            f"  if {{[catch {{filler_placement {{{spacers_tcl}}}}} _fp_err]}} {{\n"
+            "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
+            "  } else {\n"
+            f"    puts \"FILLER_INSERTED: {len(spacers)} spacer master(s) "
+            "(slot-pinned core; the decap family is withheld because the tap "
+            "prune fired on this die)\"\n"
+            "  }\n")
+    else:
+        below_arm = (
+            "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
+            f"{thr}% — full-die decap/fill tiling bounded to avoid filling an "
+            "empty fixed wrapper (would explode GDS/extraction). Density-fill "
+            "for the occupied region is covered by the downstream metal-fill "
+            "gate; empty silicon carries no signals needing decoupling.\"\n")
     # NOTE: doubled braces because this string is interpolated by the
     # f-string template in _build_pnr_tcl_text (and emitted verbatim by the
     # metal-fill helper, which also uses an f-string).
@@ -4330,11 +5501,7 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
         "  puts \"SPARSE_DIE_FILL_MEASURE_NONFATAL: $_sd_err\"\n"
         "}\n"
         f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
-        "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
-        f"{thr}% — full-die decap/fill tiling bounded to avoid filling an "
-        "empty fixed wrapper (would explode GDS/extraction). Density-fill "
-        "for the occupied region is covered by the downstream metal-fill "
-        "gate; empty silicon carries no signals needing decoupling.\"\n"
+        + below_arm +
         "} else {\n"
         f"  if {{[catch {{filler_placement {{{masters_tcl}}}}} _fp_err]}} {{\n"
         "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
@@ -4556,6 +5723,39 @@ def _parse_macro_pdn_unreachable(text: str) -> List[str]:
         if m.group(1) not in seen:
             seen.append(m.group(1))
     return seen
+
+
+# ── #701: the refusal the planner used to throw away ────────────────────────
+#
+# `_macro_pdn_grid_outcome` refuses to build a macro grid it cannot build
+# legally, and `_build_macro_pdn_refusal_tcl` prints one line per master. This
+# reads them back so the PnR step can state the refusal in its own detail
+# instead of leaving it to be rediscovered as a PSM-0038 three steps later.
+#
+# Deliberately parses the MASTER and the REASON TOKEN only. The trailing
+# sentence is for humans and will be reworded; a consumer keying off prose is a
+# consumer that breaks on an edit, which is how machine-readable evidence rots.
+_MACRO_PDN_GRID_REFUSED_RE = re.compile(
+    r"MACRO_PDN_GRID_REFUSED:\s*(\S+)\s+pin_layer=(\S+)\s+reason=(\S+)")
+
+
+def _parse_macro_pdn_grid_refusals(text: str) -> List[Dict[str, str]]:
+    """De-duplicated, ORDER-PRESERVING ``[{master, pin_layer, reason}]`` for
+    every hard macro the PDN planner declared it could not reach.
+
+    Empty list = the marker never appeared. On a design with no hard macros
+    that is the normal and correct state — and it is now a DIFFERENT state
+    from "a macro was refused", which is the whole point of the marker."""
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for m in _MACRO_PDN_GRID_REFUSED_RE.finditer(text or ""):
+        key = (m.group(1), m.group(3))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"master": m.group(1), "pin_layer": m.group(2),
+                    "reason": m.group(3)})
+    return out
 
 
 # ── A measurement names the database it was taken on ────────────────────────
@@ -5464,13 +6664,21 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
     fixed_any = False
     for n in enabled_ns:
         met = f"MET{n}"
-        via = f"VIA{n}"  # the via BELOW METn connects MET(n-1) <-> METn
-        wm = re.search(
-            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
-            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
-        if not wm:
-            continue  # this deck doesn't gate METn's width via Mt.W.1 -> no-op
-        deck_width_um = float(wm.group(1))
+        # The deck NAMES its own top-via on the Mt.EN.1 line ("Min. enclosure
+        # of Vt-1 by Mt <v> METn VIAm"), so READ it instead of computing it.
+        # The pre-existing code built the via name as VIA{n}, which on a deck
+        # whose "Vt-1" is the via BELOW the top metal (measured: `... 0.09
+        # MET5 VIA4`) never matched, so the enclosure lookup found nothing
+        # every time. Deriving VIA{n-1} instead would only swap one guess for
+        # another; taking the deck's own token is guess-free and works for
+        # either convention.
+        enm = re.search(
+            r"@Mt\.EN\.1:[^\n]*?([0-9.]+)\s+" + re.escape(met) +
+            r"\s+(\w+)\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+\s*<\s*"
+            r"([0-9.]+)", deck_text, re.IGNORECASE)
+        via = enm.group(2) if enm else ""
+        enc_note = (f", Mt.EN.1 {met}/{via} enclosure={enm.group(3)}um"
+                    if enm else "")
 
         lblock = re.search(
             r"(?ms)^LAYER\s+" + re.escape(met) + r"\s*\n(.*?)^END\s+" +
@@ -5478,38 +6686,127 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
         if not lblock:
             continue
         block = lblock.group(1)
-        wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
-        mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
-        lef_width_um = min(
-            float(wmatch.group(2)) if wmatch else 1e9,
-            float(mwmatch.group(2)) if mwmatch else 1e9)
-        if lef_width_um >= deck_width_um:
-            continue  # LEF already honors the deck's real minimum
-
-        enm = re.search(
-            r"@Mt\.EN\.1:[^\n]*\b" + re.escape(met) + r"\s+" +
-            re.escape(via) + r"\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+"
-            r"\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
-        enc_note = f", Mt.EN.1 enclosure={enm.group(1)}um" if enm else ""
-
         fixed_block = block
-        if wmatch:
-            fixed_block = (fixed_block[:wmatch.start()] +
-                           f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
-                           fixed_block[wmatch.end():])
-        # re-locate MINWIDTH after the WIDTH edit may have shifted offsets
-        mwmatch2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", fixed_block)
-        if mwmatch2:
-            fixed_block = (fixed_block[:mwmatch2.start()] +
-                            f"{mwmatch2.group(1)}{deck_width_um}{mwmatch2.group(3)}" +
-                            fixed_block[mwmatch2.end():])
-        lef_text = (lef_text[:lblock.start(1)] + fixed_block +
-                    lef_text[lblock.end(1):])
+        changed: List[str] = []
+
+        # -- (1) min WIDTH -- Mt.W.1 -------------------------------------
+        wm = re.search(
+            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
+            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
+        if wm:
+            deck_width_um = float(wm.group(1))
+            wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
+            mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
+            lef_width_um = min(
+                float(wmatch.group(2)) if wmatch else 1e9,
+                float(mwmatch.group(2)) if mwmatch else 1e9)
+            if lef_width_um < deck_width_um:
+                if wmatch:
+                    fixed_block = (
+                        fixed_block[:wmatch.start()] +
+                        f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
+                        fixed_block[wmatch.end():])
+                # re-locate MINWIDTH: the WIDTH edit may have shifted offsets
+                mw2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)",
+                                fixed_block)
+                if mw2:
+                    fixed_block = (
+                        fixed_block[:mw2.start()] +
+                        f"{mw2.group(1)}{deck_width_um}{mw2.group(3)}" +
+                        fixed_block[mw2.end():])
+                changed.append(
+                    f"WIDTH/MINWIDTH {lef_width_um} -> {deck_width_um} "
+                    f"(Mt.W.1)")
+
+        # -- (2) min SPACING -- Mt.S.1. The defect this whole branch existed
+        # for but only half-closed: the deck's THICK-TOP option makes the top
+        # metal both WIDER and further APART, and only the width half was
+        # reconciled. Measured on a real sign-off run: LEF SPACING 0.28um vs
+        # the deck's Mt.S.1 >= 0.46um -- the router, which can only see the
+        # LEF, drew legal-per-LEF metal that the deck then failed 141 times.
+        # Take the number from the deck's EXECUTABLE `EXTERNAL ... <v` line
+        # (not from its @comment) and take the STRICTEST when a deck repeats
+        # the rule under several names. Only the BASE `SPACING <v> ;` is
+        # touched: a `SPACING <v> RANGE ...` line is the wide-metal rule and
+        # is a different constraint. Never lowered.
+        deck_sp_um = max(
+            [float(m2.group(1)) for m2 in re.finditer(
+                r"@Mt\.S\.1:[^\n]*\b" + re.escape(met) +
+                r"\b[^\n]*\n\s*EXTERNAL\s+\S+\s*<\s*([0-9.]+)",
+                deck_text, re.IGNORECASE)] or [0.0])
+        if deck_sp_um > 0.0:
+            spm = re.search(r"(?m)^(\s*SPACING\s+)([0-9.]+)(\s*;)", fixed_block)
+            if spm and float(spm.group(2)) < deck_sp_um:
+                changed.append(
+                    f"SPACING {spm.group(2)} -> {deck_sp_um} (Mt.S.1)")
+                fixed_block = (
+                    fixed_block[:spm.start()] +
+                    f"{spm.group(1)}{deck_sp_um}{spm.group(3)}" +
+                    fixed_block[spm.end():])
+
+        # -- (3) PITCH -- not a deck rule but an ARITHMETIC consequence of
+        # the two above. A routing track grid finer than width+space cannot
+        # hold a legal wire on every track; the router will happily use
+        # adjacent tracks and the result is a spacing violation BY
+        # CONSTRUCTION. Raising WIDTH alone and leaving PITCH produced
+        # exactly that: width 0.44 + space 0.28 = 0.72um of demand on a
+        # 0.61um pitch -- the fix for one rule manufacturing violations of
+        # another. Raise PITCH to width+space when it is short. Derived
+        # entirely from the two reconciled numbers -- nothing hardcoded.
+        pm = re.search(r"(?m)^(\s*PITCH\s+)([0-9.]+)(\s*;)", fixed_block)
+        wnow = re.search(r"(?m)^\s*WIDTH\s+([0-9.]+)\s*;", fixed_block)
+        snow = re.search(r"(?m)^\s*SPACING\s+([0-9.]+)\s*;", fixed_block)
+        if pm and wnow and snow:
+            need = round(float(wnow.group(1)) + float(snow.group(1)), 6)
+            if float(pm.group(2)) < need:
+                changed.append(
+                    f"PITCH {pm.group(2)} -> {need} (= WIDTH+SPACING; a "
+                    f"finer track grid cannot hold a legal wire per track)")
+                fixed_block = (fixed_block[:pm.start()] +
+                               f"{pm.group(1)}{need}{pm.group(3)}" +
+                               fixed_block[pm.end():])
+
+        if changed:
+            lef_text = (lef_text[:lblock.start(1)] + fixed_block +
+                        lef_text[lblock.end(1):])
+            notes.append(
+                f"[topmetal-deck-lef-fix] deck enables TOPMETAL_{n}: {met} "
+                f"{'; '.join(changed)}{enc_note} -> staged a corrected LEF "
+                f"(raised only; the real PDK LEF is untouched)")
+            fixed_any = True
+
+        # -- (4) the CUT layer below METn -- Vt1.S.1. Same class, different
+        # layer: the deck's thick-top option also spaces the top via further
+        # apart than the LEF declares (measured: LEF 0.26um vs deck >= 0.35um,
+        # 7593 sign-off violations). A cut layer has no PITCH/track grid, so
+        # only SPACING applies. The via's NAME comes from the deck's own
+        # Mt.EN.1 token above, never from arithmetic on `n`.
+        vdeck = max(
+            [float(m2.group(1)) for m2 in re.finditer(
+                r"@Vt1\.S\.1:[^\n]*\b" + re.escape(via) +
+                r"\b[^\n]*\n\s*EXTERNAL\s+\S+\s*<\s*([0-9.]+)",
+                deck_text, re.IGNORECASE)] or [0.0]) if via else 0.0
+        if vdeck <= 0.0:
+            continue
+        vblock = re.search(
+            r"(?ms)^LAYER\s+" + re.escape(via) + r"\s*\n(.*?)^END\s+" +
+            re.escape(via) + r"\s*$", lef_text)
+        if not vblock:
+            continue
+        vsp = re.search(r"(?m)^(\s*SPACING\s+)([0-9.]+)(\s*;)",
+                        vblock.group(1))
+        if not vsp or float(vsp.group(2)) >= vdeck:
+            continue
+        vfixed = (vblock.group(1)[:vsp.start()] +
+                  f"{vsp.group(1)}{vdeck}{vsp.group(3)}" +
+                  vblock.group(1)[vsp.end():])
+        lef_text = (lef_text[:vblock.start(1)] + vfixed +
+                    lef_text[vblock.end(1):])
         notes.append(
-            f"[topmetal-width-fix] deck enables TOPMETAL_{n}: {met} Mt.W.1 "
-            f"min-width={deck_width_um}um{enc_note} > LEF WIDTH/MINWIDTH="
-            f"{lef_width_um}um -> staged a corrected LEF (WIDTH/MINWIDTH "
-            f"raised to {deck_width_um}um; the real PDK LEF is untouched)")
+            f"[topmetal-deck-lef-fix] deck enables TOPMETAL_{n}: {via} "
+            f"(the cut below {met}) SPACING {vsp.group(2)} -> {vdeck} "
+            f"(Vt1.S.1) -> staged a corrected LEF (raised only; the real "
+            f"PDK LEF is untouched)")
         fixed_any = True
 
     if not fixed_any:
@@ -5617,30 +6914,71 @@ def _discover_supply_pin_dir_fix(project: Path, cell_lef: Optional[Path]
     return out_path, notes
 
 
-def _streamout_layermap_warning(calibre_drc: Optional[str],
-                                lefdef_layermap: Optional[str]) -> Optional[str]:
-    """FLOOR-STREAMOUT loud-WARN (ic1-spm commercial PDK clean-room, v1.4.34).
+def _signoff_drc_deck(calibre_drc: Optional[str],
+                      klayout_drc: Optional[str]) -> Optional[str]:
+    """The sign-off DRC deck this run will actually EXECUTE — whatever its
+    vendor or format — or None when the run has no deck at all.
 
-    When a commercial PDK ships a sign-off DRC deck (`calibre_drc`) but NO
-    discoverable Encounter/SoC LEF->GDS streamout layermap (`lefdef_layermap`
-    is None), GDS streams out on LEGACY (compact) layer numbering. A foundry
-    sign-off deck then MISREADS routing layers on those numbers and reports a
-    WALL of spurious FEOL violations that are numbering ARTEFACTS, not design
-    defects (spm commercial PDK: routing read as thick-gate-oxide). The fallback was
-    previously SILENT — the false-DRC wall looks like a design failure. Return a
-    loud operator warning in exactly that case (deck present AND map absent);
-    None otherwise. Chip-AGNOSTIC: keyed purely on deck-present + map-absent, no
-    vendor literal."""
-    if calibre_drc is not None and lefdef_layermap is None:
+    NO NEW DISCOVERY. The two arguments are the SAME two fields `step_drc`
+    dispatches on: `pdk.drc_deck` (the KLayout DSL deck found by the
+    `*.lydrc` / `*.drc` / `*.lyt` search) and `pdk.calibre_drc` (the
+    Calibre/SVRF `*DRC*.rule` deck). The preference order below is
+    `step_drc`'s own — it runs the KLayout deck whenever one exists and only
+    takes the Calibre/SVRF route when `pdk.drc_deck` is empty — so the deck
+    named here is the deck whose verdict the operator will read.
+
+    WHY "A DECK IS PRESENT" IS THE HONEST PREDICATE, AND WHY IT IS
+    PDK-AGNOSTIC. GDSII stores no layer NAMES: a shape carries only an
+    integer layer/datatype pair. Every DRC deck that consumes a GDS
+    therefore binds its rules to layer NUMBERS — KLayout DSL
+    `input(19, 0)` / `polygons(1, 0)`, SVRF `LAYER MAP <gds> DATATYPE <dt>`.
+    So "this run executes a sign-off DRC deck" IS "this run's DRC verdict
+    depends on the streamed GDS carrying the right layer numbers", and there
+    is no PDK for which a deck runs and the numbering is irrelevant.
+
+    The pre-existing predicate was `calibre_drc is not None`, i.e. *the deck
+    is a COMMERCIAL Calibre deck*. That is a vendor test, not a physical one:
+    a PDK whose sign-off deck is a KLayout `.lydrc` has `calibre_drc=None`
+    and slipped every layermap guard, so its GDS streamed on the LEF/DEF
+    reader's own compact numbering and the deck measured geometry the design
+    never drew — silently, with a PASS (vibe-ic#789). This predicate names no
+    PDK, vendor, layer or design: it is `is there a deck`."""
+    for deck in (klayout_drc, calibre_drc):
+        if deck:
+            return str(deck)
+    return None
+
+
+def _streamout_layermap_warning(signoff_drc_deck: Optional[str],
+                                lefdef_layermap: Optional[str]) -> Optional[str]:
+    """FLOOR-STREAMOUT loud-WARN (ic1-spm commercial PDK clean-room, v1.4.34;
+    widened to ANY sign-off deck for vibe-ic#789).
+
+    When the run executes a sign-off DRC deck (`signoff_drc_deck`, from
+    `_signoff_drc_deck` — Calibre/SVRF *or* KLayout, they are equally
+    layer-number-keyed) but NO LEF->GDS streamout layermap was resolved
+    (`lefdef_layermap` is None), GDS streams out on LEGACY (compact) layer
+    numbering. The deck then MISREADS routing layers on those numbers and
+    reports a WALL of spurious FEOL violations that are numbering ARTEFACTS,
+    not design defects (spm commercial PDK: routing read as thick-gate-oxide;
+    nangate45 FreePDK45.lydrc: 7.9M phantom IMPLANT/VT/CONTACT items). The
+    fallback was previously SILENT — the false-DRC wall looks like a design
+    failure. Return a loud operator warning in exactly that case (deck present
+    AND map absent); None otherwise.
+
+    Chip- and PDK-AGNOSTIC: keyed purely on deck-present + map-absent. It was
+    previously keyed on the deck being a COMMERCIAL Calibre deck, which is a
+    VENDOR test — a KLayout-deck PDK degraded silently through it."""
+    if signoff_drc_deck is not None and lefdef_layermap is None:
         return (
             "streamout: a sign-off DRC deck is present "
-            f"({Path(calibre_drc).name}) but NO Encounter/SoC LEF->GDS streamout "
+            f"({Path(signoff_drc_deck).name}) but NO LEF->GDS streamout "
             "layermap was found under the PDK — GDS will use LEGACY (compact) "
-            "layer numbering. A foundry sign-off deck MISREADS routing layers on "
+            "layer numbering. A sign-off deck MISREADS routing layers on "
             "legacy numbers and reports a WALL of spurious FEOL violations that "
             "are numbering ARTEFACTS, not design defects. Supply the PDK's "
-            "`*layermap*for*ncounter*` / `*layermap*SOC*` map (or set it in the "
-            "bridge config) before trusting DRC results.")
+            "`*layermap*for*ncounter*` / `*layermap*SOC*` / `<pdk>.map` map (or "
+            "set it in the bridge config) before trusting DRC results.")
     return None
 
 
@@ -6270,6 +7608,36 @@ def macro_lef_layer_compat_guard(
     declared by the target PDK's tech LEF (or its cell LEF, for libraries that
     declare layers there). Otherwise this returns a loud refusal.
 
+    THE OBS-ONLY BRANCH WARNS RATHER THAN REFUSES, AND ITS ORIGINAL REASONING
+    WAS WRONG ABOUT THE COST. That branch was added to clear a real false
+    positive: a hard macro whose pins are all on declared metal and which
+    references a LEF-reserved layer type ONLY inside its OBS section was
+    halting phase3 for nothing. The pin half of that reasoning is correct and
+    is why the branch stays non-fatal. The obstruction half said the reader
+    "will drop the obstruction rectangle(s) on the undeclared layer" and that
+    "a CLASS BLOCK macro already blocks its own footprint, so the physical
+    result is unchanged". MEASURED against the reader, on exactly the shape
+    this file's own test pins — OBS opening on an undeclared layer, then a
+    full-footprint rect on a DECLARED layer, then another on a second declared
+    layer:
+
+        nObstructions = 0        (not 2)
+        nTerms        = 1        (the pin survives — that half was right)
+
+    The reader STOPS at the first entry it cannot resolve, so everything from
+    there ONWARD is lost — the rectangles on declared layers included. The
+    extent layer is conventionally declared FIRST, which is why the count here
+    is 0 rather than partial; moving the same entry later keeps the rects
+    before it (first -> 0 kept, after 30 of 63 -> 30, last -> 63). So the macro
+    loads with NO obstruction geometry on ANY layer, and the second clause's
+    premise — that something else still blocks the footprint — has nothing left
+    to stand on. The disclosure below states
+    the measured behaviour instead. Whether this branch should now REFUSE
+    rather than warn is a live question and deliberately not decided here:
+    flipping it re-introduces the halt it was added to remove, and the
+    blocking verdict belongs in `macro_obs_load_parity_check`, which measures
+    the loss directly and is wired as a gate.
+
     NOT a substitution: this guard never renames, remaps or invents a layer.
     Remapping `metal3 -> Metal3` would silently re-cut another PDK's abstract
     onto this PDK's stack at a pitch it was never drawn for; the honest
@@ -6307,22 +7675,34 @@ def macro_lef_layer_compat_guard(
             # risk (the shape is dropped and that pin is unroutable).
             offenders.append((mlef, pin_unknown))
         elif obs_unknown:
-            # Undeclared layers appear ONLY in the OBS obstruction section →
-            # NOT fatal: no pin geometry is dropped, and a CLASS BLOCK macro
-            # already blocks its own footprint. Warn, do not refuse.
+            # Undeclared layers appear ONLY in the OBS obstruction section.
+            # Still not PIN-fatal — no pin geometry is dropped — but see the
+            # corrected disclosure below: the cost is NOT limited to the
+            # entries that named the undeclared layer.
             obs_only.append((mlef, obs_unknown))
     if obs_only and not offenders:
         for mlef, layers in obs_only:
             print(
                 "[WARN] phase3 hard-macro OBS-only undeclared layer(s) "
                 + ", ".join(layers)
-                + f" in {mlef} — NOT refused. These appear only in the "
-                "macro's OBS obstruction section, never in a PIN PORT, so no "
-                "pin geometry is dropped. OpenROAD will drop the obstruction "
-                "rectangle(s) on the undeclared layer; a CLASS BLOCK macro "
-                "already blocks its own footprint, so the physical result is "
-                "unchanged. (Supply an abstract cut for this stack, or add the "
-                "layer to the tech LEF, to silence this.)",
+                + f" in {mlef} — NOT refused, because no PIN PORT geometry is "
+                "dropped and the macro's pins stay routable. BUT THE "
+                "OBSTRUCTION COST IS NOT LIMITED TO THE OFFENDING ENTRY. "
+                "MEASURED against the reader: it STOPS at the first OBS entry "
+                "it cannot resolve, so everything from that entry ONWARD is "
+                "lost, including rectangles on layers the tech LEF DOES "
+                "declare (moving one unresolvable entry within an identical "
+                "63-rect section: first -> 0 kept, after 30 -> 30, last -> "
+                "63). The extent layer is conventionally declared FIRST, so in "
+                "practice a macro declaring 64 OBS rectangles loads with 0. "
+                "So this macro loads with the correct outline, intact pins, "
+                "and NO obstruction geometry on any layer, and every "
+                "downstream stage treats its footprint as free area: "
+                "follow-pins, straps and vias are emitted across it — metal "
+                "that is illegal AND does not connect. `macro_obs_load_parity_"
+                "check` measures this directly and BLOCKS on it. (Supply an "
+                "abstract cut for this stack, or add the layer to the tech "
+                "LEF, to silence this.)",
                 file=sys.stderr)
     if not offenders:
         return None
@@ -7269,6 +8649,14 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             # routing vias read as fuse-open/thick-gate-oxide, firing a spurious
             # LMF/TG2 wall). chip-AGNOSTIC — nothing hardcoded. A staged foundry
             # map (found above) always wins; this is the fallback.
+            # NOTE the synthesizer stays keyed on `calibre_drc`, and that is
+            # not the vendor scoping vibe-ic#789 removes below: it parses the
+            # SVRF `LAYER <name> <id>` / `LAYER MAP <gds> DATATYPE <dt> <id>`
+            # indirection table, a Calibre-deck GRAMMAR. Handing it a KLayout
+            # `.lydrc` would return None after a wasted read while advertising
+            # a capability it does not have. The GUARD is what must be
+            # deck-agnostic; the REMEDIATION is honest about which deck
+            # formats it can actually read.
             if _lefdef_layermap is None and calibre_drc is not None:
                 _synth_map, _synth_notes = _synthesize_streamout_layermap(
                     str(calibre_drc), str(tech_lef) if tech_lef else None,
@@ -7277,10 +8665,6 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     print(_n, file=sys.stderr)
                 if _synth_map:
                     _lefdef_layermap = _synth_map
-            _lm_warn = _streamout_layermap_warning(
-                str(calibre_drc) if calibre_drc else None, _lefdef_layermap)
-            if _lm_warn:
-                print(f"[WARN] {_lm_warn}", file=sys.stderr)
 
             # v1.6.53 — KLayout deck discovery. Custom PDKs that ship
             # ONLY a Calibre deck cannot run open-source DRC; but many
@@ -7300,6 +8684,20 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                         break
                 if klayout_drc:
                     break
+
+            # vibe-ic#789 — the missing-map WARN is evaluated HERE, after BOTH
+            # deck searches, not after the Calibre one alone. It used to sit
+            # above this block and be passed `calibre_drc` only, so a PDK whose
+            # sign-off deck is a KLayout `.lydrc` (the deck that will actually
+            # run: see `step_drc`) produced NO warning at all and streamed on
+            # legacy numbering in silence. `_signoff_drc_deck` reuses these two
+            # already-discovered fields; it invents no new search.
+            _lm_warn = _streamout_layermap_warning(
+                _signoff_drc_deck(str(calibre_drc) if calibre_drc else None,
+                                  klayout_drc),
+                _lefdef_layermap)
+            if _lm_warn:
+                print(f"[WARN] {_lm_warn}", file=sys.stderr)
 
             # v1.3.83 — sign-off bridge config (chip-AGNOSTIC, config-driven).
             # input/pdk/bridge/signoff_config.json declares the deck's
@@ -7923,6 +9321,8 @@ def _v1_6_605_remap_surviving_dlatch(
 import synth_frontend as _sf
 # Staged-adder-map recipe + post-run "did it actually bind?" verification.
 import adder_map_techmap as _amt
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
@@ -8179,8 +9579,48 @@ _ORFS_PNR_KNOB_PARAMS: Dict[str, Tuple[str, ...]] = {
     "PLACE_DENSITY_LB_ADDON": ("place_density",),
     # optimization inside whatever floorplan the flow chose.
     "TNS_END_PERCENT":        ("repair_tns_percent",),
+    # ── the AREA CEILING on what fixing timing may cost (step 32) ────────────
+    # Ported from LibreLane, whose `PL_RESIZER_*_MAX_UTIL_PCT` family is the
+    # timing-versus-area trade made ADJUSTABLE instead of hard-coded. Step 32
+    # repaired timing with NO area ceiling whatsoever before this: OpenROAD's
+    # `repair_timing` accepts `-max_utilization util` and we passed it never.
+    #
+    # MEASURED in the pinned image (`docker run --skip`, OpenROAD
+    # 26Q3-1535-g543c33894f), because the port has to match the TOOL and not a
+    # remembered flag list:
+    #   repair_timing [-setup] [-hold] [-recover_power percent_of_paths_with_slack]
+    #      ... [-max_utilization util] ...
+    #   repair_design [-max_wire_length ...] [-max_utilization util] ...
+    # There is ONE `-max_utilization` in OpenROAD, not two. LibreLane's two
+    # names are its own FLOW-level split — it passes the same tool flag with a
+    # different value to the `-setup` call and to the `-hold` call — so these
+    # two knobs map to two flow parameters that reach two invocations, which is
+    # exactly the shape asked for, arrived at from the tool.
+    #
+    # These are OPTIMIZATION-class knobs, not routing-resource-supply ones: they
+    # BOUND how much area the repair may consume inside whatever floorplan
+    # phase 3 chose for itself. They do not replace a self-calibrated quantity,
+    # so `_RF_ROUTING_SUPPLY_PARAMS` does not withhold them.
+    #
+    # NO DEFAULT IS INVENTED. Undeclared means the repair stays unbounded, i.e.
+    # today's behaviour exactly — and the audit trail then SAYS SO, which it
+    # could not before. A ceiling nobody declared would be a ruler fitted to the
+    # answer, and this repository already carries the worked example of why
+    # (`matrix_mutation_ledger.ART-POWER-FIGURES-X1000`).
+    "PL_RESIZER_SETUP_MAX_UTIL_PCT": ("resizer_setup_max_util_pct",),
+    "PL_RESIZER_HOLD_MAX_UTIL_PCT":  ("resizer_hold_max_util_pct",),
+    # SURPLUS slack spent on power, in the tool. `-recover_power` takes a
+    # PERCENT OF THE PATHS THAT HAVE SLACK, so it acts only where slack already
+    # exists; it is the one PPA move here that is not a trade. It has no
+    # LibreLane spelling, so the knob name is ours and it is declared the same
+    # way — and it stays OFF unless declared, for the reason in the paragraph
+    # above and one more: no full place-and-route run was made to measure its
+    # effect on this flow's own designs, so defaulting it ON would be shipping
+    # an unmeasured behaviour change to every design at once.
+    "RESIZER_RECOVER_POWER_PCT":     ("recover_power_pct",),
     "CTS_CLUSTER_SIZE":       ("cts_cluster_size",),
     "CTS_CLUSTER_DIAMETER":   ("cts_cluster_diameter",),
+    "CTS_DISTANCE_BETWEEN_BUFFERS": ("cts_distance_between_buffers",),
 }
 _ORFS_NUM_PNR_KNOBS = tuple(_ORFS_PNR_KNOB_PARAMS)
 
@@ -8542,6 +9982,7 @@ def _reference_flow_pnr_mapping(
          "repair_tns_percent":   int   | None,  # repair_timing -repair_tns
          "cts_cluster_size":     int   | None,  # clock_tree_synthesis
          "cts_cluster_diameter": float | None,  #   sink-clustering knobs
+         "cts_distance_between_buffers": float | None,  # H-tree hierarchy depth
          "withheld":             [{...}, ...],  # read, understood, NOT applied
          "notes":                [str, ...]}    # audit trail
 
@@ -8549,6 +9990,15 @@ def _reference_flow_pnr_mapping(
       * TNS_END_PERCENT → repair_timing -repair_tns (the percent of endpoints the
         setup repair chases — 100 = full TNS, not just the single worst path).
       * CTS_CLUSTER_SIZE / CTS_CLUSTER_DIAMETER → TritonCTS sink-clustering.
+      * CTS_DISTANCE_BETWEEN_BUFFERS → TritonCTS -distance_between_buffers, the
+        H-tree's own inter-buffer wire-length trigger. sink_clustering_size alone
+        caps LEAF fanout but does not bound how many leaf clusters the ROOT ends
+        up driving directly — MEASURED (spm x ihp-sg13g2): with clustering capped
+        at 8 sinks/leaf but no distance trigger, TritonCTS still built only a
+        2-level tree (root + leaf), so a design whose sink count exceeds the
+        per-buffer fanout limit squared just moves the same violation from leaf
+        to root. distance_between_buffers forces an intermediate buffered level
+        once accumulated wire length crosses it, independent of sink count.
 
     The ROUTING-RESOURCE-SUPPLY class (`_ORFS_WITHHELD_PNR_KNOBS`:
     CORE_UTILIZATION / FP_CORE_UTIL / PLACE_DENSITY / PLACE_DENSITY_LB_ADDON,
@@ -8580,7 +10030,10 @@ def _reference_flow_pnr_mapping(
     out: Dict[str, object] = {
         "place_density": None, "die_target_util": None,
         "repair_tns_percent": None, "cts_cluster_size": None,
-        "cts_cluster_diameter": None, "notes": notes,
+        "cts_cluster_diameter": None, "cts_distance_between_buffers": None,
+        "resizer_setup_max_util_pct": None, "resizer_hold_max_util_pct": None,
+        "recover_power_pct": None,
+        "notes": notes,
         "rejected": rejected, "withheld": withheld,
     }
     src = sources or {}
@@ -8638,6 +10091,7 @@ def _reference_flow_pnr_mapping(
     tns = _f("TNS_END_PERCENT")
     cluster_size = _f("CTS_CLUSTER_SIZE")
     cluster_diam = _f("CTS_CLUSTER_DIAMETER")
+    dist_buf = _f("CTS_DISTANCE_BETWEEN_BUFFERS")
 
     if tns is not None and 0.0 <= tns <= 100.0:
         out["repair_tns_percent"] = int(round(tns))
@@ -8647,6 +10101,37 @@ def _reference_flow_pnr_mapping(
     elif tns is not None:
         _reject("TNS_END_PERCENT", tns,
                 "outside the valid TNS-endpoint percentage range (0..100)")
+
+    # ── the step-32 area ceiling + the power-recovery move ───────────────
+    # A utilisation PERCENT: 0 is meaningless (nothing may be placed) and
+    # anything above 100 is not a ceiling, so the accepted range is (0, 100].
+    for _knob, _param, _flag in (
+            ("PL_RESIZER_SETUP_MAX_UTIL_PCT", "resizer_setup_max_util_pct",
+             "repair_timing -setup -max_utilization"),
+            ("PL_RESIZER_HOLD_MAX_UTIL_PCT", "resizer_hold_max_util_pct",
+             "repair_timing -hold -max_utilization")):
+        _v = _f(_knob)
+        if _v is not None and 0.0 < _v <= 100.0:
+            out[_param] = _v
+            notes.append(f"{_knob}={_v:g} -> {_flag} {_v:g}"
+                         f"{_src_suffix(_knob)}")
+        elif _v is not None:
+            _reject(_knob, _v,
+                    "outside the valid core-utilisation percentage range "
+                    "(0 < pct <= 100)")
+
+    _rp = _f("RESIZER_RECOVER_POWER_PCT")
+    if _rp is not None and 0.0 < _rp <= 100.0:
+        out["recover_power_pct"] = int(round(_rp))
+        notes.append(
+            f"RESIZER_RECOVER_POWER_PCT={_rp:g} -> repair_timing "
+            f"-recover_power {int(round(_rp))} (percent of paths WITH slack; "
+            f"spends surplus slack on power)"
+            f"{_src_suffix('RESIZER_RECOVER_POWER_PCT')}")
+    elif _rp is not None:
+        _reject("RESIZER_RECOVER_POWER_PCT", _rp,
+                "outside the valid percent-of-paths-with-slack range "
+                "(0 < pct <= 100)")
 
     if cluster_size is not None and cluster_size > 0:
         out["cts_cluster_size"] = int(round(cluster_size))
@@ -8666,7 +10151,38 @@ def _reference_flow_pnr_mapping(
     elif cluster_diam is not None:
         _reject("CTS_CLUSTER_DIAMETER", cluster_diam,
                 "CTS sink-cluster max diameter must be > 0")
+    if dist_buf is not None and dist_buf > 0:
+        out["cts_distance_between_buffers"] = dist_buf
+        notes.append(
+            f"CTS_DISTANCE_BETWEEN_BUFFERS={dist_buf:g} -> clock_tree_synthesis "
+            f"-distance_between_buffers {dist_buf:g}"
+            f"{_src_suffix('CTS_DISTANCE_BETWEEN_BUFFERS')}")
+    elif dist_buf is not None:
+        _reject("CTS_DISTANCE_BETWEEN_BUFFERS", dist_buf,
+                "CTS inter-buffer distance must be > 0")
     return out
+
+
+def _eco_resizer_bounds(project: Path) -> Dict[str, object]:
+    """The step-32 resizer bounds the design DECLARED — `{}`-shaped kwargs for
+    `_build_eco_repair_tcl`, every value `None` when nothing declared one.
+
+    Single-sourced through `_reference_flow_pnr_mapping`: it does NOT re-read or
+    re-decide anything, so the audit report and the emitted deck can never
+    disagree about which knob was adopted. Never raises — a project with no
+    staged reference flow, or an unreadable one, yields three `None`s and the
+    ECO deck is emitted exactly as it was before this existed.
+    chip-AGNOSTIC."""
+    try:
+        m = _reference_flow_pnr_mapping(_reference_flow_pnr_knobs(project))
+    except Exception:
+        return {"setup_max_util_pct": None, "hold_max_util_pct": None,
+                "recover_power_pct": None}
+    return {
+        "setup_max_util_pct": m.get("resizer_setup_max_util_pct"),
+        "hold_max_util_pct": m.get("resizer_hold_max_util_pct"),
+        "recover_power_pct": m.get("recover_power_pct"),
+    }
 
 
 def _reference_flow_declared_die_util(project: Path) -> Optional[float]:
@@ -9042,9 +10558,17 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         "adopted": adopted,
         "withheld": withheld,
         "rejected": rejected,
-        "applied": {k: mapping[k] for k in
-                    ("place_density", "die_target_util", "repair_tns_percent",
-                     "cts_cluster_size", "cts_cluster_diameter")},
+        # DERIVED FROM THE VOCABULARY, not restated. This was a literal tuple
+        # of six parameter names, and `test_withheld_class_is_derived_from_the_
+        # knob_vocabulary` already asserts that every parameter the vocabulary
+        # names is one the audit really reports — so the literal was a second
+        # list that could drift away from the first, which is the failure mode
+        # `_ORFS_PNR_KNOB_PARAMS`' own header warns about. Adding the step-32
+        # resizer knobs made the drift real: the vocabulary grew and this tuple
+        # did not, and a knob would have been adopted with no line in the audit
+        # report. Deriving it makes that unrepresentable.
+        "applied": {k: mapping[k] for k in sorted(
+            {p for params in _ORFS_PNR_KNOB_PARAMS.values() for p in params})},
         "notes": list(mapping["notes"]),         # type: ignore[arg-type]
     }
 
@@ -9589,11 +11113,11 @@ def _stale_rtl_vs_netlist(netlist: Path, rtl_dir: Path) -> List[str]:
     return stale
 
 
-def _signoff_regen(artifact: Path, layout: Path) -> bool:
-    """Must this phase-3 SIGN-OFF artefact be (re)produced from ``layout``?
+def _signoff_regen(artifact: Path, *layouts: Path) -> bool:
+    """Must this phase-3 SIGN-OFF artefact be (re)produced from ``layouts``?
 
-    True when it is MISSING **or** STALE — i.e. it exists but predates the
-    layout it claims to describe, so it characterises a DIFFERENT design.
+    True when it is MISSING **or** STALE — i.e. it exists but predates one of
+    the inputs it claims to describe, so it characterises a DIFFERENT design.
 
     WHY: `_stale_rtl_vs_netlist` above fixed exactly this disease at the SYNTH
     boundary ("the flow placed-and-routed the PREVIOUS design and reported a
@@ -9627,15 +11151,41 @@ def _signoff_regen(artifact: Path, layout: Path) -> bool:
     FAILS CLOSED, like `_stale_rtl_vs_netlist`: if either mtime cannot be read,
     regenerate rather than trust an unprovable cache. Chip-AGNOSTIC — pure mtime
     comparison, no design/PDK/corner literal.
+
+    MULTI-SOURCE. Several sign-off artefacts are derived from more than one
+    input — Step 27's crosstalk report is computed from the extracted SPEF's
+    coupling capacitances as well as from the routed DEF — and such an artefact
+    is stale when ANY ONE of its inputs is newer than it. The predicate
+    therefore takes a VARIADIC source list and answers "regenerate" if any
+    source out-dates the artefact.
+
+    The widening is behaviour-preserving for the single-source call sites that
+    already exist. With exactly one ``layout`` the operation sequence is
+    identical to the pre-widening body — same order, same short-circuits, same
+    `except OSError` scope — so `not layout.is_file() -> continue -> return
+    False` is the same answer, by the same route, as the pre-widening
+    `return False`. Measured exhaustively rather than argued: over the 16
+    filesystem-reachable (artifact, layout) states in
+    {absent, older, equal, newer}^2 the widened and pre-widened predicates
+    agree 16/16; over a mock enumeration that also reaches the TOCTOU states a
+    real filesystem cannot (`is_file()` true but `stat()` raising, `is_file()`
+    itself raising) they agree 36/36.
+
+    ZERO sources reduces to the existence gate: nothing can be stale against an
+    empty source list, so an existing artefact stands.
     """
     try:
         if not artifact.is_file():
             return True
-        if not layout.is_file():
-            # No layout to compare against: leave an existing artefact alone
-            # (nothing downstream can be re-derived without the layout anyway).
-            return False
-        return artifact.stat().st_mtime < layout.stat().st_mtime
+        for layout in layouts:
+            if not layout.is_file():
+                # No layout to compare against: leave an existing artefact
+                # alone (nothing downstream can be re-derived without the
+                # layout anyway).
+                continue
+            if artifact.stat().st_mtime < layout.stat().st_mtime:
+                return True
+        return False
     except OSError:
         return True
 
@@ -10306,6 +11856,14 @@ _PNR_CHECKPOINT_STAGES = [
     ("routed_preantenna.def","post_route"),
 ]
 
+# The ONLY stage a RESUME may start from — see `_pnr_resume_after_fatal_signal`.
+# `_build_pnr_resume_tcl_text` deletes floorplan..detailed_route wholesale on
+# the premise that the checkpoint already contains that work. Start it from an
+# earlier checkpoint and the premise is false: the post-route tail runs over a
+# design that was never routed, `write_def` succeeds, and the step signs off a
+# DEF with no routing in it. Anything before this stage is not a resume point.
+_PNR_ROUTE_CHECKPOINT_STAGE = "post_route"
+
 
 def _pnr_timeout_s(cells: int) -> int:
     """ORGANIC #548 (a) — size ESTIMATE from cell count. RETIRED (v1.3.47) as
@@ -10390,11 +11948,33 @@ def _pnr_last_checkpoint_file(out_dir: Path) -> Optional[Path]:
 # WHAT IS AND IS NOT A SIGNAL DEATH. POSIX shells report a signal-terminated
 # child as 128+N. Only N in 1..NSIG-1 is a real signal, which bounds the
 # encoding to 129..128+NSIG-1 (192 on Linux). The runner's own kill sentinels
-# (RC_CEILING 124, RC_ABORTED 198, RC_STALLED 199) are deliberately outside
-# that window and are excluded explicitly as well, so a watchdog kill can
-# never be mistaken for a tool crash.
+# must never land inside that window, or a watchdog kill would be reported as
+# an OpenROAD segfault and send the next reader hunting a tool bug that is not
+# there.
+#
+# THE EXCLUSION IS READ FROM `_watchdog`, NOT COPIED HERE. It used to be the
+# hand-written triple `{RC_CEILING, RC_ABORTED, RC_STALLED}`, and that set was
+# BOTH inert and incomplete. Inert: with NSIG=65 the window is 129..192, and
+# 124 / 198 / 199 all sit outside it, so the membership test never changed a
+# single answer — deleting the whole frozenset left every test green, which is
+# the definition of a guard that only looks protective. Incomplete: a FOURTH
+# sentinel added to `_watchdog` later would not have been in the copy, and if
+# it landed in 129..192 the exclusion it needed would silently not exist.
+# Deriving the set from the module that OWNS the sentinels fixes both: the
+# guard now covers every sentinel there will ever be, and it is REACHABLE — a
+# sentinel inside the window IS excluded, which is a state a test can create
+# and this file's tests do.
 _RC_SIGNAL_BASE = 128
-_RC_NOT_A_SIGNAL = frozenset({_wd.RC_CEILING, _wd.RC_ABORTED, _wd.RC_STALLED})
+
+
+def _runner_kill_sentinels() -> FrozenSet[int]:
+    """Every exit status the RUNNER uses to say that IT killed the tool.
+
+    Read from `_watchdog` at call time so the set cannot drift from the
+    sentinels it is supposed to cover. Chip-AGNOSTIC: module introspection."""
+    return frozenset(
+        v for n, v in vars(_wd).items()
+        if n.startswith("RC_") and type(v) is int)          # noqa: E721
 
 
 def _fatal_signal_from_rc(rc: int) -> Optional[int]:
@@ -10403,7 +11983,7 @@ def _fatal_signal_from_rc(rc: int) -> Optional[int]:
     None for 0, for an ordinary non-zero exit (a tool that returned an error
     code), and for every runner kill sentinel. Chip-AGNOSTIC: arithmetic on
     the exit status only."""
-    if not isinstance(rc, int) or rc in _RC_NOT_A_SIGNAL:
+    if not isinstance(rc, int) or rc in _runner_kill_sentinels():
         return None
     sig = rc - _RC_SIGNAL_BASE
     if 1 <= sig < int(getattr(signal, "NSIG", 65)):
@@ -10455,7 +12035,8 @@ _PNR_STAGE_ORDER = (
     "floorplan", "placement", "cts", "hold_repair",
     "global_route", "detailed_route",
     "postroute_drv_repair", "postroute_antenna_repair",
-    "postroute_drv_reconverge", "postroute_fill",
+    "postroute_drv_reconverge", "postroute_antenna_reconverge",
+    "postroute_fill",
     "write_routed", "postroute_setup_repair_estimate",
 )
 
@@ -10470,6 +12051,60 @@ def _pnr_stage_from_log(log_text: str) -> Optional[str]:
                          log_text or "", re.M):
         last = m.group(1)
     return last
+
+
+# ── WHERE IN pnr.tcl A STAGE SITS RELATIVE TO THE SIGN-OFF WRITES ──────────
+# Not every crash is a crash BEFORE the artifacts were written, and treating
+# every one as if it were produced the exact inversion of this fix: a crash in
+# the END-OF-FLOW estimate block — which the template places AFTER `write_def
+# routed.def` / `write_def <top>.def` / `write_verilog`, and whose own comment
+# says it "never modifies routed.def/<top>.def/<top>_pnr.v" — was reported as
+# "a <top>.def is present but CANNOT be from this session — it predates the
+# crash", and that false claim was written into the durable attestation. It is
+# the mirror image of the bug this file exists to fix.
+#
+# The relation is MEASURED off the emitted script, not asserted from a stage
+# table: a stage's breadcrumb is printed when the stage BEGINS, so every line
+# above that `puts` already executed. A stage whose `puts` sits below the LAST
+# sign-off write therefore began with those artifacts already on disk.
+#
+# `write_def` / `write_verilog` only — anchored at line start. The estimate
+# block emits its own `catch {report_checks > .../sta_spef_repaired.rpt}`,
+# which the template explicitly marks NON-authoritative; matching redirections
+# would put the anchor INSIDE the estimate block and make this predicate inert.
+_PNR_SIGNOFF_WRITE_RE = re.compile(
+    r"^[ \t]*(?:write_def|write_verilog)\b", re.M)
+_PNR_STAGE_PUTS_RE = re.compile(
+    rf'^[ \t]*puts\s+"{re.escape(_PNR_STAGE_MARKER)}\s*([^"\s]+)"', re.M)
+
+
+def _pnr_stages_after_signoff_writes(pnr_tcl_text: str) -> FrozenSet[str]:
+    """The stages whose breadcrumb pnr.tcl prints AFTER its last sign-off write.
+
+    FAIL-SAFE BY CONSTRUCTION: an empty script, an unreadable one, or one with
+    no `write_def`/`write_verilog` at all returns the EMPTY set, i.e. "no stage
+    is known to run after the writes" — which leaves every crash on the
+    conservative refuse-the-DEF path this predicate is here to narrow, never
+    widens one onto the sign-off path. Chip-AGNOSTIC: Tcl text offsets only."""
+    text = pnr_tcl_text or ""
+    last_write = -1
+    for m in _PNR_SIGNOFF_WRITE_RE.finditer(text):
+        last_write = m.start()
+    if last_write < 0:
+        return frozenset()
+    return frozenset(m.group(1)
+                     for m in _PNR_STAGE_PUTS_RE.finditer(text)
+                     if m.start() > last_write)
+
+
+# The artifacts pnr.tcl's own END-OF-FLOW comment names as the ones the
+# estimate block must never modify, plus the authoritative STA report it
+# declares itself to run after. A "the artifacts are complete" verdict states
+# a fact about the filesystem, so it is MEASURED against these, never inferred
+# from the stage name alone.
+def _pnr_signoff_artifacts(out_dir: Path, top: str) -> List[Path]:
+    return [out_dir / f"{top}.def", out_dir / "routed.def",
+            out_dir / f"{top}_pnr.v", out_dir / "sta.rpt"]
 
 
 _DRT_COMPLETE_RE = re.compile(r"\[INFO DRT-0198\]\s*Complete detail routing")
@@ -10494,19 +12129,24 @@ def _tool_reported_signal(log_text: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def _pnr_fatal_signal_diagnosis(rc: int, log_text: str,
-                                out_dir: Path) -> Optional[Dict[str, Any]]:
+def _pnr_fatal_signal_diagnosis(rc: int, log_text: str, out_dir: Path,
+                                pnr_tcl_text: str = ""
+                                ) -> Optional[Dict[str, Any]]:
     """Classify a PnR exit as a TOOL CRASH and describe it, or return None.
 
-    The returned record answers the three questions the bare `rc=139` did not:
-    which signal killed the tool, which stage it was in, and whether routing
-    had already finished. Chip-AGNOSTIC: exit status + tool markers + file
-    existence; no design, PDK or vendor literal."""
+    The returned record answers the four questions the bare `rc=139` did not:
+    which signal killed the tool, which stage it was in, whether routing had
+    already finished, and whether the sign-off artifacts had ALREADY BEEN
+    WRITTEN when the stage that died began. `pnr_tcl_text` is the script that
+    was actually run; omitting it makes the last answer False, which is the
+    conservative reading (the DEF is refused). Chip-AGNOSTIC: exit status +
+    tool markers + file existence; no design, PDK or vendor literal."""
     sig = _fatal_signal_from_rc(rc)
     if sig is None:
         return None
     stage = _pnr_stage_from_log(log_text)
     ckpt = _pnr_last_checkpoint_file(out_dir)
+    post_signoff = _pnr_stages_after_signoff_writes(pnr_tcl_text)
     return {
         "finding": "PNR_TOOL_FATAL_SIGNAL",
         "rc": rc,
@@ -10516,6 +12156,7 @@ def _pnr_fatal_signal_diagnosis(rc: int, log_text: str,
         "stage": stage,
         "stage_is_nonfatal_by_template": (stage in _PNR_NONFATAL_STAGES
                                           if stage else False),
+        "crashed_after_signoff_writes": bool(stage and stage in post_signoff),
         "detail_route_completed": _detail_route_completed(log_text),
         "checkpoint": str(ckpt) if ckpt else None,
         "checkpoint_stage": _pnr_last_checkpoint(out_dir),
@@ -10540,7 +12181,21 @@ def _pnr_fatal_signal_message(diag: Dict[str, Any]) -> str:
     lead += (f" (rc={diag['rc']} = 128+{diag['signal']}). A Tcl `catch` "
              f"cannot trap a signal: the process dies, the interpreter never "
              f"reaches the failure branch, and every line after the crashing "
-             f"one — including `write_def routed.def` — is never executed.")
+             f"one is never executed.")
+    # WHICH lines those are is the whole question, and answering it wrongly is
+    # how this message came to state the exact opposite of the truth for a
+    # crash in the END-OF-FLOW estimate block. The stage breadcrumb is printed
+    # when the stage BEGINS, so a stage that pnr.tcl puts BELOW its last
+    # `write_def`/`write_verilog` began with those artifacts already written.
+    if diag.get("crashed_after_signoff_writes"):
+        lead += (f" {stage} begins BELOW the last `write_def`/`write_verilog` "
+                 f"in pnr.tcl, so routed.def, the final DEF and the gate "
+                 f"netlist were all written BEFORE it started: they are from "
+                 f"THIS session, and the crash cost only the work of that "
+                 f"stage.")
+    else:
+        lead += (" Everything below the crashing line — `write_def "
+                 "routed.def` included — did NOT run.")
     ck = diag.get("checkpoint")
     if ck:
         lead += (f" Last completed checkpoint ({diag.get('checkpoint_stage')}"
@@ -10774,6 +12429,28 @@ def _producer_cache_valid_for(out_dir: Path, kind: str) -> Tuple[bool, str]:
     cur_v, cur_r = now["plugin_version"], now["recipe_sha256"]
     rec = _read_producer_identity(out_dir, kind)
 
+    # vibe-ic#1097 S6 — `--force-step <kind>`. ORFS ships `do-2_1_floorplan`
+    # beside `2_1_floorplan` (`flow/Makefile:366-405`) so an external caller can
+    # bypass make's UP-TO-DATE judgement and execute the stage anyway; without
+    # it a close-loop repair re-runs the whole phase to re-test one step.
+    #
+    # WIRED HERE, AND ONLY HERE. This predicate is the ONE freshness authority
+    # the three cache sites consult (:38958 synth, :39053 pnr, :39189 gds) and
+    # each ANDs its answer into the reuse decision, so denying here reaches all
+    # three without touching a call site.
+    #
+    # FRESHNESS ONLY. It does NOT touch `step_preflight`'s input contract: that
+    # answers "does this step have what the flow says it reads", which is not
+    # make's question, and `test_there_is_no_switch_that_turns_a_refusal_into_
+    # a_pass` bans exactly the switch that would weaken it. Forcing means "do
+    # the work again", never "do it blind" — see `step_force`'s docstring.
+    try:
+        import step_force as _sf  # noqa: PLC0415
+        if _sf.is_forced(kind):
+            return (False, _sf.disclosure(kind))
+    except Exception:  # noqa: BLE001 — a missing helper must not break reuse
+        pass
+
     def _deny_unless_forced(msg: str) -> Tuple[bool, str]:
         if os.environ.get(_STALE_PRODUCER_ENV) == "1":
             # The reuse still happens, but it can never LOOK fresh: the token
@@ -10829,10 +12506,13 @@ def _extract_overutil_pct(log_text: str) -> Optional[float]:
 
 # ORGANIC #585 — TritonRoute can run out of iterations and COMPLETE with
 # violations remaining (rc=0, `[INFO DRT-0199] Number of violations = N`).
-_RE_DRT_0199 = re.compile(
-    r"\[INFO DRT-0199\]\s*Number of violations\s*=\s*(\d+)")
-_RE_DRT_COMPLETING = re.compile(
-    r"Completing\s+100%\s+with\s+(\d+)\s+violations?")
+# The grammar now lives ONCE in `_signoff_drc_format` so the sign-off audit's
+# plain-text DRC reader and this reader cannot drift apart (they used to:
+# re.search-first there vs findall-last here). These names alias the shared
+# compiled patterns, so every DRT trajectory read in this file — here and in
+# `_drt_violation_trajectory` — goes through the same grammar.
+_RE_DRT_0199 = _sdf.RE_DRT_0199
+_RE_DRT_COMPLETING = _sdf.RE_DRT_COMPLETING
 
 
 def _drt_final_violations(log_text: str) -> Optional[int]:
@@ -10844,18 +12524,43 @@ def _drt_final_violations(log_text: str) -> Optional[int]:
     geometry that actually ships — is what gets judged. A route that
     "completes" with N>0 is NOT converged: streaming its GDS downstream
     recasts one congestion root-cause as hundreds of fake DRC/LVS/STA
-    findings. chip-AGNOSTIC: OpenROAD log grammar only."""
-    if not log_text:
-        return None
-    counts = _RE_DRT_0199.findall(log_text)
-    if not counts:
-        counts = _RE_DRT_COMPLETING.findall(log_text)
-    if not counts:
-        return None
+    findings. chip-AGNOSTIC: OpenROAD log grammar only.
+
+    Delegates to the shared `_signoff_drc_format.router_iter_last_count`
+    so this reader and the sign-off audit read one grammar by construction."""
+    return _sdf.router_iter_last_count(log_text)
+
+
+#: The router's own end-of-route DRC count, under the metrics stage the PnR
+#: Tcl opens. MEASURED equal to the last `[INFO DRT-0199]` on a real route
+#: (trajectory 59/12/10/0, metric 0), which is what makes the log parser a
+#: cross-check of the SAME quantity rather than a second opinion.
+_KEY_DRT = "detailedroute__route__drc_errors"
+
+
+def _drt_reading(out_dir: Path, log_text: str):
+    """(reconciliation, raw tool metrics) for the route DRC count.
+
+    PURE — a directory and a string; runs no tool and enters no container, so
+    the three acceptance cases (agree / disagree / no metric) can be built
+    directly instead of inferred from a full PnR.
+    """
+    prose = _drt_final_violations(log_text)
+    if prose is None:
+        lp = out_dir / "openroad.log"
+        if lp.is_file():
+            prose = _drt_final_violations(lp.read_text(errors="ignore"))
+    metrics: Dict[str, Any] = {}
+    mf = out_dir / _PNR_METRICS
     try:
-        return int(counts[-1])
-    except ValueError:
-        return None
+        loaded = json.loads(mf.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            metrics = loaded
+    except (OSError, ValueError):
+        metrics = {}
+    raw = metrics.get(_KEY_DRT)
+    metric = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+    return _sm.reconcile("route__drc_errors", metric, prose), metrics
 
 
 def _compute_resized_die(die_w: int, die_h: int,
@@ -10899,21 +12604,83 @@ _AUTO_DIE_DEFAULT_UTIL = 0.40        # internal safety fallback when a util is u
 _AUTO_DIE_TARGET_UTIL = 0.25         # routing-headroom target for --die-um auto
 
 
-def _parse_site_area_um2(cell_lef_text: str) -> Optional[float]:
-    """Parse the placement SITE's area (µm²) from a cell LEF's
-    `SITE <name> ... SIZE w BY h ;`. Returns w*h, or None if absent/malformed.
-    chip-AGNOSTIC: every std-cell LEF declares its row site geometry."""
+def _parse_site_area_um2(cell_lef_text: str,
+                         site_name: str = "") -> Optional[float]:
+    """Parse the placement SITE's area (µm²) from a cell LEF's SITE DEFINITION
+    block (`SITE <name> … SIZE w BY h ; END <name>`). Returns w*h, or None if
+    absent/malformed. chip-AGNOSTIC: every std-cell LEF declares its row site.
+
+    A cell LEF holds TWO kinds of `SITE` token and only one of them is a
+    definition:
+
+      - the definition   ``SITE unithd``  (bare, then SYMMETRY/CLASS/SIZE/END)
+      - a reference      ``SITE unithd ;``  — one inside EVERY macro
+
+    The previous pattern was ``SITE .*? SIZE w BY h ;`` with DOTALL, which
+    matches the FIRST `SITE` token anywhere and then the first `SIZE` after
+    it. In a LEF whose macros precede the site definition, that first token is
+    a macro's SITE REFERENCE and the `SIZE` it then captures is THAT MACRO's
+    footprint, not the site's. MEASURED on sky130A
+    ``sky130_fd_sc_hd.lef``: it returned 4.14 x 2.72 = 11.26 µm² (a cell) in
+    place of the real ``SITE unithd`` 0.46 x 2.72 = 1.2512 µm² — 9x high,
+    which propagates straight into ``--die-um auto`` as a 9x die AREA.
+
+    Anchor on the definition instead: a bare ``SITE <name>`` line, bounded by
+    its ``END <name>``.
+
+    SELECTION, in order:
+      1. the site literally NAMED by `site_name`. That is the PDK's OWN
+         declared row site, and it is what `initialize_floorplan -site <name>`
+         will actually build rows from — so it is the only choice that keeps
+         the die MODEL and the FLOORPLAN talking about the same geometry. A
+         PDK may declare a double-height CLASS CORE site next to the unit one
+         (sky130A declares `unithd` AND `unithddbl`); picking on declaration
+         order alone sizes the die for rows the floorplan never builds.
+      2. else the first ``CLASS CORE`` site (the placement row site) — a
+         pad/corner site declared first is not the row site.
+      3. else the first site that parses at all.
+
+    ANCHOR STRICTNESS — both bounds tolerate a trailing ``\\r`` (a vendor LEF
+    written with CRLF must not read as "declares no site", which would route
+    the die to the fallback CONSTANT), and the NAME excludes ``;`` so a macro's
+    reference written ``SITE unithd;`` cannot pass as a definition: ``\\S+``
+    would swallow the semicolon into the name, no ``END unithd;`` would then
+    bound the block, and it would run on into the next MACRO and hand back
+    THAT macro's footprint — the very defect above, in another spelling.
+    """
     if not isinstance(cell_lef_text, str) or not cell_lef_text:
         return None
-    m = re.search(r"\bSITE\b.*?\bSIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;",
-                  cell_lef_text, re.DOTALL | re.IGNORECASE)
-    if not m:
-        return None
-    try:
-        w, h = float(m.group(1)), float(m.group(2))
-    except ValueError:
-        return None
-    return w * h if (w > 0 and h > 0) else None
+    named = core = first = None
+    want = (site_name or "").strip().lower()
+    for m in re.finditer(r"^[ \t]*SITE[ \t]+([^\s;]+)[ \t\r]*$",
+                         cell_lef_text, re.MULTILINE | re.IGNORECASE):
+        name = m.group(1)
+        blk = cell_lef_text[m.end():]
+        end = re.search(rf"^[ \t]*END[ \t]+{re.escape(name)}[ \t\r]*$",
+                        blk, re.MULTILINE | re.IGNORECASE)
+        if end:
+            blk = blk[:end.start()]
+        sm = re.search(r"\bSIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;",
+                       blk, re.IGNORECASE)
+        if not sm:
+            continue
+        try:
+            w, h = float(sm.group(1)), float(sm.group(2))
+        except ValueError:
+            continue
+        if not (w > 0 and h > 0):
+            continue
+        area = w * h
+        if want and name.lower() == want and named is None:
+            named = area
+        if (core is None
+                and re.search(r"\bCLASS\s+CORE\s*;", blk, re.IGNORECASE)):
+            core = area
+        if first is None:
+            first = area
+    if named is not None:
+        return named
+    return core if core is not None else first
 
 
 def _auto_die_side_um(cell_count: int, util_frac: float,
@@ -11625,38 +13392,67 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
     except Exception:
         nl = ""
     cells = _count_placed_cells_from_netlist(nl)
+    # The PDK's OWN declared row site — the same name that is handed to
+    # `initialize_floorplan -site` below, so the die model measures the site
+    # the floorplan will actually build rows from.
+    _site_name = str(getattr(pdk, "site", "") or "")
     site_area = None
     try:
         site_area = _parse_site_area_um2(
-            Path(pdk.cell_lef).read_text(errors="ignore"))
+            Path(pdk.cell_lef).read_text(errors="ignore"), _site_name)
     except Exception:
         site_area = None
+    if site_area is None and container:
+        # TWO defects kept this branch dead on every containerised run:
+        #
+        # (1) the read cannot succeed — the PDK ships INSIDE the EDA image, so
+        #     `pdk.cell_lef` is an in-container path and the host-side
+        #     `read_text` above always raises FileNotFoundError (MEASURED on
+        #     sky130A: cell_lef=/foss/pdks/sky130A/.../sky130_fd_sc_hd.lef,
+        #     `is_file()` on the host = False);
+        # (2) the CELL lef is the wrong file — it carries only SITE
+        #     REFERENCES (`SITE unithd ;`, one per macro). The SITE DEFINITION
+        #     that owns the row geometry lives in the TECH lef (MEASURED on
+        #     sky130A: 0 site definitions in the cell lef, 2 in
+        #     `techlef/sky130_fd_sc_hd__nom.tlef`).
+        #
+        # Read through the container, TECH lef first (where the definition
+        # belongs), then the cell lef for PDKs that inline it there.
+        for _lef in (getattr(pdk, "tech_lef", "") or "", pdk.cell_lef or ""):
+            if not _lef:
+                continue
+            try:
+                _rc, _out, _ = _docker_exec(
+                    container, f"cat {shlex.quote(str(_lef))}", timeout=120)
+            except Exception:
+                continue
+            if _rc == 0 and _out:
+                site_area = _parse_site_area_um2(_out, _site_name)
+                if site_area:
+                    break
     # DEGRADE LOUDLY, NEVER SILENTLY.
     #
-    # `pdk.cell_lef` is an IN-CONTAINER path (the PDK lives in the EDA image,
-    # not on the host), so on a containerised run this host-side `read_text`
-    # raises FileNotFoundError, the `except` above swallows it, and every
-    # design silently falls back to `_AUTO_DIE_FALLBACK_CELL_UM2`. The log line
-    # then prints `avg_cell=<fallback>µm²` in exactly the format it uses for a
-    # MEASURED value, so nothing downstream — and no reader — can tell that the
-    # die was sized from a constant rather than from this PDK.
+    # The fallback prints `avg_cell=<constant>µm²` in exactly the format it
+    # uses for a MEASURED value, so without a source label nothing downstream —
+    # and no reader — can tell that the die was sized from a constant rather
+    # than from this PDK.
     #
     # Measured consequence on one real cell: the fallback over-estimated the
     # average cell area by 5.3x against the design's OWN post-synthesis report,
     # so `--die-um auto` produced a die 5.3x too large in area and OpenROAD
     # reported `Effective utilization: 0.064` against a 0.25 target.
     #
-    # This change does NOT alter the number or any die produced today — it only
-    # makes the estimate SAY which of its two sources it came from, so a
-    # mis-sized die is attributable instead of invisible.
+    # The two reads above (host, then through the container) are what make the
+    # measured branch REACHABLE; this label is what makes the other branch
+    # ADMIT it is not a measurement.
     _avg_cell_src = "site-LEF"
     if site_area:
         avg_cell = site_area * _AUTO_DIE_AVG_SITES_PER_CELL
     else:
         avg_cell = _AUTO_DIE_FALLBACK_CELL_UM2
-        _avg_cell_src = ("FALLBACK CONSTANT — the site could not be read from "
-                         "this PDK's cell LEF, so the die is NOT sized from "
-                         "this process; verify the die/utilization")
+        _avg_cell_src = ("FALLBACK CONSTANT — no SITE definition was found in "
+                         "this PDK's tech LEF or cell LEF, so the die is NOT "
+                         "sized from this process; verify the die/utilization")
     # die-util FIDELITY: honor the design's own declared core density; else the
     # routing-headroom default. `util` (placement) is deliberately unused here.
     # Precedence: L9 generated constraint (design's own authored target) > the
@@ -11752,9 +13548,11 @@ def _compute_downsized_die(die_w: int, die_h: int,
 # optimization iterations. The empirically-clean routing util is design-
 # dependent (a high-fanout crypto core routes only at a very sparse util; a
 # clean datapath converges much denser), so a single fixed target cannot serve
-# every design. This loop LOOSENS an auto-sized die one rung at a time toward a
-# floor util when — and ONLY when — detailed route shows a genuine
-# non-convergence signal, re-running bounded to the ladder length.
+# every design. This loop LOOSENS an auto-sized die one rung at a time when —
+# and ONLY when — detailed route shows a genuine non-convergence signal.
+# #914: it re-runs until its own MEASUREMENTS stop improving, not until an
+# authored list runs out; the hard bounds are the rung budget and the die cap,
+# and each of them says so by name when it is the thing that fired.
 #
 # §4.05 (LOAD-BEARING honesty):
 #   * Fires ONLY when `--die-um auto` OWNS the geometry — an explicit WxH is the
@@ -11764,7 +13562,10 @@ def _compute_downsized_die(die_w: int, die_h: int,
 #     NOT trigger a loosen. The trigger is a PLATEAU/CLIMB at the trajectory
 #     tail or a single-iteration finish that never improved.
 #   * Bounded + strictly monotone: each rung is a strictly LOWER util (strictly
-#     LARGER die), stopping at the floor rung and never above the die cap.
+#     LARGER die), never above the die cap. #914 — what STOPS it is a measured
+#     stall (`_loosen_stall_streak`), the rung budget, or the die cap, and the
+#     emitted reason distinguishes the three; the authored ladder's last rung
+#     is where the SCHEDULE ends, which is not the same fact.
 #   * Every loosen step is DISCLOSED in the pnr result (`resize_history`,
 #     `direction="loosen"`), exactly like the existing upsize/downsize records.
 #   * This is a DETERMINISTIC mechanism, not a proven convergence improvement
@@ -11772,20 +13573,57 @@ def _compute_downsized_die(die_w: int, die_h: int,
 #     design's violations can only be confirmed by a LIVE PnR run. The helpers
 #     below decide + resize honestly; they make no empirical convergence claim.
 # chip-AGNOSTIC: pure OpenROAD-log grammar + geometry math, no chip literal.
-_ROUTE_LOOSEN_UTIL_FLOOR = 0.12      # never target a util below this floor
+# The last AUTHORED rung. #914 — this is where the hand-written schedule ends,
+# NOT a safety limit: past it `_loosen_ladder_util` continues at the schedule's
+# own ratio, still bounded by `_ROUTE_LOOSEN_MAX_RUNGS` and the die cap. The
+# comment here used to read "never target a util below this floor", which
+# stopped being true the moment the ladder was allowed to keep going.
+_ROUTE_LOOSEN_UTIL_FLOOR = 0.12      # last authored rung (not a hard limit)
 # Ladder head is the auto-die's own routing-headroom target; each rung is
 # strictly looser (lower util → larger die), ending at the floor rung.
 _ROUTE_LOOSEN_UTIL_LADDER: Tuple[float, ...] = (
     _AUTO_DIE_TARGET_UTIL, 0.18, _ROUTE_LOOSEN_UTIL_FLOOR)
+# ── #914 — the ladder terminates on EVIDENCE, and every terminator names
+# itself ─────────────────────────────────────────────────────────────────────
+# The authored ladder above is a STARTING SCHEDULE, not a termination criterion.
+# Until #914 the only thing that ended the ladder was running off the end of
+# that list, and the decline it emitted was `loosen_ladder_exhausted` with
+# `proposed_util=None` — a terminal-sounding pair that says "no automatic
+# remedy remains" when what was true was "the authored list ended". Measured:
+# the ladder stopped at a 138x138um die against a 2000um cap, and the residual
+# series it had measured (5 -> 2 -> 3) played no part in the decision at all.
+# It would have stopped in the same place for 50 -> 20 -> 8 and for 9 -> 9 -> 9.
+#
+# A rung bound cannot distinguish "more die area buys nothing" from "the budget
+# ran out". So:
+#   * past the authored floor the ladder CONTINUES at the authored ladder's OWN
+#     final ratio (`_loosen_ladder_util` — derived from the schedule, never a
+#     second hand-typed constant, so the two cannot drift apart);
+#   * it stops on a measured STALL, or on a bound that SAYS it is a bound.
+# The thing that must never grow without limit is the DIE, and that is still
+# capped by `_DEFAULT_DIE_MAX_UM` and still reports itself when it fires.
+_ROUTE_LOOSEN_MAX_RUNGS = 6
+# A stall needs `_ROUTE_LOOSEN_STALL_PATIENCE` consecutive rungs that beat
+# NOTHING measured before them. Patience is LOAD-BEARING and is set from the
+# filed run: its residuals went 5 -> 2 -> 3, so a criterion that stopped on the
+# first non-improving rung would have stopped that run in exactly the same
+# place, only with a different word — and the controlled re-run at a much
+# larger die reached 0 violations. The residual count is a noisy PROXY for
+# routability across a die change; one non-improving rung is noise, two
+# consecutive is a signal.
+_ROUTE_LOOSEN_STALL_PATIENCE = 2
 # Preserve the historical over-util upsize budget (initial run + up to 3 grows)
 # EXACTLY, independent of the loop's total iteration count.
 _PNR_UPSIZE_RETRIES = 3
 # Total retry-loop iterations: initial run + up-to-3 upsizes + up-to-1 downsize
-# + up-to (ladder-1) loosen steps. Each mutation path is independently bounded
-# (upsize by the die cap + `_PNR_UPSIZE_RETRIES`; downsize by a one-shot flag;
-# loosen by the ladder length), so the loop always terminates well within this.
+# + up-to `_ROUTE_LOOSEN_MAX_RUNGS` loosen steps. Each mutation path is
+# independently bounded (upsize by the die cap + `_PNR_UPSIZE_RETRIES`;
+# downsize by a one-shot flag; loosen by the rung bound AND the die cap), so
+# the loop always terminates well within this. #914: this budget must stay
+# >= the ladder's own bound, or the SHARED loop guard would end the ladder
+# before the ladder's own criterion did — the same defect one level up.
 _PNR_RETRY_ITERS = (1 + _PNR_UPSIZE_RETRIES + 1
-                    + (len(_ROUTE_LOOSEN_UTIL_LADDER) - 1))
+                    + _ROUTE_LOOSEN_MAX_RUNGS)
 
 
 def _drt_violation_trajectory(log_text: str) -> List[int]:
@@ -11866,29 +13704,183 @@ def _compute_loosened_die(die_w: int, die_h: int,
 # downsize / loosen) so the emitted `initialize_floorplan` shape and the
 # rewrite stay in lockstep. Matches only the die/core lines, leaving the
 # trailing `-site …` continuation intact.
+# ============================================================================
+# THE SLOT CONTRACT'S FLOORPLAN RECTANGLE  (agent gfinal, fix 1)
+# ----------------------------------------------------------------------------
+# Step 0.5ic ingests the shuttle operator's template and records, per slot, the
+# two rectangles the operator PINS: `DIE_AREA` (the slot the die is sawn to)
+# and `CORE_AREA` (the area inside it a submitter may place and route in). The
+# ring, the pads and the identification cells live in the band between them.
+#
+# Until now NOTHING downstream read either rectangle: the floorplan sized the
+# die from `--die-um` and inset the core by a fixed 10 um, so the placeable
+# area ran to 10 um of the saw street and OpenROAD's `ppl place_pins` — which
+# places pins on the DIE boundary and has NO core-boundary mode — put every
+# pin flush on it. MEASURED on this design's slot: 41 pins at 0.000, and the
+# seal ring the operator requires then lands on top of them.
+#
+# Setting `-core_area` alone does NOT fix it. MEASURED: rows correctly started
+# at 442.4 um and all 41 pins still came out at 0.000, because `place_pins`
+# never consults the core rectangle.
+#
+# So the floorplan's `-die_area` becomes the slot's CORE_AREA. The slot's
+# DIE_AREA does not disappear — it is what the seal ring is built on and what
+# the operator's size check measures — but it is no longer the rectangle the
+# router and the pin placer treat as "the die".
+def _slot_geometry(project: Path) -> Optional[Dict[str, Any]]:
+    """The declared slot's DIE_AREA and CORE_AREA, as ingested by step 0.5ic.
+
+    Returns None when no template was ingested, when no slot was declared, or
+    when the declared slot carries neither rectangle — every one of which is a
+    design that is NOT targeting a shuttle slot, and which must keep the
+    historical `--die-um` + 10 um-inset behaviour exactly.
+    """
+    rep = project / "reports" / "phase1" / "submission_template.json"
+    try:
+        ing = (json.loads(rep.read_text()) or {}).get("ingest") or {}
+    except Exception:
+        return None
+    declared = ing.get("declared_slot")
+    if not declared:
+        return None
+    for rec in ing.get("slots") or []:
+        if rec.get("slot") != declared:
+            continue
+        die, core = rec.get("die_area") or {}, rec.get("core_area") or {}
+        try:
+            drect = [int(float(v)) for v in (die.get("raw") or die.get("rect"))]
+            crect = [int(float(v)) for v in (core.get("raw") or core.get("rect"))]
+        except Exception:
+            return None
+        if len(drect) != 4 or len(crect) != 4:
+            return None
+        if crect[2] - crect[0] <= 0 or crect[3] - crect[1] <= 0:
+            return None
+        return {"slot": declared,
+                "die_rect": drect, "core_rect": crect,
+                "die_w": drect[2] - drect[0], "die_h": drect[3] - drect[1],
+                "source_file": rec.get("source_relpath"),
+                "source_sha256": rec.get("source_sha256")}
+    return None
+
+
 _RE_PNR_FLOORPLAN_DIE = re.compile(
-    r'initialize_floorplan -die_area "0 0 \d+ \d+"\s*\\?\s*\n'
+    r'initialize_floorplan -die_area "\d+ \d+ \d+ \d+"\s*\\?\s*\n'
     r'\s*-core_area "\d+ \d+ \d+ \d+"')
 
 
+def _floorplan_geometry_tcl(die_w: int, die_h: int, core_pad: int,
+                            core_w: int, core_h: int,
+                            fp_rect: Optional[Sequence[int]] = None) -> str:
+    """The two `initialize_floorplan` geometry lines, from ONE builder.
+
+    `fp_rect` is the shuttle slot's CORE_AREA (fix 1). When it is present it
+    becomes BOTH rectangles: `-die_area`, because `ppl place_pins` places pins
+    on the die boundary and has no core-boundary mode, so the only way to keep
+    pins out of the seal-ring band is to make that band lie outside the die
+    OpenROAD is told about; and `-core_area`, because the rows must fill the
+    rectangle the operator says is placeable, no more and no less.
+
+    Emitted from one function so the initial build and every retry-loop rewrite
+    cannot drift apart — the failure mode the `-core_area`-only attempt had,
+    where the rows moved and the pins did not.
+    """
+    if fp_rect is not None:
+        llx, lly, urx, ury = (int(v) for v in fp_rect)
+        return (f'initialize_floorplan -die_area "{llx} {lly} {urx} {ury}" \\\n'
+                f'                      -core_area "{llx} {lly} {urx} {ury}"')
+    return (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
+            f'                      -core_area "{core_pad} {core_pad} '
+            f'{core_w} {core_h}"')
+
+
 def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
-                               core_pad: int, core_w: int, core_h: int) -> str:
+                               core_pad: int, core_w: int, core_h: int,
+                               fp_rect: Optional[Sequence[int]] = None) -> str:
     """Return `tcl_text` with the `initialize_floorplan` die/core geometry
     rewritten to the given dimensions. Pure string transform used by the PnR
-    retry loop after every die resize (upsize / downsize / loosen)."""
+    retry loop after every die resize (upsize / downsize / loosen).
+
+    With `fp_rect` in force the geometry is CONTRACTUAL — the operator pins both
+    rectangles per slot — so the rewrite reinstates the pinned rect rather than
+    the resized one. A slot die cannot be grown or shrunk; the flow's remedy for
+    an unroutable slot die is a different slot, not a different die.
+    """
     return _RE_PNR_FLOORPLAN_DIE.sub(
-        (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
-         f'                      -core_area "{core_pad} {core_pad} '
-         f'{core_w} {core_h}"'),
+        _floorplan_geometry_tcl(die_w, die_h, core_pad, core_w, core_h,
+                                fp_rect).replace('\\', '\\\\'),
         tcl_text,
     )
+
+
+def _loosen_ladder_util(idx: int,
+                        ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER
+                        ) -> Optional[float]:
+    """#914 — target utilisation of loosen-ladder rung `idx`.
+
+    Inside the authored ladder this is the authored value, unchanged. PAST its
+    end the ladder continues geometrically at the authored ladder's OWN final
+    ratio (`ladder[-1] / ladder[-2]`), so the continuation is DERIVED from the
+    schedule instead of being a second hand-typed list that could disagree with
+    it. Returns None only when no continuation is definable (a ladder shorter
+    than two rungs, or one that is not strictly decreasing) — the one case in
+    which the AUTHORED LADDER is genuinely out of proposals.
+    chip-AGNOSTIC: arithmetic only."""
+    if idx < 0:
+        return None
+    if idx < len(ladder):
+        return ladder[idx]
+    if len(ladder) < 2 or not ladder[-2]:
+        return None
+    ratio = ladder[-1] / ladder[-2]
+    if not (0.0 < ratio < 1.0):
+        return None
+    return ladder[-1] * (ratio ** (idx - (len(ladder) - 1)))
+
+
+def _loosen_stall_streak(residuals: Sequence[int]) -> int:
+    """#914 — how many TRAILING rungs failed to beat the BEST residual measured
+    before them. 0 means the most recent rung set a new best.
+
+    Measured against the best-so-far, NOT against the immediately previous
+    rung: the residual count is a noisy proxy for routability across a die
+    change, and a rung that comes back worse than its predecessor can still be
+    far better than where the ladder started. The filed run went 5 -> 2 -> 3;
+    against-previous would have called that a stall, and the controlled re-run
+    at a larger die reached 0. chip-AGNOSTIC: arithmetic only."""
+    streak = 0
+    for i in range(1, len(residuals)):
+        streak = 0 if residuals[i] < min(residuals[:i]) else streak + 1
+    return streak
+
+
+# #914 — the loosen ladder's DECLINE vocabulary and what each entry means for
+# the operator. SINGLE source of truth: the printed marker, the pnr extras, the
+# ROUTE_NOT_CONVERGED remedy sentence and the tests all read this map, so a new
+# decline reason cannot be added in one place and silently missed in another.
+#   not_engaged — the ladder never applied to this run
+#   evidence    — the ladder's OWN measurements say more die area buys nothing
+#   bound       — a budget/geometry limit fired: the remedy is CUT SHORT, not
+#                 exhausted, and the operator's manual remedy is still live
+_LOOSEN_TERMINATOR_KIND: Dict[str, str] = {
+    "explicit_die_requested": "not_engaged",
+    "route_did_not_complete": "not_engaged",
+    "route_still_converging": "not_engaged",
+    "loosen_ladder_stalled": "evidence",
+    "loosen_ladder_exhausted": "bound",
+    "loosen_rung_budget_reached": "bound",
+    "die_cap_reached": "bound",
+}
 
 
 def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
                               loosen_idx: int, auto_die_requested: bool,
                               route_completed: bool,
                               ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
-                              die_max_um: int = _DEFAULT_DIE_MAX_UM
+                              die_max_um: int = _DEFAULT_DIE_MAX_UM,
+                              residual_history: Optional[Sequence[int]] = None,
+                              max_rungs: int = _ROUTE_LOOSEN_MAX_RUNGS,
+                              patience: int = _ROUTE_LOOSEN_STALL_PATIENCE,
                               ) -> Tuple[Optional[Tuple[int, int, Dict[str, Any]]], str]:
     """ROUTING-FEEDBACK decision for ONE detailed-route outcome. Returns
     (new_w, new_h, record) to loosen-the-die-and-retry, or None to leave the
@@ -11897,8 +13889,11 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
 
       1. only an AUTO-owned die is ever loosened (`auto_die_requested`);
       2. only a COMPLETED route is judged (`route_completed` = rc==0 + DEF);
-      3. bounded — stop once the ladder floor rung is reached
-         (`loosen_idx + 1 >= len(ladder)`);
+      3. bounded — #914: with a measured `residual_history` the ladder stops on
+         a STALL (`_loosen_stall_streak >= patience`) or on the named rung
+         budget (`loosen_idx >= max_rungs`); without one it falls back to the
+         authored ladder's length (`loosen_idx + 1 >= len(ladder)`), which is
+         what every pre-#914 caller still gets;
       4. loosen ONLY on a genuine non-convergence signal
          (`_drt_is_non_converging` over the parsed trajectory);
       5. never grow past the die cap (delegated to `_compute_loosened_die`).
@@ -11921,13 +13916,35 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
         # DEF, so the loudest congestion signal reaches this path as
         # `route_completed=False` and buys exactly zero loosening.
         return None, "route_did_not_complete"
-    if loosen_idx + 1 >= len(ladder):
-        return None, "loosen_ladder_exhausted"
     trajectory = _drt_violation_trajectory(log_text)
-    if not _drt_is_non_converging(trajectory):
-        return None, "route_still_converging"
-    cur_util = ladder[loosen_idx]
-    next_util = ladder[loosen_idx + 1]
+    series: Optional[List[int]] = None
+    if residual_history is None:
+        # LEGACY CALL (no measured rung-to-rung evidence supplied). Without a
+        # residual series there is nothing to apply a stall criterion TO, so
+        # the authored ladder length is the only bound available and the
+        # behaviour is exactly what it was before #914 — same order, same
+        # reasons. Kept so every existing caller/test keeps its meaning.
+        if loosen_idx + 1 >= len(ladder):
+            return None, "loosen_ladder_exhausted"
+        if not _drt_is_non_converging(trajectory):
+            return None, "route_still_converging"
+    else:
+        # EVIDENCE MODE (#914). Terminate on what the ladder MEASURED, and when
+        # a BOUND is what stopped it, say which bound — `bound` and `evidence`
+        # are different facts about the remedy and must never share a word.
+        if not _drt_is_non_converging(trajectory):
+            return None, "route_still_converging"
+        if _loosen_ladder_util(loosen_idx + 1, ladder) is None:
+            return None, "loosen_ladder_exhausted"
+        if loosen_idx >= max_rungs:
+            return None, "loosen_rung_budget_reached"
+        series = list(residual_history) + [trajectory[-1]]
+        if _loosen_stall_streak(series) >= patience:
+            return None, "loosen_ladder_stalled"
+    cur_util = _loosen_ladder_util(loosen_idx, ladder)
+    next_util = _loosen_ladder_util(loosen_idx + 1, ladder)
+    if cur_util is None or next_util is None:
+        return None, "loosen_ladder_exhausted"
     dims = _compute_loosened_die(die_w, die_h, cur_util, next_util, die_max_um)
     if dims is None:
         return None, "die_cap_reached"
@@ -11942,6 +13959,16 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
         "to_target_util": next_util,
         "final_violations": trajectory[-1],
         "violation_trajectory": list(trajectory),
+        # #914 — the evidence THIS rung was taken on, recorded next to the
+        # action it justified. `final_violations` above is the residual of the
+        # run being loosened AWAY from; `residual_series` is the across-rung
+        # series, which is the thing the termination criterion reads and the
+        # thing a reader of resize_history could not previously reconstruct.
+        "rung": loosen_idx,
+        "residual_series": list(series) if series is not None else None,
+        "stall_streak": (_loosen_stall_streak(series)
+                         if series is not None else None),
+        "past_authored_ladder": bool(loosen_idx + 1 >= len(ladder)),
     }
     return (new_w, new_h, record), "loosened"
 
@@ -12949,9 +14976,11 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
           PDK liberty exposes no tie cell,
       (b) sets every spare to FIRM (= DEF `+ FIXED`) via odb so they are
           write-protected in all subsequent DEF emissions,
-      (c) runs check_placement (DPL-0033 catch) to verify alignment —
-          a NONFATAL note is printed but the flow continues so a residual
-          off-site issue is surfaced without aborting PnR.
+      (c) runs check_placement to verify alignment and RECORDS THE TOOL'S
+          OWN VIOLATION COUNT (`SPARE_CHECK_PLACEMENT_VIOLATIONS <n>`). The
+          flow continues either way — aborting PnR here destroys the report
+          the failure has to appear in — and `placement_legality_check`,
+          wired into step 17's gate, is what refuses on a non-zero count.
     Chip-AGNOSTIC: uses generic spare_ name prefix + odb API."""
     instances = plan.get("instances", [])
     _spare_names = [i.get("name") for i in instances if i.get("cell")]
@@ -13182,15 +15211,13 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
         "  } _stn_e]} { puts \"SPARE_TIE_NET_DONT_TOUCH_NONFATAL: $_stn -- $_stn_e\" }",
         "}",
         "# ORGANIC #562 — check_placement gate: verify no off-site spares",
-        "# remain after legalization. DPL-0033 is caught so a misaligned",
-        "# inherited instance does not abort PnR (print WARN, flow continues).",
-        "if {[catch {check_placement} _cp_err]} {",
-        "  puts \"SPARE_CHECK_PLACEMENT_WARN: $_cp_err\"",
-        "} else {",
-        "  puts \"SPARE_CHECK_PLACEMENT_PASS\"",
-        "}",
+        "# remain after legalization. The verdict is recorded as the",
+        "# tool's own VIOLATION COUNT, not as a WARN string. DPL-0033 still",
+        "# does not abort PnR here (that would destroy the report the failure",
+        "# has to appear in) — placement_legality_check refuses on the count.",
     ]
-    return "\n".join(lines) + "\n"
+    return ("\n".join(lines) + "\n"
+            + _build_check_placement_verdict_tcl("SPARE", "_spare"))
 
 
 # `SPARE_TIEOFF_CONNECTED <connected> of <candidates>` — emitted by
@@ -13303,29 +15330,395 @@ def _dont_use_family_fallback_tcl() -> str:
     delay family makes `buffer_ports` insert the normal `buf_1`, so the SS setup
     path closes IN THE BASE ROUTE (0-DRC, no ECO) — measured −0.56 → +2.25 ns MET.
     Delay macros are ONLY legitimate for deliberate hold padding, never as
-    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal."""
+    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal.
+
+    NAMING-CONVENTION-AGNOSTIC + never-empty-the-pool. Two chip-AGNOSTIC
+    defects, both found on a commercial 180 nm cell library:
+
+    (1) EVERY pattern above is anchored on the OPEN-PDK ``<lib>__<fn>``
+        double-underscore convention (``sky130_fd_sc_hd__dlygate4sd3``). A
+        commercial library names the SAME delay family with BARE names —
+        ``DLY1D1`` … ``DLY4D1`` — so ``*__dly*`` matched ZERO cells and the
+        block printed ``DONT_USE_FALLBACK_APPLIED: 0`` while the delay family
+        stayed in the pool. The paragraph above calls itself "PDK-family-
+        GENERAL (any library using the ``<lib>__<fn>`` convention)"; that
+        qualifier IS the defect — the convention is an open-PDK habit, not a
+        liberty rule, and a library that does not follow it gets no protection
+        while the log still says the guard ran. Measured consequence: with the
+        pattern list unmatched, ``repair_design`` selected a 4-stage delay
+        macro as the slew-fix buffer on a hard-macro supply pin. Fix: match the
+        family STEM (``dly`` / ``delay`` / ``probe_`` / ``lpflow`` /
+        ``clkdly``) case-insensitively, which subsumes BOTH the
+        ``<lib>__<fn>`` and the bare spellings and both letter cases (open PDKs
+        spell these lower-case, commercial ones upper-case).
+
+    (2) A wider net could, on a pathological library, exclude EVERY buffer and
+        leave the resizer/CTS with nothing to insert — a silent failure worse
+        than the one being fixed. The exclusion is therefore GUARDED: count the
+        cells OpenSTA ITSELF calls buffers (``get_property $c is_buffer`` — the
+        exact pool ``repair_design`` / ``buffer_ports`` draw from) before and
+        after; if the exclusion would leave ZERO usable buffers, revert the
+        whole set with ``unset_dont_use`` and say so out loud. Measure, then
+        decide — never a blanket weakening, never silent.
+
+    The (1) fix did NOT work on its first cut, and said it did. It asked for
+    case-insensitive matching with ``get_lib_cells -nocase`` while still
+    passing GLOB patterns. OpenSTA honours ``-nocase`` ONLY together with
+    ``-regexp``; in glob mode it emits ``[WARNING STA-0358] -nocase ignored
+    without -regexp`` and matches case-SENSITIVELY. Measured in-container
+    against the same commercial 180 nm liberty::
+
+        get_lib_cells -nocase -quiet *dly*   ->  n=0
+        get_lib_cells         -quiet *DLY*   ->  n=4   (DLY1D1 … DLY4D1)
+
+    so the delay family STAYED in the pool and the run still printed
+    ``DONT_USE_FALLBACK_APPLIED: 0 … usable buffer cells 63 -> 63`` — the
+    guard reporting that it ran while protecting nothing, which is the exact
+    failure mode (1) was written to remove, one layer down. Fixed by switching
+    to ``-regexp -nocase``. OpenSTA anchors a regexp to the WHOLE cell name, so
+    the patterns carry explicit ``.*`` on both sides (measured: bare ``dly``
+    -> 0, ``.*dly.*`` -> 4). A ``-nocase`` without ``-regexp`` anywhere in this
+    block is a regression, and is pinned as such by the tests.
+
+    No design, PDK or vendor literal appears in the emitted Tcl."""
     return (
-        "# === v1.2.86 — GENERAL characterization/lpflow do-not-use fallback ===\n"
+        "# === v1.2.86 — GENERAL characterization/lpflow/delay do-not-use "
+        "fallback ===\n"
         "# Works even when the PDK ships no drc_exclude.cells (iic-osic-tools):\n"
-        "# excludes __probe/__probec/__lpflow_ (unroutable → DRT-0085) + __clkdlybuf\n"
-        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer) +\n"
-        "# __dly*/__delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal…:\n"
-        "# high-intrinsic-delay cells the resizer/buffer_ports must never insert as\n"
-        "# a signal/port buffer, or they dominate the SLOW-corner setup path).\n"
-        "# via OpenROAD's own get_lib_cells over the loaded liberty. PDK-family-\n"
-        "# GENERAL (matches the <lib>__<fn> naming, no design literal).\n"
+        "# excludes probe/probec/lpflow (unroutable → DRT-0085) + clkdly*\n"
+        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer)\n"
+        "# + dly*/delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal,\n"
+        "# DLY1D1…DLY4D1: high-intrinsic-delay cells the resizer/buffer_ports\n"
+        "# must never insert as a signal/port buffer, or they dominate the\n"
+        "# SLOW-corner setup path / get chosen as a slew-fix buffer).\n"
+        "# Family STEMS matched case-insensitively via OpenROAD's own\n"
+        "# get_lib_cells, so BOTH the open-PDK <lib>__<fn> spelling AND bare\n"
+        "# commercial names are caught; GUARDED so the buffer pool can never be\n"
+        "# emptied. NAMING-CONVENTION-AGNOSTIC, no design literal.\n"
+        "# -regexp is MANDATORY here, not stylistic: OpenSTA honours -nocase\n"
+        "# ONLY in regexp mode -- in glob mode it warns\n"
+        "# `[WARNING STA-0358] -nocase ignored without -regexp` and matches\n"
+        "# case-SENSITIVELY. Measured in-container on a commercial 180nm\n"
+        "# library: `get_lib_cells -nocase -quiet *dly*` -> 0 cells, while\n"
+        "# `-quiet *DLY*` -> 4 (DLY1D1..DLY4D1). The block then printed\n"
+        "# DONT_USE_FALLBACK_APPLIED: 0 -- announcing that the guard had run\n"
+        "# while it excluded nothing. Patterns are therefore REGEXES, and\n"
+        "# OpenSTA anchors them to the WHOLE cell name, so each needs the\n"
+        "# leading/trailing `.*` (measured: `dly` -> 0, `.*dly.*` -> 4).\n"
+        "proc _du_nbuf {} {\n"
+        "  set _n 0\n"
+        "  foreach _c [get_lib_cells -quiet *] {\n"
+        "    if {[catch {set _b [get_property $_c is_buffer]}]} { continue }\n"
+        "    if {!$_b} { continue }\n"
+        "    if {[catch {set _d [get_property $_c dont_use]}]} { set _d 0 }\n"
+        "    if {!$_d} { incr _n }\n"
+        "  }\n"
+        "  return $_n\n"
+        "}\n"
+        "set _du_before 0\n"
+        "catch {set _du_before [_du_nbuf]}\n"
         "set _duf 0\n"
-        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_* *__clkdlybuf*"
-        " *__dly* *__delay*} {\n"
-        "  set _du_cells [get_lib_cells -quiet $_du_pat]\n"
+        "set _du_all {}\n"
+        "foreach _du_pat {.*probe_.* .*probec_.* .*lpflow.* .*clkdly.* "
+        ".*dly.* .*delay.*} {\n"
+        "  set _du_cells [get_lib_cells -regexp -nocase -quiet $_du_pat]\n"
         "  if {[llength $_du_cells] > 0} {\n"
         "    if {[catch {set_dont_use $_du_cells} _duf_e]} {\n"
         "      puts \"DONT_USE_FALLBACK_NONFATAL: $_du_pat -- $_duf_e\"\n"
-        "    } else { incr _duf [llength $_du_cells] }\n"
+        "    } else {\n"
+        "      incr _duf [llength $_du_cells]\n"
+        "      set _du_all [concat $_du_all $_du_cells]\n"
+        "    }\n"
         "  }\n"
         "}\n"
-        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow cell(s) "
-        "excluded by family-name fallback\"\n")
+        "set _du_after $_du_before\n"
+        "catch {set _du_after [_du_nbuf]}\n"
+        "if {$_du_before > 0 && $_du_after == 0} {\n"
+        "  catch {unset_dont_use $_du_all}\n"
+        "  puts \"DONT_USE_FALLBACK_REVERTED: the exclusion would have left 0 "
+        "usable buffer cells (was $_du_before) -- reverted so the resizer/CTS "
+        "keep a pool; reported, never silently applied\"\n"
+        "  set _duf 0\n"
+        "  set _du_after $_du_before\n"
+        "}\n"
+        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow/delay "
+        "cell(s) excluded by family-name fallback; usable buffer cells "
+        "$_du_before -> $_du_after\"\n")
+
+
+# ── resizer sizing limits derived from the library's OWN buffer span ──────────
+# `Resizer::getSwappableCells` filters every sizing candidate against
+# `sizing_area_limit_` / `sizing_leakage_limit_`, both defaulting to 4.0 (see
+# rsz/src/Resizer.cc): a candidate whose area — or leakage — is more than 4.0X
+# the CURRENT cell's is dropped from the swap pool. That default is an implicit
+# assumption about how wide a cell library's drive ladder is, and `PreChecks::
+# checkSlewLimit` (rsz/src/PreChecks.cc) makes it load-bearing: it computes the
+# BEST ACHIEVABLE transition over `getSwappableCells(buffer_lowest_drive_)` —
+# the swap pool of the WEAKEST buffer — and if the declared max_transition is
+# below that, it raises `[ERROR RSZ-0090] Max transition time from SDC is …
+# Best achievable transition time is …`, which ABORTS repair_design.
+#
+# So on a library whose buffer family is wider than 4.0X, the strong buffers are
+# invisible to that pre-check, the "best achievable" slew is computed from a
+# crippled pool, and repair_design refuses to run — while the cell that would
+# have met the limit sits in the library, legal and un-excluded. Measured on a
+# commercial 180 nm library: buffer family spans 4.25X area / 15.82X leakage
+# (slow corner) over 22 structurally-identified buffers. Measured on the open
+# PDKs shipped in the EDA image, the same way: sky130_fd_sc_hd 10.67X / 16.47X
+# (42 buffers), nangate45 16.33X / 61.44X (9 buffers) — i.e. NO real library
+# measured here fits inside the 4.0X default. The default is narrower than the
+# libraries it is applied to; that is the chip-AGNOSTIC defect.
+#
+# The fix must NOT be a hardcoded larger number (same mistake, new constant) and
+# must NOT be derived from the violation (that is widening a limit until the
+# violation disappears). Two properties:
+#
+#   VALUE  — derived from the LIBRARY's own buffer family: parse the liberty the
+#            flow actually reads, identify buffers STRUCTURALLY the way OpenSTA
+#            does (exactly one input pin, exactly one output pin, and the
+#            output's `function` IS that input — `LibertyCell::hasBufferFunc`),
+#            and take max/min of `area` and `cell_leakage_power` over that
+#            family across EVERY corner liberty. That ratio is the widest
+#            legitimate swap INSIDE the family; x1.1 absorbs rounding.
+#   SCOPE  — nothing is emitted when the family already fits inside OpenROAD's
+#            own default, so a library the default suits keeps a BYTE-IDENTICAL
+#            pnr.tcl and no second repair pass.
+#
+# chip-AGNOSTIC and PDK-AGNOSTIC: every number comes from whatever liberty is on
+# the command line, never from a table.
+_LIB_CELL_HDR_RE = re.compile(
+    r"\bcell\s*\(\s*\"?([A-Za-z0-9_./\[\]-]+)\"?\s*\)\s*\{")
+_LIB_PIN_HDR_RE = re.compile(
+    r"\bpin\s*\(\s*\"?([A-Za-z0-9_./\[\]-]+)\"?\s*\)\s*\{")
+_LIB_ATTR_RE = re.compile(
+    r"\b(area|cell_leakage_power|direction|function)\s*:\s*"
+    r"\"?([^\";]*?)\"?\s*;")
+# OpenROAD's own defaults (rsz/src/Resizer.cc sizing_area_limit_ /
+# sizing_leakage_limit_). Emit nothing when the library fits inside them.
+_RSZ_DEFAULT_SIZING_LIMIT = 4.0
+
+
+def _lib_block_end(text: str, open_brace: int) -> int:
+    """Index just past the '}' matching ``text[open_brace] == '{'``."""
+    depth = 0
+    n = len(text)
+    i = open_brace
+    while i < n:
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _lib_depth0(s: str) -> str:
+    """``s`` with every ``{...}`` sub-block removed (depth-0 text only)."""
+    out: List[str] = []
+    depth = 0
+    for ch in s:
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            continue
+        if depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def _liberty_buffer_family(lib_text: str) -> List[Tuple[str, float, float]]:
+    """Every BUFFER in ``lib_text`` as ``(name, area, cell_leakage_power)``.
+
+    Buffer identification is STRUCTURAL, mirroring OpenSTA
+    ``LibertyCell::hasBufferFunc``: exactly one input pin, exactly one output
+    pin, and the output pin's ``function`` is that input pin. No name matching,
+    so it is independent of any library's naming convention.
+    """
+    out: List[Tuple[str, float, float]] = []
+    for m in _LIB_CELL_HDR_RE.finditer(lib_text):
+        end = _lib_block_end(lib_text, m.end() - 1)
+        body = lib_text[m.end():end - 1]
+        ins: List[str] = []
+        outs: List[Tuple[str, str]] = []
+        i = 0
+        seg = 0
+        n = len(body)
+        while i < n:
+            if body[i] == "{":
+                hdr = body[seg:i + 1]
+                sub_end = _lib_block_end(body, i)
+                pm = _LIB_PIN_HDR_RE.search(hdr)
+                if pm and pm.end() == len(hdr):
+                    flat = _lib_depth0(body[i + 1:sub_end - 1])
+                    d = fn = ""
+                    for am in _LIB_ATTR_RE.finditer(flat):
+                        if am.group(1) == "direction":
+                            d = am.group(2).strip()
+                        elif am.group(1) == "function":
+                            fn = am.group(2).strip()
+                    if d == "input":
+                        ins.append(pm.group(1))
+                    elif d == "output":
+                        outs.append((pm.group(1), fn))
+                i = sub_end
+                seg = i
+                continue
+            i += 1
+        if len(ins) != 1 or len(outs) != 1:
+            continue
+        if outs[0][1].replace("(", "").replace(")", "").strip() != ins[0]:
+            continue
+        area = leak = 0.0
+        for am in _LIB_ATTR_RE.finditer(_lib_depth0(body)):
+            try:
+                if am.group(1) == "area":
+                    area = float(am.group(2))
+                elif am.group(1) == "cell_leakage_power":
+                    leak = float(am.group(2))
+            except ValueError:
+                pass
+        out.append((m.group(1), area, leak))
+    return out
+
+
+def _buffer_family_sizing_spans(
+        lib_texts: List[str]) -> Tuple[float, float, int]:
+    """``(area_ratio, leakage_ratio, n_buffers)`` — the widest max/min inside
+    the buffer family across all supplied liberty texts. ``0.0`` for a span
+    that cannot be measured (attribute absent / single member)."""
+    area_ratio = leak_ratio = 0.0
+    n_buf = 0
+    for t in lib_texts:
+        if not t:
+            continue
+        fam = _liberty_buffer_family(t)
+        n_buf = max(n_buf, len(fam))
+        areas = [a for (_n, a, _l) in fam if a > 0]
+        leaks = [lk for (_n, _a, lk) in fam if lk > 0]
+        if len(areas) >= 2 and min(areas) > 0:
+            area_ratio = max(area_ratio, max(areas) / min(areas))
+        if len(leaks) >= 2 and min(leaks) > 0:
+            leak_ratio = max(leak_ratio, max(leaks) / min(leaks))
+    return area_ratio, leak_ratio, n_buf
+
+
+def _sizing_limits_args(lib_texts: List[str],
+                        margin: float = 1.1,
+                        spans: Optional[Tuple[float, float, int]] = None
+                        ) -> Tuple[str, str]:
+    """``(set_opt_config_args, human_span)`` — the resizer sizing limits this
+    library's OWN buffer family requires, or ``("", "")`` when the family fits
+    inside OpenROAD's 4.0X default and there is nothing to widen.
+
+    ``spans`` is a PRE-MEASURED ``_buffer_family_sizing_spans`` result. The
+    parse is O(liberty bytes) and a sign-off corner set is large: measured on
+    the real 3-corner sky130_fd_sc_hd set (96.9 MB), one pass costs 26.6 s. The
+    two emitters below plus the caller's own reporting each needed the same
+    number, so the naive wiring parsed the SAME texts three times — 81.5 s, of
+    which 54.9 s was recomputing a value already in hand. Passing the measured
+    spans in makes the extra passes unnecessary rather than merely faster.
+    Omitted, it is measured here, so every existing caller and test is
+    unchanged."""
+    a_ratio, l_ratio, n_buf = (
+        spans if spans is not None else _buffer_family_sizing_spans(lib_texts))
+    a_lim = math.ceil(a_ratio * margin * 100.0) / 100.0 if a_ratio else 0.0
+    l_lim = math.ceil(l_ratio * margin * 100.0) / 100.0 if l_ratio else 0.0
+    args = ""
+    if a_lim > _RSZ_DEFAULT_SIZING_LIMIT:
+        args += f" -limit_sizing_area {a_lim:g}"
+    if l_lim > _RSZ_DEFAULT_SIZING_LIMIT:
+        args += f" -limit_sizing_leakage {l_lim:g}"
+    if not args:
+        return "", ""
+    return args, (f"buffer family n={n_buf}, measured area span "
+                  f"{a_ratio:.4g}X, leakage span {l_ratio:.4g}X, margin "
+                  f"x{margin:g}; OpenROAD default "
+                  f"{_RSZ_DEFAULT_SIZING_LIMIT:g}X")
+
+
+def _sizing_limits_preamble_tcl(lib_texts: List[str],
+                                margin: float = 1.1,
+                                spans: Optional[Tuple[float, float, int]] = None
+                                ) -> str:
+    """OpenROAD Tcl that restores the resizer's swap pool to THIS library's own
+    buffer family, emitted BEFORE the first timing-driven step. ``""`` when the
+    family already fits inside OpenROAD's 4.0X default.
+
+    WHY BEFORE, and why not gated on a violation count: the check that fails is
+    ``PreChecks::checkSlewLimit``, and it is reached from ``global_placement
+    -timing_driven`` — gpl's Nesterov loop calls ``TimingBase::
+    executeTimingDriven`` -> ``Resizer::findResizeSlacks`` -> ``RepairDesign::
+    repairNetLoad`` -> ``checkSlewLimit`` — long before any explicit
+    ``repair_design``. It raises ``logger_->error(RSZ, 90)``, which ABORTS the
+    script. So there is no point at which a violator count could be read and
+    used as a gate: the run is already dead.
+
+    WHY THIS IS NOT A RELAXATION. ``max_transition`` is NOT touched. What is
+    widened is ``getSwappableCells``' area/leakage ratio cut-off, which drops
+    any equivalent cell more than ``sizing_area_limit_`` / ``sizing_leakage_
+    limit_`` (both default 4.0) times the SOURCE cell. Those defaults are a
+    heuristic about the power/area cost of upsizing; they are not a statement
+    about what the library contains. On a family whose own ladder is wider than
+    4.0X, the strongest buffers are invisible to ``checkSlewLimit``, which then
+    reports a "best achievable transition" that the library can in fact beat —
+    an infeasibility that does not exist. The limits emitted here are the
+    family's OWN measured span, so the pool becomes exactly what the vendor
+    shipped and no more."""
+    args, span = _sizing_limits_args(lib_texts, margin, spans)
+    if not args:
+        return ""
+    return (
+        "# === restore the resizer swap pool to THIS library's own buffer\n"
+        "# family, BEFORE the first timing-driven step.\n"
+        "# getSwappableCells drops any equivalent cell more than 4.0X the\n"
+        "# source cell in area OR leakage, and PreChecks::checkSlewLimit\n"
+        "# computes the BEST ACHIEVABLE transition over the WEAKEST buffer's\n"
+        "# surviving pool. On a family wider than 4.0X the strong buffers are\n"
+        "# invisible, so the check reports an infeasible slew target that the\n"
+        "# library can actually meet, and aborts with RSZ-0090. That abort is\n"
+        "# reached from global_placement -timing_driven (gpl -> TimingBase ->\n"
+        "# findResizeSlacks -> RepairDesign -> checkSlewLimit), NOT only from\n"
+        "# an explicit repair_design — hence this runs first.\n"
+        f"# Measured here: {span}.\n"
+        "# max_transition is NOT modified; only the cell pool is restored.\n"
+        f"if {{[catch {{set_opt_config{args}}} _sl_e]}} {{\n"
+        "  puts \"SIZING_LIMITS_NONFATAL: $_sl_e\"\n"
+        "} else {\n"
+        f"  puts \"SIZING_LIMITS_APPLIED:{args} ({span})\"\n"
+        "}\n")
+
+
+def _sizing_limits_drv_report_tcl(lib_texts: List[str],
+                                  margin: float = 1.1,
+                                  spans: Optional[Tuple[float, float, int]] = None
+                                  ) -> str:
+    """Report-only companion to :func:`_sizing_limits_preamble_tcl`, emitted
+    AFTER ``repair_design``. Prints the surviving max_slew/max_capacitance
+    violator count so a reader can see what the restored pool actually bought.
+    It CHANGES NOTHING — the number is evidence, not a gate."""
+    args, span = _sizing_limits_args(lib_texts, margin, spans)
+    if not args:
+        return ""
+    return (
+        "# Evidence for the sizing-limit restoration above: the DRV violators\n"
+        "# that survive repair_design with the library's own pool available.\n"
+        "# Report-only — this block changes nothing.\n"
+        "set _sl_v -1\n"
+        "catch {set _sl_v [expr {[sta::max_slew_violation_count]"
+        " + [sta::max_capacitance_violation_count]}]}\n"
+        "if {$_sl_v < 0} {\n"
+        "  puts \"SIZING_LIMITS_DRV_UNMEASURED: OpenSTA violator counters "
+        "unavailable\"\n"
+        "} else {\n"
+        f"  puts \"SIZING_LIMITS_DRV_AFTER_REPAIR: $_sl_v max_slew"
+        "+max_capacitance violator(s) after repair_design with the measured "
+        f"pool ({span})\"\n"
+        "}\n")
 
 
 # ── R8 (v1.3.50 fork-adapt) — librelane-first PnR cell-exclusion resolution ──────
@@ -13577,6 +15970,71 @@ def _pg_net_cleanup_tcl() -> str:
 _DPL_ESCALATION_SITES = (5, 20, 100)
 
 
+# --- The placer's OWN legality verdict, as a NUMBER --------------------------
+# From the installed binary's own `info body check_placement`:
+#
+#   # Returns the violation count. Without -no_abort a non-zero count raises
+#   # DPL-33 instead of returning, so an illegal placement can never be
+#   # mistaken for a legal one by a caller that ignores the result.
+#   return [dpl::check_placement_cmd $verbose $file_name $no_abort]
+#
+# The runner ignored the result. Both `check_placement` call sites outside the
+# legalization ladder wrapped the RAISING form in a `catch` and printed
+# `..._CHECK_PLACEMENT_WARN: $err` — DPL-33, the tool's own refusal, demoted to
+# a warning string that no gate read. Measured, on a DEF whose only edit is one
+# instance moved from site 3 to site 1:
+#
+#   [WARNING DPL-0005] Overlap check failed (1).
+#   [WARNING DPL-0011] Padding check failed (1).
+#   [ERROR   DPL-0033] detailed placement checks failed during check placement.
+#   SPARE_CHECK_PLACEMENT_WARN: DPL-0033
+#   -> placement_legality_check verdict: PASS, exit 0
+#
+# This builder asks for the COUNT (`-no_abort` makes the tool RETURN it instead
+# of raising) and prints it structurally, so `placement_legality_check` refuses
+# on the placer's own number rather than on the presence of a warning word.
+#
+# The Tcl still does not raise, deliberately and for the reason the ECO site
+# already documents: aborting PnR here destroys the report the failure has to
+# appear in. The refusal moves to the gate, which is wired into step 17's
+# `all_of` and whose non-zero exit is what stops the flow.
+#
+# Fail-closed on the tool, not just on the design:
+#   * `-no_abort` unsupported (an older OpenROAD) -> fall back to the RAISING
+#     form, where DPL-33 IS the illegal-placement signal, and record the raise.
+#   * `check_placement` unusable for another reason -> recorded as UNAVAILABLE.
+#     NOT DETERMINED is never printed as zero violations.
+def _build_check_placement_verdict_tcl(marker: str, var_tag: str = "") -> str:
+    """Tcl that records `check_placement`'s OWN violation count under `marker`.
+
+    Emits exactly one of:
+      <marker>_CHECK_PLACEMENT_VIOLATIONS <n>   the tool's count (0 == legal)
+      <marker>_CHECK_PLACEMENT_RAISED: <err>    DPL-33 — a non-zero count
+      <marker>_CHECK_PLACEMENT_UNAVAILABLE: <err>  the check could not run
+
+    chip-AGNOSTIC: an OpenROAD command name and the runner's own marker
+    grammar; no chip, PDK, library or design literal.
+    """
+    v = var_tag or ""
+    return (
+        f"# {marker}: the placer's own legality verdict, recorded as a COUNT.\n"
+        f"if {{[catch {{set _cpv{v} [check_placement -no_abort]}} _cpe{v}]}} {{\n"
+        f"  # -no_abort unsupported: use the raising form, where DPL-33 is\n"
+        f"  # itself the non-zero-violation signal.\n"
+        f"  if {{[catch {{check_placement}} _cpe2{v}]}} {{\n"
+        f"    puts \"{marker}_CHECK_PLACEMENT_RAISED: $_cpe2{v}\"\n"
+        f"  }} else {{\n"
+        f"    puts \"{marker}_CHECK_PLACEMENT_VIOLATIONS 0\"\n"
+        f"  }}\n"
+        f"}} elseif {{![string is integer -strict $_cpv{v}]}} {{\n"
+        f"  puts \"{marker}_CHECK_PLACEMENT_UNAVAILABLE: non-numeric result "
+        f"'$_cpv{v}'\"\n"
+        f"}} else {{\n"
+        f"  puts \"{marker}_CHECK_PLACEMENT_VIOLATIONS $_cpv{v}\"\n"
+        f"}}\n"
+    )
+
+
 def _build_escalating_legalize_tcl(marker: str, var_tag: str = "",
                                    clk_sink_buf: str = "") -> str:
     """Legalize with an ESCALATING displacement window, then PROVE it worked.
@@ -13719,6 +16177,34 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "",
         f"  }}\n"
         f"}}\n"
         f"{_clkswap}"
+        # Diamond-search rung. OpenROAD 26Q3 made the NegotiationLegalizer
+        # the DEFAULT (DPL-1102); measured on a failing post-CTS database it
+        # raised DPL-0701 "Violations remain: 2" and left 37 overlap + 37
+        # padding + 22 site-align violations behind, while the CLASSIC
+        # diamond legalizer (DPL-1101) on the SAME DEF legalized all but
+        # 2 cells (0 overlap, 0 padding, 2 site-align). It is a strictly
+        # last-resort rung -- gated on every rung above having failed --
+        # so a design that legalizes normally never enters it.
+        f"if {{$_dplok{v} == 0}} {{\n"
+        f"  if {{![catch {{detailed_placement -use_diamond_legalizer}}"
+        f" _dmd{v}]}} {{\n"
+        f"    if {{![catch {{check_placement}} _dmc{v}]}} {{ set "
+        f"_dplok{v} 1 ; puts \"{marker}_LEGALIZE_OK disp=diamond\" }}\n"
+        f"  }}\n"
+        f"  if {{$_dplok{v} == 0 && ![catch {{ord::get_die_area}} "
+        f"_dmda{v}]}} {{\n"
+        f"    set _dmw{v} [expr {{int(ceil([lindex $_dmda{v} 2] - "
+        f"[lindex $_dmda{v} 0]))}}]\n"
+        f"    set _dmh{v} [expr {{int(ceil([lindex $_dmda{v} 3] - "
+        f"[lindex $_dmda{v} 1]))}}]\n"
+        f"    if {{![catch {{detailed_placement -use_diamond_legalizer "
+        f"-max_displacement [list $_dmw{v} $_dmh{v}]}} _dmd{v}]}} {{\n"
+        f"      if {{![catch {{check_placement}} _dmc{v}]}} {{ set "
+        f"_dplok{v} 1 ; puts \"{marker}_LEGALIZE_OK "
+        f"disp=diamond-full-die\" }}\n"
+        f"    }}\n"
+        f"  }}\n"
+        f"}}\n"
         f"if {{$_dplok{v} == 0}} {{ puts \"{marker}_LEGALIZE_FAILED\" }}\n"
     )
 
@@ -14024,6 +16510,25 @@ _MIN_AREA_PATCH_TCL = r"""# ====================================================
 #
 # chip/PDK-AGNOSTIC: every number (AREA, MINWIDTH, SPACING) is read from the
 # active tech LEF. No design, vendor or PDK literal.
+#
+# KNOWN LIMITATION — this geometry model CANNOT SEE `RECT` PATCH SHAPES.
+# `ma_rects_of_net` walks `dbWirePathItr`, which returns a wire's path/via
+# shapes but NOT the `addRect` patches encoded on it. PROBED, not assumed
+# (spm x ihp-sg13g2): for two nets whose DEF carries a routed segment plus
+# several RECT patches, the iterator returned exactly ONE Metal2 shape each —
+# the plain segment. Two consequences, BOTH still open:
+#   (a) the blockage set omits TritonRoute's OWN min-area RECT patches, so a
+#       patch placed here can still land within min SPACING of one. MEASURED:
+#       1 residual M2.b (ours 0.497x0.29 vs TritonRoute's 0.2x0.57 landing
+#       pad, gap 0.125 um against a 0.21 um rule). The STALE-BLOCKAGE-SET fix
+#       below closes ours-vs-OURS collisions only.
+#   (b) every cluster's area is UNDER-counted by whatever RECT patches already
+#       cover it, so some clusters are declared deficient — and patched —
+#       UNNECESSARILY. Tracked separately; do not conflate with (a).
+# `dbWireShapeItr` is NOT exposed to Tcl in this build (probed); `dbWire`
+# offers only raw getOpcode/getData/getSegment. The durable fix is a
+# post-write verify-repair pass over the WRITTEN DEF, whose RECT geometry is
+# fully readable, rather than decoding the wire opcode stream.
 # ============================================================================
 proc ma_rects_of_net {net pinptsVar} {
   # -> dict layerName -> list of {x1 y1 x2 y2}
@@ -14333,6 +16838,10 @@ proc via_enclosure_patch {{marker "VIA_ENCL_PATCH"}} {
         $enc addPoint $cx1 $cy1
         $enc addRect [expr {$a-$cx1}] [expr {$b-$cy1}] [expr {$c-$cx1}] [expr {$e-$cy1}]
         $enc end
+        # STALE-BLOCKAGE-SET (same defect as min_area_patch below): `allnet`
+        # is a 1st-pass snapshot, so a via-enclosure patch was invisible to
+        # every later candidate. Register it as it lands.
+        dict lappend allnet $ln [list $nn $a $b $c $e]
         incr patched; set done 1
         break
       }
@@ -14479,6 +16988,18 @@ proc min_area_patch {{marker "MIN_AREA_PATCH"}} {
           $enc addRect [expr {$px1-$bx2}] [expr {$py1-$by1}] \
                        [expr {$px2-$bx2}] [expr {$py2-$by1}]
           $enc end
+          # STALE-BLOCKAGE-SET: the blockage snapshot `all` is built ONCE, in
+          # the 1st pass, before any patch exists. Register every patch as it
+          # lands so the NEXT candidate is spacing-tested against it too —
+          # otherwise patch N+1 is blind to patch N and the two can land
+          # inside the layer's own min SPACING of each other, which is exactly
+          # the sign-off spacing violation this clash test exists to prevent.
+          # MEASURED (spm x ihp-sg13g2, sign-off KLayout deck): 3 M2.b
+          # violations, ALL of them patch-vs-patch, 3 -> 1 with this line.
+          # Not a rejection: the loop simply advances to the next candidate
+          # growth direction, so the patch COUNT is unchanged (463) and the
+          # min-area requirement is still met — just at a legal position.
+          dict lappend all $ln [list $px1 $py1 $px2 $py2]
           incr patched; set ok 1
           break
         }
@@ -14596,8 +17117,63 @@ def _routing_integrity_check_tcl(marker_prefix: str = "SHIP") -> str:
     )
 
 
+def _resizer_bound_flag(pct: Optional[float]) -> str:
+    """`" -max_utilization <pct>"`, or `""` when nothing declared one.
+
+    PURE. The EMPTY STRING IS THE POINT: `repair_timing` with no
+    `-max_utilization` is what step 32 has always emitted, so an undeclared
+    ceiling reproduces today's behaviour byte-for-byte instead of substituting a
+    number nobody asked for. A default here would be a ruler fitted to the
+    answer — and it would be an especially bad one, because the right ceiling
+    depends on the die the design declared and the flow does not get to pick
+    that either.
+    """
+    if pct is None:
+        return ""
+    try:
+        v = float(pct)
+    except (TypeError, ValueError):
+        return ""
+    if not (0.0 < v <= 100.0):
+        return ""
+    return f" -max_utilization {v:g}"
+
+
+def _recover_power_tcl(pct: Optional[int], marker: str, var_tag: str = "") -> str:
+    """The SURPLUS-slack-to-power pass, or `""` when nothing declared one.
+
+    PURE. `repair_timing -recover_power N` takes N as a PERCENT OF THE PATHS
+    THAT HAVE SLACK (measured from the tool's own CLI contract in the pinned
+    image, OpenROAD 26Q3-1535-g543c33894f), so it acts only where slack already
+    exists. It is emitted AFTER setup and hold repair and, like every other
+    repair call in this file, inside a `catch` — a resizer that refuses is a
+    note in the log, never a dead run.
+
+    IT IS OFF UNLESS DECLARED, and that is a measured limitation rather than
+    caution for its own sake: no full place-and-route run was made on this
+    change, so whether recovering power costs slack on THIS flow's designs is
+    unmeasured here. Defaulting it on would ship that unmeasured behaviour to
+    every design at once. What makes the opt-in safe to take is step 32's own
+    closed loop: its trigger is "re-run #21-#28 after ECO", so a pass that ate
+    slack is caught by the same STA that fires the loop.
+    """
+    if pct is None:
+        return ""
+    try:
+        n = int(pct)
+    except (TypeError, ValueError):
+        return ""
+    if not (0 < n <= 100):
+        return ""
+    return (f"if {{[catch {{repair_timing -recover_power {n}}} _rrp{var_tag}]}} "
+            f"{{ puts \"{marker}_RECOVER_POWER_NONFATAL: $_rrp{var_tag}\" }}\n")
+
+
 def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
-                              var_tag: str = "") -> str:
+                              var_tag: str = "",
+                              setup_max_util_pct: Optional[float] = None,
+                              hold_max_util_pct: Optional[float] = None,
+                              recover_power_pct: Optional[int] = None) -> str:
     """ORGANIC #561 (b) / #581 round-2 — the ONE post-buffered repair
     command set, shared by every TCL builder that repairs a design whose
     earlier repair passes already inserted buffers (ECO pass-2, post-route
@@ -14611,11 +17187,19 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
     statements per the #581 round-1 Tcl-syntax doctrine.
     Chip-AGNOSTIC: standard OpenROAD commands only."""
     p, s, v = marker_prefix, marker_suffix, var_tag
+    # The AREA CEILING on what fixing timing may cost. Both are `""` unless the
+    # design declared one, so an undeclared run emits exactly what it always
+    # did. See `_resizer_bound_flag`.
+    su, ho = (_resizer_bound_flag(setup_max_util_pct),
+              _resizer_bound_flag(hold_max_util_pct))
     return (
-        f"if {{[catch {{repair_timing -setup}} _rts{v}]}} {{ "
+        f"if {{[catch {{repair_timing -setup{su}}} _rts{v}]}} {{ "
         f"puts \"{p}_REPAIR_TIMING_SETUP{s}_NONFATAL: $_rts{v}\" }}\n"
-        f"if {{[catch {{repair_timing -hold}} _rth{v}]}} {{ "
+        f"if {{[catch {{repair_timing -hold{ho}}} _rth{v}]}} {{ "
         f"puts \"{p}_REPAIR_TIMING_HOLD{s}_NONFATAL: $_rth{v}\" }}\n"
+        # Surplus slack spent on power, AFTER both repairs so it can only see
+        # the slack that survived them. `""` unless declared.
+        + _recover_power_tcl(recover_power_pct, f"{p}{s}", v)
         + _build_escalating_legalize_tcl(f"{p}{s}_REPAIR", v)
     )
 
@@ -14660,12 +17244,167 @@ _SHIP_REROUTE_MAX_DROUTE_ITERS = 32
 
 
 
+#: #766 — the ECO start-point DEF, BEST FIRST.
+#:
+#: ``<top>.def`` is the canonical SHIPPED post-route DEF: it is what
+#: `step_signoff_spef_repair` promotes the repaired route onto, what
+#: `_emit_spef_corners` extracts the sign-off SPEFs from, and what `step_gds`
+#: streams. ``routed.def`` is the same design under its stage name (the
+#: fallback for a run whose ``<top>.def`` staging did not happen).
+#: ``post_hold.def`` is the PRE-ROUTE, hold-fixed DEF — the honest last resort
+#: for a run that never completed a route, and the ONLY case in which the ECO
+#: legitimately repairs something other than the shipped design.
+_ECO_START_DEF_PRECEDENCE = (
+    ("{top}.def", "post_route_shipped"),
+    ("routed.def", "post_route"),
+    ("post_hold.def", "pre_route_post_hold"),
+)
+
+
+def _eco_start_point(pnr_dir: Path, top: str) -> Tuple[Optional[Path], str]:
+    """#766 — ``(def_path, basis)`` for the design the ECO must repair.
+
+    The ECO's trigger number is measured on the SHIPPED post-route design, so
+    the repair has to start there or it is answering about a different netlist.
+    Returns ``(None, "none")`` when the PnR directory holds none of them —
+    absence is reported, never substituted.
+    """
+    pnr_dir = Path(pnr_dir)
+    for pattern, basis in _ECO_START_DEF_PRECEDENCE:
+        cand = pnr_dir / pattern.format(top=top)
+        if cand.is_file() and cand.stat().st_size > 0:
+            return cand, basis
+    return None, "none"
+
+
+
+#: Stamped into every generated ECO deck. The value is a digest of the GENERATOR
+#: ITSELF, so it changes exactly when the emission logic changes and never needs
+#: to be bumped by hand.
+_ECO_DECK_STAMP = "# ECO_DECK_GENERATOR: "
+
+
+def _eco_deck_fingerprint() -> str:
+    """A digest of `_build_eco_repair_tcl`'s own source."""
+    import inspect
+    try:
+        src = inspect.getsource(_build_eco_repair_tcl)
+    except (OSError, TypeError):      # frozen / exec'd — cannot fingerprint
+        return ""
+    return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
+
+
+def _eco_deck_is_stale(deck: Path) -> bool:
+    """Should this ECO deck be re-emitted?
+
+    The call site used to ask `if not deck.is_file()` — EXISTENCE standing in
+    for CURRENCY. An ECO deck is a GENERATED artefact: reusing one written by a
+    different generator re-runs the old generator's logic, whatever the plugin
+    has since learned.
+
+    MEASURED (sha256 x sky130A, 2026-08-05). A tree carried a deck emitted
+    before #766, which starts the repair from the PRE-ROUTE DEF and never reads
+    SPEF. #766 fixed that. But a re-run in place found the file present, skipped
+    the emit, and reproduced the pre-#766 answer exactly: a recorded ECO
+    regression of -19.010 ns against a true delta of -0.40 ns, inflated ~47x,
+    because the two numbers described two different netlists (only 16 of 178
+    cell types matched). The fix had landed and the run could not reach it.
+
+    So the deck now carries a digest of its generator and is re-emitted whenever
+    that digest is missing or different. An unreadable deck is stale — failing
+    to read the artefact is not evidence that it is current.
+    """
+    if not deck.is_file():
+        return True
+    fp = _eco_deck_fingerprint()
+    if not fp:
+        return False        # cannot fingerprint -> keep the old behaviour
+    try:
+        head = deck.read_text(errors="replace")[:4096]
+    except OSError:
+        return True
+    return f"{_ECO_DECK_STAMP}{fp}" not in head
+
 def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                           liberty_c: str, pnr_dir_c: str, eco_dir_c: str,
                           metal_prefix: str,
-                          corner_libs: Optional[Dict[str, str]] = None) -> str:
+                          corner_libs: Optional[Dict[str, str]] = None,
+                          start_def_c: Optional[str] = None,
+                          post_route_start: bool = False,
+                          corner_spefs_c: Optional[Dict[str, str]] = None,
+                          captables_c: Optional[Dict[str, str]] = None,
+                          filler_masters: Optional[List[str]] = None,
+                          setup_max_util_pct: Optional[float] = None,
+                          hold_max_util_pct: Optional[float] = None,
+                          recover_power_pct: Optional[int] = None) -> str:
     """ORGANIC #561 — generate a self-contained OpenROAD ECO timing-repair TCL
     that embeds the 4 proven workarounds discovered during the ibex pilot:
+
+    === #766: THE ECO MUST REPAIR THE DESIGN THAT FAILED ===================
+
+    The number that FIRES this ECO is the multi-corner OCV sign-off slack, and
+    `_emit_mcorner_ocv_sta` measures it on the SHIPPED POST-ROUTE design
+    (``<pnr>/<top>_pnr.v``, which `step_signoff_spef_repair` promotes from
+    ``<top>_pnr_repaired.v``) with that design's OWN extracted parasitics
+    (``extracted/spef_corners/<top>.max.spef`` at ss, ``.min`` at ff), a
+    propagated clock and the flat-OCV derate.
+
+    This deck used to read ``post_hold.def`` — the last PRE-route, hold-fixed
+    DEF — and ``estimate_parasitics``. Those are a DIFFERENT NETLIST with
+    DIFFERENT PARASITICS. MEASURED (subservient x gf180mcuD, r8): the shipped
+    netlist carries 9701 instances against the ECO start point's 9656, and
+    three instances differ in MASTER (`_3184_`/`_3186_` nor2_4 vs nor2_1,
+    `place1325` clkbuf_8 vs buf_2) — every one of them a DOWNSIZE the sign-off
+    DRV repair made and the ECO's start point never had. So:
+
+      * the repair answered ``RSZ-0098 No setup violations found`` while the
+        design it was asked to fix read ``WNS -0.09 / TNS -0.13``, and
+      * ``eco_setup_delta_ns = -8.220`` compared TWO IMPLEMENTATIONS, not a
+        before and an after, and `eco_loop_audit` failed the step for a
+        "regression" on a run whose ``repair_timing -setup`` made ZERO changes.
+
+    The parasitics term is the DOMINANT one and it is measurable on its own:
+    on the same netlist ``estimate_parasitics -placement`` reports RSZ-0098
+    while the extracted SPEF at ``-corner ss`` reports ``RSZ-0094 Found 2
+    endpoints with setup violations`` — and the design then CLOSES with ONE
+    buffer and one pin swap (WNS -0.09 -> +0.14, TNS -0.13 -> 0.00).
+    The corner scoping is load-bearing too: a plain ``read_spef`` on that
+    design read +0.04 where ``read_spef -corner ss`` read -0.09.
+
+    So when the caller resolves a post-route start point (``post_route_start``)
+    this deck reads THAT DEF, annotates the SAME per-corner extracted SPEFs the
+    sign-off measurement annotated, and pairs each PROCESS corner with the RC
+    corner the sign-off pairs it with (ss<->max, tt<->nom, ff<->min). Three
+    consequences follow and are emitted with it:
+
+      * ``remove_fillers`` FIRST — the shipped post-route DEF is fill-tiled, so
+        a resizer has no legal site (DPL) and removing instances AFTER
+        annotation invalidates the parasitics network (EST-0104). Fillers are
+        restored after the reroute, exactly as `_ship_signoff_spef_repair_tcl`
+        does it.
+      * NO ``estimate_parasitics -placement`` in pass 1 — it would overwrite the
+        annotated real parasitics with the optimistic wire-load estimate, i.e.
+        re-create the very blindness this closes.
+      * the signal routing is CLEARED before ``global_route`` — a post-route DEF
+        arrives with committed detailed routing, and OpenROAD's ``global_route``
+        no-ops on already-routed nets (0 guides -> ``DRT-0626 Guide loading
+        failed``) while TritonRoute re-reading those committed wires can abort on
+        one of its own (``DRT-1010 Unsupported non-orthogonal wire``, measured on
+        this design on a 45-degree Metal2 segment OpenROAD wrote itself). The
+        clear is the same one `_ship_signoff_spef_repair_tcl` uses to reroute
+        successfully FROM ``routed.def``; if a reroute still aborts, the ECO's
+        artefacts are not the shipped ones and the abort is recorded rather than
+        swallowed (`_eco_repair_log_verdict.reroute_failed`), so the "after"
+        measurement declines to use the ECO's incomplete extraction.
+
+    Finally the deck RE-EXTRACTS its own parasitics after the reroute into
+    ``<eco>/spef_corners/`` when the PDK ships captables, so the post-ECO
+    "after" is measured on parasitics that describe the ECO — not on the base
+    route's (see `_measure_posteco_mcorner_ocv`).
+
+    With no post-route DEF resolvable the emission is BYTE-IDENTICAL to the
+    pre-#766 one (the honest pre-route fallback: there is no shipped route to
+    repair).
 
     TAPEOUT-SIGNOFF (multi-corner ECO): when ``corner_libs`` supplies ≥2 distinct
     process corners (SS/TT/FF discovered from THIS PDK — see
@@ -14698,8 +17437,10 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
       (c) DRT-0305: PG net cleanup before global_route — a dangling zero_/one_
           POWER/GROUND net in regular NETS makes TritonRoute abort ALL detailed
           routing. Inline the _pg_net_cleanup_tcl() pass first.
-      (d) DPL-0033: catch around check_placement — the call throws on inherited
-          mis-aligned instances rather than reporting them; catch keeps flow moving.
+      (d) DPL-0033: check_placement is asked for its VIOLATION COUNT
+          (`-no_abort` returns it instead of raising) and the number is
+          recorded as `ECO_CHECK_PLACEMENT_VIOLATIONS <n>`; the flow keeps
+          moving and `placement_legality_check` refuses on the count.
 
     Returns a ready-to-run TCL string (not an f-string template — real {/}).
     Chip-AGNOSTIC: no design-specific magic; only standard OpenROAD APIs."""
@@ -14735,15 +17476,143 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     if len(_labels) >= 2:
         _sdf_corner = "tt" if "TT" in _labels else _labels[0].lower()
         _sdf_corner_flag = f" -corner {_sdf_corner}"
+    # ── #766 — the design, and the parasitics, that produced the number ────
+    _start_def = start_def_c or f"{pnr_dir_c}/post_hold.def"
+    _spefs = {k: v for k, v in (corner_spefs_c or {}).items() if v}
+    _annotated = bool(post_route_start and _spefs)
+    _start_comment = (
+        "#   (a) RSZ-0074: read post_hold.def, not routed.def\n"
+        if not post_route_start else
+        "#   (a) #766: read the SHIPPED post-route DEF + ITS extracted SPEF —\n"
+        "#       the same design, and the same parasitics, the trigger measured\n")
+    _start_rationale = (
+        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as the ECO start-point,\n"
+        "# as the PRIMARY design source: the netlist, placement, ROWS and TRACKS\n"
+        "# all come from the DEF. post_hold.def is the last pre-route, hold-fixed\n"
+        "# DEF; routed.def would carry stale GR guides that trigger RSZ-0074 abort.\n"
+        if not post_route_start else
+        "# #766 — the ECO start-point is the SHIPPED POST-ROUTE DEF: the design\n"
+        "# the multi-corner OCV sign-off measured the violation on. The pre-route\n"
+        "# post_hold.def is a DIFFERENT NETLIST (measured: 9656 vs 9701 instances,\n"
+        "# 3 masters differing) so a repair run there answers about another design.\n"
+        "# The stale-GR-guide hazard RSZ-0074/DRT-0626 names is handled by the\n"
+        "# routing CLEAR before global_route below, the same way the shipped\n"
+        "# sign-off repair reroutes successfully from routed.def.\n")
+    # The shipped post-route DEF is fill-tiled and its parasitics are annotated
+    # below; both facts force `remove_fillers` to come FIRST (DPL: no legal site
+    # for an inserted buffer; EST-0104: removing instances after annotation
+    # invalidates the parasitics network). Restored after the reroute.
+    _remove_fillers = ("" if not post_route_start else
+                       "# #766 — fill-tiled post-route DEF: clear the tiling before any\n"
+                       "# parasitics annotation or resize (DPL legal-site / EST-0104).\n"
+                       "if {[catch {remove_fillers} _rf]} {\n"
+                       "  puts \"ECO_RMFILL_NONFATAL: $_rf\"\n"
+                       "}\n")
+    _refill = ("" if not post_route_start else
+               _build_sparse_die_aware_filler_tcl(filler_masters or []))
+    # RC corner the sign-off pairs with each PROCESS corner — the SAME pairing
+    # `_emit_mcorner_ocv_sta` uses (setup @ ss + max-RC, hold @ ff + min-RC).
+    _rc_for_process = {"ss": "max", "tt": "nom", "ff": "min"}
+
+    def _pick_spef(rc: str) -> str:
+        return (_spefs.get(rc) or _spefs.get("nom") or _spefs.get("max")
+                or _spefs[sorted(_spefs)[0]])
+
+    _spef_block = ""
+    if _annotated:
+        _reads = []
+        if len(_labels) >= 2:
+            for _lbl in _labels:
+                _l = _lbl.lower()
+                _reads.append(
+                    f"if {{[catch {{read_spef -corner {_l} "
+                    f"{_pick_spef(_rc_for_process.get(_l, 'nom'))}}} _rs_{_l}]}} {{\n"
+                    f"  puts \"ECO_READ_SPEF_NONFATAL {_l}: $_rs_{_l}\"\n"
+                    "}\n")
+        else:
+            _reads.append(
+                f"if {{[catch {{read_spef {_pick_spef('max')}}} _rs]}} {{\n"
+                "  puts \"ECO_READ_SPEF_NONFATAL: $_rs\"\n"
+                "}\n")
+        _spef_block = (
+            "\n"
+            "# #766 — annotate the EXTRACTED parasitics of the design that failed,\n"
+            "# per PROCESS corner, paired with the RC corner the sign-off pairs it\n"
+            "# with (ss<->max, tt<->nom, ff<->min). MEASURED on this design: a plain\n"
+            "# `read_spef` read +0.04 where `read_spef -corner ss` read -0.09, and\n"
+            "# `estimate_parasitics -placement` read NO violation at all — so both\n"
+            "# the SOURCE and the CORNER SCOPING of the parasitics are load-bearing.\n"
+            + "".join(_reads)
+            + "# EST-0027 — pin the resizer to the annotated detailed-route\n"
+              "# parasitics so repair_design/repair_timing cannot fall back to the\n"
+              "# optimistic set_wire_rc wire-load model. NONFATAL on stock builds.\n"
+              "if {[catch {estimate_parasitics -detailed_routing} _pe_dr]} {\n"
+              "  puts \"ECO_EST_PARASITICS_DR_NONFATAL: $_pe_dr\"\n"
+              "}\n")
+    # Pass 1 parasitics: an `estimate_parasitics -placement` here would OVERWRITE
+    # the annotation above with the optimistic estimate — the exact blindness
+    # #766 closes. It stays only on the un-annotated (pre-route) path.
+    _pass1_parasitics = (
+        "if {[catch {estimate_parasitics -placement} _pe_pl]} {\n"
+        "  puts \"ECO_EST_PARASITICS_PL_NONFATAL: $_pe_pl\"\n"
+        "}\n" if not _annotated else
+        "# #766 — NO estimate_parasitics here: the real extracted SPEF is already\n"
+        "# annotated above and re-estimating would overwrite it with the\n"
+        "# optimistic wire-load model the trigger number was NOT measured with.\n")
+    # A post-route DEF arrives with committed detailed routing. global_route
+    # no-ops on already-routed nets (0 guides -> DRT-0626) and TritonRoute can
+    # abort re-reading one of its own wires (DRT-1010 non-orthogonal, measured on
+    # this design). Clearing is what makes the reroute possible at all — it is
+    # the same clear the shipped sign-off repair uses to reroute from routed.def.
+    _routing_clear = ("" if not post_route_start else
+                      "# #766 — clear signal routing so global_route regenerates a\n"
+                      "# COMPLETE guide set (DRT-0626) and the reroute is not handed\n"
+                      "# back the base route's committed wires to re-parse — the\n"
+                      "# DRT-1010 abort measured on this design was raised on exactly\n"
+                      "# such a wire (a 45-degree Metal2 segment OpenROAD wrote\n"
+                      "# itself). PG/special nets and dont_touch nets are preserved.\n"
+                      + _spare_safe_routing_clear_tcl("ECO"))
+    # #766 (c) — the post-ECO "after" must be judged on parasitics that describe
+    # the ECO. Re-extract from the ECO's OWN route into <eco>/spef_corners/ for
+    # every captable the PDK ships; `_measure_posteco_mcorner_ocv` prefers these
+    # over the base route's extraction. Empty when the PDK ships no captable
+    # (then the after-measurement discloses it used the base parasitics).
+    _reextract = ""
+    if post_route_start and captables_c:
+        _re = ["\n"
+               "# #766 (c) — re-extract THIS route's parasitics: the base route's\n"
+               "# SPEF does not describe the design the ECO just produced, and\n"
+               "# judging the 'after' on it compares two different implementations.\n"
+               f"catch {{file mkdir {eco_dir_c}/spef_corners}}\n"
+               "catch {define_process_corner -ext_model_index 0 X}\n"]
+        for _c in sorted(captables_c):
+            _cap = captables_c[_c]
+            _sp = f"{eco_dir_c}/spef_corners/{top}.{_c}.spef"
+            _re.append(
+                f"if {{[catch {{extract_parasitics -ext_model_file {_cap} "
+                f"-corner_cnt 1 -max_res 50 -coupling_threshold 0.1}} _xe]}} {{\n"
+                f"  puts \"ECO_REEXTRACT_FAIL {_c}: $_xe\"\n"
+                "} else {\n"
+                f"  if {{[catch {{write_spef {_sp}}} _we]}} {{\n"
+                f"    puts \"ECO_REEXTRACT_WRITE_FAIL {_c}: $_we\"\n"
+                "  } else {\n"
+                f"    puts \"ECO_REEXTRACT_WROTE {_c}\"\n"
+                "  }\n"
+                "}\n")
+        _reextract = "".join(_re)
     return (
         "# === ORGANIC #561: ECO timing repair TCL ===\n"
         "# 4 OpenROAD workarounds for safe stand-alone ECO iteration:\n"
-        "#   (a) RSZ-0074: read post_hold.def, not routed.def\n"
+        + _start_comment +
         "#   (b) Signal-11: pass-2 repair is setup-only (no repair_design)\n"
         "#   (c) DRT-0305: PG net cleanup (zero_/one_ stubs) before global_route\n"
-        "#   (d) DPL-0033: catch around check_placement\n"
+        "#   (d) DPL-0033: check_placement's own violation COUNT recorded\n"
         "# Generated by phase3_one_shot_runner._build_eco_repair_tcl\n"
-        "# Chip-AGNOSTIC: standard OpenROAD APIs only.\n"
+        # WHICH generator, not just that there was one. `_eco_deck_is_stale`
+        # re-emits when this digest is absent or different, so a deck written
+        # before a fix cannot be silently reused after it.
+        + f"{_ECO_DECK_STAMP}{_eco_deck_fingerprint()}\n"
+        + "# Chip-AGNOSTIC: standard OpenROAD APIs only.\n"
         "\n"
         # G-ANTENNA-REROUTE — the ECO reroute runs its OWN detailed_route; OpenROAD
         # defaults to 1 thread, so without this it grinds single-threaded (the
@@ -14753,10 +17622,7 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
         f"{liberty_block}"
-        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as the ECO start-point,\n"
-        "# as the PRIMARY design source: the netlist, placement, ROWS and TRACKS\n"
-        "# all come from the DEF. post_hold.def is the last pre-route, hold-fixed\n"
-        "# DEF; routed.def would carry stale GR guides that trigger RSZ-0074 abort.\n"
+        + _start_rationale +
         "# Reading it as PRIMARY — NOT read_verilog+link_design followed by a second\n"
         "# read_def — is what makes this ECO runnable end-to-end: link_design from\n"
         "# the netlist leaves the block with no floorplan, so a later plain read_def\n"
@@ -14766,7 +17632,7 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "# carry the DEF's rows+tracks. The primary read carries them, so the\n"
         "# repair + reroute complete; write_verilog recovers the ECO netlist from\n"
         "# odb. (verified live on ibex: full repair+reroute completes.)\n"
-        f"read_def {pnr_dir_c}/post_hold.def\n"
+        f"read_def {_start_def}\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
         # THE ECO IS TRIGGERED BY A NUMBER IT CANNOT SEE.
         #
@@ -14791,8 +17657,12 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # AFTER read_sdc so a design SDC that already sets them is not
         # contradicted (both commands are idempotent).
         + _propagated_clock_tcl(
-            reason="post_hold.def is POST-CTS, so the clock tree exists in "
-                   "this netlist and an ideal clock cannot describe it")
+            reason=("the ECO start point is the SHIPPED POST-ROUTE design with "
+                    "its extracted parasitics annotated, exactly as the "
+                    "sign-off measurement that fired this ECO"
+                    if post_route_start else
+                    "post_hold.def is POST-CTS, so the clock tree exists in "
+                    "this netlist and an ideal clock cannot describe it"))
         + _flat_ocv_derate_tcl()
         # #543 -- the ECO resizes too, and it also ran without the v1.2.86
         # cell-pool exclusion: 1 instance of `sky130_fd_sc_hd__probe_p_8` reached
@@ -14809,32 +17679,41 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{\n"
         "  puts \"ECO_SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk\"\n"
         "}\n"
-        "\n"
+        + _remove_fillers
+        + _spef_block
+        + "\n"
         "# === ECO pass 1: placement-based repair ===\n"
-        "if {[catch {estimate_parasitics -placement} _pe_pl]} {\n"
-        "  puts \"ECO_EST_PARASITICS_PL_NONFATAL: $_pe_pl\"\n"
-        "}\n"
-        "if {[catch {repair_design} _rd_err]} {\n"
+        + _pass1_parasitics +
+        # THE AREA CEILING ON WHAT FIXING TIMING MAY COST. `repair_design` and
+        # `repair_timing` both accept `-max_utilization util` (measured from the
+        # tool's own CLI in the pinned image); step 32 passed it never, so the
+        # ECO could buy timing with unbounded area and nothing said so. The
+        # SETUP ceiling governs `repair_design` too, because that pass is the
+        # setup-repair's own buffer/upsize preparation and bounding one without
+        # the other leaves the ceiling reachable around the side.
+        # Both are "" unless the design declared one — see `_resizer_bound_flag`.
+        f"if {{[catch {{repair_design{_resizer_bound_flag(setup_max_util_pct)}}} "
+        f"_rd_err]}} {{\n"
         "  puts \"ECO_REPAIR_DESIGN_NONFATAL: $_rd_err\"\n"
         "}\n"
-        "if {[catch {repair_timing -setup} _rts_err]} {\n"
+        f"if {{[catch {{repair_timing -setup"
+        f"{_resizer_bound_flag(setup_max_util_pct)}}} _rts_err]}} {{\n"
         "  puts \"ECO_REPAIR_TIMING_SETUP_NONFATAL: $_rts_err\"\n"
         "}\n"
         + _build_escalating_legalize_tcl("ECO_DPL", "_eco")
         + "\n"
-        "# ORGANIC #561 (d): DPL-0033 — catch around check_placement.\n"
-        "# check_placement throws on inherited mis-aligned instances; catch\n"
-        "# keeps the flow moving while still surfacing the WARN message.\n"
-        "if {[catch {check_placement} _cp_err]} {\n"
-        "  puts \"ECO_CHECK_PLACEMENT_WARN: $_cp_err\"\n"
-        "} else {\n"
-        "  puts \"ECO_CHECK_PLACEMENT_PASS\"\n"
-        "}\n"
-        "\n"
+        "# ORGANIC #561 (d): DPL-0033 — check_placement after the ECO's own\n"
+        "# legalization, recorded as the tool's own VIOLATION COUNT.\n"
+        "# It still does not abort PnR here — aborting destroys the report the\n"
+        "# failure has to appear in — and placement_legality_check, wired into\n"
+        "# step 17's `all_of`, is what refuses on the count.\n"
+        + _build_check_placement_verdict_tcl("ECO", "_ecocp")
+        + "\n"
         "# ORGANIC #561 (c): DRT-0305 — PG net cleanup before global_route.\n"
         "# A dangling zero_/one_ constant-tie net with POWER/GROUND SigType in\n"
         "# regular NETS makes TritonRoute abort ALL detailed routing.\n"
         + pg_cleanup
+        + _routing_clear
         + "\n"
         "global_route\n"
         "\n"
@@ -14847,7 +17726,11 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "}\n"
         # #581 r2 — the post-buffered command set comes from the ONE shared
         # builder so this site and the SPEF-repair block cannot drift.
-        + _post_buffered_repair_tcl("ECO", "_GR", "2") +
+        + _post_buffered_repair_tcl(
+            "ECO", "_GR", "2",
+            setup_max_util_pct=setup_max_util_pct,
+            hold_max_util_pct=hold_max_util_pct,
+            recover_power_pct=recover_power_pct) +
         # Bounded reroute: -droute_end_iter caps the DRC-optimization iterations
         # so a non-converging ECO reroute (unclosable setup gap over-buffering a
         # small/low-util die) cannot grind its full ~64-iteration budget. The
@@ -14857,7 +17740,9 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"{_ECO_REROUTE_MAX_DROUTE_ITERS}}} _dr_err]}} {{\n"
         "  puts \"ECO_DETAILED_ROUTE_NONFATAL: $_dr_err\"\n"
         "}\n"
-        f"write_def {eco_dir_c}/eco_routed.def\n"
+        + _refill
+        + _reextract
+        + f"write_def {eco_dir_c}/eco_routed.def\n"
         f"write_verilog {eco_dir_c}/{top}_eco.v\n"
         f"if {{[catch {{write_sdf{_sdf_corner_flag} {eco_dir_c}/{top}_eco.sdf}} "
         "_sdf_err]} {\n"
@@ -15301,7 +18186,12 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
     EXACT recipe (fork-openroad, proven on sha256's sign-off corner: worst slack
     −8.83 ns → exit 0, 40/40 endpoints repaired → +0.33 ns):
       read_spef → estimate_parasitics -detailed_routing → repair_design
-                → repair_timing -setup
+                → repair_timing -setup → repair_timing -hold
+    and BOTH slacks are reported before/after: `sta::worst_slack -max` (setup)
+    and `sta::worst_slack -min` (HOLD). The hold half was added 2026-08-20 after
+    a gf180mcuD chip-path run routed with a −67.9 ps pad-to-flop hold violation
+    that this block neither repaired nor reported, because it only ever asked
+    about setup. UNMEASURED IS NOT ZERO applies to hold exactly as to setup.
     The `-detailed_routing` flag is on **estimate_parasitics** (marks the real
     SPEF RC valid); `repair_timing`/`repair_design` take NO such flag (a
     `repair_timing -setup -detailed_routing` throws STA-0562, which a NONFATAL
@@ -15328,6 +18218,11 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         "  if {[catch {estimate_parasitics -detailed_routing} _prr_ep]} { "
         "puts \"SPEF_REPAIR_EP_NONFATAL: $_prr_ep\" }\n"
         "  catch {puts \"SPEF_REPAIR_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
+        # vibe-ic gf180 chip-path campaign — HOLD is the other half, and it was
+        # the missing one. `-max` is SETUP; `-min` is HOLD. Reporting only -max
+        # made a post-route hold violation invisible to this block, which is the
+        # one place in the flow that sees REAL parasitics.
+        "  catch {puts \"SPEF_REPAIR_HOLD_WNS_BEFORE: [sta::worst_slack -min]\"}\n"
         # vibe-ic#569 — the recovery (this PR) and the REFUSAL COUNT (v1.9.9)
         # are both needed, and they answer different halves.
         #
@@ -15376,14 +18271,41 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         + "    if {!$_spef_repair_setup_est_rec} { "
         "puts \"SPEF_REPAIR_SETUP_NONFATAL: $_prr_rt\" ; incr _prr_refused }\n"
         "  }\n"
+        # ── POST-ROUTE HOLD REPAIR ────────────────────────────────────────
+        # MEASURED (gf180mcuD chip path, 2026-08-20): the flow repaired hold
+        # ONLY at the pre-route `hold_repair` stage, on ESTIMATED wire delay,
+        # and every post-route repair here was `-setup`. A design with a
+        # pad-to-flop path can therefore route with a real hold violation that
+        # nothing downstream repairs OR reports. `_post_buffered_repair_tcl`
+        # in this same file has always emitted `-setup` AND `-hold` together
+        # and calls itself "the ONE post-buffered repair command set"; this
+        # block simply never used the hold half.
+        # SAFE for the same reason the setup repair is: this whole block runs
+        # AFTER routed.def / <top>.def / <top>_pnr.v and after the
+        # authoritative sta.rpt, so it edits only the in-memory netlist and
+        # ships nothing. It relaxes no check — it makes one that was silent
+        # speak. NEVER `repair_design` here (segfaults on buffered gate
+        # configs; see _post_buffered_repair_tcl).
+        "  if {[catch {repair_timing -hold} _prr_rh]} {\n"
+        + _est0104_recovery_tcl(
+            spef_c, "_prr_rh", "repair_timing -hold", "SPEF_REPAIR_HOLD",
+            indent="    ", after_spef="estimate_parasitics -detailed_routing")
+        + "    if {!$_spef_repair_hold_est_rec} { "
+        "puts \"SPEF_REPAIR_HOLD_NONFATAL: $_prr_rh\" ; incr _prr_refused }\n"
+        "  }\n"
         "  catch {puts \"SPEF_REPAIR_WNS_AFTER: [sta::worst_slack -max]\"}\n"
+        "  catch {puts \"SPEF_REPAIR_HOLD_WNS_AFTER: [sta::worst_slack -min]\"}\n"
         f"  catch {{report_checks > {out_dir_c}/sta_spef_repaired.rpt}}\n"
-        "  if {$_prr_refused >= 2} {\n"
-        "    puts \"SPEF_REPAIR_NOT_APPLIED: both repairs refused "
-        "($_prr_refused/2) — WNS_BEFORE and WNS_AFTER describe the SAME "
+        # THREE repairs are attempted now (design, setup, hold), so the
+        # "all of them refused" threshold moves with the count. Leaving it
+        # at 2 would have printed NOT_APPLIED for a round in which the
+        # hold repair actually ran.
+        "  if {$_prr_refused >= 3} {\n"
+        "    puts \"SPEF_REPAIR_NOT_APPLIED: every repair refused "
+        "($_prr_refused/3) — WNS_BEFORE and WNS_AFTER describe the SAME "
         "design and their equality is not evidence of convergence\"\n"
         "  } elseif {$_prr_refused > 0} {\n"
-        "    puts \"SPEF_REPAIR_PARTIAL: $_prr_refused of 2 repairs refused\"\n"
+        "    puts \"SPEF_REPAIR_PARTIAL: $_prr_refused of 3 repairs refused\"\n"
         "    puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
         "  } else {\n"
         "    puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
@@ -15446,6 +18368,64 @@ def _v1_8_100_routing_layers(tech_lef_text: str) -> List[str]:
         if re.search(r"^\s*TYPE\s+ROUTING\s*;", m.group(2), re.M | re.I):
             out.append(m.group(1))
     return out
+
+
+def _via_patch_min_width_advisory(tlef_text: str, tech_lef_path: str,
+                                  routing_ceiling_name: Optional[str]
+                                  ) -> Tuple[str, dict]:
+    """`(note, payload)` for vibe-ic#768 — a via patch narrower than its own
+    layer's minimum width. `("", {})` when the PDK does not carry the defect.
+
+    ADVISORY BY CONSTRUCTION: it returns prose and data, and has no way to
+    reach a verdict. The severity choice lives here rather than in the caller
+    because it is a property of the finding, not of the step: a PDK defect is
+    fixed in the PDK, and the person running a design cannot do that. A gate
+    that failed every run over it would be switched off inside a week.
+
+    What it CAN say precisely is whether the defect is live for THIS run. A
+    narrow patch only fires where a wire ENDS on the via, so a layer outside
+    the run's own signal routing ceiling cannot produce one. Above the ceiling
+    the note says latent; at or below it, this run will terminate wires on
+    those vias and the note says that instead.
+
+    Pure: no I/O, no container, no verdict. The caller writes the artefact and
+    prints the line.
+    """
+    from _pdk_via_analyzer import _routing_index as _ridx      # noqa: PLC0415
+    from pdk_via_patch_meets_layer_min_width_check import (    # noqa: PLC0415
+        findings_for_text as _via_patch_findings)
+    name = Path(tech_lef_path).name
+    all_f = _via_patch_findings(tlef_text, name)
+    if not all_f:
+        return "", {}
+    ceil = _ridx(routing_ceiling_name) if routing_ceiling_name else None
+    hot = [f for f in all_f
+           if ceil is None or f["layer_index"] is None
+           or f["layer_index"] <= ceil]
+    layers = sorted({f["layer"] for f in (hot or all_f)})
+    where = (f"ceiling {routing_ceiling_name}" if routing_ceiling_name
+             else "no routing ceiling declared, so every layer is in range")
+    note = (f"{len(all_f)} via patch(es) narrower than their own layer's min "
+            f"width on {', '.join(layers)}"
+            + (f"; {len(hot)} of them on a layer THIS run routes signals on "
+               f"({where}) — a wire ending on one is a sign-off min-width "
+               f"violation the router's own in-loop DRC does not report"
+               if hot else
+               f"; none on a layer this run routes signals on ({where}) — "
+               f"latent"))
+    payload = {
+        "issue": "vibe-ic#768",
+        "tech_lef": tech_lef_path,
+        "routing_ceiling": routing_ceiling_name,
+        "findings": all_f,
+        "inside_routing_range": hot,
+        "severity": "ADVISORY",
+        "why_not_a_verdict": (
+            "a PDK defect the person running a design cannot fix; the fix is "
+            "to grow the patch in the PDK or to take the layer out of the "
+            "signal routing range"),
+    }
+    return note, payload
 
 
 def _v1_8_100_routing_layer_range(pdk, project, container
@@ -16307,6 +19287,9 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         sdc_c: str, dont_use_block: str,
                         metal_prefix: str, die_w: int, die_h: int,
                         core_pad: int, core_w: int, core_h: int,
+                        # No slot declared -> None -> the historical
+                        # `--die-um` + 10um-inset geometry, unchanged.
+                        fp_rect: Optional[Sequence[int]] = None,
                         site: str, out_dir_c: str, tapcell_block: str,
                         pdn_block: str, util: float,
                         spare_protection_tcl: str,
@@ -16330,7 +19313,10 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         openroad_threads: int = 0,
                         repair_tns_percent: Optional[int] = None,
                         cts_cluster_size: Optional[int] = None,
-                        cts_cluster_diameter: Optional[float] = None) -> str:
+                        cts_cluster_diameter: Optional[float] = None,
+                        cts_distance_between_buffers: Optional[float] = None,
+                        sizing_limits_block: str = "",
+                        sizing_drv_report_block: str = "") -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -16426,6 +19412,25 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
         if cts_cluster_diameter is not None:
             _cts_cluster += (
                 f" -sink_clustering_max_diameter {cts_cluster_diameter:g}")
+        # spm x ihp-sg13g2, 2026-08-07 — MEASURED (live OpenROAD, 3 independent
+        # isolated re-derivations, one with a full 650-check zero-violation
+        # `report_check_types -max_fanout` sweep): `-sink_clustering_size` alone
+        # caps each LEAF buffer's fanout, but TritonCTS's H-tree bisection here
+        # populates only 2 real levels (root + leaf) regardless of clustering
+        # size/levels/buf_list — the ROOT then drives every leaf cluster
+        # directly, reproducing the SAME violation one level up (leaf fanout 16
+        # -> root fanout 16, unchanged). `-distance_between_buffers` is the flag
+        # that actually forces an extra buffered level (confirmed: 10um and
+        # 40um both work on a 156um-square die; a value at ~50% of die span
+        # reverts to the 2-level collapse). An explicit CTS_DISTANCE_BETWEEN_
+        # BUFFERS knob always wins; absent one, default to a value small
+        # relative to any real die (10um — the most rigorously verified value,
+        # zero violators across the full sweep) so the same collapse cannot
+        # silently recur on a design that never tuned this. chip-AGNOSTIC: a
+        # PnR-quality knob, not a per-chip literal.
+        _dist_buf = (cts_distance_between_buffers
+                     if cts_distance_between_buffers is not None else 10.0)
+        _cts_cluster += f" -distance_between_buffers {_dist_buf:g}"
     # approach (a) — multi-corner liberty (ss setup / ff hold) or the
     # byte-identical single tt read_liberty when the caller passed none.
     _corner_lib_stanza = (corner_liberty_block if corner_liberty_block
@@ -16463,6 +19468,11 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     _rd_margin_placement = _repair_design_margin_tcl("repair_design_pl")
     _rd_margin_globalrt = _repair_design_margin_tcl("repair_design_gr")
     min_area_patch_block = _min_area_patch_tcl("MIN_AREA_PATCH")
+    # fix 1 — the floorplan rectangle. ONE builder, shared with the retry
+    # loop's rewrite, so the initial script and every resized one carry the
+    # same geometry.
+    _fp_geometry_block = _floorplan_geometry_tcl(
+        die_w, die_h, core_pad, core_w, core_h, fp_rect)
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -16476,7 +19486,7 @@ read_sdc {sdc_c}
 # before any optimization). Prevents OpenROAD from inserting PnR-forbidden cells
 # (probe / lpflow / DRC-failed) that TritonRoute then cannot route (DRT-0085).
 # See _dont_use_tcl. ===
-{dont_use_block}# === v0.1.26 wire-RC model ===
+{dont_use_block}{sizing_limits_block}# === v0.1.26 wire-RC model ===
 # Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
 # interconnect delay (optimistic) and (b) repair_timing -setup aborts with
 # RSZ-0089 "Could not find a resistance value for any corner" because it
@@ -16497,8 +19507,7 @@ if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{
 # database from the netlist. A resume replaces the whole region with a
 # `read_def` of the last stage checkpoint, so the work is never redone.
 puts "{_PNR_STAGE_MARKER} floorplan"
-initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
-                      -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
+{_fp_geometry_block} \\
                       -site {site}
 make_tracks
 {place_pins_block}
@@ -16567,11 +19576,13 @@ if {{[catch {{buffer_ports -inputs}} _bp_err]}} {{
 if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
   puts "EST_PARASITICS_PLACEMENT_NONFATAL: $_pe_pl"
 }}
-{_rd_margin_placement}if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
+{_rd_margin_placement}{sizing_drv_report_block}if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
   puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
 }}
 if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
-  puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err"
+  if {{[catch {{detailed_placement -use_diamond_legalizer}} _rt_dp_errd]}} {{
+    puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err | diamond: $_rt_dp_errd"
+  }} else {{ puts "REPAIR_LEGALIZE_OK disp=diamond" }}
 }}
 puts "{_PNR_STAGE_MARKER} cts"
 if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}{_cts_cluster}}} cts_err]}} {{
@@ -16637,7 +19648,9 @@ if {{[catch {{repair_timing -hold}} _rth2_err]}} {{
   puts "REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err"
 }}
 if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
-  puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err"
+  if {{[catch {{detailed_placement -use_diamond_legalizer}} _gr_dp_errd]}} {{
+    puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err | diamond: $_gr_dp_errd"
+  }} else {{ puts "GR_REPAIR_LEGALIZE_OK disp=diamond" }}
 }}
 # Detailed route emits the actual `+ ROUTED ...` wire geometry that
 # def_stage_progression_check requires. Without it, routed.def carries
@@ -16646,6 +19659,14 @@ if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
 # PDKs without RC files have detailed_route that completes without wire
 # geometry but at least the global_route step does write SPECIALNETS).
 puts "{_PNR_STAGE_MARKER} detailed_route"
+# vibe-ic#1080 — ASK THE ROUTER for its own count instead of scraping it.
+# `push`, not `set`: this Tcl is one session and the metrics stage is global,
+# so a bare `set` would re-label every LATER stage's metrics as routing ones.
+# The namespace stays open across EVERY route pass (the post-route SPEF /
+# antenna / ECO reroutes below are route passes) because the log parser takes
+# the LAST DRT-0199; closing it after the first pass would pin the metric while
+# the prose moved on and manufacture a disagreement on a design that converged.
+utl::push_metrics_stage "detailedroute__{{}}"
 if {{[catch {{detailed_route}} dr_err]}} {{
   puts "DETAILED_ROUTE_NONFATAL: $dr_err"
 }}
@@ -16673,7 +19694,8 @@ if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
 puts "{_PNR_STAGE_MARKER} postroute_spef_extract"
 {spef_repair_block}# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
 puts "{_PNR_STAGE_MARKER} postroute_antenna_repair"
-{antenna_repair_block}{drv_reconverge_block}{post_reconverge_antenna_block}# === v0.1.48 — decap + filler insertion ===
+{antenna_repair_block}{drv_reconverge_block}puts "{_PNR_STAGE_MARKER} postroute_antenna_reconverge"
+{post_reconverge_antenna_block}# === v0.1.48 — decap + filler insertion ===
 # spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
 # ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
 # combination: no dynamic IR margin (no decap), open density-fill rules
@@ -16686,6 +19708,11 @@ puts "{_PNR_STAGE_MARKER} postroute_fill"
 # sees the final geometry (post antenna-repair, post filler) and every
 # downstream consumer (write_def / write_verilog / RCX / magic GDS / DRC /
 # LVS) reads the patched route.
+# Close the routing metrics namespace once the shipped geometry is final.
+# `catch`-wrapped: a RESUME Tcl elides the routing body (and with it the push)
+# but keeps this tail, and an uncaught pop on an empty stack would kill a route
+# that had already succeeded.
+if {{[catch {{utl::pop_metrics_stage}} _tm_err]}} {{ puts "METRICS_STAGE_POP_SKIPPED: $_tm_err" }}
 {min_area_patch_block}write_def {out_dir_c}/routed.def
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
@@ -16780,6 +19807,8 @@ def _build_pnr_resume_tcl_text(pnr_tcl_text: str, *, checkpoint_def_c: str,
 
 _PNR_RESUME_TCL = "pnr_resume.tcl"
 _PNR_RESUME_LOG = "openroad_resume.log"
+#: vibe-ic#1080 — where OpenROAD writes the numbers IT computed.
+_PNR_METRICS = "openroad.metrics.json"
 
 
 def _pnr_resume_after_fatal_signal(*, project: Path, top: str, container: str,
@@ -16815,10 +19844,32 @@ def _pnr_resume_after_fatal_signal(*, project: Path, top: str, container: str,
                            "omitted_stages": []}
     ckpt = diag.get("checkpoint")
     stage = diag.get("stage")
+    ckpt_stage = diag.get("checkpoint_stage")
     if not ckpt:
         rec["reason"] = (
             "no stage checkpoint DEF exists in the PnR output directory, so "
             "there is nothing to resume from")
+        return rec
+    if ckpt_stage != _PNR_ROUTE_CHECKPOINT_STAGE:
+        rec["reason"] = (
+            f"the newest checkpoint on disk is {ckpt_stage!r} "
+            f"({Path(ckpt).name}), which PREDATES routing. The resume Tcl "
+            f"elides floorplan..detailed_route because the checkpoint is "
+            f"supposed to already contain that work; started from a "
+            f"pre-route checkpoint it would run the post-route tail over an "
+            f"UNROUTED design and write THAT out as the final DEF. Only the "
+            f"{_PNR_ROUTE_CHECKPOINT_STAGE} checkpoint "
+            f"({_PNR_CHECKPOINT_STAGES[-1][0]}) is a resume point")
+        return rec
+    _ck_routed, _ck_nets = _def_signal_routing_stats(
+        Path(ckpt), unknown_is_routed=False)
+    if not _ck_routed:
+        rec["reason"] = (
+            f"the {_PNR_ROUTE_CHECKPOINT_STAGE} checkpoint "
+            f"{Path(ckpt).name} exists but carries NO routed signal geometry "
+            f"({_ck_nets} nets in its NETS section, no `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD`) — "
+            f"the same crash that killed the tool cut the checkpoint write "
+            f"short, so there is no routed design in it to resume from")
         return rec
     if not stage:
         rec["reason"] = (
@@ -16879,10 +19930,27 @@ def _pnr_resume_after_fatal_signal(*, project: Path, top: str, container: str,
         rec["status"] = "FAILED"
         rec["reason"] = f"the resumed session exited {r_rc}"
         return rec
-    if not (out_dir / f"{top}.def").is_file():
+    final_def = out_dir / f"{top}.def"
+    if not final_def.is_file():
         rec["status"] = "FAILED"
         rec["reason"] = (
             "the resumed session exited 0 but wrote no final DEF")
+        return rec
+    # rc=0 PLUS a file on disk is not evidence that the file is routed. The
+    # resume runs the post-route TAIL only, so whatever routing the final DEF
+    # carries came in with the checkpoint — and the one thing this whole
+    # mechanism must never do is hand a signed-off, never-routed DEF to the
+    # seven downstream steps that read it. So the output is measured, not
+    # assumed, on the way out as well as on the way in.
+    _fd_routed, _fd_nets = _def_signal_routing_stats(
+        final_def, unknown_is_routed=False)
+    if not _fd_routed:
+        rec["status"] = "FAILED"
+        rec["reason"] = (
+            f"the resumed session exited 0 and wrote {final_def.name}, but "
+            f"that DEF carries NO routed signal geometry ({_fd_nets} nets in "
+            f"its NETS section, no `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD`). A resume that "
+            f"produces an unrouted final DEF has salvaged nothing")
         return rec
     rec["status"] = "RESUMED"
     return rec
@@ -17051,6 +20119,22 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # commands (derive_pll_clocks). For silicon synth (top=chip_top), use
     # a generic minimal SDC tied to chip_top's actual clk port.
     sdc = out_dir / "constraint.sdc"
+    # spm x ihp-sg13g2, 2026-08-07: `set_max_fanout` in the loaded SDC does NOT
+    # make OpenROAD's `clock_tree_synthesis` respect it — CTS's own leaf-level
+    # sink clustering is governed ONLY by `-sink_clustering_size` passed to the
+    # command itself (see `_cts_cluster` below). MEASURED: with `set_max_fanout
+    # 8` correctly present in constraint.sdc (the `_ensure_staged_sdc_drv` /
+    # `_liberty_drv_limits` fallback below), a CTS run with no
+    # `-sink_clustering_size` still built a leaf buffer (`clkbuf_0`) fanning
+    # out to 16 sinks against the SAME liberty's own declared limit of 8 — the
+    # SDC constraint and CTS's own clustering are two independent mechanisms,
+    # and only `set_max_fanout` was closed above. `_cts_fanout_target` carries
+    # the SAME resolved value (design-declared, else liberty-derived) to the
+    # `cts_cluster_size=` kwarg near the bottom of this function, so CTS is
+    # told the identical number the SDC and sign-off already use — set in
+    # BOTH branches below (staged / auto SDC), never fabricated (§4.05: reused
+    # from the same DRV resolution, not invented here).
+    _cts_fanout_target: Optional[int] = None
     project_sdc_silicon = _resolve_staged_silicon_sdc(project)
     if project_sdc_silicon and project_sdc_silicon.is_file():
         # benchmark-spm-asap7 — staged SDCs are ns/pF-authored; rescale
@@ -17066,6 +20150,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             project_sdc_silicon.read_text(), str(pdk.liberty))
         _staged_sdc = _reconcile_staged_sdc_drv(
             _staged_sdc, pdk.name, str(pdk.liberty), container)
+        # A9 — reconcile a stale `set_driving_cell` cell NAME the same way the
+        # DRV LIMITS were reconciled above: a foreign-PDK reference-flow SDC
+        # (e.g. a Nangate `BUF_X2`) would otherwise abort read_sdc under the
+        # active PDK (STA-0453) and stop the entire backend before floorplan.
+        _staged_sdc = _reconcile_staged_sdc_driving_cell(
+            _staged_sdc, str(pdk.liberty), container)
         # TAPEOUT-SIGNOFF (DRV) parity — a design-supplied SDC that declares NO
         # set_max_transition / set_max_capacitance reached PnR with no DRV
         # target at all, so repair_design never repaired the slews (the
@@ -17075,6 +20165,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _staged_sdc, _drv_parity = _ensure_staged_sdc_drv(
             _staged_sdc, str(pdk.liberty), container, project,
             pdk_name=str(pdk.name))
+        # Read the FINAL effective value back out of the SDC text (not just
+        # `added_max_fanout`, which is None when the design's OWN staged SDC
+        # already declared one — that value must reach CTS too, same as a
+        # liberty-derived fallback would).
+        _cts_fm = _SDC_MAX_FANOUT_RE.search(_staged_sdc)
+        if _cts_fm:
+            try:
+                _cts_fanout_target = int(float(_cts_fm.group(2)))
+            except ValueError:
+                pass
         if _drv_parity.get("note"):
             print(f"[phase3][sdc-drv] {_drv_parity['note']}", file=sys.stderr)
         try:
@@ -17126,6 +20226,19 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             drv_note=str(_drv.get("note") or ""),
             liberty_path=str(pdk.liberty),
             pdk_name=str(pdk.name)))
+        # Same CTS-clustering target as the staged branch above; the
+        # auto-SDC path has no design SDC to declare a fanout cap in, so
+        # priority collapses to L9 / RTL-replication / liberty default —
+        # `_build_auto_silicon_sdc` does not emit `set_max_fanout` text (a
+        # separate, non-blocking gap; CTS reads this value directly, not by
+        # re-parsing the SDC).
+        try:
+            _cts_fanout_target = (
+                _l9_declared_max_fanout(project, str(pdk.name))
+                or _rtl_replication_fanout_bound(project)
+                or _drv.get("max_fanout"))
+        except Exception:
+            _cts_fanout_target = _drv.get("max_fanout")
     # Whichever branch ran, record what the DESIGN staged and what became of
     # it. A machine-readable sibling of the deck's own comment block, so a
     # later reader does not have to parse an SDC to learn that the design's
@@ -17171,6 +20284,31 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     core_pad = 10
     core_w = die_w - 2 * core_pad
     core_h = die_h - 2 * core_pad
+
+    # === fix 1 — THE SLOT CONTRACT DECIDES THE FLOORPLAN RECTANGLE ==========
+    # A design that declared a shuttle slot is not free to choose its die: the
+    # operator pins DIE_AREA and CORE_AREA per slot and the submission is
+    # measured against both. So the ingested slot, when there is one, wins over
+    # `--die-um` for the die AND supplies the rectangle the floorplan is built
+    # on. Absent a slot every line below is inert and the historical `--die-um`
+    # + 10 um inset stands unchanged.
+    _slot = _slot_geometry(project)
+    fp_rect = None
+    if _slot:
+        fp_rect = _slot["core_rect"]
+        if (die_w, die_h) != (_slot["die_w"], _slot["die_h"]):
+            print(f"[phase3] slot {_slot['slot']} pins the die at "
+                  f"{_slot['die_w']}x{_slot['die_h']} um "
+                  f"({_slot['source_file']}); --die-um said "
+                  f"{die_w}x{die_h} and does not decide a slot die",
+                  file=sys.stderr)
+        die_w, die_h = _slot["die_w"], _slot["die_h"]
+        core_w = die_w - 2 * core_pad
+        core_h = die_h - 2 * core_pad
+        print(f"[phase3] floorplan rectangle := slot CORE_AREA "
+              f"{fp_rect} (die/core both), so `ppl place_pins` — which has no "
+              f"core-boundary mode — cannot put a pin in the seal-ring band",
+              file=sys.stderr)
 
     # Pick clock buffer cells: PdkConfig-carried masters win (every registry
     # PDK carries clk_buf_cell/root); otherwise DISCOVER them from the PDK's own
@@ -17257,6 +20395,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     routing_upper = None
     routing_constraint_tcl = ""
     routing_audit_note = ""
+    # Hoisted out of the try: the tech LEF text and the layer the route is
+    # actually ceilinged at are read by the min-width advisory below, which
+    # must not re-resolve host-vs-container a second time.
+    tlef_text = None
+    routing_ceiling_name = None
     try:
         from _pdk_via_analyzer import routing_layer_upper_bound as _rub
         # #687 — pdk.tech_lef is a CONTAINER-side path (PDKS_IN_CONTAINER=
@@ -17295,6 +20438,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     f"single-cut via missing above M{routing_upper}; "
                     f"routing restricted to {lo}-{hi}"
                 )
+                routing_ceiling_name = hi
     except Exception as _e:  # nosec — analyzer is best-effort
         routing_audit_note = f"via-analyzer skipped: {_e}"
     # === v1.8.100 — SIGNAL ROUTING FLOOR / CEILING ===================
@@ -17328,6 +20472,50 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 f"}}\n"
             )
             routing_audit_note = routing_audit_note or _why
+            routing_ceiling_name = _hi
+
+    # === vibe-ic#768 — A VIA PATCH NARROWER THAN ITS OWN LAYER'S MINIMUM ====
+    # The tech LEF states both halves of a contradiction: a routing layer's own
+    # minimum width, and the metal patch its vias drop on that layer. Where the
+    # patch is narrower, every place a wire ENDS on such a via is a sign-off
+    # min-width violation — and the router's in-loop DRC reports 0 for it, so
+    # nothing between here and the sign-off deck says anything.
+    #
+    # ADVISORY, NEVER A VERDICT, and the reason is who can act: this is a fact
+    # about the PDK, fixed by growing the patch in the PDK (the vibeic-eda fork
+    # carries that transform) or by taking the layer out of the routing range.
+    # A user running a design cannot do either, and a gate that fails every run
+    # over something the person in front of it cannot fix is a gate that gets
+    # switched off. So it does not move step_pnr's verdict.
+    #
+    # It is also not a whisper. It goes to THREE places every run it fires:
+    # stderr beside the route it affects, a `reports/` artefact a later audit
+    # can read, and the step detail that lands in the phase-3 record. There is
+    # no flag, no env var and no baseline that can make it print nothing — the
+    # only thing that silences it is the defect not being there.
+    #
+    # The ROUTING CEILING derived above is the one mitigation that is checkable
+    # here: a narrow patch on a layer this run does not route signals on cannot
+    # fire. Above the ceiling it is disclosed as latent; at or below it, this
+    # run WILL terminate wires on those vias and the wording says so.
+    via_patch_note = ""
+    if tlef_text:
+        try:
+            via_patch_note, _vp_payload = _via_patch_min_width_advisory(
+                tlef_text, str(pdk.tech_lef), routing_ceiling_name)
+            if via_patch_note:
+                _vp_path = project / "reports" / "pdk_via_patch_min_width.json"
+                _vp_path.parent.mkdir(parents=True, exist_ok=True)
+                _vp_path.write_text(
+                    json.dumps(_vp_payload, indent=2, ensure_ascii=False)
+                    + "\n")
+                print(f"[phase3] PDK ADVISORY (vibe-ic#768): {via_patch_note}",
+                      file=sys.stderr)
+        except Exception as _vpe:                            # nosec
+            via_patch_note = f"via-patch-min-width check skipped: {_vpe}"
+            print(f"[phase3] PDK ADVISORY NOT TAKEN: {via_patch_note}",
+                  file=sys.stderr)
+
     # make_tracks emits routing track grid for layers that don't have
     # TRACKS in the LEF (custom PDKs frequently omit these). chip-AGNOSTIC.
     macro_lefs_tcl = "\n".join(
@@ -17362,7 +20550,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _used_masters = _netlist_cell_masters(nl_text_for_count)
     spare_plan = _build_spare_cells_plan(
         placed_cells_est, spare_dens,
-        (core_pad, core_pad, core_w + core_pad, core_h + core_pad),
+        # fix 1 — spares must land in the rectangle the floorplan actually
+        # built. With a slot in force that is the operator's CORE_AREA; the
+        # historical (core_pad .. die-core_pad) box is OUTSIDE the die
+        # OpenROAD was given and every spare in it would be illegal.
+        (tuple(fp_rect) if fp_rect is not None
+         else (core_pad, core_pad, core_w + core_pad, core_h + core_pad)),
         liberty_path=pdk.liberty, container=container,
         has_pad_ring=has_pad_ring, used_cells=_used_masters)
     # #563 r2 — discover the PDK tie-low cell for the spare-input tie-off
@@ -17383,7 +20576,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # v0.1.46/47/48 — silicon-critical PnR blocks (extracted to pure
     # helpers; see TestSiliconCriticalPnrBlocks in
     # programs/tests/test_phase3_backend_fixes.py).
-    tapcell_block = _build_tapcell_tcl(pdk)
+    tapcell_block = _build_tapcell_and_placeability_tcl(pdk)
     # #684 R6 (post-place) — sparse-die anti-flood tap prune, emitted after
     # placement (real geometry) and BEFORE placed.def (keeps DEF-stage
     # monotonicity). Pre-mark the spare grid positions (inserted after
@@ -17461,7 +20654,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # FIXED wrapper is NOT flooded with 940K decap/fill cells / a 2 GB GDS.
     # A dense / normal-util design (§4.05 negative) still gets the full
     # fill (util ≥ threshold). chip-AGNOSTIC.
-    filler_block = _build_sparse_die_aware_filler_tcl(_filler_masters)
+    filler_block = _build_sparse_die_aware_filler_tcl(
+        _filler_masters, slot_pinned_core=fp_rect is not None)
 
     # PG global-connect RE-APPLY + audit. `global_connect` inside the PDN block
     # runs BEFORE placement, so it can only connect the instances that exist
@@ -17479,6 +20673,45 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     antenna_repair_block = _antenna_repair_tcl(pdk)
     pg_cleanup_block = _pg_net_cleanup_tcl()
     dont_use_block = _dont_use_tcl(pdk)
+    # Measure THIS library's buffer-family span so pnr.tcl can restore the
+    # resizer swap pool to it BEFORE the first timing-driven step. OpenROAD's
+    # 4.0X area/leakage sizing cut-off is narrower than every real library
+    # measured; PreChecks::checkSlewLimit then reports a "best achievable
+    # transition" that only the TRUNCATED pool cannot reach and aborts with
+    # RSZ-0090 — from global_placement -timing_driven, not just from an
+    # explicit repair_design. Emits "" when the library fits the default, so
+    # such a design keeps a byte-identical pnr.tcl. See
+    # `_sizing_limits_preamble_tcl`.
+    try:
+        _sl_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:  # noqa: BLE001 — a measurement, never a dependency
+        _sl_corner_libs = {}
+    _sl_paths = sorted({p for p in _sl_corner_libs.values() if p})
+    if pdk.liberty and pdk.liberty not in _sl_paths:
+        _sl_paths.append(pdk.liberty)
+    _sl_texts = [t for t in (_read_pdk_text(p, container) for p in _sl_paths)
+                 if t]
+    # MEASURE ONCE. Three consumers need the same number — the preamble, the
+    # DRV-report companion, and the disclosure printed below — and the parse is
+    # O(liberty bytes) over a whole sign-off corner set. Measured on the real
+    # 3-corner sky130_fd_sc_hd set (96.9 MB): one pass 26.6 s, three passes
+    # 81.5 s. Handing the measured spans to both emitters removes 54.9 s of
+    # recomputation from every PnR, and removes it by construction rather than
+    # by caching something that could go stale.
+    _sl_spans = _buffer_family_sizing_spans(_sl_texts)
+    sizing_limits_block = _sizing_limits_preamble_tcl(_sl_texts, spans=_sl_spans)
+    sizing_drv_report_block = _sizing_limits_drv_report_tcl(_sl_texts,
+                                                           spans=_sl_spans)
+    if sizing_limits_block:
+        _sl_a, _sl_l, _sl_n = _sl_spans
+        print("[phase3] RESIZER SIZING LIMITS: this library's buffer family "
+              f"({_sl_n} cells over {len(_sl_texts)} corner liberty file(s)) "
+              f"spans {_sl_a:.4g}X area / {_sl_l:.4g}X leakage — wider than "
+              "OpenROAD's 4.0X swap-pool cut-off, which hides the strong "
+              "buffers from PreChecks::checkSlewLimit and makes it report an "
+              "infeasible slew target. pnr.tcl restores the pool to the "
+              "MEASURED span before the first timing-driven step; "
+              "max_transition is NOT modified.", file=sys.stderr)
     # #147 — PROBE the running OpenROAD once (cached) for the fork's post-route
     # repair fix (`estimate_parasitics -detailed_routing`, vibeic/OpenROAD
     # cf06074139 — LIVE in vibeic-eda:0.2.17). R9 moved the probe UP to here:
@@ -17537,6 +20770,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                             if _fork_repair_capable else "")
     # UNCONDITIONAL, exactly as when it was concatenated onto the string
     # above: the second antenna pass ran on both probe outcomes and still does.
+    #
+    # It gets its OWN breadcrumb (`postroute_antenna_reconverge`, emitted by
+    # the template between the two slots). Without one, the last breadcrumb in
+    # force while this block runs is `postroute_drv_reconverge` — which IS in
+    # `_PNR_NONFATAL_STAGES`, so a crash in this LOAD-BEARING antenna pass was
+    # diagnosed as a crash in a best-effort stage and sent to the resume the
+    # load-bearing guard exists to refuse. The stage is deliberately NOT added
+    # to `_PNR_NONFATAL_STAGES` and carries no BEGIN/END sentinels, so it can
+    # neither be omitted nor resumed past.
     post_reconverge_antenna_block = antenna_repair_block
     spef_repair_estimate_block = _postroute_repair_estimate_tcl(
         out_dir_c, _fork_repair_capable)
@@ -17655,7 +20897,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         macro_libs_tcl=macro_libs_tcl, netlist_c=netlist_c, top=top,
         sdc_c=sdc_c, dont_use_block=dont_use_block,
         metal_prefix=pdk.metal_prefix, die_w=die_w, die_h=die_h,
-        core_pad=core_pad, core_w=core_w, core_h=core_h, site=pdk.site,
+        core_pad=core_pad, core_w=core_w, core_h=core_h,
+        fp_rect=fp_rect, site=pdk.site,
         out_dir_c=out_dir_c, tapcell_block=tapcell_block,
         pdn_block=pdn_block, util=util,
         spare_protection_tcl=spare_protection_tcl,
@@ -17676,11 +20919,26 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         spef_repair_estimate_block=spef_repair_estimate_block,
         openroad_threads=_openroad_thread_count(),
         repair_tns_percent=_rf_map.get("repair_tns_percent"),
-        cts_cluster_size=_rf_map.get("cts_cluster_size"),
-        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter")))
+        # A reference-flow-declared knob is an explicit operator choice and
+        # wins outright; absent that, fall back to the same fanout cap the
+        # SDC/sign-off now use (`_cts_fanout_target`, set above in EITHER
+        # branch) so CTS's own leaf clustering does not exceed a limit the
+        # rest of the flow already enforces. `set_max_fanout` in the SDC
+        # alone does not constrain `clock_tree_synthesis` — MEASURED spm x
+        # ihp-sg13g2: the SDC carried it, CTS still built a 16-sink leaf
+        # against the library's declared 8, until this value reached
+        # `-sink_clustering_size` directly.
+        cts_cluster_size=(_rf_map.get("cts_cluster_size")
+                          or _cts_fanout_target),
+        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter"),
+        cts_distance_between_buffers=_rf_map.get(
+            "cts_distance_between_buffers"),
+        sizing_limits_block=sizing_limits_block,
+        sizing_drv_report_block=sizing_drv_report_block))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-           f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
+           f"openroad -no_init -exit -metrics {out_dir_c}/{_PNR_METRICS} "
+           f"{pnr_tcl_c} 2>&1 | "
            f"tee {out_dir_c}/openroad.log")
     # v1.6.163 (#60 P0-3) — auto-resize retry loop. If OpenROAD
     # reports `[ERROR GPL-0301] Utilization N% exceeds 100%`, rewrite
@@ -17696,6 +20954,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     target_util_pct = util * 100.0 if util <= 1.0 else util
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
+    # #914 — the across-rung residual series the ladder terminates on, and the
+    # name of whatever finally stopped it. Both are DISCLOSED downstream: a
+    # verdict that reports a remedy as finished must be able to say why.
+    _loosen_residuals: List[int] = []
+    _loosen_terminator: Optional[str] = None
     _upsize_tries = 0         # over-util upsizes applied (bounded budget)
     # v1.3.47 — the PnR route runs under the PROGRESS-STALL WATCHDOG, not a
     # size ESTIMATE. A still-progressing OpenROAD (continuous CPU + periodic
@@ -17747,7 +21010,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             # (See _route_feedback_loosen for the full guard set + honesty note.)
             _lf, _lf_reason = _route_feedback_loosen_ex(
                 die_w, die_h, _pnr_log, _loosen_idx,
-                _auto_die_requested, _route_completed)
+                _auto_die_requested, _route_completed,
+                residual_history=_loosen_residuals)
             if _lf is None:
                 # #307 — the decline path used to have no `else` at all, so the
                 # flow could refuse its OWN rescue with nobody told. The UPSIZE
@@ -17755,32 +21019,53 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 # this now leaves the symmetric named record. Disclosure only:
                 # the verdict is unchanged, the refusal is merely no longer
                 # invisible.
+                # #914 — `proposed_util` read None whenever the AUTHORED
+                # ladder ran out, which says "no proposal exists" when what was
+                # true was "we chose not to make one". It now carries the util
+                # the next rung WOULD target whenever one is definable, next to
+                # the named reason it was not taken and the residual series the
+                # decision was actually made on.
+                _l_series = list(_loosen_residuals)
+                _l_traj = _drt_violation_trajectory(_pnr_log)
+                if _l_traj:
+                    _l_series.append(_l_traj[-1])
+                _l_streak = _loosen_stall_streak(_l_series)
                 _decline = {
                     "iteration": _retry_i,
                     "direction": "loosen",
                     "action": "declined",
                     "reason": _lf_reason,
+                    "kind": _LOOSEN_TERMINATOR_KIND.get(_lf_reason, "unknown"),
                     "die_w_um": die_w, "die_h_um": die_h,
                     "loosen_idx": _loosen_idx,
-                    "proposed_util": (_ROUTE_LOOSEN_UTIL_LADDER[_loosen_idx + 1]
-                                      if _loosen_idx + 1 < len(_ROUTE_LOOSEN_UTIL_LADDER)
-                                      else None),
+                    "proposed_util": _loosen_ladder_util(_loosen_idx + 1),
                     "die_max_um": _DEFAULT_DIE_MAX_UM,
+                    "residual_series": _l_series,
+                    "stall_streak": _l_streak,
+                    "stall_patience": _ROUTE_LOOSEN_STALL_PATIENCE,
+                    "max_rungs": _ROUTE_LOOSEN_MAX_RUNGS,
+                    "still_improving": len(_l_series) >= 2 and _l_streak == 0,
                 }
                 loosen_declines.append(_decline)
+                _loosen_terminator = _lf_reason
                 print(f"ROUTE_LOOSEN_DECLINED reason={_lf_reason} "
+                      f"kind={_decline['kind']} "
                       f"die={die_w}x{die_h}um rung={_loosen_idx} "
-                      f"proposed_util={_decline['proposed_util']}")
+                      f"proposed_util={_decline['proposed_util']} "
+                      f"residual_series={_l_series} "
+                      f"stall_streak={_l_streak}/{_ROUTE_LOOSEN_STALL_PATIENCE} "
+                      f"still_improving={_decline['still_improving']}")
             if _lf is not None:
                 _lw, _lh, _lrec = _lf
                 _lrec["iteration"] = _retry_i
                 resize_history.append(_lrec)
+                _loosen_residuals.append(int(_lrec["final_violations"]))
                 die_w, die_h = _lw, _lh
                 core_w = die_w - 2 * core_pad
                 core_h = die_h - 2 * core_pad
                 pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
                     pnr_tcl.read_text(), die_w, die_h,
-                    core_pad, core_w, core_h))
+                    core_pad, core_w, core_h, fp_rect))
                 _loosen_idx += 1
                 continue
             # (b) GAP-E2E-4 FOLLOW-UP — OVER-SPARSE downsize retry (opt-in mirror
@@ -17820,7 +21105,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     core_h = die_h - 2 * core_pad
                     pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
                         pnr_tcl.read_text(), die_w, die_h,
-                        core_pad, core_w, core_h))
+                        core_pad, core_w, core_h, fp_rect))
                     _downsized_once = True
                     continue
             break  # no over-util error → take rc / def_file path
@@ -17859,7 +21144,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         core_h = die_h - 2 * core_pad
         # Rewrite the floorplan line in pnr.tcl with the new die.
         pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
-            pnr_tcl.read_text(), die_w, die_h, core_pad, core_w, core_h))
+            pnr_tcl.read_text(), die_w, die_h, core_pad, core_w, core_h,
+            fp_rect))
         _upsize_tries += 1
     def_file = out_dir / f"{top}.def"
     sta_file = out_dir / "sta.rpt"
@@ -17897,11 +21183,83 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _pnr_log_all = (out_dir / "openroad.log").read_text(errors="ignore")
     except OSError:
         _pnr_log_all = (out or "") + "\n" + (err or "")
-    _sig_diag = _pnr_fatal_signal_diagnosis(rc, _pnr_log_all, out_dir)
+    try:
+        _pnr_tcl_text = pnr_tcl.read_text(errors="replace")
+    except OSError:
+        _pnr_tcl_text = ""          # unreadable → no stage is post-sign-off
+    _sig_diag = _pnr_fatal_signal_diagnosis(rc, _pnr_log_all, out_dir,
+                                            _pnr_tcl_text)
     _resume_record: Optional[Dict[str, Any]] = None
+    _sig_survivable = False
     if _sig_diag is not None:
         print(f"[pnr] {_pnr_fatal_signal_message(_sig_diag)}", file=sys.stderr)
-    if _sig_diag is not None and def_file.is_file():
+    # ── A CRASH *AFTER* THE SIGN-OFF WRITES ───────────────────────────────
+    # The branch below refuses a final DEF found next to a crash because it
+    # "predates the crash". That is true only while the crash precedes the
+    # writes, and pnr.tcl's LAST stage — the #147 setup-repair ESTIMATE — runs
+    # after every one of them, on the very command (`repair_timing -setup`)
+    # this fix's own evidence shows segfaulting. Sent down that branch, the
+    # runner FAILed a completed run, named a correct sign-off DEF as
+    # non-sign-off, and wrote both false claims into the durable attestation.
+    #
+    # Three independent conditions, all measured, before a crash is survivable:
+    #   1. the stage began below the last `write_def`/`write_verilog`;
+    #   2. pnr.tcl ITSELF declares the stage best-effort — the same
+    #      `_PNR_NONFATAL_STAGES` gate the resume uses, so a load-bearing
+    #      stage added after the writes one day is still a FAIL;
+    #   3. every sign-off artifact is ON DISK. (1) says the writes were
+    #      reached; only this says they landed.
+    if _sig_diag is not None and _sig_diag.get("crashed_after_signoff_writes"):
+        _missing_signoff = [p.name for p in _pnr_signoff_artifacts(out_dir, top)
+                            if not p.is_file()]
+        _stage_nm = _sig_diag.get("stage")
+        if _missing_signoff:
+            _write_pnr_fatal_signal_attestation(project, _sig_diag)
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                _pnr_fatal_signal_message(_sig_diag)
+                + f" The sign-off artifact(s) {', '.join(_missing_signoff)} "
+                  f"are nevertheless MISSING, so the writes that precede "
+                  f"{_stage_nm} did not all land; what is on disk is a "
+                  f"partial write set and is not a sign-off.",
+                [str(out_dir / "openroad.log")],
+                extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
+                        "pnr_fatal_signal": _sig_diag,
+                        "non_signoff_outputs": [
+                            str(p) for p in _pnr_signoff_artifacts(out_dir, top)
+                            if p.is_file()],
+                        "resize_history": resize_history,
+                        "loosen_declines": loosen_declines})
+        if not _sig_diag.get("stage_is_nonfatal_by_template"):
+            _write_pnr_fatal_signal_attestation(project, _sig_diag)
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                _pnr_fatal_signal_message(_sig_diag)
+                + f" Those artifacts are complete and from THIS session, but "
+                  f"{_stage_nm} is NOT one of the stages pnr.tcl declares "
+                  f"best-effort ({', '.join(sorted(_PNR_NONFATAL_STAGES))}): "
+                  f"its output is load-bearing and it did not run, so the "
+                  f"run is incomplete and nothing from it is signed off.",
+                [str(out_dir / "openroad.log")]
+                + [str(p) for p in _pnr_signoff_artifacts(out_dir, top)
+                   if p.is_file()],
+                extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
+                        "pnr_fatal_signal": _sig_diag,
+                        "non_signoff_outputs": [
+                            str(p) for p in _pnr_signoff_artifacts(out_dir, top)
+                            if p.is_file()],
+                        "resize_history": resize_history,
+                        "loosen_declines": loosen_declines})
+        # Survivable: the artifacts are complete, they are this session's, and
+        # the block that died was declared best-effort and modifies none of
+        # them. The exit status is re-pointed so the gates below judge the
+        # artifacts that exist — and the crash travels with the verdict, in
+        # the detail line, the extras and the on-disk attestation, exactly as
+        # a resumed crash does. It is recorded, never dropped.
+        _sig_survivable = True
+        _write_pnr_fatal_signal_attestation(project, _sig_diag)
+        rc = 0
+    if _sig_diag is not None and not _sig_survivable and def_file.is_file():
         # A crash WITH a final DEF already on disk. The DEF cannot have come
         # from this session — the crash preceded the write — so it is a
         # LEFTOVER from an earlier run, and the most dangerous shape of all:
@@ -17920,13 +21278,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "non_signoff_outputs": [str(def_file)],
                     "resize_history": resize_history,
                     "loosen_declines": loosen_declines})
-    if _sig_diag is not None and not def_file.is_file():
+    if _sig_diag is not None and not _sig_survivable and not def_file.is_file():
         _resume_record = _pnr_resume_after_fatal_signal(
             project=project, top=top, container=container, out_dir=out_dir,
             out_dir_c=out_dir_c, pnr_tcl=pnr_tcl, diag=_sig_diag,
             hard_ceiling_s=_pnr_ceiling)
         _sig_diag["resume"] = _resume_record
-        _write_pnr_fatal_signal_attestation(project, _sig_diag)
         if _resume_record.get("status") == "RESUMED":
             # The route was salvaged from the checkpoint and the tail
             # re-ran. rc/out are re-pointed at the RESUMED session so every
@@ -17936,18 +21293,56 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             rc = int(_resume_record.get("rc", rc))
             out = (out or "") + "\n" + str(_resume_record.get("log_tail", ""))
             def_file = out_dir / f"{top}.def"
+        else:
+            # ── A RESUME THAT DID NOT SUCCEED IS A HALF-RUN ────────────────
+            # ORGANIC #570. The resume session runs the post-route TAIL, and
+            # the writes are the last thing in it — so a resume that exits
+            # non-zero, or exits 0 having produced an UNROUTED DEF, can still
+            # have left `<top>.def` and `routed.def` sitting on their
+            # CANONICAL paths. On origin/main those files did not exist in
+            # this situation at all; the resume is what put them there, and
+            # leaving them is precisely the state `_docker_timeout_isolate`
+            # was written for on the stall path two branches up: downstream
+            # steps keyed on "the file is there" would read a half-run
+            # artifact as the design. They are renamed off the canonical
+            # paths and NAMED in the verdict.
+            #
+            # Scoped to a resume that actually RAN (`rc` present in the
+            # record). A NOT_ATTEMPTED resume wrote nothing, so there is
+            # nothing of this session's to isolate and any leftover on disk
+            # is a different (pre-existing) hazard this branch must not
+            # silently start renaming.
+            _resume_orphans: List[Path] = []
+            if "rc" in _resume_record:
+                _resume_orphans = [p for p in (out_dir / f"{top}.def",
+                                               out_dir / "routed.def",
+                                               out_dir / f"{top}_pnr.v")
+                                   if p.is_file()]
+                _docker_timeout_isolate(_resume_orphans)
+                _resume_record["isolated_outputs"] = [str(p)
+                                                      for p in _resume_orphans]
+            def_file = out_dir / f"{top}.def"          # re-measure post-isolation
+        _write_pnr_fatal_signal_attestation(project, _sig_diag)
         if not def_file.is_file():
             _msg = _pnr_fatal_signal_message(_sig_diag)
             _why = _resume_record.get("reason") or ""
+            _iso = _resume_record.get("isolated_outputs") or []
             return StepResult(
                 "pnr", "FAIL", time.time() - t0,
                 f"{_msg} RESUME: {_resume_record.get('status')}"
-                + (f" — {_why}" if _why else ""),
+                + (f" — {_why}" if _why else "")
+                + (" The resumed session had already written "
+                   + ", ".join(Path(p).name for p in _iso)
+                   + " before it failed; those are HALF-RUN outputs and have "
+                     "been renamed off their canonical paths so no downstream "
+                     "step can read them as the design."
+                   if _iso else ""),
                 [str(out_dir / "openroad.log")]
                 + [p for p in [_resume_record.get("resume_tcl"),
                                _resume_record.get("resume_log")] if p],
                 extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
                         "pnr_fatal_signal": _sig_diag,
+                        "non_signoff_outputs": _iso,
                         "resize_history": resize_history,
                         "loosen_declines": loosen_declines})
     if rc != 0 or not def_file.is_file():
@@ -17965,26 +21360,88 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # of fake DRC/LVS/STA findings. The honest verdict is FAIL naming N
     # and the congestion knobs; outputs stay on disk for debugging but
     # are marked non-signoff.
-    _drt_viol = _drt_final_violations(out + err)
-    if _drt_viol is None:
-        _log_p = out_dir / "openroad.log"
-        if _log_p.is_file():
-            _drt_viol = _drt_final_violations(
-                _log_p.read_text(errors="ignore"))
+    #
+    # vibe-ic#1080 — BOTH READINGS RUN AND MUST AGREE. The prose parser is
+    # kept, deliberately: deleting it would leave one unchecked source, and
+    # letting it WIN would keep the blindness this exists to remove. When the
+    # two differ this step FAILS and the message names BOTH numbers, because
+    # a silent preference for either is the defect and not the fix.
+    _drt_rec, _drt_metrics = _drt_reading(out_dir, out + err)
+    _drt_extras: Dict[str, Any] = {"drt_reconciliation": _drt_rec.as_dict()}
+    # A metric that was never emitted must not read as clean. Say what it is.
+    if _drt_rec.status in (_sm.NO_METRIC, _sm.NEITHER, _sm.PROSE_BLIND):
+        print(f"[pnr] ROUTE_DRC {_drt_rec.status}: {_drt_rec.detail}",
+              file=sys.stderr)
+    if not _drt_rec.ok:
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            (f"ROUTE_DRC_METRIC_DISAGREEMENT: {_drt_rec.detail} No "
+             f"route-convergence verdict is issued while the two disagree. "
+             f"Emitted DEF/GDS are kept for debugging but are NOT sign-off "
+             f"artifacts."),
+            [str(out_dir / "openroad.log"), str(out_dir / _PNR_METRICS)],
+            extras={"finding": "ROUTE_DRC_METRIC_DISAGREEMENT",
+                    "resize_history": resize_history,
+                    "loosen_declines": loosen_declines, **_drt_extras})
+    _drt_viol = _drt_rec.value
     if _drt_viol is not None and _drt_viol > 0:
+        # #914 — this verdict used to hand the operator a remedy ("increase
+        # --die-um, lower --util") that the automatic ladder had just declined
+        # to apply, without saying whether the ladder had run out of EVIDENCE
+        # or merely out of BUDGET. Those are different facts and the operator
+        # acts differently on each, so the sentence now names the terminator.
+        _last_decline = loosen_declines[-1] if loosen_declines else {}
+        _term_kind = _LOOSEN_TERMINATOR_KIND.get(_loosen_terminator or "",
+                                                 "not_engaged")
+        _l_series = _last_decline.get("residual_series") or []
+        _ladder_note = ""
+        if _loosen_terminator is not None and _term_kind == "bound":
+            _ladder_note = (
+                f" AUTO-LOOSEN CUT SHORT, NOT EXHAUSTED: the ladder stopped "
+                f"after {_loosen_idx} rung(s) on {_loosen_terminator} (a "
+                f"bound, not a measurement) with residual series {_l_series}; "
+                f"its next rung would have targeted util "
+                f"{_last_decline.get('proposed_util')}. The manual remedy "
+                f"above is the SAME remedy the ladder was still able to "
+                f"apply.")
+        elif _loosen_terminator is not None and _term_kind == "evidence":
+            _ladder_note = (
+                f" AUTO-LOOSEN STALLED: the ladder took {_loosen_idx} rung(s) "
+                f"and then {_last_decline.get('stall_streak')} consecutive "
+                f"rung(s) beat nothing measured before them (residual series "
+                f"{_l_series}) — on this design more die area is not buying "
+                f"convergence, so the manual remedy above is unlikely to "
+                f"either.")
+        # #914 — `util` is the util the caller REQUESTED. Once the ladder has
+        # moved the die, the utilisation the routed geometry was targeted at is
+        # the ladder rung's, not that one; presenting the requested number as
+        # "the condition the design is limited at" states one as the other.
+        _eff_util = _loosen_ladder_util(_loosen_idx) if _loosen_idx else None
+        _util_note = ("" if _eff_util is None else
+                      f" (auto-loosen rung {_loosen_idx} targeted util "
+                      f"{_eff_util:.4g})")
         return StepResult(
             "pnr", "FAIL", time.time() - t0,
             (f"ROUTE_NOT_CONVERGED: detailed route completed with "
              f"{_drt_viol} violations remaining (final DRT-0199). The "
              f"design is congestion-limited at die {die_w}x{die_h}µm / "
-             f"util {util:g}: increase --die-um, lower --util, or raise "
-             f"the router's end iteration. Emitted DEF/GDS are kept for "
-             f"debugging but are NOT sign-off artifacts."),
+             f"requested util {util:g}{_util_note}: increase --die-um, lower "
+             f"--util, or raise the router's end iteration. Emitted DEF/GDS "
+             f"are kept for debugging but are NOT sign-off "
+             f"artifacts.{_ladder_note}"),
             [str(out_dir / "openroad.log"), str(def_file)],
             extras={"finding": "ROUTE_NOT_CONVERGED",
                     "drt_violations": _drt_viol,
                     "die_um": f"{die_w}x{die_h}",
                     "util": util,
+                    "loosen_terminator": _loosen_terminator,
+                    "loosen_terminator_kind": _term_kind,
+                    "loosen_rungs_taken": _loosen_idx,
+                    "loosen_was_cut_short": _term_kind == "bound",
+                    "loosen_still_improving": bool(
+                        _last_decline.get("still_improving")),
+                    "loosen_residual_series": _l_series,
+                    "loosen_target_util": _eff_util,
                     "non_signoff_outputs": [str(def_file)],
                     "resize_history": resize_history,
                     "loosen_declines": loosen_declines})
@@ -18160,7 +21617,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "metal_fill_eco_aware": True,
             "allowlist_doc": _SPARE_YOSYS_KEEP_ALLOWLIST_DOC,
         }
-        (out_dir / "spare_cells.json").write_text(
+        _aa.write_text(out_dir / "spare_cells.json",
             json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
         # Coverage readiness JSON. distribution_ok is derived from the
         # grid spread (>1 distinct grid cell occupied); tie_off_ok from
@@ -18223,6 +21680,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         detail += f" | {decap_guard_note}"
     if routing_audit_note:
         detail += f" | via_audit: {routing_audit_note}"
+    if via_patch_note:
+        detail += f" | PDK ADVISORY #768: {via_patch_note}"
     if pin_order_note:
         detail += f" | pin_order: {pin_order_note}"  # ORGANIC #650
     if resize_history:
@@ -18262,6 +21721,29 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "or lower a PDK pitch floor, so there is no in-flow repair. Those "
             "ports are counted as net-owned above; that number says nothing "
             "about them")
+    # #701 — the macro(s) whose supply the grid REFUSED to reach. Until now the
+    # planner returned the same `None` for this as for "the design has no hard
+    # macros", so the PnR detail for a dropped macro was byte-identical to a
+    # macro-free run and the failure was first seen as PSM-0038/0039/0069 with
+    # nothing pointing back. Stated here, on the step's own detail line, for the
+    # same reason the unreachable-port clause is: an observation nobody reads is
+    # the silence, one step quieter.
+    _mg_refused = _parse_macro_pdn_grid_refusals(_pg_log_txt)
+    if _mg_refused:
+        detail += (
+            f" | MACRO_PDN_GRID_REFUSED: {len(_mg_refused)} hard macro(s) "
+            + "; ".join(f"{r['master']} (pin_layer={r['pin_layer']}, "
+                        f"{r['reason']})" for r in _mg_refused[:5])
+            + (" …" if len(_mg_refused) > 5 else "")
+            + " — no macro PDN grid was built for them and no OBS was "
+              "overridden, so their supply pins are NOT reached by this power "
+              "grid. REPORTED, NOT BLOCKING here: this planner reads the PDK's "
+              "macro LEF list, not the placement, so it cannot tell whether "
+              "the master is instantiated, nor whether the supply arrives by a "
+              "construct it does not model (a ring, a pre-routed abstract). "
+              "The DEF-geometry verdict below and the tool's own connectivity "
+              "check are what block; this names the macro so they can be "
+              "traced back to it")
     spare_extras = {
         "pg_terminals_total": _pg_total,
         "pg_terminals_on_no_net": _pg_bad,
@@ -18273,6 +21755,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "carries no information about conductor presence or reachability"),
         "pg_conductor_measured": False,
         "macro_pdn_ports_unreachable": _pg_unreach,
+        # #701 — machine-readable, so a consumer need not parse the sentence
+        # above, and so "no macros" ([] with no marker) stays a different
+        # record from "a macro was refused".
+        "macro_pdn_grid_refusals": _mg_refused,
         "spare_density_target": round(spare_dens, 6),
         "spare_count": spare_plan.get("count", 0),
         "spare_types": spare_plan.get("types", {}),
@@ -18329,6 +21815,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                    + ", ".join(_resume_record.get("omitted_stages") or ["-"])
                    + " NOT RUN — those stages did not contribute to the "
                      "artifacts below")
+        _nl_extras["pnr_fatal_signal"] = _sig_diag
+    elif _sig_survivable:
+        # Same rule, other side of the writes: a PnR that only reads as a PASS
+        # because the crash landed after every sign-off write must say so in
+        # the verdict, not only in the attestation.
+        detail += (" | " + _pnr_fatal_signal_message(_sig_diag)
+                   + f" {_sig_diag.get('stage')} is declared best-effort by "
+                     f"pnr.tcl and contributed NOTHING to the artifacts below "
+                     f"— they were written before it began and are unchanged "
+                     f"by its death")
         _nl_extras["pnr_fatal_signal"] = _sig_diag
     if resize_history:
         return StepResult("pnr", "PASS", time.time() - t0,
@@ -18441,6 +21937,27 @@ try:
     _cfg = _def_opts.lefdef_config
     if lefs and any(p.strip() for p in lefs):
         _cfg.lef_files = [p.strip() for p in lefs if p.strip()]
+    if _lefdef_map and not os.path.exists(_lefdef_map):
+        # DEGRADE LOUDLY, NEVER SILENTLY. A streamout layermap was CONFIGURED
+        # (the PDK bridge set lefdef_layermap to this path) yet the file is
+        # ABSENT on disk. Falling through to the `else` legacy/compact numbering
+        # here ships a mis-numbered GDS: every DEF-sourced routing/via/PDN shape
+        # lands on a GDS number the sign-off deck reads as an FEOL device layer,
+        # so DRC reports a WALL of phantom implant/VT/well violations that are
+        # numbering ARTEFACTS, not design defects. The surrounding comments were
+        # written to prevent exactly that silent fallback; before this guard it
+        # was only reachable when NO map was configured, so a PDK branch whose
+        # lefdef_layermap points at a *.map the container image does not ship
+        # slipped straight through to legacy numbering with a PASS. Refuse it.
+        # chip-AGNOSTIC: keyed purely on 'configured path that does not exist',
+        # no PDK/vendor literal.
+        print(f"LEFDEF_MAP_CONFIGURED_BUT_ABSENT: the PDK configured a "
+              f"LEF/DEF->GDS streamout layermap at {_lefdef_map!r} but no such "
+              f"file exists. Refusing to silently stream legacy (compact) "
+              f"numbering, which a sign-off DRC deck misreads as phantom FEOL "
+              f"geometry. Ship the map asset, or have the PDK branch synthesize "
+              f"one (see _synthesize_streamout_layermap).", file=sys.stderr)
+        sys.exit(7)
     if _lefdef_map and os.path.exists(_lefdef_map):
         _cfg.map_file = [_lefdef_map]
         print(f"LEFDEF_MAP applied: {_lefdef_map}")
@@ -18472,7 +21989,7 @@ try:
                   f"disabled (deck-synthesized map — no FEOL-colliding "
                   f"outline/region/placement-blockage shapes)")
     else:
-        print("LEFDEF_MAP not applied (none/missing) — legacy numbering")
+        print("LEFDEF_MAP not applied (none configured) — legacy numbering")
     # FEOL substitution for the DEF cell instances is done MANUALLY after the
     # read (see the `_manual_substitute` block below), NOT via the LEF/DEF
     # reader's `macro_resolution_mode`. Both approaches make the instances
@@ -19785,7 +23302,8 @@ def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
 
 
 def _derive_metal_fill_density(pdk: "PdkConfig",
-                               container: str) -> Optional[Dict[str, Any]]:
+                               container: str,
+                               chip_die: bool = False) -> Optional[Dict[str, Any]]:
     """Chip-AGNOSTIC per-layer density metal-fill config, synthesized from the PDK's OWN
     declared files (streamout layermap + tech LEF + sign-off DRC deck) when no bridge
     declares one — so metal fill runs for EVERY PDK, not only a hand-configured one.
@@ -19821,11 +23339,315 @@ def _derive_metal_fill_density(pdk: "PdkConfig",
     if not (layermap_text.strip() and techlef_text.strip() and deck_text.strip()):
         return None
     try:
-        return _mfcg.build_metal_fill_config(
+        cfg = _mfcg.build_metal_fill_config(
             layermap_text, techlef_text, deck_text,
             metal_prefix=(getattr(pdk, "metal_prefix", None) or "metal"))
     except Exception:
         return None
+    # === THE KEEP-OUT: THE DECK'S OWN RULE FIRST, THE BAND ONLY AS FALLBACK ===
+    #
+    # `metal_fill.py` has supported two keep-out forms since the fill engine
+    # got one, and its own docstring already says which is which:
+    #
+    #   keepout_layers  "the exact form when the PDK ships a marker for the
+    #                    band ... because it follows the ring the generator
+    #                    actually drew instead of assuming where it went"
+    #   keepout_edge_um "the `fill_all.rb` form, for a PDK that ships no marker"
+    #
+    # Only the fallback was ever populated. `build_metal_fill_config` now
+    # derives the primary from the deck's own separation rules (see
+    # `parse_metal_keepout_layers`), so the band is used for what it was
+    # documented for: a PDK whose deck states no such rule.
+    #
+    # WHY THE ORDER MATTERS, MEASURED. The band is inset from the layout's own
+    # bbox and is claimed on `chip_die`, which is a fact about the DESIGN (it
+    # declared a shuttle slot). Whether a ring is ON the layout is a fact about
+    # the ARTEFACT, and the two come apart: a PDK whose seal-ring generator
+    # cannot load its own PCell library prints an error, exits 0 and writes
+    # nothing, and the flow then carves a full scribe band out of the routed
+    # CORE's edge to protect a ring that is not there. That is the same defect
+    # a 26 um band on a 240x240 um IP macro already produced once; gating on
+    # "declares a slot" moved it, it did not remove it.
+    #
+    # A marker keep-out cannot make that mistake: an absent marker is an EMPTY
+    # region, so it keeps out nothing, and the engine says `EMPTY` rather than
+    # reporting a band it did not need.
+    _ko_layers = list((cfg or {}).get("keepout_layers") or [])
+    if cfg and chip_die and not _ko_layers:
+        # ONLY on a full chip die. `space_to_scribe_line` is a clearance from
+        # the SAWING STREET, and a sawing street exists only at the chip's own
+        # edge. An IP macro's boundary is not a scribe line: it is placed in the
+        # interior of some larger chip, so subtracting a scribe band from its
+        # own outline protects nothing and simply deletes fill area.
+        #
+        # MEASURED, on the published gf180mcuD reference (a 240x240 um macro):
+        # ungated, the 26 um band removes 22256 of 57600 um2 -- 38.6% of the
+        # die -- and takes metal2 from density 0.3500 (target 0.35, reached) to
+        # 0.3499 (NOT reached). On the sealed 1936x2531 um chip die the same
+        # keep-out removes 129541 um2 of dummy metal from the real scribe band
+        # with every layer still reaching target. Same rule, opposite verdict,
+        # because only one of the two layouts has a scribe line.
+        #
+        # `chip_die` is the flow's own existing test -- a shuttle submission
+        # template declaring the slot -- not a size heuristic. No template, no
+        # scribe band claimed, and the emitted fill is byte-identical to before.
+        _ko = _pdk_scribe_keepout_um(pdk, container)
+        if _ko is not None:
+            cfg["keepout_edge_um"] = _ko
+    return cfg
+
+
+#: The PDK's own fill scripts state the clearance dummy metal must keep from the
+#: scribe line, e.g. `tp.var("space_to_scribe_line", 26 / $ly.dbu)` followed by
+#: `scribe_line_ring = _frame - _frame.sized(-space_to_scribe_line)` which is
+#: then SUBTRACTED from the fill region. That band is exactly where the seal ring
+#: is: the operator's own size arithmetic uses the same figure as its seal-ring
+#: width. So this is not a margin this flow chose — it is the PDK's, read out of
+#: the PDK.
+_SCRIBE_KEEPOUT_RE = re.compile(
+    r"space_to_scribe_line\W+([0-9]+(?:\.[0-9]+)?)")
+#: Where a PDK laid out the standard way keeps those scripts.
+_PDK_FILL_SCRIPTS_REL = "libs.tech/klayout/tech/scripts"
+
+
+def _pdk_scribe_keepout_um(pdk: "PdkConfig",
+                           container: Optional[str]) -> Optional[float]:
+    """The dummy-fill-to-scribe-line clearance THIS PDK declares, in um.
+
+    None when the PDK ships no fill script or declares no such clearance — in
+    which case no keep-out is claimed and the fill behaves exactly as before.
+    A wrong guess here would be worse than none: too small and the fill lands on
+    the seal ring, too large and the density target becomes unreachable for a
+    reason no report explains.
+    """
+    root = _pdk_dir_of(pdk)
+    if not root:
+        return None
+    try:
+        rc, out, err = _docker_exec(
+            container,
+            f"cat {root}/{_PDK_FILL_SCRIPTS_REL}/*.rb 2>/dev/null")
+    except Exception:
+        return None
+    m = _SCRIBE_KEEPOUT_RE.search(out or "")
+    if not m:
+        return None
+    try:
+        v = float(m.group(1))
+    except Exception:
+        return None
+    return v if v > 0 else None
+
+
+def _pdk_dir_of(pdk: "PdkConfig") -> str:
+    """`<PDK_ROOT>/<PDK>` for this PDK, from the tech-LEF path prefix before
+    `/libs.ref/`. Same derivation `_max_captable_c` already uses — PDK layout,
+    not a PDK name — so it resolves for any PDK laid out the standard way."""
+    tlef = str(getattr(pdk, "tech_lef", "") or "")
+    i = tlef.find("/libs.ref/")
+    return tlef[:i] if i > 0 else ""
+
+
+def _die_finishing(project: Path, top: str, pdk: PdkConfig,
+                     gds_path: Path,
+                     container: Optional[str] = None) -> Tuple[bool, str]:
+    """Step 26.5ic — die finishing: the PDK's OWN seal ring on the streamed GDS.
+
+    Delegates to the `die_finishing_gen` plugin program, which locates the PDK's
+    script and invokes it the way LibreLane's `KLayout.SealRing` step does.
+    This function contains no geometry and no ring: the seal ring's width,
+    layer stack, corner construction and slot pattern are foundry data and the
+    PDK ships the generator for them.
+
+    WHY IT RUNS HERE. At streamout, after the layer merge and BEFORE the fill
+    passes, the density checks and the sign-off DRC/LVS read this GDS — which
+    is LibreLane's own chip-flow order (SealRing -> Filler -> Density). The
+    alternative, adding the ring at foundry handoff, would put metal on the die
+    AFTER Step 31 signed it off: the die that was verified would not be the die
+    that ships.
+
+    NONFATAL, like its `_klayout_dummy_fill` / `_density_metal_fill` siblings:
+    any failure leaves the GDS untouched and is DISCLOSED in the step note, and
+    the Step-26.5ic gate (`die_finishing_check`) reports the same verdict from the program's own report. A
+    PDK that ships no generator is a named skip, never a silent "sealed".
+    """
+    if not gds_path.is_file():
+        return False, "no GDS to seal"
+    prog = Path(__file__).resolve().parent / "die_finishing_gen.py"
+    if not prog.is_file():
+        return False, "die_finishing_gen program not found"
+    pdk_dir = _pdk_dir_of(pdk)
+    if not pdk_dir:
+        return False, ("cannot locate the PDK directory from the tech LEF — "
+                       "no seal-ring generator was looked for")
+    argv = [sys.executable, str(prog), str(project),
+            "--gds", str(gds_path), "--in-place",
+            "--pdk-root", str(Path(pdk_dir).parent),
+            "--pdk", Path(pdk_dir).name]
+    # === fix 3a — SEAL THE SLOT RECTANGLE, NOT THE ROUTED DIE ===============
+    # `die_finishing_gen` falls back to the streamed GDS's own DIEAREA when it
+    # is told no size. Since fix 1 that bbox is the slot's CORE_AREA — the
+    # 1052x1647 rectangle the logic was placed in — so an un-told generator
+    # would build the ring around the CORE, return PASS, and ship a die whose
+    # seal ring is 442 um inside the saw street on every side. It would look
+    # like a clean run: the ring exists, it is verified, and it is in the wrong
+    # place. Nothing downstream would contradict it until the operator's size
+    # check measured the layout and found it 1052x1647 instead of 1936x2531.
+    #
+    # The slot pins both rectangles precisely so this cannot be guessed. Pass
+    # the DIE_AREA explicitly whenever there is one.
+    _slot = _slot_geometry(project)
+    if _slot:
+        argv += ["--die-width", str(_slot["die_w"]),
+                 "--die-height", str(_slot["die_h"])]
+    # Same reason `_density_metal_fill` passes it: the program resolves its own
+    # KLayout runner via `_klayout_launch`, which looks for a container NAMED
+    # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run
+    # container has a different generated name, so without this the program
+    # would skip with "no KLayout runner available" while KLayout is right
+    # there in THIS run's own container.
+    run_env = dict(os.environ)
+    if container:
+        run_env["VIBEIC_EDA_CONTAINER"] = container
+    try:
+        cp = subprocess.run(argv, capture_output=True, text=True,
+                            timeout=3600, env=run_env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"die finishing NONFATAL: {exc}"
+    if cp.returncode != 0:
+        # rc 2 is the program's NAMED disclosed skip (this PDK ships no
+        # generator); rc 1 is a real failure with its reason in the report.
+        # Both are reported, never hidden.
+        tail = ((cp.stdout or "") + (cp.stderr or "")).strip().splitlines()
+        why = next((ln for ln in reversed(tail)
+                    if ln.startswith(("VACUOUS_PASS:", "die_finishing_gen:"))),
+                   (tail[-1] if tail else f"rc={cp.returncode}"))
+        return False, f"die finishing did NOT complete: {why[:300]}"
+    return True, "PDK seal ring inserted and verified around the die"
+
+
+def _die_density_fill(project: Path, top: str, pdk: PdkConfig,
+                      gds_path: Path,
+                      container: Optional[str] = None) -> Tuple[bool, str]:
+    """DIE-WIDE dummy fill by the PDK's OWN density-fill generator.
+
+    Delegates to the `die_density_fill_gen` plugin program, which locates the
+    PDK's filler (`libs.tech/klayout/tech/scripts/fill_all.rb` and the COMP /
+    Poly2 / metal passes it drives) and invokes it the way the PDK ships it.
+    This function contains no fill cell, no pitch, no keep-out and no density
+    target: dummy fill is foundry data and the PDK ships the generator for it.
+
+    WHY IT EXISTS BESIDE `_density_metal_fill`, WHICH ALREADY FILLS. Because
+    they answer different questions, and only one of them is the question a
+    foundry minimum-density rule asks. MEASURED 2026-08-20, gf180mcuD, a
+    0.5x0.5 slot die 1936 x 2531 um whose routed core is 1052 x 1647 um:
+
+        reports/phase3/cmp_fill_emit.json   metal2 0.0036 -> 0.4330 "reached"
+        reports/phase3/metal_density.json   "die_area_um2": 1732693  <- the CORE
+        the operator's own precheck, same GDS, sealed:  8 density errors
+          DCF.1b PL.8 M1.4 M2.4 M3.4 M4.4 M5.4 MT.3, every one reported
+          against the whole die polygon (0,0;1936,2531)
+        the same layers measured over the DIE:
+          COMP 3.04 %  Poly2 0.12 %  M1 8.26 %  M2 18.21 %  M3 17.97 %
+          M4 18.45 %  M5 18.48 %      (floors 25 / 14 / 30 / 30 / 30 / 30 / 30)
+
+    `_density_metal_fill` measures and fills the BOUNDING BOX OF THE STREAMED
+    GEOMETRY. On a slot submission that box is the routed core -- 35.4 % of the
+    die here -- so it reported every layer at target while 64.6 % of the die
+    carried no metal, no COMP and no Poly2 at all. It also fills metal only;
+    DCF.1b and PL.8 are COMP and Poly2 rules that nothing in this flow
+    addressed. Running the PDK's own generator over the finished die closes
+    both gaps at once, and closes them with the foundry's numbers.
+
+    WHY IT RUNS HERE. The PDK generator's fill frame is
+    `$ly.top_cell().dbbox()` and its scribe keep-out is measured inward from
+    that frame, so it must run AFTER the seal ring -- the ring is what makes
+    the bounding box the die -- and BEFORE the density checks and the sign-off
+    DRC/LVS read this GDS. That is LibreLane's own chip-flow order,
+    SealRing -> Filler -> Density. Filling after sign-off would put metal on
+    the die after Step 31 verified it.
+
+    NONFATAL, like its `_die_finishing` / `_density_metal_fill` siblings: any
+    failure leaves the GDS as it was and is DISCLOSED in the step note. A PDK
+    that ships no density filler is a NAMED skip, never a silent "filled". A
+    fill whose frame did not cover the declared die is a NAMED failure, never a
+    fill reported as die-wide.
+    """
+    if not gds_path.is_file():
+        return False, "no GDS to fill"
+    prog = Path(__file__).resolve().parent / "die_density_fill_gen.py"
+    if not prog.is_file():
+        return False, "die_density_fill_gen program not found"
+    pdk_dir = _pdk_dir_of(pdk)
+    if not pdk_dir:
+        return False, ("cannot locate the PDK directory from the tech LEF — "
+                       "no density-fill generator was looked for")
+    argv = [sys.executable, str(prog), str(project),
+            "--gds", str(gds_path), "--in-place", "--cell", top,
+            "--pdk-root", str(Path(pdk_dir).parent),
+            "--pdk", Path(pdk_dir).name]
+    # === ONE WRITER PER DUMMY LAYER =======================================
+    # `_density_metal_fill` ran just above and owns the metal dummy layers. The
+    # PDK's generator fills those too, and its per-layer keep-out is computed
+    # from the DRAWN datatype alone — its design manual assumes its filler is
+    # the only one — so it cannot see, and cannot avoid, fill that is already
+    # there. MEASURED, gf180mcuD, one die filled by both: 234437 KLayout DRC
+    # errors (MT.2a 79226, M3.2a 73590, M4.2a 71714, MT.1 4374, M3.1 2862,
+    # M4.1 2671) where EACH FILLER ALONE was DRC-clean, and the operator's
+    # precheck refused it — a worse refusal than the 8 density errors the fill
+    # was added to clear.
+    #
+    # Telling the program which layers this flow already owns is what lets it
+    # DISCOVER (by running each of the generator's own passes once) which pass
+    # writes them, and leave that one out. The layer numbers come from the
+    # metal-fill config this run itself wrote — no layer literal here, and none
+    # in the program.
+    _mf_cfg = _pl.pnr_dir(project) / "metal_fill_density_cfg.json"
+    try:
+        _owned = sorted({int((lay.get("layer") or [None])[0])
+                         for lay in ((json.loads(_mf_cfg.read_text()) or {})
+                                     .get("layers") or [])
+                         if isinstance(lay.get("layer"), list) and lay["layer"]})
+    except (OSError, ValueError, TypeError, IndexError):
+        _owned = []
+    for _l in _owned:
+        argv += ["--owned-layer", str(_l)]
+    # Same reason `_die_finishing` passes it, and the same trap if it is not:
+    # the streamed GDS's own bbox is the slot's CORE_AREA since the floorplan
+    # fix, so a generator told nothing would fill the CORE, report success, and
+    # ship a die that is 64.6 % bare. The slot pins the die rectangle exactly,
+    # so it is passed explicitly and never guessed.
+    _slot = _slot_geometry(project)
+    if _slot:
+        argv += ["--die-width", str(_slot["die_w"]),
+                 "--die-height", str(_slot["die_h"])]
+    # Same reason `_density_metal_fill` passes it: the program resolves its own
+    # KLayout runner via `_klayout_launch`, which looks for a container NAMED
+    # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run
+    # container has a different generated name, so without this the program
+    # would skip with "no KLayout runner available" while KLayout is right
+    # there in THIS run's own container.
+    run_env = dict(os.environ)
+    if container:
+        run_env["VIBEIC_EDA_CONTAINER"] = container
+    try:
+        cp = subprocess.run(argv, capture_output=True, text=True,
+                            timeout=3600, env=run_env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"die density fill NONFATAL: {exc}"
+    if cp.returncode != 0:
+        # rc 2 is the program's NAMED disclosed skip (this PDK ships no
+        # density filler); rc 1 is a real failure with its measurement in the
+        # report. Both are reported, never hidden.
+        tail = ((cp.stdout or "") + (cp.stderr or "")).strip().splitlines()
+        why = next((ln for ln in reversed(tail)
+                    if ln.startswith(("VACUOUS_PASS:", "die_density_fill_gen:"))),
+                   (tail[-1] if tail else f"rc={cp.returncode}"))
+        return False, f"die-wide density fill did NOT complete: {why[:300]}"
+    note = next((ln for ln in ((cp.stdout or "").strip().splitlines())
+                 if ln.startswith("die_density_fill_gen:")), "")
+    return True, (note[len("die_density_fill_gen: "):] if note else
+                  "the PDK's own density-fill generator filled the declared die")
 
 
 def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
@@ -19852,7 +23674,8 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
         # No bridge-declared config: synthesize one chip-AGNOSTICALLY from the PDK's own
         # declared files so per-layer density metal fill runs for EVERY PDK (e.g. the
         # open gf180mcuD / sky130A / ihp-sg13g2, none of which ship a bridge config).
-        mfd = _derive_metal_fill_density(pdk, container)
+        mfd = _derive_metal_fill_density(
+            pdk, container, chip_die=_slot_geometry(project) is not None)
         derived = mfd is not None
     if not mfd:
         return False, "no metal_fill_density config"
@@ -20398,6 +24221,69 @@ def _parse_ship_repair_log(log: str) -> dict:
     }
 
 
+def _ship_repair_refusals(parsed: dict) -> list:
+    """The promotion clauses that ACTUALLY refuse, in gate order, each named
+    with the numbers it refused on.
+
+    WHY THIS EXISTS. The non-promoted note used to close with a FIXED string,
+    `not promoted (needs setup>=0 and DRC-clean)`. That is a stated REASON, and
+    on a design whose repair is refused for any OTHER clause it is a WRONG one.
+
+    MEASURED, caravel_user_project x sky130A (routes bit-identical on two
+    independent hosts, md5 8dd2a0b7ab326390192d14c38ab8322a, so this is
+    reproducible rather than a one-off): the repair was refused while setup was
+    +8.81 ns (well over the `setup>=0` the note names) and the reroute reported
+    0 DRC violations (exactly the `DRC-clean` the note names). BOTH advertised
+    conditions were satisfied. The real refusal was the per-category DRV guard
+    -- `repair_design`'s own transcript rose slew 31->36 and cap 26->30. A
+    reader of that note is pointed at setup and DRC, which are fine, and away
+    from the clause that actually fired; the cell's failure was consequently
+    recorded for a long time as suspected PnR run-to-run randomness, which the
+    byte-identical routes disprove.
+
+    So the reason is DERIVED from the same `parsed` dict
+    `_ship_repair_should_promote` reads, clause for clause and in the same
+    order, and the published text can no longer disagree with the decision.
+    `test_signoff_repair_note_names_the_clause_that_refused` pins that
+    equivalence so the two cannot drift apart again.
+
+    This function is REPORTING ONLY -- it is not consulted by the gate and
+    changes no promotion decision. It cannot see `repaired_def_ok` /
+    `repaired_v_ok` (the gate's first clause, which is about artefacts rather
+    than about this dict), so an empty list means "nothing in the parsed log
+    refuses", not "the gate promoted"; the caller says so explicitly.
+    chip/PDK/vendor-AGNOSTIC: pure arithmetic on a parsed dict."""
+    out: list = []
+    if parsed.get("reroute_incomplete"):
+        out.append(f"the reroute did not complete "
+                   f"({parsed['reroute_incomplete']} abort(s))")
+    if parsed.get("repair_noop"):
+        out.append("the repair changed nothing")
+    _unr = parsed.get("unrouted_nets")
+    if _unr is not None and _unr > 0:
+        out.append(f"{_unr} net(s) were left unrouted")
+    wp, wb = parsed.get("wns_postroute"), parsed.get("wns_before")
+    if wp is not None and wb is not None and wp <= wb + 0.001:
+        out.append(f"setup did not measurably improve on the sign-off basis "
+                   f"({wb} -> {wp} ns)")
+    wa = parsed.get("wns_after_repair")
+    if wa is None or wa < -0.001:
+        out.append(f"the repair did not reach non-negative setup "
+                   f"(estimate {wa} ns)")
+    if parsed.get("route_violations") != 0:
+        out.append(f"the reroute was not DRC-clean "
+                   f"({parsed.get('route_violations')} violation(s))")
+    sb, sa = parsed.get("drv_slew_before"), parsed.get("drv_slew_after")
+    if sb is not None and sa is not None and sa > sb:
+        out.append(f"repair_design's own slew-violation transcript rose "
+                   f"{sb} -> {sa}")
+    cb, ca = parsed.get("drv_cap_before"), parsed.get("drv_cap_after")
+    if cb is not None and ca is not None and ca > cb:
+        out.append(f"repair_design's own capacitance-violation transcript "
+                   f"rose {cb} -> {ca}")
+    return out
+
+
 def _ship_repair_nonpromotion_note(parsed: dict) -> str:
     """The note the NON-PROMOTED sign-off repair publishes about its own slack.
 
@@ -20435,8 +24321,14 @@ def _ship_repair_nonpromotion_note(parsed: dict) -> str:
     reports the divergence it measured, never a reason for it.
     """
     viols = parsed.get("route_violations")
-    tail = (f" reroute violations={viols}; not promoted "
-            f"(needs setup>=0 and DRC-clean).")
+    # The refusing clause is DERIVED, never asserted (see
+    # `_ship_repair_refusals`): the old fixed "(needs setup>=0 and DRC-clean)"
+    # named two conditions that were both SATISFIED on the design that
+    # exposed this, and pointed every reader away from the clause that fired.
+    _why = _ship_repair_refusals(parsed)
+    tail = (f" reroute violations={viols}; not promoted — "
+            + ("; ".join(_why) if _why
+               else "no complete repaired route was written") + ".")
     est_b = parsed.get("wns_before")
     est_a = parsed.get("wns_after_repair")
     post = parsed.get("wns_postroute")
@@ -21390,9 +25282,22 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
         snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container,
                                             gds_out)
+        # Step 26.5ic — die finishing (the PDK's OWN seal ring), BEFORE the
+        # fill and before the sign-off DRC/LVS read this GDS, so the ring is
+        # verified with the rest of the die instead of appearing after its
+        # evidence.
+        seal_ok, seal_note = _die_finishing(project, top, pdk, gds_out,
+                                            container)
         # Per-layer density fill BEFORE the density checks / sign-off DRC read
         # this GDS. Config-gated + NONFATAL; the note always discloses.
         dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+        # DIE-WIDE fill by the PDK's own generator, LAST of the fill passes
+        # and still before the density checks / sign-off DRC read this GDS.
+        # The pass above measures and fills the streamed geometry's BOUNDING
+        # BOX; a foundry minimum-density rule is written over the entire DIE,
+        # and on a slot submission those are different rectangles. NONFATAL.
+        ddfill_ok, ddfill_note = _die_density_fill(project, top, pdk, gds_out,
+                                                   container)
         # vibe-ic#613 — the port-label restore is a POST-streamout pass over the
         # finished GDS, so it belongs on BOTH engines. Gating it on the KLayout
         # path alone would have made "which streamout ran" decide whether a
@@ -21416,13 +25321,18 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
             f"(streamout=magic, abutting geometry merged"
             f"{'; ' + snap_note if snap_ok else ''}"
+            f"{'; ' + seal_note if seal_ok else ''}"
             f"{'; ' + dfill_note if dfill_ok else ''}"
+            f"{'; ' + ddfill_note if ddfill_ok else ''}"
             f"{'; ' + label_note if label_ok else ''})",
             [str(gds_out)],
             extras={"streamout_engine": "magic",
+                    "die_finishing": seal_ok, "die_finishing_note": seal_note,
                     "grid_snap": snap_ok, "grid_snap_note": snap_note,
                     "density_fill": dfill_ok,
                     "density_fill_note": dfill_note,
+                    "die_density_fill": ddfill_ok,
+                    "die_density_fill_note": ddfill_note,
                     "port_label_restore": label_ok,
                     "port_label_restore_note": label_note})
 
@@ -21464,19 +25374,36 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # vs 1 with it applied, and the foundry via layers were EMPTY in the
     # un-mapped GDS (the router's vias had been written elsewhere). A GDS in
     # that state cannot be fabricated, so shipping it as PASS is the defect.
-    # Scoped to foundry sign-off (a vendor deck is present); OSS PDKs either
-    # carry their own map or never reach this branch.
-    if pdk.calibre_drc and not lefdef_map_c:
+    #
+    # vibe-ic#789 — this gate was `pdk.calibre_drc and not lefdef_map_c`, i.e.
+    # scoped to a COMMERCIAL Calibre deck. That is a VENDOR test, and the
+    # physics it stands in for is vendor-free: GDSII carries no layer names, so
+    # EVERY deck that reads a GDS binds its rules to layer NUMBERS. A PDK whose
+    # sign-off deck is a KLayout `.lydrc` has `calibre_drc=None` and walked
+    # straight past it — measured on nangate45/FreePDK45.lydrc, whose DRC on a
+    # legacy-numbered GDS reported 7,911,144 phantom IMPLANT/VT/CONTACT items;
+    # and on asap7, whose `asap7.lydrc` selects every layer by NUMBER
+    # (`input(19, 0)` = M1 … `input(7, 0)` = GATE) while the image ships no
+    # asap7 `.map` and the registry configures none, so `lefdef_map_c` was ""
+    # and the run streamed legacy numbering with a PASS. `_signoff_drc_deck`
+    # reads the same two fields `step_drc` dispatches on — no new discovery,
+    # no PDK/vendor literal.
+    _signoff_deck = _signoff_drc_deck(pdk.calibre_drc, pdk.drc_deck)
+    if _signoff_deck and not lefdef_map_c:
         return StepResult(
             "gds", "FAIL", time.time() - t0,
-            "streamout layer map missing: this PDK ships a foundry sign-off "
-            "DRC deck, but no LEF/DEF->GDS streamout layermap was found. The "
-            "DEF reader would fall back to legacy numbering and every routed "
-            "shape would land on a non-foundry GDS layer, so the sign-off deck "
-            "reads the layout as geometry the design never drew. Stage the "
-            "vendor streamout map (`<name> <purpose> <layer> <datatype>`) "
-            "under input/pdk/, or declare its path as `lefdef_layermap` in the "
-            "PDK bridge signoff config.")
+            "streamout layer map missing: this run executes the sign-off DRC "
+            f"deck {Path(_signoff_deck).name}, but no LEF/DEF->GDS streamout "
+            "layermap was found. The DEF reader would fall back to legacy "
+            "numbering and every routed shape would land on a GDS layer the "
+            "deck does not read as that purpose, so the deck reads the layout "
+            "as geometry the design never drew — a DRC verdict computed on the "
+            "wrong layers is neither a pass nor a violation count. Stage the "
+            "streamout map (`<name> <purpose> <layer> <datatype>`) under "
+            "input/pdk/, or declare its path as `lefdef_layermap` in the "
+            "PDK bridge signoff config / the pdk_registry.json entry.",
+            extras={"signoff_drc_deck": _signoff_deck,
+                    "lefdef_layermap": None})
     # v1.3.83 — std-cell exclusion marker env (config-driven; empty → no-op).
     marker_arg = pdk.stdcell_marker_layer or ""
     cmd = (
@@ -21517,6 +25444,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                                                   gds_out))
                           if pdk.same_net_heal else
                           (False, "no same_net_heal config"))
+    # Step 26.5ic — die finishing (the PDK's OWN seal ring), after the merge
+    # (so the ring's own geometry is not fused into the core's) and BEFORE the
+    # fill passes, the density checks and the sign-off DRC/LVS consume this
+    # GDS. That is LibreLane's chip-flow order, SealRing -> Filler -> Density;
+    # adding the ring later would put metal on the die after Step 31 signed it
+    # off — the artefact changing after the evidence.
+    seal_ok, seal_note = _die_finishing(project, top, pdk, gds_out, container)
     # v1.3.83 — config-driven dummy-METAL fill AFTER merge, BEFORE the
     # sign-off DRC consumes this GDS (the deck's own density + spacing +
     # wide-metal rules then verify the fill honestly — no rule is waived).
@@ -21529,6 +25463,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # PATTERN above and before the density checks / sign-off DRC consume this
     # GDS. Config-gated + NONFATAL; the note always discloses the outcome.
     dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+    # DIE-WIDE fill by the PDK's own generator, LAST of the fill passes and
+    # still before the density checks / sign-off DRC read this GDS. The pass
+    # above measures and fills the streamed geometry's BOUNDING BOX; a foundry
+    # minimum-density rule is written over the entire DIE, and on a slot
+    # submission those are different rectangles. NONFATAL, always disclosed.
+    ddfill_ok, ddfill_note = _die_density_fill(project, top, pdk, gds_out,
+                                               container)
     # v1.3.91 — restore top PORT text labels + VDD/VSS rail markers LAST (after
     # merge/heal/fill so the labels/markers land on the final geometry): makes
     # the KLayout-streamed GDS LVS-able by the geometric extractor. Config-gated
@@ -21540,6 +25481,23 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # carrying shapes must be accounted for by the map, the library GDS or the
     # bridge config. Anything else is geometry on a layer no authority
     # recognises — the same defect, caught from the GDS itself.
+    #
+    # vibe-ic#789 — this one is DELIBERATELY still `pdk.calibre_drc`, unlike
+    # the pre-flight gate above. It is a DIFFERENT question (is the map
+    # COMPLETE?) from #789's (is there a map AT ALL?), and #789 is already
+    # answered pre-flight, so widening this adds no coverage for it. What
+    # widening WOULD add was measured, not guessed: running `audit()` over
+    # three real, currently-green sky130A streamed GDS artefacts
+    # (sha256 clean_run_v1342, sha256 chip_top, subservient) with the shipped
+    # sky130A.map + sky130_fd_sc_hd.gds yields ERROR/ORPHAN_LAYER on all three
+    # — 8, 8 and 9 orphans (1/0, 2/2, 2/3, 3/2, 3/3, 8/2, 9/2, 9/3 …), because
+    # the authority set (map targets | library GDS | macro GDS | bridge config)
+    # has no entry for the reader-produced outline/pin/label datatypes an OSS
+    # PDK draws and no bridge config declares. Widening here would therefore
+    # convert every sky130A run to FAIL on an incompleteness of THIS CHECK's
+    # authority set, not on any defect in the design or the numbering. That
+    # gap is real and needs its own issue + its own evidence; borrowing #789's
+    # widening to land it would be a silent, unrelated regression.
     if pdk.calibre_drc:
         try:
             import importlib
@@ -21580,13 +25538,19 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                       f"{'; ' + snap_note if snap_ok else ''}"
                       f"{'; ' + merge_note if merge_ok else ''}"
                       f"{'; ' + heal_note if heal_ok else ''}"
+                      f"{'; ' + seal_note if seal_ok else ''}"
                       f"{'; ' + fill_note if fill_ok else ''}"
                       f"{'; ' + dfill_note if dfill_ok else ''}"
+                      f"{'; ' + ddfill_note if ddfill_ok else ''}"
                       f"{'; ' + label_note if label_ok else ''})",
                       [str(gds_out)],
                       extras={"streamout_engine": "klayout",
+                              "die_finishing": seal_ok,
+                              "die_finishing_note": seal_note,
                               "density_fill": dfill_ok,
                               "density_fill_note": dfill_note,
+                              "die_density_fill": ddfill_ok,
+                              "die_density_fill_note": ddfill_note,
                               "grid_snap": snap_ok,
                               "grid_snap_note": snap_note,
                               "layer_merge": merge_ok,
@@ -22518,9 +26482,10 @@ def _drc_wall_budget_s() -> float:
     runs to the ~24h hard ceiling. svrfdrc's single-thread derived-layer build
     (SHRINK/boolean/merge) is pathological on dense large designs (sha256: 100%
     CPU, 4.4h, zero output). This wall-clock cap bounds the DRC step so a perf
-    ceiling surfaces as an HONEST SKIPPED-CONDITION, never a multi-hour silent
-    hang. Default 2h; env VIBE_IC_DRC_BUDGET_S overrides (e.g. raise for a
-    genuinely-large sign-off, lower for CI). chip/tool-AGNOSTIC."""
+    ceiling surfaces as an HONEST, NON-GREEN verdict (see the kill path below),
+    never a multi-hour silent hang. Default 2h; env VIBE_IC_DRC_BUDGET_S
+    overrides (e.g. raise for a genuinely-large sign-off, lower for CI).
+    chip/tool-AGNOSTIC."""
     try:
         v = float(os.environ.get("VIBE_IC_DRC_BUDGET_S", "7200"))
         return v if v > 0 else 7200.0
@@ -22584,8 +26549,8 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
             cmd += f" --cell-aware-feol={cfg_c}"
     # v1.4.38 — bound the DRC step at a WALL-CLOCK budget (the stall watchdog never
     # kills a 100%-CPU tool; the default ceiling is ~24h). A non-completing DRC is
-    # NOT a proven violation → SKIPPED-CONDITION (disclosed perf ceiling), like the
-    # LEC timeout-guard, never a FAIL or a silent multi-hour hang.
+    # NOT a proven violation, and it is NOT a sign-off either — see the kill path
+    # below for the tier it takes and why, never a silent multi-hour hang.
     _drc_budget = _drc_wall_budget_s()
     rc, out, err = _docker_exec(container, cmd, marker=gds_c,
                                 hard_ceiling_s=_drc_budget)
@@ -22607,13 +26572,53 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                                     hard_ceiling_s=_drc_budget)
     if rc in (_RC_STALLED, 124):
         _mins = int(_drc_budget // 60)
+        # vibe-ic#925 — THE TIER, not the prose. The message below was already
+        # honest: it refuses to call a timeout a violation and refuses to sign
+        # off from a partial report. The word beside it was not. This site
+        # returned `SKIPPED-CONDITION`, which is a word from
+        # `flow_compliance_check`'s vocabulary and not from this runner's
+        # (`_VERDICT_TIERS`) — and `_aggregate_verdict` enumerates ITS OWN
+        # vocabulary and lets anything else fall through to the catch-all
+        # `return "PASS"`. MEASURED on this tree before the change: a plan whose
+        # only non-PASS step was a timed-out sign-off DRC aggregated to a plain
+        # green `"PASS"` — not even PASS_WITH_WAIVERS. Downstream,
+        # `_flow_verdict_tiers.is_excused("SKIPPED-CONDITION")` is True, so
+        # wherever that word IS adjudicated the step is subtracted from
+        # `total_required` as well: a DRC that ran out of time stopped being
+        # owed at all.
+        #
+        # WHY NOT `SKIPPED-SETUP-REQUIRED`, the tier #925 proposed. That word
+        # appears ZERO times in this file — it belongs to
+        # `flow_compliance_check`, a different program with a different status
+        # vocabulary. Adopting it here would swap one foreign word for another
+        # and `_aggregate_verdict` would go on returning a green `"PASS"`
+        # (measured, both arms, in test_issue925_drc_timeout_is_not_excused).
+        #
+        # WHY `BLOCKED`. It is THIS runner's own word for the state that
+        # actually obtains — "the tool is present, the input is present, the
+        # check could not be completed, so NOTHING is known about the design"
+        # — it is named explicitly in `_aggregate_verdict`'s non-green bucket,
+        # and unlike `FAIL` it does not assert a violation the deck never
+        # found. (NOT relied on here, and stated so it is not assumed:
+        # `declared_signoff_rollup` does NOT cover this step — its declared
+        # population is STA/EM plus the DRV promotion gate, and `drc` is not
+        # in it. The denominator this fix moves is `_aggregate_verdict`'s.)
+        #
+        # ORGANIC #570 — a killed engine may have left a PARTIAL report at the
+        # canonical path, and the next reader cannot tell it from a finished
+        # one. Rename it away exactly as the PnR and LVS stall paths do, so no
+        # verdict can be read from an artefact this run never finished writing.
+        _docker_timeout_isolate([rpt])
         return StepResult(
-            "drc", "SKIPPED-CONDITION", time.time() - t0,
+            "drc", "BLOCKED", time.time() - t0,
             f"svrf-native commercial DRC did not complete within the "
             f"{_mins}-minute wall-clock budget (rc={rc}) — a svrfdrc performance "
             f"ceiling on large/dense geometry (single-thread derived-layer "
             f"build), NOT a proven violation. No sign-off from a partial report; "
-            f"disclosed. Re-run under a fixed/parallelised engine or raise "
+            f"the partial report (if any) was isolated to *.timeout.partial. "
+            f"NOTHING is known about the layout's DRC state, so this step is "
+            f"BLOCKED (never green) and still owes an answer — it is not an "
+            f"excused skip. Re-run under a fixed/parallelised engine or raise "
             f"VIBE_IC_DRC_BUDGET_S.",
             extras={"finding": "SVRFDRC_PERF_CEILING",
                     "drc_budget_s": _drc_budget})
@@ -23119,9 +27124,35 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
 # ---------------------------------------------------------------------------
 # Step 5: LVS (Netgen) — defer when no extracted SPICE netlist available
 # ---------------------------------------------------------------------------
+# ── ONE DEF wiring grammar, used by every routing predicate in this file ──
+# DEF 5.8 gives a net's `regularWiring` a STATUS token, and there are four of
+# them: ROUTED (the router wrote it), FIXED (pre-routed, must not move), COVER
+# (pre-routed, must not move or be re-shaped) and NOSHIELD. Only the STATUS is
+# introduced by `+`; the further wire segments of the SAME statement continue
+# with a BARE `NEW` and no plus sign.
+#
+# The predicates below used to hand-roll this as substring tests, and each one
+# rolled it differently: `_def_has_routing` accepted `"+ ROUTED"`/`"+ FIXED"`,
+# `_def_signal_routing_stats` accepted `"+ ROUTED"`/`"+ NEW"`. Two consequences,
+# both MEASURED on the tracked corpus:
+#   * `+ NEW` is DEAD — 0 occurrences in all three tracked routed DEFs, because
+#     the continuation is spelled `NEW`, never `+ NEW`. A token that can never
+#     match is not a widened grammar, it is a comment.
+#   * a DEF whose wiring is FIXED/COVER/NOSHIELD-only, or that writes `+  ROUTED`
+#     with two spaces (both legal DEF 5.8), read as UNROUTED. For the resume gate
+#     that is a false REFUSAL and for the LVS guard a false BLOCK — safe, but
+#     wrong, and it would have sent the reader hunting a routing bug that is not
+#     there.
+# One regex, both callers, and it only ever moves a DEF from "unrouted" to
+# "routed" — it can never turn a refusal into a sign-off it did not earn.
+# chip-AGNOSTIC: DEF 5.8 grammar only.
+_DEF_WIRING_RE = re.compile(r"\+\s+(?:ROUTED|FIXED|COVER|NOSHIELD)\b")
+
+
 def _def_has_routing(def_path: Path) -> bool:
     """ORGANIC #571 — True when a DEF carries actual routing geometry: a
-    NETS section with `+ ROUTED`/`+ FIXED` wiring, or a non-empty
+    NETS section with a `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD` wiring
+    statement, or a non-empty
     SPECIALNETS section (PG straps). A floorplan / placement-stage DEF has
     COMPONENTS + PINS but no routed wiring — feeding it to Magic ext2spice
     wastes hours on an interconnect-less extraction. Reads a bounded prefix
@@ -23131,7 +27162,7 @@ def _def_has_routing(def_path: Path) -> bool:
         # on the first positive.
         with def_path.open("r", errors="ignore") as fh:
             for line in fh:
-                if "+ ROUTED" in line or "+ FIXED" in line:
+                if _DEF_WIRING_RE.search(line):
                     return True
                 if line.lstrip().startswith("SPECIALNETS"):
                     # SPECIALNETS <n> ; — a positive count means PG routing
@@ -23149,8 +27180,18 @@ def _def_has_routing(def_path: Path) -> bool:
 _LVS_MIN_SIGNAL_NETS_FOR_ROUTING_CHECK = 16
 
 
-def _def_signal_routing_stats(def_path: Path) -> Tuple[bool, int]:
+def _def_signal_routing_stats(def_path: Path,
+                              unknown_is_routed: bool = True
+                              ) -> Tuple[bool, int]:
     """Return (has_signal_routing, signal_net_count) for the DEF's NETS section.
+
+    `unknown_is_routed` selects what an UNCLASSIFIABLE DEF (unreadable, or
+    carrying no NETS header at all) means. The default True is the fail-safe
+    the LVS guard needs: never block a DEF you could not read. A caller that
+    is asking for POSITIVE proof of routing — the crash-resume gate, which
+    must refuse unless it can show the checkpoint is routed — passes False so
+    that "could not tell" reads as "not proven", not as "fine". One scan, one
+    copy of the DEF grammar, two honestly-named policies.
 
     `_def_has_routing` conflates POWER routing (SPECIALNETS straps) with SIGNAL
     routing: a DEF that carries only power SPECIALNETS + placed cells (its signal
@@ -23162,12 +27203,13 @@ def _def_signal_routing_stats(def_path: Path) -> Tuple[bool, int]:
     SIGNAL_NET_MISMATCH but are really a routing / DEF-writing gap.
 
     This scans ONLY the `NETS ... END NETS` (signal) section — never SPECIALNETS
-    — counting `- <net>` entries and stopping EARLY on the first `+ ROUTED`/
-    `+ NEW` wiring marker (so a genuinely-routed DEF is classified in O(1) lines).
+    — counting `- <net>` entries and stopping EARLY on the first DEF 5.8 wiring
+    statement (`_DEF_WIRING_RE`, so a genuinely-routed DEF is classified in O(1)
+    lines).
     A signal-unrouted DEF is scanned to `END NETS` to confirm zero. chip-AGNOSTIC:
-    pure DEF-grammar counting, no chip literal. Fail-safe: on any read error, or
-    when no NETS header is found, returns (True, 0) so the guard never blocks a
-    DEF it could not classify."""
+    pure DEF-grammar counting, no chip literal. Fail-safe by DEFAULT: on any read
+    error, or when no NETS header is found, returns (`unknown_is_routed`, 0) so
+    the LVS guard never blocks a DEF it could not classify."""
     in_nets = False
     nets = 0
     try:
@@ -23183,12 +27225,12 @@ def _def_signal_routing_stats(def_path: Path) -> Tuple[bool, int]:
                     break
                 if s.startswith("- "):
                     nets += 1
-                if "+ ROUTED" in line or "+ NEW" in line:
+                if _DEF_WIRING_RE.search(line):
                     return True, nets            # signal routing present → routed
     except OSError:
-        return True, 0                            # unknown → do not block
+        return unknown_is_routed, 0               # unclassifiable → caller's policy
     if not in_nets:
-        return True, 0                            # no NETS header seen → do not block
+        return unknown_is_routed, 0               # no NETS header → caller's policy
     return False, nets
 
 
@@ -23610,7 +27652,7 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
     # interconnect-less netlist whose every signal net is disconnected, and the
     # DEF-direct netgen compare reports a flood of pin/net mismatches that LOOK
     # like a design SIGNAL_NET_MISMATCH but are really a ROUTING / DEF-writing
-    # gap. Detect it (a routed DEF has thousands of `+ ROUTED`/`+ NEW` signal-net
+    # gap. Detect it (a routed DEF has thousands of `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD` signal-net
     # markers; a signal-unrouted DEF has zero) and attribute HONESTLY instead of
     # burning hours in ext2spice and mis-blaming the design. Applies to the
     # NAMED DEF too (not only the fallback), because the runner's own
@@ -24030,6 +28072,8 @@ extract do local
 extract all
 ext2spice lvs
 ext2spice -o $env(SPICE_OUT)
+feedback save $env(FEEDBACK_OUT)
+puts "MAGIC_EXT2SPICE_FEEDBACK $env(FEEDBACK_OUT) [feedback count]"
 puts "MAGIC_EXT2SPICE_DONE $env(SPICE_OUT)"
 quit -noprompt
 """
@@ -25032,6 +29076,106 @@ def _run_asap7_device_lvs(project: Path, top: str, pdk: PdkConfig,
         extras={**common, "finding": finding, "lvs_verdict": verdict})
 
 
+def _strip_nonlayer_blockages(def_text: str) -> Tuple[str, List[str]]:
+    """Return (def_text_without_layerless_BLOCKAGES, dropped_entry_summaries).
+
+    A DEF `BLOCKAGES` section may hold two unrelated kinds of entry:
+
+      - LAYER MET1 RECT ( x1 y1 ) ( x2 y2 ) ;              <- has geometry
+      - PLACEMENT + SOFT + COMPONENT <inst> RECT ( ... ) ; <- placer directive
+
+    The second kind names NO layer: it is an instruction to the PLACER not to
+    put cells in a region, and it carries no conductor. Magic's DEF reader has
+    no layer to bind that RECT to and emits
+
+        LEF read, Line NNNN (Error): No layer defined for RECT.
+
+    and -- measured, not assumed -- then terminates the DEF read part of the
+    time: the SAME command on the SAME byte-identical DEF succeeded 2 of 5
+    runs and died inside the BLOCKAGES section the other 3. Magic exits 0
+    either way, so the step reported only the vague downstream symptom
+    "produced no extracted netlist (rc=0)" and LVS was unrunnable at random.
+
+    So: drop only the entries magic cannot bind (no LAYER), keep every entry
+    that does name a layer, and leave the DEF used by every OTHER consumer
+    untouched -- this staged copy is for extraction alone. The removal is
+    LOSS-FREE for extraction by construction (a placement blockage has no
+    conductor to extract) and was verified as such: on a run where the intact
+    DEF happened to survive, the extracted netlists from the intact and the
+    stripped DEF were byte-identical (same md5).
+
+    Strict fall-through: a DEF with no BLOCKAGES section, or one whose
+    blockages ALL name a layer, comes back unchanged with an empty list, so
+    the caller keeps using the original file. chip-AGNOSTIC: pure DEF syntax,
+    no PDK/design knowledge."""
+    m = re.search(r"(?m)^[ \t]*BLOCKAGES[ \t]+(\d+)[ \t]*;[ \t]*$", def_text)
+    if not m:
+        return def_text, []
+    end = re.search(r"(?m)^[ \t]*END[ \t]+BLOCKAGES[ \t]*$", def_text[m.end():])
+    if not end:
+        return def_text, []
+    body = def_text[m.end():m.end() + end.start()]
+    entries = re.findall(r"-[ \t\r\n].*?;", body, re.S)
+    if not entries:
+        return def_text, []
+    kept = [e for e in entries if re.match(r"-\s+LAYER\b", e)]
+    dropped = [" ".join(e.split())[:120] for e in entries if e not in kept]
+    if not dropped:
+        return def_text, []
+    if kept:
+        new_section = (f"BLOCKAGES {len(kept)} ;\n"
+                       + "".join(f"    {' '.join(e.split())}\n" for e in kept)
+                       + "END BLOCKAGES")
+    else:
+        # An empty `BLOCKAGES 0 ;` block is legal DEF, but emitting nothing is
+        # simpler and equally legal; the section is optional.
+        new_section = ""
+    tail = def_text[m.end() + end.start():]
+    tail = re.sub(r"(?m)\A[ \t]*END[ \t]+BLOCKAGES[ \t]*\n?", "", tail)
+    return def_text[:m.start()] + new_section + ("\n" if new_section else "") \
+        + tail, dropped
+
+
+#: How long the illegal-overlap gate may take. It reads one small text file;
+#: this is a hang ceiling, not a budget.
+_ILLEGAL_OVERLAP_GATE_TIMEOUT = 120
+
+
+def _run_illegal_overlap_gate(project: Path, out_json: Path
+                              ) -> Tuple[int, str]:
+    """Spawn `magic_illegal_overlap_check` and return ``(rc, one-line reason)``.
+
+    Spawned as a SUBPROCESS rather than called in-process on purpose. The gate
+    declares ``ENFORCEMENT: blocking``, and `flow_gate_enforcement_audit` grades
+    that claim by whether a runner spawns the program AND lets the exit status
+    reach a control-flow decision. An in-process call would do the same work and
+    leave the declaration unverifiable — the #884 shape, one layer over.
+
+    Every non-zero rc is returned as-is so the caller can say WHICH failure it
+    was. A gate that could not be spawned at all returns rc 2 with a reason
+    saying nothing was examined: the flow declares this gate, so its absence is
+    an incomplete deployment, not an exemption (the same rule
+    `_run_declared_signoff_gate` applies to the step-23/25 gates).
+    """
+    prog = PROGRAMS_DIR / "magic_illegal_overlap_check.py"
+    if not prog.is_file():
+        return 2, (f"NOT CHECKED — the illegal-overlap gate is not present in "
+                   f"this deployment ({prog}); the extraction feedback channel "
+                   f"was never read.")
+    try:
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return 2, f"NOT CHECKED — cannot create {out_json.parent}: {exc}"
+    cmd = [sys.executable, str(prog), str(project), "--json", str(out_json)]
+    try:
+        cp = subprocess.run(cmd, timeout=_ILLEGAL_OVERLAP_GATE_TIMEOUT,
+                            check=False, capture_output=True, text=True)
+    except Exception as exc:                                   # noqa: BLE001
+        return 2, f"NOT CHECKED — the illegal-overlap gate could not run: {exc}"
+    return cp.returncode, _gate_detail(out_json, cp.stdout or "",
+                                       cp.stderr or "")
+
+
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                         container: str, def_file: Path, netlist: Path,
                         magicrc: str, netgen_setup: str,
@@ -25053,6 +29197,16 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     ext_dir.mkdir(parents=True, exist_ok=True)
     spice_out = ext_dir / f"{top}_extracted.sp"
     tcl = ext_dir / f"ext2spice_{top}.tcl"
+    # W2.3 — magic's ERROR channel. The extractor files every rectangle it
+    # refused to connect ("Illegal overlap between <a> and <b> (types do not
+    # connect)") as a FEEDBACK AREA and then says only `N problems occurred.
+    # See feedback entries.` — it points at a channel. Until this line the
+    # recipe never dumped that channel, so nothing downstream could read it and
+    # an extraction that told us it did not understand the layout still handed
+    # netgen a netlist to bless. `feedback save` writes an EMPTY file when there
+    # are no areas (verified against the image's magic 8.3.681), which is what
+    # makes the ABSENCE of this file a distinguishable fault rather than a zero.
+    feedback_out = ext_dir / _mio.FEEDBACK_NAMES[0]
     # ── LVS ROOT FIX (extract side) — POWER-AWARE DEF extraction (§4.05-safe). ──
     # The plain recipe collapses the four sky130 power nets onto ~2 MIS-named
     # nodes (the ground rail + its VNB taps → the substrate node `VSUBS`; the
@@ -25078,6 +29232,31 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     except Exception:  # nosec — a bad DEF/PDK must never break the plain path
         pass
     tcl.write_text(extract_tcl)
+    # ── LVS ROOT FIX (input side) — layer-less BLOCKAGES break magic's DEF
+    # read (see `_strip_nonlayer_blockages` for the measured 2-of-5 failure
+    # rate). Stage an EXTRACTION-ONLY copy of the DEF with those entries
+    # removed; the signed-off DEF that GDS/DRC/every other consumer reads is
+    # left untouched. Strict fall-through: nothing to strip -> original file.
+    extract_def = def_file
+    try:
+        _stripped, _dropped_blk = _strip_nonlayer_blockages(
+            def_file.read_text(errors="replace"))
+        if _dropped_blk:
+            extract_def = ext_dir / f"{top}_extract.def"
+            extract_def.write_text(_stripped)
+            (ext_dir / "extract_def_provenance.json").write_text(json.dumps({
+                "signed_off_def": str(def_file),
+                "extraction_def": str(extract_def),
+                "dropped_blockage_entries": _dropped_blk,
+                "reason": ("magic's DEF reader cannot bind a RECT that names "
+                           "no layer ('No layer defined for RECT') and aborts "
+                           "the read on it, non-deterministically; a placement "
+                           "blockage carries no conductor, so removing it from "
+                           "the EXTRACTION copy is loss-free. The signed-off "
+                           "DEF is untouched."),
+            }, indent=2) + "\n")
+    except OSError:
+        pass
     tlef_c = _to_container_path(str(pdk.tech_lef), container)
     clef_c = _to_container_path(str(pdk.cell_lef), container)
     # `eval`-ed inside the TCL; empty string → no-op when no macro LEFs.
@@ -25101,9 +29280,10 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"export TLEF={shlex.quote(tlef_c)} "
         f"CLEF={shlex.quote(clef_c)} "
         f"MACRO_LEF_READS={shlex.quote(macro_lef_reads)} "
-        f"DEF={_to_container_path(str(def_file), container)} "
+        f"DEF={_to_container_path(str(extract_def), container)} "
         f"TOP={top} "
-        f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
+        f"SPICE_OUT={_to_container_path(str(spice_out), container)} "
+        f"FEEDBACK_OUT={_to_container_path(str(feedback_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
     _magic_tcl_c = _to_container_path(str(tcl), container)
     cmd = (env_prefix +
@@ -25136,17 +29316,51 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                     "lvs_verdict": verdict,
                     "transcript_tail": (out + err)[-600:]})
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
+        # Say WHERE it stopped instead of only that a file is missing.
+        # MEASURED in the image: `magic` exits 0 even when a `lef read` /
+        # `def read` fails outright, so rc carries NO signal for this tool
+        # (openroad/sta/yosys do return 1 on an uncaught error; magic does
+        # not) — and that is true even now the pipeline's status is magic's
+        # own (`_tool_status_not_the_log_sinks`), because 0 is what magic
+        # itself returns. The recipe's own `MAGIC_EXT2SPICE_DONE` sentinel is
+        # therefore the only honest completion signal, and its ABSENCE plus
+        # the last tool line pins the abort to a recipe stage. Without this
+        # the step reported "produced no extracted netlist (rc=0)", which
+        # states the file is missing while implying the tool was fine.
+        _mlog = ""
+        try:
+            _mlog = (ext_dir / "ext2spice.log").read_text(errors="replace")
+        except OSError:
+            _mlog = out + err
+        _done = "MAGIC_EXT2SPICE_DONE" in _mlog
+        _ports = "PORTS_PROMOTED" in _mlog
+        _last = [ln for ln in _mlog.splitlines() if ln.strip()][-1:] or [""]
+        _err_ln = [ln for ln in _mlog.splitlines()
+                   if re.search(r"\(Error\)|error:", ln, re.I)][-3:]
+        _stage = ("completed the recipe but wrote no file" if _done else
+                  "aborted AFTER port promotion (extract/ext2spice stage)"
+                  if _ports else
+                  "aborted BEFORE port promotion (lef/def read stage)")
+        _detail = (
+            f"Magic ext2spice produced no extracted netlist: magic {_stage}. "
+            f"Its own completion sentinel MAGIC_EXT2SPICE_DONE is "
+            f"{'present' if _done else 'ABSENT'} in ext2spice.log. NOTE rc="
+            f"{rc} is not evidence here — magic exits 0 even on a fatal "
+            f"lef/def read failure. Last tool line: {_last[0].strip()[:200]!r}"
+            + (f"; last error line(s): {_err_ln}" if _err_ln else "")
+            + ". See phase3/stage3/extracted/ext2spice.log (#443).")
         verdict = _write_lvs_verdict(
-            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST",
-            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
-            f"see phase3/stage3/extracted/ext2spice.log (#443).",
-            extras={"transcript_tail": (out + err)[-600:]})
+            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST", _detail,
+            extras={"magic_completion_sentinel": _done,
+                    "magic_aborted_stage": _stage,
+                    "magic_rc_is_uninformative": True,
+                    "transcript_tail": (out + err)[-600:]})
         return StepResult(
-            "lvs", "FAIL", time.time() - t0,
-            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
-            f"see phase3/stage3/extracted/ext2spice.log (#443)",
+            "lvs", "FAIL", time.time() - t0, _detail,
             extras={"finding": "LVS_EXTRACTION_NO_NETLIST",
                     "lvs_verdict": verdict,
+                    "magic_completion_sentinel": _done,
+                    "magic_aborted_stage": _stage,
                     "transcript_tail": (out + err)[-600:]})
     # v0.3.14 — ORGANIC #509 round-3 + #685 round-6: re-add same-net top
     # ports that ext2spice dropped, joined by 0-ohm resistors (netgen
@@ -25236,6 +29450,45 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             f"warning(s)/error(s) (below the {_LVS_EXT_ERROR_FAIL_CEILING:,} "
             f"FAIL ceiling) — extracted netlist usable but review "
             f"ext2spice.log (#477).")
+    # ── W2.3 — THE EXTRACTOR'S OWN ERROR CHANNEL, GATED AT ZERO, BEFORE
+    # NETGEN EVER RUNS. ────────────────────────────────────────────────────
+    # The #477 guard above asks "did the extraction COLLAPSE" — from the
+    # transcript's `N errors` summary, at a ceiling of 1000. This asks a
+    # different question off a different channel at a different threshold:
+    # "did the extractor REFUSE a rectangle", from the feedback areas, at 0.
+    # An illegal overlap is magic saying it could not decide what the layout
+    # means at that rectangle; the `.subckt` it wrote anyway describes a design
+    # the layout does not, and netgen can report `Circuits match uniquely` over
+    # it. That is a dead chip with a clean report, and one occurrence is enough
+    # — which is why the threshold is 0 and not a tunable.
+    #
+    # SPAWNED INLINE and the status reaches this `if`, so the gate's
+    # `ENFORCEMENT: blocking` docstring is a claim `flow_gate_enforcement_audit`
+    # can check. rc 0 continues; EVERY other outcome stops the step, including
+    # rc 2 — a gate reporting "nothing to examine" immediately after this
+    # function extracted is itself the defect, not an exemption.
+    _mio_json = _pl.reports_phase3_dir(project) / "magic_illegal_overlap.json"
+    _mio_rc, _mio_detail = _run_illegal_overlap_gate(project, _mio_json)
+    if _mio_rc != 0:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_EXTRACTION_ILLEGAL_OVERLAP",
+            f"Magic's extraction feedback channel did not clear the "
+            f"zero-illegal-overlap gate (rc={_mio_rc}): {_mio_detail} netgen "
+            f"was NOT run — a compare against a netlist the extractor could "
+            f"not decide is not evidence about this design.",
+            extras={"illegal_overlap_gate_rc": _mio_rc,
+                    "illegal_overlap_report":
+                        "reports/phase3/magic_illegal_overlap.json",
+                    "extraction_feedback":
+                        f"phase3/stage3/extracted/{_mio.FEEDBACK_NAMES[0]}"})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"LVS aborted before netgen: {_mio_detail} (see "
+            f"reports/phase3/magic_illegal_overlap.json)",
+            extras={"finding": "LVS_EXTRACTION_ILLEGAL_OVERLAP",
+                    "illegal_overlap_gate_rc": _mio_rc,
+                    "lvs_verdict": verdict})
+
     # Magic may emit the top subckt as `<top>` or `<top>_flat` — feed
     # netgen the name that actually exists in the extracted netlist.
     sub_txt = spice_out.read_text(errors="replace")
@@ -25913,10 +30166,20 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
     """Make provenance.jsonl declare `rel` with the REAL current sha256 of
     `path`.
 
-    * patches EVERY existing entry that declares `rel` IN PLACE (appending a
-      second entry with a different hash would only trade
-      PROVENANCE_HASH_MISMATCH for PROVENANCE_HASH_INCONSISTENT);
+    * APPENDS a fresh entry when the newest record of `rel` declares a
+      different hash — the earlier record is superseded, never amended;
     * appends one fresh entry when no prior entry declares it.
+
+    This used to patch every existing entry that declares `rel` IN PLACE,
+    because appending "would only trade PROVENANCE_HASH_MISMATCH for
+    PROVENANCE_HASH_INCONSISTENT". That was true, and it was a defect in
+    the checker, not a reason to edit history: amending the ledger to
+    agree with the disk makes the one question the hash check exists to
+    answer — are these the bytes the recorded tool produced? —
+    permanently unanswerable, because a hand-edited artefact and a
+    legitimately re-run one both end PASS. provenance_output_hash_
+    completeness_check now resolves a path to its NEWEST record, so an
+    append is both honest and sufficient.
 
     Anti-fabrication (#365): the record declares the REAL sha256 of a file that
     EXISTS on disk, is flagged `reconstructed: true` and carries
@@ -25936,27 +30199,38 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
             for _ch in iter(lambda: _f.read(65536), b""):
                 _h.update(_ch)
         _sha = "sha256:" + _h.hexdigest()
-        _patched = False
+        # The newest record of `rel` is the one that describes the bytes
+        # on disk. If it disagrees, APPEND a record of what is there now
+        # — never edit the earlier record. Amending history is what made
+        # a hand-edited artefact indistinguishable from a re-run one;
+        # see the re-emit note in the OpenROAD provenance block.
         _found = False
-        _new_lines: List[str] = []
+        _newest_sha = None
         for _ln in prov_path.read_text().splitlines():
             if not _ln.strip():
-                _new_lines.append(_ln)
                 continue
             try:
                 _rec = json.loads(_ln)
             except Exception:
-                _new_lines.append(_ln)
                 continue
             _outs = _rec.get("outputs", {})
             if isinstance(_outs, dict) and rel in _outs:
                 _found = True
-                if _outs[rel] != _sha:
-                    _outs[rel] = _sha
-                    _patched = True
-            _new_lines.append(json.dumps(_rec))
-        if _patched:
-            prov_path.write_text("\n".join(_new_lines) + "\n")
+                _newest_sha = _outs[rel]
+        if _found and _newest_sha != _sha:
+            with prov_path.open("a") as _f:
+                _f.write(json.dumps({
+                    "tool": tool,
+                    "command": command,
+                    "exit_code": 0,
+                    "duration_ms": None,
+                    "reconstructed": True,
+                    "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "note": "output re-emitted; the earlier record of "
+                            "this path is superseded, not amended",
+                    "outputs": {rel: _sha},
+                }) + "\n")
         if not _found:
             _entry = {
                 "tool": tool,
@@ -25972,6 +30246,90 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
                 _f.write(json.dumps(_entry) + "\n")
     except (OSError, ValueError):
         pass   # non-fatal: the provenance stamp is best-effort here
+
+
+def _record_reemitted_outputs(project: Path) -> Optional[str]:
+    """APPEND one record for every declared output whose bytes on disk no
+    longer match the newest record that PRODUCED it. Returns a note on
+    failure, `None` on success.
+
+    Pulled out of `step_canonicalize_artefacts` deliberately. Inline, this
+    was the second of the two places that reconciled a re-emit, and being
+    unreachable from a test is why its predecessor's anti-regression guard
+    was a grep of the source for `prov_path.write_text(` — a STRING used
+    as a proxy for a behaviour, which promptly missed a rewrite spelled
+    `prov.write_text(`. A named helper can be driven, so the guard can
+    assert the property that actually matters: after this runs, the bytes
+    that were in the ledger are still a PREFIX of the bytes in the ledger.
+
+    Rows from FAILED invocations are not consulted for "the newest record
+    of a path". `_log_invocation` hashes whatever sits at each declared
+    path regardless of exit code, so a run that exited non-zero having
+    written nothing carries the digest of what was already there; letting
+    that stand as the newest production record would make this helper
+    append a re-emit for drift that never happened, and would disagree
+    with `provenance_output_hash_completeness_check`, which excludes the
+    same rows (PROVENANCE_OUTPUT_UNPRODUCED).
+
+    chip-AGNOSTIC: pure ledger bookkeeping over project-relative paths.
+    """
+    import datetime as _dt          # function-local: `_dt` is a local alias
+    prov_path = project / "provenance.jsonl"   # everywhere else in this file
+    if not prov_path.is_file():
+        return None
+
+    def _sha(p: Path) -> str:
+        h = hashlib.sha256()
+        with p.open("rb") as f:
+            for ch in iter(lambda: f.read(65536), b""):
+                h.update(ch)
+        return "sha256:" + h.hexdigest()
+
+    try:
+        newest: Dict[str, str] = {}
+        for line in prov_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:  # noqa: BLE001 — a line we cannot read, we skip
+                continue
+            if "exit_code" in rec:
+                try:
+                    if int(rec["exit_code"]) != 0:
+                        continue      # observed, not produced
+                except (TypeError, ValueError):
+                    pass              # unreadable rc: treat as production
+            outs = rec.get("outputs", {})
+            if isinstance(outs, dict):
+                for rel, declared_sha in outs.items():
+                    if isinstance(rel, str) and isinstance(declared_sha, str):
+                        newest[rel] = declared_sha
+        drifted = {}
+        for rel, declared_sha in newest.items():
+            fp = project / rel
+            if fp.is_file():
+                cur = _sha(fp)
+                if cur != declared_sha:
+                    drifted[rel] = cur
+        if drifted:
+            with prov_path.open("a") as f:
+                f.write(json.dumps({
+                    "tool": "phase3_one_shot_runner",
+                    "command": "re-emit (phase3 iteration)",
+                    "exit_code": 0,
+                    "duration_ms": None,
+                    "reconstructed": True,
+                    "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "note": "outputs re-emitted by a re-run of this "
+                            "runner; the earlier record of each path "
+                            "is superseded, not amended",
+                    "outputs": drifted,
+                }) + "\n")
+    except Exception as exc:  # noqa: BLE001 — bookkeeping never breaks the run
+        return f"provenance re-emit record failed: {exc}"
+    return None
 
 
 def _step37_declare_streamout_gds_provenance(project: Path, top: str) -> None:
@@ -26085,11 +30443,31 @@ def _step37_declare_streamout_gds_provenance(project: Path, top: str) -> None:
 # the condition's false branch: with no multicorner report `check()` returns
 # NOT_APPLICABLE → rc 0, i.e. exactly what the unrun conditional gate produced.
 # Measured on all 14 run-roots; the 12 without a multicorner report all return 0.
+#
+# STEP SCOPE — THE THIRD CALL SITE, and the one that would have made a
+# yaml-only fix a no-op. `sta_signoff` here writes
+# `reports/phase3/sta/post_route_summary.json`, which is the SAME artefact
+# step 23's yaml clause writes. Scoping only the yaml would have left this
+# executor discovering project-wide and overwriting the scoped verdict with an
+# unscoped one on every real run — the #755 shape ("fixed one site" is not
+# "fixed the class"). The `--under` here is byte-identical to step 23's, and
+# `test_sta_gate_step_scope.py` asserts the two cannot drift apart.
+#
+# `em_signoff` is deliberately NOT scoped in this change. EM mode has its own
+# discovery-collision question and its own blast radius, and bundling it would
+# have shipped a measurement this change did not make.
 # ---------------------------------------------------------------------------
+
+#: The `--under` scope step 23's yaml clause declares, kept here so the runner's
+#: inline invocation of the same gate reads the same artefacts. Any change must
+#: be made in both places; the test named above fails if they diverge.
+_STEP23_STA_SCOPE = ("--under", "phase3/stage3/sta/post_route_timing.rpt")
+
 _DECLARED_SIGNOFF_GATES = (
     # (step name, program, output path relative to <project>, extra argv)
     ("sta_signoff", "sta_report_check.py",
-     "reports/phase3/sta/post_route_summary.json", ("--mode", "sta")),
+     "reports/phase3/sta/post_route_summary.json",
+     ("--mode", "sta") + _STEP23_STA_SCOPE),
     ("sta_corner", "post_route_signoff_corner_check.py",
      "reports/phase3/sta/post_route_signoff_corner.json", ()),
     ("sta_record", "sta_corner_record_completeness_check.py",
@@ -27130,14 +31508,31 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
 
     Placed at the first instant its inputs exist (immediately after synth —
     the flow's own order, since Steps 7/10 precede Step 15 Floorplan), exactly
-    as ``run_step11_dft_after_synth`` is. PURELY ADDITIVE: fires only when the
-    design STAGES its own >=2 corner libs under ``input/pdk/liberty`` (the
-    measured opentitan_aes case). Projects that rely on the container built-in
-    PDK are a no-op here and keep the existing post-route canonicalize path
-    unchanged — zero regression. ``step_canonicalize_artefacts`` keeps its
-    ``if not <file>.is_file()`` guards, so it now no-ops on the three files
-    this step already wrote and every post-route artefact is untouched.
-    chip/PDK-AGNOSTIC.
+    as ``run_step11_dft_after_synth`` is.
+
+    CORNER SOURCE (fixed): corners come from ``input/pdk/liberty`` when the
+    design stages its own, ELSE from the container's built-in PDK via the same
+    ``_discover_container_corner_libs`` + ``_select_signoff_corners`` pair the
+    ``pvt_matrix`` emitter and ``_corner_libs()`` already use. Requiring
+    STAGED libs made this step inert on every container-built-in-PDK project —
+    which ORGANIC #565 records as the majority case — so the very scenario the
+    step exists to cover (a backend that dies before
+    ``step_canonicalize_artefacts``, leaving Step 10 MISSING and VOIDING every
+    step that depends on it) was the one it did not cover. Measured on
+    subservient × sky130A: the container ships 18 ``sky130_fd_sc_hd`` corner
+    libs resolving to distinct SS/TT/FF, yet this step reported "no >=2 staged
+    corner libs" and skipped. Deferral remains when fewer than 2 distinct
+    corners exist ANYWHERE — a 1-corner PDK cannot substantiate multi-corner
+    sign-off. ``step_canonicalize_artefacts`` keeps its
+    ``if not <file>.is_file()`` guards, so it still no-ops on the files this
+    step wrote and every post-route artefact is untouched. chip/PDK-AGNOSTIC.
+
+    SDC SOURCE (fixed): the design SDC comes from
+    :func:`_resolve_staged_silicon_sdc` — the shared ground truth, which reads
+    ``input/constraints`` — and goes through the SAME unit-rescale + DRV + I/O
+    parity chain ``step_pnr`` applies, so the deck the pre-layout STA reads is
+    the deck PnR will read. The canonical ``constraints/<top>.sdc`` copy is
+    written ONLY when the SDC is genuinely design-staged; see Steps 7a/7b.
     """
     t0 = time.time()
     written: List[str] = []
@@ -27146,15 +31541,38 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     staged_lib_dir = project / "input" / "pdk" / "liberty"
     staged_libs = (sorted(staged_lib_dir.glob("*.lib"))
                    if staged_lib_dir.is_dir() else [])
+    corner_source = "staged input/pdk/liberty"
     if len(staged_libs) < 2:
-        # Container-built-in-PDK project (or single staged corner): leave the
-        # pre-layout emit to the existing post-route canonicalize path so this
-        # change cannot regress a project that does not stage its own corners.
-        return StepResult(
-            "prelayout_signoff", "SKIP", time.time() - t0,
-            "no >=2 staged corner libs under input/pdk/liberty — pre-layout "
-            "stage-2 sign-off deferred to step_canonicalize_artefacts "
-            "(no-op; no regression)", [])
+        # ORGANIC #565 — a project that stages no corners of its own is the
+        # MAJORITY case, not an exotic one: it uses the container's built-in
+        # PDK. `pvt_matrix` and `_corner_libs()` ALREADY fall back to the
+        # container's corner libs for exactly that reason; this step did not,
+        # so it SKIPped on every built-in-PDK project — inert precisely where
+        # its own docstring says it is needed (a backend that dies before
+        # `step_canonicalize_artefacts` then leaves Step 10 MISSING, which
+        # VOIDS every step declaring 10 as a dependency). Reuse the SAME
+        # discovery, so one PDK cannot answer "which corners do you ship?"
+        # two different ways inside one runner.
+        _pdk_lib_dir = str(Path(getattr(pdk, "liberty", "") or "").parent)
+        _found = _select_signoff_corners(
+            _discover_container_corner_libs(container, _pdk_lib_dir),
+            container, _pdk_lib_dir)
+        if len(_found) >= 2:
+            staged_libs = [Path(c["liberty"]) for c in _found]
+            corner_source = (f"container built-in PDK {_pdk_lib_dir} "
+                             f"({len(_found)} sign-off corners: "
+                             f"{'/'.join(c['label'] for c in _found)})")
+        else:
+            # Genuinely fewer than 2 distinct corners ANYWHERE (staged or
+            # built-in): a single-corner PDK cannot substantiate multi-corner
+            # sign-off, so defer rather than emit a 1-corner "matrix".
+            return StepResult(
+                "prelayout_signoff", "SKIP", time.time() - t0,
+                f"fewer than 2 corner libs available — staged "
+                f"input/pdk/liberty={len(staged_libs)}, container built-in "
+                f"PDK={len(_found)} — pre-layout stage-2 sign-off deferred "
+                f"to step_canonicalize_artefacts (no-op; no regression)", [])
+    notes.append(f"corner source: {corner_source}")
 
     constraints_out = _pl.constraints_dir(project)
     sta_out = _pl.sta_dir(project)
@@ -27163,15 +31581,65 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         d.mkdir(parents=True, exist_ok=True)
 
     # --- Step 7a: SDC (pnr/constraint.sdc is what the STA helpers read) ---
-    # step_pnr overwrites this later with byte-identical content, so writing
-    # it early is safe and is what lets the pre-layout STA run before PnR.
+    # step_pnr overwrites this later, so writing it early is safe and is what
+    # lets the pre-layout STA run before PnR.
+    #
+    # RESOLVER: `_resolve_staged_silicon_sdc`, NOT a private probe. The probe
+    # that stood here globbed `phase2/stage2/constraints/*.sdc` then the
+    # project-root `constraints/*.sdc` and never looked at `input/constraints`
+    # — the tree's SHARED ground truth (`sdc_constraints.collect_sdc_files`).
+    # That is the exact probe `_resolve_staged_silicon_sdc` was written to
+    # kill, and its docstring records what the miss does: it LAUNDERS the
+    # runner's own fabricated SDC into "design-staged", so the design's real
+    # SDC never reaches PnR or STA. While this step SKIPped on built-in-PDK
+    # projects the stale probe was unreachable in the majority case; firing
+    # the step there PROMOTES it to the default path. Measured on a fixture
+    # carrying `benchmark-data/ic/edge_llm_accel`'s own staged
+    # `input/constraints/clock.sdc` (`create_clock ... -name core_clock
+    # -period 10.0`): the resolver found that file, this step wrote
+    # `create_clock -name clk` under an "# Auto-generated minimal SDC ... (no
+    # constraints/*.sdc supplied" header into BOTH artefacts, and — because
+    # `step_canonicalize_artefacts` guards on `not canon_sdc.is_file()` — the
+    # canonical Step-7 copy was never refreshed, so it disagreed permanently
+    # with the `pnr/constraint.sdc` step_pnr rewrites from the real file.
+    # The shared resolver is a STRICT SUPERSET of the probe it replaces: it
+    # appends `project/constraints` and `_pl.constraints_dir(project)` as
+    # lower-priority fallbacks, so any project that resolved an SDC before
+    # resolves one now.
+    #
+    # UNITS/DRV: apply the SAME chain `step_pnr` applies to a staged SDC.
+    # A pre-layout STA against an unscaled SDC is a WRONG number, not a
+    # missing one — on a liberty declaring `time_unit : "1ps"` a verbatim
+    # ns-authored deck reads 1000x too tight — and a staged SDC that declares
+    # only `create_clock` leaves every primary I/O UNTIMED, which turns a red
+    # sign-off green by SUBTRACTION. Same four calls, same order, same
+    # arguments as `step_pnr`, so the SDC the pre-layout STA reads is the SDC
+    # PnR will read.
     runner_sdc = pnr_out / "constraint.sdc"
+    staged_sdc = _resolve_staged_silicon_sdc(project)
+    design_staged = bool(staged_sdc and staged_sdc.is_file())
     if not runner_sdc.is_file():
-        staged_sdc = (
-            next(iter(sorted(constraints_out.glob("*.sdc"))), None)
-            or next(iter(sorted(project.glob("constraints/*.sdc"))), None))
-        if staged_sdc and staged_sdc.is_file():
-            runner_sdc.write_text(staged_sdc.read_text())
+        if design_staged:
+            _txt = _scale_sdc_to_liberty_units(
+                staged_sdc.read_text(), str(pdk.liberty))
+            _txt = _reconcile_staged_sdc_drv(
+                _txt, str(pdk.name), str(pdk.liberty), container)
+            _txt = _reconcile_staged_sdc_driving_cell(
+                _txt, str(pdk.liberty), container)
+            _txt, _drv_parity = _ensure_staged_sdc_drv(
+                _txt, str(pdk.liberty), container, project,
+                pdk_name=str(pdk.name))
+            _txt, _io_parity = _ensure_staged_sdc_io_delay(_txt, project)
+            runner_sdc.write_text(_txt)
+            # Carry the parity DISCLOSURES, not just the fact of the chain:
+            # "supplied set_output_delay against the design's own clock" is
+            # the sentence that makes a later reader able to tell a
+            # design-declared limit from one this step added.
+            notes.append(
+                f"SDC: design-staged {staged_sdc} — unit-rescaled + DRV/IO "
+                f"parity (same chain as step_pnr). "
+                + " ".join(str(p.get("note") or "")
+                           for p in (_drv_parity, _io_parity)).strip())
         else:
             _drv = _liberty_drv_limits(str(pdk.liberty), container)
             runner_sdc.write_text(_build_auto_silicon_sdc(
@@ -27181,11 +31649,29 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                 drv_note=str(_drv.get("note") or ""),
                 liberty_path=str(pdk.liberty),
                 pdk_name=str(pdk.name)))
+            notes.append("SDC: design staged none — runner auto-SDC")
         written.append(str(runner_sdc))
 
     # --- Step 7b: canonical staged SDC copy (constraints/<top>.sdc) -------
+    # ONLY when the SDC is genuinely DESIGN-staged. `canon_sdc` lands in
+    # `phase2/stage2/constraints`, which is the LAST fallback
+    # `_resolve_staged_silicon_sdc` searches — so copying the runner's OWN
+    # auto-SDC there hands step_pnr, later in this same run, a file it will
+    # resolve as "design-staged" and put through the staged branch. MEASURED
+    # on a liberty declaring `time_unit : "1ps"` and a project staging no SDC:
+    # `_build_auto_silicon_sdc` already scales into lib units and emits
+    # `-period 20000`; re-resolved as staged, `_scale_sdc_to_liberty_units`
+    # scales it a SECOND time to `-period 2e+07` — 1000x too LOOSE, i.e. every
+    # path passes. `staged_sdc_survey.json` would also record `consumed:
+    # phase2/stage2/constraints/<top>.sdc`, asserting the design staged an SDC
+    # when it staged none. A design-staged SDC cannot be laundered this way:
+    # `input/constraints` outranks `phase2/stage2/constraints` in the shared
+    # resolver, so the design's own file still wins. When the runner
+    # fabricated the deck, authoring the canonical copy is left to
+    # `step_canonicalize_artefacts` — the step that owns it — which runs after
+    # step_pnr has settled what the SDC actually is.
     canon_sdc = constraints_out / f"{top}.sdc"
-    if runner_sdc.is_file() and not canon_sdc.is_file():
+    if design_staged and runner_sdc.is_file() and not canon_sdc.is_file():
         canon_sdc.write_text(
             _stamp_sdc_provenance(runner_sdc.read_text(), pdk.name))
         written.append(str(canon_sdc))
@@ -27193,12 +31679,21 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     # --- Step 7c: pvt_matrix.json (design-staged Liberty corners) --------
     pvt_path = constraints_out / "pvt_matrix.json"
     if not pvt_path.is_file():
-        corners = [
-            {"name": lib.stem,
-             "label": _classify_corner_from_name(lib.name),
-             "liberty": str(lib.relative_to(project))}
-            for lib in staged_libs
-        ]
+        corners = []
+        for lib in staged_libs:
+            try:
+                _lib_ref = str(lib.relative_to(project))
+            except ValueError:
+                # Container built-in PDK corner: absolute container path, not
+                # under the project. Record it verbatim so the matrix names
+                # the file actually read rather than a path that does not
+                # resolve from either side.
+                _lib_ref = str(lib)
+            corners.append({
+                "name": lib.stem,
+                "label": _classify_corner_from_name(lib.name),
+                "liberty": _lib_ref,
+            })
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
@@ -27207,24 +31702,69 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         written.append(str(pvt_path))
 
     # --- Step 10: GENUINE pre-layout multi-corner STA --------------------
+    # force_prelayout=True: this step is Step 10 (PRE-LAYOUT) by definition, so
+    # it must time the synth netlist even on a re-run in a dir that already
+    # holds a routed netlist + SPEF from a prior round — else the shared
+    # file-existence precedence would emit a POST_ROUTE report here and label it
+    # pre-layout (the contradiction sta_report_check flags).
     per_corner = sta_out / "per_corner"
     if runner_sdc.is_file():
         per_corner.mkdir(parents=True, exist_ok=True)
         if _emit_multi_corner_sta(project, top, pdk, container,
-                                  staged_libs, per_corner, notes):
+                                  staged_libs, per_corner, notes,
+                                  force_prelayout=True):
             written.append(str(per_corner))
     # Compose pre_pnr_timing.rpt from a GENUINE per-corner report (setup-worst
     # SS preferred, else TT/FF/any) — NOT a copy of the post-route sta.rpt.
+    # Re-compose when a stale pre_pnr_timing.rpt from an earlier post-route
+    # round is present: its body would carry STA_BASIS: POST_ROUTE_* under this
+    # step's PRE-LAYOUT header — the precise contradiction sta_report_check
+    # flags. A genuinely pre-layout report (or an absent one) is left alone.
     pre_pnr = sta_out / "pre_pnr_timing.rpt"
-    if not pre_pnr.is_file():
+    _pre_pnr_stale = (pre_pnr.is_file()
+                      and _sta_basis.declared_basis(pre_pnr.read_text())
+                      != "PRE_LAYOUT")
+    if not pre_pnr.is_file() or _pre_pnr_stale:
+        # BLOCKING-1 (2026-08-05 review). The source must be chosen by what the
+        # corner report DECLARES, not by its filename. Forcing the basis in
+        # `_emit_multi_corner_sta` only re-stamps the corners whose re-emit
+        # SUCCEEDED; a corner whose OpenSTA run failed contributes no fresh
+        # report, and — before the quarantine above — left its POST_ROUTE one
+        # sitting under the very name this loop reaches for first. Picking by
+        # name then composed a PRE-LAYOUT header over a POST_ROUTE body and the
+        # step still returned PASS: the could-not-measure state resolving to
+        # measured-clean. Only a report that declares PRE_LAYOUT may be the
+        # source of a pre-layout report; the belt goes with the braces because
+        # a mislabelled corner report can reach per_corner/ by routes this step
+        # does not own.
+        def _prelayout_src(cand: Path) -> bool:
+            try:
+                return (_sta_basis.declared_basis(cand.read_text())
+                        == "PRE_LAYOUT")
+            except OSError:
+                return False
+
         src = None
-        for cand in ("sta_SS.rpt", "sta_TT.rpt", "sta_FF.rpt"):
-            if (per_corner / cand).is_file():
-                src = per_corner / cand
+        _rejected: List[str] = []
+        _ordered = [per_corner / c
+                    for c in ("sta_SS.rpt", "sta_TT.rpt", "sta_FF.rpt")]
+        if per_corner.is_dir():
+            _ordered += [p for p in sorted(per_corner.glob("sta_*.rpt"))
+                         if p not in _ordered]
+        for cand in _ordered:
+            if not cand.is_file():
+                continue
+            if _prelayout_src(cand):
+                src = cand
                 break
-        if src is None and per_corner.is_dir():
-            _any = sorted(per_corner.glob("sta_*.rpt"))
-            src = _any[0] if _any else None
+            _rejected.append(cand.name)
+        if _rejected:
+            notes.append(
+                "pre-layout compose REFUSED corner report(s) "
+                + ", ".join(_rejected)
+                + " — they do not declare STA_BASIS PRE_LAYOUT, and a "
+                  "pre-layout report composed from a post-route body is the "
+                  "contradiction this step exists to remove")
         if src is not None:
             pre_pnr.write_text(
                 "# PRE-LAYOUT STA (Step 10) — genuine OpenSTA on the synth\n"
@@ -27237,12 +31777,123 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
             notes.append("pre-layout STA produced no corner report — "
                          "pre_pnr_timing.rpt deferred (sta tool unavailable?)")
 
-    ok = canon_sdc.is_file() and pvt_path.is_file()
+    # BLOCKING-1 (2026-08-05 review), second half. Refusing to COMPOSE from a
+    # post-route body is necessary but not sufficient: when nothing genuine was
+    # available the pre-existing `pre_pnr_timing.rpt` is simply LEFT — and it is
+    # the contradiction. Two distinct outcomes, deliberately not merged:
+    #
+    #   * POSITIVELY declares POST_ROUTE — the file states, about ITSELF, that
+    #     it is the wrong side of PnR while sitting at the pre-layout path. That
+    #     is a mislabel on its own testimony, so quarantine it (bytes kept under
+    #     a non-`.rpt` suffix) rather than publish it to Step 10.
+    #   * UNDECLARED (`declared_basis` -> None) — per `_sta_basis`'s stated
+    #     contract, None is neither basis; it is "the report stated no side".
+    #     Deleting a file on an absence would be acting on a question it never
+    #     answered, so it is LEFT ALONE and only reported.
+    #
+    # BOTH are a step that could not substantiate the pre-layout artefact it
+    # owns, so NEITHER may return PASS. Silently PASSing here is precisely the
+    # could-not-measure -> measured-clean collapse this PR is written about;
+    # Step 10 scoring MISSING against an absent report is the honest outcome,
+    # and a WARN says so where the run can see it.
+    _pre_pnr_basis: Optional[str] = None
+    _pre_pnr_ok = True
+    if pre_pnr.is_file():
+        _pre_pnr_basis = _sta_basis.declared_basis(pre_pnr.read_text())
+        if _pre_pnr_basis != "PRE_LAYOUT":
+            _pre_pnr_ok = False
+            if _pre_pnr_basis == "POST_ROUTE":
+                _q = pre_pnr.parent / (pre_pnr.name + ".stale_basis")
+                try:
+                    pre_pnr.replace(_q)
+                    notes.append(
+                        f"pre_pnr_timing.rpt declared STA_BASIS POST_ROUTE "
+                        f"under this step's PRE-LAYOUT header and no genuine "
+                        f"pre-layout corner report could replace it — "
+                        f"quarantined to {_q.name}; Step 10 is MISSING, which "
+                        f"is the honest state, NOT clean")
+                    if str(pre_pnr) in written:
+                        written.remove(str(pre_pnr))
+                except OSError as exc:
+                    notes.append(
+                        f"pre_pnr_timing.rpt declares POST_ROUTE and could "
+                        f"NOT be quarantined ({exc}) — a post-route body is "
+                        f"published under a PRE-LAYOUT header")
+            else:
+                notes.append(
+                    "pre_pnr_timing.rpt carries NO recognised STA_BASIS stamp "
+                    "— this step cannot substantiate it as pre-layout, and an "
+                    "undeclared report is not evidence of either basis; left "
+                    "in place, reported, NOT counted as clean")
+
+    # `canon_sdc` is deliberately NOT part of this predicate when the design
+    # staged no SDC (see Step 7b): the artefact this step owns pre-layout is
+    # the deck the pre-layout STA actually read plus the PVT matrix. Asserting
+    # on `canon_sdc` would make the honest "left to the owning step" path
+    # report WARN.
+    ok = runner_sdc.is_file() and pvt_path.is_file() and (
+        canon_sdc.is_file() or not design_staged) and _pre_pnr_ok
     detail = (f"pre-layout stage-2 sign-off emitted BEFORE PnR: "
               f"{len(written)} artefact(s)"
               + ("; " + "; ".join(notes[-2:]) if notes else ""))
+    if not _pre_pnr_ok:
+        # Lead with WHY, not with the artefact count — a detail that opens
+        # "sign-off emitted" while the pre-layout basis is unsubstantiated
+        # reads clean at a glance, which is the whole failure mode.
+        detail = (f"pre-layout basis UNSUBSTANTIATED "
+                  f"(pre_pnr_timing.rpt declared "
+                  f"{_pre_pnr_basis or 'no STA_BASIS'}, not PRE_LAYOUT) — "
+                  + detail)
     return StepResult("prelayout_signoff", "PASS" if ok else "WARN",
                       time.time() - t0, detail, written)
+
+
+def step_digital_hardmacro_gen(project: Path) -> StepResult:
+    """Canonical step 37.5ip — the cell/IP path TERMINAL producer.
+
+    WIRED HERE AND NOT INTO THE GATE, for the reason step A8 already records in
+    `flow/phase1_phase2_phase3.yaml`: `flow_compliance_check` is the phase-2+3
+    ACCEPTANCE AUDITOR, and an auditor that writes a declared required_output
+    into the project it is auditing certifies its own output. A8's GDS producer
+    was briefly wired into A8's gate and that was withdrawn on 2026-07-28 after
+    the audit was measured creating the very `.gds` its next two clauses then
+    read. `digital_hardmacro_gen` is declared in step 37.5ip's `programs:` and
+    is invoked from HERE — the path a real run takes — so
+    `digital_hardmacro_check` measures a kit the audit did not touch.
+
+    Runs AFTER `step_canonicalize_artefacts`, which is what stages the sign-off
+    GDS at the canonical `phase3/stage4/gds/` path this producer's declared
+    input names.
+
+    NEVER FAILS THE RUN. A producer refusal (rc 1) and an absent capability
+    (rc 2) are recorded as SKIP / ENV_UNAVAILABLE: the GATE is what fails, and
+    if the kit is incomplete `digital_hardmacro_check` refuses it on its own
+    evidence rather than on this step's exit code.
+    """
+    t0 = time.time()
+    prog = PROGRAMS_DIR / "digital_hardmacro_gen.py"
+    if not prog.is_file():  # pragma: no cover - shipped tree always has it
+        return StepResult("digital_hardmacro_gen", "SKIP", 0.0,
+                          f"{prog.name} not present in this tree")
+    report = project / "reports" / "phase3" / "digital_hardmacro_gen.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [sys.executable, str(prog), str(project), "--json", str(report)]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True,
+                            errors="replace", timeout=1800)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StepResult("digital_hardmacro_gen", "ENV_UNAVAILABLE",
+                          time.time() - t0,
+                          f"producer did not complete: {exc}")
+    detail = (cp.stdout or cp.stderr or "").strip().splitlines()
+    msg = detail[0] if detail else f"rc={cp.returncode}"
+    status = {0: "PASS", 1: "SKIP"}.get(cp.returncode, "ENV_UNAVAILABLE")
+    out: List[str] = []
+    hm = project / "phase3" / "stage4" / "hardmacro"
+    if hm.is_dir():
+        out = [str(f) for f in sorted(hm.iterdir()) if f.is_file()]
+    return StepResult("digital_hardmacro_gen", status, time.time() - t0,
+                      msg, out)
 
 
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
@@ -27594,7 +32245,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     if primary_sta.is_file() and not power_preview.is_file():
         try:
             if _emit_power_report(project, top, pdk, container,
-                                  power_preview, notes):
+                                  power_preview, notes, basis="pre_pnr"):
                 written.append(str(power_preview))
         except Exception as exc:
             notes.append(f"post-synth power preview failed: {exc}")
@@ -27617,8 +32268,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(spef_sta_rpt))
             mirror = rpt_phase3 / "sta_spef_based.rpt"
             if _signoff_regen(mirror, primary_def):
-                mirror.write_text(spef_sta_rpt.read_text())
-                written.append(str(mirror))
+                written.extend(_publish_artefact_mirror(
+                    spef_sta_rpt, mirror, project, "_emit_spef_sta"))
     spef_sta_ok = spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0
 
     # --- TAPEOUT-SIGNOFF P1: multi-corner SPEF (min/nom/max) + corner STA -----
@@ -27657,8 +32308,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     written.append(str(mc_sta_rpt))
                     mc_mirror = rpt_phase3 / "sta_spef_multicorner.rpt"
                     if _signoff_regen(mc_mirror, primary_def):
-                        mc_mirror.write_text(mc_sta_rpt.read_text())
-                        written.append(str(mc_mirror))
+                        written.extend(_publish_artefact_mirror(
+                            mc_sta_rpt, mc_mirror, project,
+                            "_emit_corner_spef_sta"))
         _corners = sorted(corner_spefs)
         _multi = len(corner_spefs) >= 2
         mc_stance.write_text(json.dumps({
@@ -27758,8 +32410,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 written.append(str(mc_ocv_rpt))
                 mc_ocv_mirror = rpt_phase3 / "sta_mcorner_ocv.rpt"
                 if _signoff_regen(mc_ocv_mirror, primary_def):
-                    mc_ocv_mirror.write_text(mc_ocv_rpt.read_text())
-                    written.append(str(mc_ocv_mirror))
+                    written.extend(_publish_artefact_mirror(
+                        mc_ocv_rpt, mc_ocv_mirror, project,
+                        "_emit_mcorner_ocv_sta"))
                 # Parse the REAL per-corner worst slack (surface the violation).
                 setup_wns, hold_wns = _parse_mcorner_ocv_slacks(
                     mc_ocv_rpt.read_text(errors="replace"))
@@ -27802,15 +32455,46 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "ss/ff)."),
         }, indent=2) + "\n")
         written.append(str(mc_ocv_stance))
-        # When the sign-off STA SURFACED a real SETUP violation, ALSO emit the
-        # honest achievable-Fmax datapoint so a Category-H spec-vs-technology
-        # residual (a full CPU/crypto block at a slow OSS PDK — e.g. ibex@sky130,
-        # sha256 single-cycle round) SELF-REPORTS the frequency it actually MEETs
-        # instead of a bare FAIL. §4.05 HONESTY: this is a MEASUREMENT, never a
-        # clock relaxation — `timing_closed_multi_corner` above stays as-is and the
-        # sign-off verdict is unchanged; achievable_fmax.json travels ALONGSIDE the
-        # FAIL, `relaxation_applied` is always False.
-        if mc_ocv_ok and setup_wns is not None and setup_wns < 0:
+        # Emit the honest achievable-Fmax datapoint whenever the sign-off STA
+        # produced a setup number — on a PASS as well as on a FAIL.
+        #
+        # WHY THE `setup_wns < 0` CONDITION IS GONE (vibe-ic#1097, S8). This
+        # started as a Category-H aid: a spec-vs-technology residual (a full
+        # CPU/crypto block at a slow OSS PDK — ibex@sky130, sha256 single-cycle
+        # round) should SELF-REPORT the frequency it actually MEETs instead of a
+        # bare FAIL. That is still true, and it is not the whole use.
+        #
+        # The period a design is ASKED for reaches the SDC through a four-tier
+        # precedence walk (`l8_sta_clock_period_design_owned_check`), and every
+        # tier — down to `sdc_gen._DEFAULT_MHZ`, which is fabricated — is a
+        # number somebody REQUESTED. The achieved period is the only MEASUREMENT
+        # in that set, so it is what makes "asked" and "reached" two diffable
+        # files instead of a sentence in a log. Suppressing it on the runs that
+        # PASS kept the measurement for exactly the runs nobody needs convincing
+        # about.
+        #
+        # MEASURED on this repo's published corpus at f9c13443: 13 run roots
+        # reached post-route STA, and 2 carry `achievable_fmax.json` — the two
+        # that failed. The other 11 shipped no achieved period although the
+        # slack was on disk, and the gaps are not small:
+        #
+        #     caravel_user_project   asked 25.0 ns   reached  7.81 ns
+        #     spm/v1.10.18_sky130A   asked 10.0 ns   reached  4.76 ns
+        #     edge_llm_accel         asked 10.0 ns   reached  8.92 ns
+        #
+        # `achievable_from_slack` already handled positive slack — it reports the
+        # margin as headroom (see its own comment at the `spec_margin_ns` key) —
+        # so this is a wiring change and not a new computation.
+        #
+        # §4.05 HONESTY, unchanged and load-bearing: this is a MEASUREMENT, never
+        # a clock relaxation. `timing_closed_multi_corner` above stays as-is, the
+        # sign-off verdict is untouched, the artefact is written to its OWN path
+        # and never over the design's SDC, and `relaxation_applied` is always
+        # False. vibe-ic#1083 records ORFS's `update_ok` / `--failing` semantics
+        # — a golden that moves itself to the current run's worse value — as
+        # explicitly NOT adopted; emitting on PASS as well is the opposite of
+        # that, not a step toward it.
+        if mc_ocv_ok and setup_wns is not None:
             try:
                 from sta_achievable_fmax_report import achievable_from_slack
                 _spec_period_ns, _ = _resolve_clock_spec(project, top=top)
@@ -27819,12 +32503,21 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 (rpt_phase3 / "achievable_fmax.json").write_text(
                     json.dumps(_fmax_rep, indent=2) + "\n")
                 written.append(str(rpt_phase3 / "achievable_fmax.json"))
+                # The sentence has to be true on BOTH branches now. "setup FAIL
+                # -> achievable X" read as a repair on a run that had already
+                # MET its spec; on a PASS the same two numbers are asked-vs-
+                # reached headroom, which is a different statement about the
+                # same measurement.
+                _spec_verdict = "MET" if _fmax_rep["spec_met"] else "FAIL"
                 notes.append(
                     "achievable-Fmax reported (honest measurement, sign-off "
-                    f"verdict UNCHANGED): spec {_fmax_rep['spec_period_ns']} ns "
-                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup FAIL -> achievable "
-                    f"{_fmax_rep['achievable_period_ns']} ns "
-                    f"({_fmax_rep['achievable_fmax_mhz']} MHz) setup MET.")
+                    f"verdict UNCHANGED): asked {_fmax_rep['spec_period_ns']} ns "
+                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup {_spec_verdict} "
+                    f"-> reached {_fmax_rep['achievable_period_ns']} ns "
+                    f"({_fmax_rep['achievable_fmax_mhz']} MHz)"
+                    + (f", headroom {_fmax_rep['spec_margin_ns']} ns."
+                       if _fmax_rep["spec_met"] else
+                       ", i.e. the period at which setup would MET."))
             except Exception as _fmax_err:  # never break the flow on a report
                 notes.append(f"achievable-Fmax emit non-fatal: {_fmax_err}")
         if mc_ocv_ok and _viol:
@@ -27918,9 +32611,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- ORGANIC-20260531: Steps 24/25 IR-drop + EM (OpenROAD PSM) ------
     # NOT cascade-blocked by SPEF — analyze_power_grid walks the routed
     # DEF power grid directly. Emits reports/phase3/{ir_drop,em}.{rpt,json}.
+    #
+    # GUARDED BY `_signoff_regen`, NOT BY `.is_file()`. These four producers
+    # (IR, EM, antenna, SI) were the ones the `_signoff_regen` change left
+    # behind: it converted extraction and every STA artefact below and stopped
+    # here, so a re-run that re-routed refreshed the SPEF and the STA reports
+    # and then signed the power, reliability and crosstalk axes off with the
+    # PREVIOUS layout's numbers. The reports it skipped are the ones no
+    # downstream gate can date, so the mixture is silent — see `_signoff_regen`.
     ir_rpt = rpt_phase3 / "ir_drop.rpt"
     em_rpt = rpt_phase3 / "em.rpt"
-    if primary_def.is_file() and not (ir_rpt.is_file() and em_rpt.is_file()):
+    if primary_def.is_file() and (_signoff_regen(ir_rpt, primary_def)
+                                  or _signoff_regen(em_rpt, primary_def)):
         ir_ok, em_ok = _emit_ir_em_reports(
             project, top, pdk, container, ir_rpt, em_rpt, notes)
         if ir_ok:
@@ -27932,7 +32634,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 26 antenna (re-emit to audit path) ------
     antenna_rpt = rpt_phase3 / "antenna.rpt"
-    if primary_def.is_file() and not antenna_rpt.is_file():
+    if primary_def.is_file() and _signoff_regen(antenna_rpt, primary_def):
         if _emit_antenna_report(project, top, pdk, container,
                                 antenna_rpt, notes):
             written.append(str(antenna_rpt))
@@ -27940,7 +32642,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 27 SI / crosstalk (real SPEF coupling caps) --
     si_rpt = rpt_phase3 / "si_crosstalk.rpt"
-    if not si_rpt.is_file():
+    # Dated against the SPEF as well as the DEF: `_emit_si_crosstalk_report`
+    # reads `spef_out` for the coupling capacitances the report is made OF, so
+    # a re-extraction that leaves the DEF alone still supersedes this report.
+    if _signoff_regen(si_rpt, primary_def, spef_out):
         # v0.2.35: pass pdk + container so the SI emitter can ALSO run the
         # timing-window-aware ADVISORY upgrade (OpenSTA SI timing JSON →
         # window-gated watch-list) when a routed SPEF + post-route STA exist.
@@ -27951,15 +32656,33 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(rpt_phase3 / "si_crosstalk.json"))
 
     # --- ORGANIC-20260531: Step 34 metal fill (filler_placement) --------
+    # `filled.def` — and its siblings `metal_fill.{log,done}` and
+    # `reports/density.{rpt,json}` — are computed FROM the routed DEF, so this
+    # guard is DATED against that DEF rather than testing the output's bare
+    # existence. Measured escape: after a die change (core 45126 -> 71930 um^2)
+    # PnR correctly invalidated its own cache and rewrote `<top>.def`, while
+    # `filled.def`, `metal_fill.log` and `density.json` kept the previous
+    # round's mtime ~4h earlier — and `density.json` still quoted the OLD
+    # core's utilization to four significant figures as this round's number.
+    # Same predicate as the sign-off emitters below, deliberately: a flow with
+    # two freshness predicates that answer differently is the defect one level
+    # up.
     filled_def = pnr_out / "filled.def"
-    if primary_def.is_file() and not filled_def.is_file():
+    if primary_def.is_file() and _signoff_regen(filled_def, primary_def):
+        if filled_def.is_file():
+            # DISCLOSE it. The escape was silent — the whole cost of the bug
+            # was that nothing in the run said the fill had not re-run.
+            notes.append(
+                "metal fill RE-RUN: filled.def was older than the routed DEF "
+                "it derives from (superseded floorplan) — the stale fill and "
+                "its density report were NOT reused")
         if _emit_metal_fill(project, top, pdk, container, filled_def, notes):
             written.append(str(filled_def))
             written.append(str(pnr_out / "metal_fill.done"))
 
     # --- ORGANIC-20260531: Step 31 ERC sub-item (open-source path) ------
     erc_rpt = rpt_phase3 / "erc.rpt"
-    if primary_def.is_file() and not erc_rpt.is_file():
+    if primary_def.is_file() and _signoff_regen(erc_rpt, primary_def):
         if _emit_erc_report(project, top, pdk, container, erc_rpt, notes):
             written.append(str(erc_rpt))
             written.append(str(rpt_phase3 / "erc.json"))
@@ -27972,9 +32695,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # final netlist. §4.05: absent routed netlist -> honest SKIP; a non-proof
     # -> UNPROVEN (never a pass).
     lec_post_json = rpt_phase3 / "lec_post_layout.json"
-    if primary_def.is_file() and not lec_post_json.is_file():
+    if primary_def.is_file() and _signoff_regen(lec_post_json, primary_def):
         try:
-            _lec_v = _emit_lec_post_layout(
+            _emit_lec_post_layout(
                 project, top, pdk, container, lec_post_json,
                 rpt_phase3 / "lec_post_layout.rpt", notes)
             if lec_post_json.is_file():
@@ -27999,25 +32722,50 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             notes.append(
                 f"post-layout LEC emit FAILED (sign-off step): {exc}")
 
+    # ENFORCE the proof just written. Unconditional: the artefact that ships
+    # governs, whether this round re-emitted it or reused a still-fresh one. A
+    # FAIL / UNPROVEN / VACUOUS post-layout equivalence now makes this step
+    # FAIL, and a FAIL step makes the runner exit non-zero — see the
+    # `signoff_failures` return at the end of this function. Absent artefact ->
+    # no claim.
+    _lec_refusal = _lec_post_layout_refusal(project)
+    if _lec_refusal:
+        signoff_failures.append(_lec_refusal)
+        notes.append(_lec_refusal)
+
     # --- TAPEOUT-SIGNOFF: emit the reports the new sign-off gates consume ----
     # §4.05: every emission is best-effort + disclosed; a tool that cannot run
     # → the report is absent → the gate SKIPs honestly (never a fabricated
     # number). These feed signoff_ladder_run --mode tapeout's new tiers.
     # (a) Per-layer metal density (Efabless met_min_ca_density) — REAL KLayout
     #     measurement from the final GDS → reports/phase3/metal_density.json.
+    #     DELIBERATELY NOT `_signoff_regen`-gated, unlike its neighbours here,
+    #     and the SKIP-on-existence is gone for the reason the previous note
+    #     gave: `_emit_metal_density_report` does not read a fixed path — it
+    #     resolves the FRESHER of {canonical alias, streamed pnr source} itself,
+    #     because the alias is rewritten LATER in this same pass. There is no
+    #     single input path THIS call site could honestly date the report
+    #     against, and a guard dated against the wrong input is a worse claim
+    #     than no guard.
+    #
+    #     That note ended "if the SKIP-on-existence needs closing too, it must
+    #     be closed there, against the path that emitter actually chose." It
+    #     did need closing — an existence gate here meant a re-run that rewrote
+    #     the layout republished the PREVIOUS round's density — and it is now
+    #     closed THERE. The emitter is called unconditionally and decides for
+    #     itself, against the GDS it actually picked.
     metal_density_json = rpt_phase3 / "metal_density.json"
-    if not metal_density_json.is_file():
-        try:
-            if _emit_metal_density_report(project, top, pdk, container,
-                                          metal_density_json, notes):
-                written.append(str(metal_density_json))
-        except Exception as exc:
-            notes.append(f"metal density emit failed: {exc}")
+    try:
+        if _emit_metal_density_report(project, top, pdk, container,
+                                      metal_density_json, notes):
+            written.append(str(metal_density_json))
+    except Exception as exc:
+        notes.append(f"metal density emit failed: {exc}")
     # (b) Aging-corner STA — REAL derated OpenSTA run with a DISCLOSED generic
     #     aging margin → reports/phase3/aging_sta.{rpt,json}.
     aging_sta_rpt = rpt_phase3 / "aging_sta.rpt"
     aging_sta_json = rpt_phase3 / "aging_sta.json"
-    if primary_def.is_file() and not aging_sta_json.is_file():
+    if primary_def.is_file() and _signoff_regen(aging_sta_json, primary_def):
         try:
             if _emit_aging_sta_report(project, top, pdk, container,
                                       aging_sta_rpt, aging_sta_json, notes):
@@ -28037,7 +32785,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     #     missing-inputs (never a fabricated number). The per-instance VECTORED
     #     DVD (SAIF/VCD + package L·di/dt) is the accuracy tier tracked separately.
     dyn_ir_json = rpt_phase3 / "dynamic_ir.json"
-    if primary_def.is_file() and not dyn_ir_json.is_file():
+    if primary_def.is_file() and _signoff_regen(dyn_ir_json, primary_def):
         try:
             # Pass the design's ACTUAL tech/cell LEF + LIBERTY (the runner knows
             # them from the resolved PDK context) so the emitter never SKIPs on a
@@ -28071,7 +32819,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # (d) Thermal power-density screen — mostly WIRING (power report already
     #     exists) → reports/phase3/thermal_screen.json.
     thermal_json = rpt_phase3 / "thermal_screen.json"
-    if not thermal_json.is_file():
+    if _signoff_regen(thermal_json, primary_def):
         try:
             if _emit_thermal_screen(project, top, pdk, container,
                                     thermal_json, notes):
@@ -28084,7 +32832,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # reports/phase3/dfm_screen.json itself); best-effort like the other
     # canonicalize emitters — the gate re-runs it for the verdict.
     dfm_json = rpt_phase3 / "dfm_screen.json"
-    if primary_def.is_file() and not dfm_json.is_file():
+    if primary_def.is_file() and _signoff_regen(dfm_json, primary_def):
         try:
             subprocess.run(
                 [sys.executable, str(PROGRAMS_DIR / "dfm_screen_check.py"),
@@ -28101,7 +32849,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # Runs AFTER the antenna/ir/em/erc emitters above so it reads their
     # verdicts. Guarded like them (only when a routed DEF exists).
     perc_rpt = rpt_phase3 / "perc_equivalent.rpt"
-    if primary_def.is_file() and not perc_rpt.is_file():
+    if primary_def.is_file() and _signoff_regen(perc_rpt, primary_def):
         if _emit_perc_equivalent(project, top, pdk, container, notes):
             written.append(str(perc_rpt))
             written.append(str(rpt_phase3 / "perc_equivalent.json"))
@@ -28155,6 +32903,41 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             "checkpoint is standing in for routed.def, so no antenna "
             "repair, fill or final write ran on it and it is NOT a "
             "sign-off artifact.")
+    # ── THE CRASH ATTESTATION HAS A READER ────────────────────────────────
+    # `reports/phase3/pnr_fatal_signal.json` used to be write-only: step_pnr
+    # emitted it, the note above pointed a HUMAN at it, and no program in the
+    # tree ever opened it. So the one shape it exists to make visible — a PnR
+    # that crashed and nevertheless left a COMPLETE per-stage DEF set (a crash
+    # after the sign-off writes, or a resume that finished the tail) — reached
+    # this step looking exactly like an ordinary clean run and drew no note at
+    # all. It is read here, so the crash is in the canonicalisation record
+    # too, not only in a step detail string a re-run overwrites.
+    _fatal_sig_json = rpt_phase3 / "pnr_fatal_signal.json"
+    if _fatal_sig_json.is_file():
+        try:
+            _fs = json.loads(_fatal_sig_json.read_text())
+        except (OSError, ValueError):
+            _fs = None
+        if isinstance(_fs, dict):
+            _fs_resume = _fs.get("resume")
+            _fs_resume_status = (_fs_resume.get("status")
+                                 if isinstance(_fs_resume, dict) else None)
+            notes.append(
+                f"PnR CRASHED in this project: OpenROAD was killed by "
+                f"{_fs.get('signal_name')} (rc={_fs.get('rc')}) in stage "
+                f"{_fs.get('stage')} — see {_fatal_sig_json}. "
+                + (f"The stage began AFTER pnr.tcl's last sign-off write, so "
+                   f"the DEF/netlist below were written before it and are "
+                   f"from that session. "
+                   if _fs.get("crashed_after_signoff_writes")
+                   else "The stage ran BEFORE pnr.tcl's sign-off writes. ")
+                + (f"Resume: {_fs_resume_status}"
+                   + (f" — {_fs_resume.get('reason')}"
+                      if _fs_resume.get("reason") else "")
+                   if _fs_resume_status
+                   else "No resume was recorded.")
+                + " A complete stage-DEF set here is therefore NOT evidence "
+                  "of an uninterrupted run.")
     if primary_def.is_file():
         # PDN done flag
         pdn_flag = pnr_out / "pdn.done"
@@ -28187,12 +32970,25 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             "Re-run phase3_one_shot_runner from scratch (delete "
             "phase3/stage3/pnr/) so v1.6.36's per-stage write_def fires.")
 
-    # --- Provenance: refresh on-disk hashes + append OpenROAD entry ---
+    # --- Provenance: record re-emitted outputs + append OpenROAD entry ---
     # When the runner re-emits a file (synth.log, routed.def, GDS, etc.)
     # the previously-recorded hash in provenance.jsonl no longer matches
-    # the new on-disk hash, breaking provenance_output_hash_completeness_check.
-    # We refresh in place — this is honest provenance because the runner
-    # IS the tool invoker for these outputs.
+    # the new on-disk hash.
+    #
+    # This used to be reconciled by REWRITING the historical record's
+    # declared hash to whatever was on disk. Being the tool invoker
+    # justifies APPENDING a record of what we just produced; it does not
+    # justify editing a record of what some earlier invocation produced.
+    # The rewrite destroyed the only evidence the hash check reads: it
+    # made "the bytes on disk are not the bytes the recorded tool
+    # produced" unobservable, because any disagreement was resolved by
+    # amending the ledger. A hand-edited artefact and a legitimately
+    # re-run one are indistinguishable to it — both end PASS.
+    #
+    # So: append a new record instead. The ledger stays append-only, the
+    # newest record describes the current bytes (which is what
+    # provenance_output_hash_completeness_check verifies), and the
+    # earlier record survives as the history it was written to be.
     # Also: ensure routed.def has an entry attributed to openroad so
     # provenance_check (Step 21) finds the tool attribution.
     prov_path = project / "provenance.jsonl"
@@ -28204,33 +33000,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 h.update(ch)
         return "sha256:" + h.hexdigest()
 
-    # 1. Refresh existing provenance entry hashes for any output that
-    #    still exists on disk but whose hash drifted.
-    if prov_path.is_file():
-        try:
-            lines = prov_path.read_text().splitlines()
-            patched_lines = []
-            for line in lines:
-                if not line.strip():
-                    patched_lines.append(line)
-                    continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    patched_lines.append(line)
-                    continue
-                outs = rec.get("outputs", {})
-                if isinstance(outs, dict):
-                    for rel, declared_sha in list(outs.items()):
-                        fp = project / rel
-                        if fp.is_file():
-                            cur = _sha(fp)
-                            if cur != declared_sha:
-                                outs[rel] = cur
-                patched_lines.append(json.dumps(rec))
-            prov_path.write_text("\n".join(patched_lines) + "\n")
-        except Exception as exc:
-            notes.append(f"provenance refresh failed: {exc}")
+    # 1. Record any declared output that still exists on disk but whose
+    #    bytes no longer match its newest record — by APPENDING a fresh
+    #    record of what is there now, never by editing an older one.
+    _reemit_note = _record_reemitted_outputs(project)
+    if _reemit_note:
+        notes.append(_reemit_note)
 
     # 2. Append openroad entry for routed.def if missing.
     routed_def = pnr_out / "routed.def"
@@ -28352,7 +33127,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- Step 29: SDF emit + honest SDF-sim self-report (#437d) --------
     # OpenROAD's `write_sdf` produces the SDF the gate's check looks for.
     sdf_out = sim_pl_out / f"{top}.sdf"
-    if primary_def.is_file() and not sdf_out.is_file():
+    if primary_def.is_file() and _signoff_regen(sdf_out, primary_def):
         _emit_sdf(project, top, pdk, container, sdf_out, notes)
         if sdf_out.is_file() and sdf_out.stat().st_size > 0:
             written.append(str(sdf_out))
@@ -28400,7 +33175,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     _mcf_json = project / "reports/phase3/si_mcf_sta.json"
     _mcf_spef = sorted((project / "phase3/stage3/extracted").glob("*.spef")) \
         if (project / "phase3/stage3/extracted").is_dir() else []
-    if (not _mcf_json.is_file() and _mcf_spef
+    # Dated against the SPEF it folds, not against the bare existence of its own
+    # report. The MCF fold is a FUNCTION of that SPEF: `si_mcf_sta_check`
+    # re-derives the expected fold from whatever sits at the SPEF path NOW and
+    # compares it to the bounded SPEF emitted here, so an unrefreshed report
+    # leaves the gate comparing two files from different extractions. It then
+    # reports the mismatch as `FOLD_NOT_APPLIED` — a DESIGN defect ("the emitter
+    # dropped the fold") for what is really an unmatched artefact pair.
+    _mcf_newest_spef = max(_mcf_spef, key=lambda p: p.stat().st_mtime) \
+        if _mcf_spef else None
+    if (_mcf_newest_spef is not None
+            and _signoff_regen(_mcf_json, _mcf_newest_spef)
             and (project / "phase3/stage3/pnr/constraint.sdc").is_file()):
         try:
             _mcf_cmd = [sys.executable,
@@ -28549,8 +33334,26 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         _eco_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
     except Exception:
         _eco_corner_libs = {}
+    # #766 — the ECO must repair the design the trigger number was measured on,
+    # with THAT design's parasitics. Resolve both here (the emitter stays pure).
+    _eco_start_def, _eco_start_basis = _eco_start_point(pnr_out, top)
+    _eco_post_route = _eco_start_basis.startswith("post_route")
+    _eco_spefs_c: Dict[str, str] = {}
+    if _eco_post_route:
+        for _sp in sorted(mc_spef_dir.glob(f"{top}.*.spef")
+                          if mc_spef_dir.is_dir() else []):
+            _c = _sp.name[len(top) + 1:].split(".")[0]
+            if _c in _SPEF_CORNERS and _sp.stat().st_size > 0:
+                _eco_spefs_c[_c] = _to_container_path(str(_sp), container)
+        if not _eco_spefs_c and spef_out.is_file() and spef_out.stat().st_size > 0:
+            _eco_spefs_c["nom"] = _to_container_path(str(spef_out), container)
+    try:
+        _eco_captables_c = (_discover_openrcx_captables(pdk, container)
+                            if _eco_post_route else {})
+    except Exception:
+        _eco_captables_c = {}
     eco_tcl_path = eco_out / "eco_timing_repair.tcl"
-    if not eco_tcl_path.is_file():
+    if _eco_deck_is_stale(eco_tcl_path):
         try:
             _pnr_dir_c = _to_container_path(str(pnr_out), container)
             _eco_dir_c = _to_container_path(str(eco_out), container)
@@ -28562,10 +33365,27 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 _pnr_dir_c, _eco_dir_c,
                 pdk.metal_prefix,
                 corner_libs=_eco_corner_libs,
+                start_def_c=(_to_container_path(str(_eco_start_def), container)
+                             if _eco_start_def is not None else None),
+                post_route_start=_eco_post_route,
+                corner_spefs_c=_eco_spefs_c,
+                captables_c=_eco_captables_c,
+                filler_masters=_filler_masters_for_pdk(pdk),
+                # The step-32 area ceiling and the power-recovery move, taken
+                # from the design's OWN staged reference-flow declaration
+                # through the one ingest that already owns that vocabulary
+                # (`_ORFS_PNR_KNOB_PARAMS`). All three are None when nothing
+                # declared them, which reproduces this deck byte-for-byte.
+                **_eco_resizer_bounds(project),
             )
             eco_tcl_path.write_text(eco_tcl_content)
             written.append(str(eco_tcl_path))
-            notes.append("emitted eco_timing_repair.tcl (#561)")
+            notes.append(
+                "emitted eco_timing_repair.tcl (#561) — start point "
+                f"{_eco_start_def.name if _eco_start_def else '<none>'} "
+                f"({_eco_start_basis}), parasitics "
+                + (",".join(sorted(_eco_spefs_c)) + " extracted SPEF"
+                   if _eco_spefs_c else "ESTIMATED (no extraction on disk)"))
         except Exception as _eco_tcl_exc:
             notes.append(f"eco_timing_repair.tcl emit failed: {_eco_tcl_exc}")
 
@@ -28674,9 +33494,61 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _eco_delta = (_eco_a - _eco_b
                           if isinstance(_eco_b, (int, float))
                           and isinstance(_eco_a, (int, float)) else None)
+            # ── #766 — DID THE REPAIR EVEN SEE THE VIOLATION? ──────────────
+            # The auto-trigger fires on a NEGATIVE setup slack. A repair that
+            # answers `RSZ-0098 No setup violations found` to that is not a
+            # clean pass — it is a repair looking at a different design, or
+            # different parasitics, or a different timing view. Measured on
+            # subservient x gf180mcuD (r8): trigger -0.09 ns, both repair
+            # passes RSZ-0098, ZERO changes — and a deck pointed at the
+            # shipped post-route design with its own SPEF closed it with ONE
+            # buffer. Recorded here so it is a LOUD failure downstream
+            # (eco_loop_audit ECO_BLIND_TO_VIOLATION) instead of a clean log.
+            _eco_run_log = eco_out / "eco_repair.log"
+            _eco_log_verdict = _eco_repair_log_verdict(
+                _eco_run_log.read_text(errors="replace")
+                if _eco_run_log.is_file() else "", _eco_b)
+            if _eco_log_verdict["blind_to_violation"]:
+                notes.append(
+                    f"ECO BLIND TO THE VIOLATION: the trigger measured setup "
+                    f"{_eco_b:+.3f} ns and the repair reported 'No setup "
+                    "violations found' — the repair and the measurement are "
+                    "not describing the same design/parasitics/timing view "
+                    "(see eco/eco_repair.log + eco_timing_repair.tcl).")
+            # ── #766 — IS THE DELTA A BEFORE/AFTER AT ALL? ─────────────────
+            # `eco_before` is measured on the SHIPPED post-route design with
+            # its extracted SPEF. The delta is only a before-and-after when the
+            # ECO started from THAT design AND the "after" was measured on the
+            # ECO's OWN re-extracted parasitics. Otherwise it compares two
+            # implementations — which is how a run whose repair_timing made
+            # ZERO changes recorded `eco_setup_delta_ns = -8.220` and failed
+            # for a "regression" it never made.
+            _eco_after_src = _eco_after.get("parasitics_source")
+            _eco_delta_comparable = bool(
+                _eco_post_route and _eco_after_src == "eco_reextracted")
+            _eco_delta_reason = (
+                "before and after are the same implementation measured on its "
+                "own parasitics" if _eco_delta_comparable else
+                f"ECO start point was {_eco_start_basis!r} and the after was "
+                f"measured on {_eco_after_src!r} parasitics — the two numbers "
+                "describe different implementations, so their difference is "
+                "not a repair delta")
             _eco_regressed = bool(_eco_delta is not None
-                                  and _eco_delta < -1e-9)
-            if _eco_regressed:
+                                  and _eco_delta < -1e-9
+                                  and _eco_delta_comparable)
+            if _eco_delta is not None and _eco_delta < -1e-9 \
+                    and not _eco_delta_comparable:
+                notes.append(
+                    f"ECO setup delta {_eco_delta:+.3f} ns is NOT a repair "
+                    f"delta: {_eco_delta_reason} — recorded, not charged to "
+                    "the ECO (#766 a/c).")
+            if _ran and _eco_log_verdict["blind_to_violation"]:
+                # #766 — a repair that could not SEE the violation has not
+                # repaired anything, whatever its exit status was. (A run that
+                # produced no netlist keeps its own `eco_fired_no_netlist`
+                # action — that failure is already named.)
+                _eco_decision["action"] = "eco_fired_blind_to_violation"
+            elif _eco_regressed:
                 # The ECO outputs stay on disk under their own names for
                 # debug; they are NOT adopted as the shipped artefacts.
                 _eco_decision["action"] = "eco_fired_reverted_regression"
@@ -28688,7 +33560,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             try:
                 _eco_log.write_text(json.dumps({
                     "program": "phase3_one_shot_runner.eco_auto_trigger",
-                    "verdict": (("ECO_REVERTED_REGRESSION" if _eco_regressed
+                    "verdict": (("ECO_BLIND_TO_VIOLATION"
+                                 if _eco_log_verdict["blind_to_violation"]
+                                 else "ECO_REVERTED_REGRESSION" if _eco_regressed
                                  else "ECO_APPLIED") if _ran
                                 else "ECO_ATTEMPTED"),
                     "trigger_basis": "multi_corner_ocv",
@@ -28706,12 +33580,63 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     # sign-off on the ECO netlist (§4.05: honest — a failed ECO
                     # run that produced no netlist is NOT re-verified).
                     "re_verified": bool(_ran and _eco_after.get("measured")),
-                    "affected_steps": [21, 23, 24, 29, 30],
+                    # THE BLAST RADIUS, DERIVED FROM THE FLOW DAG — NOT TYPED.
+                    # This list was `[21, 23, 24, 29, 30]` from 0a9e51577 until
+                    # v1.11.19 and nothing had ever checked it: `eco_loop_audit`
+                    # tests `"affected_steps" not in data` and nothing else, so
+                    # `[]` and `[999]` both passed. The flow's own step-32
+                    # trigger says a THIRD thing ("re-run #21-#28"), and step 32
+                    # `blocks_on` says a fourth ([23,24,25,26,27,29,30,31]).
+                    #
+                    # The repair rewrites the ROUTED implementation (multi-corner
+                    # `repair_design` + `repair_timing -setup` + `detailed_route`,
+                    # then its own re-extraction), i.e. step 21's output. So the
+                    # evidence that no longer describes the design is exactly
+                    #
+                    #     {21} u descendants(21) - descendants(32) - {32}
+                    #
+                    # over the flow's `blocks_on` graph. Read it as: everything
+                    # downstream of routing whose result describes the PRE-repair
+                    # implementation, minus what is downstream of THIS step and
+                    # therefore consumes the repair's result by construction.
+                    # (33, power, is in it for exactly that reason — it depends
+                    # on 23, not on 32, so nothing in the graph guarantees it
+                    # ever sees the repair. 34 and 37 are out for the mirror
+                    # reason.)
+                    # 22 is in it because the repair re-extracts; 31 is in it
+                    # because the repair changes geometry AND netlist, so DRC and
+                    # LVS are both stale — that omission was the dangerous one.
+                    # `test_closed_loop_executable_coverage_affected_steps.py`
+                    # recomputes this set from the shipped flow and asserts this
+                    # literal equals it, so the two can no longer drift.
+                    #
+                    # It is a REQUIREMENT, not a receipt: this runner does not
+                    # re-run any of them, which is why the ECO netlist is not the
+                    # shipped implementation (see _ECO_REROUTE_MAX_DROUTE_ITERS).
+                    # Written in the flow's own declaration order.
+                    "affected_steps": [21, 22, "DT2", "DT3", 23, 24, 25, 26,
+                                       "26.5ic", 27, 28, 29, 30, 31, 33],
                     "eco_before": _eco_decision["eco_before"],
                     "eco_after": _eco_after,
                     "residual_violation": _eco_residual,
                     "eco_setup_delta_ns": _eco_delta,
                     "eco_regressed": _eco_regressed,
+                    # #766 — WHAT the ECO repaired, and on WHICH parasitics
+                    # both ends of the delta were measured. Without these the
+                    # delta cannot be told apart from a comparison of two
+                    # different implementations.
+                    "eco_start_point": (str(_eco_start_def.relative_to(project))
+                                        if _eco_start_def is not None else None),
+                    "eco_start_point_basis": _eco_start_basis,
+                    "eco_before_parasitics": (
+                        "extracted_spef_corners" if _eco_spefs_c
+                        else "estimated"),
+                    "eco_after_parasitics": _eco_after_src,
+                    "eco_delta_comparable": _eco_delta_comparable,
+                    "eco_delta_comparable_reason": _eco_delta_reason,
+                    "eco_repair_log": _eco_log_verdict,
+                    "eco_blind_to_violation":
+                        _eco_log_verdict["blind_to_violation"],
                     "residual_note": _eco_residual_note(
                         project, bool(_eco_residual), _eco_delta),
                 }, indent=2) + "\n")
@@ -28727,16 +33652,21 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                          "OCV unavailable) — honest fallback, not auto-run.")
     # Durable disclosure of the trigger decision (§4.05 audit trail).
     try:
-        (eco_out / "eco_trigger_decision.json").write_text(
+        _aa.write_text(eco_out / "eco_trigger_decision.json",
             json.dumps(_eco_decision, indent=2) + "\n")
         written.append(str(eco_out / "eco_trigger_decision.json"))
     except Exception:  # pragma: no cover — defensive
         pass
 
     # --- Step 33: power.rpt (OpenSTA report_power best-effort) ---------
+    # `basis="post_pnr"`: this is the SIGN-OFF power number, so the session
+    # links the ROUTED netlist + the extracted SPEF. Passing nothing here (the
+    # default) is the pre-PnR preview basis, which is what this call used to
+    # get while its own header claimed the post-PnR netlist.
     power_rpt = rpt_phase3 / "power.rpt"
-    if not power_rpt.is_file() and primary_def.is_file():
-        ok = _emit_power_report(project, top, pdk, container, power_rpt, notes)
+    if _signoff_regen(power_rpt, primary_def) and primary_def.is_file():
+        ok = _emit_power_report(project, top, pdk, container, power_rpt, notes,
+                                basis="post_pnr")
         if ok:
             written.append(str(power_rpt))
             # Companion .json for the gate's structured-form aspirations.
@@ -28745,7 +33675,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _pwr_txt = power_rpt.read_text(errors="replace")
             _mode = ("vector_vcd" if "POWER_ANALYSIS_MODE: vector_vcd"
                      in _pwr_txt else "vectorless_sdc")
-            (rpt_phase3 / "power.json").write_text(json.dumps({
+            _aa.write_text(rpt_phase3 / "power.json", json.dumps({
                 "tool": "opensta",
                 "source": str(power_rpt.relative_to(project)),
                 "analysis_mode": _mode,
@@ -28840,7 +33770,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(routed_drc))
         # Mirror to reports/phase3/ where the gate's --json output lands
         rpt_phase3.mkdir(parents=True, exist_ok=True)
-        (rpt_phase3 / "drc_router.rpt").write_text(body)
+        _aa.write_text(rpt_phase3 / "drc_router.rpt", body)
         if str(rpt_phase3 / "drc_router.rpt") not in written:
             written.append(str(rpt_phase3 / "drc_router.rpt"))
 
@@ -29247,6 +34177,50 @@ def _report_worst_paths_tcl(rpt_c: str, flag: str) -> str:
     )
 
 
+#: Marker the WNS emitter writes when the tool ACCEPTED the query. Its presence
+#: is what tells a reader that a missing `wns` line means "no paths", and its
+#: absence that the tool was never asked -- the two states this whole lane
+#: exists to keep apart.
+_SIGNOFF_WNS_MARKER = "SIGNOFF_WNS_REPORTED"
+
+
+def _report_wns_tcl(rpt_c: str, flag: str) -> str:
+    """Emit `report_wns <-max|-min>` guarded by a catch, with a marker.
+
+    THE MEASURED DEFECT. Both multi-corner sign-off stanzas asked for
+    `report_worst_slack` and `report_tns` and NEVER for `report_wns`. Measured
+    across all six STA artefacts of a real sign-off run: `timing.hold.wns_ns` is
+    NOT_MEASURED on every view with the reason "the artefact carries no wns line
+    for this view", and the same for setup on the two multi-corner reports. The
+    feasibility gate's hold axis proves from `timing.hold.wns_ns`, so the hold
+    axis was structurally unprovable from this flow's own evidence -- not for a
+    design, but for every design, on every run.
+
+    `_ppa/timing.py` will not compute the wns from the worst slack, and it is
+    right not to: OpenSTA's wns is `min(0, worst_slack)`, and a derived number
+    presented as a measured one is §3's failure. The fix therefore belongs
+    HERE -- the emitter has to ask the tool for the fact.
+
+    Guarded because a build that rejects the min/max flag must not abort a
+    sign-off script that has already written its setup half. On failure the
+    reason is written into the report and no marker appears, so the absence
+    remains visible rather than becoming a silent skip.
+
+    chip/PDK-AGNOSTIC: a stock OpenSTA command, no literal.
+    """
+    return (
+        f"if {{[catch {{report_wns {flag} >> {rpt_c}}} _wnserr]}} {{\n"
+        f"  set _wf [open {rpt_c} a]\n"
+        f'  puts $_wf "SIGNOFF_WNS_UNAVAILABLE query={flag} reason=$_wnserr"\n'
+        f"  close $_wf\n"
+        f"}} else {{\n"
+        f"  set _wf [open {rpt_c} a]\n"
+        f'  puts $_wf "{_SIGNOFF_WNS_MARKER} query={flag}"\n'
+        f"  close $_wf\n"
+        f"}}\n"
+    )
+
+
 def _report_check_types_tcl(rpt_c: str) -> str:
     """Emit `report_check_types -recovery -removal -max_slew -min_pulse_width
     -max_capacitance -max_fanout -violators` guarded by a catch; on SUCCESS
@@ -29391,7 +34365,42 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
             f"SPEF-based STA prerequisites missing ({', '.join(missing)}); "
             f"Step-23 falls back to the estimate-based sta.rpt (#527)")
         return False
-    lib_c = _to_container_path(pdk.liberty, container)
+    # SETUP SIGN-OFF CORNER, not the nominal library.
+    #
+    # MEASURED DEFECT: this report is copied verbatim to
+    # `phase3/stage3/sta/post_route_timing.rpt`, which is the ONE STA artefact
+    # Step 23 ("Post-route STA (multi-corner multi-mode SIGN-OFF)") declares in
+    # `required_outputs`. Reading `pdk.liberty` times the routed design at the
+    # NOMINAL/typical process corner, so on a design that closes at TT and
+    # violates at SS the declared sign-off artefact stamps a clean summary:
+    #
+    #     wns max 0.00 / tns max 0.00 / worst slack max 5.24 (MET)
+    #
+    # while the same routed netlist + same SPEF at the slow corner reports a
+    # real -0.93 ns setup violation. The gate only catches that today because
+    # its discovery is UNSCOPED and sweeps the whole project; scope it to the
+    # artefact the step declares — as steps 21/31 already correctly do with
+    # `--under` — and the SIGN-OFF step returns exit 0 on a design that misses
+    # setup. The nominal corner answers a question ADJACENT to the one Step 23
+    # asks.
+    #
+    # DEGRADES LOUDLY, NEVER SILENTLY: when the PDK exposes no distinct slow
+    # process library, `_resolve_signoff_corner_libs` returns no SS entry and
+    # this falls back to `pdk.liberty` — the pre-fix behaviour, preserved for
+    # single-liberty PDKs — and the basis stamp below records `NOMINAL` so the
+    # degraded case is visible in the report instead of being indistinguishable
+    # from a real sign-off corner.
+    _corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    _signoff_lib_c = _corner_libs.get("SS")
+    if _signoff_lib_c:
+        lib_c, _signoff_corner = _signoff_lib_c, "SS"
+    else:
+        lib_c, _signoff_corner = _to_container_path(pdk.liberty, container), "NOMINAL"
+        notes.append(
+            "SPEF-based post-route STA: the active PDK exposed no distinct SS "
+            "(slow) process liberty, so Step-23's declared artefact is timed at "
+            "the NOMINAL corner — a single-corner basis, NOT multi-corner "
+            "sign-off (stamped STA_SIGNOFF_CORNER=NOMINAL in the report)")
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in (pdk.macro_libs or []))
@@ -29458,6 +34467,19 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"report_tns >> {rpt_c}\n"
         f"report_wns >> {rpt_c}\n"
         f"report_worst_slack -max >> {rpt_c}\n"
+        # BASIS STAMP — every sibling STA emitter in this runner stamps what it
+        # timed (`per_corner/*` stamp PRE_LAYOUT_ESTIMATE; the aging report
+        # stamps POST_ROUTE_SPEF + its liberty). This one stamped NOTHING, so an
+        # unstamped single-corner report was indistinguishable, to any consumer,
+        # from multi-corner sign-off evidence. State the corner outright.
+        f"set _bf [open {rpt_c} a]\n"
+        f"puts $_bf \"STA_BASIS: POST_ROUTE_SPEF\"\n"
+        f"puts $_bf \"STA_SIGNOFF_CORNER: {_signoff_corner}\"\n"
+        f"puts $_bf \"STA_BASIS_LIBERTY: {lib_c}\"\n"
+        f"puts $_bf \"STA_SIGNOFF_CORNER_COUNT: 1\"\n"
+        f"puts $_bf \"STA_SIGNOFF_CORNER_SEMANTICS this report times ONE process "
+        f"corner; it is NOT by itself multi-corner sign-off evidence\"\n"
+        f"close $_bf\n"
         f"{flat_marker_tcl}"
         # recovery/removal (async-reset de-assert) + min-pulse-width + max-slew +
         # max-cap sign-off check types, guarded + marked (this OpenSTA build's
@@ -29556,6 +34578,54 @@ def _run_eco_repair(project: Path, top: str, container: str,
     return ok
 
 
+#: OpenROAD's resizer says one of exactly two things about setup, and the
+#: message IDs are the stable part of the sentence.
+_RSZ_NO_SETUP_VIOLATIONS_RE = re.compile(
+    r"RSZ-0098|No setup violations found", re.I)
+_RSZ_FOUND_SETUP_ENDPOINTS_RE = re.compile(
+    r"Found\s+(\d+)\s+endpoints?\s+with\s+setup\s+violations", re.I)
+
+
+def _eco_repair_log_verdict(log_text: str,
+                            trigger_setup_wns: Optional[float]
+                            ) -> Dict[str, Any]:
+    """#766 — DID THE REPAIR SEE THE VIOLATION IT WAS SENT TO FIX?
+
+    An ECO fires because a sign-off measurement found negative setup slack. If
+    the repair that runs in response reports ``RSZ-0098 No setup violations
+    found`` and never reports finding any, then the two are looking at
+    different designs (or different parasitics, or a different timing view) —
+    and the run has produced a CLEAN-LOOKING ECO that repaired nothing. That is
+    the silent no-op, and it is exactly the shape #766 was filed for: the
+    trigger read ``setup_worst_slack_ns: -0.09`` and ``eco_repair.log`` read
+    ``No setup violations found`` on both passes, while a correct deck on the
+    same design closed it with ONE buffer.
+
+    "It ran without erroring" and "it could see the problem" are different
+    questions, and only the first was ever asked here.
+
+    ABSENCE IS NOT THE FINDING: a missing/empty log, or a trigger slack that
+    was never measured, yields ``blind_to_violation=False`` — this reports a
+    CONTRADICTION between two things that were both measured, nothing else.
+    """
+    txt = log_text or ""
+    saw_none = bool(_RSZ_NO_SETUP_VIOLATIONS_RE.search(txt))
+    endpoints = [int(m) for m in _RSZ_FOUND_SETUP_ENDPOINTS_RE.findall(txt)]
+    saw_violations = any(n > 0 for n in endpoints)
+    negative_trigger = bool(isinstance(trigger_setup_wns, (int, float))
+                            and not isinstance(trigger_setup_wns, bool)
+                            and trigger_setup_wns < 0)
+    return {
+        "log_read": bool(txt.strip()),
+        "saw_no_setup_violations": saw_none,
+        "saw_setup_violations": saw_violations,
+        "setup_endpoints_found": max(endpoints) if endpoints else 0,
+        "reroute_failed": "ECO_DETAILED_ROUTE_NONFATAL" in txt,
+        "blind_to_violation": bool(
+            negative_trigger and saw_none and not saw_violations),
+    }
+
+
 def _parse_mcorner_ocv_slacks(rpt_text: str) -> Tuple[Optional[float],
                                                       Optional[float]]:
     """Parse (setup_wns, hold_wns) from an ``sta_mcorner_ocv*.rpt`` body — the
@@ -29583,25 +34653,99 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
     §4.05: a genuine ss floor (ibex@20 ns) STILL shows VIOLATED afterwards — the
     multi-corner ECO RECOVERS what is recoverable, it does NOT fabricate closure.
     Returns the post-ECO per-corner worst slack (None values / measured=False on
-    any failure — never a fabricated MET)."""
+    any failure — never a fabricated MET).
+
+    #766 (c) — THE "AFTER" MUST BE MEASURED ON THE ECO'S OWN PARASITICS. This
+    used to hand `_emit_mcorner_ocv_sta` the ECO NETLIST while rediscovering the
+    SPEFs from ``mc_spef_dir`` — the BASE route's extraction. The ECO
+    independently re-routes to ``eco_routed.def`` and nothing re-extracted it,
+    so the report judged the ECO's netlist against parasitics that describe a
+    different route, and said so in its own banner
+    (``SPEF=<top>.max.spef`` while reporting on ``<top>_eco.v``). The ECO deck
+    now re-extracts into ``<eco>/spef_corners/`` after its reroute; those are
+    PREFERRED here. ``parasitics_source`` records which set was used, so the
+    before/after delta downstream knows whether it is comparing an implementation
+    against ITSELF-after-repair or against a different one.
+    """
     out: Dict[str, Any] = {
         "setup_worst_slack_ns": None, "hold_worst_slack_ns": None,
         "violated_corners": [], "report": None, "measured": False,
+        "parasitics_source": None,
     }
-    eco_v = _pl.eco_dir(project) / f"{top}_eco.v"
+    eco_dir = _pl.eco_dir(project)
+    eco_v = eco_dir / f"{top}_eco.v"
     if not (eco_v.is_file() and eco_v.stat().st_size > 0):
         return out
-    posteco_rpt = Path(sta_out) / "sta_mcorner_ocv_posteco.rpt"
-    if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
-        # rediscover the per-corner SPEFs the same way the pre-ECO OCV pass did.
-        ocv_corner_spefs: Dict[str, Path] = {}
-        if mc_spef_dir and Path(mc_spef_dir).is_dir():
-            for _sp in sorted(Path(mc_spef_dir).glob(f"{top}.*.spef")):
+    # #766 (c) — the ECO's OWN re-extracted parasitics when its reroute produced
+    # them; the base route's only as the disclosed fallback.
+    eco_spef_dir = eco_dir / "spef_corners"
+    _reroute_failed = False
+    _eco_log_txt = ""
+    _eco_run_log = eco_dir / "eco_repair.log"
+    if _eco_run_log.is_file():
+        _eco_log_txt = _eco_run_log.read_text(errors="replace")
+        _reroute_failed = "ECO_DETAILED_ROUTE_NONFATAL" in _eco_log_txt
+
+    def _discover(dirpath: Path) -> Dict[str, Path]:
+        found: Dict[str, Path] = {}
+        if dirpath and Path(dirpath).is_dir():
+            for _sp in sorted(Path(dirpath).glob(f"{top}.*.spef")):
                 _c = _sp.name[len(top) + 1:].split(".")[0]
                 if _c in _SPEF_CORNERS and _sp.stat().st_size > 0:
-                    ocv_corner_spefs[_c] = _sp
+                    found[_c] = _sp
+        return found
+
+    eco_spefs = _discover(eco_spef_dir)
+    if eco_spefs and not _reroute_failed:
+        ocv_corner_spefs, _nom, _src = eco_spefs, None, "eco_reextracted"
+    else:
+        ocv_corner_spefs = _discover(mc_spef_dir)
         _nom = (nom_spef_path if (nom_spef_path
                                   and Path(nom_spef_path).is_file()) else None)
+        _src = ("base_route_spef_reroute_failed" if (eco_spefs and _reroute_failed)
+                else "base_route_spef")
+    out["parasitics_source"] = _src
+    posteco_rpt = Path(sta_out) / "sta_mcorner_ocv_posteco.rpt"
+    # #766 (d) — A REPORT THAT PREDATES ITS OWN INPUTS IS NOT A MEASUREMENT OF
+    # THEM. The reuse guard below is existence-only, so a
+    # `sta_mcorner_ocv_posteco.rpt` left by an EARLIER round survived into this
+    # one: the re-measurement was skipped and that round's number was parsed and
+    # published as this round's `eco_after`. Worse, `parasitics_source` is
+    # computed above from the inputs this call SELECTED, then recorded as fact —
+    # so the record asserted `eco_reextracted` over a number the previous round
+    # had measured against the BASE route's SPEF. Measured on a real cell: the
+    # stale report published setup -8.31 ns with `parasitics_source:
+    # eco_reextracted` and `measured: true`, where re-emitting over the same
+    # inputs measured -0.44 ns. The 23x error propagated into the ECO_REGRESSED
+    # verdict (-8.220 ns reported for a real -0.350 ns delta) and into the
+    # residual note calling -8.31 ns a "real timing floor".
+    # Same mtime-supersession idiom the metal-fill re-run already uses.
+    if posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0:
+        _rpt_mtime = posteco_rpt.stat().st_mtime
+        _inputs = [Path(eco_v)] + [Path(p) for p in ocv_corner_spefs.values()]
+        if _nom:
+            _inputs.append(Path(_nom))
+        _newer = sorted({p.name for p in _inputs
+                         if p.is_file() and p.stat().st_mtime > _rpt_mtime})
+        if _newer:
+            # Quarantine rather than delete, so a reader can still see the
+            # superseded bytes, under a name nothing globbing `*.rpt` adopts.
+            _q = posteco_rpt.parent / (posteco_rpt.name + ".superseded")
+            try:
+                posteco_rpt.replace(_q)
+                notes.append(
+                    "post-ECO multi-corner OCV: SUPERSEDED a stale "
+                    f"{posteco_rpt.name} that predates {', '.join(_newer)} — "
+                    "it was measured on an EARLIER round's inputs, so reusing "
+                    "it would publish that round's slack as this round's "
+                    f"eco_after under parasitics_source={_src}. Re-measuring.")
+            except OSError as _qe:
+                notes.append(
+                    "post-ECO multi-corner OCV: could NOT quarantine stale "
+                    f"{posteco_rpt.name} ({_qe}) — refusing to adopt it; "
+                    "this measurement is reported as NOT measured.")
+                return out
+    if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
         _emit_mcorner_ocv_sta(
             project, top, pdk, container, corner_libs, ocv_corner_spefs,
             _nom, posteco_rpt, notes, netlist_override=eco_v)
@@ -29618,6 +34762,11 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
         "report": "phase3/stage3/sta/sta_mcorner_ocv_posteco.rpt",
         "measured": True,
     })
+    if _src != "eco_reextracted":
+        notes.append(
+            "post-ECO multi-corner OCV measured on the BASE route's parasitics "
+            f"({_src}) — they do not describe the ECO's own route, so the "
+            "before/after delta is NOT a like-for-like comparison (#766 c).")
     if viol:
         notes.append(
             f"post-ECO multi-corner OCV: STILL VIOLATED at {'/'.join(viol)} "
@@ -29629,9 +34778,11 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
     return out
 
 
-def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
-                                                               Dict[str, Path],
-                                                               str, str]:
+def _multi_corner_sta_inputs(project: Path, top: str,
+                             force_prelayout: bool = False,
+                             ) -> Tuple[Optional[Path],
+                                        Dict[str, Path],
+                                        str, str]:
     """Resolve the netlist + parasitics the per-corner STA must time.
 
     The defect this closes: `_emit_multi_corner_sta`'s docstring claimed the
@@ -29653,6 +34804,13 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
          → true post-route multi-corner timing;
       2. routed netlist with no SPEF → post-route topology, no parasitics;
       3. synth netlist → PRE-LAYOUT ESTIMATE, and the report SAYS SO.
+
+    ``force_prelayout=True`` OVERRIDES the precedence: the pre-layout step
+    (Step 10) demands rung 3 even when a routed netlist exists, because a
+    re-run in a dir that already holds a routed netlist would otherwise emit a
+    post-route report under a pre-layout header. With the flag set there is no
+    routed-netlist stand-in — the synth netlist is the only acceptable basis,
+    and its absence returns ``MISSING`` rather than a mislabelled report.
 
     Returns ``(netlist, spef, basis_id, disclosure)``. The basis is stamped
     into every emitted report so no downstream summary can quote a pre-layout
@@ -29677,6 +34835,30 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
         if cand.is_file():
             spef_map["*"] = cand
             break
+    # Step 10 is the PRE-LAYOUT multi-corner STA BY DEFINITION (the post-route
+    # sign-off is Step 23). When the caller FORCES the pre-layout basis it must
+    # time the pre-PnR synth netlist with NO parasitics EVEN IF a routed netlist
+    # + SPEF already exist from an earlier round in the same dir. Otherwise the
+    # routed netlist wins the file-existence precedence below and the
+    # "pre-layout" report silently becomes a post-route one: a RE-RUN then
+    # publishes POST_ROUTE numbers under a PRE-LAYOUT header — the exact
+    # contradiction `sta_report_check` flags. There is no honest pre-layout
+    # estimate without the synth netlist, so its absence is MISSING, never a
+    # routed-netlist stand-in.
+    if force_prelayout:
+        if synth.is_file():
+            return (synth, {}, "PRE_LAYOUT_ESTIMATE",
+                    f"pre-layout basis FORCED (Step 10) — timed the pre-PnR "
+                    f"synthesis netlist {synth.name} with NO parasitics, "
+                    "ignoring any routed netlist present from an earlier round. "
+                    "This is a PRE-LAYOUT ESTIMATE, NOT post-route sign-off: it "
+                    "excludes placement, CTS, resizing and all interconnect RC, "
+                    "so a corner shown as MET here may VIOLATE on the routed "
+                    "design")
+        return (None, {}, "MISSING",
+                f"pre-layout STA forced but no pre-PnR synth netlist "
+                f"{synth.name} found — a pre-layout estimate cannot be "
+                "substantiated and a routed netlist must NOT stand in for it")
     if routed.is_file():
         if spef_map:
             per_corner = ", ".join(
@@ -29700,30 +34882,245 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
     return (None, {}, "MISSING", "no routed or synth netlist found")
 
 
+def _reused_report_basis(rpt: Path) -> Tuple[Optional[str], Optional[str]]:
+    """Read a corner report's own `STA_BASIS` stamp back, via the ONE shipped
+    reader — `eda_report_audit`.
+
+    `_emit_multi_corner_sta` stamps every report it writes with the basis it
+    was produced on (`POST_ROUTE_SPEF` / `POST_ROUTE_NO_SPEF` /
+    `PRE_LAYOUT_ESTIMATE`), precisely so a report carries its own limitation
+    rather than relying on a caller to remember it. Reading that stamp back is
+    what makes a REUSED report checkable against the basis the inputs currently
+    resolve to.
+
+    Returns ``(raw, canonical)`` where
+
+      * ``raw``       — the verbatim stamp value (e.g. ``POST_ROUTE_NO_SPEF``),
+                        for disclosure, or ``None`` when the file is unreadable
+                        or carries no stamp;
+      * ``canonical`` — that stamp collapsed to the PnR-side vocabulary every
+                        consumer compares against (``PRE_LAYOUT`` /
+                        ``POST_ROUTE``), or ``None`` when unreadable, unstamped,
+                        or an unrecognised token.
+
+    Delegating to `_sta_basis.STAMP_RE` (a `#`-tolerant regex — the sibling
+    emitter in this module writes a `#`-prefixed stamp) and
+    `_sta_basis.declared_basis` (which PREFIX-normalises the two `POST_ROUTE_*`
+    suffixes the emitter ships to the single `POST_ROUTE` token) means this call
+    can NEVER disagree with the shipped audit on the same report — no separate
+    acceptance set, no per-suffix / per-case / hyphenation drift. `eda_report_audit`
+    reads the same stamp through the same module, so "what the audit will say"
+    and "what this says" are one answer by construction. Returning
+    ``canonical=None`` as "unverified, never agrees" keeps the fail-safe: an
+    unreadable or unstamped report is disclosed as uncertain, not assumed to
+    match. Chip/PDK-AGNOSTIC: pure text.
+    """
+    try:
+        text = rpt.read_text(errors="replace")
+    except OSError:
+        return (None, None)
+    m = _sta_basis.STAMP_RE.search(text)
+    raw = m.group(1) if m else None
+    return (raw, _sta_basis.declared_basis(text))
+
+
+# OpenSTA's unresolved-master warning. The phrase "Creating black box" is the
+# stable part across OpenSTA versions; the `Warning 198` number is not matched
+# so a renumbering upstream cannot silently disable this check.
+_STA_BLACKBOX_RE = re.compile(
+    r"module\s+(\S+?)\s+not\s+found\.\s*Creating\s+black\s+box", re.I)
+
+
+def _sta_blackboxed_masters(log_path: Path) -> List[str]:
+    """Cell masters OpenSTA could not resolve against the Liberty it read.
+
+    An instance whose master is absent from every `read_liberty` becomes a
+    BLACK BOX: OpenSTA prints ``Warning 198: … module <M> not found. Creating
+    black box for <inst>.`` and **exits 0**. A black box has no timing arcs, so
+    every path through it is removed from the graph — `report_checks` then
+    prints ``No paths found`` and `report_wns`/`report_tns` print ``0.00``.
+
+    The failure mode this exists to catch is that the resulting artefact is
+    byte-indistinguishable from a genuinely clean corner, and it errs
+    OPTIMISTIC. Returns the sorted distinct master names, empty when the design
+    linked cleanly (so a healthy run is unaffected).
+    """
+    try:
+        txt = log_path.read_text(errors="replace")
+    except OSError:
+        # No log to read is not evidence of black-boxing; the caller's rc /
+        # report-exists tests still apply. Fail OPEN here so this check can
+        # only ever add a finding, never invent one.
+        return []
+    # READ WHAT THE TOOL SAID, NEVER A COMMENT ABOUT WHAT IT SAID (vibe-ic#731).
+    # A per-corner log is not HDL, but nothing keeps HDL out of one: a flow that
+    # folds the netlist into its transcript, or a reader that echoes the
+    # offending source line, puts `//` and `/* */` text in here. A comment
+    # RESTATING the warning — the note somebody leaves beside the fix — would
+    # then be read as OpenSTA ASSERTING it, and the consequence is not a spare
+    # name in a list: the caller `rpt.unlink()`s this corner's report and
+    # records that the design did not link, so a MENTION would destroy a real
+    # post-route sign-off artefact.
+    #
+    # SAFE IN THE OTHER DIRECTION TOO, which matters more, because losing a
+    # genuine Warning 198 would restore the falsely-clean corner this helper
+    # exists to stop. The `//` strip is line-bounded, and the only text OpenSTA
+    # prints before the phrase on that line is `Warning <n>: <netlist path>
+    # line <n>, `; that path comes from `_to_container_path`, which appends a
+    # `/`-prefixed remainder to a mount destination and so cannot emit `//`.
+    # MEASURED over 64 real per-corner logs carrying 18 genuine Warning 198
+    # lines: `//` appeared on 50 lines, every one of them the OpenSTA GPL
+    # banner URL and none on a warning line, and the stripped scan returned the
+    # same 18 masters as the raw one.
+    txt = _strip_v_comments(txt)
+    return sorted({m.group(1) for m in _STA_BLACKBOX_RE.finditer(txt)})
+
+
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                            container: str, libs: List[Path],
-                           out_dir: Path, notes: List[str]) -> bool:
+                           out_dir: Path, notes: List[str],
+                           force_prelayout: bool = False) -> bool:
     """For each Liberty corner run OpenSTA and emit `sta_<CORNER>.rpt`.
 
     Times the ROUTED netlist + extracted SPEF when they exist, falling back to
     the pre-PnR synth netlist ONLY when no routed netlist has been written yet
     — in which case every emitted report is stamped `STA_BASIS:
     PRE_LAYOUT_ESTIMATE` so it can never be read as post-route sign-off
-    (see :func:`_multi_corner_sta_inputs`). Best-effort: failures log WARN but
-    do not block the canonicalize step."""
-    netlist, spef_map, basis, basis_note = _multi_corner_sta_inputs(project, top)
+    (see :func:`_multi_corner_sta_inputs`). ``force_prelayout=True`` (Step 10)
+    pins the basis to the synth netlist regardless of a routed netlist present
+    from an earlier round, and re-emits any per-corner report left with a
+    non-pre-layout basis by that earlier round. Best-effort: failures log WARN
+    but do not block the canonicalize step."""
+    netlist, spef_map, basis, basis_note = _multi_corner_sta_inputs(
+        project, top, force_prelayout=force_prelayout)
     sdc_path = _pl.pnr_dir(project) / "constraint.sdc"
     if netlist is None or not sdc_path.is_file():
         notes.append("multi-corner STA skipped: netlist or SDC missing")
         return False
-    notes.append(f"multi-corner STA basis={basis}: {basis_note}")
+    notes.append(f"multi-corner STA inputs resolve to basis={basis}: "
+                 f"{basis_note}")
+    # Collapse the resolved basis to the SAME PnR-side vocabulary the reports'
+    # own stamps are read into, so the reuse comparison below is canonical-vs-
+    # canonical. The emitter ships two `POST_ROUTE_*` suffixes (SPEF / NO_SPEF);
+    # `_sta_basis` — the reader every downstream consumer uses, `eda_report_audit`
+    # included — folds both to `POST_ROUTE`. Comparing the raw strings instead
+    # would flag a perfectly-in-basis `POST_ROUTE_NO_SPEF` report as
+    # "disagreeing" with `POST_ROUTE_SPEF` inputs, a false alarm the shipped
+    # audit never raises. `MISSING` normalises to None, which the forced path
+    # below treats as "not reusable" — the fail-safe direction.
+    basis_norm = _sta_basis.normalise_basis(basis)
     any_emitted = False
+    # Corner reports REUSED from a previous call, bucketed by whether their own
+    # stamped basis agrees with the basis the inputs now resolve to. See the
+    # `if rpt.is_file()` branch below for why this accounting has to exist.
+    reused_stale: List[str] = []
+    reused_unstamped: List[str] = []
     for lib in libs:
         corner = _classify_corner_from_name(lib.name)
         rpt = out_dir / f"sta_{corner}.rpt"
+        # Existence-only reuse is correct for the post-route caller, but a
+        # FORCED pre-layout emit must NOT reuse a stale report left by an
+        # earlier post-route round: on a re-run per_corner/ already holds
+        # POST_ROUTE reports, and skipping them would preserve the exact
+        # mislabel this forces away.
+        #
+        # Whichever caller is asking, the stamp is read through `_sta_basis` —
+        # the tree's ONE reader — not by substring. A substring test
+        # (`f"STA_BASIS: {basis}" in text`) is a different, weaker question: it
+        # matches the emitter's exact spelling and spacing, so
+        # `#  STA_BASIS:   PRE_LAYOUT_ESTIMATE` reads as "not our basis" and a
+        # healthy report is re-run every time, while `STA_BASIS_NOTE: ...
+        # PRE_LAYOUT_ESTIMATE ...` reads as "ours" and a stale one is kept. The
+        # shared reader answers the question we mean — WHICH SIDE OF PnR does
+        # this report declare — and prefix-normalises `PRE_LAYOUT_ESTIMATE` /
+        # `POST_ROUTE_SPEF` to their canonical names.
         if rpt.is_file():
-            any_emitted = True
-            continue
+            # MEASURED DEFECT the DISCLOSURE below closes (#863): this reuse is
+            # keyed on the FILENAME and is blind to the report's own
+            # `STA_BASIS`. `_emit_multi_corner_sta` is called TWICE into the
+            # SAME `per_corner/` directory — once for the PRE-layout
+            # multi-corner STA and again after PnR for the post-route one. The
+            # first call's files are already on disk when the second runs, so
+            # the second emits NOTHING, returns True, and the caller appends a
+            # note asserting it performed post-route multi-corner timing. The
+            # reports it "produced" are the pre-layout ones, stamped
+            # `STA_BASIS: PRE_LAYOUT_ESTIMATE`.
+            #
+            # That is the whole failure: the producer answered the ADJACENT
+            # question ("does a file named sta_<CORNER>.rpt exist?") and
+            # published it as the answer to the real one ("has corner STA been
+            # run on THIS basis?"). Downstream, `eda_report_audit` and
+            # `sta_corner_record_completeness_check` consume this tree as the
+            # multi-corner sign-off claim.
+            #
+            # RECONCILED with the forced pre-layout basis (Step 10). The two
+            # changes met on this exact branch and answer DIFFERENT questions,
+            # so both are kept and the FORCED one is decided first:
+            #
+            #   * `force_prelayout=True` (Step 10) — a mismatched report is not
+            #     reusable AT ALL: reusing it is what publishes a POST_ROUTE
+            #     body under a PRE-LAYOUT header. It is quarantined and
+            #     re-emitted, so there is nothing left to disclose.
+            #   * every other caller (the post-route producer, Step 23) — reuse
+            #     is still reuse. No file is written, no verdict moves, and a
+            #     stale report is never silently deleted or overwritten; the
+            #     run is only stopped from CLAIMING a basis its reports do not
+            #     carry. Deleting post-route sign-off data here would destroy
+            #     the real thing to fix a labelling defect.
+            #
+            # So a mismatch is REPAIRED where the caller demands a basis, and
+            # DISCLOSED where the caller is merely reporting one. Fail-safe on
+            # both paths: an unreadable or unstamped report is never assumed to
+            # agree — forced, it is re-emitted; unforced, it is reported as
+            # unverifiable.
+            #
+            # The stamp is read and normalised through the ONE shipped reader
+            # (`_sta_basis`, via `_reused_report_basis`), so this can never
+            # disagree with the audit that consumes the same tree: a
+            # `#`-prefixed stamp is still seen (the sibling emitter writes one),
+            # and the two `POST_ROUTE_*` suffixes both fold to `POST_ROUTE`.
+            # `_reused_report_basis` also absorbs the read error a bare
+            # `rpt.read_text()` would raise out of this loop.
+            _existing_raw, _existing_norm = _reused_report_basis(rpt)
+            if not force_prelayout or (basis_norm is not None
+                                       and _existing_norm == basis_norm):
+                if _existing_norm is None:
+                    # Unreadable, unstamped, or an unrecognised token: cannot be
+                    # confirmed to match, so disclose as unverified — never as
+                    # agreeing. Name the raw stamp when there was one.
+                    reused_unstamped.append(
+                        rpt.name if _existing_raw is None
+                        else f"{rpt.name}[{_existing_raw}]")
+                elif _existing_norm != basis_norm:
+                    reused_stale.append(f"{rpt.name}[{_existing_raw}]")
+                any_emitted = True
+                continue
+            # BLOCKING-1 (2026-08-05 review). A forced pre-layout re-emit that
+            # LEAVES the stale report in place until the tool overwrites it is
+            # only correct while the tool succeeds. When this corner's run
+            # fails, `rc != 0 or not rpt.is_file()` takes the failure branch —
+            # but the POST_ROUTE report is still on disk, so `per_corner/`
+            # keeps the very mislabel this call exists to remove, and the
+            # composer downstream happily picks it as the pre-layout source.
+            # Move the stale report ASIDE FIRST, so a failed re-emit degrades
+            # to ABSENT (honest: the estimate could not be substantiated)
+            # rather than to a surviving contradiction. The bytes are kept
+            # next to it under a non-`.rpt` suffix so nothing globbing
+            # `sta_*.rpt` can re-adopt them, and a reader can still see what
+            # was displaced.
+            _quar = rpt.parent / (rpt.name + ".stale_basis")
+            try:
+                rpt.replace(_quar)
+                notes.append(
+                    f"forced pre-layout STA: quarantined {corner} report "
+                    f"declaring basis {_existing_raw or 'UNDECLARED'} -> "
+                    f"{_quar.name} before re-emit (a failed re-emit must "
+                    f"leave NO report, never a mislabelled one)")
+            except OSError as exc:
+                notes.append(
+                    f"forced pre-layout STA: could NOT quarantine stale "
+                    f"{corner} report ({exc}) — refusing to re-emit over it")
+                continue
         # Build OpenSTA tcl: read_liberty + read_verilog + read_sdc +
         # report_checks. Container path translation for tool to find.
         netlist_c = _to_container_path(str(netlist), container)
@@ -29772,7 +35169,13 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
-        rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
+        # vibe-ic#1330: DECLARED AFTER THE VERDICT, not before it. This is
+        # the one call site that may destroy its own output (the `_bb`
+        # branch below), so declaring `rpt` here would record a digest for
+        # a file removed three statements later. See
+        # `_log_surviving_artefact`, called on the surviving path only.
+        rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+        _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied
             # the single-corner TT report into per_corner/ verbatim —
@@ -29783,13 +35186,68 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                 f"multi-corner STA failed for {corner}: "
                 f"rc={rc} (sta tool may be unavailable). "
                 f"To upgrade, install OpenSTA in the container.")
+        elif _bb:
+            # THE DESIGN DID NOT LINK. `rc == 0` and a written report are NOT
+            # evidence that anything was timed: OpenSTA resolves an instance
+            # whose master is absent from the Liberty it read to a BLACK BOX,
+            # emits `Warning 198 … Creating black box`, and EXITS 0. A black box
+            # carries no timing arcs, so every path through it disappears —
+            # `report_checks` prints "No paths found" and `report_wns`/
+            # `report_tns` print 0.00. That is a COULD-NOT-MEASURE state whose
+            # artefact is indistinguishable from MEASURED-CLEAN, and it reads
+            # OPTIMISTIC: measured on a real cell, the unlinked run reported
+            # wns 0.00 at every corner where the correctly-linked run reported
+            # -33.88 ns. Degrade to ABSENT — the same #437(c) doctrine as the
+            # rc!=0 branch above: a failed corner leaves NO report, never a
+            # falsely-clean one.
+            try:
+                rpt.unlink()
+            except OSError:
+                pass
+            notes.append(
+                f"multi-corner STA UNLINKED for {corner}: OpenSTA exited 0 but "
+                f"resolved {len(_bb)} cell master(s) to a BLACK BOX because they "
+                f"are absent from the Liberty it read "
+                f"({', '.join(_bb[:5])}{' …' if len(_bb) > 5 else ''}). A black "
+                f"box has no timing arcs, so paths through it VANISH and the "
+                f"report's 0.00 slack means UNMEASURED, not clean. No corner "
+                f"report emitted. Check that the Liberty corner set matches the "
+                f"netlist's technology and that every hard-macro .lib is staged.")
         else:
             any_emitted = True
+            # The corner LINKED and its report survives, so now it
+            # is an artefact this run can be held to.
+            _log_surviving_artefact(
+                [rpt], produced_by="_emit_multi_corner_sta",
+                marker=str(tcl_c))
+    # The reports this call REUSED rather than produced, whenever they do not
+    # carry the basis the inputs resolve to. Without this the run publishes
+    # "basis=POST_ROUTE_SPEF … post-route multi-corner timing" over a directory
+    # of PRE_LAYOUT_ESTIMATE reports (see the reuse branch above).
+    if reused_stale:
+        notes.append(
+            "multi-corner STA REUSED pre-existing corner report(s) whose own "
+            f"STA_BASIS DISAGREES with basis={basis}: "
+            f"{', '.join(sorted(reused_stale))}. These were NOT regenerated and "
+            "still carry the basis stamped in them. The basis line above "
+            "describes the INPUTS now on disk, NOT these reports — do not read "
+            f"them as {basis} evidence.")
+    if reused_unstamped:
+        notes.append(
+            "multi-corner STA REUSED pre-existing corner report(s) carrying no "
+            f"STA_BASIS stamp: {', '.join(sorted(reused_unstamped))}. Their "
+            f"basis could NOT be verified against basis={basis}; they are "
+            "UNVERIFIED, which is not the same as agreeing.")
     if not any_emitted:
         # #437(c): remove the work files + dir so an EMPTY per_corner
         # never stands as an unsubstantiated multi-corner claim. The
         # failure reasons live in `notes`.
-        for debris in list(out_dir.glob("sta_*.tcl")) + list(out_dir.glob("sta_*.log")):
+        # `.stale_basis` quarantines are debris too in this branch: nothing was
+        # substantiated, so there is no per_corner/ to keep them beside, and
+        # leaving them would block the rmdir and make the note below a lie.
+        for debris in (list(out_dir.glob("sta_*.tcl"))
+                       + list(out_dir.glob("sta_*.log"))
+                       + list(out_dir.glob("sta_*.rpt.stale_basis"))):
             try:
                 debris.unlink()
             except OSError:
@@ -30204,6 +35662,18 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
     if setup_corner is None and hold_corner is None:
         return _empty
     lib_c = _to_container_path(str(pdk.liberty), container)
+    # BASIS STAMP — DERIVED from the netlist this call actually linked, never a
+    # literal. MEASURED: the SINGLE-corner emitter stamps `STA_BASIS:
+    # POST_ROUTE_SPEF` and this one, a MULTI-corner SIGN-OFF report, stamped
+    # nothing. `_ppa/timing.py::_stage_for` therefore emitted `stage: null` for
+    # every row it parsed out of this file, with the reason recorded, rather
+    # than inferring a stage from the filename — which would let a pre-layout
+    # estimate be compared against sign-off evidence. On one real run that left
+    # 48 of 56 timing rows refused as SCOPE_INCOMPLETE and made setup and hold
+    # FEAS_INCOMPLETE_VIEW_SET. The stamp belongs in the step's own tool.
+    _prelayout_netlist = (netlist == _pl.synth_dir(project) / f"{top}_synth.v")
+    _basis_stamp = ("PRE_LAYOUT_ESTIMATE" if _prelayout_netlist
+                    else "POST_ROUTE_SPEF")
     # Which liberty each RC corner is analysed with. One library across the RC
     # corners is the DESIGNED behaviour (parasitics vary, process does not) —
     # this records it instead of leaving it to be inferred from a corner name.
@@ -30240,9 +35710,22 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             # degraded run passed for a multi-corner one.
             f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}, "
             f"liberty={lib_c}) ===\"\n"
+            # Per STANZA, because the SPEF differs per stanza and the liberty
+            # is the thing a reader cannot otherwise recover from the corner
+            # name. Every stanza of this report reads a SPEF, so the only way
+            # the basis is not POST_ROUTE_SPEF is a run with no routed netlist
+            # at all — and then it says PRE_LAYOUT_ESTIMATE instead of
+            # claiming a sign-off basis it does not have.
+            f"puts $_f \"STA_BASIS: {_basis_stamp}\"\n"
+            f"puts $_f \"STA_BASIS_LIBERTY: {lib_c}\"\n"
+            f"puts $_f \"STA_BASIS_NETLIST: {netlist.name}\"\n"
+            f"puts $_f \"STA_BASIS_SPEF: {Path(corner_spefs[corner]).name}\"\n"
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
+            # WNS, the name the feasibility gate's setup/hold axes prove from.
+            # Never asked for by this stanza before; see _report_wns_tcl.
+            f"{_report_wns_tcl(rpt_c, flag)}"
             # Worst-PATH dump (ORGANIC #540). `flag` is report_worst_slack's
             # spelling (-max/-min); report_checks needs `-path_delay max|min`,
             # and passing the raw flag raised Error 514 into the swallowing
@@ -30418,12 +35901,17 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     Best-effort: returns False if it cannot run. chip/PDK-AGNOSTIC."""
     pnr_out = _pl.pnr_dir(project)
     netlist = pnr_out / f"{top}_pnr.v"
+    # Which side of PnR the netlist below comes from. The stanza basis stamp is
+    # derived from it: falling back to the SYNTH netlist with no SPEF is a
+    # PRE-LAYOUT estimate and must never stamp POST_ROUTE.
+    _routed_netlist = netlist.is_file()
     if not netlist.is_file():
         netlist = _pl.synth_dir(project) / f"{top}_synth.v"
     # ECO auto-trigger post-ECO re-measure passes the ECO netlist here (§4.05:
     # only when it genuinely exists — else the routed/synth netlist stands).
     if netlist_override is not None and Path(netlist_override).is_file():
         netlist = Path(netlist_override)
+        _routed_netlist = True
     sdc = pnr_out / "constraint.sdc"
     if not (netlist.is_file() and sdc.is_file()):
         notes.append("multi-corner OCV STA skipped: routed netlist or SDC missing")
@@ -30452,6 +35940,10 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
     rpt_c = _to_container_path(str(rpt_out), container)
 
+    # BASIS STAMP — see `_emit_corner_spef_sta`. This report is the PROCESS-
+    # corner sign-off evidence, and it stamped nothing, so every row parsed out
+    # of it carried `stage: null`. Derived per stanza below, because whether a
+    # SPEF was read is decided per stanza here.
     def _pass(label: str, kind: str, flag: str, spef_host: Optional[Path],
               open_mode: str) -> str:
         lib_c = corner_libs[label]
@@ -30460,6 +35952,29 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         if spef_host and Path(spef_host).is_file():
             spef_tcl = f"read_spef {_to_container_path(str(spef_host), container)}\n"
             spef_disc = Path(spef_host).name
+        # BOTH sides derived this classification and they name the SAME three
+        # values; they disagreed about PRECEDENCE, and only one of the two
+        # readings matches the prose that landed with it. The landed comment on
+        # `_routed_netlist` above says "falling back to the SYNTH netlist ...
+        # must never stamp POST_ROUTE" — but the landed EXPRESSION tested
+        # `spef_tcl` first, so a pre-layout netlist read alongside a SPEF from
+        # some other run stamped POST_ROUTE_SPEF. The NETLIST decides first;
+        # the SPEF only refines an answer that is already post-route.
+        # WHAT DECIDED IT: tests/test_multicorner_signoff_reports_declare_
+        # their_stage.py::test_no_routed_netlist_is_not_stamped_as_signoff
+        # emits with NO `<top>_pnr.v` and WITH SPEFs present, and asserts
+        # `POST_ROUTE` appears nowhere in the body. Under the landed precedence
+        # that arm is red.
+        # ONE predicate, not two: `_routed_netlist` is the landed spelling and
+        # it also carries the `netlist_override` (ECO netlist) case, so this
+        # lane's own `_prelayout_netlist` local was dropped rather than left
+        # beside it to drift.
+        if not _routed_netlist:
+            basis_stamp = "PRE_LAYOUT_ESTIMATE"
+        elif spef_tcl:
+            basis_stamp = "POST_ROUTE_SPEF"
+        else:
+            basis_stamp = "POST_ROUTE_NO_SPEF"
         return (
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
@@ -30478,11 +35993,31 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             # looked identical to one that resolved it to a real slow lib.
             f'puts $_f "=== {kind} corner: process={label} liberty={lib_c}, '
             f'SPEF={spef_disc} ==="\n'
+            # BASIS STAMP, read off what THIS stanza reads rather than copied
+            # from the single-corner emitter: the SPEF is per-corner here and
+            # may be absent, and `POST_ROUTE_NO_SPEF` is a different stage from
+            # `POST_ROUTE_SPEF` to every consumer that keeps extracted and
+            # unextracted timing apart, so it is never rounded up to the
+            # flattering one. Both values are already in `_sta_basis`.
+            # ONE stanza, not two. Both lanes added a STA_BASIS block here and
+            # the text merged cleanly into a report that stamped its basis
+            # TWICE — a second spelling of one fact is a fact two readers
+            # disagree about, and `_sta_basis.declared_basis` reads the first
+            # match. This lane's block is the landed one's superset (the same
+            # two lines plus the netlist and the SPEF a reader cannot otherwise
+            # recover), so it is the one kept.
             f'puts $_f "OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} '
             f'late={_FLAT_OCV_DERATE_LATE} flat-OCV"\n'
+            f'puts $_f "STA_BASIS: {basis_stamp}"\n'
+            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
+            f'puts $_f "STA_BASIS_NETLIST: {netlist.name}"\n'
+            f'puts $_f "STA_BASIS_SPEF: {spef_disc}"\n'
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
+            # WNS, the name the feasibility gate's setup/hold axes prove from.
+            # Never asked for by this stanza before; see _report_wns_tcl.
+            f"{_report_wns_tcl(rpt_c, flag)}"
             # Worst-PATH dump + the path SLEWS, so the slew explosion and the
             # cone that carries it are both visible (ORGANIC #540: this is the
             # SS sign-off report, and passing report_worst_slack's `-max`/`-min`
@@ -30884,6 +36419,69 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     return str(doc["verdict"])
 
 
+# --- POST-LAYOUT EQUIVALENCE: the proof must REFUSE, not just report --------
+# `_emit_lec_post_layout` computes a real verdict and writes it to
+# reports/phase3/lec_post_layout.{json,rpt}. Its return value was assigned to a
+# local that nothing read, and the only path that could fail the step was the
+# emitter RAISING. So the two outcomes this proof exists to catch — the routed
+# netlist is NOT equivalent, and equivalence could not be PROVEN — both left the
+# flow at PASS, with the finding sitting in an artefact no runner step consumed.
+#
+# The reference flow does not do this: OpenROAD-flow-scripts runs `run_lec_test`
+# after `repair_timing` mutates the netlist inside CTS, and the stage dies on a
+# difference (`flow/scripts/lec_check.tcl`: `error "Repair timing output failed
+# lec test"`). A logic-changing repair cannot leave the CTS stage there.
+#
+# `lec_post_layout_check.check` is the authority and is already STRONGER than
+# theirs — it treats a VACUOUS or UNPROVEN proof as a FAIL, not a pass. This
+# reads that verdict and converts it into the runner's own refusal channel
+# (`signoff_failures` -> step FAIL -> runner exit 1).
+#
+# Deliberately evaluated OUTSIDE the `_signoff_regen` freshness guard at the
+# call site: when the artefact is still fresh the emitter is correctly skipped,
+# and the verdict that then ships is the one already on disk. A refusal that
+# only fired on the round that re-emitted would let the SECOND run of a
+# non-equivalent design pass.
+#
+# §4.05, in both directions:
+#   * artefact absent            -> no claim (the design is not placed-and-routed,
+#                                   or the emitter honestly SKIPped). NOT a refusal.
+#   * verdict SKIP               -> no claim.
+#   * verdict PASS               -> no claim.
+#   * verdict FAIL               -> REFUSE (NON_EQUIVALENT / UNPROVEN / VACUOUS /
+#                                   RUN_ERROR are each a non-proof, never a pass).
+#   * artefact present but the gate cannot be run over it -> REFUSE. An
+#     equivalence proof that cannot be EVALUATED is not an equivalence proof;
+#     reporting it as clean is the exact demotion this closes.
+def _lec_post_layout_refusal(project: Path) -> Optional[str]:
+    """Return the refusal text when post-layout equivalence must FAIL the flow,
+    else None. Pure over the on-disk artefact — no container, no tools."""
+    artefact = project / "reports" / "phase3" / "lec_post_layout.json"
+    mod = _lec_post_layout_module()
+    if mod is None:
+        if artefact.is_file():
+            return ("post-layout LEC NOT ENFORCEABLE: "
+                    f"{artefact.name} exists but lec_post_layout_check is "
+                    "unavailable, so its verdict could not be evaluated — an "
+                    "equivalence proof that cannot be checked is not a pass")
+        return None
+    try:
+        res = mod.check(project)
+    except Exception as exc:  # pragma: no cover - defensive
+        if artefact.is_file():
+            return (f"post-layout LEC NOT ENFORCEABLE: evaluating "
+                    f"{artefact.name} raised {exc!r} — an equivalence proof "
+                    "that cannot be checked is not a pass")
+        return None
+    if res.get("result") != "FAIL":
+        return None
+    findings = "; ".join(res.get("findings") or []) or "equivalence not proven"
+    return (f"post-layout LEC FAILED (verdict={res.get('verdict')}): "
+            f"{findings}. The FINAL routed/ECO netlist is not a proven "
+            "logical match for the synth/RTL reference — CTS / PnR / ECO / "
+            "fill changed the logic, or the proof did not close.")
+
+
 # Step 29 disclosure table. Maps what `sdf_gate_sim.run()` actually reported to
 # (capability_flag, reason). A NON-EMPTY capability_flag is a claim that the
 # PLATFORM cannot do this — it must therefore name a gap that is genuinely open,
@@ -31016,20 +36614,94 @@ exit
 
 def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
                        container: str, power_rpt: Path,
-                       notes: List[str]) -> bool:
-    """Run OpenSTA `report_power` against the routed netlist and emit
-    `power.rpt`. Best-effort. The report contains explicit `leakage`
-    and `dynamic` keywords so the downstream `power_report_check`
-    (eda_report_audit:power) accepts it."""
+                       notes: List[str], basis: str = "pre_pnr") -> bool:
+    """Run OpenSTA `report_power` and emit a power report. Best-effort. The
+    report contains explicit `leakage` and `dynamic` keywords so the downstream
+    `power_report_check` (eda_report_audit:power) accepts it.
+
+    `basis` names WHICH SIDE OF PLACE-AND-ROUTE the session is asked to measure:
+
+      * ``pre_pnr``  — the post-synthesis netlist, no parasitics. This is the
+        Step-10 early-feedback preview, and it is honest about being one.
+      * ``post_pnr`` — the ROUTED netlist plus the extracted SPEF. This is the
+        basis Step 33 signs off.
+
+    MEASURED DEFECT — why this parameter exists. Both call sites shared one
+    body that linked ``<top>_synth.v`` unconditionally, so Step 33 published a
+    PRE-PnR number under a generated header that said "post-PnR netlist". On one
+    real routed design (same tool, same liberty, same SDC, same vectorless
+    activity basis in both arms) the shipped figure was **1.873x LOW** —
+    0.306 mW against 0.573 mW on the routed netlist — and the CLOCK group, 33.7%
+    of the real total, reported as exactly **0.000 mW**, because the netlist the
+    session linked has no clock tree in it (287 instances against 3373 routed).
+
+    The ratio is not the strongest evidence. Across a 60-configuration PnR
+    sweep the shipped ``power.rpt`` was **byte-identical 60/60** while all 60
+    routed netlists and all 60 SPEFs differed, because no place-and-route knob
+    can reach a pre-PnR netlist. A number that cannot move when the thing it
+    measures moves is not a measurement.
+
+    The remedy is the session, NOT the header: adjusting the header to say
+    "pre-PnR" would make the document honest and leave the sign-off measurement
+    useless.
+
+    DEGRADES LOUDLY, NEVER SILENTLY. When ``post_pnr`` is asked for and the
+    routed netlist is absent, the session falls back to the synth netlist AND
+    says so — the ``POWER_BASIS`` stamp, the note and the provenance envelope
+    all name what was ACTUALLY linked. Every line of the header is derived from
+    the inputs this session read; none of it is a literal claim about a netlist
+    it did not open."""
     pnr_out = _pl.pnr_dir(project)
-    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    synth_netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    routed_netlist = pnr_out / f"{top}_pnr.v"
+    spef_path: Optional[Path] = None
+    if basis == "post_pnr" and routed_netlist.is_file():
+        netlist = routed_netlist
+        _spef = _pl.extracted_dir(project) / f"{top}.spef"
+        if _spef.is_file() and _spef.stat().st_size > 0:
+            spef_path = _spef
+        else:
+            notes.append(
+                "post-PnR power: no extracted SPEF, so switching power is "
+                "computed from the routed netlist WITHOUT parasitics "
+                "(stamped POWER_BASIS: POST_ROUTE_NO_SPEF)")
+    else:
+        netlist = synth_netlist
+        if basis == "post_pnr":
+            notes.append(
+                f"post-PnR power requested but {routed_netlist.name} does not "
+                f"exist; this report is computed on the PRE-PnR netlist and is "
+                f"stamped POWER_BASIS: PRE_LAYOUT_ESTIMATE — it carries no "
+                f"clock tree, so its Clock group reads 0.000 and its total "
+                f"UNDERSTATES the routed design")
+    # What the session may claim about itself, derived from what it linked.
+    if netlist == routed_netlist:
+        basis_stamp = "POST_ROUTE_SPEF" if spef_path else "POST_ROUTE_NO_SPEF"
+        basis_desc = ("the routed, post-PnR netlist"
+                      + (" with extracted parasitics (SPEF)" if spef_path
+                         else " WITHOUT parasitics — no SPEF was extracted"))
+    else:
+        basis_stamp = "PRE_LAYOUT_ESTIMATE"
+        basis_desc = ("the post-synthesis, PRE-PnR netlist: it carries no "
+                      "clock tree and no routing parasitics, so the Clock "
+                      "group reads 0.000 and the total UNDERSTATES the "
+                      "routed design")
     sdc_path = pnr_out / "constraint.sdc"
     if not (netlist.is_file() and sdc_path.is_file()):
         return False
-    netlist_c = _to_container_path(str(netlist), container)
-    sdc_c = _to_container_path(str(sdc_path), container)
+    # PORTABLE PATHS (see `_run_root_tcl_path`): the netlist / SDC / SPEF / VCD
+    # live INSIDE the run root, so this deck reaches them through `$RUN_ROOT`
+    # and re-runs from a copy of the tree. The liberty does not — it is the
+    # environment's path and stays as the container spells it. `rpt_c` is used
+    # in the SHELL redirect, not inside the deck, so it stays a real path.
+    tcl_path = power_rpt.parent / f"power_{top}.tcl"
+    netlist_c = _run_root_tcl_path(netlist, project, container, tcl_path)
+    sdc_c = _run_root_tcl_path(sdc_path, project, container, tcl_path)
     lib_c = _to_container_path(str(pdk.liberty), container)
     rpt_c = _to_container_path(str(power_rpt), container)
+    spef_c = (_run_root_tcl_path(spef_path, project, container, tcl_path)
+              if spef_path else None)
+    spef_disc = spef_path.name if spef_path else "none (netlist-only)"
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in pdk.macro_libs
@@ -31045,20 +36717,31 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     analysis_mode = "vector_vcd" if vcd else "vectorless_sdc"
     vcd_tcl = ""
     if vcd:
-        vcd_c = _to_container_path(str(vcd), container)
+        vcd_c = _run_root_tcl_path(vcd, project, container, tcl_path)
         vcd_tcl = (f"if {{[catch {{read_power_activities -vcd {vcd_c}}} "
                    f"_vcd_err]}} {{\n"
                    f"  puts \"READ_VCD_FAIL: $_vcd_err\"\n}}\n")
-    tcl_path = power_rpt.parent / f"power_{top}.tcl"
-    tcl_path.write_text(f"""
+    # Parasitics: read AFTER link_design and alongside the SDC, exactly as the
+    # sibling post-route STA emitters do. Only ever emitted when a non-empty
+    # SPEF for THIS run exists — a `read_spef` of a file that is not there is
+    # how a session ends up quietly measuring something else.
+    spef_tcl = f"read_spef {spef_c}\n" if spef_c else ""
+    tcl_path.write_text(f"""{_emitted_script_root_tcl(tcl_path, project)}
 read_liberty {lib_c}
 {macro_libs_tcl}
 read_verilog {netlist_c}
 link_design {top}
 read_sdc {sdc_c}
-{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
+{spef_tcl}{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
 # which is what eda_report_audit:power's substance check looks for.
 puts "POWER_ANALYSIS_MODE: {analysis_mode}"
+# BASIS STAMP — which side of place-and-route these numbers come from, in the
+# same vocabulary `_sta_basis.BASIS_TOKENS` already normalises for STA reports,
+# so one table answers the question for both. Emitted by the session itself, so
+# it names what was LINKED and cannot drift from the header beside it.
+puts "POWER_BASIS: {basis_stamp}"
+puts "POWER_BASIS_NETLIST: {netlist.name}"
+puts "POWER_BASIS_SPEF: {spef_disc}"
 if {{[catch {{report_power}} pwr_err]}} {{
   puts "REPORT_POWER_FAIL: $pwr_err"
 }}
@@ -31070,6 +36753,19 @@ exit
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
     )
+    # GUARD, at the point of emission. `_esp.host_paths_in` is the ONE
+    # definition of "an absolute path pointing back into the run root"; the
+    # standalone `emitted_script_portability_check` CLI reads the same
+    # predicate over a whole tree. If this deck ever regains a hard-coded run
+    # path it says so here, in the run's own notes, rather than being found
+    # later by an identity hash that silently will not match.
+    _leaked = _esp.host_paths_in(tcl_path.read_text(errors="replace"), project)
+    if _leaked:
+        notes.append(
+            f"power analysis deck {tcl_path.name} carries {len(_leaked)} "
+            f"absolute path(s) INTO the run root (first: line {_leaked[0][0]}, "
+            f"{_leaked[0][1]}) — it will not re-run from a copy of this tree "
+            f"and any hash over it is defeated by the run directory")
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
     # If OpenSTA ran successfully but the file is small (just the
     # categorical breakdown), prepend an envelope so the report carries
@@ -31086,16 +36782,18 @@ exit
             f"#\n"
             f"# Inputs (provenance):\n"
             f"#   netlist: {netlist.relative_to(project)}\n"
+            f"#   spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
             f"#   sdc:     {sdc_path.relative_to(project)}\n"
             f"#   liberty: {Path(pdk.liberty).name}\n"
+            f"#   basis:   {basis_stamp}\n"
             f"#   die_um:  see phase3/stage3/pnr/area.rpt\n"
             f"#\n"
             f"# Substance: this Power Report is produced by `report_power`\n"
             f"# inside an OpenSTA session driven by the runner's\n"
             f"# power_<top>.tcl. Numerical leakage / switching / internal\n"
-            f"# values reflect the post-PnR netlist + the typical-corner\n"
-            f"# Liberty file. Multi-corner power is on backlog —\n"
-            f"# VIBE-IC-PLUGIN-PHASE3-MMMC-POWER.\n"
+            f"# values reflect the netlist NAMED ABOVE — {basis_desc} —\n"
+            f"# plus the typical-corner Liberty file. Multi-corner power is on\n"
+            f"# backlog — VIBE-IC-PLUGIN-PHASE3-MMMC-POWER.\n"
             f"#\n"
             f"# Group breakdown (Sequential / Combinational / Clock / Macro / Pad)\n"
             f"# follows the OpenSTA report_power tabular format. Each row\n"
@@ -31134,7 +36832,9 @@ exit
             f"\n"
             f"# === OpenSTA report_power invocation context ===\n"
             f"openroad / sta engine: live invocation, rc={rc}\n"
+            f"POWER_BASIS: {basis_stamp}\n"
             f"netlist: {netlist.relative_to(project)}\n"
+            f"spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
             f"liberty: {Path(pdk.liberty).name}\n"
             f"sdc:     {sdc_path.relative_to(project)}\n"
             f"\n"
@@ -31687,9 +37387,12 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         _psm_failed = _cov["analysis_failed"]
         _psm_conn = _cov["connectivity"]
         _bump_m = re.search(r"PSM-0073.*?bump", log)
-        # PSM's own connectivity verdict, kept beside the number it explains.
-        _psm_unconn = re.findall(r"PSM-0039\]\s*(.+)", log)
-        (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
+        # PSM's own connectivity verdict, kept beside the number it explains —
+        # and now DECIDING it. This list used to be re-derived here by a second
+        # inline regex, which is the drift the module's own header warns about;
+        # there is ONE implementation of the rule and this reads it.
+        _psm_unconn = _cov["unconnected_instances"]
+        _aa.write_text(ir_rpt.parent / "ir_drop.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
             "power_nets": power_nets,
@@ -31736,14 +37439,18 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "nets_analysed": _psm_analysed,
             "nets_analysis_failed": _psm_failed,
             "connectivity_findings": _psm_conn,
-            "verdict_basis": verdict_basis(_psm_failed),
-            # BOTH conditions, composed. #662 says an unmeasured supply has no
-            # derivable verdict; #669 says a net whose analysis FAILED must not
-            # make the number better. They are independent reasons the verdict
-            # is not a PASS, and taking either side of the conflict alone would
-            # have dropped the other silently.
+            "verdict_basis": verdict_basis(_psm_failed, _psm_unconn),
+            # ALL THREE conditions, composed. #662 says an unmeasured supply
+            # has no derivable verdict; #669 says a net whose analysis FAILED
+            # must not make the number better; and an instance terminal the
+            # solver could not REACH must not either — the supply question this
+            # flow otherwise gates is net OWNERSHIP, which such a terminal
+            # passes (its net pointer is valid) while no conductor arrives.
+            # They are independent reasons the verdict is not a PASS, and
+            # taking any one alone would drop the others silently.
             "verdict": ("UNMEASURED" if not _supply_measured
-                        else ir_verdict(_worst_ir_uv, _ir_budget_uv, _psm_failed)),
+                        else ir_verdict(_worst_ir_uv, _ir_budget_uv,
+                                        _psm_failed, _psm_unconn)),
             "evidence": "analyze_power_grid stdout",
         }, indent=2) + "\n")
         if not _supply_measured:
@@ -31798,7 +37505,7 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "\n# === Full PSM/EM stdout (provenance) ===\n" + log[-3000:] + "\n"
             "# end of em.rpt\n")
         em_rpt.write_text(body)
-        (em_rpt.parent / "em.json").write_text(json.dumps({
+        _aa.write_text(em_rpt.parent / "em.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "electromigration",
             "power_nets": power_nets,
@@ -31816,6 +37523,79 @@ catch {{set_wire_rc -clock -layer {mp}5}}
     else:
         notes.append(f"EM PSM produced no 'current' line (rc={rc})")
     return ir_ok, em_ok
+
+
+def _measured_subject(project: Path, top: str,
+                      inputs: Sequence[Optional[Path]],
+                      tool_log: Optional[Path] = None) -> Dict[str, Any]:
+    """WHOSE design this report is about, and WHICH bytes were read to make it.
+
+    THE DEFECT THIS EXISTS FOR (vibe-ic#1119, attack A3_CROSS_DESIGN). Copying a
+    different design's same-named artefacts over a published cell and re-running
+    that cell's own sign-off gates left `antenna_report_check` and
+    `erc_density_check` green. They could not do otherwise:
+    `reports/phase3/antenna.rpt` was BYTE-IDENTICAL between
+    `spm/v1.9.96_gf180mcuD` and `sha256/clean_run_v1427_20260715` — two designs,
+    two PDKs — a 487-byte summary reading "0 net violations, 0 pin violations"
+    with no name in it anywhere. `reports/density.{rpt,json}` differed only in
+    their numbers. Every other sign-off report in the flow states its design
+    somewhere (KLayout's `<top-cell>`, OpenROAD ODB's `Design:`, netgen's
+    `Device classes`), so a gate could bind those and not these. The gap was in
+    the PRODUCER, and this is the producer end of it.
+
+    WHAT A STAMP IS AND IS NOT. It makes a report ATTRIBUTABLE. It does not make
+    it a MEASUREMENT, and nothing downstream may read it as one: a report that
+    is empty, absent or unreadable stays exactly as unusable as it was, and a
+    stamp on it changes nothing except that its subject is now known. The two
+    questions — "could I read this" and "was what I read clean" — stay separate
+    at the gate.
+
+    THE PATHS ARE RESOLVED, NOT TEMPLATED. `antenna.json` carried
+    `"source": "phase3/stage3/pnr/openroad.log"` as a typed constant, and the
+    published cell does not contain that file — the citation named a path rather
+    than a thing. Anything recorded here is stat-ed and hashed, and what could
+    not be read is recorded as `null` with the path still named, so "the input
+    was absent" and "the input was not looked at" stay different facts.
+    """
+    def _one(p: Optional[Path]) -> Optional[Dict[str, Any]]:
+        if p is None:
+            return None
+        try:
+            rel = str(Path(p).resolve().relative_to(Path(project).resolve()))
+        except ValueError:
+            rel = str(p)
+        rec: Dict[str, Any] = {"path": rel, "sha256": None, "bytes": None}
+        try:
+            data = Path(p).read_bytes()
+        except OSError:
+            return rec
+        rec["sha256"] = hashlib.sha256(data).hexdigest()
+        rec["bytes"] = len(data)
+        return rec
+
+    return {
+        "design": top,
+        "inputs": [r for r in (_one(i) for i in inputs) if r is not None],
+        "tool_log": _one(tool_log),
+    }
+
+
+def _measured_subject_lines(subject: Dict[str, Any]) -> str:
+    """The same facts as text, for the `.rpt` half.
+
+    `measured_design:` is spelled so it cannot be mistaken for a tool's own
+    output — the RUNNER is asserting this, not OpenROAD — and so the auditor's
+    dialect for it is separate from the ODB one.
+    """
+    out = [f"measured_design: {subject['design']}"]
+    for rec in subject["inputs"]:
+        out.append(f"measured_from: {rec['path']} sha256:"
+                   f"{rec['sha256'] or 'UNREADABLE'}")
+    log = subject.get("tool_log")
+    if log is not None:
+        out.append(f"tool_log: {log['path']} sha256:"
+                   f"{log['sha256'] or 'UNREADABLE'}")
+    return "\n".join(out) + "\n"
 
 
 def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
@@ -31913,7 +37693,10 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     "# routing. Reported FAIL, never a silent antenna-clean pass on an\n"
                     "# unrouted design.\n"
                     if routing_incomplete else "")
+                _subject = _measured_subject(project, top, [def_file],
+                                             tool_log=pnr_log)
                 antenna_rpt.write_text(
+                    _measured_subject_lines(_subject) +
                     "# OpenROAD antenna check (gate-oxide protection) — IN-SESSION\n"
                     "# post-repair result captured during PnR (incremental loop:\n"
                     "# repair_antennas -iterations 1 -> incremental detailed_route ->\n"
@@ -31930,7 +37713,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                        f"can continue, so it is NOT visible as a routing "
                        f"failure)\n" if pins_unaccessed else "")
                     + _incomplete_note)
-                (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+                _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
                     "tool": "openroad",
                     "mode": "antenna_check_in_session_post_repair",
                     "net_violations": net_viol if have_counts else None,
@@ -31939,7 +37722,12 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     "routing_incomplete": routing_incomplete,
                     # #552 — its own field, not folded into routing_incomplete.
                     "pins_unaccessed": pins_unaccessed,
-                    "source": "phase3/stage3/pnr/openroad.log",
+                    # RESOLVED, not templated. This read
+                    # "phase3/stage3/pnr/openroad.log" as a constant, and the
+                    # published cell does not carry that file.
+                    "source": (_subject["tool_log"]["path"]
+                               if _subject["tool_log"] else None),
+                    "measured_subject": _subject,
                     "verdict": verdict,
                 }, indent=2) + "\n")
                 notes.append(
@@ -31999,7 +37787,10 @@ exit
         notes.append(f"antenna check produced no ANT output (rc={rc})")
         return False
     total = net_viol + pin_viol
+    _subject = _measured_subject(project, top, [def_file],
+                                 tool_log=out_dir / "antenna.log")
     body = (
+        _measured_subject_lines(_subject) +
         "# OpenROAD antenna check (gate-oxide protection) — emitted by\n"
         "# phase3_one_shot_runner (ORGANIC-20260531 sign-off-chain step).\n"
         "# Tool: openroad / check_antennas (ANT). The detailed router runs\n"
@@ -32013,13 +37804,14 @@ exit
         "\n# === full antenna log (last 2 KB) ===\n" + log[-2000:] + "\n"
         "# end of antenna.rpt\n")
     antenna_rpt.write_text(body)
-    (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+    _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
         "tool": "openroad",
         "mode": "antenna_check",
         "net_violations": net_viol,
         "pin_violations": pin_viol,
         "clean": total == 0,
         "source": str(antenna_rpt.relative_to(project)),
+        "measured_subject": _subject,
         "verdict": "PASS" if total == 0 else "FAIL",
     }, indent=2) + "\n")
     return True
@@ -32334,7 +38126,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
             if pdk is not None and container is not None:
                 _merge_si_timing_aware(project, top, pdk, container, spef,
                                        sbody, notes)
-            (si_rpt.parent / "si_crosstalk.json").write_text(
+            _aa.write_text(si_rpt.parent / "si_crosstalk.json",
                 json.dumps(sbody, indent=2) + "\n")
             # Advisory timing-window tail (only present when the upgrade ran).
             ta = sbody.get("timing_aware_advisory")
@@ -32400,7 +38192,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                  "structural screen, not a full SI sign-off. The OpenRCX SPEF "
                  "path (v0.2.5) produces real coupling caps when the DEF is routed."),
     }
-    (si_rpt.parent / "si_crosstalk.json").write_text(
+    _aa.write_text(si_rpt.parent / "si_crosstalk.json",
         json.dumps(body, indent=2) + "\n")
     si_rpt.write_text(
         "# Signal-integrity / crosstalk screen — emitted by\n"
@@ -32479,7 +38271,8 @@ def _emit_metal_fill(project: Path, top: str, pdk: PdkConfig,
     # full `filler_placement` for dense/normal designs (§4.05 negative) and
     # SKIPs the full-die tiling when post-place CORE utilization is below
     # the sparse threshold. chip-AGNOSTIC.
-    sparse_fill_block = _build_sparse_die_aware_filler_tcl(fillers)
+    sparse_fill_block = _build_sparse_die_aware_filler_tcl(
+        fillers, slot_pinned_core=_slot_geometry(project) is not None)
     tcl_path = out_dir / f"metal_fill_{top}.tcl"
     tcl_path.write_text(f"""
 read_lef {tech_lef_c}
@@ -32585,7 +38378,7 @@ exit
     fill_substantiated = placed_n > 0 or (
         _util_for_substance is not None and _util_for_substance >= 95.0)
     if fill_substantiated:
-        (pnr_out / "metal_fill.done").write_text(
+        _aa.write_text(pnr_out / "metal_fill.done",
             "metal_fill_done\n"
             "# OpenROAD filler_placement (ORGANIC-20260531 Step 34).\n"
             f"# fillers placed: {placed_n}\n"
@@ -32610,7 +38403,14 @@ exit
     density_rpt = project / "reports" / "density.rpt"
     density_json = project / "reports" / "density.json"
     density_rpt.parent.mkdir(parents=True, exist_ok=True)
+    # The DEF the filler actually read and the DEF it wrote, plus the tool's own
+    # log — all resolved and hashed. Before this, density.{rpt,json} named no
+    # design at all and differed between two designs only in their numbers, so
+    # nothing could tell one run's fill report from another's.
+    _subject = _measured_subject(project, top, [def_file, filled_def],
+                                 tool_log=out_dir / "metal_fill.log")
     density_rpt.write_text(
+        _measured_subject_lines(_subject) +
         "# Metal-fill / density report — OpenROAD filler_placement\n"
         "# (ORGANIC-20260531 Step 34). Tool: openroad.\n"
         f"# filler instances placed: {placed_n}\n"
@@ -32649,6 +38449,7 @@ exit
                  "core_utilization_pct = report_design_area (logic/core); "
                  "per-layer metal CMP density screened by KLayout "
                  "met_min_ca_density at sign-off DRC"),
+        "measured_subject": _subject,
     }, indent=2) + "\n")
     notes.append(
         f"metal fill: {placed_n} fillers placed → filled.def "
@@ -32693,8 +38494,182 @@ exit
 # than kept as a second authority that can drift again.
 _METAL_DENSITY_LAYER_RE = _mld._METAL_RE.pattern
 
+# ===========================================================================
+# WHICH DATATYPES DOES THE PDK ACTUALLY COUNT? (vibe-ic#990)
+#
+# The producer selected ONE (gds_layer, datatype) per metal layer — the first
+# routing/NET row of the LEF/DEF layermap — while the PDK's own KLayout density
+# deck counts routing PLUS a separate dummy-fill datatype. #988 measured both
+# paths on the published run's own GDS against that run's own deck and they
+# agreed to 0.00e+00 on all six layers, but recorded WHY:
+#
+#     measured 0 shapes on 36/28, 41/28, 34/28, 51/28 and 68..72/99
+#
+# That layout carries no fill. On a run that HAS fill the producer under-counts
+# by exactly the inserted fill area — the area inserted to SATISFY the rule —
+# and it under-counts in the direction that pushes a result toward the disputed
+# floor. A gate that cannot see fill cannot see the thing that fixes the
+# violation it reports.
+#
+# SO THE DATATYPE SET IS DISCOVERED, NEVER TYPED. Two sources, both the PDK's
+# own files, and the provenance of each is published in the report:
+#
+#   * the LAYERMAP — every purpose row the map carries for that LEF layer
+#     name, not only the first NET one. A real streamout map states FILL, PIN
+#     and TEXT as separate rows; the synthesized map this runner emits bundles
+#     them onto one spec, and both shapes are handled by the same rule.
+#   * the DECK — every layer binding in the PDK's own density deck that lands
+#     on that layer's GDS LAYER NUMBER. Keying on the NUMBER rather than on the
+#     deck's variable name is what makes this work across PDKs that name the
+#     same layer `met1`, `Metal1` and `m1`; #988 established that the PDKs in
+#     this registry already disagree about density SCOPE, so assuming they
+#     agree about naming is exactly the unwarranted assumption.
+#
+# A DATATYPE NUMBER IS NEVER WRITTEN DOWN HERE. What IS written down is a
+# PURPOSE VOCABULARY — the words that mean "this row carries no area a density
+# rule counts". That vocabulary is already this repo's: the synthesized
+# streamout map emits `LEFPIN,NET,SPNET,PIN,VIA,BLOCKAGE,FILL` and the
+# pre-#990 recipe matched on `"NET" in purpose`. #988's reading of the deck was
+# "all datatypes on the metal layer except text and via", which is the same
+# vocabulary and is why those two words are the exclusion.
+# THREE MORE WORDS, ADDED WITH THE SECOND DECK BINDING FORM. Reading a deck
+# that registers its layers through a helper recovers every purpose that deck
+# names, not just the two the direct form happened to expose — measured on
+# gf180mcuD: `metal1_drawn/_slot/_dummy/_blk/_label/_res`, of which only
+# `drawn` and `dummy` are what the PDK's own density rule adds up
+# (`metalN = metalN_drawn + metalN_dummy`, generic_layers.rb).
+#   SLOT is a HOLE in the metal, drawn as its own layer — counting it as metal
+#        area is wrong with the sign reversed;
+#   BLK  is a routing blockage marker; no metal is manufactured from it;
+#   RES  is a resistor-marker layer; likewise.
+# Over-counting density is the DANGEROUS direction — it is what lets a sparse
+# die read as dense, which is the whole failure this measurement exists to
+# catch — so a purpose that carries no manufactured metal is excluded rather
+# than left in because it happened to be empty on the die in front of us.
+_DENSITY_PURPOSE_EXCLUDE = ("VIA", "CUT", "TEXT", "LABEL", "SLOT", "BLK", "RES")
+
+
+def density_counted_specs(map_text, deck_texts, metal_re):
+    """(counted, routing, provenance) — every GDS spec a density rule counts.
+
+    `counted` maps a lower-cased metal layer name to a sorted list of
+    ``[gds_layer, gds_datatype]``; `routing` maps it to the single spec the
+    pre-#990 producer used, kept so the report can publish BOTH numbers and a
+    reader can see the delta rather than a figure that silently moved.
+
+    Pure text in, pure data out, no filesystem and no KLayout: this function is
+    injected VERBATIM into the KLayout recipe (see `_metal_density_recipe`) so
+    there is one authority, and it is directly testable off a fixture on a host
+    with no PDK and no klayout installed — which is every host this was written
+    on.
+    """
+    routing = {}
+    counted = {}
+    from_map = 0
+    for line in (map_text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        name, purpose = parts[0], parts[1]
+        try:
+            gl, gd = int(parts[2]), int(parts[3])
+        except ValueError:
+            continue
+        if not metal_re.match(name):
+            continue
+        key = name.lower()
+        up = purpose.upper()
+        if "NET" in up and key not in routing:
+            routing[key] = (gl, gd)
+        # A row is EXCLUDED only when EVERY purpose on it is an excluded one.
+        # The synthesized map bundles VIA onto the same row as NET and FILL, so
+        # a substring test would have dropped the whole layer — measured on
+        # this runner's own `_synthesize_streamout_layermap` output.
+        toks = [t for t in re.split(r"[^A-Za-z]+", up) if t]
+        if toks and all(t in _DENSITY_PURPOSE_EXCLUDE for t in toks):
+            continue
+        if (gl, gd) not in counted.setdefault(key, []):
+            counted[key].append((gl, gd))
+            from_map += 1
+
+    # The deck half. `NAME = input(L, D)` / `polygons(L, D)` / `layer(L, D)` are
+    # the KLayout DRC layer-binding forms; a missing datatype means 0.
+    bind_re = re.compile(
+        r"^[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*(?:\w+\.)?"
+        r"(?:input|polygons|polygon_layer|layer)[ \t]*\([ \t]*"
+        r"(\d+)[ \t]*(?:,[ \t]*(\d+)[ \t]*)?\)", re.MULTILINE)
+    # THE SECOND BINDING FORM, and on the PDK measured below it is the ONLY one.
+    # A deck large enough to be split across files stops writing one
+    # `NAME = input(...)` per layer and registers them through a helper instead,
+    # naming each layer with a symbol:
+    #
+    #     extract_single_layer_from_design.call(:metal1_dummy, <L>, <D>)
+    #
+    # MEASURED (2026, month eight) on an open PDK whose deck is built that way:
+    # forty deck files read, `specs_from_deck` zero, and the DUMMY purpose
+    # therefore never discovered. The consequence was not a missing field — it
+    # was a wrong number nothing could contradict: the producer published a
+    # metal density of three thousandths, and `layers_datatype_delta` of
+    # exactly zero, for a GDS carrying three quarters of a square millimetre of
+    # dummy fill on that layer's dummy purpose. It reported "this layout has no
+    # dummy fill" about a layout THIS FLOW HAD JUST FILLED, and the fill was
+    # forty-three percent of the measured area. #990 fixed the layermap half and
+    # the direct-binding half; this is the residual, and on that PDK it is the
+    # half that decides the answer.
+    #
+    # It stays SAFE the same way the form above does, and the safety is not in
+    # this pattern: a match is only counted when its GDS layer number is one the
+    # layermap already established as a metal layer (`if gl not in
+    # layer_numbers: continue` below), and when the symbol is not an excluded
+    # purpose. A helper call about an unrelated layer contributes nothing.
+    sym_bind_re = re.compile(
+        r"\([ \t]*:([A-Za-z_]\w*)[ \t]*,[ \t]*(\d+)[ \t]*,[ \t]*(\d+)[ \t]*\)")
+    layer_numbers = {}
+    for key, specs in counted.items():
+        for gl, _gd in specs:
+            layer_numbers.setdefault(gl, []).append(key)
+    for key, spec in routing.items():
+        layer_numbers.setdefault(spec[0], [])
+        if key not in layer_numbers[spec[0]]:
+            layer_numbers[spec[0]].append(key)
+    from_deck = 0
+    decks_read = 0
+    for text in (deck_texts or []):
+        if not text:
+            continue
+        decks_read += 1
+        for m in list(bind_re.finditer(text)) + list(sym_bind_re.finditer(text)):
+            var, gl = m.group(1), int(m.group(2))
+            gd = int(m.group(3)) if m.group(3) is not None else 0
+            if gl not in layer_numbers:
+                continue
+            up = var.upper()
+            if any(tok in up for tok in _DENSITY_PURPOSE_EXCLUDE):
+                continue
+            for key in layer_numbers[gl]:
+                if (gl, gd) not in counted.setdefault(key, []):
+                    counted[key].append((gl, gd))
+                    from_deck += 1
+
+    for key in list(counted):
+        counted[key] = sorted(counted[key])
+    prov = {
+        "specs_from_layermap": from_map,
+        "specs_from_deck": from_deck,
+        "deck_files_read": decks_read,
+        "purpose_exclusions": list(_DENSITY_PURPOSE_EXCLUDE),
+        "note": ("the datatype SET is discovered from the PDK's own layermap "
+                 "and its own density deck; no datatype number is written into "
+                 "this program (vibe-ic#990). `layers` counts that set; "
+                 "`layers_routing_only` is what the pre-#990 producer counted "
+                 "(the routing/NET row alone) and is published beside it so "
+                 "the delta is visible rather than a number that moved."),
+    }
+    return counted, routing, prov
+
+
 _METAL_DENSITY_KLAYOUT_RECIPE = r'''
-import json, re, sys
+import json, os, re, sys
 import pya
 gds_path = globals().get("gds", "")
 map_path = globals().get("map", "")
@@ -32704,61 +38679,164 @@ out_path = globals().get("out", "")
 # to be told from outside which process produced it can be rejudged against the
 # wrong one the moment it is read from a differently-configured shell.
 pdk_name = globals().get("pdk", "")
-# Parse the LEF/DEF layermap: "<lefname> <purpose> <gdslayer> <gdsdatatype>".
-# Keep the routing purpose (NET/SPNET) row per metal layer. The layer-name
-# pattern is injected from the CONSUMER gate's own regex so the two cannot drift.
-metal_layers = {}
+# The PDK's OWN density deck. Every deck in this registry `require`s its
+# density rules from a SIBLING file (`rule_decks/density.rb`,
+# `met_min_ca_density.lydrc`), so the named deck alone is not where the layer
+# bindings are — the deck's own directory and one level under it are swept.
+# Discovered from the path the runner already resolves, never a list of
+# PDK-specific filenames, and the sweep is BOUNDED and its size reported.
+# An absent or unreadable deck is not fatal: the layermap half still answers
+# and the report says the deck contributed nothing (vibe-ic#990).
+deck_path = globals().get("deck", "") or ""
+_DECK_SUFFIXES = (".drc", ".lydrc", ".rb", ".lydrf")
+_DECK_SWEEP_MAX = 40
+deck_paths = []
+if deck_path:
+    deck_paths.append(deck_path)
+    _base = os.path.dirname(deck_path)
+    for _root, _dirs, _files in os.walk(_base):
+        if _root != _base and os.path.dirname(_root) != _base:
+            continue                      # depth > 1 below the deck directory
+        for _f in sorted(_files):
+            _p = os.path.join(_root, _f)
+            if _p not in deck_paths and os.path.splitext(_f)[1] in _DECK_SUFFIXES:
+                deck_paths.append(_p)
+    deck_paths = deck_paths[:_DECK_SWEEP_MAX]
 metal_re = re.compile(r"__METAL_LAYER_NAME_RE__", re.IGNORECASE)
 try:
     with open(map_path) as fh:
-        for line in fh:
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            name, purpose = parts[0], parts[1]
-            try:
-                gl, gd = int(parts[2]), int(parts[3])
-            except ValueError:
-                continue
-            if metal_re.match(name) and "NET" in purpose.upper():
-                metal_layers.setdefault(name.lower(), (gl, gd))
+        map_text = fh.read()
 except OSError as e:
     open(out_path, "w").write(json.dumps({"error": "map_unreadable: %s" % e}))
     sys.exit(0)
+deck_texts = []
+decks_unreadable = []
+for p in deck_paths:
+    try:
+        with open(p) as fh:
+            deck_texts.append(fh.read())
+    except OSError as e:
+        decks_unreadable.append("%s: %s" % (p, e))
+
+__DENSITY_COUNTED_SPECS_SRC__
+
+counted, routing, spec_prov = density_counted_specs(
+    map_text, deck_texts, metal_re)
+spec_prov["deck_files_offered"] = len(deck_paths)
+spec_prov["deck_files_unreadable"] = decks_unreadable
+metal_layers = dict(routing)
 ly = pya.Layout()
 ly.read(gds_path)
 top = ly.top_cell()
 dbu = ly.dbu
 bb = top.bbox()
-die_um2 = (bb.width() * dbu) * (bb.height() * dbu)
-layers = {}
-absent = []
-for name, (gl, gd) in sorted(metal_layers.items()):
-    li = ly.find_layer(gl, gd)
-    if li is None:
-        absent.append(name)
-        continue
-    reg = pya.Region(top.begin_shapes_rec(li))
+bbox_um2 = (bb.width() * dbu) * (bb.height() * dbu)
+# THE DENOMINATOR IS THE DIE, AND THE LAYOUT BOUNDING BOX IS NOT ALWAYS IT.
+# A foundry minimum-density rule reads "coverage over the entire die" -- the
+# PDK's own deck computes `chip_area = extent.sized(0.0).area` and divides by
+# it. On a shuttle-slot submission the streamed geometry is the routed CORE
+# sitting inside a much larger die, so the two rectangles differ and this
+# measurement reported the CORE's density under the name `die_area_um2`.
+# MEASURED on gf180mcuD, a 0.5x0.5 shuttle slot (die 1936 x 2531 um, core
+# 1052 x 1647 um): this report read `"die_area_um2": 1732693` -- 35.4 % of the
+# 4900016 um2 die -- and published metal2 at 0.43 while the operator's own
+# precheck failed the same GDS on M2.4 at 18.2 % over the die. Both numbers
+# were arithmetically correct; only one of them answered the rule.
+# When the project declares a slot, the runner passes that rectangle in and it
+# is the denominator. BOTH areas are published either way, so a reader can
+# always see which question a number answers.
+die_rect = globals().get("die", "")
+die_source = "the layout bounding box (no die rectangle was declared)"
+die_um2 = bbox_um2
+if die_rect:
+    try:
+        _x0, _y0, _x1, _y1 = [float(v) for v in str(die_rect).split(",")]
+        _a = (_x1 - _x0) * (_y1 - _y0)
+        if _a > 0:
+            die_um2 = _a
+            die_source = "the declared slot DIE_AREA"
+    except (TypeError, ValueError):
+        die_source = ("a die rectangle was passed but could not be parsed "
+                      "(%r) -- fell back to the layout bounding box" % (die_rect,))
+
+
+def _density_of(specs):
+    """Merged area over the die bbox for a SET of (layer, datatype) specs.
+
+    The regions are joined and THEN merged, so a fill shape overlapping routing
+    is counted once. Summing per-datatype areas would inflate the number in the
+    one direction nobody questions.
+    """
+    reg = pya.Region()
+    seen = 0
+    for gl, gd in specs:
+        li = ly.find_layer(gl, gd)
+        if li is None:
+            continue
+        seen += 1
+        reg = reg + pya.Region(top.begin_shapes_rec(li))
+    if not seen:
+        return None
     reg.merge()
     area_um2 = reg.area() * dbu * dbu
-    layers[name] = round((area_um2 / die_um2) if die_um2 > 0 else 0.0, 6)
+    return round((area_um2 / die_um2) if die_um2 > 0 else 0.0, 6)
+
+
+layers = {}
+routing_only = {}
+fill_delta = {}
+absent = []
+for name in sorted(set(list(counted) + list(routing))):
+    full = _density_of(counted.get(name, []))
+    if full is None:
+        absent.append(name)
+        continue
+    layers[name] = full
+    r = routing.get(name)
+    bare = _density_of([r]) if r else None
+    if bare is not None:
+        routing_only[name] = bare
+        fill_delta[name] = round(full - bare, 6)
 open(out_path, "w").write(json.dumps({
     "tool": "klayout",
     "measurement": "per_layer_drawn_area_over_die_bbox_area",
     "pdk": pdk_name,
     "gds": gds_path,
     "die_area_um2": round(die_um2, 3),
+    "die_area_source": die_source,
+    "bbox_area_um2": round(bbox_um2, 3),
+    "bbox_area_over_die_area": (round(bbox_um2 / die_um2, 6)
+                                if die_um2 > 0 else None),
     "layers": layers,
+    # THE PRE-#990 NUMBER, PUBLISHED BESIDE THE NEW ONE. A gate whose figures
+    # move without saying so is a gate a reader cannot reconcile against an
+    # earlier run, and #988 left step 34 ORACLE-DISPUTED on a number measured
+    # under the old selector.
+    "layers_routing_only": routing_only,
+    "layers_datatype_delta": fill_delta,
     "layers_absent_in_gds": absent,
     "layer_gds_map": {k: list(v) for k, v in sorted(metal_layers.items())},
+    "layer_gds_specs": {k: [list(s) for s in v]
+                        for k, v in sorted(counted.items())},
+    "datatype_discovery": spec_prov,
     "disclosure": ("REAL KLayout measurement of the AS-BUILT (post-OpenROAD-"
                    "filler) GDS. Per-layer density = merged drawn metal area / "
-                   "die bbox area. Metal->GDS numbers from the PDK's own "
-                   "LEF/DEF layermap (routing/NET purpose). The signoff gate "
-                   "applies the foundry CMP window (or a DISCLOSED generic "
-                   "[0.30,0.70] default). Layers absent in the GDS are listed, "
-                   "not fabricated. A dedicated dummy-fill INSERTION pass is a "
-                   "documented follow-on; this measures the achieved density."),
+                   "DIE area, where the die is " + die_source + "; the layout "
+                   "bounding box is published beside it as `bbox_area_um2`, "
+                   "because on a shuttle-slot submission the two rectangles "
+                   "differ and only the die answers the foundry rule. "
+                   "The DATATYPE SET counted per metal layer is "
+                   "DISCOVERED from the PDK's own LEF/DEF layermap (every "
+                   "purpose row for that layer, not only routing/NET) and from "
+                   "the PDK's own density deck (every binding on that layer's "
+                   "GDS layer number); no datatype number is written into the "
+                   "producer. `layers_routing_only` is what the pre-#990 "
+                   "producer counted and `layers_datatype_delta` is the "
+                   "difference — on a layout with no dummy fill the delta is "
+                   "0.0 on every layer. The signoff gate applies the foundry "
+                   "CMP window (or a DISCLOSED generic [0.30,0.70] default) to "
+                   "`layers`. Layers absent in the GDS are listed, not "
+                   "fabricated."),
 }, indent=2))
 '''
 
@@ -32780,7 +38858,65 @@ def _metal_density_recipe() -> str:
         raise RuntimeError(
             "metal-density recipe: the metal-layer-name regex was not injected "
             "(template placeholder renamed?) — emitting it would measure nothing")
+    # THE DATATYPE DISCOVERY IS INJECTED BY SOURCE, not restated (vibe-ic#990).
+    # The recipe runs inside the container under KLayout's interpreter and
+    # cannot import this module, so the alternative to injection is a second
+    # copy — and a second copy of a selector is precisely how the producer and
+    # the consumer came to disagree in the first place (see the comment on
+    # `_METAL_DENSITY_LAYER_RE`). Injected, the function the tests exercise IS
+    # the function that runs.
+    src = "\n".join((
+        "_DENSITY_PURPOSE_EXCLUDE = %r" % (_DENSITY_PURPOSE_EXCLUDE,),
+        inspect.getsource(density_counted_specs),
+    ))
+    recipe = recipe.replace("__DENSITY_COUNTED_SPECS_SRC__", src)
+    # Same guard shape as above, and for the same reason: assert what SHOULD be
+    # there. `str.replace` makes an absent-placeholder check false by
+    # construction, so it can never fire.
+    if "def density_counted_specs(" not in recipe:
+        raise RuntimeError(
+            "metal-density recipe: the datatype-discovery source was not "
+            "injected (template placeholder renamed?) — emitting it would "
+            "measure the routing datatype alone and silently miss dummy fill")
     return recipe
+
+
+
+
+def _freshest_gds(alias_gds: Path, source_gds: Path) -> Optional[Path]:
+    """Return the GDS that reflects the CURRENT round for a sign-off
+    measurement: the FRESHER (larger mtime) of the canonical stage4 alias and
+    the streamed pnr GDS, skipping absent files.
+
+    WHY. The canonical alias `phase3/stage4/gds/<top>.gds` is a byte copy of the
+    streamed pnr GDS, refreshed by "Step 37 GDS canonical alias" — which runs
+    LATER in the SAME `step_canonicalize_artefacts` pass than the metal-density
+    emit. A consumer reading the alias BEFORE that refresh sees, on a re-run,
+    the PREVIOUS round's bytes: the alias still holds last round's GDS when the
+    metal-density emit reads it, so it measures a superseded layout (measured:
+    the density report was written ~21s before the alias was rewritten; first
+    run reported the inherited density 0.19/0.11/0.08/0.06/0.05 for a GDS that
+    actually measured 0.21/0.24/0.28/0.36/0.38). On a first-ever run the alias
+    is absent and the streamed source is used — an honest measurement, not a
+    stale one.
+
+    Comparing mtimes selects the layout this round produced regardless of the
+    copy ordering: once Step 37 HAS refreshed the alias (alias newer-or-equal)
+    the canonical alias is returned; until then the streamed source is. Ties
+    prefer the canonical alias (byte-identical anyway). Unprovable freshness
+    (stat fails) prefers the source — the always-current-round streamed
+    artefact. chip-AGNOSTIC: pure mtime comparison of two paths; no design,
+    vendor, SKU, process-node or PDK literal."""
+    a = alias_gds if alias_gds.is_file() else None
+    s = source_gds if source_gds.is_file() else None
+    if a is None:
+        return s
+    if s is None:
+        return a
+    try:
+        return a if a.stat().st_mtime >= s.stat().st_mtime else s
+    except OSError:
+        return s
 
 
 def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
@@ -32792,17 +38928,36 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     report → the gate SKIPs honestly (never a fabricated density). Best-effort;
     returns True when metal_density.json is produced. Validated live on a real
     routed sky130 GDS (espi: met1 13% — below the 30% CMP min, exactly the
-    met_min_ca_density case)."""
-    gds = _pl.gds_dir(project) / f"{top}.gds"
-    if not gds.is_file():
-        gds = _pl.pnr_dir(project) / f"{top}.gds"
-    if not gds.is_file():
+    met_min_ca_density case).
+
+    Measures the CURRENT round's GDS — the fresher of the canonical stage4 alias
+    and the streamed pnr GDS — because the alias is refreshed by Step 37 LATER
+    in this same canonicalize pass, so reading it directly measured the previous
+    round's layout on every re-run (see `_freshest_gds`)."""
+    alias_gds = _pl.gds_dir(project) / f"{top}.gds"
+    source_gds = _pl.pnr_dir(project) / f"{top}.gds"
+    gds = _freshest_gds(alias_gds, source_gds)
+    if gds is None or not gds.is_file():
         hits = sorted(_pl.gds_dir(project).glob("*.gds")) if \
             _pl.gds_dir(project).is_dir() else []
-        gds = hits[0] if hits else gds
+        gds = hits[0] if hits else alias_gds
     if not gds.is_file():
         notes.append("metal density skipped: no streamed GDS found")
         return False
+    # FRESHNESS, decided here rather than at the call site — this is the only
+    # place that knows WHICH GDS was read. An existence gate upstream meant a
+    # re-run that rewrote the layout republished the previous round's density
+    # while the report still named the current GDS: the number described a
+    # design that no longer existed, and nothing in the artefact said so.
+    if out_json.is_file():
+        try:
+            if out_json.stat().st_mtime >= gds.stat().st_mtime:
+                return False          # current for the GDS actually read
+            notes.append(
+                f"metal density re-emitted: {out_json.name} predates the GDS it "
+                f"describes ({gds.name})")
+        except OSError:
+            pass                      # cannot date it -> re-emit rather than trust it
     layermap = pdk.lefdef_layermap
     if not layermap:
         notes.append(
@@ -32816,6 +38971,18 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     map_c = _to_container_path(str(layermap), container)
     out_c = _to_container_path(str(out_json), container)
     script_c = _to_container_path(str(script), container)
+    # THE PDK'S OWN DENSITY DECK (vibe-ic#990) — already resolved by this
+    # runner for sign-off DRC, and passed through here so the measurement
+    # counts the datatype set that deck counts. `pdk.drc_deck` is already a
+    # container-side path, and an empty one is not fatal: the recipe falls back
+    # to the layermap half and RECORDS that the deck contributed nothing.
+    _dens_slot = _slot_geometry(project)
+    deck_c = pdk.drc_deck or ""
+    if not deck_c:
+        notes.append(
+            f"metal density: PDK {pdk.name} resolves no DRC deck — the counted "
+            f"datatype set comes from the LEF/DEF layermap alone (#990). This "
+            f"is DISCLOSED in the report, not silent.")
     cmd = (
         # Our build first when the image has one; this used to pin the BASE
         # klayout directory ahead of everything, which defeated even a wrapper
@@ -32823,6 +38990,21 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         f"{KLAYOUT_PREFER_FORK_SH}"
         f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"klayout -b -r {script_c} -rd gds={gds_c} -rd map={map_c} "
+        # THE DECLARED DIE, when there is one. Without it this measurement
+        # divides by the streamed geometry's bounding box and calls the result
+        # `die_area_um2`; on a slot submission that is the CORE, and the report
+        # then disagrees with the foundry's own die-wide rule by the ratio
+        # between the two rectangles (measured: 35.4 % on a 0.5x0.5 slot).
+        # OMITTED, not passed empty, for a design that targets no slot — the
+        # recipe treats an absent `die` global as "measure the bounding box"
+        # and says so in `die_area_source`.
+        + (f"-rd die={_dens_slot['die_rect'][0]},{_dens_slot['die_rect'][1]},"
+           f"{_dens_slot['die_rect'][2]},{_dens_slot['die_rect'][3]} "
+           if _dens_slot else "") +
+        # OMITTED rather than passed empty: `-rd deck=` with nothing after it is
+        # a malformed argument, and the recipe already treats an absent `deck`
+        # global as "no deck offered" and says so in the report.
+        + (f"-rd deck={deck_c} " if deck_c else "") +
         f"-rd pdk={pdk.name} -rd out={out_c} 2>&1 | tee "
         f"{_to_container_path(str(script.parent / 'metal_density.log'), container)}"
     )
@@ -34282,7 +40464,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         summary["geometry_foundry_data_residual"] = geometry_residual
 
     # --- perc_equivalent.json ---------------------------------------------
-    (rpt3 / "perc_equivalent.json").write_text(json.dumps(summary, indent=2) + "\n")
+    _aa.write_text(rpt3 / "perc_equivalent.json", json.dumps(summary, indent=2) + "\n")
 
     # --- perc_equivalent.rpt (human-readable) -----------------------------
     def _line(c):
@@ -34313,7 +40495,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
            if summary["manual_review_pending"]
            else "# No MANUAL items pending (all N/A or automated).\n")
         + "# end of perc_equivalent.rpt\n")
-    (rpt3 / "perc_equivalent.rpt").write_text(body)
+    _aa.write_text(rpt3 / "perc_equivalent.rpt", body)
 
     # --- PERC_SIGNOFF_MEMO.md (program-generated; maintainer §6 template) -
     _emit_perc_signoff_memo(project, top, summary, categories)
@@ -34475,7 +40657,37 @@ def main() -> int:
                    help=("Design-for-ECO spare-cell density as a fraction "
                          "of placed cells (default 0.02 = 2%%; clamped to "
                          "[0, 0.2]). 0 disables spare insertion."))
+    # vibe-ic#1097 S6 — ORFS `do-<stage>` (`flow/Makefile:366-405`).
+    p.add_argument("--force-step", action="append", metavar="KIND",
+                   default=None,
+                   help=("Re-run this step even if its cached artefact looks "
+                         "current (repeatable; also comma-separated). "
+                         "Bypasses the FRESHNESS check only — the step's "
+                         "declared input contract is still enforced. "
+                         "An unrecognised KIND is refused, not ignored."))
     args = p.parse_args()
+
+    # vibe-ic#1097 S6 — validate AT THE CLI BOUNDARY and publish through the
+    # environment. The freshness predicate that consumes this sits deep in this
+    # module and is called from three sites; threading a parameter to it would
+    # mean changing the signatures `step_preflight.py:20-40` documents as
+    # un-wrappable. So the flag SETS the channel and the predicate READS it.
+    #
+    # `resolve()` RAISES on an unrecognised kind and we exit 2 rather than
+    # continuing: a run that silently forced nothing reads exactly like one
+    # that re-ran the step, which is the defect class this repo keeps removing.
+    if getattr(args, "force_step", None):
+        import step_force as _sf  # noqa: PLC0415
+        _toks = [t for chunk in args.force_step
+                 for t in str(chunk).replace(",", " ").split()]
+        try:
+            os.environ[_sf.ENV] = _sf.as_env_value(_toks)
+        except _sf.UnknownStep as exc:
+            print(f"[phase3] {exc}", file=sys.stderr)
+            return 2
+        print(f"[phase3] --force-step: {os.environ[_sf.ENV]} "
+              f"(freshness bypass only; the input contract still applies)",
+              file=sys.stderr)
 
     # The container name is threaded EXPLICITLY into every step (step_pnr,
     # step_drc, ...), but several PDK-resolution helpers read it from
@@ -34795,7 +41007,14 @@ def main() -> int:
                 f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance; {_synth_prod_msg}){_reuse_note}",
                 [str(netlist_existing)]))
         else:
-            plan.append(step_synth(project, effective_top, pdk, args.container))
+            # PRE-FLIGHT (canonical step 9). Guards the DISPATCH, not the cache
+            # branch above: a cache hit does not read the RTL, so it cannot be
+            # starved of it. A refusal here appends exactly ONE row, so the
+            # `plan[-1]` reads immediately below keep meaning what they meant.
+            plan.append(_spf.gate(
+                project, "phase3_one_shot_runner", "synth",
+                _preflight_refusal("synth"),
+                step_synth, project, effective_top, pdk, args.container))
             # Stamp the producer at the CALL SITE, not inside the step:
             # step_gds alone has two PASS returns and step_synth/step_pnr have
             # many, so a per-return stamp is a class of missed sites waiting to
@@ -34865,9 +41084,17 @@ def main() -> int:
                 if def_existing.is_file():
                     print(f"[pnr] cache invalid — {_cache_msg}",
                           file=sys.stderr)
-                plan.append(step_pnr(project, effective_top, pdk, args.container,
-                                     args.die_um, args.util,
-                                     spare_density=args.spare_density))
+                # PRE-FLIGHT (canonical steps 15-22 — ONE OpenROAD session
+                # covering floorplan/PDN, clock plan, placement, spare cells,
+                # CTS, hold fix, route, extraction). Only the SPAN'S ENTRY
+                # inputs can refuse: 17 reading 15's `pdn.tcl` is a handoff
+                # this very dispatch creates.
+                plan.append(_spf.gate(
+                    project, "phase3_one_shot_runner", "pnr",
+                    _preflight_refusal("pnr"),
+                    step_pnr, project, effective_top, pdk, args.container,
+                    args.die_um, args.util,
+                    spare_density=args.spare_density))
                 # Appends NOTHING — the provenance snapshot below still finds
                 # the PnR row where it expects it.
                 if plan[-1].status == "PASS":
@@ -34989,22 +41216,49 @@ def main() -> int:
                     f"re-run; {_gds_prod_msg})",
                     [str(gds_existing)]))
             else:
-                plan.append(step_gds(project, effective_top, pdk, args.container))
+                # PRE-FLIGHT (canonical step 37 — stream-out). Step 34 (metal
+                # fill) is NOT in this span: MEASURED on spm v1.5.74, filled.def
+                # lands at 12:32:34, AFTER lvs.rpt at 12:32:23 — it is written
+                # by step_canonicalize_artefacts, later than this site. So 37's
+                # only declared input is NOT-YET-DUE here and the pre-flight
+                # says exactly that instead of pretending to have checked it.
+                plan.append(_spf.gate(
+                    project, "phase3_one_shot_runner", "gds",
+                    _preflight_refusal("gds"),
+                    step_gds, project, effective_top, pdk, args.container))
                 if plan[-1].status == "PASS":
                     _write_producer_identity(_pnr_out, "gds")
-        plan.append(step_drc(project, effective_top, pdk, args.container))
+        # PRE-FLIGHT (canonical step 31 — DRC/LVS/ERC/Density, split across the
+        # two dispatches below). Its declared input is step 21's routed.def:
+        # a sign-off that runs with no routed design produces a verdict about
+        # an absence upstream, which is the exact substitution this pre-flight
+        # exists to stop.
+        plan.append(_spf.gate(
+            project, "phase3_one_shot_runner", "drc",
+            _preflight_refusal("drc"),
+            step_drc, project, effective_top, pdk, args.container))
         # ORGANIC #590 — hand step_lvs the pnr outcome so an upstream
         # mid-tcl death SKIPs the compare instead of mislabelling the
         # inevitable mismatch a design/extraction defect.
         _pnr_result = next((s for s in reversed(plan) if s.name == "pnr"),
                            None)
-        plan.append(step_lvs(project, effective_top, pdk, args.container,
-                             upstream_pnr=_pnr_result))
+        plan.append(_spf.gate(
+            project, "phase3_one_shot_runner", "lvs",
+            _preflight_refusal("lvs"),
+            step_lvs, project, effective_top, pdk, args.container,
+            upstream_pnr=_pnr_result))
 
     # v1.6.36 — stage runner outputs at canonical flow-YAML paths.
     # Closes the runner-vs-flow drift waivers from the v10634 benchmark.
     plan.append(step_canonicalize_artefacts(
         project, effective_top, pdk, args.container))
+
+    # Canonical step 37.5ip — the cell/IP path terminal. The four-view kit is
+    # what an IP delivery IS, and until this was wired nothing this flow
+    # produced digitally could be placed by anybody: a completed sign-off run
+    # contained no `.lef` anywhere. Immediately after canonicalisation, which
+    # is what puts the sign-off GDS at this producer's declared input path.
+    plan.append(step_digital_hardmacro_gen(project))
 
     # vibe-ic#306 — corroborate a promoted route against the sign-off report,
     # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
@@ -35161,6 +41415,13 @@ def main() -> int:
     }
     if verdict_note:
         summary["verdict_note"] = verdict_note
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # A phase3-driven run used to end with NO steps tree (only the top
+    # orchestrator built one), so the backend evidence had no per-step folder
+    # at all. Best-effort and non-gating; the outcome is recorded in
+    # reports/audit/steps_view.json whether it worked or not.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="phase3_one_shot_runner")
     out_path = _pl.report_path(project, "phase3_one_shot.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")

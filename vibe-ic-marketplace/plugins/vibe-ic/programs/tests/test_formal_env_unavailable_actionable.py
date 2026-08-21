@@ -281,23 +281,35 @@ def _compliance(project: Path, out_json: Path):
 
 
 def _declared_formal_dependents() -> set:
-    """Steps that transitively depend on Step 5 per the flow's declared
-    `blocks_on` edges. Derived from the YAML so the assertion survives a
-    step renumber instead of pinning magic numbers."""
+    """Steps the flow DECLARES depend on Step 5's artefacts.
+
+    vibe-ic#776 — this used to return the transitive `blocks_on` closure, which
+    is the very thing the test below calls "an over-broad cascade would itself
+    be the defect". `blocks_on` is an ORDERING edge: on this flow it makes 1221
+    (step, ancestor) pairs and only 6 of them carry a declared dependency. The
+    closure returned {6, 39} for Step 5, and neither step's gate nor its
+    required_outputs names anything Step 5 writes (`phase2/stage1/formal/*.sby`,
+    `phase2/stage1/formal/results.json`,
+    `phase2/stage1/sim_full_stack/results.json`) — Step 6 builds an FPGA image,
+    Step 39 recompiles it and tests on board.
+
+    Derived from the producer's own relation so it cannot drift away from what
+    the checker does, and so a real declaration added to the flow later shows up
+    here as a widened expectation rather than a silent one.
+    """
     doc = yaml.safe_load(_FLOW_YAML.read_text())
     steps = [s for s in doc["steps"]
              if isinstance(s, dict) and s.get("id") is not None]
-    parents = {s["id"]: list(s.get("blocks_on") or []) for s in steps}
-    desc, changed = set(), True
-    while changed:
-        changed = False
-        for sid, ps in parents.items():
-            if sid in desc:
-                continue
-            if 5 in ps or any(p in desc for p in ps):
-                desc.add(sid)
-                changed = True
-    return desc
+    sys.path.insert(0, str(_COMPLIANCE.parent))
+    import flow_compliance_check as _fcc
+
+    ids = [s["id"] for s in steps if str(s["id"]) != "P0"]
+    results = [_fcc.StepResult(id=i, name="", stage="",
+                               status=("WAIVED" if i == 5 else "MISSING"))
+               for i in ids]
+    info = _fcc._attribute_cascade_verdicts(results, steps,
+                                            {5: {"ticket": "T"}})
+    return {sid for sid, _parent, _ticket in info["deferred_by_upstream"]}
 
 
 def test_formal_env_waiver_binds_to_the_formal_step(tmp_path):
@@ -347,6 +359,15 @@ def test_cascade_defers_only_genuinely_dependent_steps(tmp_path):
     for s in waived["steps"]:
         if s["status"] == "DEFERRED-BY-UPSTREAM":
             assert "deferred-by-upstream(5" in s["cascade_note"]
+
+    # #776 — the ordering fact is not thrown away, it is recorded WITHOUT
+    # softening: the steps ordered behind step 5 say so and stay MISSING. This
+    # is what keeps the assertions above from passing vacuously.
+    ordered_behind = {s["id"] for s in waived["steps"]
+                      if "waived-ancestor-undeclared(5)" in s["cascade_note"]}
+    assert ordered_behind, "the ordering fact must still be attributed"
+    for sid in ordered_behind:
+        assert waived_status[sid] == "MISSING", (sid, waived_status[sid])
 
 
 def test_waived_formal_never_counts_as_a_pass_downstream(tmp_path):

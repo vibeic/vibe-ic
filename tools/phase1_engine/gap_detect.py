@@ -40,9 +40,25 @@ def _resolve_default_class_kb() -> Path:
 DEFAULT_CLASS_KB = _resolve_default_class_kb()
 
 # Default defaults/ directory (K3 library) — for suggested_default lookup.
-DEFAULT_DEFAULTS_DIR = Path(
-    "vibe-ic-marketplace/plugins/vibe-ic/agents/defaults"
-)
+# Resolved the same way, and for the same reason: a bare relative path only
+# resolves when cwd happens to be a repo root containing vibe-ic-marketplace/.
+# `_load_k3_defaults` reads it as `f.exists() else {}`, so a wrong cwd does not
+# raise — it yields an EMPTY class_reference and `suggest_default` then finds no
+# default for any gap and says nothing. Silent degradation, not a failure.
+def _resolve_default_defaults_dir() -> Path:
+    here = Path(__file__).resolve().parent          # .../phase1_engine
+    plugin_defaults = here.parent.parent / "agents" / "defaults"
+    if (plugin_defaults / "class_reference.yaml").is_file():
+        return plugin_defaults
+    for anc in (here, *here.parents):
+        c = (anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+             / "agents" / "defaults")
+        if (c / "class_reference.yaml").is_file():
+            return c
+    return Path("vibe-ic-marketplace/plugins/vibe-ic/agents/defaults")
+
+
+DEFAULT_DEFAULTS_DIR = _resolve_default_defaults_dir()
 
 
 @dataclass

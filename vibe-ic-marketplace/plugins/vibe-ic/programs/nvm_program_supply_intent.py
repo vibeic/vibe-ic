@@ -65,6 +65,17 @@ declares exactly one `USE POWER`, and is therefore never considered here. The
 LEF `USE POWER` record is the macro's own authoritative statement that a
 terminal is a supply — the same record TritonRoute honours.
 
+AND THE DISCRIMINATOR NEEDS THAT RECORD TO BE THERE (#785)
+----------------------------------------------------------
+Counting a record answers ZERO both when the macro has one supply and when the
+abstract types no pin at all — and `magic`'s `lef write` emits the second. So
+the count is taken over the macro's own Liberty `pg_pin` groups too, which
+survive that write; a macro that resolves to two distinct supply terminals from
+EITHER view runs the same pipeline. An abstract that types nothing and that no
+Liberty view resolves is reported `inconclusive`, never as a single-supply
+macro — see `untyped_abstracts` / `untyped_abstracts_unverifiable` in the
+report.
+
 Everything else is likewise the design's own input: which masters the input RTL
 instantiates, which signals that RTL declares, and which names appear in the
 design's own boundary inventory (RTL ports, pin table, pad list, top ports).
@@ -103,6 +114,8 @@ if str(_HERE) not in sys.path:
 # reports a gap.
 from hardmacro_supply_intent import (  # noqa: E402
     lef_pg_pins as _lef_pg_pins,
+    lef_untyped_masters as _lef_untyped_masters,
+    project_liberty_pg_pins as _project_liberty_pg_pins,
     _rail_token_match,
     declared_rails,
     load_macro_lefs,
@@ -207,17 +220,88 @@ def multi_supply_macros(lef_texts: Iterable[str]) -> Dict[str, List[str]]:
     return {m: pins for m, pins in by_master.items() if len(pins) >= 2}
 
 
+def untyped_abstracts(lef_texts: Iterable[str]) -> Dict[str, List[str]]:
+    """`{master: [pin, ...]}` for every hard macro whose abstract types NO pin.
+
+    THE DISCRIMINATOR NEEDS A RECORD THAT MAY NOT BE THERE (vibe-ic#785)
+    -------------------------------------------------------------------
+    `multi_supply_macros` counts `USE POWER` records, so it answers ZERO for a
+    macro whose abstract types nothing at all — and `assess` then reported
+    `applicable: False` with the reason "no macro declares two or more distinct
+    LEF `USE POWER` pins". That sentence is TRUE and its implication is FALSE:
+    a macro whose abstract carries no `USE` record anywhere is not a macro that
+    declared one supply, and `magic`'s `lef write` writes exactly that abstract.
+    So a programmable NVM regenerated honestly became indistinguishable from an
+    ordinary single-supply SRAM, and the check that exists to notice a missing
+    programming supply went quiet on the file that lost the evidence.
+    """
+    out: Dict[str, List[str]] = {}
+    for txt in lef_texts or []:
+        for master, pins in _lef_untyped_masters(txt).items():
+            bucket = out.setdefault(master, [])
+            for p in pins:
+                if p not in bucket:
+                    bucket.append(p)
+    return out
+
+
+def recovered_supply_pins(untyped: Dict[str, List[str]],
+                          project: Path) -> Dict[str, Dict[str, str]]:
+    """`{master: {pin: USE}}` recovered from the macro's OWN Liberty view.
+
+    `pg_pin` / `pg_type` survive a ``lef write`` that drops the LEF ``USE``
+    records, so this is the design's own independent statement about the same
+    macro. It is the ONLY recovery used here: the discriminator counts DISTINCT
+    SUPPLY TERMINALS, so a source that cannot tell power from ground (rail
+    name-equality) cannot answer this question, and guessing would put an
+    ordinary memory into the finding set.
+    """
+    if not untyped:
+        return {}
+    try:
+        lib = _project_liberty_pg_pins(project)
+    except Exception:  # noqa: BLE001 - corroboration, never a verdict
+        return {}
+    out: Dict[str, Dict[str, str]] = {}
+    for master, pins in untyped.items():
+        cell = lib.get(master) or {}
+        got = {p: cell[p] for p in pins if cell.get(p) in ("POWER", "GROUND")}
+        if got:
+            out[master] = got
+    return out
+
+
 # ── RTL side (design INPUT only) ────────────────────────────────────────────
 
 def input_rtl_files(project: Path) -> List[Path]:
     """Every Verilog/SystemVerilog source under `<project>/input/`, excluding
-    testbenches and anything under an oracle/harness segment (§4.05).
+    testbenches, anything under an oracle/harness segment (§4.05), and a
+    macro's OWN vendor-supplied view.
 
     Deliberately broader than the Phase-2 build-source resolver: this module
     only needs to know what the design DECLARES, and reading one extra
     non-oracle source can only make the boundary inventory larger — which makes
     a finding LESS likely, never more. Erring toward silence is the right
     direction for a gate that blocks.
+
+    THE MACRO-STUB EXCLUSION IS NOT OPTIONAL (vibe-ic, this module's own
+    circularity). `input/pdk_local/<vendor>/...` is the SAME handoff tree
+    `load_macro_lefs` reads a macro's LEF from — it is the macro's own
+    behavioural/stub Verilog view, shipped for simulation, not the chip's own
+    top-level RTL. A vendor's behavioural model routinely types its own supply
+    pins as ordinary `input`/`inout` ports (needed for testbench-style
+    behavioural modelling of the supply-dependent logic, e.g. a pass-gate
+    modelling the programming path) — the SAME pins this module exists to ask
+    "does the TOP LEVEL expose a path for". Scanning that file for port names
+    answers the question with the question: the macro's own declaration of
+    its own pin was being read as proof the CHIP boundary carries it, which
+    made `boundary_is_usable` self-corroborate on every macro whose vendor
+    stub types its PG pins, and made `classify_pin` report `external_pin` for
+    a supply the design's real top level never wires anywhere (MEASURED: a
+    programmable-NVM macro whose digital top explicitly declines to connect
+    its programming-supply pin, by design, still classified `external_pin`
+    with zero gaps, because that pin's OWN name appeared in the macro's own
+    ``module NAME(...)`` port list one directory below).
     """
     root = project / "input"
     if not root.is_dir():
@@ -231,6 +315,8 @@ def input_rtl_files(project: Path) -> List[Path]:
         except ValueError:
             continue
         if _is_oracle_parts(rel.parts) or _is_tb_file(p):
+            continue
+        if rel.parts and rel.parts[0] == "pdk_local":
             continue
         out.append(p)
     return out
@@ -491,14 +577,29 @@ def classify_pin(master: str, pin: str, boundary: List[str],
                        "design's own boundary corresponds to this supply")}
 
 
-def _all_pg_pins(lef_texts: Iterable[str], masters: Set[str]
+def _all_pg_pins(lef_texts: Iterable[str], masters: Set[str],
+                 recovered: Optional[Dict[str, Dict[str, str]]] = None
                  ) -> List[Dict[str, str]]:
-    """Every PG pin (POWER *and* GROUND) of the given masters."""
+    """Every PG pin (POWER *and* GROUND) of the given masters.
+
+    `recovered` carries the pins whose supply role came from the macro's own
+    Liberty view because its abstract types nothing. They belong here for the
+    same reason they belong in the finding set: `boundary_is_usable` asks
+    whether ANY of the macro's supply terminals is recorded at the boundary, and
+    a terminal is no less real for having been read out of the Liberty instead
+    of the LEF. Omitting them would make every recovered macro report
+    `inconclusive` on an inventory that in fact answers.
+    """
     out: List[Dict[str, str]] = []
     for txt in lef_texts or []:
         for p in _lef_pg_pins(txt):
             if p["master"] in masters:
                 out.append(p)
+    for master, pins in (recovered or {}).items():
+        if master not in masters:
+            continue
+        for pin, use in sorted(pins.items()):
+            out.append({"master": master, "pin": pin, "use": use})
     return out
 
 
@@ -530,6 +631,27 @@ def assess(project: Path) -> Dict[str, Any]:
     own L-doc boundary inventory; never an oracle or a golden artefact."""
     lefs = load_macro_lefs(project)
     macros = multi_supply_macros(lefs)
+
+    # ---- an abstract that types nothing counts NOTHING (#785) ------------- #
+    # `multi_supply_macros` can only count `USE POWER` records, so a macro whose
+    # abstract types no pin at all answers ZERO — the same answer a genuinely
+    # single-supply memory gives. Recover the typing from the macro's OWN
+    # Liberty view, which survives a `lef write`; a macro that then shows two or
+    # more distinct supply terminals is multi-supply on the design's own
+    # evidence and runs the SAME pipeline as a LEF-typed one.
+    untyped = {m: p for m, p in untyped_abstracts(lefs).items()
+               if m not in macros}
+    recovered = recovered_supply_pins(untyped, project)
+    recovered_multi: Dict[str, List[str]] = {}
+    for master, pins in recovered.items():
+        pwr = sorted(p for p, u in pins.items() if u == "POWER")
+        if len(pwr) >= 2:
+            recovered_multi[master] = pwr
+    macros = {**macros, **recovered_multi}
+    # An abstract that types nothing AND that no Liberty view resolves cannot be
+    # placed on either side of the discriminator.
+    unverifiable = sorted(m for m in untyped if m not in recovered)
+
     rep: Dict[str, Any] = {
         "multi_supply_macros": {m: pins for m, pins in macros.items()},
         "instantiated": [],
@@ -542,8 +664,29 @@ def assess(project: Path) -> Dict[str, Any]:
         "applicable": False,
         "inconclusive": False,
         "reason": "",
+        "untyped_abstracts": {m: untyped[m] for m in sorted(untyped)},
+        "recovered_supply_pins": {m: recovered[m] for m in sorted(recovered)},
+        "untyped_abstracts_unverifiable": unverifiable,
     }
     if not macros:
+        if unverifiable:
+            # NOT `applicable: False` with a single-supply reason. The
+            # discriminator did not answer "one supply" — it could not read the
+            # record it counts, in a file that exists.
+            rep["inconclusive"] = True
+            rep["reason"] = (
+                f"{len(unverifiable)} staged hard macro(s) "
+                f"({', '.join(unverifiable[:6])}) type NO pin with a `USE` "
+                "record at all, and no Liberty `pg_pin` is staged beside the "
+                "abstract to recover it from — so the multi-supply "
+                "discriminator this check rests on cannot be evaluated. "
+                "`magic`'s `lef write` emits neither `DIRECTION` nor `USE` on "
+                "any PIN, so this is what an HONESTLY regenerated abstract "
+                "looks like, and it is a different fact from a macro that "
+                "declares a single supply. Reported, not decided: re-attach "
+                "the typing to the abstract or stage the macro's Liberty view "
+                "beside it")
+            return rep
         rep["reason"] = (
             "no macro under input/pdk_local/ declares two or more distinct "
             "LEF `USE POWER` pins — no programmable-NVM supply question to ask"
@@ -575,7 +718,8 @@ def assess(project: Path) -> Dict[str, Any]:
     l21 = load_l21(project)
     rep["declared_rails"] = declared_rails(l21)
 
-    usable = boundary_is_usable(_all_pg_pins(lefs, inst), boundary["names"])
+    usable = boundary_is_usable(_all_pg_pins(lefs, inst, recovered),
+                                boundary["names"])
     rep["boundary_usable"] = usable
     if not usable["usable"]:
         rep["inconclusive"] = True

@@ -1,6 +1,0 @@
-{
-  "ic_name": "Interlaken Protocol Definition",
-  "analog_mixed_signal": "Rides on bonded SerDes lanes (differential PCS/PMA); the protocol layer is digital. SerDes electrical layer is implementation-defined.",
-  "io_standard": "SerDes differential signaling (e.g. CEI-6G/CEI-11G); optional LVDS out-of-band flow-control bus.",
-  "not_applicable_reason": "Interlaken defines the protocol/framing layers; the analog SerDes is left to the implementation."
-}

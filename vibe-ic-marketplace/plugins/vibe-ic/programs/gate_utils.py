@@ -57,6 +57,30 @@ EXCLUDED_DIRS: frozenset[str] = frozenset({
     "node_modules", "steps", "oracle_run",
 })
 
+#: Directory components excluded by SUFFIX rather than by exact name, imported
+#: from the shared scan-scope policy so the two collectors that read this module
+#: cannot drift from it. Currently the `<rtl_dir>_out_of_cone/` sidecar that
+#: `rtl_transitive_cone.prune_to_cone` moves non-build sources into: a file in
+#: there has been declared NOT PART OF THE BUILD SET, so linting it as
+#: authoritative RTL contradicts the move (vibe-ic#781 L8).
+try:
+    from rtl_scan_scope import EXCLUDED_DIR_SUFFIXES
+except ImportError:      # pragma: no cover — standalone/vendored use
+    EXCLUDED_DIR_SUFFIXES = ("_out_of_cone",)
+
+
+def dir_parts_excluded(parts) -> bool:
+    """True when any DIRECTORY component of a path marks it out of RTL scope.
+
+    The one place the exact-name set and the suffix rule are combined. Three
+    collectors with three different policies is how the `steps` defect survived
+    the fix that added it to only one of them; there is no fourth private copy.
+    """
+    parts = list(parts)
+    if set(parts) & EXCLUDED_DIRS:
+        return True
+    return any(p.endswith(s) for p in parts for s in EXCLUDED_DIR_SUFFIXES)
+
 
 def read_text(path: Path) -> str:
     try:
@@ -71,8 +95,7 @@ def find_rtl_files(project: Path) -> list[Path]:
         for f in project.rglob(ext):
             if not f.is_file():
                 continue
-            parts = set(f.relative_to(project).parts[:-1])
-            if parts & EXCLUDED_DIRS:
+            if dir_parts_excluded(f.relative_to(project).parts[:-1]):
                 continue
             out.append(f)
     return out

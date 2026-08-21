@@ -1,0 +1,247 @@
+{
+ "schema": "vibeic.ppa.contract_declaration.v1",
+ "run_label": "u02",
+ "root_label": "project",
+ "problem": {
+  "artefacts": [
+   {
+    "role": "sdc",
+    "path": "phase2/stage2/constraints/spm.sdc"
+   },
+   {
+    "role": "l19_spec",
+    "path": "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+   },
+   {
+    "role": "spec_doc_L1_product_metadata",
+    "path": "input/docs/L1_product_metadata.md"
+   },
+   {
+    "role": "spec_doc_L2_architecture",
+    "path": "input/docs/L2_architecture.md"
+   },
+   {
+    "role": "spec_doc_L3_external_interface",
+    "path": "input/docs/L3_external_interface.md"
+   },
+   {
+    "role": "spec_doc_L4_command_protocol",
+    "path": "input/docs/L4_command_protocol.md"
+   },
+   {
+    "role": "spec_doc_L5_register_map",
+    "path": "input/docs/L5_register_map.md"
+   },
+   {
+    "role": "spec_doc_L6_calibration",
+    "path": "input/docs/L6_calibration.md"
+   },
+   {
+    "role": "spec_doc_L7_verification_plan",
+    "path": "input/docs/L7_verification_plan.md"
+   },
+   {
+    "role": "spec_doc_L8_submodule_integration",
+    "path": "input/docs/L8_submodule_integration.md"
+   },
+   {
+    "role": "spec_doc_L9_constraints_floorplan",
+    "path": "input/docs/L9_constraints_floorplan.md"
+   }
+  ],
+  "facts": [
+   {
+    "key": "constraints.clk.period_ns",
+    "value": 10.0,
+    "source": "sdc",
+    "source_path": "phase2/stage2/constraints/spm.sdc"
+   },
+   {
+    "key": "pdk.target",
+    "value": "sky130",
+    "source": "l19_spec",
+    "source_path": "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+   }
+  ]
+ },
+ "implementation": {
+  "artefacts": [
+   {
+    "role": "rtl_top",
+    "path": "phase2/stage1/rtl/spm.v"
+   },
+   {
+    "role": "synth_netlist",
+    "path": "phase2/stage2/synth/spm_synth.v"
+   },
+   {
+    "role": "routed_def",
+    "path": "phase3/stage3/pnr/spm.def"
+   },
+   {
+    "role": "gate_netlist",
+    "path": "phase3/stage3/pnr/spm_pnr.v"
+   },
+   {
+    "role": "gds",
+    "path": "phase3/stage4/gds/spm.gds"
+   },
+   {
+    "role": "sta_signoff_multicorner",
+    "path": "phase3/stage3/sta/sta_spef_multicorner.rpt"
+   },
+   {
+    "role": "sta_signoff_ocv",
+    "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt"
+   },
+   {
+    "role": "power",
+    "path": "reports/phase3/power.rpt"
+   },
+   {
+    "role": "drc_signoff",
+    "path": "reports/phase3/drc_signoff.rpt"
+   },
+   {
+    "role": "drc_vacuity",
+    "path": "reports/phase3/drc_vacuous.json"
+   },
+   {
+    "role": "lvs",
+    "path": "reports/phase3/lvs.rpt"
+   },
+   {
+    "role": "antenna",
+    "path": "reports/phase3/antenna.json"
+   }
+  ],
+  "facts": [
+   {
+    "key": "pnr.die_um",
+    "value": "auto",
+    "source": "runner_invocation"
+   },
+   {
+    "key": "pnr.placement_density",
+    "value": "0.60",
+    "source": "runner_invocation"
+   },
+   {
+    "key": "pnr.spare_cell_density",
+    "value": "0.00",
+    "source": "runner_invocation"
+   },
+   {
+    "key": "crosslayer.rtl_variant",
+    "value": "csa_mux_hier",
+    "source": "search_lever"
+   },
+   {
+    "key": "crosslayer.synthesis_strategy",
+    "value": "ks",
+    "source": "search_lever"
+   }
+  ]
+ },
+ "analysis": {
+  "artefacts": [
+   {
+    "role": "corner_mode_declaration",
+    "path": "phase2/stage2/constraints/pvt_matrix.json"
+   },
+   {
+    "role": "rc_corner_stance",
+    "path": "reports/phase3/multi_corner_spef_stance.json"
+   }
+  ],
+  "facts": [
+   {
+    "key": "analysis.activity_basis",
+    "value": "VECTORLESS",
+    "source": "runner"
+   },
+   {
+    "key": "analysis.stage",
+    "value": "post_route_extracted",
+    "source": "runner"
+   }
+  ]
+ },
+ "toolchain": {
+  "images": [
+   {
+    "role": "eda",
+    "ref": "ghcr.io/vibeic/vibeic-eda@sha256:24b5074b686386084f87a03712b5f76e475201fbf2f2583b112d6e2c3eb55f3d",
+    "verdict_bearing": true
+   }
+  ],
+  "tools": [
+   {
+    "name": "place_and_route",
+    "status": "MEASURED",
+    "version": "26Q3-1535-g543c33894f"
+   },
+   {
+    "name": "static_timing",
+    "status": "MEASURED",
+    "version": "2.7.0"
+   },
+   {
+    "name": "synthesis",
+    "status": "MEASURED",
+    "version": "0.68+ 0048145dd"
+   }
+  ]
+ },
+ "agent_execution": {
+  "facts": [
+   {
+    "key": "agent.autonomy",
+    "value": "candidate_authoring_only",
+    "source": "declared"
+   },
+   {
+    "key": "agent.role",
+    "value": "authored the candidate RTL; every measurement is the deterministic runner's",
+    "source": "declared"
+   }
+  ]
+ },
+ "policy": {
+  "missing_power_basis": "REFUSE",
+  "mutation_allow_list": [
+   "pnr.*",
+   "crosslayer.*"
+  ],
+  "mutation_forbidden": [
+   "constraints.*",
+   "pdk.*",
+   "spec.*"
+  ]
+ },
+ "candidate": {
+  "mutations": [
+   {
+    "target": "pnr.placement_density",
+    "from": "0.30",
+    "to": "0.60"
+   },
+   {
+    "target": "pnr.spare_cell_density",
+    "from": "0.02",
+    "to": "0.00"
+   },
+   {
+    "target": "crosslayer.rtl_variant",
+    "from": "base",
+    "to": "csa_mux_hier"
+   },
+   {
+    "target": "crosslayer.synthesis_strategy",
+    "from": "none",
+    "to": "ks"
+   }
+  ]
+ },
+ "metrics": []
+}
