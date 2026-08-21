@@ -291,6 +291,14 @@
     "phase2.rewrite_equivalence": {
       "bucket_A_program": "programs/crosslayer_rewrite_equivalence.py",
       "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"
+    },
+    "repo.pr_scope": {
+      "description": "Merge gate: which of the twenty Appendix-C review questions a change-set makes applicable, and whether each is backed by evidence a machine can re-verify",
+      "bucket_A_program": "programs/ppa_pr_scope_check.py",
+      "bucket_A_related": [
+        "programs/gatekeeper_review.py"
+      ],
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     }
   },
   "default_routing": {
