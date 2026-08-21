@@ -1215,6 +1215,7 @@ run_writing_the_corpus() {                # <label> <cwd> <cmd...>
 # and pinned equal there, because two numbers that must agree and live in two
 # languages are exactly what drifts.
 GATE_DISPATCH_ABSENT_RC=3
+
 _gate_dispatch_population_refusal() {
   # The producer argv remains in "$@" after the four evidence fields.  It is
   # intentionally not executed twice; `_gate_execute` passes the complete argv
