@@ -1,0 +1,18 @@
+{
+  "gate": "l20_dft_scan_topology_actionable_check",
+  "project": "/home/reyerchu/vibe-ic/benchmark-data/ic/opentitan_aes",
+  "verdict": "SKIP",
+  "blocking_findings": [],
+  "advisory_findings": [],
+  "evidence": {
+    "l20_path": "/home/reyerchu/vibe-ic/benchmark-data/ic/opentitan_aes/phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json",
+    "applicability": "APPLICABLE",
+    "scan_chain_count": 0,
+    "typed_scan_chain_count": 0,
+    "asserts_dft": false,
+    "dft_requirement_hits_input_docs": 0,
+    "dft_requirement_hits_sibling_l_docs": 0,
+    "backend_dft_artifacts": []
+  },
+  "reason": "no DFT requirement derivable from the design's own inputs and L20 asserts none"
+}

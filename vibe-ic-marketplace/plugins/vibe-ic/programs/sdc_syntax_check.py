@@ -35,6 +35,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +317,7 @@ def main():
         else:
             from pathlib import Path as _P
             _P(args.json).parent.mkdir(parents=True, exist_ok=True)
-            _P(args.json).write_text(payload)
+            atomic_write_text(_P(args.json), payload)
     else:
         for f in result.findings:
             tag = f"[{f.file}] " if f.file else ""
