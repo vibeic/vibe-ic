@@ -18186,7 +18186,12 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
     EXACT recipe (fork-openroad, proven on sha256's sign-off corner: worst slack
     −8.83 ns → exit 0, 40/40 endpoints repaired → +0.33 ns):
       read_spef → estimate_parasitics -detailed_routing → repair_design
-                → repair_timing -setup
+                → repair_timing -setup → repair_timing -hold
+    and BOTH slacks are reported before/after: `sta::worst_slack -max` (setup)
+    and `sta::worst_slack -min` (HOLD). The hold half was added 2026-08-20 after
+    a gf180mcuD chip-path run routed with a −67.9 ps pad-to-flop hold violation
+    that this block neither repaired nor reported, because it only ever asked
+    about setup. UNMEASURED IS NOT ZERO applies to hold exactly as to setup.
     The `-detailed_routing` flag is on **estimate_parasitics** (marks the real
     SPEF RC valid); `repair_timing`/`repair_design` take NO such flag (a
     `repair_timing -setup -detailed_routing` throws STA-0562, which a NONFATAL
@@ -18213,6 +18218,11 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         "  if {[catch {estimate_parasitics -detailed_routing} _prr_ep]} { "
         "puts \"SPEF_REPAIR_EP_NONFATAL: $_prr_ep\" }\n"
         "  catch {puts \"SPEF_REPAIR_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
+        # vibe-ic gf180 chip-path campaign — HOLD is the other half, and it was
+        # the missing one. `-max` is SETUP; `-min` is HOLD. Reporting only -max
+        # made a post-route hold violation invisible to this block, which is the
+        # one place in the flow that sees REAL parasitics.
+        "  catch {puts \"SPEF_REPAIR_HOLD_WNS_BEFORE: [sta::worst_slack -min]\"}\n"
         # vibe-ic#569 — the recovery (this PR) and the REFUSAL COUNT (v1.9.9)
         # are both needed, and they answer different halves.
         #
@@ -18261,14 +18271,41 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         + "    if {!$_spef_repair_setup_est_rec} { "
         "puts \"SPEF_REPAIR_SETUP_NONFATAL: $_prr_rt\" ; incr _prr_refused }\n"
         "  }\n"
+        # ── POST-ROUTE HOLD REPAIR ────────────────────────────────────────
+        # MEASURED (gf180mcuD chip path, 2026-08-20): the flow repaired hold
+        # ONLY at the pre-route `hold_repair` stage, on ESTIMATED wire delay,
+        # and every post-route repair here was `-setup`. A design with a
+        # pad-to-flop path can therefore route with a real hold violation that
+        # nothing downstream repairs OR reports. `_post_buffered_repair_tcl`
+        # in this same file has always emitted `-setup` AND `-hold` together
+        # and calls itself "the ONE post-buffered repair command set"; this
+        # block simply never used the hold half.
+        # SAFE for the same reason the setup repair is: this whole block runs
+        # AFTER routed.def / <top>.def / <top>_pnr.v and after the
+        # authoritative sta.rpt, so it edits only the in-memory netlist and
+        # ships nothing. It relaxes no check — it makes one that was silent
+        # speak. NEVER `repair_design` here (segfaults on buffered gate
+        # configs; see _post_buffered_repair_tcl).
+        "  if {[catch {repair_timing -hold} _prr_rh]} {\n"
+        + _est0104_recovery_tcl(
+            spef_c, "_prr_rh", "repair_timing -hold", "SPEF_REPAIR_HOLD",
+            indent="    ", after_spef="estimate_parasitics -detailed_routing")
+        + "    if {!$_spef_repair_hold_est_rec} { "
+        "puts \"SPEF_REPAIR_HOLD_NONFATAL: $_prr_rh\" ; incr _prr_refused }\n"
+        "  }\n"
         "  catch {puts \"SPEF_REPAIR_WNS_AFTER: [sta::worst_slack -max]\"}\n"
+        "  catch {puts \"SPEF_REPAIR_HOLD_WNS_AFTER: [sta::worst_slack -min]\"}\n"
         f"  catch {{report_checks > {out_dir_c}/sta_spef_repaired.rpt}}\n"
-        "  if {$_prr_refused >= 2} {\n"
-        "    puts \"SPEF_REPAIR_NOT_APPLIED: both repairs refused "
-        "($_prr_refused/2) — WNS_BEFORE and WNS_AFTER describe the SAME "
+        # THREE repairs are attempted now (design, setup, hold), so the
+        # "all of them refused" threshold moves with the count. Leaving it
+        # at 2 would have printed NOT_APPLIED for a round in which the
+        # hold repair actually ran.
+        "  if {$_prr_refused >= 3} {\n"
+        "    puts \"SPEF_REPAIR_NOT_APPLIED: every repair refused "
+        "($_prr_refused/3) — WNS_BEFORE and WNS_AFTER describe the SAME "
         "design and their equality is not evidence of convergence\"\n"
         "  } elseif {$_prr_refused > 0} {\n"
-        "    puts \"SPEF_REPAIR_PARTIAL: $_prr_refused of 2 repairs refused\"\n"
+        "    puts \"SPEF_REPAIR_PARTIAL: $_prr_refused of 3 repairs refused\"\n"
         "    puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
         "  } else {\n"
         "    puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
@@ -34140,6 +34177,50 @@ def _report_worst_paths_tcl(rpt_c: str, flag: str) -> str:
     )
 
 
+#: Marker the WNS emitter writes when the tool ACCEPTED the query. Its presence
+#: is what tells a reader that a missing `wns` line means "no paths", and its
+#: absence that the tool was never asked -- the two states this whole lane
+#: exists to keep apart.
+_SIGNOFF_WNS_MARKER = "SIGNOFF_WNS_REPORTED"
+
+
+def _report_wns_tcl(rpt_c: str, flag: str) -> str:
+    """Emit `report_wns <-max|-min>` guarded by a catch, with a marker.
+
+    THE MEASURED DEFECT. Both multi-corner sign-off stanzas asked for
+    `report_worst_slack` and `report_tns` and NEVER for `report_wns`. Measured
+    across all six STA artefacts of a real sign-off run: `timing.hold.wns_ns` is
+    NOT_MEASURED on every view with the reason "the artefact carries no wns line
+    for this view", and the same for setup on the two multi-corner reports. The
+    feasibility gate's hold axis proves from `timing.hold.wns_ns`, so the hold
+    axis was structurally unprovable from this flow's own evidence -- not for a
+    design, but for every design, on every run.
+
+    `_ppa/timing.py` will not compute the wns from the worst slack, and it is
+    right not to: OpenSTA's wns is `min(0, worst_slack)`, and a derived number
+    presented as a measured one is §3's failure. The fix therefore belongs
+    HERE -- the emitter has to ask the tool for the fact.
+
+    Guarded because a build that rejects the min/max flag must not abort a
+    sign-off script that has already written its setup half. On failure the
+    reason is written into the report and no marker appears, so the absence
+    remains visible rather than becoming a silent skip.
+
+    chip/PDK-AGNOSTIC: a stock OpenSTA command, no literal.
+    """
+    return (
+        f"if {{[catch {{report_wns {flag} >> {rpt_c}}} _wnserr]}} {{\n"
+        f"  set _wf [open {rpt_c} a]\n"
+        f'  puts $_wf "SIGNOFF_WNS_UNAVAILABLE query={flag} reason=$_wnserr"\n'
+        f"  close $_wf\n"
+        f"}} else {{\n"
+        f"  set _wf [open {rpt_c} a]\n"
+        f'  puts $_wf "{_SIGNOFF_WNS_MARKER} query={flag}"\n'
+        f"  close $_wf\n"
+        f"}}\n"
+    )
+
+
 def _report_check_types_tcl(rpt_c: str) -> str:
     """Emit `report_check_types -recovery -removal -max_slew -min_pulse_width
     -max_capacitance -max_fanout -violators` guarded by a catch; on SUCCESS
@@ -35629,19 +35710,12 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             # degraded run passed for a multi-corner one.
             f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}, "
             f"liberty={lib_c}) ===\"\n"
-            # BASIS STAMP. Unstamped, this MULTI-CORNER SIGN-OFF report was
-            # the one carrying the real corners and the one that said nothing
-            # about its own stage, so `_ppa/timing.py` had to record
-            # `stage: null` for every row it produced while the single-corner
-            # report kept its stage.
-            #
-            # The stamp is DERIVED (`_basis_stamp`), not the literal
-            # `POST_ROUTE_SPEF` the earlier arm wrote here. Every stanza of
-            # this report reads a SPEF, so the two spellings agree on every
-            # routed run — and they part exactly where it matters: on a run
-            # that fell back to the SYNTH netlist the literal stamps
-            # POST_ROUTE_SPEF, which is the "flattering lie" this file's own
-            # basis test says the stamp exists to prevent.
+            # Per STANZA, because the SPEF differs per stanza and the liberty
+            # is the thing a reader cannot otherwise recover from the corner
+            # name. Every stanza of this report reads a SPEF, so the only way
+            # the basis is not POST_ROUTE_SPEF is a run with no routed netlist
+            # at all — and then it says PRE_LAYOUT_ESTIMATE instead of
+            # claiming a sign-off basis it does not have.
             f"puts $_f \"STA_BASIS: {_basis_stamp}\"\n"
             f"puts $_f \"STA_BASIS_LIBERTY: {lib_c}\"\n"
             f"puts $_f \"STA_BASIS_NETLIST: {netlist.name}\"\n"
@@ -35649,6 +35723,9 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
+            # WNS, the name the feasibility gate's setup/hold axes prove from.
+            # Never asked for by this stanza before; see _report_wns_tcl.
+            f"{_report_wns_tcl(rpt_c, flag)}"
             # Worst-PATH dump (ORGANIC #540). `flag` is report_worst_slack's
             # spelling (-max/-min); report_checks needs `-path_delay max|min`,
             # and passing the raw flag raised Error 514 into the swallowing
@@ -35867,8 +35944,6 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     # corner sign-off evidence, and it stamped nothing, so every row parsed out
     # of it carried `stage: null`. Derived per stanza below, because whether a
     # SPEF was read is decided per stanza here.
-    _prelayout_netlist = (netlist == _pl.synth_dir(project) / f"{top}_synth.v")
-
     def _pass(label: str, kind: str, flag: str, spef_host: Optional[Path],
               open_mode: str) -> str:
         lib_c = corner_libs[label]
@@ -35877,37 +35952,29 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         if spef_host and Path(spef_host).is_file():
             spef_tcl = f"read_spef {_to_container_path(str(spef_host), container)}\n"
             spef_disc = Path(spef_host).name
-        # BASIS PRECEDENCE. Two lanes wrote this stamp and disagreed on the
-        # ORDER of the tests, which is the whole of the disagreement:
-        #
-        #   spef first  -> POST_ROUTE_SPEF whenever parasitics are on disk,
-        #                  including the run that fell back to the SYNTH
-        #                  netlist and found a SPEF an earlier routed run left
-        #                  behind.
-        #   netlist first -> the side of PnR the netlist came from decides,
-        #                  and the SPEF only chooses between the two POST_ROUTE
-        #                  spellings.
-        #
-        # The netlist test comes first. `test_phase3_step10_prelayout_basis_is_forced`
-        # records this exact defect one level down — `_multi_corner_sta_inputs`
-        # whose "precedence is purely file-existence driven" made the pre-layout
-        # step emit a POST_ROUTE report — and the basis test's docstring calls
-        # rounding up to POST_ROUTE_SPEF "the flattering lie the stamp exists to
-        # prevent". Which side of PnR the netlist came from is not a tie-break
-        # here, it is the question.
-        #
-        # Both predicates are kept and both are load-bearing: `_prelayout_netlist`
-        # is read off the path actually selected, `_routed_netlist` is the flag
-        # set while selecting it. They agree everywhere except a
-        # `netlist_override` pointing AT the synth netlist, where the flag says
-        # routed and the path says pre-layout — and there the PATH wins, because
-        # it is the file OpenSTA will actually read.
-        if _prelayout_netlist or not _routed_netlist:
-            basis = "PRE_LAYOUT_ESTIMATE"
+        # BOTH sides derived this classification and they name the SAME three
+        # values; they disagreed about PRECEDENCE, and only one of the two
+        # readings matches the prose that landed with it. The landed comment on
+        # `_routed_netlist` above says "falling back to the SYNTH netlist ...
+        # must never stamp POST_ROUTE" — but the landed EXPRESSION tested
+        # `spef_tcl` first, so a pre-layout netlist read alongside a SPEF from
+        # some other run stamped POST_ROUTE_SPEF. The NETLIST decides first;
+        # the SPEF only refines an answer that is already post-route.
+        # WHAT DECIDED IT: tests/test_multicorner_signoff_reports_declare_
+        # their_stage.py::test_no_routed_netlist_is_not_stamped_as_signoff
+        # emits with NO `<top>_pnr.v` and WITH SPEFs present, and asserts
+        # `POST_ROUTE` appears nowhere in the body. Under the landed precedence
+        # that arm is red.
+        # ONE predicate, not two: `_routed_netlist` is the landed spelling and
+        # it also carries the `netlist_override` (ECO netlist) case, so this
+        # lane's own `_prelayout_netlist` local was dropped rather than left
+        # beside it to drift.
+        if not _routed_netlist:
+            basis_stamp = "PRE_LAYOUT_ESTIMATE"
         elif spef_tcl:
-            basis = "POST_ROUTE_SPEF"
+            basis_stamp = "POST_ROUTE_SPEF"
         else:
-            basis = "POST_ROUTE_NO_SPEF"
+            basis_stamp = "POST_ROUTE_NO_SPEF"
         return (
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
@@ -35932,22 +35999,25 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             # `POST_ROUTE_SPEF` to every consumer that keeps extracted and
             # unextracted timing apart, so it is never rounded up to the
             # flattering one. Both values are already in `_sta_basis`.
-            f'puts $_f "STA_BASIS: {basis}"\n'
-            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
+            # ONE stanza, not two. Both lanes added a STA_BASIS block here and
+            # the text merged cleanly into a report that stamped its basis
+            # TWICE — a second spelling of one fact is a fact two readers
+            # disagree about, and `_sta_basis.declared_basis` reads the first
+            # match. This lane's block is the landed one's superset (the same
+            # two lines plus the netlist and the SPEF a reader cannot otherwise
+            # recover), so it is the one kept.
             f'puts $_f "OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} '
             f'late={_FLAT_OCV_DERATE_LATE} flat-OCV"\n'
-            # NETLIST and SPEF by NAME, from the other lane: the stamp says
-            # which stage, these say which two files produced it, and a reader
-            # comparing two reports cannot otherwise tell a re-run from a
-            # re-read. Emitted ONCE — the merge of the two lanes first left a
-            # second `STA_BASIS:` line here, and a report carrying two answers
-            # to one question is read by whichever line the parser reaches
-            # first.
+            f'puts $_f "STA_BASIS: {basis_stamp}"\n'
+            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
             f'puts $_f "STA_BASIS_NETLIST: {netlist.name}"\n'
             f'puts $_f "STA_BASIS_SPEF: {spef_disc}"\n'
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
+            # WNS, the name the feasibility gate's setup/hold axes prove from.
+            # Never asked for by this stanza before; see _report_wns_tcl.
+            f"{_report_wns_tcl(rpt_c, flag)}"
             # Worst-PATH dump + the path SLEWS, so the slew explosion and the
             # cone that carries it are both visible (ORGANIC #540: this is the
             # SS sign-off report, and passing report_worst_slack's `-max`/`-min`

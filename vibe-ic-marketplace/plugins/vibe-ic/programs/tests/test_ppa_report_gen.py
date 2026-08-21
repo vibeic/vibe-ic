@@ -262,9 +262,16 @@ def test_vacuous_cli_writes_no_artefact_when_it_could_not_look(tmp_path):
 
 def test_bad_invocation_is_not_a_design_finding():
     """rc=1 is a claim about silicon (§1). Arg errors must not borrow it."""
-    with pytest.raises(SystemExit) as excinfo:
-        gen.main([])
-    assert excinfo.value.code == 2  # argparse's own; never 1
+    # PPA_INTERFACES §1: 3 is BAD INVOCATION; 2 is UNDETERMINED ("I could not
+    # look") and must never be mapped to PASS by a flow gate -- which is how a
+    # caller that treats 2 as "nothing to check here" swallows a typo'd flag
+    # and carries on green. This test previously asserted argparse's own 2,
+    # which satisfied its stated intent (never 1) but pinned the wrong one of
+    # the two remaining codes.
+    rc = gen.main([])
+    assert rc == 3, (
+        f"a bad invocation must be rc=3, got {rc}. 2 there is UNDETERMINED "
+        f"and a caller cannot tell it from an artefact that was not present.")
 
 
 def test_cli_exit_codes_are_the_contract(tmp_path):
@@ -327,14 +334,11 @@ def test_mutation_treating_empty_as_readable_would_report_nothing_as_clean(
 
 def test_the_generated_claims_document_validates_against_the_shipped_schema(
         tmp_path):
-    jsonschema = pytest.importorskip(
-        "jsonschema", reason="validated here when available; the program itself "
-                             "never imports it, so a shipped gate does not "
-                             "depend on it")
+    from _ppa import schema_validation as _SV
     schema_path = (pathlib.Path(__file__).resolve().parents[2]
                    / "schemas" / "ppa" / "claims.v1.schema.json")
     assert schema_path.exists(), f"{schema_path} is not shipped"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     rc, result = gen.generate(_corpus(tmp_path, _measured(), _not_measured()))
     assert rc == gen.RC_OK
-    jsonschema.validate(result["claims_doc"], schema)
+    assert _SV.engine_or_skip(schema).errors(result["claims_doc"]) == []

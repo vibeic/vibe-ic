@@ -150,6 +150,14 @@ _PVT_MATRIX = (
     "phase3/stage3/constraints/pvt_matrix.json",
 )
 
+#: The ONLY scope keys a timing row may carry beyond the eight, and the metric
+#: that may carry them. Declared here so the schema, the test and the emitter
+#: cannot drift: an undeclared scope key silently makes a record incomparable
+#: to every other record, which is the failure mode the eight exist to prevent,
+#: so the set of permitted extras is closed and named rather than left open.
+_PATH_SCOPE_KEYS = ("path_startpoint", "path_endpoint", "path_ordinal")
+_PATH_METRIC_SUFFIX = ".worst_path_slack_ns"
+
 _SCOPE_KEYS = ("stage", "mode", "process", "voltage_v", "temperature_c",
                "rc_corner", "clock", "check")
 
@@ -204,21 +212,72 @@ def _rel(project: Path, p: Path) -> str:
         return str(p)
 
 
-def discover_reports(project: Path) -> List[Path]:
+def discover_reports(project: Path,
+                     collapsed: Optional[List[Tuple[Path, Path]]] = None
+                     ) -> List[Path]:
     """Every sign-off STA report under this project, de-duplicated and sorted.
 
     Sorted because row order feeds document identity: an unsorted glob makes the
     same tree hash two ways on two filesystems.
+
+    DE-DUPLICATED BY CONTENT, NOT BY PATH. `_STA_DIRS` names three directories
+    and this flow's runner publishes each report into TWO of them, as separate
+    files with identical bytes -- measured on a real run, all three sign-off
+    reports satisfy
+    `sha256(phase3/stage3/sta/X.rpt) == sha256(reports/phase3/X.rpt)`.
+    De-duplicating on the resolved path (which is what this did until v1.11.33)
+    sees two files and reads both, so EVERY row was emitted twice and all 20
+    (metric, scope) groups in the document collided. They are one artefact and
+    one reading; the second copy is the publisher's, not the tool's.
+
+    The first path in `_STA_DIRS` order wins, and each collapse is appended to
+    `collapsed` so the caller can say what it dropped instead of dropping it
+    quietly.
     """
-    seen: Dict[str, Path] = {}
+    candidates: Dict[str, Path] = {}
     for rel in _STA_DIRS:
         d = project / rel
         if not d.is_dir():
             continue
         for f in sorted(d.glob(_STA_GLOB)):
             if f.is_file():
-                seen.setdefault(str(f.resolve()), f)
-    return [seen[k] for k in sorted(seen)]
+                candidates.setdefault(str(f.resolve()), f)
+
+    # BYTE EQUALITY DETECTS, IT DOES NOT DECIDE. Two lanes fixed F-10
+    # independently and their tests assert opposite things:
+    #
+    #   "a report published into two directories is ONE artefact and ONE
+    #    reading -- the second copy is the publisher's, not the tool's"
+    #   "two DIFFERENT sign-off reports whose bytes happen to agree are TWO
+    #    measurements; collapsing them by digest would delete evidence"
+    #
+    # Both are true, and NOTHING IN THE BYTES TELLS THEM APART. So the bytes no
+    # longer drop anything. The producer's own declaration
+    # (`collapse_declared_mirrors`) drops declared mirrors, which is the case
+    # the first quote describes and which the runner now writes down; an
+    # UNDECLARED byte-identical pair is reported and BOTH are kept, because
+    # deleting a real second measurement is the worse error of the two -- a
+    # double count is visible in the document and a deletion is not.
+    #
+    # An undeclared pair is itself a finding: the producer published a mirror
+    # without saying so. `collapsed` carries it so the caller can say that.
+    by_digest: Dict[str, Path] = {}
+    kept: List[Path] = []
+    for key in sorted(candidates):
+        f = candidates[key]
+        digest = opensta.file_digest(f)
+        if digest is None:
+            # Unhashable is NOT a duplicate. It is read, and `timing_rows`
+            # gives it an INVALID row if it cannot be opened either.
+            kept.append(f)
+            continue
+        first = by_digest.get(digest)
+        if first is not None and collapsed is not None:
+            collapsed.append((f, first))
+        else:
+            by_digest.setdefault(digest, f)
+        kept.append(f)
+    return kept
 
 
 #: Where a step records that one artefact it wrote is a COPY of another.
@@ -380,6 +439,35 @@ def _scope(stage: Optional[str], mode: Optional[str], process: Optional[str],
     return {"stage": stage, "mode": mode, "process": _ident(process),
             "voltage_v": voltage_v, "temperature_c": temperature_c,
             "rc_corner": _ident(rc_corner), "clock": clock, "check": check}
+
+
+def _path_scope(base: Dict[str, Any], obs: Any, ordinal: int) -> Dict[str, Any]:
+    """`base` plus the identity of ONE reported path.
+
+    THE ENDPOINTS WHEN THE ARTEFACT NAMES THEM, THE ORDINAL ONLY WHEN IT DOES
+    NOT. A path is identified by where it starts and ends, and those names are
+    the same in two runs of one design -- so two arms' records for one path
+    carry equal scope and remain comparable, which is the whole point of scope.
+
+    An ORDINAL is a position in a printed list. It distinguishes the rows inside
+    one document, which is what stops the collision, but it is NOT an identity:
+    if a tool prints the same paths in a different order the ordinals move, and
+    two arms would be compared across different paths. So it is used only when
+    the artefact gave no names, and then the cross-arm comparison REFUSES on
+    differing scope -- which is the honest answer, because an unnamed path
+    cannot be shown to be the same path.
+
+    Both are never emitted together: adding a volatile key next to a stable one
+    would make the stable one useless.
+    """
+    out = dict(base)
+    start, end = getattr(obs, "startpoint", None), getattr(obs, "endpoint", None)
+    if start and end:
+        out["path_startpoint"] = start
+        out["path_endpoint"] = end
+    else:
+        out["path_ordinal"] = ordinal
+    return out
 
 
 def _source(project: Path, path: Optional[Path], sha: Optional[str],
@@ -595,15 +683,27 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
         # group. They are a PARTIAL census (the emitter dumps the worst few), so
         # they get their own metric name and can never be mistaken for the
         # design-wide worst.
+        ordinals: Dict[Tuple[str, str], int] = {}
         for p in sec.paths:
             if p.slack is None or p.clock is None:
                 continue
             check = ({"max": "setup", "min": "hold"}.get(p.path_type or "")
                      or sec.check or "unlabelled")
+            # WHICH PATH. The emitter dumps the worst FEW paths of a group, so
+            # several of these land in one (clock, check) view with different
+            # slacks. Until v1.11.33 they all carried the same scope, and a
+            # metric named "worst path slack" therefore held three values for
+            # one view -- ambiguous on its face, and refused as a conflict by
+            # every consumer. The reading is not duplicated and the numbers do
+            # not disagree: the SCOPE was missing the field that tells the
+            # paths apart (PPA_INTERFACES §2.1, last paragraph).
+            key = (p.clock, check)
+            ordinals[key] = ordinals.get(key, 0) + 1
+            scope = _scope(stage, mode, process, pvt.voltage_v,
+                           pvt.temperature_c, rc_corner, p.clock, check)
             rows.append(_row(
                 "timing.%s.worst_path_slack_ns" % check, MEASURED,
-                _scope(stage, mode, process, pvt.voltage_v, pvt.temperature_c,
-                       rc_corner, p.clock, check),
+                _path_scope(scope, p, ordinals[key]),
                 _source(project, path, parser_src_sha, p.line, p.raw),
                 value=p.slack, scope_gaps=gaps))
     return rows
@@ -663,7 +763,28 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
     result — which files were opened, and what was declared but never reported.
     """
     notes: List[str] = []
-    reports = discover_reports(project)
+    # TWO LANES FIXED F-10 INDEPENDENTLY AND BOTH ARE KEPT, because they are
+    # not the same mechanism and neither subsumes the other:
+    #
+    #   discover_reports(..., collapsed)   collapses byte-identical artefacts by
+    #                                      CONTENT DIGEST. It catches duplicates
+    #                                      nobody declared, which is the only
+    #                                      thing that can catch a duplicate the
+    #                                      producer does not know it made.
+    #   collapse_declared_mirrors(...)     collapses what the RUN ITSELF wrote
+    #                                      down as a copy, in
+    #                                      reports/phase3/artefact_mirrors.json.
+    #                                      It carries a REASON, and it still
+    #                                      collapses a mirror whose bytes have
+    #                                      since diverged in a header.
+    #
+    # Order is forced: discovery has to happen before anything can be dropped.
+    # Both record what they dropped -- `collapsed` below, `mirror_notes` here --
+    # because the hazard in either is a genuine SECOND measurement that happens
+    # to look like the first, and a reader has to be able to see that it was
+    # dropped and why.
+    collapsed: List[Tuple[Path, Path]] = []
+    reports = discover_reports(project, collapsed)
     reports, mirror_notes = collapse_declared_mirrors(project, reports)
     notes.extend(mirror_notes)
     mode, mode_gap = _mode_for(project)
@@ -686,6 +807,22 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
                                      mode_gap=mode_gap))
     notes.append("opened %d STA artefact(s): %s" % (
         len(reports), ", ".join(_rel(project, f) for f in reports) or "none"))
+    for dup, first in collapsed:
+        # REPORTED, NOT COLLAPSED. These two artefacts have the same bytes and
+        # the run declared NEITHER of them a mirror of the other, so nothing
+        # here can tell "the publisher wrote the same file twice" from "two
+        # sign-off reports that happen to agree". Both are read and both count;
+        # what is emitted is the FINDING, which is that the producer published
+        # a mirror without saying so. Declared mirrors are collapsed by
+        # `collapse_declared_mirrors` and they carry the producer's reason.
+        notes.append(
+            "undeclared byte-identical artefacts: %s and %s have the same "
+            "bytes and neither is declared a mirror of the other in %s. BOTH "
+            "were read and both count -- deleting a real second measurement is "
+            "worse than double-counting one, because a double count is visible "
+            "in this document and a deletion is not. The producer should "
+            "declare the mirror."
+            % (_rel(project, dup), _rel(project, first), _MIRROR_MANIFEST))
 
     # Declared-but-never-reported views become explicit NOT_MEASURED rows. A
     # view the run was configured to analyse and did not is the defect this

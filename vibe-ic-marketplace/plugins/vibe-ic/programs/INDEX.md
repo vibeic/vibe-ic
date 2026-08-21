@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1156
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1156)
+- **Total programs (excluding helpers / shims):** 1159
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1159)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1147 |
+| `any` | 1150 |
 
 ## Alphabetical listing
 
@@ -838,11 +838,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ppa_metric_extract` | any | — | Assemble metric records into ONE validated, indexed, canonically-identified bundle — and refuse the record set that cannot be one. |
 | `ppa_page_claim_check` | any | — | Refuse a public sentence that claims more than the artefact behind it supports. |
 | `ppa_pareto_check` | any | — | recompute the frontier and refuse a published lie. |
+| `ppa_pnr_search_space` | any | — | the PLACE-AND-ROUTE search space, MEASURED against the runner that would have to apply it. |
 | `ppa_pr_scope_check` | any | — | the PR review checklist, answered by machine. |
 | `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
 | `ppa_problem_integrity_check` | any | — | were these two runs solving the same problem? |
 | `ppa_report_gen` | any | — | The human report, and the claims file that makes every sentence in it checkable. |
 | `ppa_search_run` | any | — | build a PPA search manifest, and audit one. |
+| `ppa_signoff_records` | any | — | the flow's sign-off evidence, as canonical records. |
 | `pr_base_reachability_check` | any | — | a PR that declares a dead base, or that merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable` reports CLEAN for bot... |
 | `practical_notes_specificity_check` | any | — | meta-gate for plugin docs. |
 | `pre_awake_silence_check` | any | — | M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak... |
@@ -1001,6 +1003,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sizing_history_emit` | any | — | fixed-schema validator/emitter for the analog-sizing-loop output artefacts (rule 6). |
 | `skill_doc_section_present_check` | any | — | ORGANIC #724 / #725 |
 | `slave_tx_no_device_break_check` | any | Wave 25 | In a half-duplex single-wire request-response protocol (AID class — |
+| `slot_pad_budget_check` | any | — | does this design's interface FIT the purchased slot? |
 | `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) protocol synth helper. |
 | `sort_synth` | any | — | DETERMINISTIC solver for the CVDP bubble-sort engine family. |
 | `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
@@ -1228,7 +1231,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1147 programs)
+### `any` (1150 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2037,11 +2040,13 @@ _(no programs in this group)_
 - `ppa_metric_extract` — Assemble metric records into ONE validated, indexed, canonically-identified bundle — and refuse the record set that cannot be one.
 - `ppa_page_claim_check` — Refuse a public sentence that claims more than the artefact behind it supports.
 - `ppa_pareto_check` — recompute the frontier and refuse a published lie.
+- `ppa_pnr_search_space` — the PLACE-AND-ROUTE search space, MEASURED against the runner that would have to apply it.
 - `ppa_pr_scope_check` — the PR review checklist, answered by machine.
 - `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_
 - `ppa_problem_integrity_check` — were these two runs solving the same problem?
 - `ppa_report_gen` — The human report, and the claims file that makes every sentence in it checkable.
 - `ppa_search_run` — build a PPA search manifest, and audit one.
+- `ppa_signoff_records` — the flow's sign-off evidence, as canonical records.
 - `pr_base_reachability_check` — a PR that declares a dead base, or that merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable` reports CLEAN for bot...
 - `practical_notes_specificity_check` — meta-gate for plugin docs.
 - `pre_awake_silence_check` — M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak...
@@ -2198,6 +2203,7 @@ _(no programs in this group)_
 - `sizing_history_emit` — fixed-schema validator/emitter for the analog-sizing-loop output artefacts (rule 6).
 - `skill_doc_section_present_check` — ORGANIC #724 / #725
 - `slave_tx_no_device_break_check` — In a half-duplex single-wire request-response protocol (AID class —  _[Wave 25]_
+- `slot_pad_budget_check` — does this design's interface FIT the purchased slot?
 - `smbus_pmbus_protocol_synth` — System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) protocol synth helper.  _[v0.1.91]_
 - `sort_synth` — DETERMINISTIC solver for the CVDP bubble-sort engine family.
 - `soundwire_protocol_synth` — MIPI SoundWire-class protocol synth helper.  _[v0.1.84]_

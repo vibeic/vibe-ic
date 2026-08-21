@@ -71,6 +71,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports
+from _atomic_artefact import write_json as atomic_write_json  # noqa: E402
+
 #: What the flow emits and drives a tool with.
 SCRIPT_SUFFIXES = (".tcl", ".sh")
 
@@ -187,8 +190,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     res = check(Path(args.project), args.under)
     if args.json_out:
+        # A DECLARED report destination goes through `_atomic_artefact`
+        # (vibe-ic#1082): a reader that opens this path must never see a
+        # half-written document, and `atomic_artifact_write_check.py` names
+        # this exact file and line when it does not.
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json_out).write_text(json.dumps(res, indent=2) + "\n")
+        atomic_write_json(args.json_out, res, indent=2)
 
     rc = int(res["rc"])
     if rc == 3:
