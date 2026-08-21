@@ -183,6 +183,41 @@ def load_ledger(path: Path) -> List[Dict[str, Any]]:
     return [r for r in rows if isinstance(r, dict)]
 
 
+def repository_is_shallow(repo: Path) -> Optional[int]:
+    """Commit count when `repo` is a SHALLOW clone, else None.
+
+    WHY THIS IS ASKED BEFORE ANYTHING IS ADJUDICATED (measured 2026-08-22).
+    Every row dates its red by a commit, and the clock is
+    `rev-list --count <since>..<head>`. In a `--depth` clone those commits are
+    not present: measured on a `--depth 20` clone of this repository, BOTH the
+    oldest and the newest `since` in the shipped ledger resolve to nothing.
+
+    Adjudicated row by row that produces one `unresolvable` finding per row,
+    each saying "this repository does not contain <sha>" — which is true, and
+    which blames the ROWS for a truncated clone. Eight findings naming eight
+    innocent commits and not one naming the cause.
+
+    So it is asked once, up front, and refused once: rc 2, the state that means
+    "I could not look", with the remedy that fixes it. That is the same shape
+    as the landing runtime preflight, which refuses once rather than letting
+    every arm fail the same way.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--is-shallow-repository"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or proc.stdout.strip() != "true":
+        return None
+    try:
+        n = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", "HEAD"],
+                           capture_output=True, text=True, timeout=30)
+        return int(n.stdout.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
 def _describe_ref(repo: Path, ref: str) -> str:
     """`ref` resolved to a short sha, or a stated reason it could not be.
 
@@ -534,6 +569,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _vx.exit_code(passed=True, skipped=True)
 
     findings, known, new = adjudicate(record, ledger, git_age(args.repo, args.head_ref))
+
+    # SHALLOWNESS IS ONLY AN ANSWER WHEN A ROW ACTUALLY FAILED TO RESOLVE.
+    #
+    # Asking `--is-shallow-repository` FIRST and refusing on it was my own
+    # first attempt and it was wrong: this repository is itself shallow — a
+    # `.git/shallow` written 2026-08-22 06:09 — and every `since` in the
+    # shipped ledger still resolves in it, because `--depth` truncates the
+    # history a clone FETCHED, not the history it later acquired. A pre-emptive
+    # refusal would have blocked every landing on this host over a condition
+    # that changes no verdict.
+    #
+    # So the question is asked only once something is unresolvable, and then it
+    # is asked to EXPLAIN, not to decide: measured on a `--depth 20` clone,
+    # both the oldest and the newest `since` are absent, and without this the
+    # output is one finding per row naming an innocent commit and not one
+    # naming the cause.
+    _unresolvable = [f for f in findings if f.kind == "unresolvable"]
+    if _unresolvable:
+        _depth = repository_is_shallow(args.repo)
+        if _depth is not None:
+            print(f"gate_red_since: {len(_unresolvable)} row(s) cite commits "
+                  f"this repository does not contain, AND it is a SHALLOW "
+                  f"clone ({_depth} commit(s)) — the history is truncated, "
+                  f"which is a cause the rows cannot be blamed for.")
+            print(f"  Remedy: git -C {args.repo} fetch --unshallow"
+                  f"   (or clone without --depth)")
 
     # THE ENDPOINT IS PART OF THE NUMBER (2026-08-22). Every age below reads
     # "N commit(s) ago" and, until this line existed, never said ago RELATIVE

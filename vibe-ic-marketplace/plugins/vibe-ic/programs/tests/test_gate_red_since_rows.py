@@ -561,3 +561,58 @@ def test_an_unrecognised_state_is_not_adjudicable_rather_than_overdue():
     """The fail-safe direction: 'I do not recognise this state' must mean 'I
     cannot judge it', never 'it is red'."""
     assert G._did_not_run("SOME_STATE_INVENTED_LATER")
+
+
+# --------------------------------------------------------------------------
+# A TRUNCATED HISTORY IS A CAUSE THE ROWS CANNOT BE BLAMED FOR.
+# --------------------------------------------------------------------------
+
+def _shallow_clone_of(src, dest, depth=1):
+    subprocess.run(["git", "clone", "--quiet", "--depth", str(depth),
+                    "--no-local", f"file://{src}", str(dest)],
+                   capture_output=True, text=True, check=False)
+    return dest
+
+
+def test_a_shallow_repository_that_still_resolves_is_treated_as_normal(tmp_path):
+    """MY FIRST ATTEMPT REFUSED ON SHALLOWNESS ITSELF AND WAS WRONG. This
+    repository is shallow — a `.git/shallow` written 2026-08-22 — and every
+    `since` in the shipped ledger resolves in it anyway, because `--depth`
+    truncates what a clone FETCHED, not what it later acquired. Refusing
+    pre-emptively would have blocked every landing here over a condition that
+    changes no verdict."""
+    assert G.repository_is_shallow(REPO) is not None, (
+        "this checkout is no longer shallow — the case below is still correct "
+        "but this test no longer proves the distinction on it")
+    age = G.git_age(REPO, "HEAD")
+    rows = G.load_ledger(LEDGER)
+    assert rows and all(age(r["since"]) is not None for r in rows), (
+        "a shipped row stopped resolving in a shallow-but-complete checkout")
+
+
+def test_a_truncated_clone_names_the_truncation_and_a_remedy(tmp_path):
+    r, shas = _repo(tmp_path)
+    shallow = _shallow_clone_of(r, tmp_path / "sh", depth=1)
+    if G.repository_is_shallow(shallow) is None:
+        pytest.skip("git did not produce a shallow clone here")
+    led = tmp_path / "led.json"
+    led.write_text(json.dumps({"acknowledged": [
+        {"gate": "g", "since": shas[0], "max_commits": 1}]}), encoding="utf-8")
+    rec = _rec_file(tmp_path, {"g": "FAIL"})
+    out = _cli(shallow, rec, "--ledger", str(led)).stdout
+    assert "SHALLOW clone" in out, out
+    assert "fetch --unshallow" in out, out
+
+
+def test_a_full_repository_with_a_bad_sha_does_not_blame_shallowness(tmp_path):
+    """The direction that keeps the explanation honest: a row citing a commit
+    that never existed is the ROW's defect, and saying `the clone is truncated`
+    there would point the reader at the wrong thing."""
+    r, _ = _repo(tmp_path)
+    assert G.repository_is_shallow(r) is None
+    led = tmp_path / "led.json"
+    led.write_text(json.dumps({"acknowledged": [
+        {"gate": "g", "since": "0" * 40, "max_commits": 1}]}), encoding="utf-8")
+    out = _cli(r, _rec_file(tmp_path, {"g": "FAIL"}), "--ledger", str(led)).stdout
+    assert "unresolvable" in out.lower()
+    assert "SHALLOW" not in out, out
