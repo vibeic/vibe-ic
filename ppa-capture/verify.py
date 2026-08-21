@@ -307,6 +307,42 @@ else:
     check("no Bucket-A rule is routed at a known-unwired program", False,
           "wiring baseline absent — cannot answer, and this is not a pass")
 
+# 19. every figure the sweep table quotes must exist in the record it summarises.
+#     A summary table is a second copy of the numbers, and a second copy is
+#     where drift lives — the STATUS block proved that at 15-versus-29.
+#
+#     NUMBER-WORDS MUST BE NORMALISED FIRST. Without that this check reports 11
+#     rows in disagreement and every one is "zero" in the record against "0" in
+#     the table. That false 11 was measured before this check was written, read
+#     by hand, and is the reason the normaliser is here rather than a filter.
+_W = {"zero":"0","one":"1","two":"2","three":"3","four":"4","five":"5","six":"6",
+      "seven":"7","eight":"8","nine":"9","ten":"10","eleven":"11","twelve":"12",
+      "thirteen":"13","fourteen":"14","fifteen":"15","sixteen":"16",
+      "seventeen":"17","eighteen":"18","nineteen":"19","twenty":"20",
+      "fifty":"50","none":"0"}
+def _figs(s: str) -> set:
+    s = str(s).lower()
+    out = {x.replace(",", "") for x in re.findall(r"\d[\d,]*(?:\.\d+)?", s)}
+    for w, d in _W.items():
+        if re.search(rf"\b{w}\b", s):
+            out.add(d)
+    return out
+_byname = {(r.get("rule_name") or r.get("title", "")).strip(): r for r in RECS}
+_hd = {sid: nm for sid, nm in heads}
+control("sweep-figures", "8675309" not in _figs("a row quoting nothing unusual"))
+_rows = re.findall(r"^\| (A-\d+|C-2) \| ([^|]*)\| ([^|]*)\|", MD, re.M)
+_off = []
+for _sid, _c1, _c2 in _rows:
+    _r = _byname.get(_hd.get(_sid, ""))
+    if not _r:
+        continue
+    _rec = _figs(" ".join(map(str, _r.values())))
+    _orph = sorted(f for f in _figs(_c1 + " " + _c2) if f not in _rec)
+    if _orph:
+        _off.append((_sid, _orph))
+check("every sweep-table figure exists in the record it summarises",
+      not _off, f"{len(_rows)} rows, off {_off[:3]}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

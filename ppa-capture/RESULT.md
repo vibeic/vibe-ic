@@ -1408,6 +1408,14 @@ headline numbers changed:
 prose the ladder demands and fixed above — which is the honest yield of asking a
 question I had not been asking.
 
+**And it is now a check rather than a reading.** Check 26 compares every figure
+the sweep table quotes against the record it summarises. It required the
+number-word normaliser to be built first: without it the check reports **11 rows
+in disagreement**, and every one is `zero` in the record against `0` in the
+table. That false 11 is the reason the normaliser sits in the check instead of a
+filter — it was measured, read by hand, and would otherwise have been rediscovered
+by whoever ran this next.
+
 ## Traceability — a sketch must lead back to its narrative
 
 An angle I had not tried: **can someone holding only `candidates/` find the
@@ -1478,7 +1486,7 @@ lane — the sweep table as the batch grew, and routing. Then it did not cover t
 brief's *first* requirement, the rule stated for each of the eighteen findings,
 nor whether the emitted backlogs still pass the sanitiser that consumes them —
 and two of those were refused on first write, so a later edit could refuse them
-again in silence. **Twenty-five checks now**, the last of them the one that closes the loop:
+again in silence. **Twenty-six checks now**, the last of them the one that closes the loop:
 `candidates/` is *generated*, so editing `recoveries.json` without re-emitting
 leaves sketches that still resolve by name, still read plausibly, and describe
 the previous version of the rule. Name resolution cannot see content drift.
@@ -1517,7 +1525,7 @@ between a check that runs and a check that was run once.
 **STATUS**: 29 records emitted and validated — 26 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 ppa-capture/verify.py` (25 checks). No gate
+re-measurable by `python3 ppa-capture/verify.py` (26 checks). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1692,7 +1700,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 ppa-capture/verify.py     25 checks, exit 0 = every claim holds
+    python3 ppa-capture/verify.py     26 checks, exit 0 = every claim holds
 
 **It was held to the two invocation properties this batch records about other
 people's tools.** A-14 is about a documented command that does not run, and A-6
