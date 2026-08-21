@@ -23,6 +23,6 @@ suggested_fix: |
   Exchange the two parameters at the point the compiled row builder consumes them, and pin the fix with the two-arm measurement in the bad sample: hold one argument at the default and vary the other, in separate processes, asserting that only the rows the varied argument NAMES move. A single-arm probe cannot tell an inert argument from a crossed one, which is how this was first recorded as inertness.
 
 id: "ORGANIC-20260822-io-row-rotation-arguments-applied-to-opposite-rows"
-submitted_at: "2026-08-22T02:50:56+08:00"
+submitted_at: "2026-08-22T02:55:10+08:00"
 session_context: >-
   Found while capturing a pad-ring recovery. The source report recorded the horizontal-side pad tracking the vertical argument as a SEPARATE oddity, observed and not chased. Running the decisive second arm turned it into the whole explanation.

@@ -281,3 +281,45 @@ Every figure above is from a command run on this host tonight, not from the
 source report. Where the source report and my measurement agree, I re-derived
 it; where they disagree — `PAD_ROTATION_VERTICAL` being inert — the measurement
 is in `evidence/` and the disagreement is the finding.
+
+---
+
+## Reproduce
+
+On a clean tree (`git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`):
+
+```
+# the capture itself
+python3 vibe-ic-marketplace/plugins/vibe-ic/programs/enhancement_emit.py \
+    --records _jcapsha_notes/recoveries.json --out-dir _jcapsha_notes/candidates
+python3 vibe-ic-marketplace/plugins/vibe-ic/programs/backlog_sanitize_check.py \
+    --file _jcapsha_notes/candidates/bucket_T_forked_tool/*.yaml
+
+# the pre-fix reproduction and the AST pin
+python3 _jcapsha_notes/evidence/repro_f1.py
+python3 _jcapsha_notes/evidence/f2_pin_probe.py origin/main origin/jpadsite/pad-site
+
+# the two-arm tool measurement (needs the pinned image; --skip FIRST)
+docker run --rm -v <evidence>:/w <image> --skip bash /w/run.sh
+docker run --rm -v <evidence>:/w <image> --skip bash /w/run2.sh
+```
+
+Measured this session, all on a clean tree:
+
+```
+enhancement_emit                                     rc 0   A=4 T=1, 0 unrouted
+backlog_sanitize_check on the emitted record         rc 0   0 hard, 0 soft
+pytest: the four suites that read the routing table  rc 0   87 passed, 4 skipped
+    test_capture_routing_consistency, test_enhancement_emit,
+    test_issue1130_wiring_population_parity, test_tracked_json_yaml_parses_check
+suite_write_guard                                    PASS   the session wrote
+                                                            nothing into the tree
+```
+
+The Bucket-A sketch reproduces byte-identically from the committed
+`recoveries.json`. The emitted record's `submitted_at` will not: it is the
+instant the record was filed, and it is a measurement rather than a constant.
+
+The full `programs/tests` suite was NOT run — standing measured-load
+constraint. The four suites above are the ones that read the file this branch
+changes.

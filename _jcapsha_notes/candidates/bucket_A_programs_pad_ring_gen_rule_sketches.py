@@ -9,7 +9,7 @@
 def rule_upstream_input_set_pin(sample_text, ports):
     """Pin the INPUT SET of a re-implementation against its upstream. For any module that declares it borrows an upstream config contract, the set of variables upstream declares for that contract must equal the set this module either CONSUMES or explicitly declares UNPERFORMED. A variable in neither list is a silently dropped input. The comparison is a set difference over two enumerable lists, so it is a program's decision and not a reader's."""
     # Expected signal: ERROR
-    # Suggested fix action: Parse the upstream config module for the variables it declares in the contract being borrowed, parse this module's own declared-required and declared-unperformed tuples, and refuse on the set difference, naming each dropped variable and the upstream docstring that says what it is for. The refusal must NAME the variables, not count them.
+    # Suggested fix action: Parse the upstream config module for the variables it declares in the contract being borrowed, parse this module's own declared-required and declared-unperformed tuples, and refuse on the set difference, naming each dropped variable and the upstream docstring that says what it is for. The refusal must NAME the variables, not count them. A count is not the output: two defensible denominators over this same pair gave 11-of-20 and 13-of-14, so the finding is the list of unaccounted names or it is nothing.
     return []  # list of findings — TODO implement
 
 # Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
