@@ -1,0 +1,49 @@
+package: vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/lib
+purpose: >-
+  Pure helper modules for the MCP EDA server — shell-safety validators, netgen
+  verdict parsing, antenna and thread policy, analog layout geometry. Every
+  EDA tool entry point calls into here before it builds a command.
+owns:
+  - "*.mjs"
+  - "*.py"
+tests:
+  root: vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/test
+  collected_by: vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh
+  collected_by_kind: named
+  note: >-
+    Tier 4 of the full suite. Named by the PR template and by CONTRIBUTING as a
+    separate command — and by no runner at all — until vibe-ic#1420.
+invariants:
+  - id: I_the_validators_stay_pure
+    statement: >-
+      No module here may import child_process. These helpers validate commands;
+      they do not run them.
+    rule: forbid_regex
+    pattern: '(?:require\(\s*["'']node:?child_process|from\s+["'']node:?child_process)'
+    applies_to: ["*.mjs"]
+    severity: BLOCKING
+    why: >-
+      shell_safety.mjs states the property this depends on — "They are pure (no
+      I/O / no deps) so they can be unit-tested in isolation" — and the isolation
+      is the point, not a convenience: these are the validators that stand
+      between caller-supplied module names and paths and an `execSync` on the
+      HOST. Before v0.114.6 every tool interpolated those values into a shell
+      string escaping only double quotes, so a `;` or a backtick executed. A
+      validator that can itself spawn is a validator whose own tests have to
+      mock a process, and the first thing that gets mocked away is the escaping
+      it exists to prove. Measured 0 occurrences.
+  - id: I_python_helper_takes_a_deadline
+    statement: >-
+      A subprocess.run in the Python helper must set a timeout.
+    rule: paired_regex
+    pattern: 'subprocess\.run\('
+    requires: 'timeout\s*='
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      auto_drc_deck.py is called from an MCP tool handler, which has no
+      watchdog of its own: a klayout or magic invocation that never returns
+      hangs the MCP server for the whole session rather than failing the one
+      tool call. Measured: auto_drc_deck.py invokes no subprocess at all
+      today, so this rule binds the first call added rather than a call that
+      already exists — the trigger is absent and the pair is not yet exercised.

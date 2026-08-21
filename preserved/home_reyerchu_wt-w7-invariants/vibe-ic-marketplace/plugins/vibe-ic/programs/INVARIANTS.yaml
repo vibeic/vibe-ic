@@ -1,0 +1,46 @@
+package: vibe-ic-marketplace/plugins/vibe-ic/programs
+purpose: >-
+  The deterministic programs — the flow steps, the runners, and the ~550
+  *_check.py gates. This is the product: a benchmark number measures what these
+  can do, so a defect here is a defect in every design that ever runs.
+owns:
+  - "*.py"
+tests:
+  root: vibe-ic-marketplace/plugins/vibe-ic/programs/tests
+  collected_by: vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh
+  collected_by_kind: named
+  note: >-
+    The single testpath in pytest.ini, deliberately — single_testpath_guard.py
+    pins it. A second testpath is the green-local/red-CI footgun.
+invariants:
+  - id: I_ships_without_the_repo
+    statement: >-
+      No program may import the repo-root `tools` package. The plugin is
+      installed without it.
+    rule: forbid_regex
+    pattern: '^\s*(?:from|import)\s+tools\b'
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      What ships to a user is vibe-ic-marketplace/plugins/vibe-ic/, not this
+      repository: the repo-root tools/ directory — gatekeeper-land.sh, the
+      generators, the collectors — is maintainer machinery and is not in the
+      package. An `import tools.x` therefore resolves for every maintainer
+      running from a checkout and raises ImportError for every installed user,
+      which is the worst possible split because the suite that would catch it
+      runs on the side where it works. The engine that IS needed at runtime is
+      bundled at tools/phase1_engine inside the plugin for exactly this reason.
+      Measured 0 occurrences across 1184 files.
+  - id: I_no_os_system
+    statement: >-
+      No os.system(). Shell out through subprocess with an argument list.
+    rule: forbid_regex
+    pattern: 'os\.system\('
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      These programs run inside the EDA container against caller-supplied
+      project directories, design names and PDK paths. os.system() concatenates
+      them into a shell string, and returns a wait-status that reads as an exit
+      code — so a tool killed by a signal becomes rc 0 and a gate reports PASS
+      over a step that died. Measured 0 occurrences across 1184 files.

@@ -1,0 +1,46 @@
+package: vibe-ic-marketplace/plugins/vibe-ic/hooks
+purpose: >-
+  The plugin's Claude Code hooks — SessionStart, UserPromptSubmit and the Stop
+  validator — plus hooks.json that registers them. These run inside somebody
+  else's session, and their failure mode is that session, not this repo.
+owns:
+  - "*.sh"
+tests:
+  root: vibe-ic-marketplace/plugins/vibe-ic/programs/tests
+  collected_by: vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh
+  collected_by_kind: named
+  note: >-
+    test_ic_expert_identity_hooks.py and test_benchmark_keyword_hook.py drive
+    these scripts from the plugin's single test tree.
+invariants:
+  - id: I_a_hook_never_aborts_the_session
+    statement: >-
+      No `set -e` in a hook. Every hook runs to its own explicit exit.
+    rule: forbid_regex
+    pattern: '^\s*set\s+-[a-zA-Z]*e'
+    applies_to: ["*.sh"]
+    severity: BLOCKING
+    why: >-
+      This is the exact INVERSE of the rule the CI scripts want, and that is why
+      it has to live here rather than in a repo-wide gate. A hook's exit code is
+      a protocol with the harness, not a report about the hook: under `set -e`
+      any failing command anywhere aborts the script and hands the harness
+      whatever that command returned. For a UserPromptSubmit hook that silently
+      drops the context it exists to inject; for the Stop hook,
+      phase23_claim_validator.sh, exit 2 BLOCKS turn-end and injects stderr, so
+      an accidental abort would fabricate a block the validator never decided.
+      ic-expert-identity-session.sh:15 states the rule in prose — "no set -e,
+      always exit 0"; this is that sentence made checkable. Measured 0 of 5.
+  - id: I_exit_is_stated_not_inherited
+    statement: >-
+      Every hook ends with an explicit top-level `exit <code>`.
+    rule: require_regex
+    pattern: '^exit\s+[0-9]+'
+    applies_to: ["*.sh"]
+    severity: BLOCKING
+    why: >-
+      Without one, a hook exits with the status of whatever ran last — a grep
+      that matched nothing returns 1, and the harness reads that as the hook's
+      decision. The code a hook returns is the only thing the harness acts on,
+      so it must be chosen. All 5 hooks state one today (four `exit 0`, and
+      phase23_claim_validator.sh `exit 2`, which is deliberate).

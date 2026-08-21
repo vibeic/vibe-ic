@@ -1,0 +1,32 @@
+package: tools/ic_collector
+purpose: >-
+  Downloads real datasheets from the open web, deduplicates them by content
+  hash, extracts specs and imports them. Every step of it waits on something
+  outside this machine.
+owns:
+  - "*.py"
+tests:
+  root: NONE
+  reason: >-
+    This package has no tests. It drives live network downloads and a
+    PostgreSQL instance, and no offline fixture for either has been built, so
+    there is nothing here that a suite could run. Stated rather than left
+    blank: an undeclared absence of tests reads exactly like a package whose
+    tests pass.
+invariants:
+  - id: I_external_calls_carry_a_deadline
+    statement: >-
+      Any file that calls subprocess.run must set a timeout on it.
+    rule: paired_regex
+    pattern: 'subprocess\.run\('
+    requires: 'timeout\s*='
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      Every subprocess in this package reaches something that can hang forever
+      — a manufacturer web server, pdftotext on a malformed PDF, a psql client
+      against an unreachable database. Without a deadline the collector stops
+      making progress and reports nothing at all, which is indistinguishable
+      from having found nothing to collect. All three call sites carry one
+      today (collector_v2.py:118 t=45, extractor.py:43 t=30,
+      db_importer.py:41 t=10); this keeps the fourth from being the exception.

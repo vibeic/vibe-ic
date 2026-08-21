@@ -1,0 +1,48 @@
+# Invariants for tools/ — read by programs/package_invariants_check.py, which
+# runs in tools/ci/repo_hygiene_gates.sh on every PR check and in the merge
+# queue. Breaking one of these fails that gate.
+package: tools
+purpose: >-
+  Repo-root operator scripts: the landing arm (gatekeeper-land.sh,
+  gatekeeper-verify-merge.sh), the generators whose output other gates check,
+  and the one-off analysis tools. This is the code that MERGES, so its rules
+  are about not being able to talk its way past the gates it is running.
+owns:
+  - "*.py"
+  - "*.sh"
+tests:
+  root: tools/tests
+  collected_by: tools/gatekeeper-land.sh
+  collected_by_kind: named
+  note: >-
+    run_repo_tools_pytest finds every test_*.py under tools/, so the inline
+    test files beside these scripts are covered by the same stage.
+invariants:
+  - id: I_landing_never_bypasses_its_own_gates
+    statement: >-
+      No script here may pass --admin to gh. The landing arm merges with the
+      gates, never around them.
+    rule: forbid_regex
+    pattern: '--admin\b'
+    applies_to: ["*.py", "*.sh", "!test_*.py", "!test_*.sh"]
+    severity: BLOCKING
+    why: >-
+      `gh pr merge --admin` merges a PR whose required checks have not passed.
+      The repo-gatekeeper role is defined as "never --admin/--force/--no-verify"
+      precisely because the quality guarantee here comes from the gates and not
+      from who is pressing the button; a single --admin in the merger makes
+      every gate in repo_hygiene_gates.sh optional. Measured 0 occurrences when
+      this invariant was written.
+  - id: I_no_os_system
+    statement: >-
+      No os.system(). Shell out through subprocess with an argument list.
+    rule: forbid_regex
+    pattern: 'os\.system\('
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      os.system() concatenates a command string and returns a wait-status that
+      is easy to read as a plain exit code, so it fails in both directions this
+      repo cares about: a path or ref that contains a shell metacharacter runs
+      as shell, and a non-zero result can be silently misread as success.
+      Measured 0 occurrences when this invariant was written.

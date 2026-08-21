@@ -1,0 +1,28 @@
+package: tools/core_agent
+purpose: >-
+  The GitHub-side half of the maintainer loop: claim a thread, work out what a
+  PR covers, poll open issues. Everything here reads a REMOTE, PAGED API, and
+  every defect this package has had is a truncated read that looked complete.
+owns:
+  - "*.py"
+tests:
+  root: tools/core_agent
+  collected_by: tools/gatekeeper-land.sh
+  collected_by_kind: named
+invariants:
+  - id: I_paged_reads_paginate
+    statement: >-
+      A gh api call that sets per_page must also pass --paginate. Asking for a
+      page size is asking for ONE page.
+    rule: paired_regex
+    pattern: 'per_page'
+    requires: '--paginate'
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      Measured on vibe-ic#1241 with gh 2.97.0 — `per_page=100` alone returned
+      100 comments and `--paginate` returned 494. The truncation is silent and
+      it fails CLOSED in the worst direction: it drops the MOST-discussed
+      threads, which are exactly the ones a claim or a coverage decision is
+      about. claim.py:73 carries the measurement; this invariant is what stops
+      the next call here from being written without it.

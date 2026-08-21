@@ -1,0 +1,638 @@
+#!/usr/bin/env python3
+"""evidence_citation_resolves_check.py — a cited evidence artifact must EXIST.
+
+THIS GATE BLOCKS (rc=1) on any NEW dangling citation.
+
+WHY THIS GATE EXISTS
+--------------------
+An evidence document that says "see `foo.log`" and ships no `foo.log` is
+unverifiable, and the failure is SILENT: the sentence reads exactly the same
+whether the artifact is there or not. Nothing in the flow ever opened the
+file, so nothing ever noticed.
+
+MEASURED (#361, 2026-07-26). Over ALL of `benchmark-data/`, counting `.log`
+only: 39 cited, 27 unresolvable against ANY base — 69%. Over this gate's own
+DEFAULT SCOPE (`benchmark-data/ic`, `.log` + `.rpt`): 110 cited, 65
+unresolvable. The root cause is not author carelessness: `.gitignore` ignores
+`*.log` repo-wide, so committing a proof log requires `git add -f` and the
+22 logs that ARE tracked all got in that way. The structural hole and the
+absent gate together made "claims a proof, ships no artifact" the default
+outcome rather than a mistake — it was found by hitting it twice in one
+review (a PR fixing exactly that defect reproduced it one level down).
+
+WHAT IT CHECKS
+--------------
+Every backticked citation in a Markdown file whose token looks like an
+artifact filename with an evidence-bearing extension must RESOLVE to a file
+on disk. Resolution walks a ladder of bases — the citing document's own
+directory, then each ancestor up to the scan root — because citations in
+this tree are written relative to either the document or the IC root.
+
+    MEASUREMENT NOTE, stated because getting it wrong is the same class of
+    error this gate exists to catch: a single-base resolver (document
+    directory only) reports 35 unresolvable instead of 27. It counts every
+    IC-root-relative citation as dangling. The ladder is not a convenience;
+    without it the gate would fabricate findings.
+
+BASELINE, AND WHY IT MAY ONLY SHRINK
+------------------------------------
+65 dangling citations already exist in the default scope. Failing the tree
+on all of them would
+make the gate un-landable and it would be disabled, which is how a gate ends
+up reporting FAIL while blocking nothing. So the known set is recorded in a
+baseline file and this gate FAILs on:
+
+  * any citation NOT in the baseline that does not resolve — a NEW hole; and
+  * a baseline that has GROWN, or that lists entries which now resolve —
+    both mean the baseline was edited to accommodate a regression instead of
+    the regression being fixed. The baseline is a debt register, not a
+    waiver list: it may only shrink.
+
+Regenerate it deliberately with `--write-baseline` (and only ever to a
+SMALLER set — the gate re-checks that on the next run).
+
+chip-AGNOSTIC: pure Markdown/filesystem structure. No design, PDK, vendor or
+value literal appears here.
+
+USAGE
+-----
+    python3 evidence_citation_resolves_check.py [ROOT] [--json OUT]
+                                                [--write-baseline]
+
+EXIT CODES
+----------
+    0 = PASS (every citation resolves, or the unresolved set is within a
+        baseline that has not grown)
+    1 = FAIL (a new dangling citation, or the baseline grew / went stale)
+    2 = SKIP (no scan root — nothing to check)
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import itertools
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+# Extensions that carry sign-off EVIDENCE. Deliberately narrow: this gate
+# judges "the proof you pointed at is missing", not "every path in prose".
+_EVIDENCE_EXT = (".log", ".rpt", ".sby")
+
+# A backticked token that looks like a file path. Anchored so prose in
+# backticks (a command line, a sentence) is never mistaken for a citation.
+_CITE_RE = re.compile(r"`([A-Za-z0-9_./+-]+)`")
+
+# Tokens that are TEMPLATES / GLOBS, not citations of a specific artifact.
+# Judging these would manufacture findings against text that never claimed a
+# particular file exists.
+_TEMPLATE_RE = re.compile(r"[*?]|<[^>]*>|\{[^}]*\}|\bN\b")
+
+# ── BRACE-SET CITATIONS ────────────────────────────────────────────────
+# `hold_{ss,tt,ff}.rpt` names THREE specific artifacts, not a template. It is
+# shell brace expansion, and this tree writes sign-off evidence that way.
+#
+# `_CITE_RE`'s character class carries no `{`, `}` or `,`, so such a token was
+# never even MATCHED — the `_TEMPLATE_RE` clause below it is a second line of
+# defence that never got the chance to fire. MEASURED on `4b22e36ea` over the
+# default scope: 30 distinct brace tokens, 12 expansions ending in an evidence
+# extension, and **10 of 10 checkable ones DANGLING** while the gate printed
+# `[PASS] every cited evidence artifact resolves` — the exact silent failure
+# this program's own docstring opens by naming.
+#
+# WHY THE EXTENSION FILTER IS THE WHOLE SAFETY ARGUMENT. Most braces in this
+# corpus are Verilog concatenation — `{b3,b2,b1,b0}`, `{16'd0, field}`,
+# `{fill, carry_bit, data[MSB-1:0]}`. Expanding those and judging them would
+# manufacture findings against RTL syntax, which is precisely what
+# `_TEMPLATE_RE` exists to prevent. It cannot happen here: an expansion is
+# kept only if it survives `_is_citation`, i.e. ends in `.log` / `.rpt` /
+# `.sby`. No concatenation in the measured corpus does, and the property is
+# structural rather than lucky — a bus slice does not end in a report suffix.
+#
+# A BRACE GROUP WITH NO COMMA IS STILL A TEMPLATE. `{step}` / `{corner}` name
+# a placeholder, not a set, so they keep the old treatment and are skipped.
+# Only a comma makes it an alternation.
+_BRACE_CITE_RE = re.compile(r"`([A-Za-z0-9_./+{},\s-]*\{[^{}]*\}"
+                            r"[A-Za-z0-9_./+{},\s-]*)`")
+_BRACE_GROUP_RE = re.compile(r"\{([^{}]*)\}")
+
+#: Cap on expansions from one token. A pathological `{a,b}{c,d}{e,f}...`
+#: multiplies; refusing past the cap keeps the scan linear and is safe in the
+#: direction that matters — an unexpanded token is simply not judged, which is
+#: today's behaviour for every one of them.
+_MAX_BRACE_EXPANSIONS = 64
+
+
+def expand_brace_sets(tok: str) -> List[str]:
+    """Every concrete path a brace-set token names, or [] if it names none.
+
+    Returns [] for a token with no brace group, for a group with no comma
+    (a placeholder, not a set), and past :data:`_MAX_BRACE_EXPANSIONS`.
+    Whitespace after a comma is stripped: this corpus writes
+    `{floorplan.def, placed.def}`.
+    """
+    groups = _BRACE_GROUP_RE.findall(tok)
+    if not groups or any("," not in g for g in groups):
+        return []
+    # ONE whitespace mechanism, not two. An earlier draft ALSO stripped each
+    # alternative here; the `"".join(...split())` below already removes every
+    # blank, so the strip was dead and its test could not fail — a mutant that
+    # deleted it killed nothing. Redundant belt-and-braces in a gate is worse
+    # than useless: it makes a test look like a check when it is a ban.
+    alts = [[a for a in g.split(",") if a.strip()] for g in groups]
+    total = 1
+    for a in alts:
+        total *= max(len(a), 1)
+    if total > _MAX_BRACE_EXPANSIONS:
+        return []
+    out = []
+    for combo in itertools.product(*alts):
+        rebuilt, i = tok, 0
+
+        def _sub(_m, _combo=combo):
+            nonlocal i
+            v = _combo[i]
+            i += 1
+            return v
+        rebuilt = _BRACE_GROUP_RE.sub(_sub, rebuilt)
+        rebuilt = "".join(rebuilt.split())
+        if rebuilt:
+            out.append(rebuilt)
+    return out
+
+# The baseline lives with the DATA it describes, not in plugin source: its
+# entries are benchmark-data document paths and therefore carry design names,
+# which `source_chip_agnostic_check` (rightly) forbids anywhere under
+# `programs/`. The program itself stays chip-AGNOSTIC; only the debt register
+# names the designs whose evidence is missing.
+_BASELINE_NAME = "evidence_citation_baseline.json"
+
+# DEFAULT SCOPE — the IC sign-off trees, where a document asking a reader to
+# believe a result points at the artifact that backs it.
+_DEFAULT_ROOT_REL = "benchmark-data/ic"
+
+# OUT OF SCOPE BY DEFAULT, stated here rather than left as a silent narrowing:
+# `benchmark-data/evaluation/` holds PER-TASK, machine-generated run outputs
+# (one summary document per benchmark item, regenerated wholesale on every
+# campaign). Measured 2026-07-26: 14354 documents, 129 citations, 124
+# unresolved — i.e. its reports are simply not retained, by design. Gating it
+# would fail on every benchmark commit for a reason no author can act on, and
+# a gate that must be bypassed to work is a gate that gets deleted. Scan it
+# deliberately by passing the path; the count is disclosed on every run so
+# nobody can mistake "not scanned" for "clean".
+_DISCLOSED_OUT_OF_SCOPE = (
+    "benchmark-data/evaluation",
+    "per-task generated run outputs; reports not retained by design "
+    "(measured 2026-07-26: 124 of 129 citations unresolved)")
+
+
+def tracked_files(root: Path) -> Optional[set]:
+    """The set of git-TRACKED paths under `root`, or None when that cannot be
+    determined (not a repo / no git).
+
+    LOAD-BEARING, and learned the hard way: the first version of this gate
+    judged plain filesystem existence, so its baseline was computed from a
+    working tree that also held UNTRACKED artifacts. It was green locally and
+    RED in CI — 12 baseline entries "resolved" (their citing documents are
+    untracked, so the citation was never produced) and 9 new dangling
+    citations appeared. A gate whose verdict depends on what happens to be
+    lying in the author's tree is a false certificate of exactly the kind
+    this gate exists to remove.
+
+    The question is "does the REPO ship the proof", not "does this machine
+    have it" — so an untracked local artifact must NOT satisfy a citation.
+    """
+    try:
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
+                           capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    out = r.stdout.decode("utf-8", "replace")
+    # `-s` gives "<mode> <sha> <stage>\t<path>". Keep REGULAR files only.
+    # Mode 120000 is a SYMLINK: its blob is a path string, not document
+    # content, and it ships no content at all — 121 of the 122 tracked
+    # symlinks under this tree point at ABSOLUTE paths outside the
+    # repository, so they resolve on the machine that made them and dangle
+    # for everyone else. Reading through them is exactly what made this gate
+    # count 440 documents locally and 422 in CI. Judging the index's file
+    # MODE keeps the verdict a pure function of the index and never touches
+    # the filesystem to decide what exists. Mode 160000 (submodule) is
+    # likewise not content.
+    names = []
+    for ent in out.split("\0"):
+        if not ent or "\t" not in ent:
+            continue
+        meta, path = ent.split("\t", 1)
+        if meta.split(" ", 1)[0] in ("100644", "100755"):
+            names.append(path)
+    if not names:
+        return None
+    # LOGICAL paths, never `resolve()`. `benchmark-data/ic` carries 787
+    # symlinks; resolving follows them to targets that exist on the author's
+    # machine and not in a fresh checkout, which is precisely how this gate
+    # enumerated 440 documents locally and 422 in CI on the SAME commit. With
+    # logical relative paths the verdict is a pure function of the git index
+    # and therefore identical in every environment.
+    return {n for n in names}
+
+
+def _is_citation(tok: str) -> bool:
+    if not tok.lower().endswith(_EVIDENCE_EXT):
+        return False
+    if _TEMPLATE_RE.search(tok):
+        return False
+    return True
+
+
+def resolve_citation(md: Path, cite: str, root: Path,
+                     tracked: Optional[set] = None) -> Optional[Path]:
+    """Resolve `cite` against the ladder: the citing document's directory,
+    then each ancestor up to (and including) `root`. Returns the resolved
+    path or None.
+
+    The ladder is load-bearing — see the MEASUREMENT NOTE in the module
+    docstring. A document-directory-only resolver reports ~30% more
+    findings, all of them false.
+    """
+    _ = tracked  # membership is tested on logical paths below
+    if Path(cite).is_absolute():
+        # An absolute path is non-portable by construction: it can only
+        # resolve on the machine that wrote it, so it substantiates nothing
+        # for any other reader. Never resolvable, regardless of this host.
+        return None
+    import posixpath
+    try:
+        rel_dir = md.parent.relative_to(root).as_posix()
+    except ValueError:
+        return None
+    if rel_dir == ".":
+        rel_dir = ""
+    while True:
+        cand_rel = posixpath.normpath(
+            posixpath.join(rel_dir, cite) if rel_dir else cite)
+        if not cand_rel.startswith(".."):
+            if tracked is not None:
+                if cand_rel in tracked:
+                    return root / cand_rel
+            elif (root / cand_rel).is_file():
+                return root / cand_rel
+        if not rel_dir:
+            return None
+        rel_dir = posixpath.dirname(rel_dir)
+
+
+# JSON GATE REPORTS (#366). A report that declares a `verdict` AND names the
+# artifact substantiating it is making the same promise a Markdown citation
+# makes, in a different container. Measured 2026-07-26 over benchmark-data/ic:
+# 788 such reports, 118 artifact references, 75 unresolvable in the TRACKED
+# tree — including three spm PDK cells whose `formal_evidence.json` carries
+# verdict PASS with "PROOF_CHAIN_OK ... substantiated by an elaboratable .sby
+# + SymbiYosys PASS transcript" while no `.sby` and no transcript exist
+# anywhere in the repo.
+#
+# The gate that wrote those reports is NOT at fault: it verifies the paths
+# before emitting PASS, and they existed on disk when it ran. The evidence
+# then could not be SHIPPED — `*.sby.log` matches `.gitignore`'s repo-wide
+# `*.log`, so zero are tracked. A PASS that no reader can re-verify is the
+# same false certificate as a fabricated one; only the mechanism differs.
+_VERDICT_KEY = "verdict"
+
+
+def _json_artifact_refs(path: Path) -> List[Tuple[str, str]]:
+    """[(field, cited_path)] for a JSON GATE REPORT — a dict carrying a
+    `verdict`. Anything else is data, not a claim, and is not judged."""
+    try:
+        data = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict) or _VERDICT_KEY not in data:
+        return []
+    # A report that names its evidence AND states the evidence is ABSENT is
+    # not making an unsubstantiated claim — it is disclosing one. The defect
+    # this gate exists for is a PASS resting on evidence nobody can open;
+    # counting an explicit `evidence_present: false` as a dangling citation
+    # would penalise exactly the correction that fixes it (vibe-ic#381: three
+    # reports were changed from an unbacked PASS to a disclosed
+    # UNSUBSTANTIATED, and this gate would have kept flagging them for the
+    # path string they honestly still name).
+    if data.get("evidence_present") is False:
+        return []
+    out: List[Tuple[str, str]] = []
+    for k, v in data.items():
+        if isinstance(v, str) and _is_citation(v):
+            out.append((str(k), v))
+    return out
+
+
+# ── DISCLOSED citations (vibe-ic#448 + the caravel landing) ────────────────
+#
+# `CITATION_ROUTING.txt` is the per-cell record of whether a reader can follow
+# each citation, and OUT_OF_PUBLISHED_SCOPE is the decision it exists to
+# express: the publisher copies phase1/, phase2/, phase3/reports/ and reports/,
+# so a run-directory citation is correct WHERE THE RUN PUT IT and unfollowable
+# HERE. That is a DISCLOSURE, not a hole — the reader is told, in a tracked
+# artefact, exactly what they cannot reach.
+#
+# This gate used to count those as dangling, so the two mechanisms built for the
+# same problem returned different verdicts on the same citation, and a cell that
+# had done the disclosure correctly still could not land.
+#
+# ONLY the two decisions that give a STRUCTURAL reason the reader cannot follow
+# it: the publisher's layout excludes the path, or the path is absolute and
+# therefore unfollowable on any machine but the author's. Both are facts about
+# the deliverable, and both are checkable.
+#
+# `DANGLING` and `DANGLING_UNDER_PASS` are deliberately NOT honoured. They mean
+# "the publisher found no file", which is the HOLE, not a reason for it — and
+# honouring them would let any new hole be laundered by writing one line into a
+# routing file, which is precisely the shrink-only baseline discipline this gate
+# exists to enforce. Considered and rejected while wiring this: it would have
+# cleared the two remaining caravel findings and made the baseline meaningless.
+#
+# A RESOLVES row can never suppress a finding here — and cannot lie either,
+# since `citation_routing_is_true_check` blocks a RESOLVES row whose file is not
+# findable from the cell as committed.
+_ROUTING_NAME = "CITATION_ROUTING.txt"
+_DISCLOSURE_DECISIONS = {"OUT_OF_PUBLISHED_SCOPE", "UNFOLLOWABLE_ABSOLUTE"}
+
+
+def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], str]:
+    """{(doc_rel_to_ROOT, cited): decision} for every disclosure recorded in a
+    TRACKED routing file. Untracked records are ignored: a disclosure that is
+    not published cannot inform a reader."""
+    out: Dict[Tuple[str, str], str] = {}
+    names = ([t for t in tracked if t.endswith("/" + _ROUTING_NAME)]
+             if tracked is not None else
+             [str(p.relative_to(root)) for p in root.rglob(_ROUTING_NAME)])
+    for rel in sorted(names):
+        cell = (root / rel).parent
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or " :: " not in s:
+                continue
+            rest, _, decision = s.rpartition(" ")
+            if decision not in _DISCLOSURE_DECISIONS or " :: " not in rest:
+                continue
+            doc, _, cited = rest.partition(" :: ")
+            try:
+                key_doc = (cell / doc.strip()).relative_to(root).as_posix()
+            except ValueError:
+                continue
+            out[(key_doc, cited.strip())] = decision
+    return out
+
+
+def scan(root: Path,
+         tracked: Optional[set] = None) -> Tuple[List[Dict[str, str]], int, int]:
+    """Return (dangling, cited_total, docs_scanned). Only TRACKED documents
+    are scanned and only TRACKED artifacts satisfy a citation when `tracked`
+    is available — see `tracked_files`."""
+    dangling: List[Dict[str, str]] = []
+    disclosed = _disclosed_map(root, tracked)
+    cited = 0
+    docs = 0
+    # ENUMERATE FROM THE TRACKED LIST, never from a filesystem walk. A
+    # walk-then-filter enumerated 440 documents locally and 422 in CI on the
+    # SAME commit — directory traversal is environment-dependent (symlinks,
+    # traversal order, name encoding) in ways `git ls-files` is not. The
+    # baseline is a set of digests, so any enumeration difference between
+    # where it is WRITTEN and where it is CHECKED shows up as phantom
+    # "resolved" entries. One source of truth for what exists.
+    _mds = (sorted(root / t for t in tracked if t.lower().endswith(".md"))
+            if tracked is not None else sorted(root.rglob("*.md")))
+    for md in _mds:
+        try:
+            text = md.read_text(errors="replace")
+        except OSError:
+            continue
+        docs += 1
+        # Plain tokens, then the brace-set expansions. `dict.fromkeys` keeps
+        # first-seen order and de-duplicates: `{a,a}.rpt` is one artifact, and
+        # counting it twice would inflate both the `cited` denominator and the
+        # finding list.
+        _toks = list(_CITE_RE.findall(text))
+        for _btok in _BRACE_CITE_RE.findall(text):
+            _toks.extend(expand_brace_sets(_btok))
+        for tok in dict.fromkeys(_toks):
+            if not _is_citation(tok):
+                continue
+            cited += 1
+            if resolve_citation(md, tok, root, tracked) is None:
+                _d = str(md.relative_to(root))
+                if (_d, tok) in disclosed:
+                    continue
+                dangling.append({"doc": _d, "citation": tok})
+    _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
+              if tracked is not None else sorted(root.rglob("*.json")))
+    for js in _jsons:
+        refs = _json_artifact_refs(js)
+        if refs:
+            docs += 1
+        for field, tok in refs:
+            cited += 1
+            if resolve_citation(js, tok, root, tracked) is None:
+                _d = str(js.relative_to(root))
+                if (_d, tok) in disclosed:
+                    continue
+                dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
+    return dangling, cited, docs
+
+
+def _working_tree_dirt(root: Path) -> List[str]:
+    """Untracked or modified paths under `root`, as git reports them. Empty
+    when the tree is clean or git is unavailable (the caller degrades)."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "status", "--porcelain",
+                            "--", "."], capture_output=True, text=True,
+                           timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if r.returncode != 0:
+        return []
+    return [ln[3:] for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def _key(d: Dict[str, str]) -> str:
+    """Human-readable identity: `<doc>::<citation>`. Printed at RUN time,
+    never written to the baseline — see `_digest`."""
+    return f"{d['doc']}::{d['citation']}"
+
+
+def _digest(key: str) -> str:
+    """What the BASELINE stores.
+
+    The register must not publish the paths it lists. Some benchmark-data
+    directory names embed a commercial foundry product name, and a landed
+    diff is permanent public content — writing the literal paths would make
+    this gate a leak vector (caught by `nda_diff_scan_check` on its first
+    attempt to land, exactly as intended). A digest gives the register the
+    only thing it actually needs — set membership — while the offending
+    paths stay fully visible to whoever RUNS the gate, printed from the live
+    scan. Machine-checkable without disclosure; readable on demand."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+
+
+def _load_baseline(path: Path) -> Optional[List[str]]:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    ents = data.get("unresolved") if isinstance(data, dict) else data
+    return sorted({str(e) for e in ents}) if isinstance(ents, list) else None
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(
+        description="cited evidence artifacts must exist (#361)")
+    ap.add_argument("root", nargs="?", default=None)
+    ap.add_argument("--json", dest="json_out")
+    ap.add_argument("--baseline", default=None)
+    ap.add_argument("--write-baseline", action="store_true",
+                    help="record the CURRENT unresolved set; it may only "
+                         "ever shrink from there")
+    ap.add_argument("--scope-expanded", metavar="REASON",
+                    help="permit a GROWING baseline for this write, because "
+                         "the gate now LOOKS at more than it did (a wider "
+                         "scope finds pre-existing debt; that is not a "
+                         "regression). Requires a reason, which is recorded "
+                         "in the baseline beside the previous size — a "
+                         "deliberate, auditable act, never a bypass flag.")
+    args = ap.parse_args(argv)
+
+    here = Path(__file__).resolve()
+    explicit_root = bool(args.root)
+    if args.root:
+        root = Path(args.root)
+    else:
+        root = next((b / _DEFAULT_ROOT_REL for b in here.parents
+                     if (b / _DEFAULT_ROOT_REL).is_dir()), None)
+    if root is None or not root.is_dir():
+        print("[SKIP] evidence_citation_resolves_check: no scan root "
+              f"({args.root or _DEFAULT_ROOT_REL} not found).")
+        return 2
+
+    baseline_path = (Path(args.baseline) if args.baseline
+                     else root.parent / _BASELINE_NAME)
+    tracked = tracked_files(root)
+    dangling, cited, docs = scan(root, tracked)
+    now = sorted({_key(d) for d in dangling})
+
+    if args.write_baseline:
+        # REFUSE to record a baseline from a DIRTY tree. This is not caution,
+        # it is the bug that shipped: the first baseline was generated from a
+        # working tree holding untracked artifacts, so it was green locally
+        # and RED in CI (12 entries "resolved", 9 new dangling). A debt
+        # register describing the author's laptop is worse than none.
+        if args.scope_expanded is not None and len(
+                args.scope_expanded.strip()) < 30:
+            print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
+                  "naming what the gate now looks at that it did not before.")
+            return 1
+        dirty = _working_tree_dirt(root)
+        if dirty:
+            print(f"[FAIL] refusing to write a baseline from a DIRTY tree — "
+                  f"{len(dirty)} untracked/modified path(s) under {root} "
+                  f"would change what resolves. Generate it from a clean "
+                  f"checkout (e.g. `git worktree add --detach <tmp> HEAD`).")
+            for d in dirty[:5]:
+                print(f"   {d}")
+            return 1
+        prev = _load_baseline(baseline_path) or []
+        if prev and len(now) > len(prev) and args.scope_expanded is None:
+            print(f"[FAIL] refusing to GROW the baseline "
+                  f"({len(prev)} -> {len(now)}). The baseline is a debt "
+                  f"register, not a waiver list. If the gate now LOOKS at "
+                  f"more than it did, say so with --scope-expanded '<why>' "
+                  f"— a wider scope finding pre-existing debt is not a "
+                  f"regression, but it must be recorded, not assumed.")
+            return 1
+        baseline_path.write_text(json.dumps(
+            {"_comment": ("Known-unresolved evidence citations (#361). MAY "
+                          "ONLY SHRINK. Entries are sha256-32 digests of "
+                          "'<doc>::<citation>' — the paths themselves are "
+                          "NOT stored (some embed a commercial foundry "
+                          "product name and a landed diff is permanent "
+                          "public content). Run the gate to see them."),
+             "unresolved": sorted(_digest(k) for k in now),
+             **({"scope_expansion": {
+                 "previous_size": len(prev),
+                 "reason": args.scope_expanded.strip()}}
+                if args.scope_expanded is not None and len(now) > len(prev)
+                else {})}, indent=2)
+            + "\n")
+        print(f"wrote {baseline_path} ({len(now)} entr(ies))")
+        return 0
+
+    base = _load_baseline(baseline_path)
+    now_dig = {_digest(k): k for k in now}
+    findings: List[str] = []
+    if base is None:
+        findings = list(now)
+        stale: List[str] = []
+    else:
+        findings = [k for k in now if _digest(k) not in set(base)]
+        # entries the baseline claims are broken but that now resolve: the
+        # debt was paid and the register must be updated, else the register
+        # slowly turns into permission.
+        stale = [d for d in base if d not in now_dig]
+
+    result = {
+        "program": "evidence_citation_resolves_check",
+        "docs_scanned": docs,
+        "citations_checked": cited,
+        "unresolved_total": len(now),
+        "baseline_size": (len(base) if base is not None else None),
+        "new_dangling": findings,
+        "stale_baseline_entries": stale,
+        "passed": not findings and not stale,
+    }
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(result, indent=2) + "\n")
+
+    print(f"evidence_citation_resolves_check: {docs} doc(s), "
+          f"{cited} citation(s) checked under {root}")
+    if not explicit_root:
+        print(f"  NOT scanned    : {_DISCLOSED_OUT_OF_SCOPE[0]} — "
+              f"{_DISCLOSED_OUT_OF_SCOPE[1]}")
+    if tracked is None:
+        print("  WARNING        : git-tracked file set unavailable — falling "
+              "back to plain filesystem existence. An UNTRACKED local "
+              "artifact can satisfy a citation here, so this run is weaker "
+              "than CI's and its baseline must not be committed.")
+    print(f"  unresolved now : {len(now)}"
+          + (f"   baseline: {len(base)}" if base is not None else
+             "   (no baseline recorded)"))
+    if stale:
+        print(f"[FAIL] {len(stale)} baseline entr(ies) now RESOLVE — the "
+              f"debt was paid; shrink the baseline so it cannot become a "
+              f"standing waiver:")
+        for d in stale[:10]:
+            print(f"   (resolved) digest {d}")
+    if findings:
+        print(f"[FAIL] {len(findings)} NEW dangling evidence citation(s) — "
+              f"the document points at a proof it does not ship:")
+        for k in findings[:20]:
+            print(f"   {k}")
+        if len(findings) > 20:
+            print(f"   ... and {len(findings) - 20} more (not truncated "
+                  f"silently — this line is the disclosure)")
+    if not findings and not stale:
+        print(f"[PASS] every cited evidence artifact resolves, or is "
+              f"within a baseline that has not grown.")
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

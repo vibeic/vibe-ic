@@ -1,0 +1,31 @@
+package: tools/phase1_engine
+purpose: >-
+  The Phase-1 gap/render engine: ingest a document into a fact graph, detect
+  what is missing, fill what can be derived, render the L-layer documents.
+owns:
+  - "*.py"
+tests:
+  root: tools/phase1_engine/tests
+  collected_by: tools/gatekeeper-land.sh
+  collected_by_kind: named
+  note: >-
+    run_repo_tools_pytest walks `tools` from the repo root. run_tests.sh names
+    the PLUGIN copy of this tree, not this one — it cds into the plugin first.
+invariants:
+  - id: I_only_stdlib_and_relative_siblings
+    statement: >-
+      Import stdlib, or a sibling module through a package-relative import.
+      Never an absolute import of a repo top-level package.
+    rule: forbid_regex
+    pattern: '^\s*(?:from|import)\s+(?:programs|tools|skills|benchmark)\b'
+    applies_to: ["*.py"]
+    severity: BLOCKING
+    why: >-
+      This engine exists as TWO copies — tools/phase1_engine and the plugin's
+      bundled tools/phase1_engine — and gap_detect.py is asserted byte-identical
+      between them (test_typical_scaffolds_retired.py::test_both_engine_copies_agree),
+      because a change applied to only one ships a stale engine to installed
+      plugins. An absolute import binds a module to ONE of the two trees: it
+      resolves where that tree is on sys.path and raises where it is not, so the
+      copies stop being interchangeable while still looking identical. Every
+      import here is stdlib or `.sibling` today; this keeps it that way.
