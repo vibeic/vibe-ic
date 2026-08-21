@@ -15,7 +15,21 @@ step 0.5ic.
     opentitan_aes            515                     52                9.9x
     ibex                     262                     52                5.0x
     edge_llm_accel           120                     52                2.3x
-    edge_llm_matmul_accel    107                     52                2.1x
+    edge_llm_matmul_accel    109                     52                2.1x
+
+THE LAST ROW READ 107 UNTIL IT WAS RE-MEASURED. It is 109, and the two bits are
+worth the paragraph because they are a rule, not a typo. That design declares
+TWO clocks and TWO resets -- its own `clk`/`rst_n` and a bus-side pair. A slot
+publishes ONE dedicated clock pad and ONE dedicated reset pad, so exactly one of
+each rides for free and the SECOND pair must consume signal budget like any
+other port. Counting them is what makes 109.
+
+Do not "fix" the clk/rst recogniser to match the bus-side spellings. Excluding a
+port declares that a dedicated pad exists for it, which SHRINKS the budget, and
+a smaller interface is how a design that cannot be bonded out reads as FITS.
+Over-counting a clock can only refuse a design that would have fitted; the
+inverse silently ships one that cannot be bonded. There is a test pinning the
+second pair as counted.
 
 THOSE ARE ELABORATED COUNTS, and saying so costs one line and saves a reader an
 hour. Every figure above assumes the design's width parameters were SUPPLIED.

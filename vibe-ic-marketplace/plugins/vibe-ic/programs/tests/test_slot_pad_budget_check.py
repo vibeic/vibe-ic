@@ -795,3 +795,52 @@ def test_the_parameterised_datapath_is_still_refused_on_the_real_IC():
     assert (rep["verdict"], rep["rc"]) == ("UNDECIDED", 2), (
         "a parameterised datapath summed to a number and PASSED — the defect "
         "this program was written to end")
+
+
+# --------------------------------------------------------------------------- #
+# only ONE clock and ONE reset ride for free
+# --------------------------------------------------------------------------- #
+# A slot publishes one dedicated clock pad and one dedicated reset pad. A design
+# with two clock domains therefore pays for the second pair out of signal
+# budget, exactly like any other port.
+#
+# This is the guard against a plausible-looking "improvement": broadening
+# `_CLK_RST_RE` so bus-side spellings match too. That EXCLUDES ports, which
+# shrinks the budget, and a smaller interface than the design has is how
+# something that cannot be bonded out reads as FITS. Over-counting a clock can
+# only refuse a design that would have fitted; the inverse ships one that
+# cannot be bonded at all.
+#
+# Found by re-measuring a published IC against this file's own cited table: it
+# read 107 where the program measures 109, and the two bits are exactly a
+# second clock/reset pair.
+
+_RTL_TWO_CLOCK_DOMAINS = """
+module chip_top (
+    input  wire clk,
+    input  wire rst_n,
+    input  wire bus_clk_i,
+    input  wire bus_rst_i,
+    input  wire [7:0] data_i,
+    output wire done_o
+);
+endmodule
+"""
+
+
+def test_a_second_clock_and_reset_pair_is_COUNTED_not_waived():
+    b = S.interface_budget(S.parse_top_ports(_RTL_TWO_CLOCK_DOMAINS, "chip_top"))
+    assert b["on_dedicated_pads"] == ["clk", "rst_n"], b["on_dedicated_pads"]
+    # 8 data + 1 done + the second clk/rst pair
+    assert b["signal_bits"] == 8 + 1 + 2, (
+        "a second clock domain was waived onto dedicated pads a slot does not "
+        "publish — that shrinks the budget, which is the false-FITS direction")
+
+
+def test_the_first_clock_and_reset_still_ride_for_free():
+    """The other half: the rule must not be tightened into counting every
+    clock, or every design pays for a pad the slot does provide."""
+    rtl = ("module chip_top (input wire clk, input wire rst_n,\n"
+           "  input wire [7:0] d, output wire q);\nendmodule\n")
+    b = S.interface_budget(S.parse_top_ports(rtl, "chip_top"))
+    assert b["signal_bits"] == 9 and b["on_dedicated_pads"] == ["clk", "rst_n"]
