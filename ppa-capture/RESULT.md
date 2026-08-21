@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 18 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 19 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 15 | deterministic rules — the default, and every one names its predicate |
+| **A** | 16 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -691,6 +691,38 @@ move, before the first one is.
 **(o)** yes. **(d)** yes — it is per lever per design, so it re-answers on the
 next design, where a different lever will be the vacuous one.
 
+### A-17 · a provenance path convention must be declared and identical across producers · `ppa.record_provenance`
+
+From the last source I had not read — the method note, which mentions the split
+in passing and treats it as a curiosity:
+
+> *Artefact paths in the records are as the producing tool reported them:
+> relative to the project root where the tool reported relative, absolute where
+> it reported absolute. They were not rewritten, because a `source.path` that is
+> not the path that was read is not provenance.*
+
+Not rewriting them was right. But the split itself is a defect, and it is larger
+than the note suggests. Measured across both published record trees:
+
+    absolute  source.path     6867      of which host-prefixed:  6867
+    relative  source.path     6674
+
+    always relative   opensta · yosys · signoff
+    always absolute   openroad · power
+
+**The split is perfectly per producer** — so it is invisible from inside any one
+of them, each being flawlessly consistent with itself, and it is exactly the
+two-authors-one-interface shape this whole cluster is about. **Every one of the
+6867 absolute paths embeds a host home directory**, in a field a reader trusts as
+neutral.
+
+The existing portability guard cannot see any of it: it walks emitted scripts by
+file suffix (`.tcl`, `.sh`) and never opens a record. So the F-14 class was fixed
+for scripts and left standing for records, which is the same rule at a different
+artefact class — the pattern this lane keeps finding.
+**(o)** yes. **(d)** yes — it is per producer per field, so it re-answers for the
+next producer added and for any other provenance field the record gains.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -873,6 +905,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-10 | — | population of **1** | real defect, but the guard protects one site |
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
 | A-16 | — | 5 admitted, 0 counted | verified on the published document |
+| A-17 | — | 6867 / 6674 | split is perfectly per producer; all 6867 host-prefixed |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |

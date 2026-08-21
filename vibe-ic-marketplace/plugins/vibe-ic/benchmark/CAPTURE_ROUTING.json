@@ -246,6 +246,10 @@
     "ppa.search_space": {
       "bucket_A_program": "programs/crosslayer_search_space.py",
       "bucket_B_skill_file": "skills/ppa-optimize/SKILL.md"
+    },
+    "ppa.record_provenance": {
+      "bucket_A_program": "programs/_ppa/metrics.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     }
   },
   "default_routing": {

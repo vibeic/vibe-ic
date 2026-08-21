@@ -1,0 +1,13 @@
+# Bucket A — program-rule sketches for programs/_ppa/metrics.py
+# Corpus-sweep REQUIRED before merging into programs/_ppa/metrics.py.
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
+# Pattern: A record type carries a provenance field naming the artefact it was read from. Each producer fills it with whatever its own reader happened to hold — one resolves to an absolute path, another keeps the path relative to the project root — and the record schema never says which is meant. The split is per PRODUCER, so it is invisible from inside any one of them and perfectly consistent within each. Downstream, anything that compares, de-duplicates or cites by that field sees two conventions for one fact; and the absolute half carries the filesystem prefix of whichever machine ran it, so the published record is machine-specific in a field a reader trusts as neutral.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_a_provenance_path_convention_must_be_declared_and_identical_across_producers(sample_text, ports):
+    """The convention of a provenance field is part of the record contract and must be stated once and enforced for every producer, not left to whatever each reader happens to hold. Two conventions for one field is a disagreement even when each side is internally perfect, because the consumer cannot tell which it has without knowing who wrote it. And a provenance path must be expressed relative to a declared root: an absolute one embeds the machine, which makes a published record unreproducible and leaks a filesystem layout into an artefact meant to describe a measurement."""
+    # Expected signal: ERROR
+    # Suggested fix action: State the convention in the record definition — a path relative to the declared run root — and enforce it where the record is CONSTRUCTED, so no producer can supply the other form. Refuse a path that resolves outside the declared root, and refuse an absolute one outright rather than rewriting it: rewriting invents provenance, and a path that is not the path that was read is not provenance. Where a producer genuinely cannot express its artefact relative to the root, it must record the root it used beside the path rather than silently switching form. MEASURED across the two published record trees: 6867 records carry an absolute path and 6674 a relative one, and the split is perfectly per producer — three producers always relative, two always absolute. EVERY ONE of the 6867 absolute paths embeds a host home directory. The existing portability guard cannot see any of this: it walks emitted scripts by file suffix and never opens a record.
+    return []  # list of findings — TODO implement
