@@ -48,6 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
 - [A dangling reference the whole verifier walked past](#a-dangling-reference-the-whole-verifier-walked-past)
 - [Emission is reproducible, and the one thing that moves is the one that should](#emission-is-reproducible-and-the-one-thing-that-moves-is-the-one-that-should)
+- [Was every commit green? Replayed, and the answer is one](#was-every-commit-green-replayed-and-the-answer-is-one)
 - [Summary](#summary)
 - [Next](#next)
 
@@ -1644,6 +1645,30 @@ it**: a check whose result arrives after the push is a check that did not run in
 time. And a map maintained by hand will drift again, so it is now *regenerated*
 from the headings rather than edited — the same promote-the-habit-to-a-program
 move this whole batch is about, applied to the document's own furniture.
+## Was every commit green? Replayed, and the answer is one
+
+The verifier proves the deliverable holds *now*. It says nothing about whether it
+ever did not — and I knew of one commit that was red, because I caused it. What I
+did not know was whether there were others.
+
+Every commit that touched `ppa-capture/` since the verifier existed was replayed
+against **its own** report, records and routing table:
+
+    commits replayed     20
+    red                   1   — the one already documented above
+
+So the account in this document matches the history. One failing commit, caused
+by adding a section without updating the contents map, present on the branch for
+exactly one commit.
+
+**The first attempt at this scoped the population wrongly**, and instructively:
+it replayed the 14 commits that *modified the verifier*, on the reasonable-sounding
+theory that those are the ones whose checks changed. All 14 passed — and the red
+commit was not among them, because it touched only the report. **A check is
+broken by edits to the thing it checks, not by edits to itself.** Filtering on
+the checker excludes precisely the commits that can break it, which is the
+population error this batch records three times over, made once more while
+auditing for it.
 ---
 
 ## Summary
