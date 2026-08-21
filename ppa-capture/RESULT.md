@@ -1026,6 +1026,26 @@ to the forked-tool roadmap at `benchmark-data/ic/OSS_EDA_FORK_ROADMAP.md`, and
 block in the emitted backlog; whoever lands it must add the roadmap entry there,
 or the instruction should be repointed.
 
+## The "could not settle" seam, read out and closed
+
+Four records came from the lanes' own *what I could not settle* sections
+(**A-20**, **A-21**, **A-22**, **A-23**) — a lane stopping honestly at its scope
+boundary and writing down what it saw, material that never reaches `FINDINGS.md`
+because it was not that lane's finding.
+
+**The last section of that seam produced no record, and that is the correct
+outcome.** A lane reported two commands answering rc=0 to what looked like an
+empty input, and declined to call either a defect. Checking its reasoning: all
+**15** declared vacuous invocations correctly name a required argument of their
+own program, so where the declared table reaches, an invented arm is impossible.
+The one false reading on record was taken against a program **outside** the
+table — an empty directory handed to a command whose real input is a document.
+
+So it is not a new rule; it is **harm evidence for A-3 and A-4**, and the sharper
+form of both: a member outside the declared population does not sit un-examined,
+it gets examined by an improvised arm and yields a confident wrong answer. Both
+records now carry it.
+
 ---
 
 ## Summary
