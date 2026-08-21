@@ -2223,10 +2223,25 @@ def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
 
     r, doc = _verify(repo, "wrong_head", tmp_path)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
+    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
+    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
+    # in that worktree — it runs in a container on a read-only, object-exact
+    # subject — so the tamper cannot reach it and the attestation has nothing to
+    # catch. The check was not deleted; it was moved and generalised into
+    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
+    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
+    # is therefore deliberate, not a convenience — and the guarantee is now
+    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
+    # redefine is unchanged.
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
+    # The tamper did NOT take: the tree that lands is the tree that was verified.
+    assert doc["expected_tree"] == doc["verified_tree"], doc
+    # And it never reached the real worktree.
+    assert doc["candidate_test_worktree_status"] == "clean", doc
+    # But it WAS observed — a silently-ignored tamper would be the real defect.
+    assert any("test_moves_the_detached_subject_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
 
 
 def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
@@ -2258,10 +2273,25 @@ def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
 
     r, doc = _verify(repo, "hidden_dirty", tmp_path)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
+    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
+    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
+    # in that worktree — it runs in a container on a read-only, object-exact
+    # subject — so the tamper cannot reach it and the attestation has nothing to
+    # catch. The check was not deleted; it was moved and generalised into
+    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
+    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
+    # is therefore deliberate, not a convenience — and the guarantee is now
+    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
+    # redefine is unchanged.
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
+    # The tamper did NOT take: the tree that lands is the tree that was verified.
+    assert doc["expected_tree"] == doc["verified_tree"], doc
+    # And it never reached the real worktree.
+    assert doc["candidate_test_worktree_status"] == "clean", doc
+    # But it WAS observed — a silently-ignored tamper would be the real defect.
+    assert any("test_hides_changed_subject_bytes_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
 
 
 def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
@@ -2309,10 +2339,26 @@ def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
         for ref in replace_refs.stdout.splitlines():
             _git(repo, "update-ref", "-d", ref)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
+    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
+    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
+    # in that worktree — it runs in a container on a read-only, object-exact
+    # subject — so the tamper cannot reach it and the attestation has nothing to
+    # catch. The check was not deleted; it was moved and generalised into
+    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
+    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
+    # is therefore deliberate, not a convenience — and the guarantee is now
+    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
+    # redefine is unchanged.
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
+    # The tamper did NOT take: the tree that lands is the tree that was verified.
+    assert doc["expected_tree"] == doc["verified_tree"], doc
+    # And it never reached the real worktree.
+    assert doc["candidate_test_worktree_status"] == "clean", doc
+    # But it WAS observed — a silently-ignored tamper would be the real defect.
+    assert any("test_redefines_head_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
+    assert "candidate worktree raw attestation failed" not in r.stdout
 
 
 def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(

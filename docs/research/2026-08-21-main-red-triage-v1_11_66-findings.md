@@ -1654,9 +1654,32 @@ the proposal document):
 
 Dropping the `doc is None` / `raw attestation failed` assertions is then a
 deliberate, argued retirement of a check the runtime has replaced — **not** a
-convenience. I have NOT implemented it: it turns three reds green, and after
-finding that my first plan for it would have dropped a real assertion, this one
-deserves a reader who is not fourteen hours into the same file.
+convenience.
+
+**IMPLEMENTED, after verifying the specification against a real run first.** I had
+declined this on a judgement about my own reliability, which is a weak reason on
+its own; the stronger move was to test whether the specification was right. Probed
+verdict from a live tamper run:
+
+```
+rc 1 | verdict REFUSE | doc present
+expected_tree  c963f23118b3…  ==  verified_tree  c963f23118b3…
+candidate_test_worktree_status  "clean"
+new_failures  ["…test_thing::test_redefines_head_but_stays_green", …]
+```
+
+All five proposed assertions confirmed before a line was changed. All three tests
+now pass, and they discriminate: `expected_tree == verified_tree` fails if a
+tamper redefines the tree, the `new_failures` membership fails if a tamper is
+silently ignored, and `candidate_test_worktree_status` fails if the real worktree
+is dirtied. A tamper that WORKED, or one that went unnoticed, still goes red.
+
+**One self-inflicted error worth recording:** my first edit anchored on three
+assertion lines where the third test had four, orphaning
+`assert "after candidate zero-census" in r.stderr`. It failed loudly and
+immediately rather than silently passing — which is only true because the orphan
+was an assertion. Had it been a line whose absence weakened the test, nothing
+would have complained.
 
 
 # ===== REQUESTS TO THE LANDER =====
