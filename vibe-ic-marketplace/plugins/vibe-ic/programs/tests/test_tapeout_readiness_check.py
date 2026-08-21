@@ -519,7 +519,6 @@ def test_an_unrecognised_verdict_token_is_not_promoted_to_a_pass(tmp_path):
 #     matters; it has to be the ONE non-zero this classifier reads as a failure,
 #     and that is asserted here THROUGH the classifier rather than restated.
 # --------------------------------------------------------------------------- #
-import shlex
 
 import yaml
 
