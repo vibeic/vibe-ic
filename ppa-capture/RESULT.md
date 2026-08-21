@@ -145,7 +145,7 @@ CLASS is what this lane recorded instead:
 
 | F | fixed by | record written for the class |
 |---|---|---|
-| F-6 sign-off reports carry no basis stamp | the multi-corner emitters stamp it (`phase3_one_shot_runner.py:34476, 35159`) | folded into the C record: a header derived from inputs, not written as a literal |
+| F-6 sign-off reports carry no basis stamp | the multi-corner emitters stamp it (`phase3_one_shot_runner.py:34476, 35159`) | the STAMPING half is fixed. Its second clause — the emitters must be enumerable so none is missed — is **NOT**: 16 stamp sites, no test enumerating them. That is **A-3**'s class, recorded there as its seventh instance; **C-1** covers only the header rule |
 | F-7 power measured before place-and-route | `_emit_power_report(basis=...)` derives every header line from what it linked | **A-8** (the invariance, which is the stronger evidence) and **C-1** (the header rule) |
 | F-12 the search hard-wires the stub, and the stub's reason is false | `--feasibility-policy` plus `STUB_REASON_CONTRADICTED_BY_TREE` | **A-7**, generalised off that one string |
 
