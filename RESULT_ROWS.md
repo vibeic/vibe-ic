@@ -261,6 +261,33 @@ reading of the same instability that produced the NEW one.
 
 **NEW attributable to this branch: 0.**
 
+### RE-VERIFIED AGAIN, AGAINST CURRENT MAIN
+
+The comparison above was against `a00f53f20`. Main then moved 110 commits, this
+branch was rebased onto `81cd5321b`, and two programs changed since — so BOTH
+arms were re-run, and the selection re-derived (132 files for 23 changed):
+
+    125 non-matrix files    base 40 failed / 2735 passed
+                            cand 40 failed / 2803 passed
+                            NEW 0, only-on-base 0 — the two id sets are IDENTICAL
+
+    7 test_matrix_* files   base 13 failed | cand 11 failed
+    one pytest call each    NEW 0, only-on-base 2
+
+Not even the wall-clock timing test flipped in the non-matrix arm this time; the
+two sets match exactly.
+
+The two only-on-base ids in the matrix arm are
+`test_the_census_block_is_fresh` and
+`test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress`. They
+are NOT fixes by this branch — re-run on both arms they flip on both:
+
+    base 2 passed | cand 1 failed 1 passed | base 1 failed 1 passed
+
+which is the same standard applied earlier to the `issue1710` file: a result
+that moves on the base too cannot attribute in either direction, and crediting
+this branch with them would be the flattering reading.
+
 ## WHAT HAPPENS THE MOMENT THIS LANDS — A ONE-LANDING FUSE
 
 Stated because it is not obvious from any single commit here, and because it is
