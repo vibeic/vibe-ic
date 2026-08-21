@@ -290,39 +290,38 @@ run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_s
 # run nowhere at all -- which is the exact condition it exists to detect.
 run "P0 disposition backing"        "$ROOT" python3 "$PG/p0_disposition_backing_check.py" --repo-root "$ROOT"
 
-# vibe-ic#215/#566 — the image-version gate is BLOCKING, and what it blocks on
-# is now exactly the half this repo owns: every live pointer equals the anchor,
-# and the anchor has not been rolled below what this repo already committed.
-# Both are read from the tree and from git, so the verdict has a fixed point.
+# vibe-ic#215/#566/#927 — THE IMAGE-VERSION GATE IS GONE, with the version it
+# gated. `tools/vibeic-eda/VERSION` held vibeic-eda's version number inside THIS
+# repo, so every image release needed a PR here; `sync_image_version.py --check`
+# was the blocking gate that kept the install docs in step with it, and
+# `--report-upstream` was the non-blocking half that asked the registry.
 #
-# vibe-ic#927 — it used to ALSO block on `--require-remote`, comparing the
-# anchor against `:latest` and against the newest tag on ghcr. Those are names
-# another org re-points on its own cadence: the gate went red when the fork
-# published (0.2.75 -> .81 -> .82 -> .83 in about twelve hours), green again
-# when they were quiet, and could not tell "we are behind" from "the registry
-# moved under us". Bumping the anchor each time closed the instance and left
-# the mechanism. The comparison still HAPPENS — it moved to the report on the
-# next line — it just no longer decides whether anyone can land.
+# Removed rather than fixed, because measured 2026-08-21 the mechanism had
+# stopped paying for itself in both directions:
 #
-# vibe-ic#539, now RESOLVED as a side effect: this gate was the one declared
-# out of the host-independence comparison, because that probe runs every gate
-# TWICE and requires the verdicts to match, and a network round-trip can differ
-# between invocations for a reason that is not in the commit (v1.7.92 went RED
-# then GREEN on an identical commit). --check makes no network call at all now,
-# so the EXCLUDE directive is GONE and the gate is probed like every other one.
-run "image-version pins are internally consistent" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check
-
-# The other half of #927, deliberately NOT a verdict. "Has upstream published
-# something newer?" is real and worth knowing, so it is asked on every run and
-# the answer is RECORDED with the instant it was taken — a reading with no
-# timestamp cannot be told from a current one by a later reader. It exits 0 when
-# it got an answer (agreeing or not) and 2 when the registry did not respond, so
-# it can never be the reason a landing fails. Adopting a newer image is this
-# repo's call, made deliberately with `sync_image_version.py --set X.Y.Z`, which
-# is where the #354 "the tag must actually resolve" check now lives.
-uncheckable_until 2027-02-28 "needs a REACHABLE ghcr registry: --report-upstream asks the registry what it has published, and rc 2 means it did not respond (an answer that disagrees is rc 0 by design -- this gate can never fail a landing)"
-# host-independence: EXCLUDE — resolves a tag on a remote registry, so two invocations can differ for a reason that is not in the commit
-run_tolerating_uncheckable "upstream image currency (report-only)" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --report-upstream --require-remote
+#   * `--check` was RED on main. Its one live pointer was
+#     `crosslayer_rewrite_equivalence.py:379`, a comment recording WHICH image a
+#     yosys measurement was taken on. The gate was demanding that a measurement
+#     record be falsified to match an anchor;
+#   * of 11 registered install docs only ONE still carried an X.Y.Z pin at all.
+#     The documentation had already decoupled itself; the anchor reached almost
+#     nothing;
+#   * the anchor said 0.3.16 while the host running the gates had 0.3.13, so the
+#     two gates that judge the IMAGE were judging one this machine does not have
+#     — a multi-gigabyte pull inside a hygiene run, or a timeout reported as
+#     "could not check".
+#
+# What the anchor was standing in for is REPRODUCIBILITY AND ATTRIBUTION, and a
+# DIGEST gives that without anyone's cooperation: `_eda_image.judged_image()`
+# names the image this host actually holds by the bytes it is made of, and every
+# verdict-bearing report now carries that digest (`_eda_image.verdict_report`
+# REFUSES to write one that does not).
+#
+# The one property `--check` had that is worth keeping — nothing in the tree may
+# PIN an image version — moved to a shipped test that runs everywhere the plugin
+# runs, instead of a repo-root tool that only runs here:
+#   programs/tests/test_the_eda_image_is_resolved_not_remembered.py
+#     ::test_no_shipped_file_reads_a_vibeic_eda_version_from_our_source_tree
 
 # On 2026-07-28 a retried `gh repo fork` created 25 forks of one upstream in six
 # minutes — the command is not idempotent and invents a numbered name instead of
@@ -503,7 +502,7 @@ run "backlog items are tracked" "$ROOT" python3 "$PG/backlog_sanitize_check.py" 
 # returned rc 0 on a `sta` with 0 of 10 commands. A register describing a debt
 # that no longer exists is not conservative, it is a blind spot the exact size
 # of the bug it used to describe.
-uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: it invokes both STA engines inside it, and rc 2 means neither could be started (an engine that answers and disagrees is rc 1)"
+uncheckable_until 2027-02-28 "needs a vibeic-eda CONTAINER IMAGE on the host: it invokes both STA engines inside the digest this host resolves, and rc 2 means neither could be started (an engine that answers and disagrees is rc 1). It does NOT pull -- pass --allow-pull if that is what you mean"
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
@@ -754,7 +753,7 @@ run "PDK registry selectable"           "$ROOT" python3 "$PG/pdk_registry_select
 # a command consisting of the backslash alone. Both reported GATE_UNRUNNABLE
 # (`No such file or directory: '\'`), which is not a failure of this gate but
 # of the script's readability by its own readers.
-uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: --from-image reads the PDK layer tables out of it, and rc 2 means the PDKs could not be read at all"
+uncheckable_until 2027-02-28 "needs a vibeic-eda CONTAINER IMAGE on the host: --from-image reads the PDK layer tables out of the digest this host resolves, and rc 2 means the PDKs could not be read at all. It does NOT pull -- pass --allow-pull if that is what you mean"
 run_tolerating_uncheckable "PDK via patch vs layer min width" "$ROOT" python3 "$PG/pdk_via_patch_meets_layer_min_width_check.py" --from-image --advisory
 
 # vibe-ic#419 — the size guard `.gitignore` promised in a comment and nobody
@@ -1413,12 +1412,14 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 #   --from-image --advisory, no image  rc 2  the WARN names the image it could
 #                                            not start; still NOT_CHECKED
 #
-# The image is READ from `tools/vibeic-eda/VERSION` rather than restated in the
-# checker, and that was exercised rather than asserted: the anchor moved
-# 0.2.98 -> 0.2.99 between v1.10.42 and v1.10.43 while this change was being
-# measured, and the checker followed with no edit. The sibling carries the tag
-# as a literal and needs `sync_image_version.py` to rewrite it.
-uncheckable_until 2026-11-30 "needs the ANCHORED vibeic-eda IMAGE on the host: --from-image starts an ephemeral container from it to read the installed PDK, and rc 2 means no PDK could be read at all (a claim the installed tree contradicts is rc 1, and --advisory does not touch rc 2)"
+# The image is RESOLVED, not restated: `_eda_image.judged_image()` names the
+# newest vibeic-eda image THIS HOST holds, by digest. That was exercised rather
+# than asserted — the checker followed an anchor bump 0.2.98 -> 0.2.99 with no
+# edit back when the answer came from `tools/vibeic-eda/VERSION`, and it follows
+# a host's image with no edit now. What changed is that the answer is no longer
+# a version number stored in this repo, so a vibeic-eda release no longer needs a
+# PR here, and the report names the DIGEST it read rather than a tag.
+uncheckable_until 2026-11-30 "needs a vibeic-eda IMAGE on the host: --from-image starts an ephemeral container from the digest this host resolves and reads the installed PDK, and rc 2 means no PDK could be read at all (a claim the installed tree contradicts is rc 1, and --advisory does not touch rc 2)"
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
   python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT" --from-image --advisory
 
