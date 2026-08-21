@@ -418,7 +418,20 @@ def test_the_emitter_side_is_NOT_asked_the_same_question(tmp_path):
     `of 3 repairs refused`. Ask it for polarity and the tail leaves the emitted
     set entirely, `tail not in em` skips the comparison, and the guard silently
     checks NOTHING while still printing PASS. The return code cannot see that,
-    so the REACH is what is asserted."""
+    so the REACH is what is asserted.
+
+    NEGATIVE CONTROL, MEASURED, because this test's value is entirely in
+    catching a change nobody has made yet and its red against the pre-fix
+    program was only a `KeyError` on an absent JSON key -- a weak red, and said
+    so when it landed. Adding the symmetry itself to `phrases_of`
+
+        if is_denied(node.value):        # skip a message that also denies
+            continue
+
+    takes it red on the assertion that matters, "the pin was not compared at all
+    -- CHECK B is disarmed", and takes `test_polarity_cannot_empty_the_reach_
+    into_a_PASS` with it. So the tidy-up this test exists to stop is caught by
+    the property, not by an accident of the fixture."""
     progs, tests = _tree(tmp_path, EMITTER_DENIAL_IN_THE_MESSAGE,
                          PIN_2.replace("of 2", "of 3"))
     r = _run(progs, tests, "--json", tmp_path / "r.json")
