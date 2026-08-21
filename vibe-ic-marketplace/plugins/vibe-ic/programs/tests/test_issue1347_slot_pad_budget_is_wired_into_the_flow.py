@@ -511,3 +511,50 @@ def test_help_still_exits_zero_so_wrappers_do_not_read_it_as_failure():
     r = subprocess.run([sys.executable, str(PROG / "slot_pad_budget_check.py"),
                         "--help"], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0 and "usage" in r.stdout.lower()
+
+
+def test_the_runner_treats_a_REJECTED_command_line_as_its_own_failure():
+    """#712, one level out from the clause. Once the gate adopted the rc-3
+    usage tier, 3 became reachable in the runner — and the runner's mapping
+    sent anything that was not 0 or 1 to SKIP, so "I called my own gate
+    wrongly" would have been reported as "the gate had nothing to say".
+
+    The argv it rejected was built by this very step, so the fault is the
+    caller's. FAIL, for the same reason the merge gate blocks on rc 3."""
+    R = _runner()
+    orig = R.subprocess.run
+    try:
+        R.subprocess.run = lambda cmd, **kw: orig([*cmd, "--not-a-flag"], **kw)
+        sr = R.step_slot_pad_budget(_project(T._RTL_FITS, with_slots=True),
+                                    "chip_top")
+    finally:
+        R.subprocess.run = orig
+    assert sr.extras["exit_code"] == 3
+    assert sr.status == "FAIL", (
+        f"a rejected command line reported {sr.status!r} — the usage tier "
+        f"collapsed back into the skip tier")
+    assert "REJECTED" in sr.detail
+
+
+def test_the_runner_reads_the_usage_rc_from_the_module_that_owns_it():
+    """Resolved, not written as a literal 3 beside a module that defines it —
+    two spellings of one constant is how tiers drift apart."""
+    R = _runner()
+    import _gate_usage_exit as _u
+    assert R._usage_rc() == _u.RC_USAGE == 3
+
+
+def test_the_runners_four_tiers_are_four_distinct_readings():
+    R = _runner()
+    orig = R.subprocess.run
+    try:
+        R.subprocess.run = lambda cmd, **kw: orig([*cmd, "--not-a-flag"], **kw)
+        usage = R.step_slot_pad_budget(_project(T._RTL_FITS, True), "chip_top").status
+    finally:
+        R.subprocess.run = orig
+    fits = R.step_slot_pad_budget(_project(T._RTL_FITS, True), "chip_top").status
+    red = R.step_slot_pad_budget(_project(_HOPELESS, True), "chip_top").status
+    skip = R.step_slot_pad_budget(_project(T._RTL_FITS, False), "chip_top").status
+    assert (fits, red, skip, usage) == ("PASS", "FAIL", "SKIP", "FAIL")
+    # the two FAILs are the same verdict but must be distinguishable by rc
+    assert skip != usage, "a skip and a rejected command line share a reading"
