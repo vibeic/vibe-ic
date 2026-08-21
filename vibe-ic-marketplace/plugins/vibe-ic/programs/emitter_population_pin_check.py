@@ -97,12 +97,32 @@ $_n is incremented at 1 site(s) but its comparison denominator says 3". MEASURED
 identically against the pre-polarity revision of this file, so it is a property
 of the K-is-a-count premise, not of anything the polarity work changed.
 
-IT IS LEFT ALONE ON PURPOSE. The honest repair is a design decision -- whether K
-is a COUNT or a LOWER BOUND -- and reading it as a lower bound means no longer
-refusing `sites < denominator`, which is a relaxation of the comparison this
-guard exists to make. That is the owner's call to make in daylight, not a thing
-to slip in beside a polarity fix. Recorded here so the next reader meets it as a
-known limitation with a reproducer rather than as a mystery refusal.
+IT IS LEFT ALONE, AND THE REASON IS MEASURED RATHER THAN DEFERRED. The obvious
+repair is to read K as a LOWER BOUND wherever the emitted text is assembled
+through a call, refusing only `sites > denominator` -- which is the direction the
+lane defect lives in ("add a fourth repair and `of 3` is wrong"), so the guard's
+whole purpose would survive.
+
+THAT DETECTION MISFIRES ON THE ONE COUNTER THIS TREE ACTUALLY HAS. MEASURED: the
+`incr _prr_refused` literals in `phase3_one_shot_runner` sit in an expression
+with THREE `_est0104_recovery_tcl(...)` calls interleaved between them, so
+"assembled through a call" is true of it. The repair would classify the only
+counter this guard checks as a lower bound and stop comparing
+`sites < denominator` there -- and it would do so SILENTLY, which is worse than
+what it replaces.
+
+WEIGH THE TWO FAILURE MODES, NOT THE TWO DESIGNS. Today's wrong answer is LOUD:
+"incremented at 1 site(s) but its comparison denominator says 3" prints both
+numbers and a reader diagnoses the helper in seconds. Every detection-based
+repair trades that for an analysis whose false positives are invisible. On this
+corpus the trade buys nothing -- zero real counters are helper-assembled, so the
+false refusal fires on nothing -- while the misfire above lands on the one
+counter that matters.
+
+So this stays a KNOWN LIMITATION with a reproducer, not because it is somebody
+else's decision, but because the fix that suggests itself is measurably worse
+here. If a helper-assembled counter ever arrives, the reproducer and this
+measurement are what the implementer needs first.
 
 THE REACH IS PRINTED, ALWAYS
 ============================
