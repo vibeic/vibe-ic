@@ -388,6 +388,59 @@ Whole-file A/B on the file this branch changes most,
 
 ---
 
+## MEASURED ON MAIN v1.11.57, WITH THE NINTH DIMENSION LANDED
+
+The previous section measured this on a branch because the ninth dimension was
+not yet in the tree. It is now (`e4c5840d6`, v1.11.57), so both questions are
+re-answered against main itself. The branch and main agree to the cell, which is
+the independent confirmation that the merge landed coherently.
+
+The corrected anchor is visible on main: `flowref.py` reads
+`621<!--figure:ledger_cells-->`. My branch said 552 because it predated the ninth
+dimension. Neither side was merged; the generator re-derived it on the merged
+tree and `--check` reports no change. That is the rule working, and it is the
+same rule that decided the entries pin (163 vs 162, tree said 164) and the d8
+gradability reading.
+
+### The 69 x 9, verified fresh by the repository's own gate
+
+```
+$ python3 tools/gen_matrix_63x8_census.py . --check      # on origin/main e4c5840d6
+[PASS] 63x8 derived figures fresh: 57 anchored figure(s) re-derived across 35 corpus files.
+[PASS] 63x8 census fresh: 621 cells over 9 dimensions; ENFORCED own=19
+       substituted=117 undeclared=403; CONTRADICTED=6 NOT-MEASURED=49
+       WAIVED=8 NA=19 (621/621 accounted).
+```
+
+**Every one of the 621 cells is in a NAMED state.** Two independent partitions
+each total 621, so nothing is unaccounted on either axis:
+
+* outcome axis: 19 + 117 + 403 + 6 + 49 + 8 + 19 = 621
+* state axis: 539 ENFORCED + 6 CONTRADICTED + 8 WAIVED + 19 NA
+  + 46 ENFORCED-SKIPPED + 3 WAIVED-SKIPPED = 621
+
+**19 cells are measured against the step's OWN mechanism. 602 carry a gap with a
+written reason.**
+
+| | cells | the written reason |
+|---|---:|---|
+| ENFORCED, own mechanism | **19** | — the floor, and the only figure that means "enforcing" plainly |
+| ENFORCED, substituted | 117 | runs against a stand-in; each carries a disclosure from the owning module |
+| ENFORCED, undeclared | 403 | the dimension has not answered the question; UNDECLARED is a state, not a synonym for clean |
+| NOT MEASURED | 49 | the predicate declined and NAMED the resource it could not reach |
+| NA | 19 | dormant, guarded by a live precondition that self-invalidates |
+| WAIVED | 8 | the accepted-gap registry, which requires a reason AND evidence |
+| CONTRADICTED | 6 | configured enforcing while its own predicate is RED — a disclosed defect |
+
+**3.1% own-mechanism, 96.9% disclosed gap.** That is the campaign's own answer,
+and it is why the census refuses to publish a single "enforcing" total.
+
+**The ninth dimension arrives own=1, substituted=68.** `verdict_consumed` asks a
+real question — when a step FAILs, does the verdict reach the exit code — and on
+this tree answers it through a stand-in for 68 of 69 steps. It has started, not
+finished. If it is read as an enforcing dimension, that is 68 cells of credit
+nobody has evidence for.
+
 ## THE d8 BLOCKER: ANSWERED, AND THE SEVEN ARE MOSTLY RELEASED
 
 Re-verified on today's tree (v1.11.51) rather than restated.
@@ -411,7 +464,8 @@ passes. It was not touched — and fixing the eighth released the others, which 
 exactly how a correct rule behaves. A rule that had been over-broad would have
 kept them blocked.
 
-**Measured now: 5 of the 7 are GREEN.**
+**Measured on MAIN v1.11.57: 5 of the 7 are GREEN, 2 red.** Same verdict as on
+the branch, and the d8 one is among the green.
 
 ```
 test_the_census_block_is_fresh                                GREEN
@@ -426,9 +480,28 @@ test_no_cell_is_counted_enforced_while_its_predicate_is_red   RED
 The two still red are **no longer NORECORD-blocked**. They are red on their own
 content, and they name their cause exactly:
 
-> 55 of 552 cells are reported in a state their own live predicate contradicts
-> (6 measured red, 49 not measured). MEASURED RED — these are repo defects:
-> 15/d3, 17/d3, 19/d3, 20/d3, 30/d3, 32/d3.
+> 55 of **621** cells are reported in a state their own live predicate
+> contradicts (6 measured red, 49 not measured). MEASURED RED — these are repo
+> defects: 15/d3, 17/d3, 19/d3, 20/d3, 30/d3, 32/d3.
+
+The same 55 against a larger denominator: **the ninth dimension added no
+contradicted and no not-measured cell.** All nine of its cells per step are
+accounted, 68 of them substituted.
+
+And the OTHER of the two is a DISTINCT finding, separated here for the first
+time — it is not part of the d3 aggregate:
+
+> 2 NA problem(s): dimension 3 `test_d3_required_outputs_are_produced`
+> `pytest.skip()` at line 2309; dimension 7
+> `test_d7_required_outputs_list_is_complete` `pytest.skip()` at line 375.
+> A cell test may not skip: the three states are ENFORCED, WAIVED (strict
+> xfail) and NA (asserted precondition).
+
+That is a matrix-contract violation, not a corpus problem: a cell test that
+skips has left the three-state partition the whole grid is built on. Closing it
+means converting each skip into an ASSERTED NA precondition — which is real work
+and is NOT done here, because doing it by widening what counts as NA is exactly
+the relaxation this file refuses.
 
 Those six ARE the six `test_d3_required_outputs_are_produced[stepNN]` IDs already
 on this list. So `test_no_cell_is_counted_enforced_while_its_predicate_is_red` is
