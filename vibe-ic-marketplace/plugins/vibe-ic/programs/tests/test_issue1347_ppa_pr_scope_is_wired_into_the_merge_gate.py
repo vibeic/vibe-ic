@@ -198,3 +198,44 @@ def test_a_refused_author_override_turns_the_whole_review_REQUEST_CHANGES():
     assert any("ppa_pr_scope_check" in b for b in v.blocking)
     # and it is the ONLY thing blocking — same repo, one file added
     assert [b for b in v.blocking if "ppa_pr_scope_check" not in b] == []
+
+
+# --------------------------------------------------------------------------- #
+# the convention has to be discoverable, and then it has to stay one path
+# --------------------------------------------------------------------------- #
+# A path only the gate knows is not a convention; it is a private variable that
+# happens to be reported. The gate says "no answers document was supplied at
+# <path>" on every review, and the arm that is not blocking yet becomes
+# blocking when the convention is adopted — so an author has to be able to
+# find out that the file exists and what shape it takes.
+#
+# Documenting it creates the classic second list. This pins the two together.
+
+def _pr_template() -> Path:
+    import _hostpaths
+    return _hostpaths.require_repo(".github", "PULL_REQUEST_TEMPLATE.md")
+
+
+def test_the_answers_path_is_documented_where_a_pr_author_will_see_it():
+    body = _pr_template().read_text(encoding="utf-8")
+    assert G._PPA_ANSWERS_REL in body, (
+        f"{G._PPA_ANSWERS_REL} is the path the merge gate looks for and names "
+        "in its own output, but no PR author is told it exists")
+
+
+def test_the_documented_path_and_the_gates_constant_have_not_drifted():
+    """One path, asserted from both ends. If someone moves the constant, this
+    fails; if someone edits the template, this fails."""
+    import re
+    body = _pr_template().read_text(encoding="utf-8")
+    found = set(re.findall(r"\.github/ppa_pr_answers[\w.]*\.json", body))
+    assert found == {G._PPA_ANSWERS_REL}, (
+        f"template mentions {found}, the gate uses {G._PPA_ANSWERS_REL!r}")
+
+
+def test_the_documented_schema_string_is_the_one_the_checker_accepts():
+    """The example in the template must not be a shape the checker rejects."""
+    body = _pr_template().read_text(encoding="utf-8")
+    assert "vibeic.ppa.pr_answers.v1" in body
+    checker = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
+    assert "vibeic.ppa.pr_answers.v1" in checker
