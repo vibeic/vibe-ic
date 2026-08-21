@@ -370,3 +370,36 @@ def test_the_declaration_matches_what_the_gate_actually_does(monkeypatch):
     blocks = G.ppa_pr_scope_gate(Path("."), "BASE", "HEAD").green is False
     assert (declared == "blocking") == blocks, (
         f"declares {declared!r} but blocking={blocks}")
+
+
+# --------------------------------------------------------------------------- #
+# a review artefact must not be mistakable for a step artefact
+# --------------------------------------------------------------------------- #
+# The gate writes its report to a TemporaryDirectory, and the reason is in the
+# code: the report declares `verdict: FAIL`, and a `reports/**/*.json` carrying
+# that is exactly what `step_internal_fail_bubble_up_check` refuses. Round-4
+# mutation redirected the write into the repo and all 18 tests passed — the
+# justification was written down and never measured.
+
+def test_the_gate_leaves_no_artefact_in_the_repository():
+    repo, base = _repo_with_a_surface()
+    _answers(repo, _ANSWERS_THAT_LIE)
+    before = {p.relative_to(repo) for p in repo.rglob("*") if ".git" not in p.parts}
+    g = G.ppa_pr_scope_gate(repo, base, "HEAD")
+    after = {p.relative_to(repo) for p in repo.rglob("*") if ".git" not in p.parts}
+    assert g.rc == 1                      # it really ran and really found something
+    assert after == before, f"the review wrote into the repo: {sorted(after - before)}"
+
+
+def test_it_writes_no_verdict_FAIL_json_anywhere_under_reports():
+    """The specific cascade: `step_internal_fail_bubble_up_check` reads any
+    `reports/**/*.json` whose verdict is FAIL or MISSING as an unacknowledged
+    step-internal failure."""
+    import json as _j
+    repo, base = _repo_with_a_surface()
+    _answers(repo, _ANSWERS_THAT_LIE)
+    G.ppa_pr_scope_gate(repo, base, "HEAD")
+    for p in repo.rglob("reports/**/*.json"):
+        v = _j.loads(p.read_text()).get("verdict")
+        assert v not in ("FAIL", "MISSING"), f"{p} declares verdict={v}"
+    assert not list(repo.glob("ppa_pr_scope.json"))
