@@ -78,6 +78,19 @@ PDK_CELL_MODELS: Dict[str, Dict[str, object]] = {
     },
     "gf180": {
         "cell_prefixes": ("gf180mcu_fd_sc_",),
+        # ciel stages PDK data under a CONTENT-ADDRESSED versions/<hash>/
+        # directory that moves every time vibeic-eda's gf180mcu pin advances
+        # (unlike sky130A / ihp-sg13g2 above, whose container paths are
+        # stable). A hash baked in here as a literal goes stale the next time
+        # the image is rebuilt against a newer ciel pin — measured 2026-08-07:
+        # image 0.2.70/0.2.74 both ship gf180mcu at hash
+        # b344c97eacc2aaf8e14ae7e43e2e9dc0871de2c0, not the hash below, and
+        # Step 11 (fault_atpg_run) failed with `cp: cannot stat` on the stale
+        # path for BOTH spm x gf180mcuD ATPG and scan-chain insertion.
+        # GF180_CIEL_HASH_PLACEHOLDER below is what a caller substitutes via
+        # `resolve_gf180_ciel_hash` + `materialize_gf180_paths` before use;
+        # the literal hash stays as the offline fallback so nothing regresses
+        # when a caller cannot reach docker (e.g. unit tests).
         "container_paths": [
             "/foss/pdks/ciel/gf180mcu/versions/"
             "8f2d1529c86235d726979eb9ecb7e9628108590b"
@@ -86,6 +99,14 @@ PDK_CELL_MODELS: Dict[str, Dict[str, object]] = {
         ],
     },
 }
+
+# The literal ciel gf180mcu hash embedded in PDK_CELL_MODELS above (and, until
+# each caller adopts `resolve_gf180_ciel_hash`, independently duplicated in
+# `fault_atpg_run.PDK_CONFIG` and `fault_scan_chain_insert.SCAN_LIBERTY`).
+# Kept as a named constant so a live-resolved hash can be swapped in by
+# substring replacement without every call site re-deriving where in the
+# path string the hash sits.
+GF180_CIEL_HASH_FALLBACK = "8f2d1529c86235d726979eb9ecb7e9628108590b"
 
 
 def known_pdk_ids() -> List[str]:
@@ -99,6 +120,42 @@ def container_model_paths(pdk_id: Optional[str]) -> List[str]:
     if not entry:
         return []
     return list(entry.get("container_paths") or [])
+
+
+def resolve_gf180_ciel_hash(run_argv) -> Optional[str]:
+    """Discover the ciel gf180mcu version hash actually present, by listing
+    `ciel/gf180mcu/versions/` through `run_argv` — a caller-supplied
+    `(argv: list[str], timeout: int) -> (returncode, stdout, stderr)`
+    callable already wired to that caller's own docker access (e.g.
+    `fault_atpg_run._run_docker`). This module stays docker-transport-
+    agnostic on purpose — it never shells out itself.
+
+    Returns the single hash directory name found, or None when the listing
+    fails or is ambiguous (zero or more-than-one entry) — NEVER guesses among
+    several, since ciel is expected to stage exactly one version per PDK at a
+    time and more than one means something this function does not understand
+    is going on."""
+    try:
+        rc, out, _err = run_argv(
+            ["ls", "-1", "/foss/pdks/ciel/gf180mcu/versions/"], 30)
+    except Exception:
+        return None
+    if rc != 0:
+        return None
+    hashes = [h for h in out.split() if h.strip()]
+    return hashes[0] if len(hashes) == 1 else None
+
+
+def materialize_gf180_paths(paths: Sequence[str], run_argv) -> List[str]:
+    """Return `paths` with the fallback ciel hash swapped for the hash
+    LIVE in the image/container `run_argv` reaches, when discovery
+    succeeds and differs. On any discovery failure, returns `paths`
+    UNCHANGED (today's behaviour, not a regression) — this function never
+    raises and never fabricates a hash it did not observe."""
+    live = resolve_gf180_ciel_hash(run_argv)
+    if not live or live == GF180_CIEL_HASH_FALLBACK:
+        return list(paths)
+    return [p.replace(GF180_CIEL_HASH_FALLBACK, live) for p in paths]
 
 
 def detect_pdk_id(cell_names: Sequence[str] | set) -> Optional[str]:

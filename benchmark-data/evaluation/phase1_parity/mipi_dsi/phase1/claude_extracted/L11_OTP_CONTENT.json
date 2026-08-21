@@ -1,5 +1,0 @@
-{
-  "ic_name": "MIPI DSI v1.01.00 (Display Serial Interface, MIPI Alliance)",
-  "otp_present": false,
-  "notes": "MIPI DSI v1.01.00 does NOT define any OTP (One-Time-Programmable) / fuse content at the protocol or PHY layer. DSI packets are wire-level command + pixel data carrying no calibration constants. Vendor-specific data — per-lane skew trim, HS swing trim, LP threshold calibration, PLL trim, EoTp enable / disable default — may be stored in an implementation's local OTP / fuse bank, but those values are entirely per-device-design (host SoC and peripheral display IC each define their own fuse map). The DSI v1.01.00 specification only requires that peripheral implementers document nominal LP clock frequency and guaranteed accuracy (§5.6.1) and that a means exists to enable / disable EoTp generation (§8.8.2). Therefore OTP content is NOT APPLICABLE at the MIPI DSI specification level."
-}

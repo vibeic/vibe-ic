@@ -572,15 +572,42 @@ def _waiver_text(project: Path) -> Optional[str]:
     return None
 
 
+#: The three states in which this gate reads NOTHING about emptiness. A layer
+#: that is missing, that will not parse, or that carries no collection this
+#: gate recognises cannot be judged clean — it was never judged at all. They
+#: are counted separately from the clean reads so a PASS cannot pass an
+#: unexamined layer off as an examined one (vibe-ic#447 denominator rule).
+UNEXAMINED_STATES = ("LAYER_ABSENT", "UNPARSEABLE", "NO_CONTENT_SCHEMA")
+
+
+def unexamined_planned(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The planned reads whose layer this gate could not examine at all."""
+    return [e for e in result.get("examined") or []
+            if e.get("planned") and e.get("layer_state") in UNEXAMINED_STATES]
+
+
+def _unexamined_clause(result: Dict[str, Any]) -> str:
+    blind = unexamined_planned(result)
+    if not blind:
+        return ""
+    layers = sorted({e["layer"] for e in blind}, key=lambda c: int(c[1:]))
+    return (f", {len(blind)} NOT EXAMINED "
+            f"(absent / unparseable / no content schema: "
+            f"{', '.join(layers)})")
+
+
 def summary_line(result: Dict[str, Any]) -> str:
     f = result.get("findings") or []
+    blind = _unexamined_clause(result)
     if not f:
         planned = sum(1 for e in result.get("examined") or [] if e["planned"])
         return (f"Planned consumers:   {planned} planned layer read(s), "
-                f"0 starved")
+                f"{planned - len(unexamined_planned(result))} examined and "
+                f"0 starved{blind}")
     layers = sorted({x["layer"] for x in f}, key=lambda c: int(c[1:]))
     return ("Planned consumers:   **{n} PLANNED READ(S) OF A SILENTLY EMPTY "
-            "LAYER**: {names}".format(n=len(f), names=", ".join(layers)))
+            "LAYER**: {names}{blind}".format(
+                n=len(f), names=", ".join(layers), blind=blind))
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -632,8 +659,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  {st['layer']:>4}  {st['state']:<18} "
               f"{st.get('path') or st['declared_path'] + ' (absent)'}")
     if not findings:
-        print("  [PASS] no planned downstream step reads a silently empty "
-              "layer.")
+        blind = unexamined_planned(res)
+        if blind:
+            # An unexamined layer is not a clean one. Saying so on the verdict
+            # line is the whole point: the reader must not read "no starved
+            # consumer" as "every planned read was checked".
+            print("  [PASS] no planned downstream step reads a silently empty "
+                  "layer — of the layers this gate DID examine.")
+            detail = ", ".join(
+                "{0} {1}".format(e["layer"], e["layer_state"]) for e in blind)
+            print(f"         NOT EXAMINED: {len(blind)} planned read(s) — "
+                  f"{detail}")
+        else:
+            print("  [PASS] no planned downstream step reads a silently empty "
+                  "layer.")
     else:
         for f in findings:
             print("")

@@ -22,18 +22,34 @@ not asserted here from memory.
 
 REAL-CORPUS COVERAGE
 --------------------
-`test_corpus_*` run the exporter over the repo's own published L4 documents
-rather than a fixture. A checker that only ever meets an input its author wrote
-proves the logic and nothing about the artefacts.
+`test_corpus_*` run the exporter over the published L4 documents rather than a
+fixture. A checker that only ever meets an input its author wrote proves the
+logic and nothing about the artefacts.
+
+Those documents now live in https://github.com/vibeic/benchmark-data, not in
+this checkout. They are resolved through `_published_corpus`, so the corpus
+tests SKIP naming it when there is none to read and RUN unchanged against a
+clone pointed at by `VIBE_IC_BENCHMARK_DATA`.
+
+WHY THE OLD GUARD STOPPED GUARDING. They were skipped on
+`(_repo_root() / "benchmark-data").is_dir()`. That directory still exists — it
+carries the flow's design INPUTS — so the guard kept answering "the corpus is
+here" over a tree holding zero L4 documents, `audit-corpus` returned its own
+rc 2 SKIP, and the tests failed on the absence as though the disposition table
+had a hole in it. Presence of the directory was never the question; presence of
+a published CELL is, which is exactly what `_published_corpus` asks.
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from _published_corpus import corpus_root, needs_corpus
 
 PROG = Path(__file__).resolve().parent.parent / "l4_systemrdl_export.py"
 
@@ -53,8 +69,17 @@ needs_rdl = pytest.mark.skipif(
 # helpers
 # ---------------------------------------------------------------------------
 def _run(*args: str) -> subprocess.CompletedProcess:
+    # NEVER INHERIT THE DEVELOPER'S OWN CORPUS POINTER. Since v1.10.56 the
+    # published L4 documents live in their own repository and `audit-corpus`
+    # ADDS `$VIBE_IC_BENCHMARK_DATA` to whatever `--root` names, so a machine
+    # with the pointer exported would audit a second, unrelated corpus in every
+    # fixture case below — a suite whose verdict depends on the operator's
+    # environment, which is the host-dependence these tests exist to pin down.
+    # The corpus tests pass their root explicitly through `_corpus_root()`.
+    env = dict(os.environ)
+    env.pop("VIBE_IC_BENCHMARK_DATA", None)
     return subprocess.run([sys.executable, str(PROG), *args],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=env)
 
 
 def _export(tmp_path: Path, l4: dict, *extra: str):
@@ -437,28 +462,34 @@ def test_registers_with_no_address_report_empty_export(tmp_path):
 # ---------------------------------------------------------------------------
 # TIER 1 — the corpus gate, run on the repo's OWN published artefacts
 # ---------------------------------------------------------------------------
-def _repo_root() -> Path:
-    for p in PROG.resolve().parents:
-        if (p / "benchmark-data").is_dir():
-            return p
-    return PROG.parent
+def _corpus_root() -> Path:
+    """The tree the corpus tests walk: wherever the published cells actually are.
+
+    Only ever called from a `@needs_corpus` test, so the assertion is a
+    contract check on that marker rather than a second skip condition — there
+    is exactly one skip reason for an absent corpus and it lives in
+    `_published_corpus`.
+    """
+    root = corpus_root()
+    assert root is not None, (
+        "reached the corpus body with no corpus; @needs_corpus should have "
+        "skipped this test")
+    return root
 
 
-@pytest.mark.skipif(not (_repo_root() / "benchmark-data").is_dir(),
-                    reason="no published L4 corpus in this checkout")
+@needs_corpus
 def test_corpus_disposition_table_is_total():
-    r = _run("audit-corpus", "--root", str(_repo_root()))
+    r = _run("audit-corpus", "--root", str(_corpus_root()))
     assert r.returncode == 0, r.stdout
     assert "every register/field key in the published corpus has a recorded " \
            "disposition" in r.stdout
 
 
-@pytest.mark.skipif(not (_repo_root() / "benchmark-data").is_dir(),
-                    reason="no published L4 corpus in this checkout")
+@needs_corpus
 def test_corpus_audit_reports_a_nonzero_scan(tmp_path):
     """A gate that scanned nothing reports PASS. Assert it saw real inputs."""
     out = tmp_path / "a.json"
-    r = _run("audit-corpus", "--root", str(_repo_root()), "--json", str(out))
+    r = _run("audit-corpus", "--root", str(_corpus_root()), "--json", str(out))
     assert r.returncode == 0
     rep = json.loads(out.read_text())
     assert rep["l4_documents_scanned"] > 20
@@ -572,12 +603,10 @@ def test_MUTATION_the_comparator_catches_a_deleted_field(tmp_path):
 
 
 @needs_rdl
-@pytest.mark.skipif(not (_repo_root() / "benchmark-data").is_dir(),
-                    reason="no published L4 corpus in this checkout")
 def test_roundtrip_runs_on_a_real_published_l4(tmp_path):
-    """Not a fixture. The richest real register map in this checkout."""
+    """Not a fixture. The richest real register map in the published corpus."""
     best, score = None, -1
-    for p in (_repo_root() / "benchmark-data").rglob("L4_REGMAP.json"):
+    for p in _corpus_root().rglob("L4_REGMAP.json"):
         try:
             d = json.loads(p.read_text(encoding="utf-8", errors="replace"))
         except Exception:
