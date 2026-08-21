@@ -342,6 +342,39 @@ def test_the_area_gate_itself_is_not_vacuous():
     assert "--area-unit-um2" in cp.stdout, cp.stdout
 
 
+def test_the_evidence_route_the_area_declaration_names_still_exists():
+    """The promotion condition has to be an instruction someone can FOLLOW.
+
+    The obvious wording — "record the unit the loaded Liberty declares" — is not
+    one: Liberty has no area unit, so that sentence would have named a change
+    nobody could make, which is barely better than naming none. The declaration
+    instead points at a CROSS-CHECK against the cell LEF, and this asserts the
+    two assets it needs are still what `pdk_registry.json` resolves for a PDK.
+
+    Offline by construction: it reads the registry, never the image. The
+    measurement quoted in the declaration was taken inside vibeic-eda 0.2.26 and
+    is recorded there with its numbers; what has to hold on every run is that
+    the ROUTE still exists.
+    """
+    reg = json.loads((_PROGRAMS / "pdk_registry.json").read_text())
+    pdks = reg["pdks"]
+    named = {p["name"]: p for p in pdks if isinstance(p, dict) and "name" in p}
+    assert named, "pdk_registry.json carries no named PDK entries"
+    # The two PDKs the declaration quotes numbers for must still resolve BOTH
+    # assets the cross-check needs; if either key goes, the route named in the
+    # ENFORCEMENT block is gone and the promotion condition must be re-derived.
+    for pdk in ("gf180mcuD", "sky130A"):
+        assert pdk in named, (
+            f"{pdk} has left pdk_registry.json; the area gate's ENFORCEMENT "
+            f"block quotes a measurement taken against it")
+        for key in ("liberty_glob", "cell_lef_glob"):
+            assert named[pdk].get(key), (
+                f"{pdk} no longer declares {key}, so the cross-check the area "
+                f"gate's promotion condition names — a cell's Liberty `area` "
+                f"against its LEF `SIZE w BY h` in microns — cannot be built "
+                f"from the registry any more")
+
+
 def test_the_wiring_the_area_declaration_names_is_still_a_real_place():
     """The promotion path has to be a place that EXISTS, or the declaration is
     an instruction nobody can follow.

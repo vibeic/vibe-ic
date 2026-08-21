@@ -41,15 +41,43 @@ assert, which is the ART-POWER-FIGURES-X1000 defect this gate exists to remove.
 
 WHAT WOULD HAVE TO CHANGE FOR THIS TO BECOME BLOCKING
 -----------------------------------------------------
-One thing, and it is not in this file. `synth_area_stats_emit` must record the
-area unit the loaded Liberty DECLARES, so that `chip_area_unit` names um^2 — any
-spelling in `_UM2_SPELLINGS` — when that is what the library says. From that
-moment this gate reaches rc 0 and rc 1 on real runs and has a verdict worth
-carrying inline, and the wiring belongs in `design_one_shot_runner.
-step_yosys_synth` immediately after the `_ystat.emit_stats_json(...)` call that
-writes the figure this gate reads: rc 1 returning `StepResult(..., "FAIL", ...)`
-the way that same function's `synth_netlist_check` call site already does, rc 2
-disclosed and non-green rather than silently dropped.
+One thing, and it is not in this file: `synth_area_stats_emit` must ESTABLISH
+the unit instead of declining to, so `chip_area_unit` names um^2 — any spelling
+in `_UM2_SPELLINGS` — on EVIDENCE rather than on convention.
+
+AND THE ROUTE HAD TO BE CHECKED, because the obvious wording of this paragraph
+— "record the unit the loaded Liberty DECLARES" — is an instruction nobody can
+follow. LIBERTY HAS NO AREA UNIT. Its `units` group declares time, voltage,
+current, capacitance, resistance and power; `area` is a bare number with no unit
+beside it, no program in this repository reads such a unit, and there is nothing
+there to read.
+
+What CAN be established is the same fact by CROSS-CHECK, from two assets
+`pdk_registry.json` already names for every PDK it carries — `liberty_glob` and
+`cell_lef_glob`. A cell's LEF `SIZE w BY h` is in MICRONS by the LEF spec, so
+`w * h` is that cell's footprint in um^2, and the Liberty `area` for the SAME
+cell either agrees with it or does not. MEASURED inside the shipped EDA image
+(vibeic-eda 0.2.26), over every standard cell present in both files:
+
+    gf180mcuD   229 of 229 cells    liberty_area / lef_um2:
+                                      min 1.000000  median 1.000000  max 1.000000
+    sky130A     405 of 405 cells    min 0.999547  median 1.000000  max 1.000000
+
+So the Liberty area IS um^2 on both, and — the part that matters here — it is
+DERIVABLE PER PDK from assets the flow already resolves, rather than assumed for
+all PDKs from what two of them happen to do. A derivation must carry a
+TOLERANCE and not an equality: sky130A's worst cell is 0.999547, i.e. the
+Liberty figure is rounded, and an exact test would reject a correct library.
+
+That derivation belongs in the PRODUCER, not in this gate, and it is a separate
+change with its own blast radius — it makes this gate LIVE on every run that
+declares a die budget. Once it lands, this gate reaches rc 0 and rc 1 on real
+runs and has a verdict worth carrying inline, and the wiring belongs in
+`design_one_shot_runner.step_yosys_synth` immediately after the
+`_ystat.emit_stats_json(...)` call that writes the figure this gate reads: rc 1
+returning `StepResult(..., "FAIL", ...)` the way that same function's
+`synth_netlist_check` call site already does, rc 2 disclosed and non-green
+rather than silently dropped.
 
 That precondition is not left as prose. `test_two_gates_declare_where_their_
 verdict_is_consumed.py` re-measures it and FAILS when it stops holding, so this
