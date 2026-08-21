@@ -39,11 +39,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _corpus_repo_view import corpus_repo
+from _published_corpus import needs_corpus
+
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import provenance_declared_output_check as C  # noqa: E402
 
-_REPO = _PROGRAMS.parents[3]
 _H = "sha256:" + "0" * 64
 
 
@@ -168,19 +170,35 @@ def test_git_refusing_to_list_is_an_ERROR_not_a_PASS(tmp_path, capsys):
 
 
 # ── the published corpus ────────────────────────────────────────────────────
+#
+# WHERE THESE TWO READ FROM (the 2026-08 split). A declared output is a claim
+# made by a PUBLISHED cell, and the cells moved to `vibeic/benchmark-data`.
+# `C.audit` enumerates with `git ls-files benchmark-data` and judges the INDEXED
+# blob, so it can only be aimed at a repository that TRACKS the cells under that
+# prefix; `corpus_repo` supplies one — this checkout when it still carries them,
+# otherwise a zero-copy view of the clone named by `$VIBE_IC_BENCHMARK_DATA`.
+#
+# Aimed at this checkout after the split, the first failed on `declared == 0`
+# ("the corpus lost 156 declarations") and the second passed VACUOUSLY, because
+# `0 + 0 == 0` satisfies it over an empty population — a green report from a
+# check that read nothing, which is the exact shape this whole file is against.
+# Both floors are unchanged, so a partial corpus still fails; measured against
+# the published corpus today: 22 cells, 217 declared, 86 present + 131 pruned.
 
-def test_the_published_corpus_is_followable_today():
-    rep = C.audit(_REPO)
+@needs_corpus
+def test_the_published_corpus_is_followable_today(tmp_path):
+    rep = C.audit(corpus_repo(tmp_path))
     assert rep["verdict"] == "PASS", rep["findings"][:8]
     decl = sum(c["declared"] for c in rep["cells"])
     assert decl >= 156, decl
 
 
-def test_no_declaration_was_lost_in_the_repair():
+@needs_corpus
+def test_no_declaration_was_lost_in_the_repair(tmp_path):
     """The count is the witness for BUG 1 on the real data: 156 before the
     repair, 156 after. A repair that improves a gate by deleting rows is the
     failure this whole family is about."""
-    rep = C.audit(_REPO)
+    rep = C.audit(corpus_repo(tmp_path))
     decl = sum(c["declared"] for c in rep["cells"])
     pres = sum(c["present"] for c in rep["cells"])
     pruned = sum(len(c["pruned"]) for c in rep["cells"])

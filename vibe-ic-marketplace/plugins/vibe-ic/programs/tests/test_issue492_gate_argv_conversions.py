@@ -39,6 +39,15 @@ at the bottom of this file reconstructs.
 
 Every gate CLI was run against a scratch MIRROR of those directories, never
 against the tracked tree, which stays byte-clean.
+
+THAT ONE-LINER NOW SPANS TWO TREES. The published cells moved to
+https://github.com/vibeic/benchmark-data; the design INPUTS stayed in vibe-ic.
+Neither half alone reconstructs the 108 — the corpus carries 105 and this
+checkout carries the 3 under `ic/*/input/**/rtl` — and the two sets are
+disjoint, so the denominator is the union and the reconstruction below takes it.
+Run `git ls-files` in this checkout alone and you get 3, which is not a smaller
+corpus but a half-read one; with no corpus to read at all the reconstruction
+SKIPS naming it (`_published_corpus`) instead of reporting a corpus that shrank.
 """
 import importlib.util
 import subprocess
@@ -51,6 +60,31 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import _gate_invocation as GI  # noqa: E402
+import _published_tree  # noqa: E402  (the ONE tracked-ness resolver)
+
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
+#: The half of the published tree that stayed in vibe-ic: the design inputs.
+_INPUT_HALF = PROGRAMS.parents[3] / "benchmark-data"
+
+
+def _tracked_rtl_dirs(root: Path) -> set:
+    """Directories NAMED `rtl` that hold published Verilog, root-relative.
+
+    Tracked-ness, not disk presence, is what "published" means here, so this
+    goes through `_published_tree` rather than asking this machine's checkout —
+    otherwise a stray local run directory joins a denominator that three rows
+    describe as "0 FAIL over ALL of them". Its `None` means "not a published
+    tree", which is answered from disk rather than read as "published and
+    empty".
+    """
+    if not root.is_dir():
+        return set()
+    tracked = _published_tree.published_paths(root)
+    if tracked is None:
+        tracked = [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()]
+    return {str(Path(f).parent) for f in tracked
+            if Path(f).parent.name == "rtl" and Path(f).suffix in (".v", ".sv")}
 
 
 def _load_flow():
@@ -268,21 +302,21 @@ def test_umbrella_records_the_vacuous_project_as_a_skip_not_a_pass(tmp_path):
         assert gate not in joined_fails, f"{gate} blamed the design for no input"
 
 
+@needs_corpus
 def test_the_published_denominator_is_the_one_a_reader_reconstructs():
     """The corpus size is the LICENCE for both conversions ("0 FAIL and a
     non-zero denominator on ALL of them"), so it has to be the number an
     independent reviewer gets from the tracked tree — not a near-miss. A
     denominator stated one larger than it is would mean the sweep either
     skipped a directory or double-counted one, and "I measured all of them" is
-    exactly the claim a wrong denominator quietly breaks."""
-    repo = PROGRAMS.parents[3]
-    if not (repo / "benchmark-data").is_dir():
-        pytest.skip("benchmark-data corpus not present in this checkout")
-    tracked = subprocess.run(["git", "ls-files", "benchmark-data"], cwd=repo,
-                             capture_output=True, text=True).stdout.splitlines()
-    rtl_dirs = {str(Path(f).parent) for f in tracked
-                if Path(f).parent.name == "rtl"
-                and Path(f).suffix in (".v", ".sv")}
+    exactly the claim a wrong denominator quietly breaks.
+
+    Reconstructed from BOTH halves of the published tree (see the module
+    docstring): the cells in `vibeic/benchmark-data` and the design inputs still
+    here. Both are keyed benchmark-data-relative, so a tree that carries both
+    halves reconstructs to the same set rather than to twice it.
+    """
+    rtl_dirs = _tracked_rtl_dirs(corpus_root()) | _tracked_rtl_dirs(_INPUT_HALF)
     assert len(rtl_dirs) == _CORPUS_DENOMINATOR, (
         f"corpus moved: {len(rtl_dirs)} rtl/ dirs now, table says "
         f"{_CORPUS_DENOMINATOR} — re-run the measurement before trusting it")

@@ -65,12 +65,26 @@ def graph() -> dict:
 
 
 def _stage_steps(stage_id: str) -> list:
+    """Members of a stage, read from the ONE place membership is declared.
+
+    This used to read the per-stage roster ``stages[].steps``. That roster was
+    a SECOND declaration of membership, it disagreed with the per-step
+    ``stage:`` field for 12 of the 63 steps, and it has been deleted
+    (vibe-ic#923). Reading it now would return ``[]`` and make every caller
+    vacuously true, so the lookup moved to the surviving declaration and
+    asserts that it found somebody.
+    """
     import yaml
     doc = yaml.safe_load(FLOW.read_text())
-    for st in doc.get("stages", []):
-        if str(st.get("id")) == stage_id:
-            return [str(s) for s in (st.get("steps") or [])]
-    raise AssertionError(f"premise: stage {stage_id!r} not found in the flow")
+    declared = [str(st.get("id")) for st in (doc.get("stages") or [])]
+    assert stage_id in declared, (
+        f"premise: stage {stage_id!r} not declared in the flow; got {declared}")
+    members = [str(s.get("id")) for s in (doc.get("steps") or [])
+               if str(s.get("stage")) == stage_id]
+    assert members, (
+        f"premise: no step declares stage: {stage_id!r} — an empty membership "
+        f"would make every assertion over it vacuously true")
+    return members
 
 
 # ── the declaration itself ───────────────────────────────────────────────────

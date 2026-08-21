@@ -1,5 +1,0 @@
-{
-  "ic_name": "MIPI D-PHY / CSI-2 (TI SLLA414 application note)",
-  "register_map_present": false,
-  "notes": "MIPI D-PHY (physical layer) + CSI-2 (protocol layer) define NO conventional register file at the protocol layer. CSI-2 packets are wire-level image data; there is no opcode/register transport over CSI-2 itself. Image-sensor implementations expose vendor-specific control registers (gain / exposure / ROI / lens-shading / black-level / frame-rate / Virtual-Channel assignment / Data-Type select / lane-count select / etc.) over a SEPARATE sideband bus — typically I2C (SCCB variant from OmniVision, or generic I2C with sensor-specific register maps from Sony / ON Semi / etc.). These sideband register maps are documented per sensor datasheet, not in the MIPI D-PHY / CSI-2 specifications."
-}
