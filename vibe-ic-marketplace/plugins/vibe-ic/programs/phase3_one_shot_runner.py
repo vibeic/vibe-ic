@@ -35443,6 +35443,18 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
     if setup_corner is None and hold_corner is None:
         return _empty
     lib_c = _to_container_path(str(pdk.liberty), container)
+    # BASIS STAMP — DERIVED from the netlist this call actually linked, never a
+    # literal. MEASURED: the SINGLE-corner emitter stamps `STA_BASIS:
+    # POST_ROUTE_SPEF` and this one, a MULTI-corner SIGN-OFF report, stamped
+    # nothing. `_ppa/timing.py::_stage_for` therefore emitted `stage: null` for
+    # every row it parsed out of this file, with the reason recorded, rather
+    # than inferring a stage from the filename — which would let a pre-layout
+    # estimate be compared against sign-off evidence. On one real run that left
+    # 48 of 56 timing rows refused as SCOPE_INCOMPLETE and made setup and hold
+    # FEAS_INCOMPLETE_VIEW_SET. The stamp belongs in the step's own tool.
+    _prelayout_netlist = (netlist == _pl.synth_dir(project) / f"{top}_synth.v")
+    _basis_stamp = ("PRE_LAYOUT_ESTIMATE" if _prelayout_netlist
+                    else "POST_ROUTE_SPEF")
     # Which liberty each RC corner is analysed with. One library across the RC
     # corners is the DESIGNED behaviour (parasitics vary, process does not) —
     # this records it instead of leaving it to be inferred from a corner name.
@@ -35479,6 +35491,16 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             # degraded run passed for a multi-corner one.
             f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}, "
             f"liberty={lib_c}) ===\"\n"
+            # Per STANZA, because the SPEF differs per stanza and the liberty
+            # is the thing a reader cannot otherwise recover from the corner
+            # name. Every stanza of this report reads a SPEF, so the only way
+            # the basis is not POST_ROUTE_SPEF is a run with no routed netlist
+            # at all — and then it says PRE_LAYOUT_ESTIMATE instead of
+            # claiming a sign-off basis it does not have.
+            f"puts $_f \"STA_BASIS: {_basis_stamp}\"\n"
+            f"puts $_f \"STA_BASIS_LIBERTY: {lib_c}\"\n"
+            f"puts $_f \"STA_BASIS_NETLIST: {netlist.name}\"\n"
+            f"puts $_f \"STA_BASIS_SPEF: {Path(corner_spefs[corner]).name}\"\n"
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
@@ -35691,6 +35713,12 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
     rpt_c = _to_container_path(str(rpt_out), container)
 
+    # BASIS STAMP — see `_emit_corner_spef_sta`. This report is the PROCESS-
+    # corner sign-off evidence, and it stamped nothing, so every row parsed out
+    # of it carried `stage: null`. Derived per stanza below, because whether a
+    # SPEF was read is decided per stanza here.
+    _prelayout_netlist = (netlist == _pl.synth_dir(project) / f"{top}_synth.v")
+
     def _pass(label: str, kind: str, flag: str, spef_host: Optional[Path],
               open_mode: str) -> str:
         lib_c = corner_libs[label]
@@ -35699,6 +35727,12 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         if spef_host and Path(spef_host).is_file():
             spef_tcl = f"read_spef {_to_container_path(str(spef_host), container)}\n"
             spef_disc = Path(spef_host).name
+        if _prelayout_netlist:
+            basis_stamp = "PRE_LAYOUT_ESTIMATE"
+        elif spef_tcl:
+            basis_stamp = "POST_ROUTE_SPEF"
+        else:
+            basis_stamp = "POST_ROUTE_NO_SPEF"
         return (
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
@@ -35719,6 +35753,10 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             f'SPEF={spef_disc} ==="\n'
             f'puts $_f "OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} '
             f'late={_FLAT_OCV_DERATE_LATE} flat-OCV"\n'
+            f'puts $_f "STA_BASIS: {basis_stamp}"\n'
+            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
+            f'puts $_f "STA_BASIS_NETLIST: {netlist.name}"\n'
+            f'puts $_f "STA_BASIS_SPEF: {spef_disc}"\n'
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
