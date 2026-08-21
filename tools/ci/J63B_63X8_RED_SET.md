@@ -618,71 +618,49 @@ proof of anything. They stay open and stay described as they are above — one
 observation with no reproduction, and a named 18.95 s item against a 60 s
 window.
 
-## PROBED to a conclusion: the window OWNS the kill, and "startup" was the wrong word all along
+## PROBED to a conclusion: the window OWNS the kill, and "startup" was the wrong word
 
-The reason this report gives for not touching the watchdog is that a startup
-grace would redden red 11. That was reasoning. Probed, in a throwaway worktree:
-`_watchdog.supervise()` was given a startup budget — before the FIRST observed
-progress, use `max(stall_grace_s, 5.0)` — and red 11 was run.
+**The settled answer first, because this section took three probes to reach it
+and the intermediate steps are recorded below rather than in front.**
 
-```
-startup grace 5.0s    red 11: 1 passed in 1.38s
-startup grace 45.0s   red 11: 1 passed in 1.37s
-```
-
-**Forty-five seconds changed nothing, and the test asserts `elapsed < 3`.** If
-that watchdog were deciding red 11's kill, the elapsed time would have moved.
-It did not, so `_watchdog.supervise` is not the mechanism that kills it in the
-green case — most likely the semantic monitor's ABORT path fires first
-(`abort_probe` in `run_owned` kills as `aborted`, never consulting
-`stall_grace_s`), which is what "fails closed" in the test's own name describes.
-
-Two corrections follow, and they cut in opposite directions, so both are stated:
-
-* **The blast-radius argument was misaimed.** "Six programs share that one
-  window" is true of `_owned_process_supervisor.run_owned`, and this report used
-  it to scope a fix for reds 10, 11 and 13 — without having confirmed that this
-  is the watchdog doing the killing on those paths. It is not confirmed, and for
-  red 11 it is now positively doubtful.
-* **"A startup grace would redden red 11" is NOT established.** One probe left
-  it green. That is not evidence a startup grace is SAFE either — the probe
-  never reached the decision point, so it says nothing in either direction.
-
-What still stands, because it is read rather than inferred, is the PINNING
-itself: the test asserts `elapsed < 3`, `WATCHDOG_STALLED:` and
-`COLLECT_CHATTER` in the message. Anything that delays that kill past three
-seconds reddens it, whichever component owns the timer. The conclusion — do not
-widen a window to make a loaded host fit — is unchanged. What was wrong is this
-report's account of WHICH component would have to change, and that is now
-labelled unconfirmed instead of asserted.
-
-**THIRD PROBE, and it settles it.** The startup probe was keyed on "before the
-FIRST observed progress", so the question it left open was whether
-`supervise()` is on the path at all. Answered by widening the window itself
-rather than adding a grace:
+`supervise()` owns red 11's kill, and widening its window reddens the test:
 
 ```
 stall_grace_s x 40    red 11: 1 FAILED — "DID NOT RAISE AssertionError", 4.16s
 ```
 
-`supervise()` **does** own red 11's kill: multiply its window and the kill stops
-happening, and the test that exists to prove the kill happens goes red. So:
+So the six-consumer blast radius of `run_owned` DOES apply, and this report's
+original conclusion — do not widen that window — is confirmed by measurement
+rather than by argument.
 
-* **The original conclusion was right and my correction over-corrected.**
-  Widening that window reddens red 11 — now MEASURED, not reasoned. The
-  six-consumer blast radius of `run_owned` DOES apply after all.
-* **But "startup" was the wrong word for every one of these.** A startup-KEYED
-  grace never engages, because progress IS observed early on this path — the
-  child is not killed before it reports, it reports and then stalls. Red 11
-  joins reds 10 (`stage=collecting`) and 13 (`stage=running`) as a **mid-run
-  stall**. The "startup indistinguishability" framing this report used for all
-  three was wrong three times.
+**But "startup" was the wrong word for all three of reds 10, 11 and 13.** A
+startup-KEYED grace never engages: progress IS observed early on these paths, so
+the child is not killed before it reports, it reports and then stalls. Red 11
+joins red 10 (`stage=collecting`) and red 13 (`stage=running`) as a **mid-run
+stall**. This report used the startup framing three times and it was wrong three
+times.
 
-The practical consequence is now clean and fully measured: **a startup grace
-would not fix reds 10, 11 or 13 — it never engages. Widening the stall window
-would, and it reddens red 11's fail-closed-fast guarantee.** That is the trade,
-it is real, and the decision not to take it stands on a measurement instead of
-on a story.
+Net, and fully measured: **a startup grace would fix none of reds 10, 11 or 13 —
+it never engages. Widening the stall window would fix them, and it reddens red
+11's fail-closed-fast guarantee.** That is the real trade, and declining it now
+rests on a measurement.
+
+<details>
+<summary>How this was reached — two probes that did not settle it</summary>
+
+Probe 1 gave `supervise()` a startup budget (before the FIRST observed progress,
+`max(stall_grace_s, N)`) and red 11 stayed green at **1.38 s** with N=5 and
+**1.37 s** with N=45, while the test asserts `elapsed < 3`.
+
+That was read as "the blast-radius argument is misaimed and the mechanism is
+doubtful". **That reading was wrong**, and it is left here because the mistake is
+instructive: a probe that does not move the outcome has two explanations — the
+component is not on the path, or the probe's KEY never fires — and only the
+second was true. Probe 2 raised the same grace to 45 s and changed nothing,
+which distinguished nothing. Probe 3 stopped keying on startup and multiplied
+the window itself, which moved the outcome immediately and settled it.
+
+</details>
 
 Nothing from any of the three probes was committed.
 
