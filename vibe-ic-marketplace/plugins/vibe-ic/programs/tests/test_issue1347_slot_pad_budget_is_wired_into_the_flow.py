@@ -139,3 +139,77 @@ def test_the_program_discovers_step_1_rtl_without_being_handed_a_glob():
     found = S._discover_rtl(str(p))
     assert [Path(f).name for f in found] == ["chip_top.v"]
     assert S._discover_rtl(str(Path(tempfile.mkdtemp(prefix="empty1347_")))) == []
+
+
+# --------------------------------------------------------------------------- #
+# the YAML clause alone CANNOT block — #306
+# --------------------------------------------------------------------------- #
+# `flow_gate_enforcement_audit`'s founding measurement: the step runners execute
+# the flow's `program_exit_zero` gates NOWHERE. They are evaluated only by
+# `flow_compliance_check`, which the runner invokes as `final_audit` — the LAST
+# step, after every artefact has been written. `cts_quality_check` FAILed on the
+# same cell across three plugin versions while the flow shipped a 181 MB
+# routed.def every time.
+#
+# So the clause above is where the verdict is DECLARED, and the runner spawn
+# below is what makes it able to refuse. Both are required; neither is enough.
+
+def _runner():
+    import design_one_shot_runner as R
+    return R
+
+
+def test_the_runner_spawns_it_and_the_exit_status_decides_the_step():
+    """PROVE-BY-RUN, not by reading: drive the runner step itself."""
+    R = _runner()
+    hopeless = _project(_HOPELESS, with_slots=True)
+    fits = _project(T._RTL_FITS, with_slots=True)
+    no_slot = _project(T._RTL_FITS, with_slots=False)
+    assert R.step_slot_pad_budget(hopeless, "chip_top").status == "FAIL"
+    assert R.step_slot_pad_budget(fits, "chip_top").status == "PASS"
+    assert R.step_slot_pad_budget(no_slot, "chip_top").status == "SKIP"
+
+
+def test_the_skip_carries_the_programs_own_reason_not_a_silence():
+    """§6 degrade loudly: a decline that printed nothing reads downstream as
+    'nothing needed doing'."""
+    R = _runner()
+    sr = R.step_slot_pad_budget(_project(T._RTL_FITS, with_slots=False),
+                                "chip_top")
+    assert sr.status == "SKIP"
+    assert "UNDECIDED" in sr.detail and "slots" in sr.detail
+
+
+def test_the_runner_passes_its_own_top_name_not_the_programs_default():
+    """A design whose top is not `chip_top` would otherwise answer UNDECIDED
+    and disclose a skip for a question that was perfectly askable."""
+    R = _runner()
+    p = _project(_HOPELESS.replace("chip_top", "my_soc_top"), with_slots=True)
+    assert R.step_slot_pad_budget(p, "my_soc_top").status == "FAIL"
+
+
+def test_the_step_is_in_the_runners_plan():
+    import ast
+    src = (PROG / "design_one_shot_runner.py").read_text(encoding="utf-8")
+    assert "step_slot_pad_budget(project" in src, \
+        "the runner defines the step but never puts it in the plan"
+    ast.parse(src)
+
+
+def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
+    """The doctrine property itself (§3/§5), pinned so it cannot regress to
+    AUDIT_ONLY. A dict `.get(rc, ...)` instead of a branch on `rc` is enough to
+    lose it — that spelling reports INLINE_UNPROVEN, and unknown is not yes."""
+    import subprocess
+    import tempfile as _tf
+    out = Path(_tf.mkdtemp(prefix="fga1347_")) / "fga.json"
+    subprocess.run([sys.executable,
+                    str(PROG / "flow_gate_enforcement_audit.py"),
+                    "--json", str(out)],
+                   capture_output=True, text=True, timeout=600)
+    doc = json.loads(out.read_text())
+    mine = [g for g in doc["gates"] if g.get("gate") == "slot_pad_budget_check"]
+    assert mine, "the audit does not see the gate at all"
+    assert mine[0]["enforcement"] == "ENFORCED", mine[0]
+    assert mine[0]["wiring"] == "INLINE_BLOCKING", mine[0]
+    assert mine[0]["declared"] == "blocking", mine[0]
