@@ -295,8 +295,25 @@ That is the fuse the owner asked for — "opening this deadline will make some
 landing that currently succeeds start failing. That is the point." It is one
 landing long, and it starts when this lands, not when it is written.
 
-The five: `flow-gate enforcement audit` (89 behind, bound 70), `L-doc field
-producer` (295/210), `evidence citation resolves` (295/140), `declaration scans
-strip comments` (87/70), `liar census controls still fire` (69/35). `d3
-declaration/manifest parity` is live with 36 commits left, and the two corpus
-rows are annotated as stating a CONDITION rather than a deadline.
+**RE-MEASURED at `81cd5321b` (v1.11.68), and it is now SEVEN, not five.** Main
+advanced and two rows came due while this branch was being written — which is
+the clearest evidence available that these are deadlines and not decoration:
+
+    flow-gate enforcement audit         119 / 70    EXPIRED
+    L-doc field producer                325 / 210   EXPIRED   (condition, see below)
+    evidence citation resolves          325 / 140   EXPIRED   (condition, see below)
+    checker execution wiring             99 / 70    EXPIRED   <- came due since
+    gates are wired to something         99 / 70    EXPIRED   <- came due since
+    declaration scans strip comments    117 / 70    EXPIRED
+    d3 declaration/manifest parity       54 / 60    live, 6 left
+    liar census controls still fire      99 / 35    EXPIRED
+
+`d3` has six commits of margin at the current rate — roughly two hours. It will
+have come due by the time anyone reads this, and that is the row behaving
+correctly rather than a number needing another edit.
+
+All eight were re-probed at `81cd5321b` and all eight are still FAIL, so no row
+is STALE — a row whose gate had been fixed would itself be failed, and none has.
+
+The two corpus rows are annotated as stating a CONDITION rather than a deadline
+and must not be read as blocking a corpus-less landing host.
