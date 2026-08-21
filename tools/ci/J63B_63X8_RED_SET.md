@@ -74,3 +74,44 @@ The one state that closes them honestly is the fourth state the owner ruled on:
 alone, with no knowledge of whether its predicate can run. That contract change
 is `jfindings-63x8`'s, and reds 7-9 are its downstream consumers — they close
 when it lands, and not before.
+
+## Confirmations, run separately so neither claim rests on one sample
+
+* **d8 is green, twice.** In the sweep: `347 passed in 83.11s`, rc=0. Re-run
+  alone at load 29.75: `347 passed in 34.73s`. The second run reported rc=1 —
+  and that was CORRECT and was not d8: `suite_write_guard` caught THIS report
+  file appearing in the worktree mid-run, which is what it is for. No d8 case
+  failed in either run.
+* **Red 13 is the host.** `test_the_census_block_is_fresh` alone, same tree,
+  load 18.48-29.75: `1 passed in 163.79s`. Inside the full-file run it dies on
+  `WATCHDOG_STALLED ... > 60s` with `terminal event missing (stage=running)`
+  while three nested pytest children compete for the box.
+
+## What was NOT done, and why that is the answer rather than a shortfall
+
+None of the seven reds this agent owns is a defect in `origin/main`, so none was
+"fixed". Four are the harness starving itself and three are NOT_MEASURED with
+the missing input named. The available ways to turn any of them green tonight
+were: widen `applies_to` on a measurement nobody took, widen a watchdog window
+until a saturated host squeezes under it, or re-point a citation at a corpus
+that has been withdrawn. Each buys a green that is worth less than the red it
+replaces, so none was taken.
+
+The watchdog does have a real weakness underneath reds 10-13 — its stall clock
+starts before the child can emit its first lifecycle event, so interpreter
+startup under load is scored as a hang ("no pytest progress stream was
+produced"). Fixing that means changing `pytest_per_file_junit.py`, the driver
+every tier runs through, and showing it harms nothing means the full
+`programs/tests` suite, which this host cannot carry. It is written down here
+instead of half-landed.
+
+## Reproduce
+
+```
+git worktree add -f <wt> origin/main --detach
+cd <wt>/vibe-ic-marketplace/plugins/vibe-ic
+export PYTHONDONTWRITEBYTECODE=1; unset VIBE_IC_BENCHMARK_DATA
+for f in programs/tests/test_matrix_*.py; do
+  python3 -m pytest -q -p no:randomly -p no:cacheprovider "$f"; done   # one process per file
+python3 programs/matrix_mutation_ledger.py --replay D3-UNDECLARED-ARTEFACT --step 1.6x
+```
