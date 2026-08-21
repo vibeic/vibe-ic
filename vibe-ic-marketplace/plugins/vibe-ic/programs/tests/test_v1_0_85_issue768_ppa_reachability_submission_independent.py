@@ -89,9 +89,17 @@ _HAVE_CONTAINER = _container_up()
 # (0) acceptance: --reference must appear in --help (issue ## 驗收, verbatim)
 # ════════════════════════════════════════════════════════════════════════════
 def test_acceptance_reference_flag_in_help(capsys):
-    """The issue's acceptance command greps `--help` for `--reference`."""
-    with pytest.raises(SystemExit):
-        ppa.main(["--help"])
+    """The issue's acceptance command greps `--help` for `--reference`.
+
+    It used to assert that `main(["--help"])` RAISES SystemExit, which was a
+    fact about argparse's internals rather than about the acceptance command.
+    `main` is documented to RETURN an int, and `--help` is a successful
+    invocation: PPA_INTERFACES §1 gives it 0. The grep the issue specifies is
+    asserted directly instead, which is strictly more than the old form
+    checked -- it now pins the exit code too.
+    """
+    rc = ppa.main(["--help"])
+    assert rc == 0, f"--help is not a bad invocation; got rc={rc}"
     out = capsys.readouterr().out
     assert "--reference" in out
 
