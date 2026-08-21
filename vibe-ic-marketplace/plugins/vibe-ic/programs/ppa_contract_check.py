@@ -76,31 +76,6 @@ USAGE
 -----
     ppa_contract_check.py --contract CONTRACT.json [--json REPORT.json]
                           [--schema-dir DIR]
-    ppa_contract_check.py --corpus DIR [--corpus-may-be-absent]
-
-CORPUS MODE, AND WHY IT REFUSES AN EMPTY ONE
---------------------------------------------
-`--contract` names ONE document, so a contract filed under any other path was
-simply not judged. `--corpus DIR` judges every contract record under DIR,
-resolved through `_corpus_location` — the same seam `ppa_head_to_head_check`
-uses, so both follow `$VIBE_IC_BENCHMARK_DATA` to a cloned corpus and both
-print one vocabulary for "the corpus is not here".
-
-Records are selected by their DECLARED SCHEMA, never by filename: this mode
-exists because a record under an unexpected name went unjudged, and a filename
-glob would answer that with a smaller version of itself.
-
-An EMPTY corpus is rc=2 with the corpus root named — never rc=0. The corpus
-verdict is the most severe record's, so adding a record can never subtract a
-refusal.
-
-TWO CONTRACTS FOR ONE IDENTITY IS A CONFLICT. If two documents declare the same
-`identities` and differ anywhere else, both paths and both digests are named and
-the run REFUSES. It does not take the first match, for the same reason
-PPA-C-003 does not choose between two sources that disagree about a key.
-
-`--contract` and `--corpus` together are rc=3, a bad invocation. Silently
-letting one win reports a verdict about a document the caller did not name.
 
 EXIT CODES
 ----------
@@ -110,9 +85,8 @@ EXIT CODES
                        something else was unchecked would hide it. Both are
                        always listed.
     2  [CANNOT CHECK]  the contract is absent/unreadable, or something needed
-                       was UNDETERMINED; in corpus mode also an EMPTY corpus
-                       and a `*.json` nobody could parse
-    3  bad invocation, including --contract together with --corpus
+                       was UNDETERMINED
+    3  bad invocation
 """
 from __future__ import annotations
 
@@ -120,17 +94,12 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import _ppa_corpus as corpus_seam  # noqa: E402  one seam for all corpora
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
-<<<<<<< HEAD
 from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
-=======
-from _ppa import canonical_json as cj  # noqa: E402
->>>>>>> origin/jcorpus/ppa-corpus-mode
 from _ppa import contract as C  # noqa: E402
 from _ppa import schema_validation as SV  # noqa: E402
 
@@ -160,30 +129,6 @@ def schema_findings(document: Any, schema_dir: Path) -> List[Dict[str, Any]]:
             f"a pile of shape violations from applying the wrong schema would "
             f"read as a broken contract rather than as the wrong document",
             declared=declared)]
-<<<<<<< HEAD
-    try:
-        import jsonschema
-    except ImportError:
-        return [C.finding(
-            "PPA-C-010", C.SEV_UNDETERMINED,
-            "jsonschema is not importable here, so the contract's shape was "
-            "NOT validated. This is not the schema passing")]
-    # The SAME defect the ImportError branch above exists for, one version
-    # check further along: `Draft202012Validator` arrived in jsonschema 4.0.
-    # On an older library the attribute lookup raises AttributeError, which
-    # `raise SystemExit(main())` turns into exit code 1 -- and §1 says 1 is a
-    # finding about the DESIGN. Measured on this machine (jsonschema 3.2.0):
-    # every invocation crashed and reported rc=1, so a missing library was
-    # indistinguishable from a broken contract.
-    if not hasattr(jsonschema, "Draft202012Validator"):
-        return [C.finding(
-            "PPA-C-010", C.SEV_UNDETERMINED,
-            f"jsonschema {getattr(jsonschema, '__version__', 'unknown')} has "
-            f"no Draft202012Validator (it arrived in 4.0), so the contract's "
-            f"shape was NOT validated. This is not the schema passing",
-            jsonschema_version=getattr(jsonschema, "__version__", None))]
-=======
->>>>>>> origin/jsearch2/space-and-feasibility
     path = Path(schema_dir) / "contract.v1.schema.json"
     schema, reason = C.load_json(path)
     if reason is not None:
@@ -250,86 +195,9 @@ def _apply(engine: Any, instance: Any, name: str,
     return rows
 
 
-#: What this gate would have examined, for the NO_CORPUS / VACUOUS line. A zero
-#: is stated over a NAMED population or it is not stated at all.
-_GATE = "PPA contract records"
-_SCANNED = "published contract record(s)"
-
-
-def is_contract(doc: Any) -> bool:
-    """A corpus record for THIS gate, decided on the document, not its name."""
-    return isinstance(doc, dict) and doc.get("schema") == C.CONTRACT_SCHEMA
-
-
-def check_corpus(named: Path, schema_dir: str, may_be_absent: bool = False,
-                 json_out: Optional[str] = None) -> int:
-    """Every contract record under `named`, aggregated by severity.
-
-    Two contracts declaring the SAME `identities` are a conflict rather than a
-    choice; see `_ppa_corpus.identity_conflicts`. A contract that declares no
-    identities cannot be keyed and is EXCLUDED from that scan — stated here
-    because a silent exclusion is a denominator nobody can see. Its own
-    PPA-C-007 rows still reach the verdict through the per-record run.
-    """
-    corpus, rc = corpus_seam.open_corpus(named, _GATE, _SCANNED, may_be_absent)
-    if corpus is None:
-        return rc
-    scan = corpus_seam.collect(corpus, is_contract)
-    print(f"ppa_contract_check --corpus {corpus}: {scan.denominator(_SCANNED)}")
-    unread_rc = corpus_seam.report_unreadable(_GATE, scan)
-    if not scan.records:
-        return corpus_seam.worst_rc(
-            [corpus_seam.vacuous(_GATE, corpus, _SCANNED, scan), unread_rc])
-
-    keyed, unkeyed = [], []
-    for path, doc in scan.records:
-        ids = doc.get("identities")
-        if isinstance(ids, dict) and ids:
-            keyed.append((path, cj.digest_of(ids), doc))
-        else:
-            unkeyed.append(path)
-    for path in unkeyed:
-        print(f"[{_GATE}] NOTE: {path} declares no `identities`, so it is not "
-              f"keyed for the corpus conflict scan. It is still validated.",
-              file=sys.stderr)
-    conflicts, copies = corpus_seam.identity_conflicts(
-        keyed, _GATE, "contract identity")
-    conflict_rc = corpus_seam.print_conflicts(_GATE, conflicts, copies)
-
-    rcs = [main(["--contract", str(path), "--schema-dir", schema_dir])
-           for path, _ in scan.records]
-    worst = corpus_seam.worst_rc(rcs + [conflict_rc, unread_rc])
-    refused = sum(1 for r in rcs if r == corpus_seam.RC_REFUSED)
-    undet = sum(1 for r in rcs if r == corpus_seam.RC_UNDETERMINED)
-    print(f"ppa_contract_check --corpus {corpus}: {len(rcs)} record(s), "
-          f"{refused} refused, {undet} undetermined, "
-          f"{len(rcs) - refused - undet} accepted, {len(conflicts)} identity "
-          f"conflict(s) -> rc={worst}")
-    if json_out:
-        atomic_write_text(Path(json_out), json.dumps({
-            "program": "ppa_contract_check", "mode": "corpus",
-            "corpus": str(corpus), "files_opened": scan.files,
-            "records": [str(path) for path, _ in scan.records],
-            "unreadable": [{"path": str(p), "why": w}
-                           for p, w in scan.unreadable],
-            "identity_conflicts": conflicts, "identity_copies": copies,
-            "rc": worst,
-        }, indent=2, sort_keys=True) + "\n")
-    return worst
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    ap.add_argument("--contract", default=None,
-                    help="path to ONE contract document")
-    ap.add_argument("--corpus", default=None, metavar="DIR",
-                    help="validate every contract record under DIR; exits 2 "
-                         "when the corpus carries none")
-    ap.add_argument("--corpus-may-be-absent", action="store_true",
-                    help="this repository need not carry the published "
-                         "corpus. Turns 'nothing anywhere' into a stated "
-                         "NO_CORPUS that names its zero, and NEVER excuses a "
-                         "$VIBE_IC_BENCHMARK_DATA that is set and unreadable.")
+    ap.add_argument("--contract", required=True)
     ap.add_argument("--json", dest="json_out",
                     help="optional machine-readable report; nothing is "
                          "written unless this is given")
@@ -337,15 +205,6 @@ def main(argv=None) -> int:
     args, _rc = cli_exit.parse_or_refuse(ap, argv)
     if args is None:
         return _rc
-
-    if args.contract is not None and args.corpus is not None:
-        return corpus_seam.both_given("ppa_contract_check", "--contract",
-                                      "--corpus")
-    if args.corpus is not None:
-        return check_corpus(Path(args.corpus).resolve(), args.schema_dir,
-                            args.corpus_may_be_absent, args.json_out)
-    if args.contract is None:
-        ap.error("give --contract CONTRACT.json or --corpus DIR")
 
     document, reason = C.load_json(Path(args.contract))
     if reason is not None:

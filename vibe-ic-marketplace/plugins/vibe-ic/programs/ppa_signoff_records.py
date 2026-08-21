@@ -57,7 +57,7 @@ from typing import List, Optional
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import _atomic_artefact  # noqa: E402
-from _ppa import signoff  # noqa: E402
+from _ppa import cli_exit, signoff  # noqa: E402
 
 MARK_CANNOT = "[CANNOT CHECK]"
 
@@ -74,12 +74,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", default=None, help="bundle artefact path")
     ap.add_argument("--quiet", action="store_true",
                     help="suppress the per-axis census on stdout")
-    try:
-        args = ap.parse_args(argv)
-    except SystemExit:
-        # argparse exits 2 on a usage error; the contract says a bad invocation
-        # is 3, and a 2 there would be indistinguishable from "not checked".
-        return RC_BAD_INVOCATION
+    # argparse exits 2 on a usage error and the contract says a bad invocation
+    # is 3, so its own exit has to be intercepted. It is intercepted BY CODE and
+    # not by exception type: `--help` raises SystemExit(0) too, and the bare
+    # `except SystemExit: return RC_BAD_INVOCATION` that stood here turned
+    # asking this program what its flags are into a bad invocation. That is the
+    # trap `_ppa/cli_exit.parse_or_refuse` exists to close, in one place, for
+    # every `ppa_*` CLI.
+    args, rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return rc
 
     run = pathlib.Path(args.run)
     if not run.is_dir():

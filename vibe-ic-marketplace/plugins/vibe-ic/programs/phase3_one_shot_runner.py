@@ -35710,18 +35710,6 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             # degraded run passed for a multi-corner one.
             f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}, "
             f"liberty={lib_c}) ===\"\n"
-<<<<<<< HEAD
-            # BASIS STAMP. This stanza reads the routed netlist and a SPEF
-            # extracted from the post-route DEF, so it discloses the same basis
-            # the single-corner emitter does — in the same two words, because a
-            # second spelling of one fact is a fact two readers disagree about.
-            # Unstamped, this MULTI-CORNER SIGN-OFF report was the one carrying
-            # the real corners and the one that said nothing about its own
-            # stage, so `_ppa/timing.py` had to record `stage: null` for every
-            # row it produced while the single-corner report kept its stage.
-            f"puts $_f \"STA_BASIS: POST_ROUTE_SPEF\"\n"
-            f"puts $_f \"STA_BASIS_LIBERTY: {lib_c}\"\n"
-=======
             # Per STANZA, because the SPEF differs per stanza and the liberty
             # is the thing a reader cannot otherwise recover from the corner
             # name. Every stanza of this report reads a SPEF, so the only way
@@ -35732,7 +35720,6 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"puts $_f \"STA_BASIS_LIBERTY: {lib_c}\"\n"
             f"puts $_f \"STA_BASIS_NETLIST: {netlist.name}\"\n"
             f"puts $_f \"STA_BASIS_SPEF: {Path(corner_spefs[corner]).name}\"\n"
->>>>>>> origin/agent/jrunner2-phase3-runner-honesty
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
@@ -35957,8 +35944,6 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     # corner sign-off evidence, and it stamped nothing, so every row parsed out
     # of it carried `stage: null`. Derived per stanza below, because whether a
     # SPEF was read is decided per stanza here.
-    _prelayout_netlist = (netlist == _pl.synth_dir(project) / f"{top}_synth.v")
-
     def _pass(label: str, kind: str, flag: str, spef_host: Optional[Path],
               open_mode: str) -> str:
         lib_c = corner_libs[label]
@@ -35967,18 +35952,29 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         if spef_host and Path(spef_host).is_file():
             spef_tcl = f"read_spef {_to_container_path(str(spef_host), container)}\n"
             spef_disc = Path(spef_host).name
-<<<<<<< HEAD
-        basis = ("POST_ROUTE_SPEF" if spef_tcl
-                 else "POST_ROUTE_NO_SPEF" if _routed_netlist
-                 else "PRE_LAYOUT_ESTIMATE")
-=======
-        if _prelayout_netlist:
+        # BOTH sides derived this classification and they name the SAME three
+        # values; they disagreed about PRECEDENCE, and only one of the two
+        # readings matches the prose that landed with it. The landed comment on
+        # `_routed_netlist` above says "falling back to the SYNTH netlist ...
+        # must never stamp POST_ROUTE" — but the landed EXPRESSION tested
+        # `spef_tcl` first, so a pre-layout netlist read alongside a SPEF from
+        # some other run stamped POST_ROUTE_SPEF. The NETLIST decides first;
+        # the SPEF only refines an answer that is already post-route.
+        # WHAT DECIDED IT: tests/test_multicorner_signoff_reports_declare_
+        # their_stage.py::test_no_routed_netlist_is_not_stamped_as_signoff
+        # emits with NO `<top>_pnr.v` and WITH SPEFs present, and asserts
+        # `POST_ROUTE` appears nowhere in the body. Under the landed precedence
+        # that arm is red.
+        # ONE predicate, not two: `_routed_netlist` is the landed spelling and
+        # it also carries the `netlist_override` (ECO netlist) case, so this
+        # lane's own `_prelayout_netlist` local was dropped rather than left
+        # beside it to drift.
+        if not _routed_netlist:
             basis_stamp = "PRE_LAYOUT_ESTIMATE"
         elif spef_tcl:
             basis_stamp = "POST_ROUTE_SPEF"
         else:
             basis_stamp = "POST_ROUTE_NO_SPEF"
->>>>>>> origin/agent/jrunner2-phase3-runner-honesty
         return (
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
@@ -36003,8 +35999,13 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             # `POST_ROUTE_SPEF` to every consumer that keeps extracted and
             # unextracted timing apart, so it is never rounded up to the
             # flattering one. Both values are already in `_sta_basis`.
-            f'puts $_f "STA_BASIS: {basis}"\n'
-            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
+            # ONE stanza, not two. Both lanes added a STA_BASIS block here and
+            # the text merged cleanly into a report that stamped its basis
+            # TWICE — a second spelling of one fact is a fact two readers
+            # disagree about, and `_sta_basis.declared_basis` reads the first
+            # match. This lane's block is the landed one's superset (the same
+            # two lines plus the netlist and the SPEF a reader cannot otherwise
+            # recover), so it is the one kept.
             f'puts $_f "OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} '
             f'late={_FLAT_OCV_DERATE_LATE} flat-OCV"\n'
             f'puts $_f "STA_BASIS: {basis_stamp}"\n'

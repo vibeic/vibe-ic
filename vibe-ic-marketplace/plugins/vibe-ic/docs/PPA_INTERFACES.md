@@ -70,7 +70,21 @@ One shape, `vibeic.ppa.metric.v1`. Numbers never travel alone.
 **No numeric sentinels.** `0`, `-1` and `""` never mean "not measured". A report
 prints the literal `NOT_MEASURED` row; it does not omit it.
 
-<<<<<<< HEAD
+**A verdict is not a number.** A metric whose last name segment is `verdict`
+carries a non-empty STRING value and declares `"unit": "verdict"`. Two of the
+nine feasibility axes are proved this way: LVS answers whether two named
+circuits match, and equivalence answers whether a proof exists — neither is a
+population, and encoding "matched" as the integer `0` puts a number where a
+verdict belongs and invites arithmetic on it downstream. `_ppa/metrics.compare`
+returns `NOT_NUMERIC` for a pair of verdicts and never a delta; whether a
+verdict is acceptable is decided only by the feasibility axis that names the
+literals it accepts.
+
+**A `scope` key that is present and null is worse than one that is absent.**
+`null == null`, so two records that could not read their corner compare as the
+SAME corner. A field a producer could not establish is OMITTED and the reason is
+recorded outside `scope`; the refusal that follows is the correct outcome.
+
 **A record that may enter a numeric comparison must CARRY its unit.** Absent or
 empty is refused (`NO_UNIT`); it is never inferred from the name. The name is a
 cross-check on a declared unit, not a substitute for one.
@@ -89,29 +103,12 @@ Measured 2026-08-21: `_ppa/area.py` declared `"cells"`, `"wires"` and
 `"count"`. Two files in one lane holding opposite rules refused six records per
 run. The registry moved, not the rule. Guard:
 `tests/test_ppa_producer_consumer_agreement.py`.
-=======
-**A verdict is not a number.** A metric whose last name segment is `verdict`
-carries a non-empty STRING value and declares `"unit": "verdict"`. Two of the
-nine feasibility axes are proved this way: LVS answers whether two named
-circuits match, and equivalence answers whether a proof exists — neither is a
-population, and encoding "matched" as the integer `0` puts a number where a
-verdict belongs and invites arithmetic on it downstream. `_ppa/metrics.compare`
-returns `NOT_NUMERIC` for a pair of verdicts and never a delta; whether a
-verdict is acceptable is decided only by the feasibility axis that names the
-literals it accepts.
-
-**A `scope` key that is present and null is worse than one that is absent.**
-`null == null`, so two records that could not read their corner compare as the
-SAME corner. A field a producer could not establish is OMITTED and the reason is
-recorded outside `scope`; the refusal that follows is the correct outcome.
->>>>>>> origin/agent/jppafeas-feasibility-producers
 
 **Two numbers are comparable only if their `scope` matches.** Synthesis area and
 post-route area are different metrics. Vectorless power and VCD power are
 different metrics. A comparison across differing scope is `UNDETERMINED`, not a
 winner.
 
-<<<<<<< HEAD
 ### 2.1 A SECOND record under one `(metric, scope)` identity
 
 Three different things look alike here, and collapsing them is what made a
@@ -147,8 +144,8 @@ conflict into two facts that quietly never compare again.
 metric emitted once per reported path under one scope
 (`timing.*.worst_path_slack_ns`, three values, one view) is not a conflict and
 not corroboration; the scope is missing the field that tells the readings apart.
-=======
-### 2.1 Required views are declared PER AXIS
+
+### 2.2 Required views are declared PER AXIS
 
 `_ppa/feasibility.FeasibilityPolicy` reads `required_views` (global) and
 `required_views_by_axis` (per axis, falling back to the global list for any axis
@@ -173,7 +170,6 @@ covers the view). Those two used to be one sentence, and they need different
 fixes: one needs a better artefact, the other needs a run. The coverage is
 published on a SATISFIED axis too, so a reader questioning whether the view set
 was the right one does not have to make the axis fail first.
->>>>>>> origin/agent/jppafeas-feasibility-producers
 
 ## 3. Identity
 

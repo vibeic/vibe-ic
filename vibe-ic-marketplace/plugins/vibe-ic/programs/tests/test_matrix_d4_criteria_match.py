@@ -823,20 +823,12 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-<<<<<<< HEAD
-<<<<<<< HEAD
-    assert len(cells) == len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
-=======
     # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
     # hand: measured with `len(F.step_ids())` on the live yaml. The
     # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
     # (v1.11.18) and this pin was moved for none of them, which is why it
     # was already red on main before the ninth dimension landed.
     assert len(cells) == len(F.step_ids()) == 69, (
->>>>>>> origin/jm9/d9-verdict-consumed
-=======
-    assert len(cells) == len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
->>>>>>> origin/jmatrix/63x8-main-reds
         f"the flow declares {len(F.step_ids())} steps; dimension {DIM} carries "
         f"{len(cells)} cells — the ledger and the yaml have diverged"
     )
@@ -867,20 +859,12 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-<<<<<<< HEAD
-<<<<<<< HEAD
-    assert len(cells) - len(waived) == 69 and not waived, (   # 68 -> 69: step 1.6x
-=======
     # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
     # hand: measured with `len(F.step_ids())` on the live yaml. The
     # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
     # (v1.11.18) and this pin was moved for none of them, which is why it
     # was already red on main before the ninth dimension landed.
     assert len(cells) - len(waived) == 69 and not waived, (
->>>>>>> origin/jm9/d9-verdict-consumed
-=======
-    assert len(cells) - len(waived) == 69 and not waived, (   # 68 -> 69: step 1.6x
->>>>>>> origin/jmatrix/63x8-main-reds
         f"{len(cells) - len(waived)} cells are enforced and {len(waived)} are "
         f"waived; this module was reported as enforcing all 63 with no "
         f"waiver. Update the report, or explain the change."

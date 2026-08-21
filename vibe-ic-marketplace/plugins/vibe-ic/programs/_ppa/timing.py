@@ -243,6 +243,24 @@ def discover_reports(project: Path,
             if f.is_file():
                 candidates.setdefault(str(f.resolve()), f)
 
+    # BYTE EQUALITY DETECTS, IT DOES NOT DECIDE. Two lanes fixed F-10
+    # independently and their tests assert opposite things:
+    #
+    #   "a report published into two directories is ONE artefact and ONE
+    #    reading -- the second copy is the publisher's, not the tool's"
+    #   "two DIFFERENT sign-off reports whose bytes happen to agree are TWO
+    #    measurements; collapsing them by digest would delete evidence"
+    #
+    # Both are true, and NOTHING IN THE BYTES TELLS THEM APART. So the bytes no
+    # longer drop anything. The producer's own declaration
+    # (`collapse_declared_mirrors`) drops declared mirrors, which is the case
+    # the first quote describes and which the runner now writes down; an
+    # UNDECLARED byte-identical pair is reported and BOTH are kept, because
+    # deleting a real second measurement is the worse error of the two -- a
+    # double count is visible in the document and a deletion is not.
+    #
+    # An undeclared pair is itself a finding: the producer published a mirror
+    # without saying so. `collapsed` carries it so the caller can say that.
     by_digest: Dict[str, Path] = {}
     kept: List[Path] = []
     for key in sorted(candidates):
@@ -254,11 +272,10 @@ def discover_reports(project: Path,
             kept.append(f)
             continue
         first = by_digest.get(digest)
-        if first is not None:
-            if collapsed is not None:
-                collapsed.append((f, first))
-            continue
-        by_digest[digest] = f
+        if first is not None and collapsed is not None:
+            collapsed.append((f, first))
+        else:
+            by_digest.setdefault(digest, f)
         kept.append(f)
     return kept
 
@@ -746,14 +763,30 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
     result — which files were opened, and what was declared but never reported.
     """
     notes: List[str] = []
-<<<<<<< HEAD
+    # TWO LANES FIXED F-10 INDEPENDENTLY AND BOTH ARE KEPT, because they are
+    # not the same mechanism and neither subsumes the other:
+    #
+    #   discover_reports(..., collapsed)   collapses byte-identical artefacts by
+    #                                      CONTENT DIGEST. It catches duplicates
+    #                                      nobody declared, which is the only
+    #                                      thing that can catch a duplicate the
+    #                                      producer does not know it made.
+    #   collapse_declared_mirrors(...)     collapses what the RUN ITSELF wrote
+    #                                      down as a copy, in
+    #                                      reports/phase3/artefact_mirrors.json.
+    #                                      It carries a REASON, and it still
+    #                                      collapses a mirror whose bytes have
+    #                                      since diverged in a header.
+    #
+    # Order is forced: discovery has to happen before anything can be dropped.
+    # Both record what they dropped -- `collapsed` below, `mirror_notes` here --
+    # because the hazard in either is a genuine SECOND measurement that happens
+    # to look like the first, and a reader has to be able to see that it was
+    # dropped and why.
     collapsed: List[Tuple[Path, Path]] = []
     reports = discover_reports(project, collapsed)
-=======
-    reports = discover_reports(project)
     reports, mirror_notes = collapse_declared_mirrors(project, reports)
     notes.extend(mirror_notes)
->>>>>>> origin/agent/jrunner2-phase3-runner-honesty
     mode, mode_gap = _mode_for(project)
     rows: List[Row] = []
     for f in reports:
@@ -775,12 +808,21 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
     notes.append("opened %d STA artefact(s): %s" % (
         len(reports), ", ".join(_rel(project, f) for f in reports) or "none"))
     for dup, first in collapsed:
-        # Named, not dropped silently: "we read one file" and "we read one of
-        # two byte-identical copies" are different sentences to a reader
-        # auditing which artefact a number came from.
+        # REPORTED, NOT COLLAPSED. These two artefacts have the same bytes and
+        # the run declared NEITHER of them a mirror of the other, so nothing
+        # here can tell "the publisher wrote the same file twice" from "two
+        # sign-off reports that happen to agree". Both are read and both count;
+        # what is emitted is the FINDING, which is that the producer published
+        # a mirror without saying so. Declared mirrors are collapsed by
+        # `collapse_declared_mirrors` and they carry the producer's reason.
         notes.append(
-            "collapsed duplicate artefact: %s is byte-identical to %s, so it "
-            "was read once" % (_rel(project, dup), _rel(project, first)))
+            "undeclared byte-identical artefacts: %s and %s have the same "
+            "bytes and neither is declared a mirror of the other in %s. BOTH "
+            "were read and both count -- deleting a real second measurement is "
+            "worse than double-counting one, because a double count is visible "
+            "in this document and a deletion is not. The producer should "
+            "declare the mirror."
+            % (_rel(project, dup), _rel(project, first), _MIRROR_MANIFEST))
 
     # Declared-but-never-reported views become explicit NOT_MEASURED rows. A
     # view the run was configured to analyse and did not is the defect this

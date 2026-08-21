@@ -76,6 +76,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_json as atomic_write_json  # noqa: E402
+from _ppa import cli_exit  # noqa: E402 — PPA_INTERFACES §1: a bad invocation is 3
 
 PROGRAM = "ppa_pnr_search_space"
 DEFAULT_JSON_REL = "reports/ppa_pnr_search_space.json"
@@ -419,7 +420,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--programs-dir", default=None,
                     help="where the runner lives (default: this file's "
                          "directory)")
-    args = ap.parse_args(argv)
+    # §1: argparse exits 2 on a usage error and 2 is UNDETERMINED here, so a
+    # caller that skips on 2 swallows the typo. `parse_or_refuse` maps it to
+    # 3 and keeps `--help` at 0. Pinned by
+    # test_ppa_layer_exit_contract::test_unknown_flag_is_bad_invocation_not_undetermined.
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     programs = Path(args.programs_dir).resolve() if args.programs_dir \
         else Path(__file__).resolve().parent
@@ -582,4 +589,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":                              # pragma: no cover
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:                            # pragma: no cover
+        # §1: 3 is INTERNAL ERROR. Letting this propagate exits 1, which is
+        # reserved for a finding about a design, and nothing about a crash in
+        # this program is a fact about one.
+        print(f"{cli_exit.MARK_REFUSE} {PROGRAM}: internal error "
+              f"{type(exc).__name__}: {exc}. Nothing was measured and no "
+              f"space was published. rc=3 (NOT a finding about any design).",
+              file=sys.stderr)
+        raise SystemExit(cli_exit.RC_BAD_INVOCATION)

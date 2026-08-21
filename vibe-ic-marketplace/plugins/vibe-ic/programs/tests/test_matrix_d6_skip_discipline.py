@@ -947,9 +947,6 @@ def _disclosure_prefixes() -> Tuple[str, ...]:
             _fcc._SKIP_HINT_PREFIX,
             _fcc._WAIVER_HINT_PREFIX,
             _fcc._JSON_VACUOUS_HINT_PREFIX)
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 
 
 #: Hints the consumer's tier chain dispatches that this leg deliberately does
@@ -1015,9 +1012,6 @@ def test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name():
         f"{sorted(stale)} are excluded here but the consumer no longer "
         f"dispatches them in its tier chain; the exclusion is describing an "
         f"older module")
->>>>>>> origin/jm9/d9-verdict-consumed
-=======
->>>>>>> origin/jmatrix/63x8-main-reds
 
 
 def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:

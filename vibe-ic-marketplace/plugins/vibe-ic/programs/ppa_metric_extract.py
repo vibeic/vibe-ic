@@ -55,11 +55,8 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports resolve however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
-<<<<<<< HEAD
-from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
-=======
 from _ppa import backends as BK
->>>>>>> origin/jrecords/record-shape-reconcile
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import canonical_json as cj
 from _ppa import metrics as M
 
@@ -282,11 +279,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _emit(args, report, index, n_docs=1, n_bad=0, expected=None)
 
     if not args.records:
-<<<<<<< HEAD
-        return cli_exit.refuse(ap.prog, "give --records PATH [PATH ...] or --backend TOOL")
-=======
-        ap.error("give --records PATH [PATH ...] or --backend TOOL --from PATH")
->>>>>>> origin/jrecords/record-shape-reconcile
+        # BOTH sides moved and neither was wrong about its own half. The exit
+        # lane changed the MECHANISM (`ap.error` exits 2 = UNDETERMINED; §1
+        # says a bad invocation is 3 — `_ppa/cli_exit.py` names this very call
+        # site as its usage example). This lane changed the MESSAGE, because
+        # `--backend TOOL` now needs `--from PATH` to name what to read.
+        # Keeping one and dropping the other loses a real fix either way.
+        return cli_exit.refuse(
+            ap.prog,
+            "give --records PATH [PATH ...] or --backend TOOL --from PATH")
 
     paths = [Path(p) for p in args.records]
     report = collect(paths)

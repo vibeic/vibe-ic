@@ -43,17 +43,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from _ppa import metrics as M  # noqa: E402
 
-<<<<<<< HEAD
-# `importorskip` covered ABSENCE. It did not cover a jsonschema too old to
-# carry `Draft202012Validator` (4.0+), and on 3.2.0 every test below failed
-# with an AttributeError -- turning "I could not check it" into the same red as
-# "I checked it and it was broken", which this file's own docstring forbids.
-from _ppa_jsonschema import require_draft_2020_12  # noqa: E402
-
-jsonschema = require_draft_2020_12()
-=======
 from _ppa import schema_validation as _SV  # noqa: E402
->>>>>>> origin/jsearch2/space-and-feasibility
 
 SCHEMA_PATH = (pathlib.Path(__file__).resolve().parents[2]
                / "schemas" / "ppa" / "metric_record.v1.schema.json")

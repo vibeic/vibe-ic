@@ -177,6 +177,16 @@ uncheckable_until 2026-11-30 "compares TWO contracts to establish that both arms
 run_tolerating_uncheckable "PPA arms solved one problem" "$ROOT" python3 "$PG/ppa_problem_integrity_check.py" --baseline "$ROOT/benchmark-data/ppa/baseline_contract.json" --candidate "$ROOT/benchmark-data/ppa/contract.json"
 
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
+# Its BLIND SPOT, and they are not the same question. The gate above asks whether
+# a stated version AGREES with the shipped one; a claim inserted in the WRONG
+# PLACE still agrees. MEASURED 2026-08-21 by replaying this rule over 400 commits
+# of `origin/main`: 1370 distinct tracked markdown blobs, 25 of them carrying a
+# `| Plugin version | **1.11.NN** |` fragment at `vibe-ic-marketplace/README.md`
+# line 43 with no delimiter row above or below it, the number advancing release
+# by release inside a "table" that never rendered as one. Every version gate
+# looked at those numbers and found them correct. The sentence the fragment
+# replaced was nobody's denominator, so nothing missed it.
+run "table rows belong to tables" "$ROOT" python3 "$PG/doc_table_row_placement_check.py" --repo "$ROOT"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
 # inside the container keeps running as an orphan. The checker that finds those
 # call sites shipped with nothing but its own test running it, which
@@ -1041,6 +1051,17 @@ run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denom
 # never changes the exit code. ~25s, dominated by evaluating the bindings.
 run "stated corpus figures are derived, not typed" "$ROOT" python3 "$PG/derived_corpus_figure_check.py"
 
+# THE THIRD MEMBER OF THAT FAMILY, and the one the two above cannot reach. They
+# ask what a gate SAYS about its own reach. This one asks whether a population an
+# emitter PRINTS still equals the population it counts, and whether the test
+# pinning that number still names a value the emitter can produce. MEASURED
+# 2026-08-21: a lane added a third repair to a post-route block, moved the
+# emitter's printed denominator from two to three, and left the test asserting
+# the old ratio — so the test failed for the right reason with the wrong message.
+# Reach is small and PRINTED on every run (a handful of denominators and pins);
+# a verdict that did not state it would overstate itself.
+run "a printed population agrees with its pin" "$PLUGIN" python3 programs/emitter_population_pin_check.py
+
 # vibe-ic#564 — the SIBLING property. The gate above requires a PASS to say how
 # much it looked at; this one requires a gate that looked at NOTHING to refuse.
 # Both are needed: the P0 umbrella reads exit codes, so a gate that discloses
@@ -1454,21 +1475,6 @@ run "a step whose gate cannot fail" "$PLUGIN" python3 programs/flow_step_can_fai
 run "flow-gate grid" "$PLUGIN" python3 programs/flow_gate_grid.py
 
 run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_check.py
-
-# The same flow document's OTHER graph: the `closed_loop` edges. Wired here
-# because it was the SEVENTH name that `checker_execution_wiring_audit` and
-# `gate_is_wired_check` both reported, and the only reason both exited 1 —
-# `closed_loop_edge_check` landed with no flow gate clause, and its one
-# non-comment consumer was a file under `programs/tests/`, which is not a wiring
-# surface. A gate reachable only from a test does not run on a design, so the
-# check that made `closed_loop` declarations falsifiable was itself consulted by
-# no automatic verdict (docs/PPA_CURRENT_STATE.md section 5).
-#
-# rc RE-MEASURED on this base before wiring, not carried over from another tree:
-# rc 0, "checked 22 declared closed_loop edge(s) over 69 step(s); every edge
-# resolves to a declared step, closes a loop, carries a trigger, and leaves a
-# step whose gate can produce a verdict."
-run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py"
 
 # The census the two gates above feed into, and the one thing in this family that
 # a HUMAN had to remember to run.

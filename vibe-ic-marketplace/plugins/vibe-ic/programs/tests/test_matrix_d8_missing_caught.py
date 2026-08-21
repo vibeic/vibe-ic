@@ -1764,7 +1764,13 @@ CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
 #: :data:`CONTENT_ARM_UNGRADABLE_SELF_WRITTEN` below, which names every step in
 #: this position and is re-derived live so it cannot rot into a description of
 #: an older tree.
-CONTENT_ARM_BLIND: Tuple[str, ...] = ("28", "A1", "A4", "D1")
+#: 2026-08-21, MERGE: "2" RESTORED. It was removed on the yaml INFERENCE that
+#: step 2's only content-bearing declared output is its own gate's `--json`
+#: target. The on-disk MEASUREMENT disagrees — the file survives the gate — so
+#: step 2 is gradable after all, it is UNMOVED, and UNMOVED on a gradable row
+#: is what this set means. Removing it was my error; the measurement puts it
+#: back, and the record of why is above CONTENT_ARM_UNGRADABLE_SELF_WRITTEN.
+CONTENT_ARM_BLIND: Tuple[str, ...] = ("2", "28", "A1", "A4", "D1")
 
 #: Steps the content arm CANNOT grade because every content-bearing artefact it
 #: rewrites is written by that step's own gate. Not a waiver and not a pass: it
@@ -1778,17 +1784,32 @@ CONTENT_ARM_BLIND: Tuple[str, ...] = ("28", "A1", "A4", "D1")
 #: artefact some other producer writes, and for 1.6x that is not currently
 #: possible (the step is unconditional by design and a design that ran no
 #: cross-layer search produces no upstream report).
-CONTENT_ARM_UNGRADABLE_SELF_WRITTEN: Tuple[str, ...] = ("1.6x", "2")
+#: 2026-08-21, MERGE: "2" REMOVED, and the test that removed it is
+#: `test_the_two_readings_of_self_written_agree`, written for exactly this
+#: merge. Two lanes answered "is this row gradable?" two ways and they part on
+#: step 2. MEASURED:
+#:
+#:   step 2    declared output rewritten : reports/phase2/lint/rtl_hygiene.json
+#:             yaml says the gate writes it : YES (it is a --json target)
+#:             SURVIVED the gate on disk    : YES
+#:   step 1.6x yaml says the gate writes it : YES
+#:             SURVIVED the gate on disk    : NO
+#:
+#: The yaml INFERENCE reads a `--json` target and concludes the gate overwrites
+#: it. That over-predicts for any clause that does not actually run: step 2's
+#: path is named by a clause whose program never wrote it, so the file survived
+#: and the content arm CAN grade the step. The on-disk MEASUREMENT is what
+#: happened, and it is the reading this file acts on.
+#:
+#: So the two lanes were not both right here, as they were on the entries pin.
+#: The inference was coarser and it is the one that lost, on evidence.
+CONTENT_ARM_UNGRADABLE_SELF_WRITTEN: Tuple[str, ...] = ("1.6x",)
 
 #: Kinds the flow can read at all. Anything else is not a content channel, so a step
 #: that rewrites only those is NOT gradable and its UNMOVED means nothing about blindness.
 _CONTENT_BEARING_SUFFIXES: Tuple[str, ...] = (".json", ".jsonl")
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> origin/jmatrix/63x8-main-reds
 #: Paths a step's OWN gate writes, from the `--json` / `--out` of its own gate
 #: commands. Re-derived from the live yaml, never listed.
 def _gate_written_paths(step_id) -> frozenset:
@@ -1801,37 +1822,6 @@ def _gate_written_paths(step_id) -> frozenset:
     return frozenset(out)
 
 
-def _gradable(rec, step_id=None) -> bool:
-    """Is this row's UNMOVED/MOVED a judgement about CONTENT at all?
-
-    THE SUFFIX WAS A PROXY AND IT WAS WRONG FOR A MEASURABLE CLASS.
-    This asked one question — "is at least one rewritten file of a kind the
-    flow can read" — and answered it from the filename. A `.json` passed. But a
-    declared output that is the step's OWN gate's `--json` destination is
-    truncated and rewritten by that gate BEFORE it computes anything, so no
-    content can travel from it into the verdict. MEASURED on step 1.6x, seeding
-    its one declared output with deliberately wrong content and running its own
-    gate command::
-
-        before  sha256 02998b14880f76689dc0f11b71cf4b512382d3e3fd811a96c5dc45...
-        rc=0
-        after   sha256 22bad440d577d4e24c168b4c98ce017377474622a0410e49d72d5f1...
-
-    The gate overwrote it. UNMOVED there is not "a gate that read a wrong
-    artefact and did not act"; it is "there was no channel", which is the FIRST
-    of the two cases this file's own docstring says must not be graded as
-    blindness:
-
-        "It cannot, alone, tell a row that did not move because the flow has no
-         channel to read from a row that did not move because the flow read the
-         channel and did not act. The first is a capability gap; the second is a
-         gate reporting a wrong artefact as good as a right one."
-
-    So this is the stated rule, implemented; it is not the rule relaxed. A step
-    with even ONE rewritten content-bearing file its gate does not write stays
-    gradable, and a gate that genuinely stops reading such a file still reddens.
-<<<<<<< HEAD
-=======
 def _survived_the_gate(rec) -> Tuple[str, ...]:
     """The rewritten files still carrying the WRONG body once the gate had run.
 
@@ -1850,7 +1840,7 @@ def _survived_the_gate(rec) -> Tuple[str, ...]:
         if body == wrong_body(rel).encode("utf-8"))
 
 
-def _gradable(rec) -> bool:
+def _gradable(rec, step_id=None) -> bool:
     """Is this row's UNMOVED/MOVED a judgement about CONTENT at all?
 
     THE SURVIVAL CLAUSE (2026-08-21). It is not enough that the harness WROTE a
@@ -1877,32 +1867,12 @@ def _gradable(rec) -> bool:
     stopped reading, a step arrived whose only declared artefact is one its gate
     produces. Charging it would have been the campaign's own disease — measuring
     something adjacent and reporting it as if it answered the question.
->>>>>>> origin/jm9/d9-verdict-consumed
-=======
->>>>>>> origin/jmatrix/63x8-main-reds
     """
     rels = rec.get("rels") or ()
     if not rels or rec.get("unresolved_alts"):
         return False
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> origin/jmatrix/63x8-main-reds
-    readable = [r for r in rels
-                if str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)]
-    if not readable:
-        return False
-    if step_id is None:
-        return True
-    written = _gate_written_paths(step_id)
-    return any(str(r) not in written for r in readable)
-<<<<<<< HEAD
-=======
     return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)
                for r in _survived_the_gate(rec))
->>>>>>> origin/jm9/d9-verdict-consumed
-=======
->>>>>>> origin/jmatrix/63x8-main-reds
 
 
 def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one():
@@ -2425,3 +2395,52 @@ def test_the_pin_is_the_MEASURED_population_not_a_SUPERSET_of_it():
         f"catches): {sorted(measured - pinned)}\n"
         f"  re-derive the tuple rather than adding to it — appending is how "
         f"v1.10.38 shipped a 28-entry pin over a 27-step population.")
+
+
+def test_the_two_readings_of_self_written_agree():
+    """THE MERGE, AS A TEST. Two lanes answered "is this row gradable?" two
+    ways -- inference from the yaml (`_gate_written_paths`) and measurement off
+    disk (`_survived_the_gate`). They agree on this tree, and that agreement is
+    asserted rather than assumed, because the day they part is the day a gate
+    started writing a declared output under a name the yaml does not spell.
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm measured ZERO steps -- a broken measurement"
+    disagree = []
+    for step_id, rec in sweep.items():
+        rels = rec.get("rels") or ()
+        if not rels or rec.get("unresolved_alts"):
+            continue
+        readable = [r for r in rels
+                    if str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)]
+        if not readable:
+            continue
+        inferred = any(str(r) not in _gate_written_paths(step_id)
+                       for r in readable)
+        measured = _gradable(rec, step_id)
+        if inferred != measured:
+            disagree.append((step_id, inferred, measured))
+    # ONE DIVERGENCE IS MEASURED AND PINNED, in BOTH directions, so this test
+    # still fires for any new one. The message below anticipated a divergence
+    # in one direction — a gate WRITING a declared output the command does not
+    # name. Measured on this tree it is the OTHER direction:
+    #
+    #   step 2  reports/phase2/lint/rtl_hygiene.json
+    #           the gate command NAMES it as a `--json` target
+    #           the file SURVIVED the gate on disk
+    #
+    # so the command names a target its program did not write on this fixture.
+    # That is why the inference (False) and the measurement (True) disagree, and
+    # it is why the measurement is the reading this file acts on: a `--json`
+    # flag is an intention, and only the disk says what happened.
+    KNOWN_DIVERGENCE = {("2", False, True)}
+    unexpected = [d for d in disagree if tuple(d) not in KNOWN_DIVERGENCE]
+    stale = [d for d in KNOWN_DIVERGENCE if d not in {tuple(x) for x in disagree}]
+    assert not unexpected and not stale, (
+        "the yaml inference and the on-disk measurement disagree about which "
+        "rows are gradable, and not in the way already recorded. NEW: "
+        + repr(unexpected) + "; NO LONGER DIVERGING: " + repr(stale) +
+        ". The measurement is the one this file acts on; a divergence means a "
+        "gate writes a declared output under a path the gate command does not "
+        "name, or names one it does not write — either way a finding about "
+        "that gate, and either way it must be named here rather than absorbed.")

@@ -76,6 +76,9 @@ import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082
+
 # --------------------------------------------------------------------------- #
 # pad roles -- derived from the operator's OWN instance names, never assumed
 # --------------------------------------------------------------------------- #
@@ -578,9 +581,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc = int(rep["rc"])
 
     if a.out_json:
-        os.makedirs(os.path.dirname(os.path.abspath(a.out_json)), exist_ok=True)
-        with open(a.out_json, "w", encoding="utf-8") as fh:
-            json.dump(rep, fh, indent=2, sort_keys=True)
+        # vibe-ic#1082 — a declared report destination is written through
+        # `_atomic_artefact`, never a bare `open(..., 'w')`: a reader that finds
+        # the file half-written cannot tell a truncated report from a short one.
+        write_json(a.out_json, rep, indent=2, sort_keys=True)
     print(f"slot_pad_budget_check: {rep['verdict']}")
     if rep["verdict"] == "UNDECIDED":
         print(f"  {rep.get('reason', 'no reason recorded')}")
