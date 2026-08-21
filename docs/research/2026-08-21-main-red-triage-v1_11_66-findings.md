@@ -2336,6 +2336,56 @@ that looks like the one that went missing.
 Six rows, six corrections. Not one survived audit as written.
 
 
+## M37 — the waiver lookup, PERFORMED: there is no waiver, for any of them
+
+M33 reduced the coverage bridge from "a vocabulary design question" to "is there
+a waiver?" — and then I declined to look, on the grounds that those reds are in
+another agent's set. **That is the same "not mine" reasoning that collapsed five
+times tonight.** A lookup is something I can do. I did it.
+
+The central registry is `matrix_63x8.waivers.WAIVERS`
+(`programs/tests/matrix_63x8/waivers.py`), and its own docstring states the
+standard this engagement has been groping toward all night:
+
+> A waiver is a **public, dated admission** that one cell of the 504 is NOT
+> enforced … **visible and machine-checkable instead of silently absent.**
+> `reason` must say what a program *cannot decide* and why, in terms someone who
+> has never seen the cell can check.
+
+It even bans the non-reasons by word boundary — `"not implemented"` and friends.
+
+**Eleven entries. Result of the lookup:**
+
+| probed | waiver? |
+|---|---|
+| coverage bridge | **none** |
+| `0.5ic` | **none** |
+| steps 15, 17, 19, 20, 30, 32 (the six `d3` cells) | **none** |
+| existing `d3` waivers | only `6/d3` and `39/d3` |
+
+**What this settles.**
+
+* **The coverage bridge (M33) is answered.** `WAIVED-DEFERRED` requires a
+  recorded waiver; there is none. **So it is not available, and the verdict is
+  the vacuous one.** No design decision is needed — the repository already
+  decided by not granting a waiver.
+* **The six `d3` cells and `0.5ic` are not waived either.** Their reds are
+  legitimate and unexempted, which strengthens M34/M35: they need evidence or a
+  NEW waiver, and nobody has quietly granted one.
+
+**And the two existing `d3` waivers show the bar.** `6/d3` and `39/d3` cover
+Intel Quartus outputs — a `.sof` bitstream from a proprietary tool, genuinely
+undecidable by any program here. That is what "what a program cannot decide"
+means. **The six cells I examined do not meet it**: they cite run roots of an
+unsearchable kind, which is an EVIDENCE gap, not an undecidable one. A waiver for
+them would have to argue something the registry's own standard would reject.
+
+**Six "not mine" claims collapsed, and this is the seventh thing I nearly left
+unlooked-at for the same reason.** The tell was that I had already reduced it to
+a lookup and still did not look — the reduction felt like progress and substituted
+for the work.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2421,7 +2471,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | *Is there a waiver id + owner reason for this cell?* If yes → `WAIVED-DEFERRED`; if no → it is not available and the pass is vacuous. A LOOKUP, not a vocabulary choice (M33). | **lookup** |
+| **Coverage bridge** (2 reds) | ~~is there a waiver?~~ **LOOKED UP (M37): there is NONE.** `WAIVED-DEFERRED` is therefore unavailable and the verdict is the vacuous one. No decision needed — the registry already decided by not granting one. | **answered** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
