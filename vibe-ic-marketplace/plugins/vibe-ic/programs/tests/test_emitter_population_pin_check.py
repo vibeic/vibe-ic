@@ -599,6 +599,58 @@ def test_the_pin_reader_gets_every_negation_spelling_right():
         f"govern: {refused}")
 
 
+#: Every denominator denied AND every pin denied -- polarity empties the reach.
+EMITTER_EVERYTHING_DENIED = '''\
+def script() -> str:
+    return (
+        "  set _n 0\\n"
+        "  if {[catch {a}]} {{ incr _n }}\\n"
+        "  if {[catch {b}]} {{ incr _n }}\\n"
+        "  # $_n >= 2 is no longer the threshold, that gate was removed\\n"
+        "  puts \\"PARTIAL: 0 of 2 repairs refused\\"\\n"
+    )
+'''
+
+PIN_DENIES_EVERYTHING = '''\
+from thing_emit import script
+
+
+def test_the_old_wording_is_gone():
+    assert "of 2 repairs refused" not in script()
+'''
+
+
+def test_polarity_cannot_empty_the_reach_into_a_PASS(tmp_path):
+    """THE PROPERTY THE WHOLE POLARITY CHANGE TURNS ON, and the one it would be
+    worst to get wrong.
+
+    Consulting polarity can only ever REMOVE things from what this guard
+    compares. That is safe exactly while an emptied reach is reported as
+    VACUOUS -- "nothing was compared, this is NOT a pass" -- and catastrophic
+    the moment it prints PASS instead, because then a denial anywhere in an
+    emitted script becomes a way to switch a blocking gate off and be thanked
+    for it with a green line.
+
+    So the extreme is exercised rather than reasoned about: an emitter whose
+    only denominator sits in a sentence retiring it, and a test whose only
+    phrase it DENIES. rc must be 2, the words "NOT a pass" must be printed, and
+    the `[POLARITY]` line must name what was removed -- an emptied reach that
+    does not say why is the silent direction wearing a verdict."""
+    progs, tests = _tree(tmp_path, EMITTER_EVERYTHING_DENIED,
+                         PIN_DENIES_EVERYTHING)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_VACUOUS, (
+        "polarity emptied the reach and the guard did not say so:\n" + out)
+    assert "NOT a pass" in out, out
+    assert "VACUOUS_PASS:" in out, out
+    assert "[POLARITY]" in r.stdout, (
+        "the reach was emptied without naming what removed it:\n" + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["counters_examined"] == 0 and doc["pins_examined"] == 0, doc
+    assert len(doc["denied_by_polarity"]) == 2, doc
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
