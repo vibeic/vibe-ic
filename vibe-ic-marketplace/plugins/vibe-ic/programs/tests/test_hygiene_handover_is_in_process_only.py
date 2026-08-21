@@ -55,18 +55,21 @@ class _Stop(Exception):
     """Raised in place of `parse_args` so `main()` builds the parser and stops."""
 
 
-def _real_parser() -> argparse.ArgumentParser:
-    """The parser `main()` actually builds, CAPTURED rather than restated.
+def _real_parsers() -> list:
+    """EVERY parser `main()` builds, CAPTURED rather than restated.
 
     A restated copy of the option list would go on passing after the program's
     own copy grew one more, which is the drift this repo removes from gates one
-    at a time.
+    at a time. Plural because capturing only the first `parse_args` would let a
+    pre-parser in front of the real one hide the option: this collects every
+    parser reached before the first one stops, and the callers check all of
+    them.
     """
-    captured = {}
+    captured = []
     original = argparse.ArgumentParser.parse_args
 
     def spy(self, args=None, namespace=None):
-        captured["ap"] = self
+        captured.append(self)
         raise _Stop
 
     argparse.ArgumentParser.parse_args = spy
@@ -76,8 +79,10 @@ def _real_parser() -> argparse.ArgumentParser:
         pass
     finally:
         argparse.ArgumentParser.parse_args = original
-    assert "ap" in captured, "main() did not build an ArgumentParser"
-    return captured["ap"]
+    assert captured, "main() did not build an ArgumentParser"
+    # Anything constructed but not yet parsed is reachable too — a parser whose
+    # `parse_known_args` runs first would not appear above.
+    return captured
 
 
 def _handover_kwargs() -> set:
@@ -97,13 +102,14 @@ def _handover_kwargs() -> set:
 def test_no_command_line_option_can_supply_a_hygiene_result():
     """THE POINT. Bound to `dest`, so `--gate-record-in` fails just as hard."""
     banned = _handover_kwargs()
-    for action in _real_parser()._actions:
-        assert action.dest not in banned, (
-            f"{action.option_strings or action.dest!r} reaches "
-            f"review({action.dest}=...), which hands the hygiene gate a "
-            f"substitute for running it. Renaming the flag does not stop it "
-            f"being a skip button on the one gate whose entire purpose is "
-            f"that it cannot be forgotten")
+    for parser in _real_parsers():
+        for action in parser._actions:
+            assert action.dest not in banned, (
+                f"{action.option_strings or action.dest!r} reaches "
+                f"review({action.dest}=...), which hands the hygiene gate a "
+                f"substitute for running it. Renaming the flag does not stop "
+                f"it being a skip button on the one gate whose entire purpose "
+                f"is that it cannot be forgotten")
 
 
 def test_main_never_hands_the_review_a_record():
