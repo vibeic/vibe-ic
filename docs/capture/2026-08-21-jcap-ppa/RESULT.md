@@ -688,6 +688,13 @@ invocation of its own driver program does not run:**
     enhancement_emit.py: error: the following arguments are required: --out-dir
     rc=2
 
+Re-run after merging main: identical, with the declared form returning 0 as the
+control. The text is at `skills/benchmark-enhancement-capture/SKILL.md:532` in
+the repository, not only in the installed copy — a four-line continued invocation
+whose three output flags were all replaced by one. It is deliberately not
+hand-patched here: correcting the line would remove the motivating instance and
+leave the population unguarded.
+
 An existing guard already checks that a command quoted in the release notes and
 manifests names a file that EXISTS. Two things put this case outside it: skills
 are not in its population, and it tests existence rather than acceptance — a
