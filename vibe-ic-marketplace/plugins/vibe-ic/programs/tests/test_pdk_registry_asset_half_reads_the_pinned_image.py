@@ -34,6 +34,7 @@ program returns that container anyway. No daemon, no image, no network.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -53,7 +54,7 @@ FOREIGN_ID = "sha256:" + "b" * 64
 # A stub `docker` that answers the three questions either version of the
 # program can ask, and logs every invocation so a test can count them.
 _STUB = r'''#!/usr/bin/env python3
-import os, sys
+import json, os, sys
 a = sys.argv[1:]
 log = os.environ.get("PDKREG_STUB_LOG")
 if log:
@@ -77,6 +78,10 @@ if a[:1] == ["inspect"]:
     if not ref:
         sys.stderr.write("No such object\n")
         sys.exit(1)
+    if "{{json .Mounts}}" in a:
+        dests = json.loads(os.environ.get("PDKREG_STUB_CONTAINER_MOUNTS", "[]"))
+        sys.stdout.write(json.dumps([{"Destination": d} for d in dests]) + "\n")
+        sys.exit(0)
     sys.stdout.write("/%s\t%s\t%s\ttrue\t2026-01-01\n" % (a[-1], ref, cid))
     sys.exit(0)
 sys.exit(1)
@@ -96,11 +101,12 @@ def docker_stub(tmp_path, monkeypatch):
     monkeypatch.setenv("PDKREG_STUB_LOG", str(log))
     monkeypatch.setattr(C, "_image_tag", lambda: PINNED)
 
-    def configure(container_ref, container_id, images):
+    def configure(container_ref, container_id, images, mounts=()):
         monkeypatch.setenv("PDKREG_STUB_CONTAINER_REF", container_ref or "")
         monkeypatch.setenv("PDKREG_STUB_CONTAINER_ID", container_id or "")
         monkeypatch.setenv("PDKREG_STUB_IMAGES",
                            ",".join(f"{k}={v}" for k, v in images.items()))
+        monkeypatch.setenv("PDKREG_STUB_CONTAINER_MOUNTS", json.dumps(mounts))
         # The fix memoises the decision; clearing keeps tests independent.
         # getattr-guarded so this file RUNS against the unfixed program and
         # fails on its ASSERTIONS rather than on a missing symbol.
@@ -137,6 +143,19 @@ def test_a_container_matched_by_id_when_the_tag_was_retagged(docker_stub):
     docker_stub("some-local-retag:dev", PINNED_ID,
                 {PINNED: PINNED_ID, "some-local-retag:dev": PINNED_ID})
     assert C._resolve_target("vibeic-eda") == ("exec", "vibeic-eda")
+
+
+def test_a_matching_container_with_a_pdk_mount_is_not_authoritative(
+        docker_stub):
+    """Image identity does not undo Docker's mount overlay. A matching image
+    whose Nangate tree is replaced by host staging bytes must fall back to the
+    pinned image rather than turn those host bytes into a registry verdict."""
+    docker_stub(PINNED, PINNED_ID, {PINNED: PINNED_ID},
+                mounts=["/foss/pdks/nangate45"])
+    assert C._resolve_target("vibeic-eda") == ("run", PINNED)
+    _target, why = C._target_and_why("vibeic-eda")
+    rejected = why.get("container_rejected") or {}
+    assert rejected.get("masking_mounts") == ["/foss/pdks/nangate45"]
 
 
 def test_no_container_at_all_still_reads_the_pinned_image(docker_stub):
