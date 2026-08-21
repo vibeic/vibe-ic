@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 21 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 22 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 18 | deterministic rules — the default, and every one names its predicate |
+| **A** | 19 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -780,6 +780,32 @@ same rule at a different artefact class, again.
 **(o)** yes. **(d)** yes — it is per rung pair, so it re-answers for any ladder
 the layer gains.
 
+### A-20 · a consumer must resolve a declared output path, not guess among candidates · `phase2.final_audit`
+
+From a lane's own *what I could not settle*: a reliability screen writes wherever
+its option points, no step pins the path, and the consumer tries **three guessed
+names**. The lane called it *"a convention, not a contract"* and left it.
+
+It is broader than the one axis, and the discriminator is that **the flow already
+declares the path**:
+
+    consumers carrying an ordered candidate list for one artefact      48
+      naming at least one path the flow ALREADY declares               33
+        ...in a program that reads the flow declaration                 3
+        ...in a program that does NOT — guesses anyway                 30
+
+One artefact, two definitions of where it lives, and the list is where they
+drift. The failure is silent in the worst direction: a consumer that finds
+nothing reports the artefact **absent**, which is indistinguishable from a step
+that never ran — so the axis degrades to not-measured and the run stays green.
+
+The rule orders the declaration first and keeps the list as a **disclosed**
+fallback rather than deleting it: some of the 30 may be supporting older trees
+deliberately, and a second-choice hit that fires silently is itself evidence the
+declaration is wrong.
+**(o)** yes. **(d)** yes — it is per declared artefact, so it covers every one
+the flow gains.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -965,6 +991,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-17 | — | 6867 / 6674 | split is perfectly per producer; all 6867 host-prefixed |
 | A-18 | — | 0 mentions | the ranking layer has no word for the property it deletes |
 | A-19 | — | order INVERTED | the cheap rung's top candidate places third |
+| A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |

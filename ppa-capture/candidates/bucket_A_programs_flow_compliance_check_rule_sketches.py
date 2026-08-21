@@ -1,0 +1,13 @@
+# Bucket A — program-rule sketches for programs/flow_compliance_check.py
+# Corpus-sweep REQUIRED before merging into programs/flow_compliance_check.py.
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
+# Pattern: A step writes an artefact wherever its own option points. A later consumer needs that artefact and locates it by trying an ordered list of names it carries in its own source, taking the first that exists. The flow document ALREADY declares the path, and the consumer never reads it — so one artefact has two definitions of where it lives, and the list is where they drift. Nothing detects the drift, because a consumer that finds nothing reports the artefact as absent, which is indistinguishable from a step that did not run.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_a_consumer_must_resolve_a_declared_output_path_rather_than_guess_among_candidate(sample_text, ports):
+    """Where the flow declares a step's output path, that declaration is the single definition of where the artefact lives, and a consumer must resolve it from there. A private candidate list re-implements the same fact in a second place, and the failure it produces is silent in the worst direction: the artefact is reported absent rather than mislocated, so the axis it feeds degrades to not-measured and the run stays green. A list remains legitimate where the flow declares nothing, and as a fallback BEHIND the declaration — but then the fallback must be disclosed when it fires, because a consumer that quietly found the file under its second-choice name has evidence the declaration is wrong."""
+    # Expected signal: ERROR
+    # Suggested fix action: Resolve every declared artefact through the flow declaration; keep a candidate list only as a disclosed fallback, and report which name satisfied the lookup so a second-choice hit is visible rather than silent. Refuse a candidate list whose first entry contradicts the declaration. MEASURED on this tree: 48 consumers carry an ordered candidate-path list for a single artefact; 33 of those name at least one path the flow document ALREADY declares; and of those 33, only 3 are in a program that reads the flow declaration at all — the other 30 guess. The instance that surfaced this is a reliability screen whose consumer tries three names, one of which the flow does not know about, so the axis is reachable only by a coincidence of naming. Some of the 30 may be supporting older trees deliberately, which is why the rule orders the declaration first rather than deleting the lists.
+    return []  # list of findings — TODO implement
