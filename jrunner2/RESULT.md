@@ -397,6 +397,32 @@ in two commits of one push, and it was right to.
 
 ---
 
+## One defect I introduced and caught
+
+Running the four new modules TOGETHER, after all four fixes were committed,
+reddened `test_the_measurement_moves_when_the_routed_design_moves`:
+
+```
+FileNotFoundError: [Errno 2] No such file or directory:
+  '$RUN_ROOT/phase3/stage3/pnr/dut_pnr.v'
+```
+
+The test opened the argument of `read_verilog` as a real path. That was true
+when it was written (before F-14) and stopped being true the moment the same
+branch made the deck run-root-relative. It was not caught earlier because the
+A/B selection excludes this branch's own new modules and I did not re-run them
+after the path change — which is the run that should follow any change to how
+an artefact is spelled.
+
+Fixed by resolving `$RUN_ROOT` the way the deck does and then asking the test's
+own question. Re-verified: 37 passed across the four modules together, each
+module green alone, and the F-7 arm against `e36d81c0a` still 7 failed /
+2 passed for the measurement reason. The shape is worth recording: a test that
+reads an emitted artefact's paths as filesystem paths is coupled to how they
+are spelled, and the spelling is a separate fix with separate tests.
+
+---
+
 ## What I could NOT settle
 
 1. **The other 25 emitted scripts still carry host paths.** Named below.
