@@ -38,6 +38,7 @@ The fixture is synthetic on purpose — a square die, a three-master IO library,
 four pads a side — and carries no process, foundry or library name.
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -136,7 +137,10 @@ def _config(**over) -> dict:
         "PAD_CORNER_SITE_NAME": "io_corner_site",
         "PAD_EDGE_SPACING": 10,
         "PAD_ROTATION_HORIZONTAL": "R0",
-        "PAD_ROTATION_VERTICAL": "R90",
+        # librelane's default, and the ONLY value this step proceeds on: the
+        # placer does not read this variable (measured), so a declared
+        # non-default is refused NOT_DETERMINED rather than silently ignored.
+        "PAD_ROTATION_VERTICAL": "R0",
         "PAD_ROTATION_CORNER": "R0",
         "PAD_CORNER": "pad_corner",
         "PAD_FILLERS": ["pad_fill1"],
@@ -926,3 +930,451 @@ def test_the_skip_disclosure_guard_is_load_bearing(tmp_path):
     r = _run(mut, root)
     assert real == 1 and r.returncode == 2, (
         f"real={real} mutant={r.returncode}\n{r.stdout}")
+
+
+# --------------------------------------------------------------------------- #
+# WHERE A PAD SITE IS DECLARED — the second PDK view
+#
+# MEASURED 2026-08-22 in the pinned image, on the open PDK whose IO library was
+# read exhaustively: all 15 of its IO cell LEFs carry the `SITE <name> ;`
+# REFERENCE form inside a MACRO and NOT ONE top-level SITE declaration. The
+# distribution declares those sites in its tech view instead —
+#
+#     libs.tech/<flow>/<io library>/config.tcl
+#         # Note: This is needed if site definition are not in LEF
+#         dict set ::env(PAD_FAKE_SITES) "<site>" "<width_um>, <height_um>"
+#
+# — which is upstream's own PDK-scoped variable, consumed by upstream's placer
+# before its two site lookups. Reading only the LEF view refused a real PDK
+# with PAD_SITE_NOT_FOUND, which is our own tool blocking a verdict the chip
+# had earned. Every fixture below is the SAME synthetic library as above with
+# its two SITE declarations moved from the LEF to the tech view, so what the
+# tests vary is the view and nothing else.
+# --------------------------------------------------------------------------- #
+def _io_lef_sites_not_in_lef(site_w: float = 1.0) -> str:
+    """The same IO library, with its SITE records where this PDK puts them:
+    not in the LEF. The `SITE <name> ;` lines are the REFERENCE form every
+    such distribution's macros carry, and they declare nothing."""
+    body = _io_lef(site_w)
+    keep = []
+    drop = False
+    for ln in body.splitlines():
+        if ln.startswith("SITE "):
+            drop = True
+        if not drop:
+            keep.append(ln)
+        if drop and ln.startswith("END ") and ln.split()[1].endswith("site"):
+            drop = False
+    text = "\n".join(keep) + "\n"
+    assert "CLASS PAD ;\n    SYMMETRY" not in text
+    # the reference form, inside each macro, exactly as the distribution ships
+    text = text.replace("MACRO pad_bidir\n  CLASS PAD ;",
+                        "MACRO pad_bidir\n  CLASS PAD ;\n  SITE io_site ;")
+    text = text.replace("MACRO pad_corner\n  CLASS PAD ;",
+                        "MACRO pad_corner\n  CLASS PAD ;\n"
+                        "  SITE io_corner_site ;")
+    return text
+
+
+def _site_declaration(*entries: tuple) -> str:
+    """A PDK tech-view config in the form the distributions write it."""
+    lines = ["set current_folder [file dirname [file normalize [info script]]]",
+             'set ::env(PAD_SITE_NAME) "io_site"',
+             'set ::env(PAD_CORNER_SITE_NAME) "io_corner_site"',
+             "# Create fake pad sites",
+             "# Note: This is needed if site definition are not in LEF",
+             "set ::env(PAD_FAKE_SITES) [dict create]"]
+    lines += [f'dict set ::env(PAD_FAKE_SITES) "{n}" "{w}, {h}"'
+              for n, w, h in entries]
+    return "\n".join(lines) + "\n"
+
+
+def _project_sites_in_tech_view(tmp_path: Path, *, site_w: float = 1.0,
+                                declare: bool = True,
+                                second_lib: tuple = None,
+                                config=...) -> Path:
+    root = _project(tmp_path, config=config, site_w=site_w)
+    (root / "pdk/proc/libs.ref/proc_io/lef/io.lef").write_text(
+        _io_lef_sites_not_in_lef(site_w))
+    if declare:
+        d = root / "pdk/proc/libs.tech/someflow/proc_io"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.tcl").write_text(_site_declaration(
+            ("io_site", f"{site_w:.2f}", "350"),
+            ("io_corner_site", "350", "350")))
+    if second_lib is not None:
+        d = root / "pdk/proc/libs.tech/someflow/proc_other_io"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.tcl").write_text(_site_declaration(*second_lib))
+    return root
+
+
+def test_a_pdk_that_declares_its_sites_in_the_tech_view_is_not_refused(
+        tmp_path):
+    """THE DEFECT. The IO LEFs carry no SITE declaration — which is what a
+    real distribution ships — and the PDK declares both sites in its tech
+    view. Before this was read, step 15.5ic answered PAD_SITE_NOT_FOUND about
+    a PDK that had declared the site, and the run could not reach a verdict
+    for a reason the flow itself owned."""
+    root = _project_sites_in_tech_view(tmp_path)
+    # the premise: the LEF view really is empty of SITE declarations
+    lefs = PR.discover_io_lefs(str(root / "pdk"), "proc")
+    assert PR.IoLibrary(lefs).sites == {}
+    assert _gen(root) == 0, _report(root)["reason"]
+    rep, _ = CHK._unwrap(_report(root))
+    assert rep["verdict"] == "PASS"
+    assert len(rep["pads"]) == len(ALL_SIGNALS)
+    assert rep["abutment"]["abuts"] is True
+    assert _chk(root) == 0
+
+
+def test_the_tech_view_site_is_the_same_ring_as_the_lef_site(tmp_path):
+    """A site is a site. Reading the second view must place the SAME ring,
+    to the DEF unit — otherwise the fix changed the geometry rather than
+    where the geometry was read from."""
+    lef_root = _project(tmp_path / "a")
+    tech_root = _project_sites_in_tech_view(tmp_path / "b")
+    assert _gen(lef_root) == 0 and _gen(tech_root) == 0
+    a, _ = CHK._unwrap(_report(lef_root))
+    b, _ = CHK._unwrap(_report(tech_root))
+    assert a["pads"] == b["pads"]
+    assert a["corners"] == b["corners"]
+    assert a["spacing"] == b["spacing"]
+    assert a["abutment"]["gaps"] == b["abutment"]["gaps"]
+
+
+def test_the_artefact_says_which_pdk_view_each_site_came_from(tmp_path):
+    """A resolved site is not enough; the report has to say WHERE from, or a
+    reader cannot tell a site that was read from one that was declared."""
+    tech_root = _project_sites_in_tech_view(tmp_path / "b")
+    assert _gen(tech_root) == 0
+    b, _ = CHK._unwrap(_report(tech_root))
+    src = b["config"]["site_source"]
+    assert src["PAD_SITE_NAME"].startswith(PR.SITE_SOURCE_DECLARED)
+    assert src["PAD_CORNER_SITE_NAME"].startswith(PR.SITE_SOURCE_DECLARED)
+    assert "config.tcl" in src["PAD_SITE_NAME"]
+    lef_root = _project(tmp_path / "a")
+    assert _gen(lef_root) == 0
+    a, _ = CHK._unwrap(_report(lef_root))
+    assert a["config"]["site_source"]["PAD_SITE_NAME"] == PR.SITE_SOURCE_LEF
+
+
+def test_a_site_declared_by_neither_pdk_view_is_still_refused(tmp_path):
+    """The refusal has to stay reachable. Reading a second view widens WHERE
+    a site may be declared; it does not let a name nobody declared through."""
+    root = _project_sites_in_tech_view(
+        tmp_path, config=_config(PAD_SITE_NAME="no_such_site"))
+    assert _gen(root) == 1
+    assert "PAD_SITE_NOT_FOUND" in _rules(root)
+
+
+def test_a_pdk_that_declares_no_site_anywhere_is_still_refused(tmp_path):
+    """The LEF view is empty and there is no tech view either. Nothing was
+    invented to fill the hole."""
+    root = _project_sites_in_tech_view(tmp_path, declare=False)
+    assert _gen(root) == 1
+    assert "PAD_SITE_NOT_FOUND" in _rules(root)
+
+
+def test_a_site_declared_at_two_sizes_is_refused_not_ordered(tmp_path):
+    """A tree may ship more than one IO library. Upstream reads one config and
+    never sees a second; this step discovers them, so it can. The site width
+    is what every gap in the ring is rounded to, and picking it out of a
+    directory listing would put the ring's abutment on file order."""
+    root = _project_sites_in_tech_view(
+        tmp_path, second_lib=(("io_site", "2.00", "350"),
+                              ("io_corner_site", "350", "350")))
+    assert _gen(root) == 1
+    assert "PAD_SITE_DECLARATION_AMBIGUOUS" in _rules(root)
+    assert "io_site" in _report(root)["reason"]
+
+
+def test_two_libraries_that_agree_are_not_an_ambiguity(tmp_path):
+    """Every distribution measured ships the same site twice, identically —
+    once per IO library. Agreement is not a conflict."""
+    root = _project_sites_in_tech_view(
+        tmp_path, second_lib=(("io_site", "1.00", "350"),
+                              ("io_corner_site", "350", "350")))
+    assert _gen(root) == 0, _report(root)["reason"]
+
+
+def test_only_the_pdk_may_declare_a_site_never_the_project(tmp_path):
+    """The config contract carries no site GEOMETRY and this fix does not add
+    any. A project that writes PAD_FAKE_SITES into its own pad_assignment.json
+    gets nothing from it — the site is still looked up in the PDK."""
+    root = _project_sites_in_tech_view(
+        tmp_path, declare=False,
+        config=dict(_config(PAD_SITE_NAME="project_invented_site"),
+                    PAD_FAKE_SITES={"project_invented_site": [1.0, 350.0]}))
+    assert _gen(root) == 1
+    assert "PAD_SITE_NOT_FOUND" in _rules(root)
+
+
+def test_the_gate_reads_the_same_two_views_as_the_producer(tmp_path):
+    """An auditor that consulted only the LEF would call a correctly placed
+    ring PAD_SITE_NOT_FOUND — a gate contradicting its own producer over which
+    file it opened."""
+    root = _project_sites_in_tech_view(tmp_path)
+    assert _gen(root) == 0
+    assert _chk(root) == 0
+    _rewrite_producer(root,
+                      lambda r: r["config"].update(PAD_SITE_NAME="gone"))
+    assert _chk(root) == 1
+    assert "PAD_SITE_NOT_FOUND" in _rules(root)
+
+
+def test_the_declaration_parser_reads_upstreams_form_verbatim():
+    """The one form the distributions write, and nothing else. A file that
+    declares no site contributes none."""
+    got = PR.parse_pad_site_declarations(_site_declaration(
+        ("a_site", "0.1", "355"), ("a_corner_site", "355", "355")))
+    assert got == {"a_site": (0.1, 355.0), "a_corner_site": (355.0, 355.0)}
+    assert PR.parse_pad_site_declarations("set ::env(PAD_SITE_NAME) \"x\"\n") \
+        == {}
+    assert PR.parse_pad_site_declarations("") == {}
+
+
+# --------------------------------------------------------------------------- #
+# THE ALONG-THE-ROW EXTENT, AND THE ROTATION THAT IS NOT READ
+#
+# Upstream measures a cell in exactly two places and both are the master's
+# WIDTH, on all four sides. The tool agrees: a vertical-side pad is placed
+# 75-along / 350-into for EVERY value of PAD_ROTATION_VERTICAL, measured in
+# four separate OpenROAD processes. Taking the ORIENTED extent instead summed
+# the master's HEIGHT on a vertical side and refused a ring upstream places.
+#
+# The fixture's pad is 75 x 350, so a side that sums heights is 4.67x a side
+# that sums widths — the same shape as the real 19 x 350-vs-1500 error.
+# --------------------------------------------------------------------------- #
+def test_a_vertical_side_sums_the_master_width_not_its_height(tmp_path):
+    """THE DEFECT. Four pads a side, 75 um wide and 350 um tall, on a die whose
+    sides are 1280 um. Summing widths gives 300 and fits; summing heights gives
+    1400 and does not. Upstream sums widths on every side."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0, _report(root)["reason"]
+    rep, _ = CHK._unwrap(_report(root))
+    for side in ("PAD_EAST", "PAD_WEST"):
+        assert rep["spacing"][side[4]]["space_for_fill"] == 1280_000 - 4 * 75_000
+    # every side sums the same, because every side sums the same thing
+    fills = {s: rep["spacing"][s]["space_for_fill"] for s in PR.SIDES}
+    assert len(set(fills.values())) == 1, fills
+
+
+def test_the_vertical_sides_carry_the_orientation_the_placer_produces(tmp_path):
+    """THE DEF MUST NOT CONTRADICT ITSELF. The orientation written is the one
+    the tool actually produces — measured MXR90 west, R90 east — so the
+    footprint a DEF reader derives matches the geometry this step recorded."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    got = {p["side"]: p["orient"] for p in rep["pads"]}
+    assert got["W"] == PR.VERTICAL_SIDE_ORIENT["W"] == PR.ORIENT_ALIASES["MXR90"]
+    assert got["E"] == PR.VERTICAL_SIDE_ORIENT["E"] == PR.ORIENT_ALIASES["R90"]
+    # and the DEF says the same thing the report does
+    for pad in rep["pads"]:
+        assert f"( {pad['x']} {pad['y']} ) {pad['orient']} ;" in \
+            _ring_def(root).read_text()
+    # the recorded extents are the oriented footprint of that orientation
+    for pad in (p for p in rep["pads"] if p["side"] in PR.VERTICAL_SIDES):
+        w, h = PR.footprint(( 75.0, 350.0), pad["orient"], UNITS)
+        assert (pad["width_dbu"], pad["height_dbu"]) == (w, h)
+
+
+def test_a_declared_non_default_vertical_rotation_is_not_determined(tmp_path):
+    """DEGRADE LOUDLY. The placer does not read this variable. Honouring it
+    silently is a lie and ignoring it silently is the defect. An author who
+    sets a knob is entitled to be told the knob does nothing — and being told
+    is rc 2, not rc 0 and not rc 1: it is `I cannot honour what you asked`,
+    which is neither a pass nor a finding about the design."""
+    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R90"))
+    assert _gen(root) == 2
+    rep, _ = CHK._unwrap(_report(root))
+    assert rep["verdict"] == "SKIP"
+    assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
+    assert "PAD_ROTATION_VERTICAL" in rep["reason"]
+    assert "R90" in rep["reason"]
+    # no ring was placed and none was claimed
+    assert not _ring_def(root).is_file()
+    assert rep["pads"] == [] and rep["verdict"] != "PASS"
+    assert (root / PR.PADRING_SKIPPED_REL).is_file()
+
+
+@pytest.mark.parametrize("value", ["R90", "R180", "R270", "MX", "MXR90"])
+def test_every_non_default_vertical_rotation_is_refused(tmp_path, value):
+    """Not just the one the fixture used to carry."""
+    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL=value))
+    assert _gen(root) == 2
+    assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
+
+
+def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_inert(
+        tmp_path):
+    """The other half of the rule, and the half that keeps it honest. A run at
+    librelane's default is indistinguishable from a run that set nothing, so it
+    proceeds — and the report SAYS the variable is inert, with the measurement,
+    rather than leaving a reader to find out."""
+    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R0"))
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    inert = rep["rotation_vertical_inert"]
+    assert inert["variable"] == "PAD_ROTATION_VERTICAL"
+    assert inert["honoured"] is False
+    assert inert["measured_orientation"] == {"W": "MXR90", "E": "R90"}
+    assert "four SEPARATE OpenROAD processes" in inert["reason"]
+    assert inert["librelane_default"] == PR.ROTATION_DEFAULT
+
+
+def test_the_inert_disclosure_is_in_every_report_including_the_skip(tmp_path):
+    """A disclosure only present on the happy path is not a disclosure."""
+    for cfg in (None, _config(), _config(PAD_ROTATION_VERTICAL="R90")):
+        root = _project(tmp_path / f"p{id(cfg)}", config=cfg)
+        _gen(root)
+        rep, _ = CHK._unwrap(_report(root))
+        assert rep["rotation_vertical_inert"]["honoured"] is False
+
+
+def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
+    """WHY PART 3 OF THE RULE IS LOAD-BEARING, proved rather than argued.
+
+    The gate re-derives every pad's footprint from the master and the DEF
+    ORIENTATION and compares it with the extents the report claims. So had the
+    extent been corrected without also correcting the emitted orientation —
+    the option that would have left the declared rotation in the DEF beside a
+    footprint contradicting it — this gate would have refused the result.
+
+    Written as a test so that stays true: put the DECLARED orientation back on
+    a vertical pad and watch the artefact stop corroborating itself.
+    """
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    declared = PR.normalise_orient(_config()["PAD_ROTATION_VERTICAL"])
+    assert declared != PR.VERTICAL_SIDE_ORIENT["W"], (
+        "premise: the declared rotation and the placer's are different")
+    victim = next(p["instance"] for p in CHK._unwrap(_report(root))[0]["pads"]
+                  if p["side"] == "W")
+    _edit_def(root, _line(root, victim),
+              _line(root, victim).rsplit(" ", 2)[0] + f" {declared} ;")
+    assert _chk(root) == 1
+    assert "PAD_FOOTPRINT_DISAGREES_WITH_LIBRARY" in _rules(root)
+
+
+# --------------------------------------------------------------------------- #
+# REAL PDKs, not fixtures.
+#
+# Every test above this line is a fixture authored alongside the change, and a
+# suite made only of those cannot distinguish the change from its own absence
+# (`real_artefact_test_backing_check`). The artefact that actually backs this
+# change is not in the repo — no checked-in file declares a pad site — it is
+# the INSTALLED PDK. So the guard is repeated here against whatever PDKs the
+# host really has, and skipped, honestly, where there are none.
+#
+# It names no PDK, no foundry and no library: it iterates the trees that are
+# installed and asks one question of each.
+# --------------------------------------------------------------------------- #
+_REAL_PDK_ROOTS = [
+    Path("/foss/pdks"), Path("/usr/share/pdk"), Path("/opt/pdk"),
+    Path.home() / ".volare" / "volare",
+]
+
+
+def _real_pdk_trees():
+    """(root, tree) for every installed PDK tree, from the host's own roots."""
+    roots = list(_REAL_PDK_ROOTS)
+    env = os.environ.get("VIBEIC_PDK_ROOT")
+    if env:
+        roots = [Path(p) for p in env.split(os.pathsep) if p] + roots
+    out = []
+    for root in roots:
+        if root.is_dir():
+            out += [(str(root), d.name)
+                    for d in sorted(root.iterdir()) if d.is_dir()]
+    return out
+
+
+def _trees_with_an_io_library():
+    return [(r, t) for r, t in _real_pdk_trees()
+            if PR.discover_io_lefs(r, t)]
+
+
+def _library_for(root, tree):
+    """The IO library for a real tree, built through whatever site views this
+    revision of `_pad_ring` knows about.
+
+    `getattr`, deliberately. These tests are the REAL-ARTEFACT control for this
+    change, and a control that dies with `AttributeError` on the pre-fix tree
+    has observed nothing — it fails on the ABSENCE of the function the fix
+    adds, which is true of every new function ever written and grades as
+    presence-only under `control_substance_check`. Resolving the API softly
+    lets the pre-fix tree RUN the question and answer it wrongly, with a
+    measured value, which is the only kind of red that proves anything.
+    """
+    lefs = PR.discover_io_lefs(root, tree)
+    find_decls = getattr(PR, "discover_io_site_declarations", None)
+    if find_decls is None:
+        return PR.IoLibrary(lefs)
+    return PR.IoLibrary(lefs, find_decls(root, tree))
+
+
+def _pad_class_sites(lib):
+    """Every PAD-class site the library resolves, on either revision."""
+    names = getattr(lib, "pad_class_site_names", None)
+    if names is not None:
+        return names()
+    return sorted(n for n, s in lib.sites.items() if s["class"] == "PAD")
+
+
+@pytest.mark.skipif(not _trees_with_an_io_library(),
+                    reason="no installed PDK here ships an IO cell library")
+def test_no_real_pdk_that_ships_an_io_library_is_called_siteless():
+    """A PDK that ships IO cells declares the sites they sit on. If this step
+    cannot find them it is looking in the wrong place, and the refusal it
+    raises is about US.
+
+    MEASURED on the pinned image: of the trees carrying an IO cell library,
+    half declare their sites as LEF SITE records and half declare them in the
+    tech view. Reading one view called the other half siteless.
+    """
+    siteless = []
+    for root, tree in _trees_with_an_io_library():
+        lib = _library_for(root, tree)
+        if not _pad_class_sites(lib):
+            siteless.append(
+                f"{tree}: {len(lib.lefs)} IO LEF(s), "
+                f"{len(lib.sites)} LEF SITE record(s), "
+                f"{len(getattr(lib, 'declared_sites', {}))} tech-view "
+                f"declaration(s)")
+    assert not siteless, (
+        "a real PDK ships an IO cell library and this step resolved no "
+        f"PAD-class site for it: {siteless}")
+
+
+@pytest.mark.skipif(not _trees_with_an_io_library(),
+                    reason="no installed PDK here ships an IO cell library")
+def test_every_real_pdk_site_resolves_with_a_class_and_a_size():
+    """Whichever view a site comes from, it has to arrive usable: CLASS PAD
+    and a SIZE, because the spacing arithmetic rounds to that width."""
+    for root, tree in _trees_with_an_io_library():
+        lib = _library_for(root, tree)
+        for name in _pad_class_sites(lib):
+            got = lib.resolve_site(name)
+            assert got is not None, f"{tree}: {name} listed but unresolvable"
+            assert got["class"] == "PAD", f"{tree}: {name} -> {got}"
+            assert got["size"] and got["size"][0] > 0, f"{tree}: {name} -> {got}"
+
+
+@pytest.mark.skipif(not _real_pdk_trees(),
+                    reason="no installed PDK on this host")
+def test_no_real_pdk_declares_one_site_at_two_sizes():
+    """The corpus-sweep property, as a test. A tree may ship more than one IO
+    library — every one measured declares the same site identically, and
+    agreement must not be reported as a conflict, or the new refusal is a
+    false positive on real PDKs."""
+    for root, tree in _real_pdk_trees():
+        lib = _library_for(root, tree)
+        # NOT a control — pre-fix there are no declarations to conflict, so
+        # this passes trivially there. It is the criterion-2 false-positive
+        # guard: the one refusal this change ADDS must never fire on a real
+        # PDK, and every tree measured declares its sites identically across
+        # its IO libraries.
+        assert not getattr(lib, "site_declaration_conflicts", {}), (
+            f"{tree}: {lib.site_declaration_conflicts}")
