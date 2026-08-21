@@ -490,6 +490,74 @@ listed as a risk with the control recorded.
 Revised count for the one defect: **7 loud, 1 unproven, 2 genuine** across ten
 tests.
 
+### M15 — the OTHER silent green is settled too, and its guarantee had no can_fail arm
+
+`..._cannot_prewrite_base_wave_artifacts` is resolved, structurally, without
+needing to land the attack.
+
+The arm's mount topology (`hermetic_candidate_runner.py:1902-1907`) is:
+
+| destination | mode |
+|---|---|
+| `/subject`, `/runtime`, `/corpus` | bind, **readonly=True** |
+| `/input/selection`, `/input/progress-plan.json` | bind, **readonly=True** (individual FILES, not a directory) |
+| `/evidence` | named volume, RW |
+| `/tmp` | tmpfs |
+| rootfs | **`read_only_rootfs: True`** |
+
+**The parent's run directory is not mounted into the arm at all.** There is no
+path from inside a hermetic arm to `base_hygiene.json`, `base.xml` or
+`base_land.log`. The prewrite attack is not blocked by a check — it is
+unreachable by construction. That is also why my M13 positive control wrote
+nowhere: `/input` is not a mount, only two files inside it are, and the rootfs
+is read-only, so the forged writes failed silently (the stub never checks
+`printf`'s status).
+
+**So this one must NOT be turned red, and the contrast with M14 is the point:**
+
+| test | vacuous? | is the property guaranteed elsewhere? | action |
+|---|---|---|---|
+| `..._post_bootstrap_equal_corpus...` | yes, measured | **no** — nothing computes the transition | **made red (M14)** |
+| `..._cannot_prewrite_base_wave_artifacts` | yes | **yes** — the read-only mount topology | **left green** |
+
+Vacuity alone does not justify flipping a green. What matters is whether
+anything else holds the property up.
+
+**But nothing was testing that topology.** The refusal branch
+`"candidate {role} bind is not exact/read-only"` was exercised by **no test**.
+The fake-docker harness already had `wrong_user` and `extra_mount`, and I
+assumed those covered it. They do not, and finding out why is itself a small
+result: **both are refused by the evidence-volume PROVISIONER, not by the
+candidate profile at all** —
+
+```
+wrong_user   -> evidence volume provisioner identity/configuration differs
+extra_mount  -> evidence volume provisioner mount differs
+rw_bind      -> candidate subject bind is not exact/read-only
+```
+
+because they perturb *every* container the fake docker creates, so the
+provisioner check fires first and the candidate profile is never inspected.
+Refusing earlier is correct and safe; but it means neither shape covers the
+candidate-profile branches their names suggest.
+
+**FIXED.** Added a `rw_bind` behaviour that flips ONLY the subject bind to
+read-write, so the provisioner passes and the refusal must come from the
+candidate profile, plus a dedicated test that names the owning branch and
+asserts no candidate container ever started (the provisioner legitimately does,
+which is why this could not be folded into the parametrized test above).
+
+Mutation arm: delete `or item.get("RW") is not False` from the runner and the
+new test goes RED; restore it and GREEN. It discriminates on exactly that clause.
+
+A/B of the whole file, interleaved: `BASE 2 failed/14 passed`, `BASE 16 passed`,
+`MINE 17 passed`, `MINE 17 passed`. 16 -> 17 is the one added test.
+**Note the baseline's own flake:**
+`test_malformed_progress_is_norecord_and_cleanup_is_owned` fails intermittently
+with DIFFERENT parametrisations run to run, on the pristine tree. Two runs both
+reading "2 failed" had different node IDs. It is pre-existing, timing-sensitive,
+and not attributable to this change — recorded here so nobody attributes it.
+
 ### One defect or several
 
 **ONE defect, six unreachable knobs, ten affected tests** (7 red after M14, 1

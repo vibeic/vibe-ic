@@ -145,6 +145,17 @@ elif args[:2] == ["container", "create"]:
             })
             mounts[-1]["RW"] = "readonly" not in flags
     behavior = os.environ.get("FAKE_DOCKER_BEHAVIOR", "good")
+    if behavior == "rw_bind":
+        # A bind at the RIGHT destination that is READ-WRITE. `extra_mount`
+        # adds a NEW destination and is caught by the unowned-bind branch;
+        # this is the other shape, and it is the one that would let a candidate
+        # arm write back into a host path the parent later trusts. Applied only
+        # to the subject bind, so the provisioner passes and the refusal has to
+        # come from the candidate profile itself.
+        for item in mounts:
+            if item["Destination"] == values["--workdir"]:
+                item["Mode"] = "rw"
+                item["RW"] = True
     if behavior == "extra_mount":
         mounts.append({
             "Destination": "/host", "Mode": "ro", "Propagation": "rprivate",
@@ -517,6 +528,28 @@ def test_profile_drift_refuses_before_candidate_start(case, behavior):
     assert not (case["state"] / "container.json").exists()
     assert not (case["state"] / "provisioner.json").exists()
     assert not (case["state"] / "volume.json").exists()
+
+
+def test_a_read_write_subject_bind_refuses_before_the_candidate_starts(case):
+    """The arm's subject bind must be READ-ONLY, and that must be enforced.
+
+    Nothing exercised this branch before. It is the property that makes a
+    candidate arm structurally unable to pre-write the base wave's artifacts:
+    the parent's run directory is not mounted into the arm at all, and every
+    bind it does get is read-only. `wrong_user`/`extra_mount` above cannot
+    reach it -- they perturb every container, so the evidence-volume
+    provisioner refuses first and the candidate profile is never inspected.
+    """
+    proc = invoke(case, behavior="rw_bind")
+    assert proc.returncode == 2
+    # Refusing for the wrong reason is not a pass: name the owning branch.
+    assert "subject bind is not exact/read-only" in proc.stderr, proc.stderr
+    started = [row[-1] for row in calls(case)
+               if row[:2] == ["container", "start"]]
+    assert started, "the provisioner never ran, so this is not the branch above"
+    assert not any("-provision-" not in name and "-export-" not in name
+                   for name in started), started
+    assert not case["receipt"].exists()
 
 
 @pytest.mark.parametrize("behavior", ["oom", "restarting"])
