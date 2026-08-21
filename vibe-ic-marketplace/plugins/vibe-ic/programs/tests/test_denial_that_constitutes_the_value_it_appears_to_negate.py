@@ -6,6 +6,7 @@ possible at all, so the table's own behaviour is asserted here first.
 """
 from __future__ import annotations
 
+import re
 import json
 import subprocess
 import sys
@@ -108,6 +109,62 @@ def test_constitutive_is_tested_before_negating():
         kind, word = P.classify_denial(concept, span)
         assert kind == "constitutive", (concept, span, kind, word)
         assert word
+
+
+def test_the_table_is_not_narrower_than_the_denial_vocabulary_it_overrides():
+    """A constitutive table must cover every language `is_denied` already does.
+
+    THE ASYMMETRY IS THE BUG. `_DENIAL_CORE` has shipped a CJK tier since
+    before this table existed, so `is_denied` fires on those sentences today.
+    If the constitutive table were narrower, `classify_denial` would fall
+    through to the negation branch and return "negating" for a sentence whose
+    denial IS the value — which is precisely the inversion this rule exists to
+    prevent, just in another language.
+
+    MEASURED, by rebuilding the table with its non-ASCII entries removed and
+    re-classifying the same four spans: two of the four flip to "negating" —
+    the two on which the shipped `is_denied` already fires. So the entries are
+    load-bearing, and this test is what says so.
+    """
+    spans = {"freedom": "時脈週期未指定",
+             "optionality": "非必要",
+             "absence": "此設計無 reset",
+             "exclusion": "除外 seal ring"}
+    assert set(spans) == set(P.CONSTITUTIVE_IDIOMS), (
+        "a concept was added to the table with no cross-language control; add "
+        "one here or the parity claim stops covering it")
+    for concept, span in spans.items():
+        kind, word = P.classify_denial(concept, span)
+        assert kind == "constitutive", (
+            f"{concept}: {span!r} classified {kind!r} via {word!r}. A denial "
+            f"that CONSTITUTES the value must never be read as negating it.")
+
+
+def test_dropping_the_non_ascii_entries_would_invert_two_of_the_four():
+    """The negative control for the test above, run in-process.
+
+    It rebuilds the table English-only and asserts the damage is real, so the
+    parity test cannot quietly become vacuous if the vocabulary changes.
+    """
+    eng = {c: tuple(i for i in ids if i.isascii())
+           for c, ids in P.CONSTITUTIVE_IDIOMS.items()}
+    pats = {c: re.compile("(?:" + "|".join(i) + ")", re.IGNORECASE)
+            for c, i in eng.items() if i}
+    spans = {"freedom": "時脈週期未指定", "optionality": "非必要",
+             "absence": "此設計無 reset", "exclusion": "除外 seal ring"}
+
+    inverted = []
+    for concept, span in spans.items():
+        pat = pats.get(concept)
+        if pat is not None and pat.search(span):
+            continue                       # still constitutive, no damage
+        if P.is_denied(span) is not None:
+            inverted.append(concept)       # falls through to "negating"
+
+    assert sorted(inverted) == ["absence", "optionality"], (
+        f"the control measured {sorted(inverted)}; if this set has changed, the "
+        f"vocabulary moved and the parity test above needs re-deriving, not "
+        f"re-asserting")
 
 
 def test_a_sentence_with_no_denial_is_neither():
