@@ -103,6 +103,44 @@ being RUN, which is the standing constraint on this host, not a routing gap.
 Recorded as a refuted hypothesis so the next reader spends their time
 elsewhere.
 
+## Read the timing reds in the right regime — three are fixture-scale, ONE is not
+
+Everything below about `0.25 s`, `0.30 s` and `0.45 s` windows is easy to
+misread as "collection and outcome runs are fragile under load", and that would
+be false. The PRODUCTION values are:
+
+```
+_COLLECTION_PROGRESS_STALL_S = 60      test monkeypatches it to 0.25 / 0.30
+_OUTCOME_PROGRESS_STALL_S    = 60      test monkeypatches it to 0.45
+```
+
+**Two hundred times tighter in the fixture than in production.** Reds 10, 11 and
+12 all live in that shrunken regime: they exist to make a renewal property
+testable in seconds, and their sensitivity to load is a property of a window
+deliberately squeezed to sub-second, not of anything a real run meets. Nothing in
+this report should be read as evidence that a production collection or outcome
+run is at risk of a spurious stall kill.
+
+**Red 13 is the exception, and that is what makes it the most interesting of the
+four.** `test_the_census_block_is_fresh` drives a REAL nested run at the REAL
+`60 s` window — nothing is monkeypatched — and it still stalled, because one d3
+item (`test_d3_the_producer_oracle_answers_both_ways`) takes **18.95 s** on an
+almost idle box. A third of a production window inside a single pytest item,
+before the machine is busy.
+
+So the four sort into two very different classes:
+
+| | window | regime | what its red means |
+|---|---|---|---|
+| 10, 11, 12 | 0.25-0.45 s | fixture, 200x tightened | a construction/robustness question about the TEST |
+| **13** | **60 s** | **production** | **a real item consuming a third of a real window** |
+
+That ordering is the opposite of the effort spent on them here — three fixture
+reds got two fixes and many measurements, and the one production-regime
+observation is the one left open. It is left open for the reason given in its own
+section (the remedy is an intra-item heartbeat, and widening 60 s is refused),
+but a reader deciding where to look next should start at 13.
+
 ## 12 — a real finding that had been filed as weather
 
 The renewal test drove 12 child items that each slept `0.45` s against a stall
