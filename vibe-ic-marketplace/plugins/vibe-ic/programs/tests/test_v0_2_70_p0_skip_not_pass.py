@@ -26,21 +26,29 @@ def test_no_rtl_returns_none_not_true(tmp_path):
     assert any("no RTL" in s for s in skips)
 
 
-def test_p0_source_renders_skipped_condition():
+def test_p0_renders_skipped_condition():
     """The P0 StepResult must render SKIPPED-CONDITION when nothing executed,
     and the #447 rationale must be documented at that site.
 
-    Keyed on the ENCLOSING FUNCTION rather than a fixed byte window around
-    `id="P0"`. The window was 900 chars and #447 now sits 1538 away, because
-    vibe-ic#559 added a comment block explaining the headline count between them
-    — a documentation change the old assertion read as a regression. Function
-    scope is also strictly stronger: a byte window can be satisfied by a `#447`
-    that happens to be nearby, function scope cannot."""
+    ASSERTED ON BEHAVIOUR FIRST. This used to be a source-substring test over
+    `main()` (`'"SKIPPED-CONDITION" if s_passed is None'`), keyed on the
+    ENCLOSING FUNCTION rather than a byte window because #559's comment block
+    had already pushed #447 1538 bytes away and the byte window read that as a
+    regression. The verdict expression has since moved into
+    `_p0_umbrella_status`, its one owner, so the substring is now checked in the
+    function that owns the decision — and, more to the point, the tri-state is
+    checked by CALLING it, which no relocation can satisfy accidentally.
+
+    The `main()` half is kept as a wiring assertion: the owner is only the owner
+    if the site that publishes the step actually calls it."""
     import inspect
+    assert F._p0_umbrella_status(None, []) == "SKIPPED-CONDITION"
+    owner = inspect.getsource(F._p0_umbrella_status)
+    assert '"SKIPPED-CONDITION"' in owner
+    assert "#447" in owner
     fn = inspect.getsource(F.main)
     assert 'id="P0"' in fn
-    assert '"SKIPPED-CONDITION" if s_passed is None' in fn
-    assert "#447" in fn
+    assert "_p0_umbrella_status(s_passed, structural_gate_records)" in fn
 
 
 def test_rtl_present_still_executes(tmp_path):

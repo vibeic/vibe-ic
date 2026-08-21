@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("rtl_review_aggregate")
 
 
@@ -151,10 +152,11 @@ class TestAggregator:
         assert rep.total_warns == 2
         assert rep.total_infos == 1
 
-    def test_emitted_by_includes_v0150(self):
+    def test_emitted_by_carries_the_shipped_version(self):
         rep = mod.aggregate([])
         d = rep.as_dict()
-        assert "v0.1.50" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"rtl_review_aggregate v{shipped_plugin_version()}"
 
     def test_report_as_dict_round_trip(self):
         rep = mod.aggregate([_f("latch_inferred", "ERROR")])

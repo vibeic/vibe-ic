@@ -23,6 +23,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 CATEGORIES = (
@@ -91,7 +92,7 @@ class TriageReport:
             "counts": self.counts,
             "total": self.total,
             "top_3_root_causes": self.top_3_root_causes,
-            "emitted_by": "lvs_triage_classify v0.1.50",
+            "emitted_by": _pmd.emitted_by("lvs_triage_classify"),
         }
 
 
@@ -126,7 +127,8 @@ def classify_report(report_text: str) -> TriageReport:
 def report_to_markdown(rep: TriageReport) -> str:
     out = ["# LVS triage",
            "",
-           f"_Emitted by `lvs_triage_classify.py` (v0.1.50)._",
+           f"_Emitted by `lvs_triage_classify.py` "
+           f"(v{_pmd.running_plugin_version()})._",
            "",
            f"Total findings: **{rep.total}**",
            ""]

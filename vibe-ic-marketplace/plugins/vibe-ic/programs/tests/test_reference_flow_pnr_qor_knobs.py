@@ -363,9 +363,14 @@ class TestPnrTclEmission:
             cts_cluster_size=20, cts_cluster_diameter=50.0)
         # BOTH executable setup-repair passes get -repair_tns (pre-CTS + post-GR)
         assert tcl.count("repair_timing -setup -repair_tns 100") == 2
+        # -distance_between_buffers defaults to 10 whenever clustering is
+        # active and no explicit CTS_DISTANCE_BETWEEN_BUFFERS knob overrides
+        # it (spm x ihp-sg13g2, 2026-08-07 — sink_clustering alone can still
+        # leave the CTS root buffer over its own fanout limit).
         assert ("clock_tree_synthesis -buf_list {clkbuf_4} -root_buf clkbuf_16"
                 " -sink_clustering_enable -sink_clustering_size 20"
-                " -sink_clustering_max_diameter 50}") in tcl
+                " -sink_clustering_max_diameter 50"
+                " -distance_between_buffers 10}") in tcl
 
     def test_hold_repair_never_gets_repair_tns(self):
         tcl = mod._build_pnr_tcl_text(**_TCL_BASE, repair_tns_percent=100)
@@ -374,14 +379,35 @@ class TestPnrTclEmission:
 
     def test_cts_size_only(self):
         tcl = mod._build_pnr_tcl_text(**_TCL_BASE, cts_cluster_size=20)
-        assert "-sink_clustering_enable -sink_clustering_size 20}" in tcl
+        assert ("-sink_clustering_enable -sink_clustering_size 20"
+                " -distance_between_buffers 10}") in tcl
         assert "-sink_clustering_max_diameter" not in tcl
 
     def test_cts_diameter_only(self):
         tcl = mod._build_pnr_tcl_text(**_TCL_BASE, cts_cluster_diameter=50.0)
-        assert ("-sink_clustering_enable -sink_clustering_max_diameter 50}"
-                in tcl)
+        assert ("-sink_clustering_enable -sink_clustering_max_diameter 50"
+                " -distance_between_buffers 10}" in tcl)
         assert "-sink_clustering_size" not in tcl
+
+    def test_cts_distance_between_buffers_explicit_overrides_default(self):
+        """A reference-flow-declared CTS_DISTANCE_BETWEEN_BUFFERS must win
+        outright over the built-in default (10) — same non-override
+        guarantee every other reference-flow knob already has."""
+        tcl = mod._build_pnr_tcl_text(
+            **_TCL_BASE, cts_cluster_size=20,
+            cts_distance_between_buffers=40.0)
+        assert ("-sink_clustering_enable -sink_clustering_size 20"
+                " -distance_between_buffers 40}") in tcl
+        assert "-distance_between_buffers 10" not in tcl
+
+    def test_cts_distance_between_buffers_absent_without_clustering(self):
+        """No clustering knob at all -> no -distance_between_buffers either;
+        the default only fires alongside sink clustering, since that is the
+        specific scenario it closes (an ungated design gets byte-identical
+        CTS behaviour to before this fix)."""
+        tcl = mod._build_pnr_tcl_text(**_TCL_BASE)
+        assert "-distance_between_buffers" not in tcl
+        assert "-sink_clustering_enable" not in tcl
 
     @needs_tclsh
     def test_injected_tcl_parses_in_tclsh(self, tmp_path):

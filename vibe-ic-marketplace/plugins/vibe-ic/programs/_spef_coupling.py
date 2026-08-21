@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import re
 from typing import Dict, List, Optional, Tuple
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 # Vacuum permittivity in pF/um : 8.854e-12 F/m / 1e6 um/m * 1e12 pF/F = 8.854e-6
 EPS0_PF_PER_UM = 8.854e-6
@@ -444,7 +445,7 @@ def augment_spef_file(def_path: str, lef_path: str, spef_path: str,
         spef_text = f.read()
     res = build_coupling(def_text, lef_text, spef_text, window_um, eps_r)
     dst = out_path or spef_path
-    with open(dst, "w") as f:
+    with atomic_writing(dst) as f:
         f.write(res["new_spef"])
     res["out_path"] = dst
     return res

@@ -181,8 +181,9 @@ def test_mealy_dialect_skips_moore_named_prose():
 
 # =================== NATIVE VE PATH BYTE-IDENTICAL ======================== #
 def test_native_ve_fire_sets_unchanged():
-    # The dialect is purely additive: across the VE corpus the native solvers fire on
-    # EXACTLY their known targets, and NO VE prompt opens the dialect header gate.
+    # Across the VE corpus the native solvers fire on EXACTLY their known
+    # targets, including the directional bump/fall family added after the
+    # detector-fold dialect, and NO VE prompt opens the dialect header gate.
     import glob
     import os
     base = Path(_VE)
@@ -204,7 +205,8 @@ def test_native_ve_fire_sets_unchanged():
                 gate_open.add(nm)
     assert m_fire == {"Prob088_ece241_2014_q5b", "Prob129_ece241_2013_q8"}, m_fire
     assert b_fire == {"Prob095_review2015_fsmshift",
-                      "Prob096_review2015_fsmseq"}, b_fire
+                      "Prob096_review2015_fsmseq",
+                      "Prob142_lemmings2"}, b_fire
     assert gate_open == set(), gate_open    # the dialect gate never opens on VE
 
 

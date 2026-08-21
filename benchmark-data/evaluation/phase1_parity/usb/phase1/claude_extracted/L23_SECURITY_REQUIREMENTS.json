@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "USB 2.0 (2000) is a wire-level + framework spec; no confidentiality / integrity / authentication features at the protocol layer. CRC-5 + CRC-16 provide anti-corruption, not anti-tampering. Modern USB security extensions (USB Type-C Authentication, USB4 spec security features) are layered on top — not part of USB 2.0."
-  }
-}

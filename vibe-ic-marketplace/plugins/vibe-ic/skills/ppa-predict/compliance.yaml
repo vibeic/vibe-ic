@@ -23,7 +23,70 @@ requirements:
     pattern: '(cell|area|um2|µm|frequency|MHz|power|mW|µW)'
     skill_section: 'PPA'
 
+  - id: R_estimated_status
+    description: >-
+      Every number in this report is an estimate, and the report says so with
+      the literal status token rather than by tone. PPA_INTERFACES section 2:
+      ESTIMATED never enters final PPA.
+    pattern: 'Status:\s*ESTIMATED'
+    positive_sample: 'Status: ESTIMATED (never enters final PPA)'
+    negative_sample: 'Status: estimated-ish'
+  - id: R_not_a_measurement
+    description: >-
+      The report names the skill that produces MEASURED numbers, so a reader
+      who needs one is never left to treat this document as the nearest thing
+      available.
+    pattern: 'Not a measurement:\s*\S'
+    positive_sample: 'Not a measurement: run /ppa-measure for numbers parsed from tool artefacts'
+    negative_sample: 'Not a measurement:'
+
 cross_checks:
-  - id: X_output_artifact_check
-    description: "Verify PPA report exists on disk"
-    rule: postcheck_pass_only
+  - id: X_text_only_report
+    description: >-
+      MEASURED on origin/main before this change: a ppa-predict report with
+      4/4 required elements present returned FAIL, and the only route to rc=0
+      was to append `// Post-checks: rtl_hygiene_lint=PASS,
+      fsm_error_invariant=PASS` to a markdown estimate that neither tool had
+      ever been run against. The rule was postcheck_pass_only, which belongs to
+      skills that emit RTL; this skill emits a document. Swapped to
+      text_only_report, whose teeth point the right way: a prose report that
+      CLAIMS an RTL post-check verdict is the failure.
+    rule: text_only_report
+  - id: X_no_placeholder_fields
+    description: >-
+      A required field filled with a placeholder is the same fact as an
+      unfilled one, and only one of the two is visible to a regex that
+      asks whether the label is present. This bans the placeholder so the
+      requirement above cannot be satisfied by typing n/a into it.
+    rule: no_forbidden_patterns
+    patterns:
+      - '(?i)^\s*(?:\*\*)?(?:rollback|rollback point|remeasure|actuator|expected effect|budget|baseline scope|blast radius|stop condition|fairness conditions|known unfairness|independent scorer|handoff|design fingerprint|promotion criteria|arm_id|lifecycle|verdict authority|status|not a measurement)(?:\*\*)?\s*:\s*(?:n/?a|none|tbd|todo|-{1,3}|\?+)\s*$'
+  - id: X_estimate_never_claims_measurement
+    description: >-
+      The estimate-only boundary, as data rather than as prose. This skill has
+      opened no artefact, so an output of it that carries a MEASURED status, an
+      "as measured" phrase, or a post-route stage label is claiming a provenance
+      that does not exist. Stated three times in SKILL.md and enforced once,
+      here, which is the copy that still works when nobody remembers the prose.
+    rule: no_forbidden_patterns
+    patterns:
+      - '(?i)"status"\s*:\s*"(?:MEASURED|DERIVED)"'
+      - '(?i)^\s*Status:\s*MEASURED\b'
+      - '(?i)\bpost[_ -]route(?:[_ -]extracted)?\b'
+      - '(?i)\bas\s+measured\b'
+      - '(?i)\bmeasured\s+(?:area|power|timing|wns|tns|fmax|slack)\b'
+  - id: X_verdict_boundary
+    description: >-
+      An agent skill emits a proposal or an evidence-linked report, never a gate
+      verdict. Identical pattern list to the six ppa-* lane skills; the per-skill
+      tests/test_verdict_boundary.py asserts they stay identical.
+    rule: no_forbidden_patterns
+    patterns:
+      - '(?i)^\s*(?:[-*>]\s*)?(?:\*\*)?(?:verdict|gate verdict|sign-off|signoff)(?:\*\*)?\s*:'
+      - '(?i)\b(?:decide|judge|determine|conclude)\s+(?:for\s+yourself\s+)?whether\s+(?:it|this|that|the\s+\S+)\s+(?:passes|fails|is\s+acceptable|is\s+ready)\b'
+      - '(?i)\b(?:mark|set|declare|record)\s+(?:it|this|the\s+\S+)\s+as\s+(?:pass|fail|passing|failing|green|red)\b'
+      - '(?i)\b(?:tape-?out[- ]ready|ready\s+for\s+tape-?out|clean\s+for\s+sign-?off)\b'
+      - '(?i)\b(?:this|the)\s+design\s+(?:passes|fails|meets\s+sign-?off)\b'
+      - '(?i)^\s*(?:\*\*)?(?:pass|fail)(?:\*\*)?\s*$'
+      - '(?i)\b(?:I|we)\s+(?:hereby\s+)?(?:certify|attest)\b'
+      - '(?i)\byou\s+are\s+the\s+(?:gate|sign-?off\s+authority|final\s+authority)\b'
