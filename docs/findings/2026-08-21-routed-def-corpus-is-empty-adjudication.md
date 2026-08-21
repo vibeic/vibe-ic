@@ -21,8 +21,14 @@ asking the wrong question. Every routed DEF this repository ever published was
 published cells was a pass.
 
 That makes `NOT CHECKED` the correct verdict, and it makes `BLOCKING` the
-correct declaration. Neither is changed here. What is changed is the **sentence**
-the blocking row prints, because on `main` it is not true.
+correct declaration. **Neither is changed here, and no exemption is bought** —
+the dispatcher refuses one by design, and buying it would be the weakening this
+brief forbids.
+
+What ships instead is a test for the rule itself. The property "an empty corpus
+never becomes a pass" rests on exactly one four-line branch in
+`_gate_dispatch.sh`, and **nothing asserted it**: deleting it left the suite
+green. That is now pinned.
 
 ---
 
@@ -164,38 +170,87 @@ weakening what the gate asks, and it is refused.
 
 ---
 
-## The declaration that IS dishonest, and what is changed
+## Is the row's SENTENCE true? Yes — on the path that produces it
 
-Not the blocking-ness. The **sentence**.
+`main`'s row reads *"corpus … is EMPTY — nothing was checked over it"*. That is a
+claim **about the corpus**, so it is true only if a corpus was actually opened.
+Two states reach the dispatcher as the identical `rc 0, 0 items`:
 
-On `main` the row reads *"corpus … is EMPTY — nothing was checked over it"*. That
-is a claim **about the corpus**. Nothing on `main` measured the corpus: there is
-no `benchmark-data/` to read and no pointer to a clone. The producer's own stderr
-says so — `NO_CORPUS … NOTHING WAS SCANNED` — and then that outcome is handed to
-the dispatcher as `rc 0, 0 items`, which is the same pair of numbers a *measured*
-zero produces.
+| state | what happened |
+|---|---|
+| **A** — nothing at `benchmark-data/`, no pointer | nothing was opened |
+| **B** — a corpus was resolved and its index carries no routed DEF | it was read, and it is empty |
 
-Two different states, one sentence:
+Both were measured today and are byte-indistinguishable at the dispatcher, and
+that collapse is the shape `_corpus_location.py`'s own header calls the defect
+(*"COLLAPSING ANY TWO OF THEM IS THE DEFECT"*).
 
-| state | what happened | what the row says today |
-|---|---|---|
-| **A** — no corpus anywhere, no pointer (`main`, now) | nothing was opened | "corpus is EMPTY" |
-| **B** — pointer set at a real clone, index carries no routed DEF | the corpus was read and is empty | "corpus is EMPTY" |
+**But the review and landing path is in state B, not state A.**
+`gatekeeper_review._published_corpus_binding()` resolves the corpus BEFORE the
+hygiene set runs — `$VIBE_IC_BENCHMARK_DATA`, then
+`$VIBEIC_BENCHMARK_DATA_CHECKOUT`, then a default `~/_matrix_benchmark_data`
+clone — refuses with rc 2 and a named remedy if it cannot, and exports
+`GATEKEEPER_BENCHMARK_DATA_SHA` so the binding cannot be shadowed. Its own
+measurement, 2026-08-20:
 
-Both were measured today and are byte-indistinguishable at the dispatcher.
+    pointer UNSET -> ... the routed-DEF corpus EMPTY and BLOCKING, 239s wasted.
+    pointer SET   -> ... and `published-evidence index honest` FAILS — a real
+                     defect the empty corpus hid outright.
 
-`_corpus_location.py`'s own header names this class of collapse as the defect —
-*"THE FOUR OUTCOMES, AND COLLAPSING ANY TWO OF THEM IS THE DEFECT"* — and
-`routed_def_corpus.py`'s docstring promises *"A broken pointer, a loose
-directory, or a failed git query is UNDETERMINED (rc 2), never an empty
-population."* A corpus that is simply **absent** was the one row left out of that
-promise, and it is the row `main` is in.
+So on the path that produced the row in question, the corpus **was** opened, the
+zero **was** measured, and the sentence is true. **There is no dishonest
+declaration here to repair.** An earlier draft of this document claimed there
+was; that claim was wrong and is withdrawn.
 
-The change is therefore: state A is reported as an **unknown denominator**
-(`rc 2` from the producer → *"corpus producer FAILED — denominator unknown"*),
-state B as a **measured empty population** (`rc 0`, 0 items → *"corpus is EMPTY"*).
-Both remain NOT CHECKED. Both remain BLOCKING. Both remain un-exemptable. Only
-the true sentence differs, and only the true one is printed.
+State A remains reachable — `tools/ci/repo_hygiene_gates.sh` run by hand, or
+`gatekeeper-land.sh`'s `lane_hygiene` on a host that never exported the pointer —
+and there the sentence is not true. That is a real but **secondary** observation
+about a producer contract (`routed_def_corpus.py`'s docstring already promises
+*"A broken pointer, a loose directory, or a failed git query is UNDETERMINED
+(rc 2), never an empty population"*; an ABSENT corpus is the one row left out of
+it). It is recorded here and deliberately **not** changed tonight: reversing
+`may_be_absent=True`, which `_corpus_location` documents as a considered
+call-site opt-in and which `test_an_unconfigured_moved_corpus_is_explicit_no_corpus`
+pins, is a decision to propose, not to land unilaterally on a secondary finding.
+It also has **zero** effect on the outcome: both states already block (measured —
+`test_empty_population_has_one_shard_owner_attestation_and_progress` and
+`test_failed_producer_is_a_distinct_blocking_attested_result` both pin rc 2).
 
-Today `main` is in state A, so `main` blocks on *"denominator unknown"* — which is
-what actually happened — instead of on a claim about a corpus it never opened.
+---
+
+## What IS shipped: the absolute rule was itself unpinned
+
+The rule the brief calls absolute — *an empty corpus stays rc 2 NOT CHECKED and
+must never become a pass* — rests on exactly one mechanism, and **nothing tested
+it**.
+
+There is one way this row could stop blocking: buy it the dated tolerance a human
+may buy for an ordinary gate. `gate_dispatch_finish` counts a `NOT_CHECKED` row
+as unexempted only when `GATE_EX_UNTIL[i]` is empty — and `_dispatch` **records**
+the pending exemption unconditionally, before it judges it. So an
+`uncheckable_until` written above this wiring site is consumed, stamped onto the
+row, and removes it from `not_checked_unexempted`. The only thing left refusing
+the run is the mode-2 arm:
+
+    tools/ci/_gate_dispatch.sh:667-670
+      elif [ "$tolerate" -eq 2 ] && [ -n "$ex_until" ]; then
+        _gate_wiring_error "\"$label\" is a dispatcher-owned population refusal
+    and cannot consume an uncheckable exemption — an unknown denominator must
+    remain blocking"
+
+**Measured:** `grep` for that sentence outside `_gate_dispatch.sh` returns
+nothing, and removing the branch leaves the suite green. Four lines stood between
+this corpus and a silently exempted row, and they were a free edit.
+
+Two tests are added to `test_routed_def_corpus_dispatch.py`:
+
+* `test_a_population_refusal_cannot_buy_an_uncheckable_exemption` — an exemption
+  over an empty population is a WIRING ERROR and the run still exits 2.
+* `test_the_shipped_producer_over_an_empty_corpus_blocks_and_never_passes` —
+  state B end to end through the SHIPPED producer: a real checkout whose index
+  holds no routed DEF expands to 0 items, records `NOT_CHECKED`, carries no
+  exemption, leaves an rc-2 process attestation, and blocks.
+
+Nothing about the gate's declaration changes. It is `NOT CHECKED`, it is
+`BLOCKING`, it has no exemption, and all three are correct. What changes is that
+the rule keeping it that way can no longer be deleted in silence.

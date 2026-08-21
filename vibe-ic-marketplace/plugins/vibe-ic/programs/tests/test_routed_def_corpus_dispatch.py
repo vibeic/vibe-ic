@@ -337,7 +337,7 @@ def test_two_versions_of_one_design_refuse_before_duplicate_gate_owners(
     assert "two-phase identity migration" in proc.stderr
 
 
-def _dispatch_script(root: Path, producer: str) -> Path:
+def _dispatch_script(root: Path, producer: str, *, preamble: str = "") -> Path:
     script = root / "gates.sh"
     script.write_text(textwrap.dedent(f"""\
         set -euo pipefail
@@ -345,15 +345,16 @@ def _dispatch_script(root: Path, producer: str) -> Path:
         . {str(DISPATCH)!r}
         gate_dispatch_init "$@"
         _body() {{ run "per item ($1)" "$ROOT" true; }}
-        gate_dispatch_over "an observed corpus" _body {producer}
+        {preamble}gate_dispatch_over "an observed corpus" _body {producer}
         gate_dispatch_finish
         """), encoding="utf-8")
     return script
 
 
 def _dispatch_run(root: Path, producer: str, owned_label: str,
-                  stem: str, *, attest_population: bool = True):
-    script = _dispatch_script(root, producer)
+                  stem: str, *, attest_population: bool = True,
+                  preamble: str = ""):
+    script = _dispatch_script(root, producer, preamble=preamble)
     labels = root / f"{stem}.labels"
     labels.write_text(owned_label + "\n", encoding="utf-8")
     summary = root / f"{stem}.summary.json"
@@ -447,3 +448,86 @@ def test_failed_producer_is_a_distinct_blocking_attested_result(tmp_path):
     assert doc["not_checked_unexempted"] == [label]
     assert len(attestations) == len(progress) == 1
     assert attestations[0]["returncode"] == 2
+
+
+# --------------------------------------------------------------------------
+# THE ROUTED-DEF CORPUS IS EMPTY, AND THE RULE THAT KEEPS THAT HONEST WAS
+# ITSELF UNPINNED.
+#
+# Adjudicated 2026-08-21 (`docs/findings/2026-08-21-routed-def-corpus-is-empty-
+# adjudication.md`): every published cell this corpus ever selected was
+# WITHDRAWN from `https://github.com/vibeic/benchmark-data` on 2026-08-20,
+# because not one of the four was a pass. So the population is 0, the row is
+# `NOT CHECKED (rc 2, BLOCKING; no exemption)`, and that is CORRECT rather than
+# a defect to be closed.
+#
+# The rule that makes it correct is absolute: an empty corpus stays rc 2 NOT
+# CHECKED and must never become a pass. There is exactly ONE way it could stop
+# blocking — buying the dated tolerance a human may buy for an ordinary gate —
+# and exactly one mechanism refuses that: the mode-2 arm in `_dispatch`.
+#
+# MEASURED: deleting that arm left the whole suite green. Nothing anywhere
+# asserted it, so the four lines standing between this corpus and a silently
+# exempted row were a free edit. These two tests are that assertion.
+# --------------------------------------------------------------------------
+
+_EMPTY_LABEL = ('corpus "an observed corpus" is EMPTY — nothing was checked '
+                'over it')
+
+
+def test_a_population_refusal_cannot_buy_an_uncheckable_exemption(tmp_path):
+    """An exemption over an empty population is a WIRING ERROR, not tolerance.
+
+    Without the mode-2 arm the exemption is simply consumed and RECORDED, which
+    is worse than it looks: `gate_dispatch_finish` counts a NOT_CHECKED row as
+    unexempted only when `GATE_EX_UNTIL` is empty, so a recorded date removes
+    the row from `not_checked_unexempted` and the run stops blocking on it.
+    The wiring error is the only thing left refusing the run.
+    """
+    proc, doc, _attestations, _progress = _dispatch_run(
+        tmp_path, "true", _EMPTY_LABEL, "exempted",
+        preamble=('uncheckable_until 2099-01-01 "an empty corpus is not a '
+                  'reason to stop looking"\n        '))
+    text = proc.stdout + proc.stderr
+
+    assert doc["gates"][0]["state"] == "NOT_CHECKED"
+    assert "cannot consume an uncheckable exemption" in text, (
+        "an empty population accepted a dated exemption; the one mechanism "
+        "keeping 'never a pass' true has been removed")
+    assert any("cannot consume an uncheckable exemption" in str(err)
+               for err in doc["wiring_errors"]), doc["wiring_errors"]
+    # The refusal is what blocks. Assert the OUTCOME too, so an implementation
+    # that keeps the sentence and drops the consequence is still caught.
+    assert proc.returncode == 2, text
+    assert doc["gates"][0]["state"] != "PASS"
+
+
+def test_the_shipped_producer_over_an_empty_corpus_blocks_and_never_passes(
+        tmp_path):
+    """State B end to end: a corpus that IS read and publishes no routed DEF.
+
+    `_external` is a real git checkout with an empty index — which is exactly
+    what `vibeic/benchmark-data` is for this corpus since the 2026-08-20
+    withdrawal. Driven through the SHIPPED producer rather than a `true` stub,
+    so the pinned outcome belongs to the program the hygiene script wires.
+    """
+    external = _external(tmp_path)
+    # No commit: `_index_paths` reads git's INDEX, and an initialised checkout
+    # with an empty index is precisely "a corpus that was read and holds none".
+    (external / "ic").mkdir()
+    producer = (f"env VIBE_IC_BENCHMARK_DATA={str(external)!r} "
+                f"python3 {str(HELPER)!r} --repo {str(REPO)!r}")
+
+    proc, doc, attestations, _progress = _dispatch_run(
+        tmp_path, producer, _EMPTY_LABEL, "shipped")
+    text = proc.stdout + proc.stderr
+
+    # The producer looked, and found none. That is rc 0 with an empty
+    # population — NOT a producer failure, and NOT a pass.
+    assert doc["corpora"][0]["items"] == 0
+    assert doc["corpora"][0]["expansion"] == "EXPANDED"
+    assert doc["gates"][0]["state"] == "NOT_CHECKED"
+    assert doc["not_checked_unexempted"] == [_EMPTY_LABEL], doc
+    assert doc["gates"][0]["exempt_until"] is None
+    assert proc.returncode == 2, text
+    assert attestations and attestations[0]["returncode"] == 2
