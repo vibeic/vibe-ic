@@ -371,6 +371,29 @@ if SLOW:
     control("wiring-live", "gate is wired" in _r.stdout or bool(_r.stdout))
     check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
           not (_tg & _live), f"live-unwired {sorted(_tg & _live)}")
+
+    # 22. the LIVE FIGURES this report quotes must still be what the gate says.
+    #     Two places quote "gates N, unwired M (baseline B)" from a run made
+    #     during the lane. Those are another program's output pasted into prose:
+    #     the STATUS block showed what happens to a pasted number nobody
+    #     re-derives. Only --slow can answer it, because only --slow has the
+    #     gate's current output.
+    # the TOOL prints "gates: N   unwired: M (baseline B)" with colons; the
+    # REPORT quotes it without them. Two formats for one fact, which is why
+    # this check exists — and why its first regex matched neither.
+    _m = re.search(r"gates:\s*(\d+)\s+unwired:\s*(\d+) \(baseline (\d+)\)", _r.stdout)
+    control("wiring-figures", _m is not None)
+    if _m:
+        _live_fig = (_m.group(1), _m.group(2), _m.group(3))
+        _quoted = re.findall(r"gates (\d+)\s+unwired (\d+) \(baseline (\d+)\)", MD)
+        _quoted += [(None, q[0], q[1]) for q in
+                    re.findall(r"unwired (\d+) \(baseline (\d+)\)", MD)
+                    if (None, q[0], q[1]) not in _quoted]
+        _stale = [q for q in _quoted
+                  if (q[0] is not None and q[0] != _live_fig[0])
+                  or q[1] != _live_fig[1] or q[2] != _live_fig[2]]
+        check("[slow] the live gate figures this report quotes are current",
+              not _stale, f"gate says {_live_fig}, report quotes {_quoted}")
 else:
     print("  SKIP  [slow] live wiring check — pass --slow to run it "
           "(about forty seconds)")

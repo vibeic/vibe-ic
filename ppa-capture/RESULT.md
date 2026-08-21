@@ -915,6 +915,17 @@ one you ran is the difference between a measurement and a reassurance.
 gate and compares the live unwired set against every routed target; the default
 stays fast because it is free. Measured both ways: live-unwired targets, none.
 A disclosed limitation nobody can act on is just a nicer way of not checking.
+
+**And `--slow` now also re-derives the live figures this report quotes.** Two
+places here paste `gates N, unwired M (baseline B)` out of a gate run made during
+the lane — another program's output, sitting in prose, with nobody re-deriving
+it. The STATUS block showed exactly what happens to such a number. The check
+compares all three against the gate's current output.
+
+Its first regex matched **neither** side: the tool prints the figures with
+colons, the report quotes them without. Two renderings of one fact — which is
+the reason the check is worth having, and was the reason it did not work. The
+control caught it and reported itself BROKEN rather than passing.
 The check belongs at emit time, refusing the pairing and saying which half must
 change: wire the program, or route the rule somewhere that runs.
 **(o)** yes. **(d)** yes — it is per record per emit, so every future batch is
@@ -1530,7 +1541,7 @@ between a check that runs and a check that was run once.
 **STATUS**: 29 records emitted and validated — 26 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 ppa-capture/verify.py` (27 fast + 1 authoritative). No gate
+re-measurable by `python3 ppa-capture/verify.py` (27 fast + 2 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1706,7 +1717,7 @@ every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
     python3 ppa-capture/verify.py     27 checks, exit 0 = every claim holds
-    python3 ppa-capture/verify.py --slow   + the authoritative wiring run
+    python3 ppa-capture/verify.py --slow   + 2 authoritative gate-run checks
 
 **It was held to the two invocation properties this batch records about other
 people's tools.** A-14 is about a documented command that does not run, and A-6
