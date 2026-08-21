@@ -188,12 +188,34 @@ def test_the_runner_passes_its_own_top_name_not_the_programs_default():
     assert R.step_slot_pad_budget(p, "my_soc_top").status == "FAIL"
 
 
-def test_the_step_is_in_the_runners_plan():
+def test_the_step_is_APPENDED_TO_THE_PLAN_not_merely_defined():
+    """A defined-but-uncalled step is the #884 shape exactly: it looks wired to
+    a reader and to the wiring audit (the module still NAMES the program, so
+    PROG is still credited), and it runs never.
+
+    Found by mutation: deleting the `plan.append(...)` line left every test in
+    this module green, because the previous assertion was the substring
+    `step_slot_pad_budget(project` — which the DEFINITION
+    `def step_slot_pad_budget(project: Path, ...)` satisfies all by itself. So
+    the call is resolved structurally, from the plan-building appends."""
     import ast
     src = (PROG / "design_one_shot_runner.py").read_text(encoding="utf-8")
-    assert "step_slot_pad_budget(project" in src, \
-        "the runner defines the step but never puts it in the plan"
-    ast.parse(src)
+    tree = ast.parse(src)
+    appended = set()
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "append"
+                and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "plan"):
+            for a in n.args:
+                if isinstance(a, ast.Call):
+                    try:
+                        appended.add(ast.unparse(a.func))
+                    except Exception:
+                        pass
+    assert "step_slot_pad_budget" in appended, (
+        "design_one_shot_runner defines the step but never appends it to the "
+        f"plan, so it never runs. plan.append targets: {sorted(appended)[:8]}...")
 
 
 def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
@@ -265,3 +287,45 @@ def test_the_three_step_verdicts_are_three_distinct_values():
             _step_status(T._RTL_FITS, True),
             _step_status(T._RTL_FITS, False)}
     assert len(seen) == 3, seen
+
+
+# --------------------------------------------------------------------------- #
+# the gate this branch exists to close, asked locally
+# --------------------------------------------------------------------------- #
+# `checker_execution_wiring_audit` is the gate that named this program as one
+# nothing but its own test ran. The tests above pin the flow clause and the
+# runner spawn INDIVIDUALLY; this pins the audit's own verdict about the
+# program, which is the thing that was actually red.
+#
+# `machine_runners`, NOT absence from `test_only`, and the distinction is the
+# whole point: the audit counts a SKILL document as a runner and says in its
+# own docstring that this is the weakest form there is. Adding one line to a
+# skill would empty `test_only` and satisfy nothing — a skill runs only if an
+# agent remembers to. FLOW / PROG / CI / TOOLS fire without anyone choosing.
+
+def _wiring_audit_report() -> dict:
+    import subprocess
+    import tempfile as _tf
+    out = Path(_tf.mkdtemp(prefix="cew1347_")) / "cew.json"
+    subprocess.run([sys.executable,
+                    str(PROG / "checker_execution_wiring_audit.py"),
+                    "--json", str(out)],
+                   capture_output=True, text=True, timeout=600)
+    return json.loads(out.read_text())
+
+
+def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
+    rep = _wiring_audit_report()
+    runners = rep["machine_runners"].get("slot_pad_budget_check.py")
+    assert runners, (
+        "checker_execution_wiring_audit credits NO machine runner for "
+        "slot_pad_budget_check — a skill mention does not count, because it "
+        "runs only if an agent remembers to")
+    # Both of this branch's wirings, and they are different venues on purpose.
+    assert "FLOW" in runners, f"the flow clause is not credited: {runners}"
+    assert "PROG" in runners, f"the runner spawn is not credited: {runners}"
+
+
+def test_it_is_no_longer_in_the_audits_test_only_population():
+    rep = _wiring_audit_report()
+    assert "slot_pad_budget_check.py" not in (rep.get("test_only") or [])
