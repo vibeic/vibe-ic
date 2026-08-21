@@ -27,11 +27,11 @@ is what surfaced them.
 | # | id | which of the three | what was done |
 |---|----|--------------------|---------------|
 | 1-6 | `d3_outputs_produced::test_d3_required_outputs_are_produced[15,17,19,20,30,32]` | NOT_MEASURED (evidence) | VERIFIED absent, see below. Owned by `jfindings-63x8` |
-| 7-9 | `matrix_mutation_ledger` — `[0.5ic]`, `[1.6x]`, `coverage_is_complete` | NOT_MEASURED | reason recorded below; closes with the fourth-state ruling |
+| 7-9 | `matrix_mutation_ledger` — `[0.5ic]`, `[1.6x]`, `coverage_is_complete` | NOT_MEASURED | PROBED: the fourth state does close all three, and costs 2 further edits — and it is UNSTARTED, not pending |
 | 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | **REAL FINDING — FIXED** | thin margin (2.1x); killed BETWEEN collections, not at startup — see below |
-| 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED — 1 observation, 0 reproductions | never reproduced in 8 attempts incl. load 48.5; it is also the test that PINS fail-closed-fast — see below |
+| 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED — 1 observation, 0 reproductions | mid-run stall, mechanism SETTLED by probe; widening the window reddens it, which is why it is not touched |
 | 12 | `63x8_coverage::..._nested_outcome_run_outlives_old_fixed_bound...` | **REAL FINDING — FIXED** | zero margin by construction; fixed + negative control added |
-| 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED — cause NAMED | one d3 item is 18.95 s against a 60 s window; no intra-item heartbeat exists — see below |
+| 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED — cause NAMED | mid-run stall: one d3 item is 18.95 s against a 60 s window; widening the window is the measured trade, and it is refused |
 | 14 | `63x8_coverage::test_every_na_cell_asserts_a_live_precondition` | REAL FINDING | already fixed on `jfindings-63x8`'s branch; not duplicated |
 | 15 | `63x8_coverage::test_no_cell_is_counted_enforced_while_its_predicate_is_red` | THE RULING | 55 of 621 cells: 6 measured red, 49 not measured |
 | 16 | `flow_manifest_declaration_parity::test_every_declared_path_has_a_manifest_entry` | **STALE PIN — FIXED** | re-derived on the current tree |
@@ -415,11 +415,35 @@ exist **nowhere** in the corpus, in any cell, at any version. The classification
 "needs evidence this repository does not hold" is confirmed by search, not
 inherited.
 
-## The three fixes were re-verified with the corpus BOUND as well
+## The fixes re-verified with the corpus BOUND — and red 10's honest limit
 
 A fix measured only in the configuration that hides most of the population is
-half a measurement, so all three were re-run against the pre-withdrawal clone —
-the configuration in which 22 further reds are visible:
+half a measurement, so they were re-run against the pre-withdrawal clone — the
+configuration in which 22 further reds are visible.
+
+**This section said "all three" until red 10 was fixed after it was written, and
+that stale word was hiding a real gap: red 10's fix had never been measured
+bound at all.** Measured now, and the answer is not a clean pass:
+
+```
+bound, load 63.65   1 FAILED
+bound, load 60.42   1 passed (4.08s)
+bound, load 57.15   1 passed (3.14s)  1 passed (2.81s)
+UNBOUND control, same load window      1 passed (2.27s)
+```
+
+The unbound control passes in the same window, so **the corpus is not the
+variable — load is.** One failure in four attempts at load 57-63. Red 10's fix
+takes the renewal margin from 2.1x to 6x and that is a real improvement measured
+10/10 alone, green in three concurrent full-file runs at load 31.5, and green in
+the original 5-way sweep shape — but **it is not immunity, and at load ~63 the
+6x margin can still be exceeded.** That is consistent with the settled mechanism
+rather than a surprise: a margin is a ratio, and a busy enough box beats any
+ratio. Stated here rather than left for someone to discover, because "FIXED" in
+the table above means the construction defect is gone, not that the node can
+never go red on a saturated host.
+
+The rest, re-run bound:
 
 ```
 test_flow_manifest_declaration_parity          12 passed        (reds 16, 17)
