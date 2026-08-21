@@ -1106,3 +1106,73 @@ edit-plus-pin pairs, and every one of them has to arrive.
 
 That is the whole lesson of this document in one sentence, and it now applies
 to the fix as much as to the thing it fixes.
+
+## 20. The differential re-derived at the pinned pair, and a hypothesis I cannot test from here
+
+**§13's headline was measured on a stale pair.** The lander-comment fix
+(`1eefc98923`) changed the branch after those runs, so "clears 6, adds 0" was a
+claim about a branch that no longer existed. Re-run at the pinned pair:
+
+```
+base 137caae925 as it stands      : 16 failed, 457 passed, 5 skipped  (901s)
++ branch, run 3 (current head)    : 10 failed, 463 passed, 5 skipped  (763s)
+
+cleared: the same six test_ci_harness_timeout_ceiling_check.py ids
+added  : NONE
+```
+
+Three merged runs now (r1, r2, r3). The six clear in all three; the only id ever
+to differ was the host-capability flake in r1, absent from r2 and r3. **Clears
+6, adds 0 — reproduced, not sampled.**
+
+### `jmeas3` ran my control and my prediction was wrong
+
+I predicted that a quiet run on its tree would finish under 300 s and its wiring
+errors would go to zero. It ran it. Quiet (load 11) and loaded both produced
+**302 s and 15 wiring errors** on the same shape of run. The prediction failed,
+and the failure is more interesting than the prediction: **302 s is not a
+runtime, it is 300 s plus overhead.** Its run does not finish under the grace at
+any load, because it never finishes at all — the grace fires.
+
+That vindicates the watchdog mechanism (§18) and kills the load hypothesis
+(§17) at the same time. Load and binding both change duration; neither is the
+cause. **The cause is that the work exceeds the grace.**
+
+### Its hypothesis is corpus size, and my own number points at it
+
+The loop corpus runs `_per_published_cell_gates` — FOUR gates — per member.
+This tree's corpus holds exactly ONE routed DEF, so the loop expands to 4 gate
+invocations. `jmeas3`'s is a `--depth 1` clone with 114 published cells: ~456
+invocations, in one shard bounded at 300 s.
+
+**I cannot settle it from this host, and the reason is worth stating rather than
+substituting a weaker measurement for a missing one.** The obvious move is to
+time the per-cell gates here and multiply by 114. Measured: they return in
+**0.2 s each — at rc 2**, `NO_BASELINE` / "no previous run; nothing compared".
+That is the REFUSAL path. My single cell gives them nothing to examine, so 0.2 s
+is the cost of declining, not of evaluating. Multiplying it by 114 real cells
+would be measuring MY donor and publishing it as a property of the gates — the
+exact error this repo has a memory about. So the extrapolation is not made.
+
+Nor can the corpus be synthesised: copies of one cell would still take the
+refusal path, so a fabricated 114-cell corpus would measure the same nothing,
+114 times.
+
+**The decisive test is cheap and it is `jmeas3`'s to run: `--stall-grace 900` on
+its tree and corpus.** Three outcomes, all informative:
+
+* completes, 0 wiring errors, wall > 300 s — the grace was the whole cause, and
+  a full published corpus simply needs more than 300 s.
+* completes but still errors — there is a second mechanism and §18 is partial.
+* still killed at 900 s — something is genuinely hung, not slow, and the
+  watchdog is doing exactly its job.
+
+**If the first outcome holds, the finding sharpens into something the repo
+should act on:** `DEFAULT_STALL_GRACE_S = 300` would be unsurvivable for the
+configuration the gate's own error text instructs you to create — it names the
+clone command for the full published corpus. A tool whose recommended remedy is
+what makes it refuse is a defect, but it is a FLOW-level defect: the watchdog
+exists to stop a hang reading as slowness, so changing it needs the
+flow-change acceptance standard and a bidirectional control proving the new
+value still catches a real hang. Neither of us is taking it, and both of us have
+said so for the same reason.
