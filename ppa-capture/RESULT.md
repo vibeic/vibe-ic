@@ -738,7 +738,7 @@ artefact class — the pattern this lane keeps finding.
 **(o)** yes. **(d)** yes — it is per producer per field, so it re-answers for the
 next producer added and for any other provenance field the record gains.
 
-### A-18 · a lever that deletes a design property must be priced, or the winner is a trade · `ppa.pareto`
+### A-18 · a lever that deletes a design property must be priced or the winner is a trade · `ppa.pareto`
 
 The published winner of the 60-arm sweep won partly by **deleting all ten of the
 design's spare ECO cells**. The report decomposes the move exactly:
@@ -765,7 +765,7 @@ evidence that the layer owes it.
 **(o)** yes. **(d)** yes — it is per declared property, so it covers the next
 lever whose range includes switching something off.
 
-### A-19 · a cheap fidelity rung may not rank until its rank agreement is measured · `ppa.search`
+### A-19 · a cheap fidelity rung may not rank candidates until its rank agreement is measured · `ppa.search`
 
 The search ships an ordered fidelity ladder, *cheapest first*, so candidates can
 be screened early. Nothing requires the cheap rung to order candidates the same
@@ -795,7 +795,7 @@ same rule at a different artefact class, again.
 **(o)** yes. **(d)** yes — it is per rung pair, so it re-answers for any ladder
 the layer gains.
 
-### A-20 · a consumer must resolve a declared output path, not guess among candidates · `phase2.final_audit`
+### A-20 · a consumer must resolve a declared output path rather than guess among candidates · `phase2.final_audit`
 
 From a lane's own *what I could not settle*: a reliability screen writes wherever
 its option points, no step pins the path, and the consumer tries **three guessed
@@ -821,7 +821,7 @@ declaration is wrong.
 **(o)** yes. **(d)** yes — it is per declared artefact, so it covers every one
 the flow gains.
 
-### A-21 · which stream carries the summary is contract, and must be driven to a real verdict · `ppa.cli_contract`
+### A-21 · which stream carries the summary is part of the contract and must be driven to a real verdict · `ppa.cli_contract`
 
 The originating lane spotted one program on the wrong stream and **declined to
 sweep the layer**, saying so: *"asserting it could redden other lanes' files on a
@@ -846,7 +846,7 @@ subject.
 **(o)** yes. **(d)** yes — a known-verdict invocation per command covers every
 command the layer gains.
 
-### A-22 · a third-party import at test module scope aborts collection · `repo.test_population`
+### A-22 · a third-party import at test module scope must be guarded or it aborts collection · `repo.test_population`
 
 The tests lane found **two** files importing PyYAML at module scope with no
 guard and judged them latent, the host having the package. The count is what
@@ -934,7 +934,7 @@ paths I could only audit here, and now this.
 **(o)** yes. **(d)** yes — it is per gate per consumed tree, so it covers the
 next tree that is split out.
 
-### A-25 · every emitted document type must have the schema its interface promises · `ppa.schema_coverage`
+### A-25 · every emitted document type must have the schema its own interface promises · `ppa.schema_coverage`
 
 A lane asked, in its requests, why one document type had no schema file when the
 interface says every instance document has one. It is not one type:
@@ -985,7 +985,7 @@ confirmed instance rather than a number I could not defend.**
 **(o)** yes. **(d)** yes — any docstring that quantifies a population it does not
 name is the same claim waiting to expire.
 
-### A-27 · a quoted population count must name the instance its screen was validated against · `capture.emit`
+### A-27 · a quoted population count must name the known instance its screen was validated against · `capture.emit`
 
 **This lane's own apparatus is the evidence.** Twelve screens I wrote returned a
 number I could not use:
@@ -1396,6 +1396,33 @@ headline numbers changed:
 **Zero contradictions.** One real drift in the whole deliverable, found in the
 prose the ladder demands and fixed above — which is the honest yield of asking a
 question I had not been asking.
+
+## Traceability — a sketch must lead back to its narrative
+
+An angle I had not tried: **can someone holding only `candidates/` find the
+measurement narrative?** The sketches carry the pattern, the docstring and the
+whole fix action, so the content travels. The link does not: no sketch names a
+record id. The only handle is the generated `def rule_<slug>`, derived from the
+record's `rule_name`, which is also supposed to be the section heading here.
+
+Tested, and it did not round-trip:
+
+    rule definitions in the sketches                 26
+    resolving to a section by name, before           20
+    resolving after                                  26
+
+**Seven headings paraphrased the rule name instead of using it.** *"…may not rank
+until…"* for *"…may not rank candidates until…"*; *"…is contract, and must be
+driven…"* for *"…is part of the contract and must be driven…"*. Each reads
+better and each broke the only link between an emitted artefact and the evidence
+behind it.
+
+This is the **presence-versus-agreement** class again, one section up, and the
+third instance of it in my own work: the elements were all present, and two
+copies of one string disagreed. My audits counted sections and counted defs;
+nothing asked whether a def could *find* its section. The fix is to make the
+heading quote the record verbatim, which is now true for all 26 and is
+mechanically checkable — a heading is either a `rule_name` or it is not.
 
 ---
 
