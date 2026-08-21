@@ -48,8 +48,12 @@ def _drive(tmp_path, stub_body: str, budget: str = "240"):
         + _extract("run_gatekeeper_review")
         + 'run_gatekeeper_review; echo "RC=$?"\n',
         encoding="utf-8")
+    # 60 s is `ci_harness_timeout_ceiling_check.inner_timeout_ceiling`, which
+    # polices `tools/test_*.py`: a bound above it can hide a hang rather than
+    # report one. The longest stub here is killed by the script's own 1 s
+    # budget, so this is a backstop and not a runtime.
     r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     rc = int(re.search(r"RC=(-?\d+)", r.stdout).group(1))
     return rc, r.stdout
 
@@ -193,8 +197,12 @@ def _drive_through_run(tmp_path, stub_body: str, budget: str = "240"):
           'run_gatekeeper_review\n'
           'echo "FAILED=$FAILED"\n',
         encoding="utf-8")
+    # 60 s is `ci_harness_timeout_ceiling_check.inner_timeout_ceiling`, which
+    # polices `tools/test_*.py`: a bound above it can hide a hang rather than
+    # report one. The longest stub here is killed by the script's own 1 s
+    # budget, so this is a backstop and not a runtime.
     r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     failed = re.search(r"FAILED=(\d+)", r.stdout)
     return (int(failed.group(1)) if failed else None), r.stdout + r.stderr
 
