@@ -43,6 +43,8 @@ import _waiver_entries as _we  # noqa: E402
 import waivers_schema_check as wsc  # noqa: E402
 import waiver_staleness_check as wsl  # noqa: E402
 
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
 SCRIPT = PROGRAMS / "waivers_schema_check.py"
 
 GOOD_REASON = ("LVS deck requires a SPICE-extracted netlist that this "
@@ -402,19 +404,17 @@ def test_generated_waivers_carry_no_fabricated_approved_at(tmp_path):
                 f"{path} carries a machine-written approved_at")
 
 
-def _corpus_root():
-    """The repo's benchmark-data root, or None when the plugin tree has been
-    copied somewhere without it (the corpus is repo data, not plugin data)."""
-    for parent in PROGRAMS.parents:
-        candidate = parent / "benchmark-data"
-        if candidate.is_dir():
-            return candidate
-    return None
-
-
 def _tracked_waiver_docs():
-    """Every waivers.json in the repo corpus, as (path, parsed) pairs."""
-    root = _corpus_root()
+    """Every waivers.json in the published corpus, as (path, parsed) pairs.
+
+    Empty when there is no corpus to read. Locating it is `_published_corpus`'s
+    job, not a private walk up the tree: the walk answered "is there a
+    `benchmark-data/` directory?", which this checkout still satisfies with the
+    design INPUTS after the result cells moved to vibeic/benchmark-data — so it
+    returned a root holding no waiver at all, and the sweep below then read as a
+    defect rather than as "I could not look".
+    """
+    root = corpus_root()
     if root is None:
         return []
     out = []
@@ -426,11 +426,15 @@ def _tracked_waiver_docs():
     return out
 
 
+@needs_corpus
 def test_every_tracked_waiver_file_is_actually_examined():
     """The corpus-level statement of the defect: no tracked waiver file may
-    report a waiver_count of 0 while holding entries."""
-    if _corpus_root() is None:
-        pytest.skip("benchmark-data corpus not present in this tree")
+    report a waiver_count of 0 while holding entries.
+
+    The `assert docs` below stays exactly as strict: with a corpus present, a
+    sweep that examined nothing is still a defect. It is only when there is no
+    corpus at all that this reports SKIP instead of FAIL.
+    """
     docs = _tracked_waiver_docs()
     assert docs, "corpus root exists but holds no waivers.json — probe is vacuous"
     for path, doc in docs:

@@ -1,13 +1,21 @@
 type: enhancement
 severity: P1
-component: phase2/final-audit/p0-structural-rtl-umbrella
-plugin_version: "1.9.76"
+component: program:flow_compliance_check
+plugin_version: "1.9.78"
 
 title: >-
   Triage the residual structural-RTL gate failures into gate-defect versus design-defect, one corpus per family
 
 pattern: |
-  
+  A gate reports FAIL as a bare exit code, so "the artefact does not contain the thing the
+  gate requires" and "the artefact contains it in a form this gate cannot parse" arrive as
+  the same verdict. Those two have opposite owners and opposite fixes — one is a defect in
+  the subject under test, the other is a defect in the gate — so an undifferentiated
+  residual cannot be assigned to anyone, cannot be prioritised, and cannot be compared
+  against the previous round's residual to show whether the work moved anything. The
+  failure hardens with repetition: successive rounds reproduce an identical count, and an
+  identical count is read as a stable baseline when what it actually records is that
+  nobody has yet split it.
 
 suggested_fix: |
   Stand up one labelled corpus per residual family plus a family checker that consumes it. Identifier and document-field family: collect designs where the field the gate demands IS present in a form the gate does not parse, alongside designs where it is genuinely missing, and make the gate report which of the two it found instead of a bare exit code. Timing-constraint family: the same split into constraint file absent, constraint present but the clock the gate searched for is named differently, and constraint genuinely missing. Ship both corpora as fixtures so each family verdict is reproducible, then wire the resulting cause class into the umbrella's FAIL records so the next round's residual is machine-comparable with this one's. Until those corpora exist, make the umbrella refuse to publish a residual whose families it cannot classify, rather than reporting an undifferentiated count.
@@ -15,4 +23,4 @@ suggested_fix: |
 id: "ORGANIC-20260804-structural-gate-residual-fail-family-triage"
 submitted_at: "2026-08-04T23:55:17+08:00"
 session_context: >-
-  Convergence rounds R25 and R26 of one design on a commercial process (the third and latest run directory was not read). Both rounds measured the identical partition: 246 registered structural-RTL gates, 210 returning a verdict, 13 FAIL. 7 of the 13 belong to the deferred-track suppression defect captured as a separate record; these 6 are the remainder. Nothing filed for either family.
+  Convergence rounds R25 and R26 of one design on a commercial process (the third and latest run directory was not read). Both rounds measured the identical partition: 246 registered structural-RTL gates, 210 returning a verdict, 13 FAIL. 7 of the 13 belong to the deferred-track suppression defect, which is fixed separately; these 6 are the remainder. Nothing filed for either family. TWO CORRECTIONS, both checked at this record's base. First, the counts: the 210 / 13 / 7 / 6 partition CANNOT BE RE-MEASURED here, because the R25 and R26 run directories are not in the repo — which is itself the untracked-capture failure issue #794 documents, showing up in the evidence for a record that cites it. Treat those four numbers as the run's own report, not as reproducible figures. Second, the sibling: an earlier draft called it a separate RECORD and asked the lander to land it as one. No such file exists on any ref. The sibling is a BRANCH — `fix/deferred-gate-skip-by-ownership`, which makes a deferred track skip a gate only when the deferral record names that gate as owned, and which fast-forwards from this same base. So "land the sibling" means merging that branch, not adding a backlog entry. The case for landing it does NOT rest on the unmeasurable 7: it rests on the sibling defect being real and INDEPENDENT of this one — suppression-by-ownership across the gates a deferral claims, versus triage of the causes behind a FAIL. Different mechanism, different owner, different fix.

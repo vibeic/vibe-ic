@@ -23,7 +23,20 @@ HARNESS = PLUGIN / "benchmark"
 sys.path.insert(0, str(HARNESS))
 import cvdp_gate as G  # noqa: E402
 
-_HAS_IVERILOG = shutil.which("iverilog") is not None
+#: The guard's definition lives in `_sim_tools` so it exists ONCE rather
+#: than once per file — eight copies of `shutil.which("yosys")` is the
+#: drift shape this repo removes from registries one at a time. Same
+#: semantics: skip only on genuine absence, and name the missing tool.
+#: See that module for the measured 38-test / 8-file cluster.
+from _sim_tools import (  # noqa: E402
+    MISSING as _MISSING_SIM, NEEDS_SIM as _NEEDS_SIM)
+
+#: Derived from the shared set rather than probed a second time. This
+#: file already guarded 18 OTHER tests on `_HAS_IVERILOG and _HAS_YOSYS`
+#: — the both-tools rule was always this file's intent; the 13 fixed
+#: here were simply left on the older iverilog-only marker.
+_HAS_IVERILOG = "iverilog" not in _MISSING_SIM
+_HAS_YOSYS = "yosys" not in _MISSING_SIM
 
 GOOD = """Here is the fix:
 
@@ -87,7 +100,7 @@ def test_559_required_module_names_from_prompt():
         "Design a 4-bit counter.") == set()
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_559_filename_module_mismatch_is_advisory_with_prompts(tmp_path):
     # ORGANIC #642 round-2 — a filename hint (`rtl/foo.sv`) is NOT the harness
     # TOPLEVEL (cocotb sets it from the module DECLARATION name). A
@@ -112,7 +125,7 @@ def test_559_filename_module_mismatch_is_advisory_with_prompts(tmp_path):
                for n in e.get("notes", []))
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_559_matching_module_passes_and_no_prompts_unchanged(tmp_path):
     good = ("```verilog\nmodule foo(input a, output b);\n"
             "assign b=a;\nendmodule\n```\n")
@@ -144,7 +157,7 @@ def test_extract_code_kinds():
     assert kind == "doc_only" and code is None
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_buggy_completions_blocked_good_gated_in(tmp_path):
     batch = _write_batch(tmp_path, [
         {"id": "p_good", "completion": GOOD},
@@ -165,7 +178,7 @@ def test_buggy_completions_blocked_good_gated_in(tmp_path):
     assert verd["p_good"] == "PASS"
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_negative_context_module_instantiation_not_blocked(tmp_path):
     # NEGATIVE no-leak (#528): Unknown module type from the problem's
     # context files is a LEGAL copilot shape — must gate in.
@@ -176,7 +189,7 @@ def test_negative_context_module_instantiation_not_blocked(tmp_path):
     assert [r["id"] for r in _read_jsonl(out)] == ["p_ctx"]
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_doc_only_completion_tolerated(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_doc", "completion": DOC_ONLY}])
     out = tmp_path / "responses.jsonl"
@@ -188,7 +201,7 @@ def test_doc_only_completion_tolerated(tmp_path):
     assert rep["records"][0]["verdict"] == "PASS_DOC_ONLY"
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_hygiene_fix_is_enforced_in_gate(tmp_path):
     # a draft with a reset-less power-up register: rtl_hygiene_lint --fix
     # must run INSIDE the gate (the gated-in completion may differ from the
@@ -279,7 +292,7 @@ endmodule
 """
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_text_fence_before_broken_verilog_blocks(tmp_path):
     # HIGH (review): a ```text fence before the verilog fence used to skew
     # fence pairing — the broken code passed as doc_only (block-evasion).
@@ -291,7 +304,7 @@ def test_review_text_fence_before_broken_verilog_blocks(tmp_path):
     assert _read_jsonl(out) == []
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_text_fence_before_good_verilog_gates_in(tmp_path):
     # the same skew also DROPPED good code (compiled the prose → false
     # block). The good record must gate in as code, not doc_only.
@@ -307,7 +320,7 @@ def test_review_text_fence_before_good_verilog_gates_in(tmp_path):
     assert rep["records"][0]["kind"] == "fenced"
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_two_fence_writeback_not_duplicated(tmp_path):
     # HIGH (review): the old write-back substituted the CONCATENATED blob
     # into every fence (f1+f2 twice → duplicate declarations). The emitted
@@ -328,7 +341,7 @@ def test_review_two_fence_writeback_not_duplicated(tmp_path):
     assert "```" not in body
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_unknown_module_does_not_mask_genuine_error(tmp_path):
     # MED (review): icarus aborts on the unknown context module BEFORE
     # reporting the author's own genuine error (undeclared signal under
@@ -342,7 +355,7 @@ def test_review_unknown_module_does_not_mask_genuine_error(tmp_path):
     assert _read_jsonl(out) == []
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_report_discloses_iverilog_version(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_doc2", "completion": DOC_ONLY}])
     out = tmp_path / "responses.jsonl"
@@ -355,7 +368,6 @@ def test_review_report_discloses_iverilog_version(tmp_path):
 
 # ── #531 yosys smoke + #535 transmission integrity ─────────────────────────
 
-_HAS_YOSYS = shutil.which("yosys") is not None
 
 IVERILOG_OK_YOSYS_EMPTY = "```verilog\n// no module at all — just a comment\n```"
 
@@ -571,7 +583,7 @@ def test_round2_json_dict_extraction():
     assert G.extract_code(JSON_DICT_SCHEMA) == (None, "doc_only")
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_round2_json_dict_good_gates_in_broken_blocked(tmp_path):
     batch = _write_batch(tmp_path, [
         {"id": "p_jgood", "completion": JSON_DICT_GOOD},
@@ -613,7 +625,7 @@ def test_round2_531_json_dict_reaches_yosys_smoke(tmp_path):
     assert [r["id"] for r in _read_jsonl(out)] == ["p_jsmoke"]
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_round2_535_empty_completion_blocked_not_doc_only(tmp_path):
     # #535 reopen: whitespace-only / trivially-short completions are the
     # corruption shape and must BLOCK — never PASS_DOC_ONLY.
@@ -757,6 +769,103 @@ LATCH_COMB_JSON = _json.dumps({"code": [{"rtl/bcd.sv":
     "  end\nendmodule"}]})
 
 
+# ── host-yosys CAPABILITY probes (never a version string) ──────────────────
+# The three round-4/round-5 assertions below pin the EVIDENCE STRING the gate
+# must emit when it takes ONE SPECIFIC tolerance branch. Reaching that branch
+# needs a yosys that (a) parses SV `.*` so the HIERARCHY pass actually runs
+# and (b) raises always_comb latch inference to an `ERROR:` line. The plugin
+# PINS yosys 0.40 (benchmark/cvdp_env_preflight.py REQUIRED / Dockerfile.sim);
+# a host yosys older than the pin (the distro 0.9 has neither capability:
+# `.*` is a frontend syntax error, and latch inference is an INFO line) can
+# NEVER execute those branches, so the gate correctly reports a DIFFERENT —
+# still correct — reason string there. `shutil.which("yosys")` proves
+# PRESENCE, not CAPABILITY, so each mechanism assertion is preconditioned on
+# a real probe of the host binary while the VERDICT assertions above it stay
+# unconditional on every host.
+#
+# The probes carry their OWN literal patterns and never import cvdp_gate's
+# regexes: a probe that asked the code under test whether it can be tested
+# would fall silent exactly when that code broke. A probe that cannot get
+# yosys to run at all FAILS the test instead of skipping it (#604 applied to
+# the probe itself) — a skip must never rest on absent evidence.
+_YOSYS_CAP: dict = {}
+
+
+def _yosys_probe_blob(sv_text, top):
+    import re as _re_p
+    import subprocess as _sp
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        p = Path(td) / "probe.sv"
+        p.write_text(sv_text)
+        r = _sp.run(["yosys", "-p",
+                     f"read_verilog -sv {p}; synth -top {top}; stat"],
+                    # 60s, NOT 300. The pytest harness runs with --timeout=180, so a
+                    # bound ABOVE the harness cap is not a longer allowance — it is a
+                    # different failure mode. A hung yosys reaches 180s first and
+                    # `--timeout-method=thread` kills the SESSION, losing every other
+                    # result in the run, instead of failing this one test with a name.
+                    # That is why `ci_harness_timeout_ceiling_check` refuses it: the
+                    # ceiling is 60 = 180 // 3.
+                    #
+                    # Measured: batch R4 (22 PRs) failed BOTH its gates on this one
+                    # line — `FAIL targeted tests +++ Timeout +++` with zero named
+                    # failures, and `[FAIL] 1 inner bound(s) above the 60s ceiling`.
+                    # The timeout named nothing because the session died; the hygiene
+                    # gate is the only one that could say why.
+                    capture_output=True, text=True, timeout=60)
+    blob = (r.stdout or "") + "\n" + (r.stderr or "")
+    assert _re_p.search(r"Yosys\s+[\d.]|Executing\s+\w+\s+pass|/----", blob), (
+        "host yosys did not RUN for the capability probe — refusing to "
+        "downgrade a mechanism assertion to a skip on no evidence:\n"
+        + blob[:400])
+    return blob
+
+
+def _host_yosys_version():
+    if "ver" not in _YOSYS_CAP:
+        import subprocess as _sp
+        r = _sp.run(["yosys", "-V"], capture_output=True, text=True,
+                    timeout=60)
+        line = ((r.stdout or "") + (r.stderr or "")).splitlines()
+        _YOSYS_CAP["ver"] = line[0].strip() if line else "unknown"
+    return _YOSYS_CAP["ver"]
+
+
+def _yosys_errors_on_always_comb_latch():
+    """Host yosys raises always_comb latch inference to an ERROR line."""
+    if "latch" not in _YOSYS_CAP:
+        import re as _re_p
+        blob = _yosys_probe_blob(
+            "module lprobe(input e, input d, output reg q);\n"
+            "  always_comb begin\n    if (e) q = d;\n  end\nendmodule\n",
+            "lprobe")
+        _YOSYS_CAP["latch"] = any(
+            _re_p.search(r"ERROR:.*[Ll]atch inferred", ln)
+            for ln in blob.splitlines())
+    return _YOSYS_CAP["latch"]
+
+
+def _yosys_hierarchy_reaches_unknown_context():
+    """Host yosys parses `.*` and reaches HIERARCHY on the unknown module."""
+    if "ctx" not in _YOSYS_CAP:
+        import re as _re_p
+        blob = _yosys_probe_blob(
+            "module cprobe(input a, output z);\n"
+            "  unknown_ctx u(.*);\nendmodule\n", "cprobe")
+        _YOSYS_CAP["ctx"] = bool(_re_p.search(r"referenced in module", blob))
+    return _YOSYS_CAP["ctx"]
+
+
+def _skip_unreachable(cap, what):
+    pytest.skip(
+        f"host yosys ({_host_yosys_version()}) {cap} — the synth-stage "
+        f"{what} under test is UNREACHABLE on this binary; the plugin pins "
+        f"yosys 0.40 (cvdp_env_preflight REQUIRED), where this assertion "
+        f"runs hard. The gate VERDICT for this record was asserted above on "
+        f"THIS host and held.")
+
+
 @pytest.mark.skipif(not (_HAS_IVERILOG and _HAS_YOSYS),
                     reason="iverilog/yosys not on this host")
 def test_round4_context_module_at_synth_hierarchy_tolerated(tmp_path):
@@ -772,6 +881,10 @@ def test_round4_context_module_at_synth_hierarchy_tolerated(tmp_path):
     rep = _json.loads((tmp_path / "rep.json").read_text())
     e = rep["records"][0]
     assert e["verdict"] == "PASS"
+    if not _yosys_hierarchy_reaches_unknown_context():
+        _skip_unreachable("cannot parse SV `.*` (frontend syntax error), so "
+                          "its frontend never reaches the HIERARCHY pass",
+                          "unknown-context-module tolerance")
     assert "context module" in e.get("synth", "")
 
 
@@ -790,6 +903,11 @@ def test_round4_latch_strictness_is_advisory_not_block(tmp_path):
     rep = _json.loads((tmp_path / "rep.json").read_text())
     e = rep["records"][0]
     assert e["verdict"] == "PASS"
+    if not _yosys_errors_on_always_comb_latch():
+        _skip_unreachable("does not raise always_comb latch inference to an "
+                          "ERROR line (it is an INFO line there, so the smoke "
+                          "simply succeeds)",
+                          "latch-strictness ADVISORY tolerance")
     assert "ADVISORY" in e.get("synth", "")
 
 
@@ -883,6 +1001,12 @@ def test_round5_review_latch_error_abort_must_not_mask_later_fatal(tmp_path):
     assert _read_jsonl(out) == []
     rep = _json.loads((tmp_path / "rep.json").read_text())
     assert rep["records"][0]["verdict"] == "BLOCKED"
+    if not _yosys_errors_on_always_comb_latch():
+        _skip_unreachable("does not raise always_comb latch inference to an "
+                          "ERROR line, so PROC_DLATCH never aborts and the "
+                          "masked PROC_DFF fatal prints on the FIRST run "
+                          "(the block above proves it was not masked)",
+                          "confirming re-run that un-masks it")
     assert "confirming re-run" in rep["records"][0].get("synth", "")
 
 

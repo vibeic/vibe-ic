@@ -1,0 +1,22 @@
+WAITING_FOR_IMAGE ghcr.io/vibeic/vibeic-eda:0.2.76
+IMAGE_READY ghcr.io/vibeic/vibeic-eda:0.2.76
+0655cbf2d69cac497e18740d9209e69d228079079f05dfb78157ecc24dbcd849
+CONTAINER_CREATE rc=0
+RUNNING: vibeic-eda-otaes3 ghcr.io/vibeic/vibeic-eda:0.2.76 Up 5 seconds
+RUNNER_LAUNCHED pid=3826791
+ALIVE 3826791
+      phase1_sufficiency_check: sufficiency verdict: sufficient [ADVISORY]
+          layers=L1,L10,L11,L12,L13,L14,L15,L16,L17,L18,L19,L2,L20,L21,L22,L23,L24,L25,L26,L27,L3,L4,L5,L6,L7,L8,L9 ports=57 sequential=False
+[phase1] expert track (second track) ...
+      INCOMPLETE: phase1_expert_parse_track — the AI sub-track did not deliver a reading (HANDOFF_EMITTED), so the expert expectation was NOT examined; the deterministic findings are a floor, not coverage
+      phase1_expert_parse_track: VACUOUS_PASS (1 finding(s); AI sub-track HANDOFF_EMITTED)
+        [REVIEW] EXPERT_TRACK_AI_SUBTRACK_SKIPPED: The AI sub-track of the Phase-1 expert track did not deliver a reading (HANDOFF_EMITTED): pack written to /home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/reports/audit/phase1/expert_parse_track_pack; invoke subagent vibe-ic:ic-expert-agent on /home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/reports/audit/phase1/expert_parse_track_pack/ic_expert_agent_handoff.json and re-run to consume its answer Findings below come from the deterministic sub-track ALONE — read them as a floor, not as coverage.
+        report: /home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/reports/audit/phase1/expert_parse_track.json
+steps view: steps/ — 63 steps, 2 with outputs (63 nested phase/stage/step)
+
+========================================================================
+=== PHASE 2 (= 2a + 2b) → phase2_one_shot_runner.py
+========================================================================
+RUNNER_LOCK_REENTRANT: design_one_shot_runner re-enters the lock held by parent pid=3826791 on /home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808 (#588 delegated sub-run).
+[phase2] complexity advisory: complexity score=82.26 tier=COMPLEX (prefer_catalog_glue=True synth_effort=high fpga_early=True sta_corners=multi+aging) — ADVISORY only
+[ADVISORY] CATALOG_GLUE_CLOSURE (#778): 32 staged file(s) NOT reachable from 'chip_top' (98 of 130 reachable) — over-broad set fed to synth. The runner never auto-drops a staged file, but an unreachable prunable-tail file using a cross-file macro it never `include`s can crash yosys-slang opaquely with no author hint. Consider pruning to the closure. Examples: prim_secded_22_16_dec.sv, prim_secded_22_16_enc.sv, prim_secded_28_22_dec.sv, prim_secded_28_22_enc.sv, prim_secded_39_32_dec.sv, prim_secded_39_32_enc.sv, prim_secded_64_57_dec.sv, prim_secded_64_57_enc.sv
