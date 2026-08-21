@@ -2614,6 +2614,60 @@ the thing that is wrong?"** Every framing was more precise than the last, and
 only this one was reached by running the thing.
 
 
+## M43 — SETTLED by instrumentation: the waiver fires, and the step is vacuous for good reason
+
+Instrumenting the run (dumping the compliance output to a file instead of
+grepping pytest's elided `repr` — defect #8) gives the whole member set for
+Step 4:
+
+```
+GATE_RAN formal_proof_evidence_check         rc=2   VACUOUS_PASS
+GATE_RAN cpu_functional_oracle_waiver_check  rc=0   PASS
+GATE_RAN cdc_crossing_check                  rc=0   PASS
+GATE_RAN vacuous_testbench_check             rc=2   VACUOUS_PASS
+GATE_RAN bit_level_full_stack_tb_check       rc=1   FAIL
+GATE_RAN cdc_async_input_check               rc=0   PASS
+GATE_RAN verilator_coverage_measure          rc=3   PASS_WITH_WAIVERS
+GATE_RAN clock_domain_reg_crossing_check     rc=0   PASS
+GATE_RAN professional_tb_check               rc=0   VACUOUS_PASS
+GATE_RAN coverage_closure                    rc=2   VACUOUS_PASS
+GATE_RAN reset_dependency_check              rc=0   PASS
+```
+
+**The waiver plumbing is not broken. It works.** `verilator_coverage_measure`
+returns **rc=3 `PASS_WITH_WAIVERS`** in the real run, exactly as designed —
+which retires M39's "probably a defect" reading, arrived at by inference.
+
+**Step 4 reports VACUOUS-PASS because it contains FOUR vacuous members** —
+`formal_proof_evidence_check`, `vacuous_testbench_check`, `coverage_closure`
+(all rc=2) and `professional_tb_check` (rc=0 but classified VACUOUS_PASS). The
+step is not being denied a waiver by broken plumbing; **it is vacuous on its own
+merits, and the vacuity outranks the waiver.**
+
+That precedence is right. A step containing four predicates that examined
+nothing should not report `WAIVED-DEFERRED`, which reads as "measured, gap
+disclosed, reviewable". `VACUOUS-PASS` is the more honest of the two, and Pillar
+2 — *"no vacuous result counts as PASS"* — is the doctrine that says so.
+
+**So the two reds are the TEST's expectation being too narrow**, not a defect in
+the flow. The test asserts `WAIVED-DEFERRED` for a scenario where the waiver is
+only one of six non-PASS signals, four of them vacuous and one an outright
+`FAIL` (`bit_level_full_stack_tb_check rc=1`).
+
+**That `FAIL` is worth its own look and I am flagging it rather than chasing
+it:** a member at rc=1 inside a step reporting VACUOUS-PASS deserves an
+explanation, and it is a separate thread from the one I was pulling.
+
+**Sixth and final framing, and the thread closes here:** vocabulary → registry
+lookup → policy call → waiver-plumbing defect → "is the vacuous member correct"
+→ **the waiver fires, four members are vacuous, and VACUOUS-PASS is the right
+verdict; the test wants a verdict the run does not merit.**
+
+Five of six framings were wrong. **The one that held was produced by
+instrumenting the run** — the same method that settled every other real question
+in this document, and the one I reached for last each time.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2699,7 +2753,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **M41:** producer verified correct; `all_of` verified to CARRY the waiver (`:8103`). Untraced link is now one function: **the step-level precedence between VACUOUS_PASS and WAIVED-DEFERRED when an `all_of` carries both hints.** Two hypotheses formed and killed on the way — see M41 before trusting a third. | **likely defect, one link left** |
+| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M43) by instrumentation.** `verilator_coverage_measure` DOES return rc=3 `PASS_WITH_WAIVERS` in the real run — the plumbing works. Step 4 is VACUOUS-PASS because it holds **four vacuous members** (plus one outright `FAIL`), and vacuity rightly outranks a waiver. **The test's expectation is too narrow; not a flow defect.** Separately flagged: `bit_level_full_stack_tb_check rc=1 FAIL` inside a VACUOUS-PASS step. | **answered** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
