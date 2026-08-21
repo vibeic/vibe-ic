@@ -1335,6 +1335,54 @@ def test_a_refused_pin_points_at_the_phrase_not_the_keyword(tmp_path):
         f"reader is looking for: {refused}")
 
 
+EMITTER_HONEST_TWO_SITES = (
+    'def s():\n    return (\n'
+    '        "  if {[catch {a}]} { incr _h }\\n"\n'
+    '        "  if {[catch {b}]} { incr _h }\\n"\n'
+    '        "  if {$_h >= 2} { puts ALL }\\n")\n')
+
+EMITTER_WITH_A_DENIED_SITE = (
+    'def s():\n    return (\n'
+    '        "  # the retry path does not incr _d; it re-issues\\n"\n'
+    '        "  if {[catch {p}]} { incr _d }\\n"\n'
+    '        "  if {[catch {q}]} { incr _d }\\n"\n'
+    '        "  if {$_d >= 2} { puts ALL }\\n")\n')
+
+
+def test_a_refusal_names_the_program_it_came_from(tmp_path):
+    """The counter side's `where`, across TWO programs -- which every other
+    fixture on this branch lacks, so it has been trivially right until now.
+
+    This is the same property already pinned for the PIN side (a refusal points
+    at the phrase's line) and for the two-counter case (a refusal names the
+    counter). Checking it on one side and not the others is how a standard ends
+    up half-applied, which is what this test exists to stop.
+
+    The files are named so ALPHABETICAL order puts the honest one FIRST: a
+    `where` taken from the wrong variable, or captured outside the per-program
+    loop, reports `aa_honest.py` and sends the reader to a file with nothing
+    wrong in it. Both programs must still be examined -- the denial in one must
+    not curtail the other."""
+    progs = tmp_path / "p"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    (progs / "aa_honest.py").write_text(EMITTER_HONEST_TWO_SITES, encoding="utf-8")
+    (progs / "zz_denied.py").write_text(EMITTER_WITH_A_DENIED_SITE, encoding="utf-8")
+    (tests / "test_x.py").write_text("def test_x():\n    assert True\n",
+                                     encoding="utf-8")
+
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["findings"] == [], doc
+    assert [(d["where"], d["matched"]) for d in doc["denied_by_polarity"]] == [
+        ("zz_denied.py", "incr _d")], (
+        "the refusal names the wrong program -- a reader sent to a file with "
+        f"nothing wrong in it: {doc['denied_by_polarity']}")
+    assert doc["counters_examined"] == 2, (
+        f"a denial in one program curtailed the other: {doc}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
