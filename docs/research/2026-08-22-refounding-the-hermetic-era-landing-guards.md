@@ -135,6 +135,44 @@ transition is then computed by the real producer from real inputs, which is what
 the test claims to be testing. This also retires the `.get(..., [])` that M14
 had to harden, because the key will be present when the producer actually runs.
 
+### D's feasibility is UNVERIFIED — flagged before someone builds it
+
+Design A was ranked first and specified against an artifact no test can reach. I
+corrected it only because I went looking. **D rests on the same kind of
+assumption and has not had the same check**, so it is flagged here rather than
+left for whoever picks it up.
+
+D says: express "the corpus is expanded" as data, by giving the base arm and the
+candidate arm corpora that genuinely differ. Whether a TEST can make them differ
+is the open question, and the source points both ways:
+
+* **For:** `gatekeeper-verify-merge.sh:798` materializes the B2 corpus with
+  `--checkout "$BENCHMARK_B2" --subject-repo "$WT_CAND"` — the checkout is built
+  with reference to the CANDIDATE subject worktree, so materialization is
+  subject-aware, and `BENCHMARK_A2`/`BENCHMARK_B2` are genuinely separate trees.
+* **Against:** `:1237` passes a single `$BENCHMARK_SHA` for both, and `_verify()`
+  supplies exactly one `VIBE_IC_BENCHMARK_DATA` checkout. On that reading the two
+  directories exist for ISOLATION — which is precisely what
+  `..._b2_corpus_mutation_is_post_attested_and_norecord` guards, that B2 cannot
+  mutate what A2 reads — and not for differing content.
+
+Both cannot be right about what a test controls. The system must support an
+EMPTY→expanded transition somehow, because that is G5's whole subject; what is
+unknown is whether a test can DRIVE it, or whether it only arises from a real
+benchmark-data pin moving between two real commits.
+
+**The question to answer before building D:** does the A2 corpus ever differ in
+CONTENT from the B2 corpus in a single verification, and if so, what makes it
+differ — the subject tree, the benchmark-data pin, or something the test cannot
+reach? If the answer is the third, D is not implementable as written and the two
+corpus tests need a different re-founding than the one proposed here.
+
+**The general rule this earns, and it applies to B and C as well as D:** every
+"just express it through channel X" claim in this document needs channel X
+checked before the item is ranked. A survived that check only after being
+rewritten. B's channel is confirmed (the container label, from source). C's is
+confirmed (M15, implemented and passing in both lanes). **D's is not.**
+
 ## What this costs, honestly
 
 * Thirteen tests rewritten, in a file inside the protected closure. Not small.
