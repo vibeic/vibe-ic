@@ -2774,6 +2774,46 @@ this resolve that way", the answer is in the predicate, not in what got printed
 afterwards.
 
 
+## M46 — how NOT to fix it, which matters more than the verdict
+
+M45 settled that `VACUOUS-PASS` is correct and the test's expectation too narrow.
+The obvious next move is to flip the assertion to `VACUOUS-PASS`. **That would be
+the wrong fix**, and someone will try it, so:
+
+**What the tests are FOR** (their own docstrings):
+
+* `..._lifts_step4_out_of_skipped_condition` — #460's real complaint was Step 4
+  *stuck at SKIPPED-CONDITION for a genuine oracle PASS*. **That complaint is
+  fixed**: VACUOUS-PASS is out of SKIPPED-CONDITION.
+* `..._is_deferred_not_counted_without_coverage` — *"an oracle PASS with NO
+  coverage measurement … must not be counted into the headline executed-PASS
+  numerator. It must instead appear in the WAIVED-DEFERRED bucket, which is
+  reviewable."*
+
+**The SUBSTANCE of the second is already satisfied.** `VACUOUS_PASS` is likewise
+not counted as an executed PASS, and is likewise surfaced with reasons for
+review. What differs is only the bucket LABEL.
+
+**So there are two candidate fixes, and they are not equivalent:**
+
+| fix | effect |
+|---|---|
+| assert `VACUOUS-PASS` instead | test goes green, but it stops testing the WAIVER path entirely — it would then assert the behaviour of a scenario with vacuous gates, which is not what #460 was about. **A relaxation wearing a correction's clothes.** |
+| enrich the fixture so Step 4 has NO vacuous members | the waiver branch at `:10057` can then fire, and the test exercises the deferral path it was written for |
+
+**The second is the right one.** The blocker is that `vacuous_testbench_check`
+and `professional_tb_check` go vacuous on this fixture, so the waiver branch is
+structurally unreachable in it — the test cannot demonstrate deferral while its
+own scenario is vacuous.
+
+**NOT DONE — and this one really is not mine.** It is fixture work in another
+agent's test, requiring a substantive testbench in the replica, and the choice
+between the two fixes is the owner's. **What I can usefully hand over is that
+the cheap fix destroys the test**, which is not obvious from the failure message
+and is exactly the trap this branch has spent its length documenting: a green
+bought by removing the thing that could fail.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
