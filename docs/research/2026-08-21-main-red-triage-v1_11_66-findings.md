@@ -677,3 +677,47 @@ Two bad options unless the wiring changes with the declaration. **NOT FIXED, and
 deliberately: the audit exists precisely to force this decision to be taken by
 someone, and taking it by guess is the failure mode it was built against.**
 Whoever owns those two gates has a two-line fix plus a wiring decision.
+
+# ===== A FOURTH ARTEFACT OF MINE, AND THIS ONE IS SYSTEMIC: TMPDIR LENGTH =====
+
+`test_flow_compliance_check_gate::test_a_real_verdict_is_not_mistaken_for_a_crash`
+asserts `'verdict: FAIL' in snippet`. The snippet in my run STARTS MID-PATH —
+`yerchu/_ptmo_priv/tmp1166t/image/pytest-of-designer/pytest-3/...` — so it is a
+fixed-size evidence WINDOW, and my 96-character TMPDIR pushed the marker out of
+it.
+
+```
+TMPDIR=/home/reyerchu/_ptmo_priv/tmp1166t/image   (96 chars)  -> FAILED
+TMPDIR=/tmp/ptmo_short                            (16 chars)  -> 1 passed in 0.87s
+```
+
+**Not about main. About the length of the path I chose.** That is the fourth
+environment artefact of my own in this thread — pytest-timeout, the `$HOME`
+mount, the unbound corpus, and now TMPDIR depth.
+
+**And unlike the others this one is SYSTEMIC**: any test that quotes a bounded
+evidence window containing a path is exposed, so I cannot assume it touched only
+this ID. Every file carrying a BOTH red is therefore being re-run with a 6-char
+TMPDIR (`/tmp/ps`) to find out which other reds are mine.
+
+This is the sharpest lesson of the whole job: **four times my measurement
+environment produced a red I was ready to attribute to the subject, and each
+time the tell was in the text of the failure rather than in its colour.** The
+`$HOME` one is now caught by the instrument. This one needs the same treatment —
+a short, fixed scratch root, not a descriptive one.
+
+## The short-TMPDIR sweep, partial (6 of 12 BOTH-red files)
+
+```
+red with my 96-char TMPDIR : 9
+red with a 6-char TMPDIR   : 8
+
+WENT GREEN on a short TMPDIR — MINE (1):
+    test_flow_compliance_check_gate::test_a_real_verdict_is_not_mistaken_for_a_crash
+```
+
+So far the blast radius of the TMPDIR artefact is **one** ID, not the whole
+list — which is the answer I wanted and not the one I feared. The other eight in
+these six files survive a short path and stay attributed. The remaining six
+files are still running; if any of them moves, it moves in the same direction
+(a red of mine, retracted) and never the other way.
