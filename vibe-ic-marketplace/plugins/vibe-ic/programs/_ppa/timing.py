@@ -221,6 +221,87 @@ def discover_reports(project: Path) -> List[Path]:
     return [seen[k] for k in sorted(seen)]
 
 
+#: Where a step records that one artefact it wrote is a COPY of another.
+#: Written by `phase3_one_shot_runner._publish_artefact_mirror`.
+_MIRROR_MANIFEST = "reports/phase3/artefact_mirrors.json"
+
+
+def collapse_declared_mirrors(project: Path, reports: List[Path]
+                              ) -> Tuple[List[Path], List[str]]:
+    """Drop reports the RUN ITSELF declared to be copies. Returns (kept, notes).
+
+    MEASURED DEFECT: this flow publishes each sign-off STA report into two of
+    the directories `_STA_DIRS` names, so one measurement arrived here as two
+    byte-identical files:
+
+        sha256(phase3/stage3/sta/sta_spef_based.rpt)
+            == sha256(reports/phase3/sta_spef_based.rpt)
+
+    Every row was therefore emitted twice under one scope, and ALL 20
+    (metric, scope) groups in the timing document collided as
+    CONFLICTING_RECORD -- correctly, because two numbers claiming to be the
+    same fact IS a conflict. One fact was arriving as two records.
+
+    WHY HERE AND NOT IN THE EMITTER: both locations are load-bearing. Five
+    shipped checkers read the `reports/phase3/` copy and the step writes the
+    `phase3/stage3/sta/` one; dropping either breaks a consumer.
+
+    WHY NOT BY CONTENT HASH: a genuine SECOND measurement that happens to agree
+    to the byte is a real reading of a real artefact, and collapsing it would
+    erase evidence -- exactly the silence this lane exists to remove. Identical
+    bytes are not proof of a copy. So the collapse is driven by the run's OWN
+    declaration: only a pair the producing step RECORDED as a mirror collapses,
+    and only while both files still match the digest recorded at copy time.
+
+    DEGRADES LOUDLY: no manifest, or a mirror whose content has diverged from
+    its source, means nothing is collapsed and the note says why. "I could not
+    tell" must not look like "there was nothing to collapse".
+    """
+    notes: List[str] = []
+    manifest = project / _MIRROR_MANIFEST
+    if not manifest.is_file():
+        return reports, notes
+    doc = _load_json(manifest)
+    entries = (doc or {}).get("mirrors")
+    if not isinstance(entries, list):
+        notes.append("mirror manifest %s declares no `mirrors` list; nothing "
+                     "collapsed" % _MIRROR_MANIFEST)
+        return reports, notes
+
+    by_rel = {_rel(project, f): f for f in reports}
+    drop: Dict[str, str] = {}
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        mirror, of, want = e.get("mirror"), e.get("of"), e.get("sha256")
+        if not (isinstance(mirror, str) and isinstance(of, str)):
+            continue
+        if mirror not in by_rel:
+            continue
+        if of not in by_rel:
+            # The thing it mirrors is not in scope, so this copy is the only
+            # reading present. Keeping it is the honest answer.
+            notes.append("declared mirror %s kept: its source %s is not among "
+                         "the artefacts read" % (mirror, of))
+            continue
+        digests = {r: opensta.file_digest(by_rel[r]) for r in (mirror, of)}
+        if not isinstance(want, str) or set(digests.values()) != {want}:
+            notes.append(
+                "declared mirror %s NOT collapsed: it and %s no longer both "
+                "match the digest recorded when the copy was made, so they are "
+                "two contents and therefore two facts" % (mirror, of))
+            continue
+        drop[mirror] = of
+
+    if not drop:
+        return reports, notes
+    kept = [f for f in reports if _rel(project, f) not in drop]
+    for mirror, of in sorted(drop.items()):
+        notes.append("collapsed declared mirror %s (a copy of %s made by the "
+                     "run itself); it contributes no second row" % (mirror, of))
+    return kept, notes
+
+
 def _stage_for(report: opensta.Report) -> Tuple[Optional[str], Optional[str]]:
     """(stage, gap-reason). Unknown is null and says why — never a guess.
 
@@ -583,6 +664,8 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
     """
     notes: List[str] = []
     reports = discover_reports(project)
+    reports, mirror_notes = collapse_declared_mirrors(project, reports)
+    notes.extend(mirror_notes)
     mode, mode_gap = _mode_for(project)
     rows: List[Row] = []
     for f in reports:
