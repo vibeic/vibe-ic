@@ -499,6 +499,31 @@ and `pre_pnr_timing.rpt` is a report the **same runner deliberately stamps** wit
 the basis marker this module exists to read. Some of the five may be out of scope
 on purpose; **nothing in the selector says which, and that is the defect rather
 than the count.**
+**Corpus-swept, and the population is not what it looks like.** Applied to every
+filename pattern in the program layer:
+
+    all discovery patterns                                  1584
+      extension-only, not this rule                         1222
+      carrying a semantic filename token                     362   <-- unusable
+    scoped to scans over a CALLER-SUPPLIED corpus             12   <-- the real rule
+
+The 362 are overwhelmingly correct — a layer reading artefacts it wrote itself,
+under names it chose, in a directory it owns. There is no two-author problem
+there. The rule holds where the documents may have come from a producer this
+layer never saw, and that is **12 programs, not 362 sites**, which makes the
+check per-scanner and tractable.
+
+**And it must follow constants.** A screen reading only the literal argument of
+the discovery call finds 4 of the 12 and **misses the case that motivated the
+rule**, whose pattern is a module-level constant — the third time in this batch a
+naive screen has failed on the very case it was written for.
+
+**The second instance is a different rule** and is split off. The timing-report
+case is same-layer, so the corpus argument does not apply to it; what is wrong
+there is that the module's own comment claims a new report is picked up without a
+change and the pattern does not deliver it. That belongs with the documented-claim
+family.
+
 **(o)** yes. **(d)** yes — the predicate is "select on the declared schema", so
 it holds for any document class this layer gains, and the third disclosed number
 it requires (files that would not parse) is the half neither denominator gate
@@ -740,13 +765,27 @@ a bug."* That rule is about **false** positives. **12 of these 13 Bucket-A rules
 fire on this tree today, and every one of them is a TRUE positive** — each names a measured
 defect quoted in its record. **A-7 is the one that runs clean**, and it says so.
 
-Two rules were narrowed BY the sweep rather than merely checked against it, and
-in both cases the version I first wrote would have been rejected on contact:
-**A-8** went 24 → 8 flagged of 54 axes once a varying sibling was required, and
-**A-7** went 560 → 0 once the absence verb had to attach to the path and the
-claim had to be unconditional. Neither narrowing was visible from the defect that
-motivated the rule; both came from running it on data it was not written
-against.
+### Which rules have actually been swept, and what happened to them
+
+A record's measurement is of the DEFECT. A sweep measures the RULE — its false
+positives. **Four rules have been swept. Not one survived unchanged.**
+
+| rule | naive | after the sweep | outcome |
+|---|---:|---:|---|
+| A-7 | 560 hits | 0 | narrowed twice; **runs clean** |
+| A-8 | 24 of 54 axes | 8 | narrowed; found a live defect |
+| A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off |
+| C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
+
+In every case the discriminator was invisible from the defect that motivated the
+rule, and in three of the four a naive screen missed the motivating case itself.
+That is the argument for the sweep being mandatory rather than advisory.
+
+**The other nine Bucket-A rules are UNSWEPT**, and this is the honest limit of
+this lane. Their numbers measure the defect they name, which is real, but nobody
+has yet measured how often they would fire on legitimate state. On a base rate of
+four for four, the implementing lane should sweep each one before building it and
+should expect to narrow it.
 
 The failure mode to avoid is therefore the opposite of the usual one: an
 implementer who reads "must run clean" and narrows a correct guard until the tree
