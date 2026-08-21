@@ -642,6 +642,43 @@ proof of anything. They stay open and stay described as they are above — one
 observation with no reproduction, and a named 18.95 s item against a 60 s
 window.
 
+## Both fixes measured at EXTREME load on equal terms — and one was improved
+
+Red 10's honest limit (above) made the asymmetry obvious: red 12 had never been
+measured above load 53, so this report was claiming more confidence for one fix
+than for the other without having tested them equally. Measured, same box, same
+session:
+
+```
+red 12, item = window/3, 24 items   load 82-86    0 of 6 green   (9-10 s each)
+                                    the CONTROL passed every time
+```
+
+The failing arm was the positive test, and the control — the arm asserting that
+an item which CANNOT renew is still killed — passed under every one of those
+runs. That is the load-insensitivity it was built for, confirmed at the harshest
+condition available rather than claimed.
+
+So red 12's margin was raised to a SIXTH of the window, matching red 10, with
+36 items:
+
+```
+red 12, item = window/6, 36 items   load 87.88    6 of 6 green   (5.5 s each)
+```
+
+**Strictly better on both axes**: 6/6 where /3 was 0/6, at slightly HIGHER load,
+and 5.5 s per run against 9-10 s. Nothing was traded for it — 36 items at a
+sixth is less total work than 24 at a third. Both mutations re-run afterwards
+and both still fire (ratio walked back to `/2` → the margin guard refuses before
+the run; window shrunk to `0.02` → `WATCHDOG_STALLED`, red).
+
+**What this does NOT claim.** Neither fix is immunity. Red 10 still failed once
+in four attempts at load 63, and it uses the same `/6` ratio. A margin is a
+ratio; a busy enough box beats any ratio. What the fixes remove is a
+CONSTRUCTION defect — a test whose green depended on scheduler jitter at
+ordinary load — and that is gone for both, with the improvement measured rather
+than assumed.
+
 ## PROBED to a conclusion: the window OWNS the kill, and "startup" was the wrong word
 
 **The settled answer first, because this section took three probes to reach it

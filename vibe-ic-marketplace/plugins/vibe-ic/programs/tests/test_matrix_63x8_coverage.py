@@ -1755,12 +1755,16 @@ def test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress(
     construction promoted to the control it always was.
     """
     old_fixed_bound = 0.45
-    #: A third of the window, so two renewals fit inside every interval the
-    #: watchdog is allowed to wait. Asserted below rather than commented, so an
-    #: edit cannot quietly walk it back to the zero-margin shape.
-    item_seconds = old_fixed_bound / 3
-    items = 24
-    assert item_seconds * 3 <= old_fixed_bound, (
+    #: A SIXTH of the window — matched to the collection test above, which
+    #: uses the same ratio for the same reason. This was `/3` until 2026-08-22,
+    #: when both fixes were measured at extreme load on equal terms: at load
+    #: 82-86 the 3x shape failed 6 of 6 while the control passed every time.
+    #: 36 items at a sixth is FASTER than 24 at a third (2.7s vs 3.6s) and
+    #: doubles the margin, so nothing is traded for it. Asserted below rather
+    #: than commented, so an edit cannot quietly walk it back.
+    item_seconds = old_fixed_bound / 6
+    items = 36
+    assert item_seconds * 6 <= old_fixed_bound, (
         f"each child item must finish well inside the {old_fixed_bound}s stall "
         f"window or this test measures scheduler jitter, not renewal")
     assert items * item_seconds > old_fixed_bound * 4, (
