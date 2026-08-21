@@ -46,6 +46,7 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import run_output_completeness_check as R  # noqa: E402
 import result_md_audit_provenance_check as P  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 AMBIG = "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS"
 
@@ -171,6 +172,46 @@ Tally: PASS=19 FAIL=9 MISSING=1  [CURRENT]
     assert rep.state == AMBIG and rep.rc == 1
     stat = {d["status"] for d in rep.evidence["round_tally_distinct"]}
     assert stat == {"CURRENT", "UNMARKED"}
+
+
+_BASELINE_VS_THIS_RUN = """# RESULT
+
+Verdict: FAIL
+
+canonical v1.0.0 : PASS=30  FAIL=1  MISSING=3  WAIVED-DEFERRED=3  SKIPPED=22
+this run         : PASS=32  FAIL=0  MISSING=2  WAIVED-DEFERRED=3  SKIPPED=22
+"""
+
+
+def test_the_baseline_vs_this_run_shape_is_refused(tmp_path):
+    """The dominant shape in the wild: a two-line comparison of the reference
+    figure against this round's, with nothing marking which is which.
+
+    A FIRST-MATCH consumer takes the BASELINE and reports it as the round's
+    result; a `tail -1` consumer takes the round. Two readers, two different
+    answers off one file, and neither can tell it guessed.
+    """
+    rep = R.check(_run(tmp_path, _BASELINE_VS_THIS_RUN))
+    assert rep.state == AMBIG and rep.rc == 1
+
+
+def test_a_baseline_may_be_labelled_a_baseline_not_a_withdrawal(tmp_path):
+    """A baseline is not a retracted claim — it is a live figure about a
+    different thing. A rule that could only be satisfied by stamping WITHDRAWN
+    on it would be asking the author to write something false, and a rule
+    satisfiable only by lying gets worked around rather than followed.
+
+    This is the fixed form of the shape above, and it must sign off clean.
+    """
+    body = """# RESULT
+
+Verdict: FAIL
+
+canonical v1.0.0 : PASS=30  FAIL=1  MISSING=3   [BASELINE]
+this run         : PASS=32  FAIL=0  MISSING=2   [CURRENT]
+"""
+    rep = R.check(_run(tmp_path, body))
+    assert rep.state == "COMPLETE" and rep.rc == 0
 
 
 def test_withdrawing_everything_declares_nothing(tmp_path):
@@ -367,12 +408,28 @@ Round A: PASS=26 FAIL=2 MISSING=1  (WITHDRAWN — reachable only with a check di
     "Tally: PASS=21 FAIL=7 MISSING=1  [LATEST]",
     "Tally: PASS=21 FAIL=7 MISSING=1  (AUTHORITATIVE)",
 ])
+
 def test_the_ways_an_author_will_actually_write_the_marker_all_work(
         tmp_path, marker_line):
     """A rule that only accepts one spelling gets worked around rather than
     followed. Each of these is a shape a real report already uses somewhere."""
     body = f"# RESULT\n\n{marker_line}\n\nOld: PASS=26 FAIL=2 MISSING=1 [STALE]\n"
     rep = R.check(_run(tmp_path, body, name=str(abs(hash(marker_line)))))
+    assert rep.state == "COMPLETE" and rep.rc == 0
+
+
+@pytest.mark.parametrize("not_current", [
+    "WITHDRAWN", "RETRACTED", "SUPERSEDED", "OBSOLETE", "STALE", "HISTORICAL",
+    "BASELINE", "REFERENCE", "PRIOR", "PREVIOUS",
+])
+def test_both_honest_reasons_a_number_is_not_this_round_are_sayable(
+        tmp_path, not_current):
+    """A claim taken back and a reference that was never the claim are
+    different facts. Both keep a number out of the current slot, and the
+    vocabulary has to let an author write whichever one is true."""
+    body = (f"# RESULT\n\nRound C: PASS=21 FAIL=7 MISSING=1  [CURRENT]\n"
+            f"Round A: PASS=26 FAIL=2 MISSING=1  [{not_current}]\n")
+    rep = R.check(_run(tmp_path, body, name="v" + not_current))
     assert rep.state == "COMPLETE" and rep.rc == 0
 
 
@@ -483,14 +540,7 @@ def test_a_run_that_produced_only_inputs_keeps_its_own_diagnosis(tmp_path):
 # ---------------------------------------------------------------------------
 # CORPUS SWEEP — the guard must not flag the state the repo already shipped.
 # ---------------------------------------------------------------------------
-def _repo_root() -> Path:
-    p = Path(__file__).resolve()
-    for anc in p.parents:
-        if (anc / "benchmark-data").is_dir() and (anc / ".git").exists():
-            return anc
-    return p.parents[6]
-
-
+@needs_corpus
 def test_no_published_result_md_is_flagged(tmp_path):
     """Swept through ``check()`` — the shipped verdict, not a helper — with each
     published deliverable presented as a complete run's RESULT.md.
@@ -499,12 +549,18 @@ def test_no_published_result_md_is_flagged(tmp_path):
     deliverable trips this, that is either a real ambiguous report (fix the
     report) or the rule is too wide (narrow the rule) — never a reason to
     weaken the assertion.
+
+    SWEPT OVER THE CORPUS, NOT OVER THIS CHECKOUT. Every one of the 56 is a
+    PUBLISHED deliverable and they now live in `vibeic/benchmark-data`; walking
+    the repository root found ONE unrelated `RESULT.md` and tripped the
+    too-thin floor. That floor is the assertion doing its job — a sweep of 1 is
+    not the sweep this test claims to be — so the fix is to walk the tree that
+    holds the deliverables, and to SKIP naming the corpus when no such tree is
+    readable. The floor itself is untouched.
     """
-    root = _repo_root()
+    root = corpus_root()
     files = sorted(root.rglob("RESULT.md"))
     files = [f for f in files if ".git" not in f.parts]
-    if not files:
-        pytest.skip("no RESULT.md files in this checkout")
     run = tmp_path / "sweep"
     (run / "reports").mkdir(parents=True)
     (run / "reports" / "final_summary.md").write_text("verdict: FAIL\n")

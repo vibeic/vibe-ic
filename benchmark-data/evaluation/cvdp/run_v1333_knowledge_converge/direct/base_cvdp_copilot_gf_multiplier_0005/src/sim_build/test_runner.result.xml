@@ -1,9 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1783361153" />
-    <testcase name="gf_multiplier_basic_test" classname="test_gf_mult_8bit" file="/code/src/test_gf_mult_8bit.py" lineno="30" time="0.0003597736358642578" sim_time_ns="2.0" ratio_time="5559.0510271703115" />
-    <testcase name="gf_multiplier_random_test" classname="test_gf_mult_8bit" file="/code/src/test_gf_mult_8bit.py" lineno="59" time="0.0019364356994628906" sim_time_ns="20.0" ratio_time="10328.254124599853" />
-    <testcase name="gf_multiplier_maximum_value_test" classname="test_gf_mult_8bit" file="/code/src/test_gf_mult_8bit.py" lineno="80" time="0.00011801719665527344" sim_time_ns="1.0" ratio_time="8473.341414141414" />
-    <testcase name="gf_multiplier_zero_value_test" classname="test_gf_mult_8bit" file="/code/src/test_gf_mult_8bit.py" lineno="97" time="9.608268737792969e-05" sim_time_ns="1.0" ratio_time="10407.70223325062" />
-  </testsuite>
-</testsuites>

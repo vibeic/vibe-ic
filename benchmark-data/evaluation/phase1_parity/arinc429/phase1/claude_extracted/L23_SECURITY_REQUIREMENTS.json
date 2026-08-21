@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "ARINC 429 (Mark 33 DITS) is a wire-level avionics protocol spec; no confidentiality / integrity / authentication features are defined. ARINC 429 is unidirectional broadcast — every receiver on the bus sees every 32-bit word. The built-in security primitive is the per-word odd-parity bit (bit 32 over bits 1..31), which guards against accidental corruption only, not against tampering. Physical isolation (shielded 78 Ω twisted-pair, balanced differential, RTCA DO-160 environmental qualification) plus avionics-grade airframe-level segregation provides anti-tamper defense in the deployment context. Modern avionics security (signed software upload via ARINC 615A, authenticated AFDX virtual links on ARINC 664 Part 7, secure boot of avionics LRUs) is layered on top of or replaces ARINC 429 — not part of ARINC 429 itself."
-  }
-}

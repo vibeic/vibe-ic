@@ -172,20 +172,34 @@ exactly one state, each with the evidence it judged on:
                                         this repo stay untouched.
                                       * TWO OR MORE distinct tallies -> exactly
                                         one must be marked CURRENT and every
-                                        other must be marked WITHDRAWN, with the
-                                        marker on the TALLY'S OWN LINE.
+                                        other must be marked NOT-THIS-ROUND,
+                                        with the marker on the TALLY'S OWN LINE.
                                     Retracting in prose is correct and
                                     INSUFFICIENT: the retraction has to be as
                                     machine-visible as the number it retracts,
                                     or the number outlives it.
 
-                                    Marking everything WITHDRAWN does NOT satisfy
-                                    the rule — that declares no current round, so
-                                    it is the same undeclared state under a
-                                    different spelling. Nor does a status word
-                                    floating in prose: a marker that is not
-                                    attached to a number declares nothing about
-                                    any number.
+                                    The NOT-THIS-ROUND vocabulary carries BOTH
+                                    honest reasons a number sits in the file
+                                    without being the round's result — WITHDRAWN
+                                    / RETRACTED / SUPERSEDED for a claim taken
+                                    back, BASELINE / REFERENCE / PRIOR for a
+                                    figure that was never this round's claim.
+                                    Measured: of the three ambiguous
+                                    deliverables in a 9456-document sweep of one
+                                    host, TWO are a "baseline vs this run"
+                                    comparison, and demanding WITHDRAWN there
+                                    would ask an author to assert something
+                                    false. A rule satisfiable only by lying gets
+                                    worked around, not followed.
+
+                                    Marking everything NOT-THIS-ROUND does NOT
+                                    satisfy the rule — that declares no current
+                                    round, so it is the same undeclared state
+                                    under a different spelling. Nor does a
+                                    status word floating in prose: a marker that
+                                    is not attached to a number declares nothing
+                                    about any number.
 
                                     HONEST LIMIT, stated because it cannot be
                                     fixed here: no document convention survives
@@ -347,13 +361,25 @@ _TALLY_RE = re.compile(
 # which is an adjective about a plugin, not a claim about a number.
 _STATUS_CURRENT_RE = re.compile(
     r"\b(CURRENT[_ ]ROUND|CURRENT|LATEST|AUTHORITATIVE)\b")
-_STATUS_WITHDRAWN_RE = re.compile(
+# NOT-THIS-ROUND. Two different honest reasons a number is in the file without
+# being the round's result, and the vocabulary names both, because forcing one
+# to wear the other's word would make the marker a lie:
+#   * WITHDRAWN — a claim the author has TAKEN BACK. This is the half the
+#     measured retraction case needs: the retraction has to be as
+#     machine-visible as the number it retracts.
+#   * BASELINE  — a number that was never this round's claim at all. MEASURED:
+#     of the three ambiguous deliverables found in a 9456-document sweep of this
+#     host, TWO are a two-line "baseline vs this run" comparison. Demanding
+#     `WITHDRAWN` on a baseline would ask the author to assert something false
+#     about a perfectly live reference figure, and a rule that can only be
+#     satisfied by lying gets worked around instead of followed.
+_STATUS_NOT_CURRENT_RE = re.compile(
     r"\b(WITHDRAWN|RETRACTED|SUPERSEDED|OBSOLETE|STALE|HISTORICAL|"
-    r"NOT[_ ]CURRENT)\b")
-# Only PAST-PARTICIPLE / adjectival withdrawal words are in that vocabulary.
-# `SUPERSEDES` is excluded on purpose: "these numbers supersede everything
-# below" is written on the CURRENT round's line, and reading it as a withdrawal
-# would mark the live number dead.
+    r"NOT[_ ]CURRENT|BASELINE|REFERENCE|PRIOR|PREVIOUS)\b")
+# Only PAST-PARTICIPLE / adjectival forms are in that vocabulary. `SUPERSEDES`
+# is excluded on purpose: "these numbers supersede everything below" is written
+# on the CURRENT round's line, and reading it as a withdrawal would mark the
+# live number dead.
 
 # A caps word only counts as a MARKER when it is delimited as one, so that a
 # caps word merely occurring in a sentence on the tally's line cannot decide the
@@ -729,13 +755,13 @@ def find_round_tallies(text: str) -> List[Dict[str, object]]:
     for m in _TALLY_RE.finditer(text):
         window, tally_end, lineno = _marker_window(text, m.start(), m.end())
         cur = _markers_on(window, _STATUS_CURRENT_RE, tally_end)
-        wd = _markers_on(window, _STATUS_WITHDRAWN_RE, tally_end)
-        if cur and wd:
+        nc = _markers_on(window, _STATUS_NOT_CURRENT_RE, tally_end)
+        if cur and nc:
             status = "CONFLICTED"
         elif cur:
             status = "CURRENT"
-        elif wd:
-            status = "WITHDRAWN"
+        elif nc:
+            status = "NOT_CURRENT"
         else:
             status = "UNMARKED"
         out.append({
@@ -743,7 +769,7 @@ def find_round_tallies(text: str) -> List[Dict[str, object]]:
             "tally": {"PASS": int(m.group(1)), "FAIL": int(m.group(2)),
                       "MISSING": int(m.group(3))},
             "status": status,
-            "markers": cur + wd,
+            "markers": cur + nc,
             "text": " ".join(window.split())[:160],
         })
     return out
@@ -790,12 +816,12 @@ def assess_current_round_declaration(path: Path) -> Dict[str, object]:
         lines[k].append(int(h["line"]))
 
     def _agg(st: set) -> str:
-        if "CONFLICTED" in st or ({"CURRENT", "WITHDRAWN"} <= st):
+        if "CONFLICTED" in st or ({"CURRENT", "NOT_CURRENT"} <= st):
             return "CONFLICTED"
         if "CURRENT" in st:
             return "CURRENT"
-        if "WITHDRAWN" in st:
-            return "WITHDRAWN"
+        if "NOT_CURRENT" in st:
+            return "NOT_CURRENT"
         return "UNMARKED"
 
     distinct = [{"tally": {"PASS": k[0], "FAIL": k[1], "MISSING": k[2]},
@@ -822,7 +848,7 @@ def assess_current_round_declaration(path: Path) -> Dict[str, object]:
                 "distinct": distinct, "occurrences": hits,
                 "reason_fragment": (
                     f"{len(conflicted)} tally line(s) carry BOTH a CURRENT and a "
-                    f"WITHDRAWN marker, so the document contradicts itself about "
+                    f"NOT-CURRENT marker, so the document contradicts itself about "
                     f"which claim is live: {_fmt(conflicted)}")}
     if not current:
         return {"state": "CURRENT_ROUND_UNDECLARED", "ambiguous": True,
@@ -839,15 +865,17 @@ def assess_current_round_declaration(path: Path) -> Dict[str, object]:
                     f"{len(current)} DIFFERENT tallies are each marked CURRENT — "
                     f"{_fmt(current)}. A round has one result")}
     if unmarked:
-        return {"state": "WITHDRAWN_NOT_MACHINE_VISIBLE", "ambiguous": True,
+        return {"state": "NON_CURRENT_TALLY_UNMARKED", "ambiguous": True,
                 "distinct": distinct, "occurrences": hits,
                 "reason_fragment": (
                     f"the current round is declared ({_fmt(current)}) but "
-                    f"{len(unmarked)} superseded tally/tallies sit in the same "
-                    f"file with NO machine-visible withdrawal — {_fmt(unmarked)}. "
-                    f"A reader that lands on one of those lines reads a dead "
-                    f"number as a live claim; retracting it in prose does not "
-                    f"reach a machine")}
+                    f"{len(unmarked)} other tally/tallies sit in the same file "
+                    f"with NO machine-visible status — {_fmt(unmarked)}. A "
+                    f"reader that lands on one of those lines reads a number "
+                    f"that is not this round's result as if it were; saying so "
+                    f"in prose does not reach a machine. Mark each of them "
+                    f"WITHDRAWN (a claim taken back) or BASELINE (a reference "
+                    f"that was never this round's claim), whichever is TRUE")}
     return {"state": "TALLY_CURRENT_DECLARED", "ambiguous": False,
             "distinct": distinct, "occurrences": hits, "reason_fragment": ""}
 
@@ -1137,7 +1165,8 @@ def check(run_dir: Path, *,
                     f"{dl['content_lines']} content lines) but "
                     f"{rounds['reason_fragment']}. "
                     f"[{rounds['state']}] Mark exactly one tally CURRENT and "
-                    f"every superseded one WITHDRAWN, on the tally's own line. "
+                    f"every other one WITHDRAWN or BASELINE, on the tally's "
+                    f"own line. "
                     f"A retraction written only in prose does not reach a "
                     f"machine, and the number outlives it."))
     elif deliverable_complete:
@@ -1263,9 +1292,10 @@ def _highlight(rep: CompletenessReport) -> str:
         lines.append(f"!! {b}")
     if rep.state == "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS":
         lines.append("!! ACTION      : mark exactly ONE tally CURRENT and every "
-                     "superseded one WITHDRAWN, on the tally's OWN LINE, then "
-                     "re-run this gate — a number a machine cannot date is a "
-                     "number a machine will misreport.")
+                     "other one WITHDRAWN (taken back) or BASELINE (never this "
+                     "round's claim), on the tally's OWN LINE, then re-run this "
+                     "gate — a number a machine cannot date is a number a "
+                     "machine will misreport.")
     else:
         lines.append("!! ACTION      : write the deliverable from the artifacts, "
                      "then re-run this gate — NO RESULT / empty output = the run "
@@ -1290,8 +1320,9 @@ def _capture_candidate(rep: CompletenessReport) -> dict:
         "on the agent's turn lifecycle — an agent that detaches a long run "
         "and idles never gets re-invoked to write the deliverable.")
     fix = (
-        "Mark exactly ONE tally CURRENT and every superseded tally WITHDRAWN, "
-        "with the marker on the tally's OWN LINE, then re-run this gate. "
+        "Mark exactly ONE tally CURRENT and every other tally WITHDRAWN (a "
+        "claim taken back) or BASELINE (never this round's claim), with the "
+        "marker on the tally's OWN LINE, then re-run this gate. "
         "Retracting a number in prose is correct and INSUFFICIENT: the "
         "retraction has to be as machine-visible as the number, or a consumer "
         "keyed on the number outlives the retraction and reports it as fact."

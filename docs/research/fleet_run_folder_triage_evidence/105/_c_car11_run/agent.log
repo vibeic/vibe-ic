@@ -1,0 +1,43 @@
+Round 11 complete. Findings: `/home/reyerchu/_c_car11_findings.md` (857 lines). Run: `/home/reyerchu/_c_car11_run/iter2`.
+
+## The single remaining FAIL, named from measurement
+
+Not Step 23 — R10's log says `FAIL drc` (canonical Step 31). And it was **one** `m2.5` marker counted three times (`drc_report_check` sums three canonicalised copies of one report: 3 reported, 1 physical). Step 36 was purely downstream of it, verified not assumed.
+
+## It was the tool's — and I fixed the tool
+
+R10 got to "KLayout deep mode splits an 18-vertex polygon and measures to the cut". I reproduced that independently, then got the engine to hand me the offending edge pair — `(1065,1310;1215,1310)/(1065,1235;1215,1235)`, subject edge sitting exactly on the split line — and instrumented a build to find why:
+
+```
+[KLDBG] subjects=1 primary_intruders=0 ... BRANCH=2_merge_subjects
+```
+
+`check_local_operation::override_distance()` sets the foreign pseudo-intruder search enlargement to `0` with a comment saying "only touching". KLayout's own header: **`1` is touching; `0` is overlap**. Split fragments share exactly an edge — boxes touch, never overlap — so the sibling never arrives, the subject-merging compensation does nothing, and the cut becomes a polygon boundary. One character.
+
+**[vibeic/klayout#2](https://github.com/vibeic/klayout/pull/2)** — with a unit test that fails on the parent commit and passes on the branch, plus a three-binary deck table: distribution 8 violations, my unpatched build 8 (same report size to the byte), patched build 0. The 7 `li.5` inside foundry std cells were the same defect — shown with the **distribution binary**, no build of mine involved.
+
+## Then the next blocker turned out to be ours
+
+With DRC clean, `--strict` failed only on 3 self-skipped sign-off steps. Step 5's "formal verification capability gap" was this:
+
+```
+ERROR: Re-definition of module `\user_proj_example'!  →  DONE (ERROR, rc=16)
+```
+
+The Step-5 runner read `uprj_netlists.v` next to the two files it `include`s. The plugin already owns the predicate for that (`_rtl_include_hub`, "the SINGLE SOURCE OF TRUTH", used by three other selectors) — Step 5 never imported it. Six lines. Two real trees: `INCONCLUSIVE proved=0` → `PASS proved=2` (`abc pdr` unbounded + `abc bmc3`, on 2 real assertions). **[vibe-ic#588](https://github.com/vibeic/vibe-ic/pull/588)**, failure name set vs origin/main: identical.
+
+## Finish line — two of three green, and the third is FAIL
+
+```
+run_output_completeness_check  rc=0  COMPLETE
+benchmark_result_md_lint       rc=0  PASS
+flow_compliance_check --strict rc=1  PASS=32 FAIL=0  Overall: FAIL
+```
+
+R10 → me: `FAIL=2` → **0**, 7 ordering violations → **0**, 8 DRC → **0**, self-skipped sign-off steps 3 → **2**. GDS byte count and +0.620 ns worst slack unchanged; LVS MATCH.
+
+What's left is Step 11 (DFT) and Step 12 (downstream of it). Step 11's own artefact puts the cause in **`fault`** — not one of our forks — so per your instruction I stopped at the diagnosis.
+
+Also filed: [#583](https://github.com/vibeic/vibe-ic/issues/583) (image rebuild needed; explicitly asks that no gate be relaxed), [#584](https://github.com/vibeic/vibe-ic/issues/584) (the 3-vs-1 gate disagreement).
+
+Three corrections to your brief, all measured: plugin is **v1.9.8** not v1.9.1; image anchor is 0.2.50 with **0.2.51** local, not 0.2.48 (irrelevant here — 0.2.51 ships the same KLayout 0.30.10); and `Bash(timeout)` caps at 600 s, so the foreground shape you describe gets killed — both 24-min runs and four KLayout builds used harness-tracked background, which does re-invoke.
