@@ -706,18 +706,23 @@ time the tell was in the text of the failure rather than in its colour.** The
 `$HOME` one is now caught by the instrument. This one needs the same treatment —
 a short, fixed scratch root, not a descriptive one.
 
-## The short-TMPDIR sweep, partial (6 of 12 BOTH-red files)
+## The short-TMPDIR sweep, COMPLETE (12 of 12 BOTH-red files)
 
 ```
-red with my 96-char TMPDIR : 9
-red with a 6-char TMPDIR   : 8
+red with my 96-char TMPDIR : 24
+red with a 6-char TMPDIR   : 23
 
 WENT GREEN on a short TMPDIR — MINE (1):
     test_flow_compliance_check_gate::test_a_real_verdict_is_not_mistaken_for_a_crash
+
+appeared only on the short path: NONE
 ```
 
-So far the blast radius of the TMPDIR artefact is **one** ID, not the whole
-list — which is the answer I wanted and not the one I feared. The other eight in
-these six files survive a short path and stay attributed. The remaining six
-files are still running; if any of them moves, it moves in the same direction
-(a red of mine, retracted) and never the other way.
+**The blast radius of the TMPDIR artefact is exactly ONE id, measured over all
+twelve files rather than assumed from one.** The other 23 survive a 6-character
+path and stay attributed. Nothing appeared only on the short path, so the sweep
+did not trade one artefact for another.
+
+**THE CURRENT RED LIST AT v1.11.66 IS 23 BOTH + 9 in the quarantined
+landing-verdict file = 32**, with IMAGE-ONLY 0 (the seal-ring trio fixed) and
+HOST-ONLY 0.
