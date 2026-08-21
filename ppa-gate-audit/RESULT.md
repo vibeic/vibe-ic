@@ -568,3 +568,60 @@ measured over every ref this repository has, not just `main`:
 Neither artefact has ever been published on any branch of this repository. That is
 the difference between an exemption that says "not yet" because nobody looked and
 one that says it after looking everywhere there is to look.
+
+---
+
+# Part 5 — the guard, so this cannot happen again quietly
+
+vibe-ic#1710 re-aimed four hygiene gates after v1.10.56 moved `benchmark-data/`
+out of this repository. The six PPA record gates were aimed at the same tree and
+were not in that sweep. They went on pointing at `benchmark-data/ppa/*` for two
+months, and **nothing could have noticed**: `run_tolerating_uncheckable` renders
+rc 2 as NOT_CHECKED, which is exactly what those gates *should* report when they
+cannot look. The roll-up was correct and useless at the same time. Neither the
+exemption expiry, nor the roll-up, nor any other test can see a gate that has
+quietly stopped having a subject.
+
+`test_issue1241_ppa_gates_are_aimed_at_a_population_that_exists.py` is that
+signal. For every PPA record-gate invocation in `tools/ci/repo_hygiene_gates.sh`
+it resolves the declared input and asserts:
+
+  1. it exists;
+  2. an in-tree corpus holds at least one document — counted with the
+     **checker's own corpus walk**, so the guard cannot drift from what the gate
+     will actually find;
+  3. no checker is aimed **only** at `benchmark-data/`, which on a host without a
+     clone means it examines nothing, forever.
+
+It asserts nothing about the verdict. `h2h_F` is refused today; that is a finding,
+not a wiring defect, and this file is indifferent to it. The only claim is that
+each gate has a subject to reach a verdict *about*.
+
+**Negative control, against the wiring exactly as it shipped on a00f53f20:**
+
+    7 failed, 3 passed
+      test_every_ppa_checker_is_aimed_somewhere_that_exists[ppa_contract_check.py]
+      test_every_ppa_checker_is_aimed_somewhere_that_exists[ppa_feasibility_check.py]
+      test_every_ppa_checker_is_aimed_somewhere_that_exists[ppa_head_to_head_check.py]
+      test_every_ppa_checker_is_aimed_somewhere_that_exists[ppa_measurement_check.py]
+      test_every_ppa_checker_is_aimed_somewhere_that_exists[ppa_pareto_check.py]
+      test_every_ppa_checker_is_aimed_somewhere_that_exists[ppa_problem_integrity_check.py]
+      test_no_ppa_exemption_still_claims_that_no_record_has_been_filed
+
+    with the branch's wiring: 10 passed
+
+This test would have gone red in v1.10.56, on the day the corpus left.
+
+## Final measurement
+
+Third hygiene run, committed and untouched tree, after the guard was added:
+
+    baseline a00f53f20   declared 85  decided 75  passed 69  failed 6  NOT CHECKED 10
+    this branch          declared 90  decided 80  passed 73  failed 7  NOT CHECKED 10
+
+    failures on the branch and not the baseline:  PPA head-to-head records (cross-layer campaign)
+    failures on the baseline and not the branch:  (none)
+
+Each of the six pre-existing failures was diffed line by line between the two
+runs and is byte-identical in content. Nothing in this lane made any of them
+worse, and none of them was touched.
