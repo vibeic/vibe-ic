@@ -684,3 +684,43 @@ def test_failed_producer_is_a_distinct_blocking_attested_result(tmp_path):
     assert doc["not_checked_unexempted"] == [label]
     assert len(attestations) == len(progress) == 1
     assert attestations[0]["returncode"] == 2
+
+
+def test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND(tmp_path):
+    """The state this repository is ACTUALLY in, pinned end to end.
+
+    Everything above drives the producer and the dispatcher directly, over a
+    corpus a fixture built. This one runs the SHIPPED
+    `tools/ci/repo_hygiene_gates.sh` against THIS checkout, because the defect
+    vibe-ic#1764 filed was not that a fixture said the wrong thing — it was that
+    main's own hygiene run did, on every developer machine with no pointer set.
+
+    `--list` drives the real `_dispatch` and writes the record through the same
+    path a real run uses, so this measures the shipped wiring without paying for
+    a gate execution.
+    """
+    if (REPO / "benchmark-data" / "ic").is_dir():
+        pytest.skip("this checkout carries a corpus of its own, so it is in "
+                    "state B and cannot exercise state A")
+    record = tmp_path / "record.json"
+    env = os.environ.copy()
+    env.pop(ENV, None)
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
+    proc = subprocess.run(
+        ["bash", str(SHIPPED_HYGIENE), "--list", "--summary-json", str(record)],
+        cwd=str(REPO), env=env, capture_output=True, text=True)
+    assert proc.returncode == 0, (proc.stdout[-2000:] + proc.stderr[-2000:])
+
+    doc = json.loads(record.read_text(encoding="utf-8"))
+    corpus = "published cells carrying a routed DEF"
+    assert [c for c in doc["corpora"] if c["name"] == corpus] == [
+        {"name": corpus, "items": 0, "gates": 1, "expansion": "NO_CORPUS"}], (
+        doc["corpora"])
+
+    labels = [g["label"] for g in doc["gates"] if g.get("corpus") == corpus]
+    assert labels == [
+        f'corpus "{corpus}" was NOT FOUND — nothing was opened to check'], labels
+    assert not any("is EMPTY" in label for label in labels), (
+        "the shipped hygiene script still reports a corpus that nothing opened "
+        "under the row for a corpus that WAS read and holds none — this is the "
+        "exact sentence vibe-ic#1764 was filed about, on the real wiring")
