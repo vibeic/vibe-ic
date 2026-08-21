@@ -2434,6 +2434,58 @@ answering it, and a reduction built on the wrong mechanism is worse than the
 vague question it replaced** — it invites action.
 
 
+## M39 — the coverage bridge is probably a DEFECT, not a policy call. Fourth framing, and the program settles the intent.
+
+M38 posed the question properly: when Verilator is absent, should
+`verilator_coverage_measure check` return rc=3 (a disclosed capability gap →
+`WAIVED-DEFERRED`) or should the step report VACUOUS-PASS? **The program answers
+it, in its own docstring:**
+
+```
+ 3 — a DISCLOSED capability gap (printed with the `PASS_WITH_WAIVERS`
+     sentinel) resolves to WAIVED-DEFERRED — reviewable, review_required
+ …
+ absent  -> rc 3 + sentinel: EXPLAIN the gap (WAIVED-DEFERRED, …)
+```
+
+`verilator_coverage_measure.py:54,445`. **rc=3 for an absent executable is the
+DESIGNED behaviour**, and the test expecting `WAIVED-DEFERRED` is asking for
+exactly what the program says it does.
+
+**So this is very likely a defect, not a decision.** Step 4 prints VACUOUS-PASS
+where both the test AND the program's own documentation say it should be
+`WAIVED-DEFERRED`.
+
+**And the program names where to look** (`:420-421`):
+
+> recognises as "PASSED WITH WAIVERS" -> step tier WAIVED-DEFERRED. **Both are
+> required there**, so a stray rc=3 from an unrelated program is never waived.
+
+**Both** — rc=3 AND the `PASS_WITH_WAIVERS` sentinel. That guard exists so an
+unrelated program's rc=3 cannot smuggle a waiver, which is a good design. The
+obvious hypothesis is that one half is missing: the sentinel is not emitted, or
+not recognised, so a legitimate rc=3 falls through to VACUOUS-PASS.
+
+**NOT VERIFIED — I have not run it**, and this is a hypothesis with a named place
+to look, not a finding. It is also in another agent's set, and unlike the waiver
+lookup that is a reason to hand over a precise question rather than to open the
+file.
+
+**Fourth framing of these two reds:**
+
+| framing | rested on | verdict |
+|---|---|---|
+| a verdict-vocabulary DESIGN question | unchecked | wrong (M33) |
+| an availability lookup in the matrix registry | wrong mechanism | withdrawn (M38) |
+| a policy call about rc=3 vs VACUOUS-PASS | correct mechanism, unchecked intent | superseded here |
+| **a probable DEFECT: designed rc=3 not reaching the step tier** | the program's own docstring | **current** |
+
+Each framing was more precise than the last and three were wrong. **The
+correction that mattered was not a better argument — it was reading the program
+that produces the verdict.** I had four goes at reasoning about this and one go
+at reading it.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2519,7 +2571,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | ~~vocabulary choice (M33)~~ ~~registry waiver lookup (M37)~~ — **both withdrawn, see M38.** The real question: should `verilator_coverage_measure check` return **rc=3** (absent Verilator = a disclosed CAPABILITY GAP → `WAIVED-DEFERRED`) or should the step report VACUOUS-PASS? Nothing to do with the matrix registry. | **policy, precisely posed** |
+| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. `:420-421` requires **rc=3 AND the `PASS_WITH_WAIVERS` sentinel**; the hypothesis is one half is missing. **Not verified — a place to look, not a finding.** | **likely defect** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
