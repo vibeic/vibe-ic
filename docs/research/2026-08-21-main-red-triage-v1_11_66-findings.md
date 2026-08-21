@@ -3526,6 +3526,39 @@ a new failure mode to the catalogue — **not a wrong answer, but a step that di
 not happen while reporting success.**
 
 
+## M64 — did defect #10 happen before? Audited: no. (A negative result, recorded.)
+
+#10 was an unterminated heredoc that ate a `git push`. **I have built commit
+messages that way for this entire branch**, so the obvious question is whether it
+happened earlier and I never noticed — which would mean a commit sitting
+unpushed, or a message carrying shell code, while I reported the branch clean.
+
+**Audited all 85 commits** on the branch for shell fragments in their bodies
+(`git push -q origin`, `echo "=== FINAL`, `uncommitted: $(`, a leading
+`git add -A`):
+
+```
+no CORRUPT lines — all clean
+```
+
+and `origin == HEAD`, so nothing is unpushed.
+
+**So #10 was a one-off, and #9 (backticks) affected exactly one message**
+(`88601fd74`, recorded there). Two message-construction failures in 85 commits,
+both identified, one amended, one recorded as a known cosmetic loss.
+
+**Why record a negative.** Because the doubt was real and specific: "I have
+reported this branch pushed at the end of a dozen turns, and I now know one of
+those reports could have been false." **An unexamined doubt of that shape is
+worth as much as an unexamined claim** — and this document has spent 64 sections
+establishing that the unexamined ones are where the errors live. Checking cost
+one loop over `git log`.
+
+**The generalised guard, now applied:** every "pushed" claim in this session's
+remaining turns is verified with `git log origin/<branch>..HEAD`, not with the
+absence of an error from `git push`.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
