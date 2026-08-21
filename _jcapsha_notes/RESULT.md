@@ -253,13 +253,19 @@ They were written here first. That is all that is pad-shaped about them.
 
 ## What was NOT done, and why
 
-* **No new guard was landed.** All three plugin-side rules would go RED on
-  `origin/main` today — correctly, because the defects they guard are fixed on
-  `origin/jpadsite/pad-site` and that branch has not landed. Shipping a
-  correct-but-red gate would block every push on the repo. They ship as
-  sketches, with the ordering dependency stated: **land `jpadsite/pad-site`
-  first, then the guards.** For F2 the red/green pair is already measured
-  (above) so whoever lands it does not have to re-derive it.
+* **No new guard was landed, and the four Bucket-A rules are red for three
+  different reasons.** Stated one by one rather than as a group, because they
+  do not share a fix order:
+  * **F1 and F2** would go RED on `origin/main` today, CORRECTLY — the defects
+    they guard are fixed on `origin/jpadsite/pad-site` and that branch has not
+    landed. Shipping a correct-but-red gate would block every push on the repo.
+    Ordering dependency: **land `jpadsite/pad-site` first, then these two.**
+    For F2 the red/green pair is already measured above and does not need
+    re-deriving; for F1 the unaccounted-name lists for both trees are in
+    `evidence/upstream_input_set_MEASURED.txt`.
+  * **F3b** is not red — it has no population at all; see the next bullet.
+  * **F4** is red on `main` and stays red: nothing on any branch fixes it, and
+    I declined to fix it tonight for the reason given in its own section.
 * **F3b's guard has no population yet.** Nothing on `main` declares a variable
   unhonoured, so a gate written to it today would run over zero subjects — and
   this repo's own doctrine (`gate_zero_denominator_refuses_check`) says a gate
