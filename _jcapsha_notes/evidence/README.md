@@ -27,6 +27,7 @@ without a claim.
 | file | the claim it backs |
 |---|---|
 | `f2_pin_probe.py` | the AST taint walk, run against both trees: RED on `origin/main` (16 orientation-tainted names, `along` among them), GREEN on the fix branch (2, both corner extents). |
+| `f2_generality_sweep_MEASURED.txt` | the sweep I owed this rule and did not run until three rounds later: the shape the predicate keys on occurs at **224 sites** across the population, so detection alone cannot be the program. Backs the rule's change of shape to declare-then-check. |
 
 Upstream's own side arithmetic was read directly out of the pinned image and is
 quoted in `../RESULT.md`; it is not reproduced here as a file because it is
@@ -42,3 +43,9 @@ upstream's source, not our measurement.
 | `rotation_arguments_GOLDEN.txt` | the golden, labelled DERIVED not observed, with the two things it is derived from: the argument names, and the tool's own script layer dumped from the running binary. |
 | `f3b_population_MEASURED.txt` | the unhonoured-knob class has FOUR instances on this tree, in four subsystems (77 raw hits → 12 narrowed → 4 read by hand). |
 | `f3b_contract_status_MEASURED.txt` | of those four, **0 carry the non-honouring as a machine-readable record** — all four wrote it as prose in whichever module found it. |
+
+## F4 — the component vocabulary
+
+| file | the claim it backs |
+|---|---|
+| `f4_population_MEASURED.txt` | the population is **one**: exactly one validator in 1232 programs carries a `PREFIX:IDENTIFIER` alternation. A real defect, but a single instance rather than a class — recorded so it is not read as a general rule by association. |
