@@ -1349,7 +1349,11 @@ def gate_red_since_gate(repo: Path, record: Path,
     # branch: 7 expired against its head, 5 against origin/main.
     argv = ["--record", str(record), "--repo", str(repo)]
     if base:
-        argv += ["--head-ref", base]
+        # BOTH halves come from the base: the clock, so a candidate's own
+        # commits cannot expire a row it never touched, AND the rows, so a
+        # candidate cannot renew its own overdue row by moving `since` forward
+        # in the commit that needs the renewal.
+        argv += ["--head-ref", base, "--ledger-ref", base]
     rc, out, err = _run_program(prog, argv)
     line = (out.strip().splitlines() or [""])[-1]
     if rc == 2:
