@@ -1760,6 +1760,36 @@ The six, each with its reason and none of them "unknown":
 None is "red, cause unknown", which is where this file started the night with 22.
 
 
+## M27 — the 9→6 improvement is HOST-LANE ONLY, measured
+
+M26 reported the file going 9 reds to 6. That is a host-lane number, and I
+verified A and C on the host only. The CI lane is the one this document keeps
+insisting decides, so:
+
+| lane | pristine | after A + C |
+|---|---|---|
+| host 8hd-3 | 9 failed, 125 passed | **6 failed, 128 passed** |
+| pinned image | 22 failed, 112 passed | **22 failed, 112 passed** |
+
+**In CI, designs A and C change nothing.** The only ID difference is the rename —
+`..._candidate_wave_precedes_parallel_isolated_base_wave` gone,
+`..._every_arm_of_both_waves_actually_ran` present, and **both are red in the
+image**. Every one of the 22 dies on the absent Docker CLI with
+`rc 2 = RC_CANNOT_MEASURE` long before reaching any assertion I re-founded.
+
+**So the honest headline is:** four guards are genuinely repaired, and the repair
+is invisible to the lane that gates landings, because those tests are
+unmeasurable there for an unrelated reason. A reader seeing "9 → 6" could easily
+conclude CI got better. **It did not.** The benefit accrues to a developer host,
+or to any lane with a Docker CLI — which is the fourth escalation, and this is
+one more reason it matters.
+
+This is the fifth time in this document a number needed its lane attached before
+it meant anything, and the first time the number was one of my own improvements
+rather than a red I was diagnosing. **The rule does not stop applying to good
+news.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
