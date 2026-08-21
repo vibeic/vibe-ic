@@ -17,6 +17,7 @@ both in the direction that produces a FALSE PASS:
 """
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -844,3 +845,57 @@ def test_the_first_clock_and_reset_still_ride_for_free():
            "  input wire [7:0] d, output wire q);\nendmodule\n")
     b = S.interface_budget(S.parse_top_ports(rtl, "chip_top"))
     assert b["signal_bits"] == 9 and b["on_dedicated_pads"] == ["clk", "rst_n"]
+
+
+# --------------------------------------------------------------------------- #
+# where a relative --json lands  (#712 path containment)
+# --------------------------------------------------------------------------- #
+# The destination used to be resolved against the CALLER's working directory,
+# because nothing tied it to the project. Both wirings run with
+# `cwd=<project>`, so neither was affected — but the contract was loose enough
+# that `--json ../../x.json` wrote outside the project entirely.
+#
+# MEASURED while probing exactly that question: one probe put a report in the
+# repository root and another in the invoking user's HOME directory. Neither
+# was noticed by any verdict; the run reported FITS both times.
+
+def _traversal_project() -> Path:
+    d = Path(tempfile.mkdtemp(prefix="trav_"))
+    (d / "phase2" / "stage1" / "rtl").mkdir(parents=True)
+    (d / "phase2" / "stage1" / "rtl" / "chip_top.v").write_text(_RTL_FITS)
+    s = d / "input" / "submission_template" / "slots"
+    s.mkdir(parents=True)
+    (s / "slot_1x1.json").write_text(json.dumps(_slot_ingested()))
+    return d
+
+
+def test_a_relative_json_destination_lands_inside_the_project():
+    """Not in whatever directory the caller happened to be standing in."""
+    p = _traversal_project()
+    assert S.main([str(p), "--json", "reports/x.json"]) == 0
+    assert (p / "reports" / "x.json").is_file()
+
+
+def test_a_json_destination_that_climbs_out_is_REFUSED():
+    p = _traversal_project()
+    rc = S.main([str(p), "--json", "../../ESCAPED.json"])
+    assert rc == 3, f"a path climbing out of the project returned {rc}"
+    assert not (p.parent / "ESCAPED.json").exists()
+    assert not (p.parent.parent / "ESCAPED.json").exists()
+
+
+def test_an_absolute_destination_is_still_honoured():
+    """An absolute path is an explicit choice by the caller, not an accident,
+    so containment does not second-guess it."""
+    p = _traversal_project()
+    out = Path(tempfile.mkdtemp(prefix="abs_")) / "elsewhere.json"
+    assert S.main([str(p), "--json", str(out)]) == 0
+    assert out.is_file()
+
+
+def test_the_refusal_is_the_USAGE_tier_not_the_vacuous_one():
+    """A rejected destination is the caller being wrong, so it must not wear
+    rc 2 — which this flow reads as 'there was nothing to examine'."""
+    p = _traversal_project()
+    assert S.main([str(p), "--json", "../out.json"]) == 3
+    assert S.main([str(Path(tempfile.mkdtemp(prefix="noslot_")))]) == 2
