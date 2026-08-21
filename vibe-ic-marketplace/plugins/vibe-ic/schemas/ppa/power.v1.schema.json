@@ -1,0 +1,325 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vibeic.ppa.power.v1",
+  "title": "vibeic.ppa.power.v1 — a power measurement and where its activity came from",
+  "description": "The power domain's instance document. It carries the internal / switching / leakage / total split for one scenario AND the activity basis those figures were computed on, because a vectorless estimate and a VCD-driven measurement are both 'total power' and are not the same number (PPA_INTERFACES.md §2). Two documents whose activity_basis differs are not comparable and a comparison across them is UNDETERMINED, not a winner. Versioned by filename: v1 is never edited once something has hashed against it.",
+  "type": "object",
+  "required": [
+    "schema",
+    "activity",
+    "metrics",
+    "source"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "vibeic.ppa.power.v1"
+    },
+    "scenario": {
+      "type": "string",
+      "description": "The operating scenario these figures were measured for. Power is per scenario; a single number with no scenario is not a power result."
+    },
+    "activity": {
+      "type": "object",
+      "description": "Where the switching activity came from, derived from EVIDENCE in the artefact and never from the label alone. Measured 2026-08-21: 8 of the 17 published power reports declare vector_vcd and every one is falsified by its own transcript.",
+      "required": [
+        "basis",
+        "corroboration"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "basis": {
+          "enum": [
+            "VCD",
+            "SAIF",
+            "VECTORLESS",
+            "UNSTATED",
+            "CONTRADICTED"
+          ],
+          "description": "VCD/SAIF/VECTORLESS are the only bases a numeric comparison may run across. UNSTATED does not match another UNSTATED: two numbers whose activity models are both unknown are not known to share one. CONTRADICTED means the artefact declares a basis its own transcript falsifies."
+        },
+        "corroboration": {
+          "enum": [
+            "CORROBORATED",
+            "UNCORROBORATED",
+            "CONTRADICTED",
+            "NO_CORROBORATION_NEEDED"
+          ]
+        },
+        "declared_mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The token the artefact stated, kept verbatim even when it is the thing being refused."
+        },
+        "annotated_pin_activities": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "The tool's own count. The only POSITIVE evidence in the artefact that a vector basis is real; 0 under a vector label is a contradiction."
+        },
+        "read_failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "description": "The lines the basis was decided from, with line numbers, so a reader can check the verdict against the artefact rather than trusting it.",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "line",
+              "text"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "declared_mode",
+                  "annotated_pin_activities",
+                  "activity_read_failure"
+                ]
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "description": "One vibeic.ppa.metric.v1 record per (group, category). A category the artefact does not state is present as a NOT_MEASURED row carrying a reason — never omitted, and never 0, -1 or \"\".",
+      "items": {
+        "type": "object",
+        "required": [
+          "schema",
+          "metric",
+          "status",
+          "unit",
+          "scope",
+          "source"
+        ],
+        "properties": {
+          "schema": {
+            "const": "vibeic.ppa.metric.v1"
+          },
+          "metric": {
+            "enum": [
+              "power.internal_w",
+              "power.switching_w",
+              "power.leakage_w",
+              "power.total_w"
+            ]
+          },
+          "status": {
+            "enum": [
+              "MEASURED",
+              "NOT_MEASURED",
+              "NOT_APPLICABLE",
+              "INVALID",
+              "ESTIMATED",
+              "DERIVED"
+            ]
+          },
+          "unit": {
+            "const": "W"
+          },
+          "value": {
+            "type": "number"
+          },
+          "value_raw": {
+            "type": "string",
+            "description": "The token the tool wrote. §3: hash the value you PARSED, never one you recomputed."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "required": [
+              "activity_basis",
+              "group",
+              "stage",
+              "scenario"
+            ],
+            "properties": {
+              "activity_basis": {
+                "enum": [
+                  "VCD",
+                  "SAIF",
+                  "VECTORLESS",
+                  "UNSTATED",
+                  "CONTRADICTED"
+                ]
+              },
+              "activity_corroboration": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "group": {
+                "type": "string"
+              },
+              "stage": {
+                "type": "string"
+              },
+              "scenario": {
+                "type": "string"
+              },
+              "tool": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "liberty": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The Liberty library the figures were computed against. A measurement CONDITION: a power number at one corner's library is not the same metric as one at another's, so it lives in scope and is compared."
+              }
+            },
+            "description": "The measurement's conditions. §2: two numbers are comparable only if their scope MATCHES, and `comparable()` compares every key present on either side rather than an enumerated subset — enumerating one would silently exempt whatever a later author adds here. `tool` appears here as well as in `source` because for power a different engine on a different netlist view is a different condition."
+          },
+          "source": {
+            "type": "object"
+          },
+          "provenance": {
+            "type": "object",
+            "description": "How well the basis is known, kept OUT of scope on purpose: it describes the confidence in the condition, not the condition itself, so it must not make two otherwise identical measurements incomparable.",
+            "properties": {
+              "activity_corroboration": {
+                "enum": [
+                  "CORROBORATED",
+                  "UNCORROBORATED",
+                  "CONTRADICTED",
+                  "NO_CORROBORATION_NEEDED"
+                ]
+              },
+              "activity_reason": {
+                "type": "string"
+              },
+              "declared_mode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "MEASURED",
+                    "DERIVED"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "NOT_MEASURED",
+                    "NOT_APPLICABLE",
+                    "INVALID"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "reason"
+              ],
+              "not": {
+                "required": [
+                  "value"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256",
+        "parser"
+      ],
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parser": {
+          "type": "string"
+        },
+        "parser_sha256": {
+          "type": "string"
+        },
+        "liberty": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "netlist": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,47 @@
-"""phase2_scaffold_gen.py — Phase 1 L docs → Phase 2 Verilog scaffolding.
+"""phase2_scaffold_gen.py — ORACLE ONLY: the executable specification of what a conforming Phase 2 emits from the L docs. Nothing in the flow runs it.
+
+ORACLE-ONLY — READ THIS BEFORE TREATING THIS MODULE AS LIVE CODE (#509)
+=======================================================================
+Nothing in the shipping flow calls this program to author RTL. Measured
+across ALL refs at v1.7.73 and re-measured on this change:
+
+    programs/*runner*.py naming it ........ none, at any version
+    flow/phase1_phase2_phase3.yaml ........ does not name it
+    subprocess / CLI invocation ........... none
+    anything else writing <top>_fsm.v ..... none
+
+`emit_fsm_v()` / `derive_fsm_states()` are reached from this module's own
+`main()` and from the layer gates below — nowhere else. Phase 2 authors RTL
+through a different and fully-developed path: `design_one_shot_runner.
+step_rtl_gen` dispatches deterministically, WAIVEs to the `spec-to-rtl`
+skill for a class carrying `rtl_gen: null`, and consults
+`reused_ip_rtl_consume` for a design that stages its own implementation.
+
+So what this module IS, is a REFERENCE IMPLEMENTATION: an executable
+statement of what a conforming Phase 2 must be able to produce from the L
+docs. The layer gates import it and drive it as a CONTRACT ORACLE, and that
+is the whole of its production role. It is a good one — an executable spec
+beats a prose one, and it is why #404 and #377 were catchable at all:
+
+    l1_pin_bus_width_actionable_check        l16_compliance_properties_…
+    l4_regmap_phase2_emitter_contract_check  l17_channel_catalog_consumer_…
+    l6_fsm_scaffold_actionable_check         cross_layer_reference_check
+    regmap_bit_layout_check                  (l10 / l22 cite it in prose)
+
+WHAT THAT OBLIGES EVERY SENTENCE WRITTEN ABOUT THIS MODULE TO SAY. A
+requirement derived from it is a claim about what a CONFORMING PHASE 2
+WOULD receive — never about what phase 2 does receive. The two read alike
+and are not alike: a gate that blocks on a consequence which does not occur
+is a gate no reader can evaluate, which is what #509 measured on the L6
+gate. The requirements themselves survive unchanged, because an L doc that
+cannot yield a scaffoldable FSM, a unique register identifier or a
+resolvable port width is underspecified whether or not any program consumes
+it. Only the justification becomes counterfactual.
+
+`tests/test_issue509_phase2_scaffold_gen_is_oracle_only.py` pins all four
+measurements above over the real tree. Wiring this module into the flow is
+a legitimate thing to decide; doing it silently is not, and that test is
+what makes the decision loud.
 
 v0.1.88 — bridges Phase 1 protocol coverage (39 families, ~51 KLoC of L docs)
 into deterministic Phase 2 RTL scaffolding. Reads `phase1/generated_docs/L*.json`
@@ -10,7 +53,8 @@ names. Each output file is a SKELETON: ports declared and tied to TODO
 stubs, FSM states enumerated, registers laid out. The user/LLM fills in
 behavior; the harness enforces that ports/widths/states match the spec.
 
-Outputs (per protocol benchmark project):
+Outputs — WHEN THE CLI BELOW IS RUN BY HAND. No flow step produces these
+files; the gates drive the derivation functions in memory and write nothing.
 
     phase2/stage1/scaffold/
       ├── <top>_top.v                — module + port list + sub-module instances
@@ -24,6 +68,17 @@ Outputs (per protocol benchmark project):
 
 The generator is fail-open per file: failure to derive one scaffold does
 not block the others.
+
+ONE EXCEPTION, and it is deliberate (ORGANIC #404). If the layers STATE a
+port width this generator cannot resolve to an integer — a `width_symbolic`
+such as `"size-1:0"`, or a `width` that is prose — it emits NOTHING and
+exits 1. It used to coerce that case to 1 bit silently, which produced a
+scaffold whose top-module interface was narrower than the design and was
+byte-identical to a scaffold for a design that really has a 1-bit port.
+Fail-open is the right policy for a derivation that produced nothing; it is
+the wrong policy for one that produced a confident wrong answer. See
+`derive_signals` for the three width states and `UnresolvedPortWidth` for
+why resolving the symbol here is not the remedy.
 
 Usage (CLI):
 
@@ -168,6 +223,85 @@ def derive_top_module_name(l1: dict, l9: dict, ic_name: str | None) -> str:
     return _sanitize_id(cand)
 
 
+class UnresolvedPortWidth(RuntimeError):
+    """An emitter was asked to render a port whose width was never resolved.
+
+    Raised rather than rendered. `derive_signals` marks such a port
+    ``width: None`` (ORGANIC #404); every emitter below turns a width into
+    either nothing (`width == 1`) or `[width-1:0]`, and there is no third
+    rendering that is honest. Emitting the 1-bit form would restore exactly
+    the silent coercion this class exists to stop, one layer further down.
+    """
+
+    def __init__(self, artefact: str, ports: list[dict]) -> None:
+        self.artefact = artefact
+        self.ports = ports
+        detail = "; ".join(
+            "%s (declared %r)" % (p.get("name"), p.get("width_declared"))
+            for p in ports)
+        super().__init__(
+            "UNRESOLVED_PORT_WIDTH: %s cannot be emitted — %d port(s) carry a "
+            "width the layers STATE and phase2_scaffold_gen.derive_signals "
+            "could not resolve to an integer: %s. The scaffold will not "
+            "declare a 1-bit scalar for a port the design declares as a bus: "
+            "that emission is byte-identical to a real 1-bit port, so nothing "
+            "downstream could tell the difference, and the interface error "
+            "would surface several steps later with an opaque cause. Resolving "
+            "the symbol here is NOT the remedy — #404 measured that a wrong "
+            "resolution and a right one are indistinguishable from outside. "
+            "The remedy is in the LAYER: state the width as an integer, or "
+            "declare the parameter the range names in the same document."
+            % (artefact, len(ports), detail))
+
+
+# Distinguishes "the layer stated no width" from every value a layer CAN
+# state — including the `1` that `dict.get`'s default used to supply, which
+# was then indistinguishable from a layer that really said 1.
+_WIDTH_NOT_STATED = object()
+
+
+def _record_declared_width(entry: dict, name: str,
+                           into: dict[str, str]) -> None:
+    """Note a width this module cannot use but the layer nonetheless STATES.
+
+    Two shapes, both taken from the layer's own keys rather than from any
+    prose pattern: a non-empty ``width_symbolic`` (which
+    `phase1_doc_one_shot_runner._parse_port_width` fills on purpose, "so
+    downstream consumers can resolve at elaboration time"), and a ``width``
+    that is a non-empty string carrying anything other than digits.
+    """
+    if not isinstance(entry, dict):
+        return
+    key = _sanitize_id(str(name or ""))
+    if not key or key in into:
+        return
+    sym = entry.get("width_symbolic")
+    if isinstance(sym, str) and sym.strip():
+        into[key] = sym.strip()
+        return
+    w = entry.get("width")
+    if isinstance(w, str) and w.strip() and not w.strip().isdigit():
+        into[key] = w.strip()
+
+
+def unresolved_width_ports(signals: list[dict]) -> list[dict]:
+    """Signals `derive_signals` refused to assign a width to."""
+    return [s for s in signals
+            if isinstance(s, dict) and s.get("width") is None]
+
+
+def require_resolved_widths(signals: list[dict], artefact: str) -> None:
+    """Raise `UnresolvedPortWidth` if any signal has no resolved width.
+
+    Called by EVERY emitter that renders a port width, not only by
+    `emit_scaffold`, so importing one emitter directly cannot route around
+    the refusal.
+    """
+    bad = unresolved_width_ports(signals)
+    if bad:
+        raise UnresolvedPortWidth(artefact, bad)
+
+
 def derive_signals(l17: dict, l9: dict) -> list[dict]:
     """Return a deduplicated list of {name, direction, width, comment} dicts.
 
@@ -176,11 +310,87 @@ def derive_signals(l17: dict, l9: dict) -> list[dict]:
       2. L9.top_ports (if structured as list of port dicts)
       3. L9.ports
 
-    For each channel we default to master-side direction. Width defaults to 1
-    bit unless we can parse a [N:0] hint from the name/purpose.
+    For each channel we default to master-side direction.
+
+    WIDTH HAS THREE STATES, NOT TWO (ORGANIC #404)
+    ----------------------------------------------
+    Until this landing there were two: an integer, or the 1-bit default that
+    every other case fell into. A port the design declares as `[size-1:0]`
+    therefore came out as ``width: 1`` — byte-identical to a real 1-bit
+    scalar. An absent answer indistinguishable from a real one is the
+    false-certificate shape this repo has spent a campaign removing, and it
+    is worse here than elsewhere because three gates IMPORT this function to
+    decide what the consumer gets. They were reading a fabricated 1.
+
+    The three states:
+
+      RESOLVED   the layer states a width this function can use — an int, a
+                 digit-string, or a numeric ``[N:0]`` hint in an L17 channel
+                 name.  ->  ``width: <int>``
+
+      UNRESOLVED the layer STATES a width and this function cannot turn it
+                 into an integer — a non-empty ``width_symbolic``, or a
+                 ``width`` that is a non-empty non-numeric string.
+                 ->  ``width: None`` + ``width_declared: "<the text>"``
+                 The emitters REFUSE to render this (see
+                 `require_resolved_widths`): a scaffold that declares a
+                 1-bit port for a bus is wrong at its interface and the
+                 failure surfaces several steps downstream with an opaque
+                 cause.
+
+      ABSENT     the layer states NO width at all (key missing, or null,
+                 with no ``width_symbolic``).  ->  ``width: 1``, the
+                 scaffold's documented scalar default.
+
+    BOTH ENCODINGS OF "NO WIDTH" MUST BEHAVE ALIKE (#404, round 6)
+    ---------------------------------------------------------------
+    The contract above names two encodings of ABSENT — "key missing, or
+    null" — and until this landing only the NULL one honoured
+    ``width_symbolic``. `port.get("width", 1)` turned a MISSING key into an
+    int >= 1, which registered the port as `resolved_from_layer` and made
+    the post-pass skip it, so key-absent + ``width_symbolic`` emitted a
+    silent 1-bit scalar and no emitter ever raised. Which of two equivalent
+    spellings of "I have no width" the producer happened to choose decided
+    whether the refusal fired.
+
+    That was not hypothetical. Measured on this repo's own producers:
+    `phase1_doc_one_shot_runner._parse_port_width` returns
+    ``(None, None, 0, 'size-1:0')`` for the only non-numeric width cell in
+    the tracked corpus, and BOTH L1->L9 promotion sites copy the typed
+    fields under ``if _v is not None``, so a None width is DROPPED while
+    ``width_symbolic`` is kept — precisely the divergent shape. It does not
+    appear in any tracked L9 today only because the L1 emitter separately
+    keeps the raw prose in ``width``, a retention its own comment calls
+    "backward compatibility". The enforcement axis therefore rested on a
+    legacy field in a different program. It no longer does.
+
+    WHY ABSENT IS NOT UNRESOLVED, stated as a measurement rather than a
+    preference: over the 106 published cells carrying
+    `phase1/generated_docs`, 80 derived ports come from an entry with no
+    width at all, and `l1_pin_bus_width_actionable_check.derive_bus_evidence`
+    — which reads the design's OWN input files, not any L-doc — proves a bit
+    range for ZERO of them. There is no measured case where the scalar
+    default contradicts the design. Folding ABSENT into UNRESOLVED would
+    refuse 6 of 15 IC cells for a defect no evidence supports, which is how
+    a check gets deleted rather than fixed.
+
+    THIS RESOLVES NOTHING, and that is deliberate. #404 measured that joining
+    ``width_symbolic`` against the corpus' ``parameters[]`` and writing the
+    result back into L1 turns `l1_pin_bus_width_actionable_check` from a
+    correct FAIL into a PASS, and that resolving it HERE instead is equally
+    undetectable — a same-document parameter contradicting the port's own
+    stated width resolved to 4 bits on a port the design ships as 32, with
+    no diagnostic anywhere. Refusing is the only answer that a wrong number
+    cannot imitate.
     """
     signals: list[dict] = []
     seen: set[str] = set()
+    # name -> the width TEXT the layers state and this function cannot use.
+    declared_unresolved: dict[str, str] = {}
+    # names whose width came from a range this function actually parsed, as
+    # opposed to the 1-bit default. A port that got a real number from L17
+    # is RESOLVED even if an L9 twin also carries an unusable string.
+    resolved_from_layer: set[str] = set()
 
     def _normalize_dir(d: str | None) -> str:
         if not d:
@@ -223,6 +433,8 @@ def derive_signals(l17: dict, l9: dict) -> list[dict]:
         if m:
             width = int(m.group(1)) + 1
             name = re.sub(r"\[\d+:0\]", "", str(name))
+            resolved_from_layer.add(_sanitize_id(name))
+        _record_declared_width(ch, name, declared_unresolved)
         _add(name, direction, width, comment=purpose)
 
     # L17 global_signals (clock, reset, power, etc.)
@@ -241,11 +453,28 @@ def derive_signals(l17: dict, l9: dict) -> list[dict]:
                 continue
             name = port.get("name") or ""
             direction = _normalize_dir(port.get("direction") or "input")
-            width = port.get("width", 1)
+            # What the LAYER states, or the sentinel when it states nothing.
+            # This used to be `port.get("width", 1)`, which supplied the
+            # 1-bit default HERE — and the default then satisfied the
+            # `int >= 1` test below and registered the port in
+            # `resolved_from_layer`, whose own comment above says it holds
+            # names resolved "as opposed to the 1-bit default". The post-pass
+            # skips anything in that set, so a port carrying `width_symbolic`
+            # with NO `width` key came out a silent 1-bit scalar and
+            # `require_resolved_widths` never saw it — the exact collapse the
+            # rest of this function exists to refuse, reachable through the
+            # one encoding of "no width" that bypassed the check.
+            width = port.get("width", _WIDTH_NOT_STATED)
             if isinstance(width, str) and width.isdigit():
                 width = int(width)
-            if not isinstance(width, int) or width < 1:
+            if isinstance(width, int) and not isinstance(width, bool) \
+                    and width >= 1:
+                # `_WIDTH_NOT_STATED` is not an int, so this arm is now
+                # reachable only from a width the layer actually stated.
+                resolved_from_layer.add(_sanitize_id(name))
+            else:
                 width = 1
+            _record_declared_width(port, name, declared_unresolved)
             comment = port.get("description") or port.get("purpose") or ""
             _add(name, direction, width, comment=comment)
 
@@ -257,6 +486,18 @@ def derive_signals(l17: dict, l9: dict) -> list[dict]:
         _add("clk", "input", 1, comment="System clock (auto-added by scaffold)")
     if not any(_is_reset_name(s["name"]) for s in signals):
         _add("rst_n", "input", 1, comment="Active-low reset (auto-added)")
+
+    # A single post-pass, so the verdict does not depend on which source won
+    # the dedup. `_add` returns early for a name it has already seen, so a
+    # port contributed by L17 with no width hint and re-stated in L9 with an
+    # unusable one would otherwise keep the 1-bit default and lose the fact
+    # that a declaration exists which this function never managed to read.
+    for s in signals:
+        text = declared_unresolved.get(s["name"])
+        if text is None or s["name"] in resolved_from_layer:
+            continue
+        s["width"] = None
+        s["width_declared"] = text
 
     return signals
 
@@ -342,6 +583,7 @@ def derive_clock_period_ns(l8: dict, *, default_ns: float = 10.0) -> tuple[float
 # ---------------------------------------------------------------------------
 
 def emit_top_v(top: str, signals: list[dict], l1_ic_name: str) -> str:
+    require_resolved_widths(signals, f"{top}_top.v")
     lines: list[str] = [
         "// Auto-generated by phase2_scaffold_gen.py — DO NOT EDIT THE PORT",
         "// LIST manually; fill in the BODY (marked TODO) with module logic.",
@@ -388,6 +630,41 @@ def emit_top_v(top: str, signals: list[dict], l1_ic_name: str) -> str:
 # Output: <top>_regs.v
 # ---------------------------------------------------------------------------
 
+# A bit designation and NOTHING else. The strictness is measured, not
+# defensive: 50 `bits` values in the published corpus are pin designations like
+# `A[15:13]` / `A8, A10, A[15:13]` harvested from an address-pin table. A
+# substring search reads `A[15:13]` as bits 15:13 of a register and would size
+# a register off a package pin.
+_REG_FIELD_BITS_RE = re.compile(r"^\s*\[?\s*(\d+)\s*(?::\s*(\d+)\s*)?\]?\s*$")
+
+_REG_WIDTH_DEFAULT = 8
+
+
+def _reg_width_from_own_fields(reg: dict) -> int:
+    """Widest bit index declared by this register's OWN fields, +1.
+
+    Returns the default when nothing in the record says anything numeric —
+    which is the honest answer, not a fallback to be minimised. 202 fields in
+    the published corpus are explicit `WHOLE_REG` placeholders meaning "this
+    document carries no field breakdown" (vibe-ic#377), and they contribute
+    NOTHING here on purpose: #377 measured that feeding those placeholders to
+    a standard register generator produced 3235 lines of SystemVerilog
+    implementing a layout nobody ever specified, indistinguishable from the
+    fields that were. A placeholder must not acquire a width by being read
+    twice."""
+    widest = 0
+    for f in _list_or_empty(reg.get("fields")):
+        if not isinstance(f, dict):
+            continue
+        m = _REG_FIELD_BITS_RE.match(str(f.get("bits") or ""))
+        if not m:
+            continue
+        hi = int(m.group(1))
+        lo = int(m.group(2)) if m.group(2) else hi
+        widest = max(widest, hi, lo)
+    return (widest + 1) if widest else _REG_WIDTH_DEFAULT
+
+
 def derive_registers(l4: dict, l8: dict) -> list[dict]:
     """Return a normalized [{name, offset, width, access, fields}, ...]."""
     out: list[dict] = []
@@ -396,11 +673,44 @@ def derive_registers(l4: dict, l8: dict) -> list[dict]:
         if not isinstance(r, dict):
             continue
         name = _sanitize_id(str(r.get("name") or r.get("abbrev") or "REG"))
-        off = r.get("offset") or r.get("address") or ""
-        width = r.get("width") or r.get("width_bits") or 8
+        # layergate-2 — DISTILLED FIX, not a per-design workaround.
+        # `regmap_table_extractor.py` (this plugin's own L4 register-table
+        # walker) emits a register's address as `addr_hex`; the rst/CSR
+        # walkers in phase1_doc_one_shot_runner do the same. This function
+        # read only `offset`/`address`, so for every register extracted by
+        # those paths the address was silently dropped and emit_regs_v()
+        # wrote nothing but `// TODO — address decode (per L4 offsets)`.
+        # Two programs in the same plugin disagreeing on one key.
+        # Measured across the fleet before this fix: 49 of 139 real
+        # Phase-1 outputs affected (30 of 42 registers on one design,
+        # 32 of 80 on another, 1 of 1 on a third) — the address was
+        # always present in L4, just under a key its consumer never read.
+        # Reading the sibling key here fixes the whole class at once
+        # rather than leaving 49 runs to be patched individually.
+        off = (r.get("offset") or r.get("address")
+               or r.get("addr_hex") or r.get("addr") or "")
+        width = r.get("width") or r.get("width_bits")
         if isinstance(width, str):
             m = re.search(r"\d+", width)
-            width = int(m.group(0)) if m else 8
+            width = int(m.group(0)) if m else None
+        if width is None:
+            # SAME DEFECT SHAPE AS layergate-2 ABOVE: the value is present in
+            # the record the consumer is already holding, under a key it never
+            # reads. The register's own fields state their bits; this read only
+            # `width`/`width_bits` and otherwise emitted `reg [7:0]`.
+            #
+            # MEASURED over the published corpus (strict bit-designation match):
+            #     81 registers wide enough already
+            #      8 emitted NARROWER than their own fields declare
+            # and the widest of those declares a field spanning 32 bits and was
+            # emitted `reg [7:0]` — 24 bits of a DECLARED field simply absent
+            # from the RTL, with no diagnostic. The output is byte-identical to
+            # a register the design really did specify as 8 bits.
+            #
+            # Scoped to ONE record on purpose. #404 measured that joining a
+            # width against a corpus-global `parameters[]` by bare name lets an
+            # unrelated layer size a bus; nothing here leaves the register.
+            width = _reg_width_from_own_fields(r)
         access = r.get("access") or r.get("attribute") or "rw"
         out.append({
             "name": name,
@@ -546,6 +856,7 @@ def emit_fsm_v(top: str, states: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def emit_tb_v(top: str, signals: list[dict]) -> str:
+    require_resolved_widths(signals, f"{top}_tb.v")
     inputs = [s for s in signals if s["direction"] == "input"]
     outputs = [s for s in signals if s["direction"] == "output"]
     inouts = [s for s in signals if s["direction"] == "inout"]
@@ -649,13 +960,30 @@ def emit_compliance_vectors(l10: dict, l16: dict, l22: dict) -> str:
             txt = str(item.get("name") if isinstance(item, dict) else item)
             if txt:
                 lines.append(f"L10: {txt[:120]}")
-    # L16 must-have compliance
-    for src in (l16.get("must_have_properties"),
+    # L16 must-have compliance.
+    #
+    # SILENT DEAD READ (fixed): this used to read only `must_have_properties` /
+    # `must_have_compliance` / `compliance_properties` — the shapes the
+    # hand-written protocol synthesisers emit. The Phase-1 EXTRACTOR
+    # (phase1_protocol_spec_extract.extract_l16_compliance) emits
+    # `properties[]` with the requirement text under `english_form`, so on
+    # every extractor-driven run BOTH the container key AND the text key
+    # missed and L16 contributed ZERO lines to compliance_vectors.txt while
+    # the layer reported EXTRACTED. Reading `properties` and `english_form`
+    # closes that. Guarded by l16_compliance_properties_actionable_check.py.
+    for src in (l16.get("properties"),
+                l16.get("must_have_properties"),
                 l16.get("must_have_compliance"),
                 l16.get("compliance_properties")):
         for item in _list_or_empty(src):
-            txt = str(item if isinstance(item, str) else item.get("text") or
-                      item.get("description") or item)
+            if isinstance(item, str):
+                txt = item
+            elif isinstance(item, dict):
+                txt = str(item.get("english_form") or item.get("text")
+                          or item.get("description") or item.get("statement")
+                          or item)
+            else:
+                txt = str(item)
             if txt and len(txt) > 1:
                 lines.append(f"L16: {txt[:120]}")
     # L22 verification plan
@@ -742,6 +1070,7 @@ def emit_cocotb_test(top: str, signals: list[dict], l8: dict,
     protocol stimulus. Clock period comes from L8 (see
     derive_clock_period_ns); falls back to 10 ns.
     """
+    require_resolved_widths(signals, f"{top}_cocotb_test.py")
     period_ns, period_note = derive_clock_period_ns(l8)
     clk = _detect_clk_port(signals)
     rst, active_low = _detect_rst_port(signals)
@@ -870,6 +1199,7 @@ def emit_soc_wrap_v(top: str, signals: list[dict], regs: list[dict]) -> str:
         ports at the wrapper boundary and tie the APB bus to a read-only
         ID register (so the SoC can still probe the wrapper).
     """
+    require_resolved_widths(signals, f"{top}_soc_wrap.v")
     has_regs = bool(regs)
     # Native (non-clock/reset) ports we re-expose at the wrapper boundary.
     clk = _detect_clk_port(signals)
@@ -1050,6 +1380,25 @@ def emit_scaffold(project: Path,
     top = derive_top_module_name(l1, l9, ic_name)
     signals = derive_signals(l17, l9)
 
+    # BLOCKING, and BEFORE the first write (ORGANIC #404). The individual
+    # emitters refuse too, but a refusal discovered on the fourth `_write`
+    # leaves three scaffold files on disk built around an interface the
+    # fourth just declared unemittable — a partial scaffold is a worse
+    # artefact than none, and the next reader has no way to tell it is
+    # partial. `_top.v` is the first thing written, so the check has to be
+    # here to be ahead of it.
+    #
+    # Blast radius, measured over the 106 published cells that carry
+    # `phase1/generated_docs` (the 15 under `benchmark-data/ic` plus the
+    # 81-IC phase-1 parity corpus, which is where the published scaffold
+    # artefacts actually live): 3 cells declare a width this consumer
+    # cannot resolve, all three the SAME port of the same design, and NONE
+    # of the three has a published scaffold — their RTL was authored, and
+    # it declares the parameter and the symbolic range correctly. So this
+    # refusal changes ZERO published artefacts while changing what the
+    # generator would emit on the one input shape where it was wrong.
+    require_resolved_widths(signals, f"{top}_top.v")
+
     written: list[str] = []
 
     def _write(name: str, content: str) -> None:
@@ -1124,12 +1473,32 @@ def main() -> int:
         print(f"ERROR: project not a directory: {proj}", file=sys.stderr)
         return 2
 
-    report = emit_scaffold(proj,
-                           skip_tb=args.skip_tb,
-                           skip_regs=args.skip_regs,
-                           skip_cocotb=args.skip_cocotb,
-                           skip_soc=args.skip_soc,
-                           force=args.force)
+    try:
+        report = emit_scaffold(proj,
+                               skip_tb=args.skip_tb,
+                               skip_regs=args.skip_regs,
+                               skip_cocotb=args.skip_cocotb,
+                               skip_soc=args.skip_soc,
+                               force=args.force)
+    except UnresolvedPortWidth as exc:
+        # NOT swallowed into a "skipped" report. The module docstring says
+        # this generator is fail-open PER FILE — one scaffold failing does
+        # not block the others — and that policy is right for a derivation
+        # that produced nothing. It is wrong here: the port list is the one
+        # artefact every other file is built from, and the failure mode this
+        # replaces was a scaffold that emitted happily and was wrong.
+        print(json.dumps({
+            "project": str(proj),
+            "status": "blocked",
+            "reason": "UNRESOLVED_PORT_WIDTH",
+            "artefact": exc.artefact,
+            "ports": [{"name": p.get("name"),
+                       "width_declared": p.get("width_declared")}
+                      for p in exc.ports],
+            "detail": str(exc),
+        }, indent=2))
+        print(str(exc), file=sys.stderr)
+        return 1
     print(json.dumps(report, indent=2))
     return 0 if report.get("status") == "ok" else 1
 

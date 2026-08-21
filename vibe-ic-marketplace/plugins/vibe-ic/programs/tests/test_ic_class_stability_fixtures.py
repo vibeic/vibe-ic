@@ -196,11 +196,49 @@ _EMBEDDED_DIGITAL_ARITH = {
     },
 }
 
+# data_converter (ORGANIC #613): analog content (L5 analog_blocks + L1
+# declares an analog/mixed-signal class) AND a DIGITAL serial readout
+# (1-bit serial / dout-style bitstream) but NO command protocol and NO
+# FSM. The serial-readout signature is what separates this from
+# _EMBEDDED_PURE_ANALOG (which has analog_blocks but NO digital readout):
+# it must classify as data_converter, NOT collapse to pure_analog (which
+# SKIPs RTL entirely). Generic data-converter vocabulary only, deny-safe.
+_EMBEDDED_DATA_CONVERTER = {
+    "L1_DATASHEET.json": {
+        "schema_version": "1.0",
+        "doc_class": "L1_DATASHEET",
+        "ic_name": "generic_part_e",
+        "class": "mixed_signal_adc",
+        "description": (
+            "Multi-channel sigma-delta converter front-end with "
+            "Digital serial outputs OUT1..OUT6 (+ dout serial)."
+        ),
+    },
+    "L5_ADI_SPEC.json": {
+        "schema_version": "1.0",
+        "doc_class": "L5_ADI_SPEC",
+        "no_analog": False,
+        "analog_blocks": [
+            {
+                "name": "modulator_ch",
+                "type": "delta_sigma",
+                "spec": {"order": 2},
+                "low_confidence": False,
+            }
+        ],
+        "signaling_summary": (
+            "Each channel: output 1-bit serial (OUTn / dout) — a digital "
+            "bitstream per channel from the decimation datapath."
+        ),
+    },
+}
+
 _EMBEDDED_SHAPES = {
     "pure_analog": _EMBEDDED_PURE_ANALOG,
     "processor_cpu": _EMBEDDED_PROCESSOR_CPU,
     "digital_cmd_driven": _EMBEDDED_DIGITAL_CMD_DRIVEN,
     "digital_arithmetic_primitive": _EMBEDDED_DIGITAL_ARITH,
+    "data_converter": _EMBEDDED_DATA_CONVERTER,
 }
 
 

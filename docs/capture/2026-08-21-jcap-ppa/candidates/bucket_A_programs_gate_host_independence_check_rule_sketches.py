@@ -1,0 +1,13 @@
+# Bucket A — program-rule sketches for programs/gate_host_independence_check.py
+# Corpus-sweep REQUIRED before merging into programs/gate_host_independence_check.py.
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
+# Pattern: An optional dependency is imported inside a handler that catches the import failure, and the fallback is correct for the case where the package is missing entirely. The package is then used through an attribute that only exists from a later release. On a host carrying an older release the import SUCCEEDS, the handler never runs, and the attribute access raises — inside a program whose exit codes reserve one value for a finding about the subject under test, so a crash publishes itself as a verdict. The test-side guard has the same hole from the other side: skipping on whether the import works covers one of the two ways the dependency can be out of reach.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_an_optional_import_is_guarded_by_capability_not_by_exception_type(sample_text, ports):
+    """Guard an optional dependency on the CAPABILITY the code uses, never on whether the import raised. Present-but-too-old and absent are different states and only one of them is an import failure; the guard that conflates them fails on the state that is harder to notice, because everything up to the attribute access behaves normally. The same rule binds the test side: a skip predicated on importability reports NOT-RUN for the absent case and a red for the too-old one, and neither is the honest answer, which is that the verification did not run and here is the command that would let it."""
+    # Expected signal: ERROR
+    # Suggested fix action: For every handler catching an import failure and binding a name, require a capability check on each attribute of that name used outside the handler, and make the fallback path set an explicit capability flag the use sites read. Route the test-side skip through the not-verified tier rather than a bare skip, carrying the remedy command, so the roll-up sees an unanswered question instead of a green tick. Measured cost of the version-gated case: the gate crashed and returned the exit code reserved for a finding about the subject, and 33 test identifiers were red on a stock host for that one attribute. A broad static screen over this tree finds 79 of 131 handler sites using an attribute of the guarded name outside the handler; that is an UPPER BOUND on candidates and not a defect count, because a site whose use is already behind a capability flag satisfies the rule and the screen cannot see the flag.
+    return []  # list of findings — TODO implement
