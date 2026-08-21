@@ -129,32 +129,53 @@ def test_contract_check_says_the_schema_was_not_applied(tmp_path):
 def test_the_jsonschema_capability_is_reported_not_assumed():
     """MUTATION ARM for `_ppa_jsonschema`.
 
-    Delete the `hasattr` term from `HAVE_DRAFT_2020_12` and this goes red on a
-    host with jsonschema < 4: the flag claims a capability the host does not
-    have, and every test that trusts it fails with an AttributeError instead of
-    skipping with a reason.
+    RE-STATED 2026-08-21. The original arm asserted "jsonschema not importable
+    => HAVE_DRAFT_2020_12 is False". That was true when the only engine was the
+    installed library, and the lane beside this one made it false on purpose:
+    `_ppa/schema_validation` ships a BUNDLED engine, so a host with no
+    jsonschema at all can still apply a draft-2020-12 schema. Keeping the old
+    assertion would have pinned the capability to the library and thrown away
+    the fallback -- reporting "nothing looked" on a session that did look.
+
+    What the arm is FOR is unchanged, and is what is asserted below: the flag
+    must report a capability that was MEASURED, never one assumed from an
+    import, and the skip reason must still refuse to read as a pass. Break the
+    resolution and the first assertion goes red; soften the reason and the
+    second does.
     """
-    import importlib
-    try:
-        js = importlib.import_module("jsonschema")
-    except ImportError:
-        assert HAVE_DRAFT_2020_12 is False
-        assert "not installed" in REASON
+    from _ppa import schema_validation as _SV
+    probe = {"$schema": "https://json-schema.org/draft/2020-12/schema"}
+    engine, notes = _SV.resolve(probe)
+
+    assert HAVE_DRAFT_2020_12 == (engine is not None), (
+        f"HAVE_DRAFT_2020_12 is {HAVE_DRAFT_2020_12} but the resolver "
+        f"{'found' if engine else 'found no'} engine for a draft-2020-12 "
+        f"schema: {notes}")
+
+    if HAVE_DRAFT_2020_12:
+        # The capability is real and says which engine backs it. A flag that
+        # cannot name its engine is the assumption this arm exists to catch.
+        assert engine.name in (_SV.ENGINE_LIBRARY, _SV.ENGINE_BUNDLED), engine
+        import importlib
+        try:
+            js = importlib.import_module("jsonschema")
+        except ImportError:
+            # No library and still capable: that is the bundled engine, and it
+            # is the whole point of shipping one.
+            assert engine.name == _SV.ENGINE_BUNDLED, (
+                f"jsonschema is not importable, so the only engine that can "
+                f"serve here is the bundled one, but the resolver returned "
+                f"{engine.name!r}")
+        else:
+            if hasattr(js, "Draft202012Validator"):
+                assert engine.name == _SV.ENGINE_LIBRARY, (
+                    "a usable reference implementation is installed and the "
+                    "resolver preferred something else")
         return
-    assert HAVE_DRAFT_2020_12 == hasattr(js, "Draft202012Validator"), (
-        f"HAVE_DRAFT_2020_12 is {HAVE_DRAFT_2020_12} but "
-        f"hasattr(jsonschema, 'Draft202012Validator') is "
-        f"{hasattr(js, 'Draft202012Validator')}")
+
     assert "SKIP and NOT a pass" in REASON, (
         "the skip reason no longer says a skip is not a pass, which is the "
         "only thing stopping a reader from counting it as one")
-    if not HAVE_DRAFT_2020_12:
-        # Queried the supported way; `jsonschema.__version__` is deprecated in
-        # 4.x and reading it here would emit a warning on every run.
-        from importlib.metadata import version
-        assert version("jsonschema") in REASON, (
-            "the reason does not name the installed version, so a reader "
-            "cannot tell this skip from a test that was switched off")
 
 
 @pytest.mark.parametrize("prog", sorted(p.name for p in
@@ -184,6 +205,9 @@ def test_no_ppa_program_lets_a_traceback_reach_the_exit_code(prog, tmp_path):
         "ppa_metric_extract.py": ["--records", j],
         "ppa_page_claim_check.py": [j, "--claims", j],
         "ppa_pareto_check.py": ["--candidates", j],
+        # A document that parses and is not a search space: --verify is
+        # this program's only reading arm.
+        "ppa_pnr_search_space.py": ["--verify", j],
         "ppa_predict_aggregate.py": ["--cell-count", "1"],
         "ppa_problem_integrity_check.py": ["--baseline", j, "--candidate", j],
         "ppa_report_gen.py": [j],

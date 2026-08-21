@@ -180,6 +180,10 @@ def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
         "ppa_metric_extract.py":       ["--records", a],
         "ppa_page_claim_check.py":     [a, "--claims", a],
         "ppa_pareto_check.py":         ["--candidates", a],
+        # --verify names a space file that is not there. The other
+        # flags all EMIT a space rather than read one, so this is the
+        # only arm of this program with an input to be missing.
+        "ppa_pnr_search_space.py":     ["--verify", a],
         "ppa_predict_aggregate.py":    ["--cell-count", "0"],
         "ppa_problem_integrity_check.py": ["--baseline", a, "--candidate", a],
         "ppa_report_gen.py":           [a],

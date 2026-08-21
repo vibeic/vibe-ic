@@ -76,6 +76,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_json as atomic_write_json  # noqa: E402
+from _ppa import cli_exit  # noqa: E402  PPA_INTERFACES §1: a bad invocation is 3, never argparse's 2
 
 PROGRAM = "ppa_pnr_search_space"
 DEFAULT_JSON_REL = "reports/ppa_pnr_search_space.json"
@@ -419,7 +420,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--programs-dir", default=None,
                     help="where the runner lives (default: this file's "
                          "directory)")
-    args = ap.parse_args(argv)
+    # §1. `parse_args` exits 2 on a usage error, and 2 is UNDETERMINED --
+    # "I could not look" -- which a flow gate may read as "nothing to check
+    # here, carry on". A typo'd flag would then pass over silently. This
+    # program was written before that contract existed and is brought under it
+    # here; `tests/test_ppa_layer_exit_contract.py` is the guard.
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     programs = Path(args.programs_dir).resolve() if args.programs_dir \
         else Path(__file__).resolve().parent
