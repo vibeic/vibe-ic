@@ -1271,9 +1271,9 @@ Every remaining red is now attributed to one of four causes, none of which is
 |--:|---|---|
 | 11 | matrix family | the 54-ID agent's lane |
 | 2 | coverage bridge | **jmain-green's 38** (confirmed against the split), red since v1.11.18, and it poses a verdict-vocabulary DESIGN question: should "oracle PASS with no coverage measurement" be `VACUOUS-PASS` or `WAIVED-DEFERRED`? Same class as the flow-gate intent call — not mine to guess |
-| 3 | flow-gate enforcement audit | a POLICY call: two gates must declare `ENFORCEMENT: blocking\|advisory`, and the flow's `program_exit_zero` clauses make either choice wrong without a wiring change |
+| 3 | flow-gate enforcement audit | a POLICY call — but SMALLER than stated here, see **M29**. ~~the flow's `program_exit_zero` clauses make either choice wrong~~: those clauses execute NOWHERE, so `advisory` contradicts nothing and is truthful today. The real question is only whether these two SHOULD be able to stop a step. |
 | 2 | manifest parity | ~~EVIDENCE this host lacks~~ — **WRONG, see M30/M32. 10 of the 15 declared roots ARE here, two carry the artefact. FIXED: 3 reds closed.** |
-| 9 | landing-verdict guard | the guard is UNRUNNABLE here — needs docker CLI + git >= 2.38 + a non-`$HOME` subject in ONE environment |
+| 9 | landing-verdict guard | ~~UNRUNNABLE here~~ — **WRONG, see M8/M18/M26.** It runs on the host in the degraded tier; the two-lane A/B measured **10 BOTH-lane reds**, and designs A and C have since closed **4** of them. 6 remain, each with a named cause (M26). |
 | 2 | `magic` flake, 0.8 s lease family | characterised, ratios recorded |
 
 **Nothing is left in the "red, cause unknown" state**, which was the state the
