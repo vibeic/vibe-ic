@@ -209,13 +209,39 @@ from the checkout `_verify()` supplies. The base side's gate set comes from the
 A2 arm running `gatekeeper-land.sh` on the base subject, which enumerates for
 itself. So the two sides CAN differ, and the tree is the channel.
 
-**The question that remains:** does `routed_def_corpus.py` take its population
-from the benchmark-data checkout at `$BENCHMARK_SHA` (in which case a test needs
-two benchmark-data commits, and M11 already found the published corpus is empty
-upstream), or from a declaration inside `$WT_CAND` (in which case a test needs
-only two branches)? M10 established that it reads git's INDEX and refuses a
-tree-only copy, which points at the former. **I did not settle this, and I am not
-going to guess it a third time.**
+**ANSWERED — by reading the program, which is not guessing, and I should have
+done it before writing two wrong models.** `_manifest()`
+(`routed_def_corpus.py:159`) does:
+
+```python
+rc, paths = _index_paths(checkout / "ic")
+```
+
+**The population is the benchmark-data checkout's `ic/`, read through git's
+index.** `subject_repo` is used only to locate the plugin program tree for
+checker argv binding — it does NOT contribute cells. The function also refuses
+unless `git -C checkout rev-parse HEAD` equals the measured benchmark SHA,
+emitting `UNDETERMINED` otherwise, which is the rule-9 shape again.
+
+So a corpus difference must come from benchmark-data, not from the subject
+branch. **And the test does control benchmark-data:** `_verify()` already passes
+`VIBE_IC_BENCHMARK_DATA` and `VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN` pointing at
+`_BENCHMARK_TEST["checkout"]` / `["remote"]`, a repository the fixture owns. It
+could publish a cell there.
+
+**The one unknown left, and it is now a single question rather than a model:**
+a run measures ONE `$BENCHMARK_SHA` and both arms receive it, so how does an
+EMPTY→expanded transition arise inside a single verification at all? Either the
+A2 arm enumerates its own corpus independently under the base's plugin tree, or
+the transition is only ever produced across two verifications. **That is worth
+one experiment, not another paragraph of mine** — publish a cell into the
+fixture's benchmark-data remote, run `..._trusted_verifier_supplies...`, and read
+whether `corpus_transitions` appears.
+
+I did not run it: M11 measured the published corpus as empty upstream, so the
+fixture would need a cell authored for it, and authoring benchmark content to
+make a test go green is exactly the move this engagement exists to prevent unless
+the cell is real.
 
 **The general rule this earns, and it applies to B and C as well as D:** every
 "just express it through channel X" claim in this document needs channel X
