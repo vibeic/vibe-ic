@@ -538,9 +538,30 @@ branch is dead still reaches for it**, because it is the correct-looking answer
 and the error message lists it among the supported forms. A dead branch is not
 merely unused; it costs every author who trusts the help text.
 
+**Where it lands, found by reading the emitted backlog as its recipient.** The
+Bucket-T ticket in this bundle declares `root_cause_layer: forked_tool` and names
+its tool — and its `component` field, the one a tracker routes on, said
+`program:` followed by a plugin runner. A forked-tool bug addressed to a plugin
+maintainer, because the branch that should have carried it cannot express a
+dotted step identifier and the author falls back to a prefix that is wrong.
+
+The sharper half is what the fallback revealed:
+
+    fork:openroad     refused
+    tool:openroad     refused
+    flow:phase3       accepted
+
+**The accepted-value set has no term for a layer the record schema itself
+declares.** Two fields of one record disagree about what kinds of thing exist,
+which is this cluster's shape inside the capture tooling's own grammar. The
+ticket now reads `flow:phase3` — expressible, and merely coarse rather than
+false, which is the best the grammar allows.
+
 **(o)** yes. **(d)** yes — it is a census of a vocabulary against a pattern, so
 it also catches the harder direction: a branch that works today and dies when
-the vocabulary gains a separator.
+the vocabulary gains a separator. And it must run BOTH ways: every value the
+vocabulary admits must be reachable, and every layer the schema declares must
+have a value that names it.
 
 ### A-11 · discovery selects on the parsed document not on the filename · `ppa.head_to_head`
 
