@@ -11,6 +11,25 @@ PARAMS your caller provides:
 - `RUNDIR`    absolute path to the run dir (with `samples/`, `problems.list`, `batches/`)
 - `BATCHFILE` list of design dirs (relative to DATASET) — your batch
 
+## CAPTURED-LESSON DIGEST — MUST READ + APPLY (ORGANIC #718/#733)
+
+If `<RUNDIR>/lessons.md` exists (rendered by `benchmark_dispatch.py --setup` from chip-AGNOSTIC `### Skill:` sections), it is run-dir material (blindness preserved). Staging is not enough — you MUST CONSUME it.
+
+**MANDATORY PRE-AUTHORING CONSUMPTION (ORGANIC #733 - staged != consumed).**
+Staging the digest is not enough; you MUST CONSUME it per design. BEFORE you
+author EACH design, you MUST: (1) OPEN the staged `<RUNDIR>/lessons.md`; (2)
+KEYWORD-MATCH the design genre against the digest genre-convention sections -
+`barrel shifter`, `frequency divider / odd / dual-edge`, `async FIFO`,
+`serial<->parallel`, `edge/pulse detect`, `FSM Moore`, `gshare`, `serial twos
+complement`, `K-map -> mux`, `IEEE-754 float multiply`, `saturating counter /
+no upper limit / cannot overflow`; (3) APPLY the matched
+section to your RTL. section 4-E NO-LEAK: apply a convention ONLY "unless the
+spec states otherwise" - never override an explicit spec; a spec-ambiguous case
+stays spec-faithful (no oracle answer). The #716 recovered-floor gain is only
+realized when the author reads+applies the matched convention, not merely has
+it staged.
+
+
 ## ORCHESTRATION RULES (for the caller spawning the agents — ORGANIC-20260605)
 
 Shape B uses the SAME batch fan-out architecture as Shape C, so the same
@@ -42,7 +61,7 @@ caller-side rules are REQUIRED (full doctrine + rationale in
 For each `<design>` you may read ONLY `<DATASET>/<design>/design_description.txt`.
 NEVER open / cat / grep / list `testbench.v` / `verified_*.v` / any
 `LLM_generated_verilog.v`. The hidden TB / golden ref are touched ONLY by the host
-scorer (`benchmark-harness/score_iverilog_tb.py`), at scoring time, not generation.
+scorer (`benchmark/score_iverilog_tb.py`), at scoring time, not generation.
 
 **CROSS-PROBLEM PROHIBITION (ORGANIC-20260605-blindness-rule-cross-problem-refs).**
 The rule binds for the WHOLE dataset: you may NOT read ANY dataset file other
@@ -80,14 +99,36 @@ at the score front door.
    python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py <project> \
        --skip-phase3 --skip-analog --skip-hardware --pdk sky130A
    ```
-   The runner internally: Path-A phase1 (NL → L1-L23) → phase2 spec-to-rtl (with
+   The runner internally: Path-A phase1 (NL → L1-L27) → phase2 spec-to-rtl (with
    chip_top wrapper, power-up `--fix`, lint, synth) → emits RTL at
    `<project>/phase2/stage1/rtl/`.
 
-4. **Copy the runner's RTL to the scoreable location**:
-   The runner emits its top module under whatever name was authored. Find the
-   module that matches the description's stated name and copy it to
-   `<RUNDIR>/samples/<leaf>.v`.
+4. **Export the runner's RTL to the scoreable location — DETERMINISTIC, the
+   SOLE EMIT PATH** (ORGANIC #678; analogous to `gates_atomic.py` for Shape C):
+   ```
+   python3 ${CLAUDE_PLUGIN_ROOT}/programs/shape_b_sample_export.py \
+       --project <project> --leaf <leaf> --samples <RUNDIR>/samples \
+       [--module <spec 'Module name:' value>]
+   ```
+   DO NOT hand-copy a single module. The program copies the runner's **COMPLETE
+   TB-facing-top RTL FILE verbatim**, preserving every variant-alias / synonym
+   wrapper bundled with its inner children in one file, then runs a post-export
+   guard (standalone `iverilog -g2012` compile + variant-alias completeness).
+
+   **WHY (the gate↔scorer discrepancy this closes).** The runner may fire
+   `reset_clock_variant_alias` (#518): it renames the TB-facing top to
+   `<top>__rcvar_inner` in place and appends a wrapper `<top>` exposing the
+   canonical reset/clock spelling, wired 1:1 — BOTH modules in ONE file, and only
+   that complete file PASSES the hidden TB (which binds the canonical port). The
+   same class applies to leaf-typo synonym wrappers (#517). A hand-extracted
+   single module ships only the un-wrapped inner core (prompt-spelling ports),
+   DROPPING the wrapper: standalone compile (no TB) passes the inner → gate
+   green, but the host scorer binds the hidden TB against the canonical port →
+   COMPILE-ERROR, and the runner's deterministic fix never reaches the scorer.
+   The export program is the sole emit path so that can never happen; its guard
+   REJECTS any export missing a wrapper (or a wrapper's inner). Exit 0 = sample
+   exported + guard passed; a non-zero exit means re-run the runner, never
+   hand-edit the sample.
 
 5. **Handling phase2 outcomes** — there are TWO classes to distinguish carefully:
 
@@ -98,7 +139,7 @@ at the score front door.
      → detected ic_class → set the expected output path. It is now handing off
      to you (the AI playing the spec-to-rtl ROLE) to author RTL.
    - **Author RTL at `<project>/phase2/stage1/rtl/<top>.<v|sv>`** using the L
-     docs (L1-L23 esp.) PLUS the original `design_description.txt`. The blind
+     docs (L1-L27 esp.) PLUS the original `design_description.txt`. The blind
      rule still applies — never read the hidden testbench. Module name must
      match what L9 / the description states (NOT "TopModule" for RTLLM).
    - This is NOT "bypassing the runner" — bypass means authoring with MCP

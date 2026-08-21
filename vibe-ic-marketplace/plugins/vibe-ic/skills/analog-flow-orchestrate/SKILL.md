@@ -124,7 +124,7 @@ list, HW availability or target specs from a human is interaction, not a check.
 
 ```
 Digital Track            Analog Track
-Step 1: spec-to-rtl      A1: spec extraction    ← both start from L1-L23
+Step 1: spec-to-rtl      A1: spec extraction    ← both start from L1-L27
 Step 2: lint              A2: topology + sizing
 Step 3: CDC/RDC           A3: netlist gen
 Step 4: simulation        A4: corner sweep

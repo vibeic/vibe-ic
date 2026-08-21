@@ -32,6 +32,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -42,7 +44,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def _force_ic_name(gd: Path, ic_name: str) -> None:
@@ -2409,11 +2413,19 @@ def is_ethercat(blob: str) -> bool:
     # Base IEEE 802.3 Ethernet: overwhelming MII/MDIO/802.3 PHY-MAC density
     # with only incidental EtherCAT mentions (an EtherCAT-PRIMARY doc names
     # EtherCAT hundreds of times — not a handful).
+    # Keyed on the ratio, not absolute magnitude: an ETHERNET-primary doc is
+    # dense in the MII/MDIO/802.3 PHY-MAC signature while EtherCAT stays
+    # INCIDENTAL (a handful of comparison mentions), whereas an EtherCAT-primary
+    # doc names EtherCAT hundreds of times (447 in the real benchmark) and is far
+    # LESS 802.3-PHY-dense (18) — so the incidental-EtherCAT clause is the load-
+    # bearing discriminator and the PHY-density thresholds only need to establish
+    # a genuine PHY-MAC doc, not a specific magnitude (a real ethernet spec runs
+    # MII≈400 / MDIO≈145 / 802.3≈119 — the old 200/200 gate missed it).
     ethernet_base_primary = (
-        blob.count("802.3") >= 200
-        and blob.count("MII") >= 200
-        and blob.count("MDIO") >= 50
-        and blob.count("EtherCAT") < 20)
+        blob.count("EtherCAT") < 20
+        and blob.count("MII") >= 100
+        and blob.count("MDIO") >= 20
+        and blob.count("802.3") >= 50)
     if (ethernet_800g_primary or profibus_primary or profinet_primary
             or ethernet_base_primary):
         return False

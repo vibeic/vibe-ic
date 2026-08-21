@@ -1,0 +1,88 @@
+type: enhancement
+severity: P2
+component: program:cvdp_solve_pipeline
+
+title: >-
+  CVDP Tier-1 is classify-only (emit-fires == Tier1) with NO conformance or
+  behavioral gate, so a fired-but-wrong deterministic emit is banked as a stable
+  Tier-1 even though it fails the design's own cocotb harness
+
+plugin_version: "1.2.5"
+
+pattern: |
+  The VerilogEval-v2 and VerilogEval-Human tier pipelines accept a Tier-1 claim
+  ONLY when the deterministic emit actually passes the design's own testbench
+  under iverilog (and, as of the v1.2.4/v1.2.5 GATE-PARITY change, also survives
+  the conformance gate). The CVDP pipeline does NOT: cvdp_solve_pipeline.solve()
+  returns TIER_PROGRAM the instant the atomic bridge produces any RTL —
+
+      rtl = _bridge.solve(record)
+      ...
+      if rtl:
+          return {"tier": TIER_PROGRAM, "rtl": rtl, ...}   # no gate, no scoring
+
+  There is no conformance-gate check and no behavioral (cocotb) verification on
+  that emit. So a deterministic emit that fires but is WRONG is still banked as
+  the most-stable tier. Measured evidence: scoring the 33 classified-Tier-1 emits
+  through the official OSS-sim cocotb harness (docker cvdp-sim-local, local_import)
+  found 29/33 pass and 4 fired-but-wrong (a FILO, a cascaded adder, a moving
+  average, a sync LIFO). Per the §9 honesty gate ("a Tier-1 claim is accepted ONLY
+  on a real pass; a fired-but-wrong emit is dropped to a lower tier, never
+  shipped"), those 4 should not be Tier-1.
+
+  Root asymmetry vs VE/RTLLM: VE/RTLLM verify Tier-1 with iverilog, which is cheap
+  and in-process. CVDP's oracle is a cocotb harness that needs a docker OSS-sim
+  image — too heavy to run inside the classifier on every emit — so the pipeline
+  silently skipped behavioral verification entirely instead of substituting the
+  next-best in-process check.
+
+suggested_fix: |
+  ⚠ The tempting "mirror v1.2.4 conformance-gate parity" was TRIED AND REJECTED in
+  this campaign. Wiring `gate_check` as the Tier-1 gate demoted 4 emits on a
+  `port_width` violation — and ALL 4 (bcd_adder_0001, hamming_code_tx_and_rx_0001,
+  kogge_stone_adder_0007, moving_average_0005) were MEASURED cocotb-PASS: a §4.05
+  FALSE-REJECT of correct emits (CVDP carries equivalent / param-expression widths
+  that the literal-width conformance gate mis-compares). So the conformance gate is
+  the WRONG Tier-1 gate for CVDP — it BOTH false-rejects correct emits AND misses
+  the 4 logic-wrong ones (those are interface-conformant, 0 violations). The ONLY
+  sound behavioural gate is the design's own cocotb harness.
+
+  SHIPPED fix (this campaign):
+  1. solve(record, verify_behavioral=False) DEFAULT — emit-fires == Tier-1 but
+     stamped `verified="emit-only"`: the number is explicitly NOT behaviourally
+     verified (fast, for --dist). NO conformance demote → NO false-reject (tier
+     dist stays 33; the 4 param-width emits remain Tier-1, as they should).
+  2. solve(record, verify_behavioral=True) — the emit must PASS the cocotb harness
+     (tier1_cocotb_verify, docker) to stay Tier-1 (`verified="cocotb"`); a
+     cocotb-FAIL emit is demoted to the gate tiers; a None verdict (docker absent)
+     keeps emit-only with a verify_note.
+  3. tier1_cocotb_verify(record, rtl) — the OPTIONAL docker behavioural gate (the
+     `run_benchmark.py --llm -m local_import` path), returning True/False/None,
+     fail-safe (any failure → None), chip-AGNOSTIC.
+  4. docstring + §9 relabel CVDP Tier-1 as emit-only-by-default, behaviourally
+     verifiable ONLY via the cocotb gate — never iverilog/conformance-authoritative
+     like VE/RTLLM.
+  Regression: assert default solve() stamps verified="emit-only" and does NOT
+  demote the param-width emits (no false-reject); assert verify_behavioral demotes a
+  cocotb-FAIL emit and keeps a cocotb-PASS one; assert None-verdict (docker absent)
+  stays emit-only.
+
+  REMAINING: make verify_behavioral default-ON for campaign measurement when a sim
+  image is configured, so a PUBLISHED CVDP Tier-1 number is always cocotb-
+  authoritative; CI (no docker) stays emit-only + disclosed.
+
+id: "ORGANIC-20260624-cvdp-tier1-not-behaviorally-verified"
+submitted_at: "2026-06-24T11:30:00+08:00"
+session_context: >-
+  CVDP 302-problem stability-converge campaign. Classified 33 Tier-1 emits, then
+  scored them through the real OSS-sim cocotb harness (docker) for the first time;
+  4 of 33 failed their own harness, exposing that CVDP Tier-1 — unlike VE/RTLLM —
+  carries no behavioral or conformance verification. The v1.2.4/v1.2.5 GATE-PARITY
+  fixes addressed VE/VE-Human but not the CVDP pipeline.
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    cvdp_solve_pipeline.py verify_behavioral gate + emit-only honesty marker live; test_cvdp_solve_pipeline.py green
