@@ -503,3 +503,52 @@ are absent from `origin/main` entirely, five of them whole test programs. Workin
 as `harvest/rescue-120-falselanded-*`. **`jharvest-triage` is not reachable from this session** —
 it does not appear in the peer list — so this branch is the relay. The flip to RECOVER is that
 shard's owner's call and neither of us has edited their file.
+
+## The seven "unpushable" stashes were preservable after all
+
+I recorded 7 stash commits as impossible to preserve: GitHub rejects them because their history
+carries a 234 MB and a 141 MB benchmark report, over the hard 100 MB limit. That was true of the
+**commits**. I never checked whether their **content** could go — the same error as the "owner's
+call" residual, one level down, and I made it again three sections later.
+
+Measured, what those 7 stashes actually *change*:
+
+    154f8e13f89  owned=6   differing=1    17,310 bytes
+    2b64741ba7b  owned=74  differing=74  244,650
+    7326eff69d1  owned=10  differing=10  101,139
+    9e6a670c592  owned=13  differing=13  108,669
+    a9a61c81c41  owned=4   differing=2    55,357
+    bd57e62017b  owned=2   differing=2   140,974
+    c122e2788b5  owned=74  differing=74  244,650
+    TOTAL  176 files, 0.87 MB, **zero oversize**
+
+The 234 MB files were inherited *history*, not the stashes' own work. Preserved as
+`harvest/preserved-stashes-8HD-7` `bce4d5f5988`, 176 files verified on origin. The commits
+themselves still exist only on local refs in two clones — that part was accurate.
+
+## A verdict that flip-flopped, and why the record shows both
+
+`_jcpath2/wt_new` has now gone **ABANDON → RECOVER → ABANDON** across three measurements. That is
+not indecision: the two worktrees genuinely diverged and re-converged while this was being
+written. Verified at each step, and now: both `mut` and `wt_new` sit at head `c0ecd5f1310`, tree
+`5bf932a9082`, both clean under `--untracked-files=normal`. They are duplicates again.
+
+jharv3 saw the same shape on their host — a DROP that became a KEEP and back within an hour. **A
+verdict on a live host is a photograph.** The anchor in each row is what makes it re-checkable
+rather than merely re-doable.
+
+## Drift this pass
+
+14 rows moved: 8 on `.105`, 3 on `.114`, 1 on `.121`, 2 on `.102`. No new deletions — the 9 on
+`.114` are the ones already recorded. All 14 re-judged against `81cd5321b08`.
+
+**`_gk1764` has now moved three times** — `71729c291e1 → dc119d0520e → c71af5c6cfe → e1741e86415`
+— and each new head landed on no ref. All four are preserved. An actively-worked tree outruns any
+single snapshot, which is an argument for the anchor and against trusting an hour-old rescue.
+
+## Every harvest ref audited against my own tag defect
+
+250 harvest refs on origin: **every tip is a `commit` object** checked raw and undereferenced —
+the exact test the annotated-tag defect defeats — and **zero** of their parents is a tag. jharv3
+ran the same check on shard C's 86 anchor claims and found 13/13 refs live and 86/86 shas
+reachable.
