@@ -1,6 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1783361334" />
-    <testcase name="test_complex_scrambler" classname="test_scrambler" file="/code/src/test_scrambler.py" lineno="7" time="0.0083160400390625" sim_time_ns="450.0" ratio_time="54112.293577981654" />
-  </testsuite>
-</testsuites>
