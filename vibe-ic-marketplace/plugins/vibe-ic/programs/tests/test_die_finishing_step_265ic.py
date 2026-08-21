@@ -76,7 +76,22 @@ def test_the_step_is_declared_between_the_antenna_check_and_pv():
     ids = [str(s["id"]) for s in _steps()]
     assert ids.count(_STEP) == 1
     assert ids.index("26") < ids.index(_STEP) < ids.index("31")
-    assert _step(_STEP)["blocks_on"] == [26]
+    # 26 is the ORDER this test is about. 0.5ic is here because this step's
+    # `condition:` reads the submission template 0.5ic writes, so a run where
+    # 0.5ic never happened must not reach a silent skip -- the flow says so in
+    # its own comment on the `blocks_on` line. Asserted as a SUPERSET with 26
+    # named, rather than as an exact list, so adding a further legitimate
+    # predecessor does not make this test fail for a reason it is not about,
+    # while dropping 26 -- the thing it IS about -- still does.
+    blocks = [str(b) for b in _step(_STEP)["blocks_on"]]
+    assert "26" in blocks, blocks
+    # And every predecessor it names must actually PRECEDE it in the flow. That
+    # is the invariant the exact-list assertion was standing in for, and unlike
+    # the list it does not go stale when a legitimate predecessor is added: a
+    # `blocks_on` entry that comes AFTER this step is either a cycle or a step
+    # that will never have run, and both read as "declared" to the gate.
+    for b in blocks:
+        assert ids.index(b) < ids.index(_STEP), (b, blocks)
 
 
 def test_the_two_programs_the_step_names_exist_and_are_split():

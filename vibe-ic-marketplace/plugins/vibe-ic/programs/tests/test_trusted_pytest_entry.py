@@ -147,6 +147,87 @@ def _real_site_dir() -> Path:
     return Path(proc.stdout.strip()).resolve().parents[1]
 
 
+def _site_processing_dirs() -> list[Path]:
+    """Every directory SITE PROCESSING adds to this installation's path.
+
+    Derived as a set difference -- what the ordinary interpreter can import
+    from, MINUS what an interpreter with site processing off (`-S -I`) can --
+    rather than by matching the names `site-packages` and `dist-packages`. The
+    name match was the first shape and it is a guess about two spellings: it
+    silently returns an INCOMPLETE lane on any installation that adds a
+    directory under some other name, or one a `.pth` file injected.
+
+    BOTH ARMS RUN WITHOUT `PYTHONPATH`/`PYTHONHOME`, and that is load-bearing
+    rather than tidy. `-I` implies `-E`, so the siteless arm cannot honour them
+    and the ordinary arm can -- an asymmetry that puts every ambient entry into
+    the difference as though site processing had added it. MEASURED: under the
+    landing arm, `pytest_per_file_junit` prepends the plugin's own `programs`
+    directory to `PYTHONPATH` for every child it spawns, so the lane came out
+    naming a directory INSIDE the checkout and `trusted_pytest_entry` refused
+    it -- `VIBEIC_TRUSTED_PYTEST_SITE resolved inside the subject checkout`.
+    The entry's guard was right; the lane this helper built was wrong.
+
+    Anything inside the repository is dropped for that same reason. The entry
+    OWNS that refusal and keeps it; this is a builder obeying the contract it
+    builds for, not a second copy of the check. An editable install pointing at
+    the checkout would otherwise reintroduce exactly the failure above on a host
+    that happens to have one.
+
+    The difference is also what makes the ordering assertion sound: none of
+    these directories is on a siteless interpreter's path by construction, so
+    when the lane names them they appear because the lane named them.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if key not in {"PYTHONPATH", "PYTHONHOME"}}
+
+    def seen(*flags: str) -> list[str]:
+        proc = subprocess.run(
+            [sys.executable, *flags, "-c",
+             "import sys" + chr(10) + "for e in sys.path: print(e)"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
+        assert proc.returncode == 0, proc.stderr
+        return [line for line in proc.stdout.split()
+                if line and Path(line).is_dir()]
+
+    siteless = set(seen("-S", "-I"))
+    out: list[Path] = []
+    for item in seen():
+        if item in siteless:
+            continue
+        resolved = Path(item).resolve()
+        if resolved == PROGRAMS.parents[3] or PROGRAMS.parents[3] in resolved.parents:
+            continue
+        out.append(resolved)
+    return out
+
+
+def _closure_lane() -> str:
+    """A lane value naming the runner's WHOLE import closure, runner dir first.
+
+    `_real_site_dir()` alone is HALF a closure on this fleet. MEASURED on 8HD-d
+    at 46db018669::
+
+        pytest, _pytest, pluggy, iniconfig, packaging
+                                 -> ~/.local/lib/python3.12/site-packages
+        pygments                 -> /usr/lib/python3/dist-packages
+
+    `pytest` imports `pygments` lazily, at terminal-writer time, so the entry
+    imports the runner and then dies mid-session with `No module named
+    'pygments'` — and the `-S` shim below keeps NO site directory, so nothing
+    else can supply it. Three tests in this file measured that host rather than
+    this entry until the lane learned to take more than one directory.
+
+    The runner's own directory stays FIRST, which is what the ordering and
+    provenance assertions below are about.
+    """
+    seen: list[str] = []
+    for source in [_real_site_dir(), *_site_processing_dirs()]:
+        item = str(source)
+        if source.is_dir() and item not in seen:
+            seen.append(item)
+    return os.pathsep.join(seen)
+
+
 def _subject(tmp_path: Path) -> Path:
     subject = tmp_path / "subject"
     subject.mkdir()
@@ -155,16 +236,60 @@ def _subject(tmp_path: Path) -> Path:
     return subject
 
 
-def _entry(python: Path, subject: Path, **extra: str) -> subprocess.CompletedProcess:
+def _child_env(**extra: str) -> dict:
+    """The environment every child below runs under.
+
+    Factored out so the entry-free control in
+    `test_a_half_closure_lane_is_not_silently_completed` runs under the IDENTICAL
+    environment as the entry it is a control for. A control that differs from its
+    subject in a second variable is not a control.
+    """
     env = {key: value for key, value in os.environ.items()
            if key not in {"PYTHONPATH", "PYTHONHOME", _HOST_LANE_ENV}
            and not key.startswith(_PROGRESS_ENV_PREFIX)}
     env[_AUTOLOAD_ENV] = "1"
     env.update(extra)
+    return env
+
+
+def _entry(python: Path, subject: Path, **extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [str(python), "-I", str(ENTRY), "-q", "-p", "no:cacheprovider",
          "test_ok.py"],
-        cwd=subject, env=env, capture_output=True, text=True)
+        cwd=subject, env=_child_env(**extra), capture_output=True, text=True)
+
+
+def _session_without_the_entry(python: Path, subject: Path, lane: Path
+                               ) -> subprocess.CompletedProcess:
+    """Can this interpreter run the session with ONLY `lane` on `sys.path`?
+
+    Same interpreter, same subject, same environment, same one directory -- and
+    no trusted entry. So this measures whether the RUNTIME is viable, which is a
+    different question from whether the ENTRY reports it faithfully, and it is
+    the question the caller needs answered before it can know which verdict to
+    expect.
+    """
+    return subprocess.run(
+        [str(python), "-I", "-c",
+         "import sys" + chr(10)
+         + "sys.path.insert(0, " + repr(str(lane)) + ")" + chr(10)
+         + "import pytest" + chr(10)
+         + "raise SystemExit(pytest.main("
+           "['-q', '-p', 'no:cacheprovider', 'test_ok.py']))" + chr(10)],
+        cwd=subject, env=_child_env(), capture_output=True, text=True)
+
+
+def _missing_module(text: str) -> str:
+    """The `No module named 'x'` line from a child's output, or "" if absent.
+
+    Returning "" rather than guessing keeps "I could not extract a cause" from
+    arriving at the caller as "the cause matched".
+    """
+    for line in text.splitlines():
+        marker = line.find("No module named")
+        if marker != -1:
+            return line[marker:].strip()
+    return ""
 
 
 def test_without_the_lane_a_siteless_isolated_entry_refuses(tmp_path):
@@ -178,7 +303,7 @@ def test_without_the_lane_a_siteless_isolated_entry_refuses(tmp_path):
 def test_the_named_lane_records_where_the_same_entry_refused(tmp_path):
     """THE REVERT GUARD. Remove the lane from `run()` and this goes red."""
     proc = _entry(_siteless_python(tmp_path), _subject(tmp_path),
-                  **{_HOST_LANE_ENV: str(_real_site_dir())})
+                  **{_HOST_LANE_ENV: _closure_lane()})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "1 passed" in proc.stdout
 
@@ -209,7 +334,7 @@ def test_the_lane_is_inserted_at_the_front_not_appended(tmp_path):
         "    assert pytest.__file__.startswith(LANE + '/'), pytest.__file__\n",
         encoding="utf-8")
     proc = _entry(_siteless_python(tmp_path), subject,
-                  **{_HOST_LANE_ENV: str(lane)})
+                  **{_HOST_LANE_ENV: _closure_lane()})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "2 passed" in proc.stdout, proc.stdout
 
@@ -283,9 +408,124 @@ def test_the_identity_record_still_shows_which_lane_answered(tmp_path):
         " rows\n",
         encoding="utf-8")
     proc = _entry(_siteless_python(tmp_path), subject,
-                  **{_HOST_LANE_ENV: str(lane)})
+                  **{_HOST_LANE_ENV: _closure_lane()})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "2 passed" in proc.stdout, proc.stdout
+
+
+def test_the_entry_reports_the_runtime_it_was_given_and_never_completes_it(
+        tmp_path):
+    """A lane naming ONLY the runner's own directory must get the verdict that
+    directory actually deserves -- refusal when something is missing, a record
+    when nothing is -- and never a refusal papered over by reaching past it.
+
+    WHY THIS IS NOT `if the closure spans one directory`. It was, and that guard
+    was wrong. MEASURED on two hosts of this fleet at the same commit:
+
+        8HD-d  runner dir  ~/.local/lib/python3.12/site-packages
+               pygments lives in /usr/lib/python3/dist-packages, so the runner
+               dir alone is INSUFFICIENT and the entry refuses.       rc 2
+        8HD-7  runner dir  ~/.local/lib/python3.10/site-packages
+               which already holds everything that session imports, so the
+               runner dir alone is SUFFICIENT and the entry records.  rc 0
+
+    Both hosts have a three-directory closure by the `os.pathsep` count, so
+    counting directories predicted a refusal on 8HD-7 that could not happen
+    there and the test failed on the orchestrator host while passing here --
+    which is the host-dependent gate this repository refuses to ship.
+
+    REPRODUCED on 8HD-d before rewriting it, by building a runner directory that
+    holds the whole closure and pointing the lane at that alone: the entry
+    records, `1 passed`, rc 0 -- 8HD-7's shape, on this host, from the same
+    entry. So the ENTRY was never wrong; the guard was measuring a proxy.
+
+    The property is SUFFICIENCY, and sufficiency is measured, not counted:
+    `_session_without_the_entry` runs the same interpreter, subject and
+    environment with that one directory on `sys.path` and no entry at all. What
+    is asserted is that the entry's verdict AGREES with it, which is a real
+    claim in both directions:
+
+      control fails, entry records  ->  the entry reached past the lane it was
+                                        given, which is the silent fallback
+                                        `trusted_pytest_entry`'s own docstring
+                                        refuses. THE DEFECT THIS TEST IS FOR.
+      control records, entry fails  ->  the entry refuses a runtime that works.
+
+    and on a host whose runner directory is insufficient it additionally pins
+    that the refusal names the SAME cause the control hit, rather than a generic
+    one.
+    """
+    python = _siteless_python(tmp_path)
+    subject = _subject(tmp_path)
+    runner_only = _real_site_dir()
+
+    control = _session_without_the_entry(python, subject, runner_only)
+    proc = _entry(python, subject, **{_HOST_LANE_ENV: str(runner_only)})
+
+    if control.returncode == 0:
+        assert proc.returncode == 0, (
+            "the runner's own directory runs this session with no entry at all, "
+            "so the entry had nothing to refuse and refused anyway:\n"
+            + proc.stdout + proc.stderr)
+        assert "1 passed" in proc.stdout, proc.stdout
+        return
+
+    assert proc.returncode == 2, (
+        "the runner's own directory CANNOT run this session -- the control "
+        f"exited {control.returncode} -- yet the entry recorded, so it resolved "
+        "the missing part from somewhere the lane never named:\n"
+        + control.stdout + control.stderr + "\n--- entry ---\n"
+        + proc.stdout + proc.stderr)
+    assert "[NORECORD] trusted pytest entry:" in proc.stderr, proc.stderr
+
+    cause = _missing_module(control.stdout + control.stderr)
+    if cause:
+        assert cause in proc.stderr, (
+            f"the control failed with {cause!r} and the entry refused for some "
+            f"other stated reason: {proc.stderr!r}")
+    else:
+        # NOT a pass. The refusal is still required to SAY something; what could
+        # not be done here is the tighter check that it says the RIGHT thing.
+        reason = proc.stderr.split("[NORECORD] trusted pytest entry:", 1)[1]
+        assert reason.strip(), (
+            "the entry refused without stating a cause, and the control's own "
+            "failure was not module-shaped so it could not be cross-checked: "
+            + repr(control.stdout + control.stderr))
+
+
+def test_every_named_directory_answers_in_the_order_it_was_named(tmp_path):
+    """The widened value is a LIST, not a set and not one directory with noise.
+
+    Asserted from inside the recorded session on `sys.path` itself, because the
+    order is the whole contract: the first directory named must answer first,
+    which is what keeps the runner resolving from the directory the provenance
+    assertions above pin it to.
+    """
+    subject = _subject(tmp_path)
+    value = _closure_lane()
+    named = value.split(os.pathsep)
+    (subject / "test_ok.py").write_text(
+        "import sys\n"
+        f"NAMED = {named!r}\n"
+        "def test_each_named_directory_is_on_the_path_in_order():\n"
+        "    where = [sys.path.index(item) if item in sys.path else -1\n"
+        "             for item in NAMED]\n"
+        "    assert -1 not in where, (where, NAMED, sys.path)\n"
+        "    assert where == sorted(where), (where, NAMED, sys.path)\n",
+        encoding="utf-8")
+    proc = _entry(_siteless_python(tmp_path), subject,
+                  **{_HOST_LANE_ENV: value})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "1 passed" in proc.stdout, proc.stdout
+
+
+def test_an_empty_segment_in_the_lane_is_refused(tmp_path):
+    """`a::b` is a caller mistake, and an empty segment would resolve to cwd."""
+    proc = _entry(_siteless_python(tmp_path), _subject(tmp_path),
+                  **{_HOST_LANE_ENV: _closure_lane() + os.pathsep + ""
+                     + os.pathsep + str(_real_site_dir())})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "empty directory segment" in proc.stderr
 
 
 def test_an_unset_lane_leaves_the_pinned_image_path_unchanged(tmp_path):

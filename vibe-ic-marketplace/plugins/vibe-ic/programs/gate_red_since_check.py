@@ -91,7 +91,8 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
+                    Tuple)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _vacuous_exit as _vx  # noqa: E402
@@ -252,6 +253,104 @@ def adjudicate(record: Dict[str, Any],
     known = [l for l in red if l in acknowledged_gates]
     new = [l for l in red if l not in acknowledged_gates]
     return findings, known, new
+
+
+#: The kind, in `hygiene_finding_delta`'s vocabulary, that means a gate was
+#: DISPATCHED AND BLOCKED. `WROTE_CORPUS` and `EXEMPTION_EXPIRED` are the other
+#: two and neither is a red; `NOT_CHECKED` never reaches this list at all,
+#: because a gate that could not look has its own dated exemption discipline in
+#: `_gate_dispatch.sh`. Keying on this one string is what makes the rule below
+#: apply to "declared always-run-and-BLOCKING" and to nothing else.
+BLOCKING_KIND = "FAIL"
+
+
+def inherited_red_reasons(
+        carried: Iterable[Sequence[str]],
+        ledger: List[Dict[str, Any]],
+        age: Callable[[str], Optional[int]]) -> List[str]:
+    """Refusal reasons for INHERITED blocking reds. For the landing verdict.
+
+    `carried` is `hygiene_finding_delta`'s carried list — findings present on
+    BOTH arms, which `landing_merge_verdict` today reports as
+    "…carried (which do NOT block)". A carried `FAIL` is precisely a gate that
+    was dispatched as blocking, went red, and has already survived at least one
+    landing. This function is what makes surviving the SECOND one cost
+    something.
+
+    WHY THE GRACE FOR AN UNACKNOWLEDGED RED IS ZERO, AND WHY THAT IS NOT A
+    CONSTANT SOMEBODY CHOSE
+    -----------------------------------------------------------------------
+    "Red for N commits" needs a FIRST-RED COMMIT to count from, and for a red
+    nobody has acknowledged there is none: the dispatch record is written to a
+    temporary directory and destroyed with the run, which is the gap this
+    program's own module docstring opens with. So for an unacknowledged red the
+    only honest values of N are 0 and infinity — anything in between would be a
+    number computed from a history that does not exist. Infinity is the state
+    being removed. Hence 0.
+
+    The DECLARED N is `max_commits`, per gate, in the row you must then write —
+    required by `_REQUIRED_KEYS`, bounded by `MAX_BOUND_COMMITS`, and read at
+    the `bound` line below exactly as `adjudicate` reads it. Writing the row is
+    the amnesty: a reason, an owner, and an expiry, all visible in a tracked
+    file. Renewal is moving `since` forward, which is a visible act; raising
+    `max_commits` past the ceiling is refused, so immortality cannot be bought.
+
+    Returns one string per offending gate, sorted, deduplicated by label. An
+    empty list means every inherited blocking red is owned by a live, unexpired
+    acknowledgement — which is the only state in which this rule is silent.
+    """
+    rows = {str(r.get("gate")): r for r in ledger if r.get("gate")}
+    out: Dict[str, str] = {}
+    for finding in carried:
+        kind, label, _corpus = (list(finding) + ["", "", ""])[:3]
+        if kind != BLOCKING_KIND or not label or label in out:
+            continue
+        row = rows.get(label)
+        if row is None:
+            out[label] = (
+                f"AN INHERITED RED WITH NO OWNER — {label} failed on the base "
+                f"too, so it is not this branch's, and no row in "
+                f"{LEDGER_REL} names it. Add one with an owner and a "
+                f"max_commits bound, or fix the gate. A red that belongs to "
+                f"nobody is the one that survives everything.")
+            continue
+        missing = [k for k in _REQUIRED_KEYS if row.get(k) in (None, "")]
+        if missing:
+            out[label] = (
+                f"AN INHERITED RED IS ACKNOWLEDGED WITHOUT A BOUND — {label} "
+                f"has a row missing {', '.join(missing)}. An acknowledgement "
+                f"with no deadline never comes due, which is the state this "
+                f"ledger exists to end.")
+            continue
+        behind = age(str(row["since"]))
+        if behind is None:
+            out[label] = (
+                f"AN INHERITED RED'S DEADLINE CANNOT BE EVALUATED — {label} "
+                f"cites commit {str(row['since'])[:12]}, which this repository "
+                f"does not contain. 'I could not check the deadline' must not "
+                f"read as 'the deadline is fine'.")
+            continue
+        try:
+            bound = int(row["max_commits"])
+        except (TypeError, ValueError):
+            out[label] = (
+                f"AN INHERITED RED'S BOUND IS NOT A NUMBER — {label} declares "
+                f"max_commits={row['max_commits']!r}.")
+            continue
+        if bound > MAX_BOUND_COMMITS:
+            out[label] = (
+                f"AN INHERITED RED IS ACKNOWLEDGED WITHOUT A REACHABLE "
+                f"DEADLINE — {label} declares max_commits={bound}, beyond the "
+                f"{MAX_BOUND_COMMITS}-commit ceiling. A deadline that cannot "
+                f"arrive is not a deadline; renew by moving `since` forward.")
+            continue
+        if behind > bound:
+            out[label] = (
+                f"THE DEADLINE ON AN INHERITED RED HAS PASSED — {label} has "
+                f"been red since {str(row['since'])[:12]}, {behind} commit(s) "
+                f"ago, and the bound this row set for itself was {bound}. "
+                f"{row.get('owner') or 'nobody'} owns it.")
+    return [out[k] for k in sorted(out)]
 
 
 def git_age(repo: Path) -> Callable[[str], Optional[int]]:

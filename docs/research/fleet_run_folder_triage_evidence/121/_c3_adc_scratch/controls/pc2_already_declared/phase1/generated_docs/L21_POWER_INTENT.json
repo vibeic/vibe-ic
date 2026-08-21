@@ -1,0 +1,32 @@
+{
+  "doc_id": "L21",
+  "doc_name": "L21_POWER_INTENT",
+  "applicability": "APPLICABLE",
+  "fields": {
+    "power_domains": [
+      {
+        "name": "VDD",
+        "power_net": "VDD",
+        "ground_net": "VSS",
+        "hand_authored": true
+      },
+      {
+        "name": "VDDIO",
+        "power_net": "VDDIO",
+        "ground_net": "VSS",
+        "hand_authored": true
+      },
+      {
+        "name": "VSS",
+        "power_net": "VDD",
+        "ground_net": "VSS",
+        "hand_authored": true
+      }
+    ],
+    "isolation_cells": [],
+    "level_shifters": [],
+    "upf_path": null
+  },
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "extraction_evidence": {}
+}

@@ -217,6 +217,19 @@ _VERSION_READING_PROGRAMS = {
     # _ATTRIBUTION_KEYS.
     "flow_compliance_check",
     "foundry_handoff_pack_gen",
+    # The programs of step 0.5ic and of step 37.5ic's two arms. Each asks the
+    # manifest (`_pmd.emitted_by`) rather than restating a literal, which is the
+    # whole point of this pin: a precheck report that names a version it
+    # invented is a report nobody can trace to a build.
+    #
+    # `tapeout_precheck` joined 2026-08-20 when step `37.5self` was RETIRED and
+    # the general precheck became 37.5ic's second ARM. It is the MERGE over both
+    # arms, and it emits a report of its own — the per-line-authority record —
+    # so it reads the version for the same reason its two arms do. Added here
+    # rather than left to redden this pin: a new emitter appearing silently is
+    # exactly what #800 pinned this set against, and an emitter that is
+    # DECLARED is not the defect.
+    "general_precheck",
     "hold_fix_planner",
     "ir_drop_triage_classify",
     "l_doc_parity_diff",
@@ -242,10 +255,13 @@ _VERSION_READING_PROGRAMS = {
     "signoff_waiver_md_emit",
     "sta_triage_classify",
     "synth_doctor",
+    "tapeout_declaration_check",
+    "tapeout_declaration_gen",
     # #1744 — the live external-refusal gate. It stamps its report with
     # `_pmd.emitted_by` for the same reason the other emitters do: a verdict
     # about whether an outside party would accept a layout is worthless without
     # knowing which build produced it.
+    "tapeout_precheck",
     "tapeout_readiness_check",
 }
 
