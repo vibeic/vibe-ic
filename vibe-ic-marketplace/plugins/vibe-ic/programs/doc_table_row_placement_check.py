@@ -73,13 +73,13 @@ chip-AGNOSTIC: Markdown structure only. No design, PDK, vendor or SKU literal.
 """
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import _atomic_artefact as _atomic
 import _gate_usage_exit as _usage
 import _vacuous_exit as _vac
 
@@ -203,7 +203,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     report = {"tool": TOOL, "documents": examined, "table_rows": rows_seen,
               "findings": findings}
     if args.json:
-        args.json.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        _atomic.write_json(args.json, report)
 
     head = (f"{examined} document(s), {rows_seen} table-shaped line(s) examined")
 

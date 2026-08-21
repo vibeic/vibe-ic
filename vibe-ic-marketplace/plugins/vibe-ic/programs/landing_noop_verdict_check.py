@@ -72,12 +72,12 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import json
 import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import _atomic_artefact as _atomic
 import _gate_usage_exit as _usage
 import _vacuous_exit as _vac
 
@@ -218,8 +218,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                       for p, v in differing],
     }
     if args.json:
-        args.json.write_text(json.dumps(report, indent=2) + "\n",
-                             encoding="utf-8")
+        _atomic.write_json(args.json, report)
 
     if not rows:
         _vac.announce_vacuous(
