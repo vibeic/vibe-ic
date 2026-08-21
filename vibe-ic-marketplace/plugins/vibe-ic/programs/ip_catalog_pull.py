@@ -93,23 +93,77 @@ LOCAL_MIRROR_MAP = {
 
 
 # ---------------------------------------------------------------------------
-def find_local_mirror(ip_name: str) -> Optional[Path]:
-    """Return path to local mirror dir if present, else None.
+# RTL source extensions used to decide whether a candidate mirror dir is
+# actually populated. Structural — no chip/vendor/IP-name literal.
+_RTL_SOURCE_EXTS = (".v", ".sv", ".vhd", ".vhdl", ".vh", ".svh")
+
+
+def _dir_has_rtl(cand: Path,
+                 rtl_files: Optional[List[str]] = None) -> bool:
+    """Return True iff `cand` is a populated mirror that actually holds RTL.
+
+    A bundled git submodule that has never been initialized leaves a bare
+    directory on disk that passes ``is_dir()`` but contains zero source
+    files. Selecting it short-circuits the populated fallback mirrors and
+    makes every manifest rtl_file land in files_missing → status FAIL.
+
+    Acceptance rule (structural, chip-AGNOSTIC):
+      1. If the manifest lists rtl_files, accept only when at least one of
+         them resolves under `cand` (direct path OR basename rglob match) —
+         the same resolution pull_catalog_ip() uses to copy them.
+      2. Otherwise (no manifest hint), accept only when `cand` contains at
+         least one RTL source file (``*.v`` / ``*.sv`` / ``*.vhd`` / …)
+         anywhere in its tree.
+    An un-initialized / empty submodule dir satisfies neither and is
+    rejected so the fallback chain continues to a populated mirror.
+    """
+    if not cand.is_dir():
+        return False
+    if rtl_files:
+        for rtl_rel in rtl_files:
+            if (cand / rtl_rel).is_file():
+                return True
+            # basename rglob — manifest paths may differ from the mirror tree
+            if list(cand.rglob(Path(rtl_rel).name)):
+                return True
+        return False
+    for ext in _RTL_SOURCE_EXTS:
+        if next(cand.rglob(f"*{ext}"), None) is not None:
+            return True
+    return False
+
+
+def find_local_mirror(ip_name: str,
+                      rtl_files: Optional[List[str]] = None) -> Optional[Path]:
+    """Return path to a POPULATED local mirror dir if present, else None.
 
     v1.0: prefer the bundled top-level IP/ submodule mirror (categorized,
     IP/<category>/<core>), matched by leaf name; then the legacy flat
-    ~/ic_documents mirrors."""
+    ~/ic_documents mirrors.
+
+    A candidate dir is accepted only if it actually contains RTL
+    (``_dir_has_rtl``). An empty / un-initialized bundled submodule dir is
+    skipped so the fallback chain falls through to a populated mirror —
+    never selecting a dir with no RTL content (ORGANIC #665, field agent
+    round-4 v1.0.42 adversarial verify)."""
     candidate_names = LOCAL_MIRROR_MAP.get(ip_name, [ip_name])
     if IP_MIRROR_ROOT and IP_MIRROR_ROOT.is_dir():
         leaves = [n.split("/")[-1] for n in (candidate_names + [ip_name])]
         for leaf in leaves:
             for cand in sorted(IP_MIRROR_ROOT.glob(f"*/{leaf}")):
-                if cand.is_dir():
+                if _dir_has_rtl(cand, rtl_files):
                     return cand
     for root in LOCAL_MIRROR_ROOTS:
         for name in candidate_names:
-            p = root / name
-            if p.is_dir():
+            # ORGANIC #665 round-2 — LOCAL_MIRROR_ROOTS carry a literal `~`
+            # (`Path("~/ic_documents/...")`); without expanduser() a `~`-rooted
+            # candidate NEVER resolves (`Path('~/ic_documents/open_ic/serv')`
+            # .is_dir() is always False), so the populated home-dir fallback the
+            # #665 round-1 content-gate was meant to fall THROUGH to stayed
+            # unreachable and the catalog-glue RTL pull still FAILed. Expand the
+            # user home so the real mirror is found. chip-AGNOSTIC.
+            p = (root / name).expanduser()
+            if _dir_has_rtl(p, rtl_files):
                 return p
     return None
 
@@ -130,6 +184,20 @@ def pull_catalog_ip(match: CatalogMatch,
     Returns audit dict with files_pulled, sha256 of each, license, etc.
     Records a provenance.jsonl line.
     """
+    # 0. #187 self-match guard (defense-in-depth). query_catalog already refuses
+    #    a self-match by default, but a caller that hand-builds a CatalogMatch (or
+    #    passes allow_self_match) must not silently pull the IC's OWN reference
+    #    design — that hands back the answer key (§4.05). A flagged self-match is
+    #    REJECTED here too.
+    if getattr(match, "self_match", False):
+        return {
+            "ip_name": match.ip_name,
+            "status": "REJECTED",
+            "reason": (match.self_match_reason
+                       or "catalog entry supplies the IC-under-test's own design "
+                          "(#187 benchmark integrity) — refused"),
+        }
+
     # 1. License compliance gate
     ok, rationale = check_license_compatibility(match.license)
     if not ok:
@@ -139,8 +207,10 @@ def pull_catalog_ip(match: CatalogMatch,
             "reason": rationale,
         }
 
-    # 2. Locate source
-    src_dir = find_local_mirror(match.ip_name)
+    # 2. Locate source — require the mirror to actually hold this manifest's
+    #    RTL (an empty/un-initialized submodule dir must not short-circuit a
+    #    populated fallback mirror; ORGANIC #665).
+    src_dir = find_local_mirror(match.ip_name, match.rtl_files)
     pull_method = "local_mirror"
     if src_dir is None:
         # Fallback: git clone canonical_url at canonical_commit
@@ -420,6 +490,38 @@ def pull_all_catalog_matches(project: Path,
     existing.update(aggregated)
     decl_path.write_text(json.dumps(existing, indent=2))
 
+    # ORGANIC #711 — ALSO emit phase2/stage1/rtl/SOURCE_MANIFEST.json{reused_ip}
+    # at pull time. l9_rtl_pin_consistency_check + flow_compliance read THIS
+    # file (NOT declaration.json) to enable their reused-IP relaxations; pre-#711
+    # NO program wrote it, so on every catalog-glue SoC the relaxations were dead
+    # code and the pin gate hard-FAILed or forced a per-run waiver. The reused_ip
+    # flag + ip_list are the keystone the relaxations key on. Emitted ONLY when
+    # ≥1 IP was actually pulled (honest signal of catalog integration). MERGE-
+    # preserving: never clobber a hand-authored manifest's tie_offs /
+    # flattened_buses / wrapper_exposed_outputs / renamed_interfaces declarations.
+    # chip-AGNOSTIC: structure only, no chip/vendor literal.
+    ip_list = sorted({a.get("ip_name") for a in audits
+                      if a.get("status") in ("PASS", "PARTIAL")
+                      and a.get("ip_name")})
+    if ip_list:
+        manifest_path = (project / "phase2" / "stage1" / "rtl"
+                         / "SOURCE_MANIFEST.json")
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        if manifest_path.is_file():
+            try:
+                mf = json.loads(manifest_path.read_text())
+                if not isinstance(mf, dict):
+                    mf = {}
+            except Exception:
+                mf = {}
+        else:
+            mf = {}
+        mf["reused_ip"] = True
+        mf["ip_list"] = ip_list
+        mf["rtl_strategy"] = "catalog_lookup_plus_ai_glue"
+        mf.setdefault("generated_by", "ip_catalog_pull")
+        manifest_path.write_text(json.dumps(mf, indent=2))
+
     return aggregated
 
 
@@ -432,6 +534,12 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="Query + show what would be pulled, don't actually copy")
     ap.add_argument("--min-confidence", type=float, default=0.4)
+    ap.add_argument("--ic-name", default=None,
+                    help="IC-under-test name (strengthens the #187 self-match "
+                         "guard; L1/L3/L9 identity is used when omitted)")
+    ap.add_argument("--allow-self-match", action="store_true",
+                    help="Do NOT refuse a catalog entry that supplies the IC's "
+                         "OWN design (#187 — requires explicit acknowledgement)")
     ap.add_argument("--prune", metavar="IP_NAME", default=None,
                     help="Cleanly prune/supersede a previously-pulled IP: "
                          "remove its pulled files and record a removal "
@@ -473,6 +581,8 @@ def main(argv: List[str]) -> int:
         project,
         Path(args.catalog_dir) if args.catalog_dir else None,
         min_confidence=args.min_confidence,
+        ic_name=args.ic_name,
+        allow_self_match=args.allow_self_match,
     )
 
     if not matches:

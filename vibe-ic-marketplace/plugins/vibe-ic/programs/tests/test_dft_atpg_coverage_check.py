@@ -10,6 +10,14 @@ The gate this checker replaces TRUSTED the self-produced boolean
             measured number is below target → recomputed verdict wins.
   * FAIL  — no report at all (missing data, honest FAIL — NOT vacuous pass).
   * supports the .rpt fallback and both coverage.json schemas.
+
+2026-07 DFT-depth raise: the checker now enforces a FOUNDRY floor (default
+95 %) so a lenient written target cannot pass a sub-foundry number. The
+tests below that assert PASS at a sub-95 % target are exercising the
+RECOMPUTE mechanism (measured-field selection / .rpt fallback / ratio
+normalisation) in ISOLATION, so they pin `--foundry-floor 0`
+(`foundry_floor=0`) to hold the floor out of the way. The foundry-floor
+behaviour itself is pinned in test_dft_foundry_depth.py.
 """
 import json
 import subprocess
@@ -62,7 +70,7 @@ def test_pass_measured_above_target_fault_schema(tmp_path):
         "target_pct": 55.0,
         "stuck_at_ge_target": True,
     })
-    r = _run(str(tmp_path))
+    r = _run(str(tmp_path), "--foundry-floor", "0")
     assert r.returncode == 0, r.stdout + r.stderr
     rep = json.loads(r.stdout)
     assert rep["verdict"] == "PASS"
@@ -83,7 +91,7 @@ def test_pass_runner_schema(tmp_path):
         "stuck_at_target": 85.0,
         "stuck_at_ge_target": True,
     })
-    assert chk.main([str(tmp_path)]) == 0
+    assert chk.main([str(tmp_path), "--foundry-floor", "0"]) == 0
 
 
 # ── FAIL: the real silicon deficit — measured < target ──────────────────
@@ -184,7 +192,7 @@ def test_rpt_fallback_fault_dialect_pass(tmp_path):
                "Covered / Total: 880 / 996\n"
                "Target (min)  : 80.00\n"
                "Result        : PASS\n")
-    r = _run(str(tmp_path))
+    r = _run(str(tmp_path), "--foundry-floor", "0")
     assert r.returncode == 0, r.stdout + r.stderr
     rep = json.loads(r.stdout)
     assert rep["verdict"] == "PASS"
@@ -213,7 +221,7 @@ def test_json_missing_target_falls_back_to_rpt(tmp_path):
     supplies the target. Both substance pieces required → must combine."""
     _write_cov(tmp_path, {"coverage_pct": 70.0})  # no target field
     _write_rpt(tmp_path, "Stuck-at %    : 70.00\nTarget (min)  : 65.00\n")
-    r = _run(str(tmp_path))
+    r = _run(str(tmp_path), "--foundry-floor", "0")
     assert r.returncode == 0, r.stdout + r.stderr
     rep = json.loads(r.stdout)
     assert rep["verdict"] == "PASS"
@@ -225,7 +233,7 @@ def test_json_missing_target_falls_back_to_rpt(tmp_path):
 def test_ratio_normalised_to_percent(tmp_path):
     """A fractional ratio (0.91) must be read as 91%, not 0.91%."""
     res = chk.evaluate({"coverage_pct": 0.91, "target_pct": 80.0,
-                        "stuck_at_ge_target": True}, None)
+                        "stuck_at_ge_target": True}, None, foundry_floor=0)
     assert res["measured_coverage_pct"] == 91.0
     assert res["verdict"] == "PASS"
 
@@ -236,7 +244,7 @@ def test_writes_json_output(tmp_path):
     _write_cov(tmp_path, {"coverage_pct": 90.0, "target_pct": 80.0,
                           "stuck_at_ge_target": True})
     out = tmp_path / "out.json"
-    rc = chk.main([str(tmp_path), "--json", str(out)])
+    rc = chk.main([str(tmp_path), "--json", str(out), "--foundry-floor", "0"])
     assert rc == 0
     assert out.is_file()
     rep = json.loads(out.read_text())

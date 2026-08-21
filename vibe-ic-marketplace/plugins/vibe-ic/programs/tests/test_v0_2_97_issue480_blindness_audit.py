@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
+from _entry_guard_fixture import write_prompt_report  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 AUDIT = PLUGIN / "programs" / "blindness_audit.py"
@@ -223,6 +224,10 @@ def _stage_run(tmp_path, transcript_body: str):
     run = tmp_path / "run"
     (run / "samples").mkdir(parents=True)
     (run / "work").mkdir()
+    # The upstream entry gate now validates producer semantics, not file
+    # presence.  Stage its producer-derived prompt envelope so this test still
+    # isolates the downstream blindness-audit behaviour.
+    write_prompt_report(run)
     (run / ".bench_config.json").write_text(json.dumps({
         "bench": "verilogeval-v2", "dataset": str(ds), "shape": "C",
         "problems": 1, "batches": 1, "clean_room": True,
@@ -236,7 +241,7 @@ def _score(ds, run):
     return subprocess.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
 
 
 def test_dispatch_legit_jsonl_passes_audit_then_proceeds(tmp_path):
