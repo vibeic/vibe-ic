@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "HDLC / SDLC (ISO/IEC 13239) is a wire-level data link protocol spec; no PDK / SDC / floorplan constraints at the protocol layer. Per-controller integration constraints (clock-tree budget for receive-clock recovery, transmit-clock jitter requirements, FIFO depth for back-pressure absorption, address-filter table size, FCS hardware engine vs software fallback) live in the SoC integration spec, not in ISO/IEC 13239."
-  }
-}

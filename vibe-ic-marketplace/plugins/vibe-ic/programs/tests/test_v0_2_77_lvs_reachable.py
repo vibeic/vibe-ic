@@ -48,13 +48,24 @@ def _proj(tmp_path):
 def _fake_docker(transcripts, spice_body=".subckt chip_top a b\n.ends\n"):
     """Return a docker stub: tool checks OK, magic writes the extracted
     netlist, netgen prints the given transcript + writes lvs.rpt."""
-    def fake(container, cmd, timeout=0):
+    def fake(container, cmd, timeout=0, **_):
         if cmd.startswith("command -v") or cmd.startswith("test -f"):
             return (0, "", "")
         if "magic" in cmd and "SPICE_OUT=" in cmd:
             import re as _re
             m = _re.search(r"SPICE_OUT=(\S+)", cmd)
             Path(m.group(1)).write_text(spice_body)
+            # A REAL extraction always writes the feedback dump: the recipe ends
+            # `feedback save $env(FEEDBACK_OUT)` (phase3_one_shot_runner.py:27902,
+            # lvs_power_aware_extract_tcl.py:333) and magic writes a 0-byte file when
+            # `feedback count` is 0. Modelling the netlist but not the feedback channel
+            # made this stub an extraction that cannot happen, and
+            # magic_illegal_overlap_check correctly refused it (EXTRACTION_FEEDBACK_ABSENT:
+            # "an absent file is not a measured zero, it is an unmeasured nothing").
+            _fb = _re.search(r"FEEDBACK_OUT=(\S+)", cmd)
+            if _fb:
+                Path(_fb.group(1)).parent.mkdir(parents=True, exist_ok=True)
+                Path(_fb.group(1)).write_text("")
             return (0, "MAGIC_EXT2SPICE_DONE", "")
         if "netgen" in cmd:
             import re as _re
@@ -93,7 +104,7 @@ def test_missing_tools_env_unavailable(tmp_path, monkeypatch):
     p = _proj(tmp_path)
     monkeypatch.setattr(
         runner, "_docker_exec",
-        lambda c, cmd, timeout=0: (1, "", "") if cmd.startswith("command -v")
+        lambda c, cmd, timeout=0, **_: (1, "", "") if cmd.startswith("command -v")
         else (0, "", ""))
     r = runner.step_lvs(p, "chip_top", _pdk(), "x")
     assert r.status == "ENV_UNAVAILABLE"
@@ -103,7 +114,7 @@ def test_missing_tools_env_unavailable(tmp_path, monkeypatch):
 def test_missing_inputs_waived_with_name(tmp_path, monkeypatch):
     # tools present but no GDS / netlist
     monkeypatch.setattr(runner, "_docker_exec",
-                        lambda c, cmd, timeout=0: (0, "", ""))
+                        lambda c, cmd, timeout=0, **_: (0, "", ""))
     r = runner.step_lvs(tmp_path, "chip_top", _pdk(), "x")
     assert r.status == "WAIVED"
     assert "LVS inputs missing" in r.detail

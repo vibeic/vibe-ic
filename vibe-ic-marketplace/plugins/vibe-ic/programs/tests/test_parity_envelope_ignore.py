@@ -1,7 +1,7 @@
 """Tests for v0.1.64 R18 capture: l_doc_parity_diff envelope-ignore.
 
-Captured from the recurring 'parity tool over-counts' theme that surfaced
-in GAP_v0157, _v0160, _v0162, _v0163. The diff treats every top-level
+Captured from the recurring 'parity tool over-counts' theme in parity
+review. The diff treats every top-level
 key in the agent that isn't in the program as ABSENT — including wrapper
 metadata (doc_id, fields, evidence, extraction_source on Claude's side;
 extraction_evidence, extraction_strategy, schema_version on the program
@@ -19,6 +19,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -133,8 +134,10 @@ def test_absent_count_drops_on_real_amba_axi_diff(tmp_path):
     """Re-run l_doc_parity_diff on the real AMBA AXI program + agent
     extractions and confirm ABSENT_IN_PROGRAM is materially lower than the
     v0.1.63 pre-R18 baseline of 361."""
-    arm_prog = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
-    arm_agnt = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/claude_extracted")
+    arm_prog = require_repo("benchmark-data/evaluation/phase1_parity/"
+                            "arm_aix/phase1/generated_docs")
+    arm_agnt = require_repo("benchmark-data/evaluation/phase1_parity/"
+                            "arm_aix/phase1/claude_extracted")
     if not arm_prog.is_dir() or not arm_agnt.is_dir():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")
