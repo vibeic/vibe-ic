@@ -2338,7 +2338,22 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(cells_for(DIM)) == len(live) == 68
+    # 2026-08-21, 68 -> 69: step 1.6x. The note above is CORRECT about its own
+    # change and wrong about the base it applied it to. Measured by driving
+    # `flowref` at each revision's yaml through
+    # `VIBE_IC_MATRIX_FLOW_YAML`, the matrix population is:
+    #
+    #     ff5071caa (this pin last set)   68   no 1.6x, no 37.5self
+    #     7fcbc7397~1                     69   no 1.6x, 37.5self PRESENT
+    #     7fcbc7397 (adds 1.6x)           70
+    #     867de4289 (retires 37.5self)    69
+    #
+    # So the population moved THREE times across three commits, not once: 37.5self
+    # arrived after this pin was set and was never credited, 1.6x arrived and was
+    # never credited, and only the removal was. Subtracting one from a base that
+    # was already two behind is how a hand-moved census drifts while every
+    # individual edit to it looks careful.
+    assert len(cells_for(DIM)) == len(live) == 69
 
 
 @needs_corpus
@@ -2801,7 +2816,7 @@ def test_d3_waivers_meet_the_registry_bar():
 
 
 def test_d3_cell_states_partition_all_steps():
-    """ENFORCED + WAIVED + NA == 68, computed live, with no cell in two states."""
+    """ENFORCED + WAIVED + NA == 69, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -2825,7 +2840,22 @@ def test_d3_cell_states_partition_all_steps():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(enforced) + len(waived) + len(na) == 68, (
+    # 2026-08-21, 68 -> 69: step 1.6x. The note above is CORRECT about its own
+    # change and wrong about the base it applied it to. Measured by driving
+    # `flowref` at each revision's yaml through
+    # `VIBE_IC_MATRIX_FLOW_YAML`, the matrix population is:
+    #
+    #     ff5071caa (this pin last set)   68   no 1.6x, no 37.5self
+    #     7fcbc7397~1                     69   no 1.6x, 37.5self PRESENT
+    #     7fcbc7397 (adds 1.6x)           70
+    #     867de4289 (retires 37.5self)    69
+    #
+    # So the population moved THREE times across three commits, not once: 37.5self
+    # arrived after this pin was set and was never credited, 1.6x arrived and was
+    # never credited, and only the removal was. Subtracting one from a base that
+    # was already two behind is how a hand-moved census drifts while every
+    # individual edit to it looks careful.
+    assert len(enforced) + len(waived) + len(na) == 69, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
@@ -2838,10 +2868,11 @@ def test_d3_cell_states_partition_all_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (51, 2, 16), (
+    assert (len(enforced), len(waived), len(na)) == (52, 2, 15), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(51, 2, 16) at v1.11.5. A step moving between states is a real "
+        f"(52, 2, 15) at 7fcbc7397 + 867de4289. A step moving between states "
+        f"is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2926,6 +2957,51 @@ def test_d3_cell_states_partition_all_steps():
         "a run tree carrying SELF_TAPEOUT.txt and this NA self-invalidates "
         "through the same live guard, the cell returns to the denominator, "
         "and this pin reddens naming it."
+        "\nsmrg/retire-37p5self: (51, 2, 16) -> (51, 2, 15), and it is the "
+        "MIRROR of the entry directly above \u2014 the same step, leaving. The "
+        "triple sums 69 -> 68. `37.5self` is RETIRED: the general precheck was "
+        "never a third ROUTE out of stage 4, it is a second ARM of 37.5ic, "
+        "which now runs our ladder on every design that reaches it and the "
+        "operator's container IN ADDITION wherever the PDK ships a precheck and "
+        "its template was fetched."
+        "\nWHICH CELL MOVED, AND IN WHAT STATE: `37.5self/d3`, and it was NA, "
+        "not ENFORCED \u2014 exactly the state the entry above records it "
+        "entering the grid in. So this is -1 STEP with NO reclassification, the "
+        "mirror image of that +1: ENFORCED unmoved at 51, WAIVED unmoved at 2, "
+        "NA 16 -> 15. NOTHING ELSE MOVED, and that is MEASURED rather than "
+        "assumed: the live not-ENFORCED inventory was diffed against the pinned "
+        "one on this tree and the ONLY difference is `37.5self/d3` "
+        "(`matrix_mutation_ledger.LEDGER_CELLS_NOT_ENFORCED`, moved in this "
+        "same change). A step removal that had silently reclassified a "
+        "neighbouring cell would appear there as a second difference; there is "
+        "none."
+        "\nWHY THIS IS A STALE PIN AND NOT A BROKEN DERIVATION: everything "
+        "above this assertion is recomputed live \u2014 `cells_for(DIM)` reads "
+        "the yaml, `step_record` reads the manifest, `waiver_for` reads the "
+        "registry \u2014 and all three handled a 68-step flow with no change at "
+        "all. Only the hand-restated TRIPLE is a number a human must move, "
+        "which is exactly what it is for: a step LEAVING has to force someone "
+        "to say the number as loudly as one arriving."
+        "\n2026-08-21: (51, 2, 15) -> (52, 2, 15). +1 ENFORCED, no "
+        "reclassification, and it is step 1.6x \u2014 the cross-layer "
+        "rewrite-fidelity relation, added by `7fcbc7397` FIVE COMMITS BEFORE "
+        "the entry above. It lands ENFORCED on the same three live reads its "
+        "siblings were classified by: `step_condition('1.6x')` is None, it "
+        "declares one required_output "
+        "(`reports/crosslayer/rewrite_equivalence_check.json`), and it holds no "
+        "dimension-3 waiver. Its unconditionality is deliberate and recorded in "
+        "its own yaml comment: a `files_exist` condition was tried first and "
+        "refused by `flow_condition_reachability_check` as 'a check disabled by "
+        "exactly the situation it was written for'. WAIVED and NA unmoved."
+        "\nTHE ENTRY ABOVE IS CORRECT ABOUT ITS OWN CHANGE AND WRONG ABOUT THE "
+        "BASE IT APPLIED IT TO, which is the part worth keeping. It moved the "
+        "triple 69 -> 68 for a step LEAVING, from a base that had never been "
+        "credited with this step ARRIVING. MEASURED, by driving `flowref` at "
+        "each revision's yaml through `VIBE_IC_MATRIX_FLOW_YAML` and counting "
+        "`step_ids()`: ff5071caa 68, 7fcbc7397~1 69, 7fcbc7397 70, 867de4289 "
+        "69. The population moved THREE times across three commits and only the "
+        "third was written down \u2014 so 'a human must move it' is the "
+        "mechanism AND, twice running, the failure."
     )
 
 

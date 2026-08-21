@@ -686,6 +686,32 @@ def d5_problems(step_id) -> List[str]:
                 f"{parent!r} can never cut {sid}'s cascade"
             )
 
+    # ── CL-* — the closed_loop FALLBACK edge, dimension 5's other edge set
+    # A `closed_loop.fallback_to` IS a dependency edge, and until 2026-08-20
+    # nothing in this repository read one. MEASURED at 46db018669: 19
+    # `closed_loop:` declarations in the flow, ZERO consumers anywhere in the
+    # plugin — and this module's own substrate shipped the accessor
+    # (`flowref.closed_loop`, exported in `__all__`) with no caller. A
+    # `fallback_to` naming a step that does not exist would have passed every
+    # gate here, so the convergence edges the flow's close-loop story rests on
+    # were, as a class, unfalsifiable.
+    #
+    # Dimension 5 owns "is the declared edge set the true one", so it owns this
+    # edge set too. The predicate is NOT restated here: `closed_loop_edge_check`
+    # is the ONE implementation and this module calls it, so the program a
+    # reviewer runs by hand and the cell the matrix reddens cannot drift apart —
+    # the failure mode `_ORFS_PNR_KNOB_PARAMS` names in its own header ("a second
+    # list of names that would drift away from it").
+    #
+    # Steps with no `closed_loop` get an empty list, so this adds no cell and
+    # moves no existing verdict: measured over the shipped flow, `d5_problems`
+    # is unchanged for every step and the 19 declaring steps stay green.
+    import closed_loop_edge_check as _cl
+
+    _cl_raw_ids, _cl_by = _cl.build_index(list(F.steps()))
+    problems.extend(
+        _cl.problems_for_step(F.step_by_id(step_id), _cl_raw_ids, _cl_by))
+
     # ── D5-CYCLE ─────────────────────────────────────────────────────
     if sid in ancestors(sid):
         cycle = sorted(a for a in ancestors(sid) if sid in ancestors(a))
@@ -962,7 +988,12 @@ def test_d5_covers_every_cell_exactly_once():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(ids) == len(F.step_ids()) == 68, (
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(ids) == len(F.step_ids()) == 69, (
         f"parametrized {len(ids)} cells over {len(F.step_ids())} flow steps"
     )
     assert ids == [F.normalize_id(s) for s in F.step_ids()], (
@@ -1021,7 +1052,12 @@ def test_d5_state_census_is_exhaustive():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(F.step_ids()) == 68, (
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(F.step_ids()) == 69, (
         f"the NA rationale was re-derived over {len(F.step_ids())} steps, not "
         f"63; the population moved and this census states a figure for a grid "
         f"it no longer describes"
