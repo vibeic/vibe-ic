@@ -618,3 +618,91 @@ def test_the_abstention_is_still_waivable(tmp_path):
     r = _run(tmp_path)
     assert r.returncode == 0, r.stdout
     assert "PASS_WITH_WAIVER" in r.stdout, r.stdout
+
+
+# ── the flow's own verdict compounds are not claims of a pass ────────────
+#
+# `VACUOUS-PASS` and `PASS-VOIDED` are tokens this flow EMITS to say a step
+# did NOT earn a pass. They appear in the tally line a RESULT.md quotes as
+# evidence. Matching the bare `PASS` inside them turns an honest FAIL report
+# into a burn-provenance demand for a burn that never happened.
+
+
+def test_vacuous_pass_near_hardware_is_not_a_pass_claim(tmp_path):
+    """The measured failure: two unrelated clauses, one 40-char window.
+
+    `hardware` and `PASS` sit within 40 characters of each other only because
+    a blocker table names absent hardware and the tally names a VACUOUS-PASS.
+    The document's verdict is NOT CONVERGED.
+    """
+    (tmp_path / "RESULT.md").write_text(
+        "# VERDICT: NOT CONVERGED\n\n"
+        "The gate is an honest FAIL and nothing was burned.\n\n"
+        "  PASS=7  FAIL=3  MISSING=5  VACUOUS-PASS=1\n\n"
+        "| B9 | 2 steps waived for absent FPGA hardware; "
+        "1 VACUOUS-PASS (diagnostic coverage) | process | OPEN |\n"
+    )
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    assert "does not claim" in r.stdout, r.stdout
+    assert "RESULT_MD_MISSING_AUDIT_SHA" not in r.stdout, r.stdout
+
+
+def test_pass_voided_near_hardware_is_not_a_pass_claim(tmp_path):
+    (tmp_path / "RESULT.md").write_text(
+        "# VERDICT: NOT CONVERGED\n\n"
+        "hardware sign-off is PASS-VOIDED by its failed dependency.\n"
+    )
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    assert "does not claim" in r.stdout, r.stdout
+
+
+def test_overall_verdict_vacuous_pass_is_not_a_pass_claim(tmp_path):
+    (tmp_path / "RESULT.md").write_text(
+        "# Report\n\noverall verdict = PASS-VOIDED\n"
+    )
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    assert "does not claim" in r.stdout, r.stdout
+
+
+# ── reverse controls: a REAL claim must still be caught ──────────────────
+#
+# A filter tightened until nothing matches would pass the three tests above
+# and silently stop gating every genuine report. These must keep FAILING for
+# missing provenance, which is only possible if the claim is still detected.
+
+
+def test_genuine_hardware_pass_claim_still_demands_provenance(tmp_path):
+    (tmp_path / "RESULT.md").write_text(
+        "# Report\n\nhardware regression: PASS on 5/5 runs.\n"
+    )
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert "RESULT_MD_MISSING_AUDIT_SHA" in r.stdout, r.stdout
+
+
+def test_genuine_phase23_pass_claim_still_demands_provenance(tmp_path):
+    (tmp_path / "RESULT.md").write_text("# Phase 2+3 PASS\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert "RESULT_MD_MISSING_AUDIT_SHA" in r.stdout, r.stdout
+
+
+def test_genuine_overall_verdict_pass_still_demands_provenance(tmp_path):
+    (tmp_path / "RESULT.md").write_text("# Report\n\noverall verdict: PASS\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert "RESULT_MD_MISSING_AUDIT_SHA" in r.stdout, r.stdout
+
+
+def test_pass_with_waivers_verdict_still_demands_provenance(tmp_path):
+    """`PASS_WITH_WAIVERS` is a credited pass; the underscore compound must
+    not be swept up by the hyphen-compound exclusions."""
+    (tmp_path / "RESULT.md").write_text(
+        "# Report\n\naudit_verdict: PASS_WITH_WAIVERS\n"
+    )
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert "RESULT_MD_MISSING_AUDIT_SHA" in r.stdout, r.stdout
