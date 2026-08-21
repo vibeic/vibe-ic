@@ -353,18 +353,30 @@ def inherited_red_reasons(
     return [out[k] for k in sorted(out)]
 
 
-def git_age(repo: Path) -> Callable[[str], Optional[int]]:
-    """Commits between a sha and HEAD, or None when the sha is unknown here.
+def git_age(repo: Path, head: str = "HEAD") -> Callable[[str], Optional[int]]:
+    """Commits between a sha and `head`, or None when the sha is unknown here.
 
     The clock is COMMITS and not wall time on purpose: it is derivable from the
     repository alone, identical for every reader of the same tree, and needs no
     persisted run history — which is precisely what this repo does not keep.
+
+    `head` EXISTS BECAUSE THE CANDIDATE MUST NOT MOVE THE CLOCK (2026-08-22).
+    Counting to a candidate branch's own HEAD adds that branch's commits to
+    EVERY row's age, so a large branch expires rows it has nothing to do with —
+    and a small one shelters them. MEASURED on a 15-commit branch: 7 rows read
+    as expired against its HEAD and 5 against `origin/main`, the tree that
+    actually lands. Two of the difference were rows the branch never touched.
+
+    The deadline is a property of the base, so a landing counts to the base.
+    This is the same rule as the one that requires the LEDGER to be the base's:
+    a branch must not be able to change what counts as overdue, in either
+    direction.
     """
 
     def age(sha: str) -> Optional[int]:
         try:
             proc = subprocess.run(
-                ["git", "-C", str(repo), "rev-list", "--count", f"{sha}..HEAD"],
+                ["git", "-C", str(repo), "rev-list", "--count", f"{sha}..{head}"],
                 capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.SubprocessError):
             return None
@@ -388,6 +400,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help=f"acknowledgement ledger (default: <repo>/{LEDGER_REL})")
     ap.add_argument("--repo", type=Path, default=Path.cwd(),
                     help="repository whose history dates the acknowledgements")
+    ap.add_argument("--head-ref", default="HEAD",
+                    help=("the ref the clock counts TO (default HEAD). A "
+                          "landing passes its BASE: counting to a candidate's "
+                          "own head lets a large branch expire rows it never "
+                          "touched"))
     args = ap.parse_args(argv)
 
     try:
@@ -414,7 +431,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"gate_red_since: 0 gate state(s) examined — {why}")
         return _vx.exit_code(passed=True, skipped=True)
 
-    findings, known, new = adjudicate(record, ledger, git_age(args.repo))
+    findings, known, new = adjudicate(record, ledger, git_age(args.repo, args.head_ref))
 
     print(f"gate_red_since: {int(record.get('declared') or 0)} gate(s) "
           f"declared, {len(known) + len(new)} red "
