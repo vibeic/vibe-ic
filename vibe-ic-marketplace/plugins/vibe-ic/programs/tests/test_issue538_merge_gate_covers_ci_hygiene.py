@@ -49,9 +49,6 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
 _SCRIPT = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
-#: The dispatch library the script sources. Read for its population-refusal
-#: labels so the partition below is derived from it, never restated.
-DISPATCH = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
 _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
 
 if str(_PROGRAMS) not in sys.path:
@@ -177,26 +174,9 @@ def _label_matcher(decl):
 
 #: The dispatcher's synthetic row for a corpus that expanded to nothing. Written
 #: by `gate_dispatch_over` in `tools/ci/_gate_dispatch.sh` (vibe-ic#1075), NOT by
-#: any `run` line — see `split_population_refusal_records`.
-#: BOTH dispatcher-owned population rows, not just the empty one.
-#: `gate_dispatch_over`'s `attest_population` branch synthesises TWO labels for
-#: the same corpus -- "is EMPTY" when the producer succeeded over nothing, and
-#: "producer FAILED" when it could not answer at all (`_gate_dispatch.sh`). Only
-#: the first was listed here, so the second could never be attributed to a `run`
-#: line and read as a fabricated gate. It was latent while no wired producer
-#: failed; vibe-ic#1764 made `routed_def_corpus.py` refuse an ABSENT corpus and
-#: the second row became reachable, which is how it surfaced.
-#: `test_every_population_row_the_dispatcher_can_write_is_recognised` derives
-#: this set from the dispatcher's own source so a third row cannot rot in.
-_POPULATION_ROW_LABEL_RE = re.compile(
-    r'\Acorpus "(?P<name>.+)"'
-    r'(?: is EMPTY — nothing was checked over it'
-    r'| producer FAILED — denominator unknown)\Z')
-
-#: How the dispatcher writes those rows, so the test above can read them out of
-#: `_gate_dispatch.sh` rather than restating them here.
-_DISPATCH_POPULATION_ROW_RE = re.compile(
-    r'^\s*"corpus \\"\$corpus\\"(?P<tail>[^"]*)"\s*\\\s*$', re.M)
+#: any `run` line — see `split_empty_corpus_records`.
+_EMPTY_CORPUS_LABEL_RE = re.compile(
+    r'\Acorpus "(?P<name>.+)" is EMPTY — nothing was checked over it\Z')
 
 
 #: Leading shell environment assignments on a command line, e.g. the
@@ -231,8 +211,8 @@ def declared_corpora(script: Path):
     return out
 
 
-def split_population_refusal_records(recorded_labels):
-    """(`run`-line invocations, corpus names with a dispatcher POPULATION row).
+def split_empty_corpus_records(recorded_labels):
+    """(`run`-line invocations, corpus names whose loop expanded to NOTHING).
 
     A RECORD IS NOT ALWAYS AN INVOCATION. `gate_dispatch_over` deliberately
     appends one synthetic NOT_CHECKED row when its producer yields zero items,
@@ -255,22 +235,10 @@ def split_population_refusal_records(recorded_labels):
     caller must still prove each name is one the script DECLARES; a synthetic
     row naming a corpus no `gate_dispatch_over` line mentions is exactly the
     fabrication this file exists to catch, so it is returned, not swallowed.
-
-    AND THERE ARE TWO SUCH ROWS, NOT ONE (vibe-ic#1764). The same branch also
-    writes `producer FAILED — denominator unknown` when the producer could not
-    answer at all. That row is written by the dispatcher for the same corpus by
-    the same mechanism, so it can no more be explained by a `run` line than the
-    empty one can — but it was not listed, so it arrived at `reconcile` as an
-    unattributed gate. MEASURED: with `routed_def_corpus.py` refusing an ABSENT
-    corpus, this file went red naming
-    `corpus "published cells carrying a routed DEF" producer FAILED —
-    denominator unknown`, and the merge gate again looked broken when nothing
-    about it had changed. Both rows are partitioned now, and BOTH remain subject
-    to the caller's declared-corpus proof.
     """
     invocations, empty = [], []
     for label in recorded_labels:
-        m = _POPULATION_ROW_LABEL_RE.match(label)
+        m = _EMPTY_CORPUS_LABEL_RE.match(label)
         if m:
             empty.append(m.group("name"))
         else:
@@ -398,12 +366,12 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
 
     # A record written BY THE DISPATCHER rather than by a `run` line is set
     # aside first — and only after the script is made to account for it. See
-    # `split_population_refusal_records`: an empty corpus leaves a synthetic
+    # `split_empty_corpus_records`: an empty corpus leaves a synthetic
     # NOT_CHECKED row behind on purpose, and reconciling it against `run` lines
     # asks a question it can never answer. It is not waved through: its corpus
     # must be one the script DECLARES, so a synthetic-looking label the script
     # never asked for is still a fabricated gate and still red.
-    invocations, empty_corpora = split_population_refusal_records(recorded)
+    invocations, empty_corpora = split_empty_corpus_records(recorded)
     fabricated = sorted(set(empty_corpora) - set(declared_corpora(_SCRIPT)))
     assert not fabricated, (
         "the dispatcher recorded an EMPTY-corpus row for a corpus no "
@@ -459,67 +427,8 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
     assert_invocations_decompose(decls, invocations)
 
 
-def test_every_population_row_the_dispatcher_can_write_is_recognised():
-    """The partition must cover EVERY row `gate_dispatch_over` can synthesise.
-
-    vibe-ic#1764. The splitter listed one of the two and the second reached
-    `reconcile` as a fabricated gate. Hard-coding "now there are two" would rot
-    the same way the first list did, so the set is DERIVED from the dispatcher's
-    own source: every label its population-refusal branch passes to `_dispatch`.
-    A third row added there fails this test on the next run rather than becoming
-    silently unattributable.
-
-    Both directions. The derivation must find something (a regex that matched
-    nothing would make this vacuous), and every label it finds must be
-    recognised AND yield the corpus name — the caller's declared-corpus proof is
-    what keeps the partition honest, and it needs the name to do it.
-    """
-    dispatch = DISPATCH.read_text(encoding="utf-8")
-    tails = _DISPATCH_POPULATION_ROW_RE.findall(dispatch)
-    assert len(tails) >= 2, (
-        "the dispatcher's population-refusal labels could not be read out of "
-        f"{DISPATCH}; this test would pass over anything: {tails!r}")
-
-    name = "a corpus this test named"
-    for tail in tails:
-        label = f'corpus "{name}"{tail}'
-        invocations, population = split_population_refusal_records([label])
-        assert (invocations, population) == ([], [name]), (
-            f"the dispatcher can write {label!r} but the partition does not "
-            "recognise it, so it would reach `reconcile` as a gate no `run` "
-            "line explains")
-
-    # NEGATIVE CONTROL: the recogniser must not be a rubber stamp on anything
-    # shaped vaguely like a corpus row.
-    for impostor in ('corpus "x" was fine',
-                     'corpus "x" is EMPTY — nothing was checked over it!',
-                     'not a corpus row at all'):
-        inv, pop = split_population_refusal_records([impostor])
-        assert (inv, pop) == ([impostor], []), impostor
-
-
-def test_a_FABRICATED_producer_FAILED_row_is_still_unexplained():
-    """Clause 3 of the control below, for the row vibe-ic#1764 made reachable.
-
-    The empty row already had this proof. Without the same one here, "producer
-    FAILED — denominator unknown" would be a second phrase any fabricated label
-    could wear to walk past the assertion that catches fabricated labels.
-    """
-    declared = ["a corpus the script declares"]
-    honest = f'corpus "{declared[0]}" producer FAILED — denominator unknown'
-    forged = 'corpus "a corpus nobody declared" producer FAILED — denominator unknown'
-
-    _inv, population = split_population_refusal_records([honest, forged])
-
-    assert sorted(population) == sorted(
-        [declared[0], "a corpus nobody declared"])
-    assert sorted(set(population) - set(declared)) == ["a corpus nobody declared"], (
-        "a producer-FAILED row naming a corpus no `gate_dispatch_over` line "
-        "declares was swallowed by the partition")
-
-
 def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
-    """The control for `split_population_refusal_records`, which must not become a
+    """The control for `split_empty_corpus_records`, which must not become a
     hole through which any unexplained record escapes.
 
     Driven over a REAL script that sources the REAL dispatch library and runs a
@@ -560,7 +469,7 @@ def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
     assert corpora == ["cells that do not exist"]
 
     # 1. the dispatcher really does record the empty corpus.
-    invocations, empty = split_population_refusal_records(recorded)
+    invocations, empty = split_empty_corpus_records(recorded)
     assert empty == ["cells that do not exist"], recorded
     assert len(recorded) == len(invocations) + 1
 
@@ -577,11 +486,11 @@ def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
     # 3. THE CLAUSE THAT KEEPS IT HONEST: same phrasing, corpus the script never
     #    declared, still caught.
     forged = 'corpus "a corpus nobody declared" is EMPTY — nothing was checked over it'
-    _inv, forged_empty = split_population_refusal_records(recorded + [forged])
+    _inv, forged_empty = split_empty_corpus_records(recorded + [forged])
     assert sorted(set(forged_empty) - set(corpora)) == ["a corpus nobody declared"]
     # …and a record that is not the synthetic shape at all is untouched by the
     # partition and reaches `reconcile` as before.
-    assert split_population_refusal_records(["something else"]) == (["something else"], [])
+    assert split_empty_corpus_records(["something else"]) == (["something else"], [])
 
 
 def test_a_continued_run_line_is_read_as_the_one_command_bash_runs():

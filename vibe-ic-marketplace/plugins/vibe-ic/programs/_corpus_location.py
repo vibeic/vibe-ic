@@ -65,19 +65,6 @@ the third one: an rc 0 for a scan that did not happen is the false certificate
 this whole gate suite exists to remove, and the only thing keeping it from
 becoming the general answer is that somebody has to type it.
 
-AND SOME CALL SITES HAVE NO SUCH FLAG AT ALL, which is a THIRD state and not a
-spelling of "did not pass it". A producer whose consumer reads only its exit
-status and its item count cannot afford the NO_CORPUS row at any price: rc 0
-with nothing on stdout is, at that consumer, byte-identical to a corpus that was
-opened and holds none. MEASURED 2026-08-21 on `tools/ci/routed_def_corpus.py`
-(vibe-ic#1764): with nothing at `benchmark-data/` and the pointer unset, and
-again with a resolved checkout carrying no routed DEF, the dispatcher received
-`rc 0, 0 items` both times and printed `corpus ... is EMPTY — nothing was
-checked over it` about a corpus nothing had opened. Such a caller passes
-``absent_opt_in=None`` to :func:`refuse`, which then refuses the absent row AND
-stops naming a flag the caller does not accept — a remedy whose real answer is
-`unrecognized arguments` is the false-premise defect one layer down.
-
 chip-AGNOSTIC: pure path/git plumbing. No design, PDK, vendor or SKU literal.
 """
 from __future__ import annotations
@@ -105,12 +92,6 @@ BOUND_SHA_ENV = "GATEKEEPER_BENCHMARK_DATA_SHA"
 #: against another (vibe-ic#1223), so the two spellings must be reconciled
 #: DELIBERATELY and in one place rather than by each gate guessing.
 CANONICAL_CORPUS_NAME = "benchmark-data"
-
-#: The flag a call site conventionally exposes to reach the NO_CORPUS row.
-#: Quoted by :func:`refuse` so the remedy a reader is handed is the spelling
-#: every gate that HAS one actually accepts. A caller with no such flag passes
-#: ``absent_opt_in=None`` instead of a second spelling of this string.
-ABSENT_OPT_IN = "--corpus-may-be-absent"
 
 #: Origins returned by :func:`resolve`.
 NAMED = "named"          #: the path the caller/CI named, in this repository
@@ -231,21 +212,12 @@ def not_a_checkout_reason(root: Path, reads: str, *,
 
 
 def refuse(gate: str, named: Path, resolved: Path, origin: str,
-           may_be_absent: bool, scanned: str,
-           absent_opt_in: Optional[str] = ABSENT_OPT_IN) -> int:
+           may_be_absent: bool, scanned: str) -> int:
     """The rc for a corpus that could not be resolved, with the reason printed.
 
     `scanned` names what this gate would have examined ("published cell(s)",
     "published run tree(s)", "published gate record(s)") so the NO_CORPUS line
     states a zero over a named population rather than a bare silence.
-
-    `absent_opt_in` is the flag THIS CALL SITE ACCEPTS to reach the NO_CORPUS
-    row, quoted verbatim in the UNDETERMINED sentences so a reader is handed a
-    remedy they can actually type. A caller that exposes no such flag — because
-    for it an unopened corpus is never an acceptable input — passes None, and
-    the sentences then say that rather than naming a flag whose real answer is
-    `unrecognized arguments`. It does NOT decide the rc: `may_be_absent` alone
-    does that, and a caller passing None simply never passes True either.
 
     Returns 2 for both UNDETERMINED rows and 0 for NO_CORPUS. It never returns
     1: "the corpus is not here" is not a finding against anything.
@@ -266,10 +238,7 @@ def refuse(gate: str, named: Path, resolved: Path, origin: str,
               f"{resolved} is not a readable directory, so this gate scanned "
               f"nothing and examined 0 {scanned}. A pointer that is set and "
               f"wrong is a broken configuration, not an absent corpus, and "
-              + (f"{absent_opt_in} does not excuse it."
-                 if absent_opt_in else
-                 "this caller accepts no absent opt-in that could excuse it."),
-              file=sys.stderr)
+              f"--corpus-may-be-absent does not excuse it.", file=sys.stderr)
         return 2
     if may_be_absent:
         # rc 0, and it must never read as a scan that happened.
@@ -283,12 +252,8 @@ def refuse(gate: str, named: Path, resolved: Path, origin: str,
     print(f"[{gate}] UNDETERMINED: no corpus at {named}, so this gate scanned "
           f"nothing and examined 0 {scanned}. A check that could not look has "
           f"not passed. Point {CORPUS_ENV} at a clone of the published-corpus "
-          f"repository"
-          + (f", or pass {absent_opt_in} if this repo need not "
-             f"carry one." if absent_opt_in else
-             ". This caller accepts no absent opt-in: a corpus nothing opened "
-             "and a corpus that was read and holds none must not reach its "
-             "consumer as the same answer."), file=sys.stderr)
+          f"repository, or pass --corpus-may-be-absent if this repo need not "
+          f"carry one.", file=sys.stderr)
     return 2
 
 
