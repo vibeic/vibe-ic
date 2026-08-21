@@ -33,6 +33,51 @@ rc 2, with the measured population count in the message, in both. So the
 question is only whether the populations are empty here. **They are not**, and
 that is measured, so the first branch is the one that applies.
 
+## RE-ADJUDICATED 2026-08-22 06:26+ — THE CORPUS MOVED AND SO DID BOTH VERDICTS
+
+Everything below this section was measured against `/home/reyerchu/benchmark-data`
+as it stood on 2026-08-21. That clone has since advanced to `b971220` and
+**shrank from 1037 enumerated files to 70**. Re-measured:
+
+    L-doc field producer      then  48 L-docs, 3 fields present in 4 docs and
+                                    populated in 0        -> a producer finding
+                              NOW   "0 of them carry a `fields` object, so 0
+                                    document(s) were scanned against 18
+                                    field(s)"             -> rc 2 UNDETERMINED
+
+    evidence citation resolves then 149 contributing docs of 1037, 105
+                                    citations, 113 baseline resolved, 4 dangling
+                              NOW   66 contributing docs of 70, 28 citations,
+                                    132 baseline resolved, 5 dangling
+
+**`L-doc field producer` has moved from the owner's first branch to the second.**
+The ruling was: *either it is a real finding about the design and it stays red
+until fixed, or its population is genuinely empty and it must report rc=2 NOT
+CHECKED with the measured population count in the message.* Its population is now
+genuinely empty, and it reports exactly that — rc 2, naming both counts. It is
+behaving correctly.
+
+**And that exposes the real defect, which is the DISPATCH, not the gate.**
+`repo_hygiene_gates.sh:449` dispatches it with a plain blocking `run`, under
+which rc 2 is recorded **FAIL**. So a gate that correctly says "I could not
+look" reaches the roll-up as "I looked and it was bad" — the collapse this repo
+removes from gates one at a time, and the one `run_tolerating_uncheckable` plus
+a dated `uncheckable_until` exists to prevent. The gate needs re-dispatching,
+not fixing.
+
+That is a change to `repo_hygiene_gates.sh`, which is a PROTECTED path, so it is
+not made here.
+
+**`evidence citation resolves` stays on the first branch**: its population is
+non-empty (66 documents, 28 citations) and both findings are real — a baseline
+that has become a standing waiver for 132 paid debts, and 5 documents citing
+proofs they do not ship.
+
+**The figures below are kept, dated, rather than edited in place.** They were
+true when measured and the measurement is the evidence for the reasoning that
+follows; a verdict that silently restates itself against a moved corpus is
+exactly the shelf-life failure this document is about.
+
 ## VERDICT 1 — `L-doc field producer`: REAL FINDING
 
 Population, measured: **48 L-docs** under the published corpus, **18 fields**
