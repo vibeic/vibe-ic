@@ -1701,15 +1701,56 @@ def _run_one_module_outcome(path: Path,
 
 def test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress(
         monkeypatch, tmp_path):
-    """Completed pytest items, not elapsed wall time, keep the child alive."""
+    """Completed pytest items, not elapsed wall time, keep the child alive.
+
+    THE ITEM MUST FINISH WELL INSIDE THE WINDOW, AND THAT IS THE MEASUREMENT.
+    Until 2026-08-22 this drove 12 children that each slept ``0.45`` against a
+    stall window of exactly ``0.45``, so the interval between two renewals
+    equalled the interval the watchdog was allowed to wait. It had no margin at
+    all, and it lost the race whenever the host blinked. MEASURED on
+    ``origin/main`` a00f53f20, whole-file, on an idle box (load 3.45, the file
+    2.1x faster than under load): still RED, and the child's own tail says why
+    it is not a load story --
+
+        .......
+        WATCHDOG_STALLED: ... did not advance for > 0.45s — killed as hung
+        PROGRESS_PROTOCOL_INCOMPLETE: terminal event missing (stage=running)
+
+    Seven of the twelve items had already reported. The child was running and
+    renewing; it was killed BETWEEN two renewals that were scheduled exactly one
+    window apart. A test whose green depends on scheduler jitter measures the
+    scheduler, so the jitter is engineered out rather than waited out: each item
+    now completes at a THIRD of the window, and the run still outlives the bound
+    by 8x rather than 12x.
+
+    NOTHING IS RELAXED BY THIS. The window is still ``0.45`` — the bound under
+    test is untouched — and the run still has to cross it on the strength of
+    renewals alone. Revert the watchdog to a fixed wall bound and this reddens
+    at once, because the total is ``8x`` that bound. The direction the change
+    DOES weaken, "an item that cannot renew the window must be killed", is not
+    left to inference: it is now its own test, below, and it is the old
+    construction promoted to the control it always was.
+    """
     old_fixed_bound = 0.45
+    #: A third of the window, so two renewals fit inside every interval the
+    #: watchdog is allowed to wait. Asserted below rather than commented, so an
+    #: edit cannot quietly walk it back to the zero-margin shape.
+    item_seconds = old_fixed_bound / 3
+    items = 24
+    assert item_seconds * 3 <= old_fixed_bound, (
+        f"each child item must finish well inside the {old_fixed_bound}s stall "
+        f"window or this test measures scheduler jitter, not renewal")
+    assert items * item_seconds > old_fixed_bound * 4, (
+        f"the nested run must outlive the bound by a wide margin or it cannot "
+        f"tell renewal from a run that simply finished first")
+
     monkeypatch.setattr(
         sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S", old_fixed_bound)
     paths = tuple(tmp_path / f"test_nested_{i}.py" for i in range(4))
     paths[0].write_text(
         "import time\n" + "\n".join(
-            f"def test_progress_{i}():\n    time.sleep(0.45)"
-            for i in range(12)) + "\n",
+            f"def test_progress_{i}():\n    time.sleep({item_seconds})"
+            for i in range(items)) + "\n",
         encoding="utf-8",
     )
     for path in paths[1:]:
@@ -1726,7 +1767,7 @@ def test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress(
         f"the nested run lasted only {elapsed:.2f}s, so it did not prove that "
         f"work may cross the old {old_fixed_bound}s wall bound")
     expected = {
-        *(f"{paths[0].name}::test_progress_{i}" for i in range(12)),
+        *(f"{paths[0].name}::test_progress_{i}" for i in range(items)),
         *(f"{path.name}::test_fast" for path in paths[1:]),
     }
     assert set(reports) == expected
@@ -1734,6 +1775,40 @@ def test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress(
                for rows in reports.values())
 
 
+def test_nested_outcome_run_is_killed_when_no_item_can_renew_the_window(
+        monkeypatch, tmp_path):
+    """The other direction: a window that renewals cannot reach still KILLS.
+
+    The test above was made survivable by giving each item a third of the
+    window. On its own that is exactly the shape of a relaxation — a bound
+    widened until the thing under it fits — so the opposite claim is asserted
+    here instead of being left to trust: an item that CANNOT complete inside
+    the window must still be killed as hung.
+
+    This is the pre-2026-08-22 construction of the test above, kept and pointed
+    the other way. It is also the arm that is INSENSITIVE to host load: a slower
+    host makes the kill more certain, never less, which is what a control for a
+    timing test has to be.
+    """
+    window = 0.45
+    monkeypatch.setattr(sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S",
+                        window)
+    path = tmp_path / "test_never_renews.py"
+    path.write_text(
+        f"import time\n\ndef test_one():\n    time.sleep({window * 8})\n",
+        encoding="utf-8",
+    )
+
+    started = time.monotonic()
+    with pytest.raises(AssertionError) as caught:
+        _run_outcome_reports((path,), cwd=tmp_path)
+    elapsed = time.monotonic() - started
+
+    assert "WATCHDOG_STALLED" in str(caught.value), str(caught.value)[:2000]
+    assert elapsed < window * 8, (
+        f"the run took {elapsed:.2f}s, which is the child's whole sleep — the "
+        f"watchdog did not kill it, the child finished on its own and the "
+        f"control proves nothing")
 def test_nested_outcome_chatty_import_without_pytest_events_fails_closed(
         monkeypatch, tmp_path):
     """Captured chatter cannot impersonate a completed pytest transition."""
