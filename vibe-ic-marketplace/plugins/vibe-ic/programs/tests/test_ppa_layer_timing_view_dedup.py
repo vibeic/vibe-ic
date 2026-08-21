@@ -61,13 +61,13 @@ from _ppa import metrics as M      # noqa: E402
 from _ppa import timing as T       # noqa: E402
 
 FIX = _TESTS / "fixtures" / "ppa" / "sta" / "known_answer" / "views"
-_PIN = pytest.mark.xfail(
-    strict=True,
-    reason="F-10: `_ppa/timing.discover_reports` de-duplicates by resolved "
-           "path, so the same report in the stage tree and the report tree is "
-           "opened twice. `_ppa/timing.py` belongs to the record lane "
-           "(PPA_INTERFACES §6); handed to the lander in RESULT.md. Strict: "
-           "goes red the moment the fix lands.")
+# F-10 IS FIXED AND THE PIN IS GONE. Until the record lane landed, the three
+# arms below were `xfail(strict=True)` with the note "goes red the moment the
+# fix lands", handed over in RESULT.md per PPA_INTERFACES §6. The fix landed in
+# `_ppa/timing.discover_reports` (de-duplicate by CONTENT, not by resolved
+# path) and all three xpassed, which is this file's own instruction to delete
+# the pin: "a pin that survives its bug is a second bug, and it is the one that
+# hides the first". The arms stay, unpinned, as the guard against a regression.
 
 
 def _one_report() -> pathlib.Path:
@@ -95,14 +95,33 @@ def _tree_with_the_same_report_in_two_places(tmp_path) -> pathlib.Path:
 
 def test_both_copies_are_discovered(tmp_path):
     """The premise of the finding, stated on its own so that a failure below
-    cannot be explained away as 'discovery only found one'."""
+    cannot be explained away as 'discovery only found one'.
+
+    THE PREMISE IS UNCHANGED; WHERE IT IS OBSERVED MOVED. Discovery still has
+    to REACH both trees — if it only ever saw one, the two arms below would be
+    green over a population of one and would prove nothing. Since the record
+    lane landed F-10 it no longer RETURNS both, because the two files are
+    byte-identical and one measurement recorded twice is not two measurements.
+    So the premise is now read off the pair (kept, collapsed): two candidates
+    were seen, one was kept, and the second was COLLAPSED ONTO THE ONE KEPT
+    rather than never found. `discover_reports` takes the `collapsed` list
+    precisely so this stays observable instead of becoming a silent drop.
+    """
     root = _tree_with_the_same_report_in_two_places(tmp_path)
-    found = T.discover_reports(root)
-    assert len(found) == 2, (
-        f"expected discovery to reach both trees, got {[str(f) for f in found]}")
+    collapsed = []
+    found = T.discover_reports(root, collapsed)
+    assert len(found) + len(collapsed) == 2, (
+        f"discovery reached {len(found) + len(collapsed)} of the two trees; "
+        f"kept={[str(f) for f in found]} collapsed={[str(a) for a, _ in collapsed]}")
+    assert len(found) == 1 and len(collapsed) == 1, (
+        f"the two copies are byte-identical, so exactly one is kept and one "
+        f"collapses; kept={[str(f) for f in found]} "
+        f"collapsed={[(str(a), str(b)) for a, b in collapsed]}")
+    assert collapsed[0][1] == found[0], (
+        "the collapse does not name the report it was collapsed onto, so a "
+        "reader cannot tell a de-duplication from a dropped file")
 
 
-@_PIN
 def test_one_measurement_is_not_counted_twice(tmp_path):
     """F-10, at the key a consumer joins on.
 
@@ -122,7 +141,6 @@ def test_one_measurement_is_not_counted_twice(tmp_path):
         f"{sorted(m for m, _ in dupes)}")
 
 
-@_PIN
 def test_the_duplicate_rows_come_from_the_same_bytes(tmp_path):
     """States WHY the duplication is a defect rather than two views.
 

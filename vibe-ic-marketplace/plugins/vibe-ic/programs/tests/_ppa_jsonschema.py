@@ -54,11 +54,25 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from not_verified_tier import not_verified_reason  # noqa: E402
+from _ppa import schema_validation as _SV  # noqa: E402
 
-try:                                              # pragma: no cover - trivial
-    import jsonschema as _js
-except ImportError:                               # pragma: no cover
-    _js = None
+# THE REFERENCE LIBRARY, ASKED FOR THROUGH THE ONE PLACE THAT NAMES IT.
+# This module used to say `import jsonschema` here. It is not allowed to any
+# more, and the rule is not bookkeeping: `_ppa/schema_validation.py` carries
+# the version probe, the bundled fallback and the refusal, and a second import
+# site is a second place that has to get the version question right — which is
+# exactly the shape of the defect this module was written to fix, one level up.
+# `test_ppa_schema_validation.test_jsonschema_is_imported_in_exactly_one_place`
+# names this file by path when it drifts back.
+#
+# WHY THE REFERENCE AND NOT `resolve()`. The tests this module guards call
+# `jsonschema.Draft202012Validator(...)` THEMSELVES, as an independent
+# cross-check on `_ppa/metrics.validate` and on the shipped schemas. Asking
+# `resolve()` would hand them the bundled engine on a bare host and the
+# cross-check would then be this plugin agreeing with itself. So the question
+# stays "is the REFERENCE implementation usable here", and when it is not the
+# honest verdict is still the declared skip below.
+_js = _SV.reference_library()
 
 def _installed_version():
     """The version, without touching `jsonschema.__version__`.

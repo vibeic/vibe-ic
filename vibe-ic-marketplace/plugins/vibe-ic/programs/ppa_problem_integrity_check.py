@@ -105,6 +105,13 @@ def compare_contracts(baseline: Mapping[str, Any],
     b_ids = baseline.get("identities", {}) or {}
     c_ids = candidate.get("identities", {}) or {}
 
+    # Computed BEFORE the must-match loop because the analysis verdict is only
+    # interpretable next to it: `analysis` differing on its own is a genuinely
+    # different measurement, while `analysis` differing WHEN THE IMPLEMENTATION
+    # DOES is the signature of an artefact filed in the wrong identity.
+    impl = ident.compare(b_ids.get("implementation", {}),
+                         c_ids.get("implementation", {}))
+
     for kind in _MUST_MATCH:
         left, right = b_ids.get(kind), c_ids.get(kind)
         if left is None or right is None:
@@ -136,8 +143,32 @@ def compare_contracts(baseline: Mapping[str, Any],
             candidate_digest=verdict.get("right_digest"),
             differing_members=verdict.get("differing_members")))
 
-    impl = ident.compare(b_ids.get("implementation", {}),
-                         c_ids.get("implementation", {}))
+        # THE DIAGNOSIS, not a second verdict. PPA-C-012 above says the
+        # comparison is invalid and is deliberately unchanged; this says WHY it
+        # is invalid in the one case where the cause is a declaration mistake
+        # rather than a real difference in how the two runs were measured.
+        if kind == "analysis" and impl["verdict"] == "DIFFERENT":
+            moved = [row["role"] for row
+                     in (verdict.get("differing_members", {}) or {}
+                         ).get("artefacts", []) or []]
+            if moved:
+                out.append(C.finding(
+                    "PPA-C-016", C.SEV_FAIL,
+                    "the analysis identity moved WITH the implementation, "
+                    f"which means {', '.join(sorted(moved))} "
+                    f"{'is' if len(moved) == 1 else 'are'} declared under "
+                    "`analysis` but produced BY the implementation. An "
+                    "artefact that varies with the implementation may not sit "
+                    "in `analysis` (PPA_INTERFACES §3.1): `analysis` is the "
+                    "measurement CONFIGURATION -- the corners, the extraction, "
+                    "the activity basis, the scripts that take the reading -- "
+                    "and never the reading. Declaring an STA, DRC or LVS "
+                    "REPORT there makes every legitimate comparison refuse, "
+                    "because of course the reports differ: they are outputs. "
+                    "Move them to `implementation` and this check passes on "
+                    "two runs that really are comparable.",
+                    identity=kind, misfiled_artefacts=sorted(moved)))
+
     if impl["verdict"] == "SAME":
         out.append(C.finding(
             "PPA-C-013",

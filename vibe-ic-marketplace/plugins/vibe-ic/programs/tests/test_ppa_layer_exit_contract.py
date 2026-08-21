@@ -180,6 +180,11 @@ def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
         "ppa_metric_extract.py":       ["--records", a],
         "ppa_page_claim_check.py":     [a, "--claims", a],
         "ppa_pareto_check.py":         ["--candidates", a],
+        # The search-space lane's producer. `--verify <absent>` names a subject
+        # that is not there AND `--programs-dir <empty>` gives it no runner to
+        # measure, so BOTH of its inputs are vacuous and neither can be
+        # satisfied by anything that happens to be on the machine.
+        "ppa_pnr_search_space.py":     ["--verify", a, "--programs-dir", d],
         "ppa_predict_aggregate.py":    ["--cell-count", "0"],
         "ppa_problem_integrity_check.py": ["--baseline", a, "--candidate", a],
         "ppa_report_gen.py":           [a],

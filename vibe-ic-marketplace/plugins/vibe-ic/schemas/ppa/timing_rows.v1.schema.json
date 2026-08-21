@@ -58,12 +58,15 @@
       ]
     },
     "scope": {
-      "description": "All eight keys, always. An omitted key and a null key are different claims to a reader and only one of them is true. null in `clock` means the number is an aggregate over every clock in the view -- never 'unknown clock'.",
+      "description": "All eight keys, always. An omitted key and a null key are different claims to a reader and only one of them is true. null in `clock` means the number is an aggregate over every clock in the view -- never 'unknown clock'. THE THREE PATH KEYS ARE THE ONLY PERMITTED EXTRAS, and only `timing.*.worst_path_slack_ns` carries them: that metric is emitted once per REPORTED PATH, so several rows land in one view with different slacks, and without a key naming the path they collide as one identity holding three values. `additionalProperties` stays false -- an undeclared scope key makes a record incomparable to every other record, which is the failure the eight exist to prevent.",
       "type": "object",
       "required": ["stage", "mode", "process", "voltage_v", "temperature_c",
                    "rc_corner", "clock", "check"],
       "additionalProperties": false,
       "properties": {
+        "path_startpoint": {"type": "string", "minLength": 1, "description": "Where the reported path starts. An IDENTITY: the same in two runs of one design, so two arms' rows for one path carry equal scope and stay comparable."},
+        "path_endpoint": {"type": "string", "minLength": 1, "description": "Where the reported path ends. Emitted with `path_startpoint` or not at all."},
+        "path_ordinal": {"type": "integer", "minimum": 1, "description": "Position in the printed list, used ONLY when the artefact named no endpoints. It separates the rows inside one document but it is not an identity -- reorder the tool's output and it moves -- so a cross-arm comparison over it refuses on differing scope, which is the honest answer for a path that cannot be shown to be the same path."},
         "stage": {"type": ["string", "null"]},
         "mode": {"type": ["string", "null"]},
         "process": {"type": ["string", "null"]},

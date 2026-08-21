@@ -184,6 +184,9 @@ def test_no_ppa_program_lets_a_traceback_reach_the_exit_code(prog, tmp_path):
         "ppa_metric_extract.py": ["--records", j],
         "ppa_page_claim_check.py": [j, "--claims", j],
         "ppa_pareto_check.py": ["--candidates", j],
+        # A well-formed JSON that is not a search space: the audit must REFUSE
+        # it (rc=1 with a [REFUSE] line), never fall over reading it.
+        "ppa_pnr_search_space.py": ["--verify", j],
         "ppa_predict_aggregate.py": ["--cell-count", "1"],
         "ppa_problem_integrity_check.py": ["--baseline", j, "--candidate", j],
         "ppa_report_gen.py": [j],
