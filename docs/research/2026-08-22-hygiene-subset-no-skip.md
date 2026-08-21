@@ -555,3 +555,104 @@ only how it is published.
 `--batch` does not suppress this. `collateral_revert_gate` passes only
 `--repo` and `--rev-range`; no batch flag reaches it, which was checked before
 reporting it as a blocker.
+
+## 11. The base moved twice, and a plain `git fetch` did not tell me
+
+Written after `jmeas3` (8HD-6) reviewed §9 and corroborated it independently.
+
+**Both heads moved while this was being verified.**
+
+```
+origin/main                   a00f53f20 (v1.11.66) -> 81cd5321b (v1.11.68), 30 commits
+origin/land/batch67-assembled 546487a8a -> 8c409aa5a -> 137caae92
+                              137caae92 = "Merge origin/main (v1.11.68) into the batch-67 assembly"
+                              parents: 8c409aa5a (first) + 81cd5321b (second)
+```
+
+**And my remote-tracking ref lied about it.** `git fetch -q origin` in this
+worktree left `origin/land/batch67-assembled` at `8c409aa5a`; the object
+`137caae92` was not even present locally (`git cat-file -t` → bad object) while
+`git ls-remote origin` reported it as the branch tip. The disagreement was only
+visible by asking the REMOTE. A ref that is stale reads exactly like a branch
+that did not move, which is the same shape as every other unmeasured-reads-as-a
+-measured-zero in this repo. **`git ls-remote`, not the tracking ref, when the
+answer decides whether a measurement is about the right tree.**
+
+**What that costs the numbers above, stated rather than left to be found.** §7's
+third arm was taken against `a00f53f20`, which is superseded. The delta this
+branch introduces has not changed, and — checked — v1.11.68 touched NONE of the
+four files this branch edits:
+
+```
+git diff --stat a00f53f20..81cd5321b -- tools/gatekeeper-land.sh \
+    programs/gatekeeper_review.py programs/ci_harness_timeout_ceiling_check.py \
+    tools/test_gatekeeper_land_review_budget.py
+(empty)
+```
+
+so the two re-derived digests are still the right values for this branch's
+lander. But the §7 arms are numbers about a tree nobody will create again, and
+they are labelled as such rather than re-quoted.
+
+**§9 re-verified against the CURRENT head**, not the one it was written about:
+
+```
+137caae92 as it stands : ci_harness_timeout_ceiling_check rc 1 FAIL
+                         seam guard test file: ABSENT
+137caae92 + this branch: merge CLEAN, 0 conflicted files
+                         ci_harness_timeout_ceiling_check rc 0 PASS
+                         the two target tests + the seam guard: 9 passed
+```
+
+The finding survives the base change intact, and so does the remedy.
+
+**Independent corroboration, and the part of it that matters most.** `jmeas3`
+measured the same failure on `137caae92` before merging, and reports the
+observed prefix digest as
+`cfc5dabcce04cd9a335114b36e6e565f4d9198996d457c917181f8a3f2bef419` — which is
+exactly the value `2ce40937c` re-pins to, and which §9 named as the prediction
+BEFORE that measurement existed. A diagnosis that predicts a digest and is then
+handed that digest by someone else's run is a different thing from a plausible
+story, which is why it is recorded here as confirmed rather than as agreed.
+
+## 12. The review reaches hygiene through the PARALLEL runner, which is red on main
+
+`jmeas3` measured, on a quiet host and after ruling out contention by re-running:
+
+```
+tools/ci/repo_hygiene_gates.sh (SERIAL)   : 71 passed, 6 failed, 0 wiring errors
+programs/repo_hygiene_parallel.py, base   : 85 declared, 61 passed, 12 failed, 15 wiring errors
+programs/repo_hygiene_parallel.py, head   : 87 declared, 62 passed, 12 failed, 19 wiring errors
+```
+
+every wiring error being `PROGRESS_PROTOCOL_INCOMPLETE` / watchdog
+`outcome=stalled rc=199`. That is theirs, not mine, and is reported as theirs.
+
+What is verified HERE is that it lands on this branch's evidence path.
+`repo_hygiene_gate` picks its runner as
+
+```python
+parallel = repo / _HYGIENE_PARALLEL_REL
+path = parallel if parallel.is_file() else (repo / _HYGIENE_SCRIPT_REL)
+```
+
+and `_HYGIENE_PARALLEL_REL` resolves to
+`vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py`, which
+IS a file in this tree — so the gate picks **PARALLEL**, not the serial script.
+Resolved by importing the module and asking it, rather than by reading the
+constant and assuming the file exists.
+
+**Consequence for §7, and it cuts toward honesty rather than away.** The
+headline there is `89/89 gate(s) ran in 193s`, and the same output reported
+`11 NOT CHECKED (not a pass)` alongside 9 failing gates; the 631.5 s run in §6
+reported 10 wiring errors and a shard whose watchdog ended `stalled` at rc 199.
+Those were recorded at the time as "this tree's state". `jmeas3`'s base-vs-head
+pair upgrades that from an assumption to a measurement: the wiring errors are
+present on `origin/main` too, so they are NOT produced by removing the record
+handover or by moving the budget. Making the review RUN the set does not create
+them — it runs into them.
+
+This is worth stating plainly because it is the one way this branch could be
+blamed for someone else's red: it is the change that makes the hygiene set
+actually execute inside the review, so it is the change present the first time
+anyone SEES those wiring errors from the review's mouth.
