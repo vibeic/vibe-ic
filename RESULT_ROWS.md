@@ -123,6 +123,15 @@ other programs:
 The deadline I opened yesterday, and the eight rows I wrote today, are in that
 same class right now.
 
+> **CLOSED IN THIS BRANCH — the paragraphs above are the measurement, not the
+> current state.** The owner ruled on 2026-08-21: wire it into
+> `tools/gatekeeper-land.sh`, budget four minutes, and a review that cannot
+> decide returns rc 2 UNDETERMINED and BLOCKS. That is now the
+> `full:gatekeeper-review` unit. The measurement is kept rather than deleted
+> because it is the evidence for why the wiring was needed, and because a report
+> that quietly rewrites what it found reads as if it had never been wrong — but
+> read it as of a00f53f20's parent, not as of this branch's head.
+
 **On the substance, six rows and two decisions.** Six of the eight went red in
 the last 48 hours, from three commits, each of which added programs and left one
 clause unfinished: `41bfd8a12` shipped `closed_loop_edge_check`,
@@ -135,11 +144,18 @@ small, local, owned, dated.
 
 The other two are different in kind. `L-doc field producer` and `evidence
 citation resolves` both went red at `c5d7f2d00`, the commit that moved published
-results to `vibeic/benchmark-data`, and their fix is in **another repository**. A
-dated row in this repo cannot make a change happen in that one. For those two a
-row is the wrong instrument, and the honest options are to have the checkers
-declare the external fields optional, or to accept that these two gates cannot
-be green here and say so in the gate rather than in a ledger.
+results to `vibeic/benchmark-data`.
+
+> **SUPERSEDED — and I was wrong about these two.** I wrote here that "for those
+> two a row is the wrong instrument" because their fix is in another repository.
+> The owner ruled: adjudicate, do not renew. Adjudicating them showed the
+> premise was too quick. Both populations are non-empty here (48 L-docs; 105
+> citations), so both are REAL FINDINGS that stay red — and one quarter of the
+> second one was not in another repository at all but a defect in the gate,
+> whose scope predicate stopped reaching this repo when the corpus became a
+> sibling of it rather than a child. Their rows stand, already expired, which is
+> the correct state for "stays red until fixed".
+> See `docs/research/2026-08-21-corpus-gate-adjudication.md`.
 
 **And the part about how you have been working, since you asked for it written
 down.** The flag is not the finding. The finding is that the flag did not
@@ -150,21 +166,40 @@ version-bearing landings. Landing fast is not the problem and I would not stop
 it. What is missing is a step that closes the loop inside the same day, and
 right now the repo has one — it is just wired the weakest way there is.
 
-## REQUESTS TO THE LANDER
+## WHAT HAPPENED TO THE FIVE REQUESTS
 
-1. **Land the rows.** They change nothing today except that
-   `gatekeeper_review` now returns rc 1 for a named reason instead of a general
-   one — which is only visible if something runs it.
-2. **Wire `gatekeeper_review` to something.** This is the request that makes the
-   other work real, and it is not mine to place: hook, workflow, or
-   `gatekeeper-land.sh`. Naming the runner is a decision about how long a
-   landing may take, which is yours.
-3. **Rule on the two corpus gates** rather than renewing their rows. They are
-   already 291 commits and 97 landings old and their fix is not in this repo.
-4. **Substitute issue numbers for `owner: repo-gatekeeper`** if you want them —
-   one line each. I did not open issues; that is an outward-facing write and it
-   is your queue.
+All five are answered. Kept as a record of who decided what, rather than deleted.
+
+1. ~~Land the rows.~~ Still the ask; they are in this branch.
+2. ~~Wire `gatekeeper_review` to something.~~ **RULED and DONE** — the lander,
+   240 s, rc 2 UNDETERMINED blocks. Fed this run's hygiene record rather than
+   running the set twice, because with the corpus bound the review's own run
+   measured 214.6 s against a 240 s budget and 275 s standalone in another run:
+   re-running it makes the timeout a coin flip decided by load.
+3. ~~Rule on the two corpus gates.~~ **RULED and ADJUDICATED** — both real
+   findings, both stay red, neither renewed.
+4. ~~Substitute issue numbers.~~ **RULED: no.** `owner: repo-gatekeeper` stays;
+   opening issues is a write to a public repository and carries the NDA
+   constraint.
 5. Three rows come due within about five commits of each other
    (`checker execution wiring` and `gates are wired to something` have 5 left,
    `d3` has 40). At the current rate that is under two hours and half a day. I
    have not padded them to buy room.
+
+## WHAT IS ACTUALLY OUTSTANDING
+
+1. **This branch needs a PREPARE/ACTIVATE pair**, because it moves three
+   protected paths. The PREPARE is authored and pushed as
+   `agent/jrows-prepare-review-wired`; this branch is the ACTIVATE. Order:
+   PREPARE first.
+   I earlier reported `tools/gatekeeper-land.sh` as unprotected. That was wrong
+   — my check read `current.files` as a mapping when it is a list of objects, so
+   a membership test matched nothing and printed a confident false negative.
+2. **`main` is in a state its own manifest refuses**, and it is not this
+   branch's doing: 46 of 47 protected paths match `next`, and
+   `landing_merge_verdict.py` drifted when the deadline landed at v1.11.63/64
+   without the manifest moving with it. The PREPARE re-authorises it by zero
+   bytes. Any protected-path landing is blocked until that lands.
+3. **`published-evidence index honest` fails on clean main when the corpus is
+   bound** and passes unbound. Not mine, and it has no row: a row is true against
+   a stated corpus state, and nothing on the landing path states one.
