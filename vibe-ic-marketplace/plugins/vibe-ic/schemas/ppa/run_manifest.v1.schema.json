@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vibeic.ppa.run_manifest.v1",
+  "title": "vibeic.ppa.run_manifest.v1",
+  "description": "What a run READ. Deliberately carries no clock, hostname or pid: a manifest that differs between two byte-identical runs cannot be evidence that they were identical, because the reader has to decide which differences do not count. When a run happened belongs in the run log.",
+  "type": "object",
+  "required": ["schema", "root", "images", "tools", "artefacts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "vibeic.ppa.run_manifest.v1"},
+    "root": {
+      "type": "string",
+      "description": "A LABEL for the root the paths below are relative to, not a host path. An absolute path here would make one run's identity unreproducible on any other machine."
+    },
+    "images": {"type": "array", "items": {"$ref": "#/$defs/image"}},
+    "tools": {"type": "array", "items": {"$ref": "#/$defs/tool"}},
+    "artefacts": {"type": "array", "items": {"$ref": "#/$defs/artefact"}}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "artefact": {
+      "type": "object",
+      "description": "Always present for every declared artefact. An absent row and a NOT_MEASURED row read identically to a human scanning a table and only one of them is honest about having been asked.",
+      "required": ["role", "path", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "not": {"pattern": "^/"},
+          "description": "Relative to the declared root. Absolute paths are host state."
+        },
+        "status": {"enum": ["MEASURED", "NOT_MEASURED"]},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "bytes": {"type": "integer", "minimum": 0},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "MEASURED"}}, "required": ["status"]},
+          "then": {
+            "required": ["sha256", "bytes"],
+            "not": {"required": ["reason"]},
+            "description": "A measured artefact has a hash and a size and no reason: there is nothing to excuse."
+          }
+        },
+        {
+          "if": {"properties": {"status": {"const": "NOT_MEASURED"}}, "required": ["status"]},
+          "then": {
+            "required": ["reason"],
+            "not": {"anyOf": [{"required": ["sha256"]}, {"required": ["bytes"]}]},
+            "description": "An unread artefact carries WHY. It must not carry a hash or a byte count: an empty file has a real sha256 and a real size of zero, and if an unread one could carry either then 'I could not read it' and 'I read it and it was empty' would be indistinguishable."
+          }
+        }
+      ]
+    },
+    "image": {
+      "type": "object",
+      "required": ["role", "ref", "form", "floating", "verdict_bearing", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {"type": "string"},
+        "ref": {"type": "string"},
+        "form": {"enum": ["digest", "bare_digest", "tag", "untagged", "malformed"]},
+        "floating": {
+          "type": "boolean",
+          "description": "True when the reference does not pin bytes. A floating reference that carries a verdict is refused by ppa_contract_check; a floating reference that carries none is only a note."
+        },
+        "verdict_bearing": {"type": "boolean"},
+        "repository": {"type": "string"},
+        "digest": {"$ref": "#/$defs/digest"},
+        "version": {"$ref": "#/$defs/image_version"}
+      }
+    },
+    "image_version": {
+      "type": "object",
+      "description": "Read from the image's own OCI label, never mirrored into this source tree. A version written down in source is a copy that goes stale the next time the image is rebuilt, and then the source asserts something about an image it has never opened.",
+      "required": ["status", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["MEASURED", "NOT_MEASURED"]},
+        "label": {"const": "org.opencontainers.image.version"},
+        "value": {"type": "string", "minLength": 1},
+        "source": {"const": "oci_label"},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "MEASURED"}}, "required": ["status"]},
+          "then": {"required": ["value", "source"]}
+        },
+        {
+          "if": {"properties": {"status": {"const": "NOT_MEASURED"}}, "required": ["status"]},
+          "then": {"required": ["reason"], "not": {"required": ["value"]}}
+        }
+      ]
+    },
+    "tool": {
+      "type": "object",
+      "required": ["name", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "role": {"type": "string"},
+        "status": {"enum": ["MEASURED", "NOT_MEASURED"]},
+        "version": {"type": "string", "minLength": 1},
+        "commit": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "NOT_MEASURED"}}, "required": ["status"]},
+          "then": {"required": ["reason"], "not": {"required": ["version"]}}
+        }
+      ]
+    }
+  }
+}

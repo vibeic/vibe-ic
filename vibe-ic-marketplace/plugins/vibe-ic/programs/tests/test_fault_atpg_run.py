@@ -58,19 +58,15 @@ def test_clock_arg_required(tmp_path):
 
 
 # --- image-resolution pinning ------------------------------------------------
-# The fork fallback tags must be PINNED (vibeic-eda:X.Y.Z), never :latest — a
-# floating tag can silently resolve to a stale local image whose tool behavior
-# no longer matches what the plugin was verified against. The pinned value is
-# kept in sync with tools/vibeic-eda/VERSION by sync_image_version.py (this
-# file is registered in its INSTALL_DOC_CANDIDATES).
-
-def _find_version_file():
-    for up in Path(__file__).resolve().parents:
-        c = up / "tools" / "vibeic-eda" / "VERSION"
-        if c.is_file():
-            return c
-    return None
-
+# A floating `:latest` must never reach `docker run` from this program: it does
+# not consult the registry, so it means "whatever this machine pulled, whenever".
+# `_eda_image.resolve()` answers a digest, or a named local tag, and says so on
+# stderr when it degrades.
+#
+# It used to be a literal kept in step with `tools/vibeic-eda/VERSION` by
+# `sync_image_version.py`. Both are deleted — that file held vibeic-eda's version
+# number inside this repo, so every image release needed a PR here — and the
+# helper that located it went with them, unused.
 
 def test_no_floating_fork_image_tag():
     """A floating `:latest` must never reach `docker run` from this program.

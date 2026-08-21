@@ -183,7 +183,7 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 176<!--figure:blocking_clauses--> blocking clauses over
+LIVE, not remembered: 177<!--figure:blocking_clauses--> blocking clauses over
 68<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name
@@ -461,25 +461,6 @@ def _w(root: Path, rel: str, content) -> Path:
 
 def _f_empty(p: Path) -> None:
     """Nothing was produced at all. The commonest real failure."""
-
-
-def _f_crosslayer_search_undeclared(p: Path) -> None:
-    """A cross-layer search that SNAPSHOTTED a baseline and reported nothing.
-
-    Step 1.6x's gate is unconditional on purpose — its own yaml comment records
-    that a `files_exist` condition was refused by
-    `flow_condition_reachability_check` as "a check disabled by exactly the
-    situation it was written for". The consequence is that on an EMPTY project
-    the checker correctly answers NOT_APPLICABLE and exits 0, so EMPTY cannot
-    reach its FAIL branch and the step read as "gate CANNOT FAIL".
-
-    That is a limit of the FIXTURE, not of the gate: the program's fail branch
-    is one marker away. Writing the baseline snapshot alone says a search ran
-    and declared no rewrite-fidelity report, which is the defect the step
-    exists for. MEASURED: `crosslayer_rewrite_equivalence_check .` exits 1 with
-    CLX_BASELINE_PRESENT_NO_REPORT on exactly this tree.
-    """
-    _w(p, "reports/crosslayer/baseline_rtl", "phase2/stage1/rtl/top.v\n")
 
 
 def _f_rtl_bad(p: Path) -> None:
@@ -943,8 +924,32 @@ def _f_power_over_budget(p: Path) -> None:
     330 uW against a declared 100 uW: 3.3x over. Chip- and PDK-AGNOSTIC — a
     watt figure, a micro-watt budget, and the design's own number as the only
     authority.
+
+    A THIRD HALF BECAME LOAD-BEARING IN v1.11.22 AND THIS FIXTURE DID NOT SAY SO
+    ----------------------------------------------------------------------------
+    `POWER_ANALYSIS_MODE: vectorless_sdc` is not decoration on the report above.
+    Until v1.11.22 the gate compared any watt figure to the budget; it now
+    refuses — rc 2, INCOMPLETE — a figure whose ACTIVITY BASIS it cannot derive,
+    because a vectorless estimate and a VCD-driven measurement are both "total
+    power" and are not the same number. MEASURED on this fixture with the mode
+    line removed, verbatim:
+
+        rc 2  INCOMPLETE: total power was NOT compared against anything —
+              missing authority: the total-power record's activity basis is
+              'UNSTATED' ...
+
+    and rc 2 is a VACUOUS_PASS to `check_step`, so the blocking Step-33 clause
+    became one no input could redden — silently, because the fixture still
+    "worked" in the sense of being read. `test_d2_gate_has_a_reachable_fail`
+    [step33] is the mutation arm: delete the mode line and it goes red naming
+    this clause. `vectorless_sdc` and NOT a vector mode deliberately — a
+    declared vector basis is CONTRADICTED unless the transcript corroborates it
+    (`_ppa/power.py`: zero published vector report in this repository does), and
+    a fixture that has to fake a corroborating annotation count would be
+    asserting an activity model it never ran.
     """
     _w(p, "reports/phase2/power.rpt",
+       "POWER_ANALYSIS_MODE: vectorless_sdc\n"
        "Group                  Internal  Switching    Leakage      Total\n"
        "                          Power      Power      Power      Power (Watts)\n"
        "-----------------------------------------------------------------\n"
@@ -1329,6 +1334,79 @@ def _f_macro_obs_spanned(p: Path) -> None:
     _write_macro_obs_layout(p, spanning=6)
 
 
+def _f_pad_decl_partial(p: Path) -> None:
+    """A tape-out declaration whose pad-ring section was STARTED and abandoned.
+
+    Reddens the Step-15.5ic clause
+    ``pad_assignment_gen . --json reports/phase3/pad_assignment.json``,
+    wired in vibe-ic#1410/cpath as the author of
+    ``phase3/stage3/pnr/pad_assignment.json`` — a path that had two references
+    in the whole repository before that change and both were READERS.
+
+    EMPTY cannot reach it, and the reason is the program working correctly.
+    With no declaration and no operator slot file it answers NOT_ASKED at rc 2:
+
+        NOT_ASKED: no source answers any of the 8 questions of declaration
+        section 2B_pad_ring and no operator slot file pins a per-side pad list
+
+    which the flow reads as its disclosed-skip tier. That is "nobody was asked
+    for a pin-out", which is not a statement about a pad ring, and it is the
+    tier this suite refuses to count as a red. It is also the state EVERY tree
+    in this repository is in, which is exactly why the clause could be wired
+    without moving any existing verdict.
+
+    So the fixture has to make the declaration look ANSWERED and INCOMPLETE.
+    It writes a well-formed declaration — one the declaration's own validator
+    accepts, because an incomplete declaration is deliberately NOT a malformed
+    one — carrying SEVEN of section 2B's eight answers and leaving
+    ``pad_site_name`` at ``NOT_DETERMINED``. The program's split between an
+    ABSENT config and a HALF-WRITTEN one then fires.
+
+    MEASURED, verbatim:
+
+        rc 1  declaration section 2B_pad_ring was STARTED (7 of 8 question(s)
+              answered) and still owes 1 of the 13 variables `pad_ring_gen`
+              requires ... Still owed: PAD_SITE_NAME (declaration question
+              pad_site_name)
+
+    Chosen over an unreadable declaration deliberately: that branch reddens on
+    the FILE, and a program that did nothing but try to parse its input would
+    pass it. This branch is one the program has to read the CONTENT to reach,
+    and it is the exact behaviour the change exists for — a NOT_DETERMINED
+    field is NAMED, never guessed, because a pad site invented here would be
+    indistinguishable in the artefact from a real pin-out.
+
+    Chip- and PDK-AGNOSTIC: the instance, master and site names are synthetic
+    and no design, vendor or process literal appears. No oracle is consulted.
+    """
+    decl = p / "input" / "submission_template" / "tapeout_declaration.json"
+    decl.parent.mkdir(parents=True, exist_ok=True)
+    pads = [f"pad_{s}{i}" for s in "senw" for i in range(2)]
+    answers = {
+        "deliverable": "DIE",
+        "pad_order_by_side": {"south": pads[0:2], "east": pads[2:4],
+                              "north": pads[4:6], "west": pads[6:8]},
+        # "pad_site_name" is DELIBERATELY ABSENT — it is the whole fixture.
+        "pad_corner_site_name": "io_corner_site",
+        "pad_edge_spacing_um": 10,
+        "pad_rotations": {"horizontal": "R0", "vertical": "R90",
+                          "corner": "R0"},
+        "pad_corner_master": "pad_corner",
+        "pad_fillers": ["pad_fill1"],
+        "pad_signal_map": {n: n[4:] for n in pads},
+    }
+    # Built through the declaration's OWN constructor and merge, so the fixture
+    # cannot drift into a shape the module would refuse for an unrelated reason
+    # and redden this clause by accident.
+    import _tapeout_declaration as _TD
+    doc = _TD.blank_declaration()
+    doc, ignored = _TD.merge_answers(doc, answers)
+    assert not ignored, ignored
+    assert _TD.validate(doc) == [], _TD.validate(doc)
+    assert doc["answers"]["pad_site_name"] == _TD.NOT_DETERMINED
+    decl.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+
 def _f_die_unfinished(p: Path) -> None:
     """The die-finishing report claims a seal ring the run did not leave behind.
 
@@ -1456,9 +1534,43 @@ def _f_extract_illegal_overlap(p: Path) -> None:
        ".subckt top a b\nM1 a b 0 0 nfet\n.ends\n")
 
 
+def _f_crosslayer_refuted(p: Path) -> None:
+    """A cross-layer search whose candidate is NOT the baseline RTL.
+
+    Step 1.6x landed in v1.11.15 with a blocking gate whose FAIL nothing proved
+    reachable, and EMPTY cannot reach it BY DESIGN. The gate's own docstring
+    settles why: it was first written CONDITIONAL on the baseline snapshot and
+    `flow_condition_reachability_check` refused that shape in one line — "a
+    check disabled by exactly the situation it was written for" — so it runs
+    unconditionally and answers `NOT_APPLICABLE` for a design that never ran a
+    search. On EMPTY that is the honest answer, not a defect, which is exactly
+    the position `_f_a0_skipped` was built for one gate over.
+
+    So the fixture has to make a search look ATTEMPTED and REFUTED: the
+    baseline snapshot the search writes before it touches a lever, plus a
+    rewrite-fidelity report whose status says the candidate diverges. That is
+    the step's own closed_loop trigger, spelled in the yaml — "the candidate
+    RTL is not the baseline RTL ... The candidate is DISCARDED and step 1's RTL
+    stands" — so reddening here is the gate doing the one job it exists for,
+    not an artificial break.
+
+    MEASURED: rc 1, `CLX_NOT_EQUIVALENT`. Reached through the program's own
+    status ladder rather than by malforming the file — an unparseable report
+    would redden the clause too, and would prove only that the gate can crash.
+    """
+    (p / "reports" / "crosslayer").mkdir(parents=True, exist_ok=True)
+    (p / "reports" / "crosslayer" / "baseline_rtl").write_text(
+        "cross-layer baseline snapshot marker\n", encoding="utf-8")
+    _w(p, "reports/crosslayer/rewrite_equivalence.json",
+       {"status": "NOT_EQUIVALENT",
+        "compared_points": 4,
+        "unproven_points": 0,
+        "explanation": ("candidate diverges from baseline at 1 of 4 compared "
+                        "points")})
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
-    "CROSSLAYER_SEARCH_UNDECLARED": _f_crosslayer_search_undeclared,
     "RTL_BAD": _f_rtl_bad,
     "ANALOG_P3": _f_analog_p3,
     "A0_SKIPPED": _f_a0_skipped,
@@ -1492,6 +1604,8 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "DIE_UNFINISHED": _f_die_unfinished,
     "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
     "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
+    "CROSSLAYER_REFUTED": _f_crosslayer_refuted,
+    "PAD_DECL_PARTIAL": _f_pad_decl_partial,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1500,16 +1614,33 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
 #: not redden it) fails loudly rather than silently keeping a stale recipe.
 #: Clauses absent from this table use ``EMPTY``.
 CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
-    # Step 1.6x's single blocking clause. EMPTY reaches NOT_APPLICABLE -> rc 0,
-    # which is the CORRECT answer for a design that ran no cross-layer search
-    # and is therefore no answer at all to "can this gate fail?". The fixture
-    # writes the baseline snapshot only: a search that ran and declared no
-    # rewrite-fidelity report. See _f_crosslayer_search_undeclared.
-    ("1.6x", 'crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json'): "CROSSLAYER_SEARCH_UNDECLARED",
     # vibe-ic#700 wired this into D1. EMPTY cannot redden it: absence of the
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
     ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
+    # Step 1.6x (v1.11.15) — its single blocking clause answers
+    # NOT_APPLICABLE on EMPTY and banks a PASS, so nothing proved its FAIL
+    # reachable and the cell was red on main from the version it arrived in.
+    # See `_f_crosslayer_refuted` for why EMPTY cannot reach it by design.
+    # TWO LANES MAPPED THIS SAME CLAUSE AND THE MERGE KEPT ONE, ON EVIDENCE.
+    # `CLAUSE_FIXTURE` is a dict, so both entries under one key meant the second
+    # silently won and the first was dead code that read as live — the merge
+    # hazard, before the question of which fixture is better.
+    #
+    # BOTH REDDEN, MEASURED through `_evaluate_clause` on this tree:
+    #   EMPTY                        tier=PASS  (NOT_APPLICABLE — correct, and
+    #                                            therefore no answer to "can it
+    #                                            fail?")
+    #   CROSSLAYER_SEARCH_UNDECLARED tier=FAIL  CLX_BASELINE_PRESENT_NO_REPORT
+    #   CROSSLAYER_REFUTED           tier=FAIL  CLX_NOT_EQUIVALENT
+    #
+    # Neither is graded ABSENCE_RED, so the choice is not about which counts. It
+    # is about what each PROVES. The first reddens on a procedural precondition
+    # — a search ran and declared nothing. The second reddens on the relation
+    # the step exists for, the candidate diverging from the baseline, reached
+    # through the program's own status ladder rather than by malforming a file.
+    # The second is kept.
+    ("1.6x", "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"): "CROSSLAYER_REFUTED",
     # This change moves `reports/phase1/extraction_coverage_report.{md,json}`
     # onto D1 and wires this clause to read it. EMPTY cannot redden it, and for
     # the SAME reason `LDOC_TODO` exists at all: with no `generated_docs/` the
@@ -1559,6 +1690,17 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # at the tree to reach.
     ("26.5ic", "die_finishing_check . --json "
                "reports/phase3/die_finishing.json"): "DIE_UNFINISHED",
+    # vibe-ic#1410/cpath wired `pad_assignment_gen` into 15.5ic as the AUTHOR
+    # of `phase3/stage3/pnr/pad_assignment.json`, which nothing had ever
+    # written. EMPTY answers NOT_ASKED at rc 2 — the disclosed-skip tier —
+    # because with no declaration and no slot file nobody has been asked for a
+    # pin-out, and that is the state every tree in this repository is in. The
+    # fixture makes the declaration look ANSWERED AND INCOMPLETE, which is the
+    # branch the change exists for: the owed field is NAMED, never guessed.
+    # See `_f_pad_decl_partial` for the measured rc and message, and for why
+    # the half-written declaration is chosen over an unreadable one.
+    ("15.5ic", "pad_assignment_gen . --json "
+               "reports/phase3/pad_assignment.json"): "PAD_DECL_PARTIAL",
     ("37.5ip", "digital_hardmacro_check . --json "
                "reports/phase3/digital_hardmacro.json"):
         "HARDMACRO_KIT_INCOMPLETE",

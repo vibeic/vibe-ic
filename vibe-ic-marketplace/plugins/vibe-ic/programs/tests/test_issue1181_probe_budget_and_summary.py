@@ -26,23 +26,41 @@ OTHER design's remedy and importing them would smuggle it in through the tests:
     it would be the claim wearing a test.
 
 WHY THE FIRST TEST BELOW IS THE ONE THIS CLUSTER CAN LEAST AFFORD TO LOSE.
-Every docstring in the #1181/#1272 cluster CITES the mechanism — that
-`--timeout-method=thread` cannot interrupt a blocking `subprocess.wait`, so
-pytest-timeout dumps stacks and calls `os._exit(1)`, killing the interpreter
-before a summary is written. #1234 was the only PR that MEASURED it. The
+Every docstring in the #1181/#1272 cluster CITES a mechanism: a session that is
+KILLED for outliving its bound is killed mid-run, so it writes no summary line
+and no junit, and every result it had already earned is destroyed with it. The
 consequence is not one slow test: the invocation produces NO SUMMARY LINE and
 ZERO `FAILED` lines, which greps as a clean sweep. Two full-suite sweeps of
-clean main died that way today at 22% and 23%, and the first reading of the
-wreckage was "0 failing nodes" on a suite whose 63x9 matrix alone is 26 red.
+clean main died that way at 22% and 23%, and the first reading of the wreckage
+was "0 failing nodes" on a suite whose 63x9 matrix alone is 26 red.
 
-If a future pytest-timeout stopped calling `os._exit`, this test says so rather
-than leaving the cluster's premise standing on a citation.
+THE MECHANISM IS PINNED HERE, AND IT NO LONGER NAMES pytest-timeout.
+#1234 measured the claim through `-p pytest_timeout --timeout-method=thread`,
+which cannot interrupt a blocking `subprocess.wait` and therefore dumps stacks
+and calls `os._exit(1)`. That was a true measurement of a plugin this repo has
+since RETIRED — `programs/pytest_per_file_junit.py` ("There is deliberately no
+pytest-timeout guard on the landing path"), `tools/liar_census.py`,
+`tools/ci/repo_hygiene_gates.sh`, and two live tests in `tools/ci/` that forbid
+its return. MEASURED 2026-08-20: the plugin is absent from the anchored runtime
+`ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…d01ff` and from its newer 0.3.13 tag,
+and `-p <missing plugin>` is a hard import that dies in pytest's pre-parse — so
+these two tests were RED in the image and GREEN on a host carrying an ambient
+pip package that nothing in this tree declares. A test that can only run where
+the runtime is not is not a pin; it is a second disagreement.
+
+What is carried forward is the part that survives the retirement, because it is
+a property of the KILL and not of whatever delivers it: the two tests below now
+bound the session EXTERNALLY, with `subprocess.run(timeout=...)` — the idiom
+this repo replaced the plugin with — and pin BOTH directions, that the killed
+session loses the record its passing test had already earned, and that the same
+work inside a bound it fits keeps every result.
 """
 from __future__ import annotations
 
 import subprocess
 import sys
 import textwrap
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parents[1]
@@ -51,58 +69,85 @@ import gate_discloses_denominator_check as G  # noqa: E402
 
 _T = 55
 
+#: The bound the killed-session test puts on ITSELF, with
+#: `subprocess.run(timeout=...)`. Well below `_T`, which stays this file's outer
+#: safety net for the sessions that are expected to finish on their own.
+_KILL_S = 5
+
 
 # --------------------------------------------------------------------------
 # the mechanism — design-independent, carried from #1234 unchanged
 # --------------------------------------------------------------------------
-def test_pytest_timeout_thread_method_really_does_exit_the_process(tmp_path):
-    """The claim this whole cluster rests on, measured rather than cited."""
+def test_a_session_killed_for_outliving_its_bound_loses_the_earned_result(
+        tmp_path):
+    """The claim this whole cluster rests on, measured rather than cited.
+
+    `test_a` PASSES before `test_slow` starts. The session is then killed for
+    outliving its bound, and the junit it was asked for does not exist — so
+    `test_a`'s pass is gone with it. That is the whole of #1181's consequence
+    and the whole reason `pytest_per_file_junit.py` exists.
+    """
+    junit = tmp_path / "killed.xml"
     t = tmp_path / "test_x.py"
     t.write_text(textwrap.dedent("""\
         import subprocess
         def test_a():
             assert True
         def test_slow():
-            subprocess.run(["sleep", "6"])
+            subprocess.run(["sleep", "30"])
     """))
-    p = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "pytest_timeout",
-         "--timeout=2", "--timeout-method=thread", str(t)],
-        capture_output=True, text=True, timeout=_T,
-        env={"PATH": "/usr/bin:/bin", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
-    out = p.stdout + p.stderr
-    assert "Timeout" in out, out
-    # the whole point: no summary, so even `test_a`'s pass is lost
-    assert not any(l.strip().startswith(("1 passed", "2 passed", "1 failed"))
-                   for l in out.splitlines()), (
-        "pytest wrote a summary despite the thread-method timeout — the "
-        f"premise of #1181 no longer holds:\n{out}")
+    killed = False
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+             "-o", "junit_family=xunit1", f"--junitxml={junit}", str(t)],
+            capture_output=True, text=True, timeout=_KILL_S,
+            env={"PATH": "/usr/bin:/bin", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
+    except subprocess.TimeoutExpired:
+        killed = True
+    assert killed, (
+        f"the session finished inside {_KILL_S} s — the slow fixture is no "
+        "longer slow and this test proves nothing")
+    # THE WHOLE POINT: `test_a` had already passed and its record is gone.
+    assert not junit.is_file(), (
+        "a session killed mid-run wrote its junit anyway — the premise of "
+        "#1181 no longer holds and the per-file driver is answering a defect "
+        "that does not exist")
 
 
 def test_a_bound_the_work_fits_restores_the_summary(tmp_path):
     """The other half of the mechanism: once the work is inside the bound, the
-    summary comes back and the other files in the invocation keep their result.
+    summary comes back and everything in the invocation keeps its result.
 
     #1234 demonstrated this by widening the bound and this PR by shrinking the
     work; on a fixture the two are the same fact, which is why this survives the
     arbitration while the assertion about the real file's marker does not.
+
+    THE NEGATIVE CONTROL for the test above, on the SAME shape: identical argv,
+    identical fixture apart from how long the slow test sleeps. If both tests
+    were to pass for a reason other than the kill — a broken `--junitxml`, say —
+    this one would fail too.
     """
+    junit = tmp_path / "kept.xml"
     t = tmp_path / "test_y.py"
     t.write_text(textwrap.dedent("""\
-        import subprocess, pytest
+        import subprocess
         def test_a():
             assert True
-        @pytest.mark.timeout(30)
         def test_slow():
-            subprocess.run(["sleep", "6"])
+            subprocess.run(["sleep", "1"])
     """))
     p = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "pytest_timeout",
-         "--timeout=2", "--timeout-method=thread", str(t)],
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         "-o", "junit_family=xunit1", f"--junitxml={junit}", str(t)],
         capture_output=True, text=True, timeout=_T,
         env={"PATH": "/usr/bin:/bin", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
     assert p.returncode == 0, p.stdout + p.stderr
     assert "2 passed" in p.stdout, p.stdout
+    assert junit.is_file(), p.stdout + p.stderr
+    names = sorted(tc.get("name") for tc
+                   in ET.parse(str(junit)).getroot().iter("testcase"))
+    assert names == ["test_a", "test_slow"], names
 
 
 # --------------------------------------------------------------------------
