@@ -42,6 +42,7 @@ a published CELL is, which is exactly what `_published_corpus` asks.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -68,8 +69,17 @@ needs_rdl = pytest.mark.skipif(
 # helpers
 # ---------------------------------------------------------------------------
 def _run(*args: str) -> subprocess.CompletedProcess:
+    # NEVER INHERIT THE DEVELOPER'S OWN CORPUS POINTER. Since v1.10.56 the
+    # published L4 documents live in their own repository and `audit-corpus`
+    # ADDS `$VIBE_IC_BENCHMARK_DATA` to whatever `--root` names, so a machine
+    # with the pointer exported would audit a second, unrelated corpus in every
+    # fixture case below — a suite whose verdict depends on the operator's
+    # environment, which is the host-dependence these tests exist to pin down.
+    # The corpus tests pass their root explicitly through `_corpus_root()`.
+    env = dict(os.environ)
+    env.pop("VIBE_IC_BENCHMARK_DATA", None)
     return subprocess.run([sys.executable, str(PROG), *args],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=env)
 
 
 def _export(tmp_path: Path, l4: dict, *extra: str):

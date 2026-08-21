@@ -32,6 +32,19 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import tracked_symlink_target_present_check as T                # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_corpus_pointer(monkeypatch):
+    """Every case below builds its own fixture repo and calls `main()` IN THIS
+    PROCESS, so it reads the real environment.
+
+    Since #1710's treatment landed here the pointer OVERRIDES `--root`/`--subdir`.
+    A developer or CI job with `VIBE_IC_BENCHMARK_DATA` exported would therefore
+    have every fixture below silently replaced by their corpus clone, and the
+    file would report about a tree it never built.
+    """
+    monkeypatch.delenv(T.CORPUS_ENV, raising=False)
+
+
 def _repo(tmp_path):
     """A real git repo — the check reads git's index, so a fixture must too."""
     r = tmp_path / "repo"

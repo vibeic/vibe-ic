@@ -339,7 +339,9 @@ def _verdict_line(out: str) -> str:
     lines = [ln.rstrip() for ln in (out or "").splitlines() if ln.strip()]
     if not lines:
         return "(no output)"
-    return re.sub(r"\bin\s+\d+(?:\.\d+)?s\s*$", "in <TIME>s", lines[-1])
+    return re.sub(
+        r"\bin\s+\d+(?:\.\d+)?s(?:\s+\(\d+:\d{2}:\d{2}\))?\s*$",
+        "in <TIME>s", lines[-1])
 
 
 def _completed_attestation(label: str, proc: subprocess.CompletedProcess,

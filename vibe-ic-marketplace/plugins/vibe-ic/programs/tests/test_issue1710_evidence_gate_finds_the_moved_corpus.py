@@ -52,13 +52,20 @@ PROG = PROGRAMS / "benchmark_evidence_structure_check.py"
 ENV = "VIBE_IC_BENCHMARK_DATA"
 
 
+# 60 s, not 180 (vibe-ic#1711). 180 was the WHOLE pytest session budget, and
+# with `--timeout-method=thread` a bound that large can never fire as a TEST
+# failure: pytest kills the SESSION first, `--maxfail` stops applying, and every
+# other file in the subset loses its verdict. 60 s is the ceiling
+# `ci_harness_timeout_ceiling_check` resolves (180 // 3) and the bound 464 other
+# call sites in this corpus already use. MEASURED here: 8 passed in 0.69 s,
+# slowest item 0.04 s — 60 s is ~1500x that, so it cannot fire on passing work.
 def _run(*args: str, env_tree: str | None = None, cwd: Path | None = None):
     env = dict(os.environ)
     env.pop(ENV, None)
     if env_tree is not None:
         env[ENV] = env_tree
     out = subprocess.run([sys.executable, str(PROG), *args],
-                         capture_output=True, text=True, timeout=180,
+                         capture_output=True, text=True, timeout=60,
                          cwd=str(cwd) if cwd else None, env=env)
     return out.returncode, (out.stdout + out.stderr)
 
@@ -188,3 +195,8 @@ def test_the_landing_gate_actually_passes_the_flag():
     assert all("--corpus-may-be-absent" in ln for ln in line), (
         f"the landing gate invokes the gate without the flag, so a repo with no "
         f"corpus is still blocked:\n" + "\n".join(line))
+    assert '[ -n "${VIBE_IC_BENCHMARK_DATA:-}" ]' in text
+    assert 'BENCHMARK_STRUCTURE_SCOPE=(--changed-since "$BASE")' in text
+    assert '"${BENCHMARK_STRUCTURE_SCOPE[@]}"' in line[0], (
+        "the landing gate applies the vibe-ic BASE to the external corpus, so "
+        "a present benchmark checkout becomes an unmeasured zero denominator")

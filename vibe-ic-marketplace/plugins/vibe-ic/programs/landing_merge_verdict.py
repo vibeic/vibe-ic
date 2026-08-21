@@ -126,6 +126,46 @@ EVERY WAY THE DIFFERENTIAL CAN DEGRADE, DEGRADES TOWARD STRICTER
     `LAND OK`. The list arm A was asked for arrives as `--base-selection`;
     without it the check cannot fire and says so in the notes.
 
+A PER-FILE NORECORD IS STRUCTURED EVIDENCE, NOT CONSOLE TEXT (vibe-ic#1709)
+==========================================================================
+`pytest_per_file_junit.py` keeps a file whose session died ABSENT from the
+merged report and names it on stdout as `NORECORD`. Which arm of this program
+reads that absence decided whether the refusal could say WHAT is missing.
+
+Until #1709 the answer was: neither. `missing_process_files` and
+`base_missing_process_files` were declared in :func:`decide`, initialised to
+`[]` in :func:`main`, and never populated; `junit_per_file_process_files` had no
+caller. The signal reached the verdict only through
+`tools/gatekeeper-land.sh`'s
+
+    grep -qa '^NORECORD' <driver combined stdout>
+
+which prints a gate LABEL — over the mixed driver/subject channel this file
+says everywhere else that it does not trust, because pytest can print
+marker-looking text into it. MEASURED on 7c376e348, one candidate report,
+aggregate suite intact, ONE selected file's per-file attestation removed, every
+other input byte-identical:
+
+    no label            LAND OK   rc=0   missing_candidate_process_files []
+    label on candidate  REFUSE    rc=1   ...still []  — "LANDING GATE FAILED"
+    label on BOTH arms  LAND OK   rc=0   ...still []
+
+The middle row is the one #1709 reported: a refusal that cannot name the file
+sends the next reader to the wrong place. The LAST row is worse and is the
+reason the fix is a REASON and not a better label. A label goes through the
+per-label gate differential, so the same NORECORD on both arms is scored
+PRE-EXISTING and excused — and a hang that fires on both arms is precisely the
+shape `pytest_per_file_junit.py` exists for; its own docstring rejects a
+synthetic red testcase for exactly this reason and the label reintroduced it.
+
+WHICH FILES THE QUESTION IS ASKED ABOUT is the part that must not be guessed.
+Per-file sessions are diagnostic recovery, so a healthy landing has NO per-file
+evidence and demanding one attestation per selected file unconditionally would
+refuse every landing — the ban. `per_file_record_gaps` derives the population
+from what the report claims instead: aggregate attested and no per-file
+evidence is NOT ASKED and says so; any per-file attestation, or a missing
+aggregate attestation, asks over the whole selection and NAMES every gap.
+
 There is no argument this program accepts that makes it more permissive than
 "demand green". That is the property that makes the relaxation safe. THE
 VERIFICATION TIER BELOW IS NOT AN EXCEPTION TO IT: a degraded tier reports what
@@ -159,6 +199,28 @@ to detect.
                           PERFORMED — nothing is left to disagree with it. The
                           forge's `refs/pull/<n>/merge` still cross-checks it
                           whenever the forge merged this same base.
+    TIER `direct-push`    the DIRECT-PUSH path (`git push origin main`), driven
+                          by `tools/gatekeeper-land-differential.sh`. There is
+                          no PR, no forge merge and no squash: the commit being
+                          pushed IS the commit that lands and its tree IS the
+                          tree that lands, so squash-vs-rebase is NOT
+                          APPLICABLE rather than not performed — there are not
+                          two computations of one tree for one to disagree
+                          with. THAT DISTINCTION IS THE WHOLE POINT OF THE
+                          SEPARATE CODE: `NOT_PERFORMED` names evidence that
+                          was lost, `NOT_APPLICABLE` names evidence that never
+                          existed, and a reader who cannot tell them apart
+                          cannot tell a degraded run from a complete one.
+                          The caller must therefore pass the SAME oid as
+                          `--expected-tree` and `--verified-tree` (the pushed
+                          commit's tree) and leave `--replayed-tree` and
+                          `--github-tree` empty; the cross-tree refusals above
+                          stay armed and fire if it does not.
+                          THE FAST-FORWARD ASSERTION IS NOT WAIVED, it is
+                          simply owned elsewhere: `gatekeeper-land.sh` runs
+                          `gatekeeper_stale_branch_check` over the real range
+                          on the candidate arm, where an empty base range makes
+                          it range-scoped and therefore ABSOLUTE.
 
 Everything else is identical: same squash commit built from the tree under test,
 same `gatekeeper-land.sh`, same test and gate differentials, same fail-closed
@@ -184,7 +246,8 @@ Usage
         --base-junit <path> --candidate-junit <path>
         [--base-hygiene <path> --candidate-hygiene <path>
          --base-hygiene-host <name> --candidate-hygiene-host <name>]
-        [--verification-tier merge-tree|rebase-replay] [--git-version <v>]
+        [--verification-tier merge-tree|rebase-replay|direct-push]
+        [--git-version <v>]
         [--merge-tree-min-version <v>] [--tier-reason <text>]
         [--gate-edited <path>...] [--maxfail N] [--json <out>]
 
@@ -199,13 +262,14 @@ chip-AGNOSTIC.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 RC_OK = 0
 RC_REFUSE = 1
@@ -412,13 +476,56 @@ class Verdict:
     disclosures: List[str] = field(default_factory=list)
 
 
+def read_protected_transition_receipt(
+        path: str, *, base_commit: str, candidate_commit: str,
+        base_tree: str, candidate_tree: str
+        ) -> tuple[Optional[dict], Optional[dict], str]:
+    """Load and bind BASE-owned protected-source evidence.
+
+    The validator is resolved by path from this verdict's own raw-attested
+    BASE snapshot.  Importing a same-named candidate module would let the
+    subject redefine the receipt it is meant to satisfy.
+    """
+    if not str(path).strip():
+        return None, None, "no protected landing transition receipt was supplied"
+    repo = Path(__file__).resolve().parents[4]
+    validator_path = repo / "tools" / "ci" / "protected_landing_transition.py"
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_trusted_protected_landing_transition", validator_path)
+        if spec is None or spec.loader is None:
+            raise ImportError("no loader")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        receipt = module.strict_load_receipt(
+            Path(path), oid_len=len(base_commit))
+        summary = module.validate_receipt_binding(
+            receipt,
+            base_commit=base_commit,
+            candidate_commit=candidate_commit,
+            base_tree=base_tree,
+            candidate_tree=candidate_tree,
+        )
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as exc:
+        return None, None, str(exc)
+    return receipt, summary, ""
+
+
 # The verification TIERS. `merge-tree` is the strong path; `rebase-replay` is the
 # fallback for a host whose git predates `merge-tree --write-tree` (>= 2.38), on
 # which the strong path cannot start at all. Anything else is not a tier this
 # program knows how to reason about, and it FAILS CLOSED on one — see `decide`.
 TIER_MERGE_TREE = "merge-tree"
 TIER_REBASE_REPLAY = "rebase-replay"
-TIERS = (TIER_MERGE_TREE, TIER_REBASE_REPLAY)
+#: The DIRECT-PUSH path. Not a degradation of the merge path — a different
+#: question with a different answer set. Nothing is squashed, so there is no
+#: second computation of the landing tree to cross-check the first against, and
+#: the honest disclosure is NOT_APPLICABLE rather than NOT_PERFORMED. Every
+#: OTHER refusal in `decide` is computed exactly as the merge path computes it,
+#: including the cross-tree checks, which the caller keeps armed by passing the
+#: pushed commit's tree as BOTH `expected_tree` and `verified_tree`.
+TIER_DIRECT_PUSH = "direct-push"
+TIERS = (TIER_MERGE_TREE, TIER_REBASE_REPLAY, TIER_DIRECT_PUSH)
 MERGE_TREE_MIN_VERSION = "2.38"
 
 
@@ -645,6 +752,46 @@ def junit_per_file_process_files(path: Path) -> set:
     return {file_name for file_name, count in counts.items() if count == 1}
 
 
+def per_file_record_gaps(path: Path, selection: Sequence[str],
+                         aggregate_present: bool) -> Optional[List[str]]:
+    """Selected files with no valid per-file attestation — or ``None`` when the
+    question was NOT PUT, which is a different answer from "none missing".
+
+    WHEN THE QUESTION IS PUT (vibe-ic#1709)
+    ---------------------------------------
+    Per-file sessions are diagnostic recovery: `pytest_per_file_junit.py` runs
+    them only after the aggregate record is lost, so a healthy landing carries
+    an aggregate attestation and NO per-file evidence at all. Demanding one per
+    selected file unconditionally would refuse every landing — the ban this
+    whole program exists to avoid — so the population is derived from what the
+    report itself claims:
+
+      aggregate attested, no per-file evidence  -> NOT ASKED. The authoritative
+                                                   whole-selection question was
+                                                   answered and recovery never
+                                                   ran; ``None``.
+      any per-file attestation present          -> ASKED over the whole
+                                                   selection. The report claims
+                                                   per-file coverage, and a
+                                                   selected file missing from
+                                                   it is a session whose
+                                                   record was LOST, not one
+                                                   that was never needed.
+      no aggregate attestation                  -> ASKED. The aggregate is
+                                                   already an absolute refusal;
+                                                   asking here is what NAMES
+                                                   the file(s) behind it.
+
+    Returning ``None`` rather than ``[]`` for the first row is the same law the
+    rest of this file follows: a check that could not fire must be legible as
+    such, never as a check that fired and found nothing.
+    """
+    attested = junit_per_file_process_files(path)
+    if aggregate_present and not attested:
+        return None
+    return sorted(set(selection) - attested)
+
+
 def junit_has_aggregate_process(path: Path) -> bool:
     """Whether the report has exactly one valid aggregate attestation."""
     root = ET.parse(str(path)).getroot()
@@ -745,7 +892,9 @@ def parse_land_log(text: str) -> LandLog:
 
 
 def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
-                       cand_host: str) -> Optional[dict]:
+                       cand_host: str,
+                       trusted_transition_evidence: str = ""
+                       ) -> Optional[dict]:
     """The hygiene finding differential, or ``None`` when it was not asked for.
 
     ``None`` is NOT a clean result and `decide` never reads it as one — it is
@@ -778,12 +927,32 @@ def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
                 f"the two arms' hygiene records were supplied but "
                 f"`hygiene_finding_delta` could not be imported from {here} "
                 f"({exc}), so nothing was differenced"}
-    return _H.compare(Path(base_path), Path(cand_path), base_host, cand_host)
+    evidence = (Path(trusted_transition_evidence)
+                if str(trusted_transition_evidence).strip() else None)
+    return _H.compare(
+        Path(base_path), Path(cand_path), base_host, cand_host,
+        trusted_transition_evidence_path=evidence)
 
 
 # ------------------------------------------------------------------- the gate
 #
 # EVERYTHING ABOVE MEASURES. THIS DECIDES. One function, one call site.
+
+
+def _load_red_since():
+    """`gate_red_since_check`, loaded by path at the moment it is needed.
+
+    It owns the acknowledgement vocabulary and the deadline; this file owns the
+    decision to consume it. Loading it lazily keeps this module's import graph
+    exactly what it was.
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parent / "gate_red_since_check.py"
+    spec = importlib.util.spec_from_file_location(
+        "_lmv_gate_red_since_check", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
@@ -794,6 +963,8 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            base_selection_supplied: bool = True,
            base_land: Optional[LandLog] = None,
            hygiene: Optional[dict] = None,
+           red_since_ledger: Optional[Sequence[dict]] = None,
+           commit_age: Optional[Callable[[str], Optional[int]]] = None,
            verification_tier: str = TIER_MERGE_TREE,
            git_version: str = "", tier_reason: str = "",
            missing_process_files: Sequence[str] = (),
@@ -833,7 +1004,26 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             f"nothing was."], notes, unmeasurable=True,
             disclosures=["VERIFICATION_TIER_UNKNOWN"])
 
-    if verification_tier == TIER_REBASE_REPLAY:
+    if verification_tier == TIER_DIRECT_PUSH:
+        # NOT a third degradation of the merge path. On `git push origin main`
+        # the commit under gate IS the commit that lands, so there is no second
+        # computation of one tree for a cross-check to compare — the check is
+        # NOT APPLICABLE, and the code says so in its own word rather than
+        # borrowing the fallback's, because borrowing it would tell a reader
+        # that something was lost here.
+        disclosures += ["VERIFICATION_TIER_DIRECT_PUSH",
+                        "SQUASH_VS_REBASE_CROSS_CHECK_NOT_APPLICABLE"]
+        notes.append(
+            "DIRECT-PUSH TIER: nothing is squashed and no forge merge exists, "
+            "so the tree measured is the tree that lands and the "
+            "squash-vs-rebase cross-check is NOT APPLICABLE (not 'not "
+            "performed' — there is no second tree it could disagree with). "
+            "Every other refusal reason was computed exactly as the merge path "
+            "computes it, including the cross-tree checks, which the caller "
+            "keeps armed by passing the pushed commit's tree as both "
+            "--expected-tree and --verified-tree."
+            + (f" ({tier_reason})" if tier_reason else ""))
+    elif verification_tier == TIER_REBASE_REPLAY:
         disclosures += ["VERIFICATION_TIER_REBASE_REPLAY",
                         "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED"]
         notes.append(
@@ -952,6 +1142,38 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
     # the original, authoritative whole-selection question.  Per-file sessions
     # are diagnostic recovery after aggregate NORECORD; requiring them on a
     # complete aggregate would repeat the suite on every successful landing.
+    # `per_file_record_gaps` therefore decides WHETHER the per-file question is
+    # put; this block decides what its answer means (vibe-ic#1709).
+    #
+    # BOTH LISTS ARE READ HERE AND NOWHERE ELSE. Until #1709 they were declared
+    # in this signature, initialised to `[]` in `main`, and never populated, so
+    # the only thing carrying a per-file NORECORD to this decision was
+    # `tools/gatekeeper-land.sh`'s `grep -qa '^NORECORD'` over the driver's
+    # COMBINED driver/subject stdout — a channel pytest can print into, and the
+    # one input this file's own docstring says it does not trust. Measured on
+    # 7c376e348 with a candidate report whose aggregate suite was intact and one
+    # selected file's per-file attestation removed:
+    #
+    #     grep label absent               -> LAND OK          rc=0
+    #     grep label on the candidate     -> REFUSE, generic  rc=1
+    #     grep label on BOTH arms         -> LAND OK          rc=0
+    #
+    # The third row is the worse half and it is why this is a REASON rather than
+    # a gate label: a label goes through the per-label base differential, so a
+    # hang that fires on both arms — the exact shape `pytest_per_file_junit.py`
+    # was written for — is scored PRE-EXISTING and excused. A reason is absolute
+    # and NAMES the file, which is the difference between a refusal a reader can
+    # act on and one that sends them looking in the wrong place.
+    if missing_process_files:
+        reasons.append(
+            f"{len(missing_process_files)} SELECTED TEST FILE(S) HAVE NO "
+            f"PER-FILE SESSION RECORD IN THE CANDIDATE REPORT — the per-file "
+            f"question was put (see `candidate_aggregate_process_present` for "
+            f"which of the two ways) and these files did not answer it, so "
+            f"their sessions are UNKNOWN, not clean. This is an absolute "
+            f"refusal and cannot be waived by the base gate log. Missing: "
+            + ", ".join(missing_process_files[:5])
+            + ("…" if len(missing_process_files) > 5 else ""))
     if not aggregate_process_present:
         reasons.append(
             "THE CANDIDATE AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD "
@@ -965,7 +1187,18 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             "by the machine record and cannot be treated as green.")
     # The base is the permissive arm of a differential, so its aggregate
     # attestation remains independently mandatory.  A complete candidate can
-    # never compensate for an unknown baseline.
+    # never compensate for an unknown baseline.  The per-file question is asked
+    # of arm A on the same terms and for #1443's reason: what the baseline did
+    # not measure is what the branch may delete for free.
+    if base_missing_process_files:
+        reasons.append(
+            f"{len(base_missing_process_files)} SELECTED TEST FILE(S) HAVE NO "
+            f"PER-FILE SESSION RECORD ON THE BASE — the per-file question was "
+            f"put of arm A and these files did not answer it, so what they "
+            f"would have shown is UNKNOWN and `silenced`/`weakened` were "
+            f"computed over a SUBSET of the baseline. Missing: "
+            + ", ".join(base_missing_process_files[:5])
+            + ("…" if len(base_missing_process_files) > 5 else ""))
     if base_selection_supplied and not base_aggregate_process_present:
         reasons.append(
             "THE BASE AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD — "
@@ -1092,6 +1325,26 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
                 "THE HYGIENE SUITE FAILED HERE AND NOT ON THE BASE, YET THE "
                 "FINDING DIFFERENTIAL NAMES NOTHING — the two disagree, so the "
                 "finding list is incomplete and cannot account for the failure.")
+    # ---- AN INHERITED RED IS NOT THIS BRANCH'S, AND IT IS STILL SOMEBODY'S ----
+    #
+    # The two tiers above both end the same way: a failure present on BOTH arms
+    # is `notes` (`gate fails on the base too…`) or `carried (which do NOT
+    # block)`. That subtraction is correct — an absolute "any FAIL refuses"
+    # would refuse every landing, which is measured in the comment above the
+    # gate differential — and it has no floor. MEASURED: `flow-gate enforcement
+    # audit`, dispatched with a plain blocking `run`, was red on the base at
+    # e4880703b on 2026-08-12 and still red at 752a8baa nine days, 704 commits
+    # and 96 version-bearing landings later, and every one of those landings
+    # was correct to allow it.
+    #
+    # The deadline that would end that already exists — `max_commits` in
+    # `tools/ci/gate_red_since.json`, read by `gate_red_since_check` — and
+    # nothing ever opens it, because a row is voluntary and pure cost so no row
+    # is ever written. This is the forcing function, and it has to be HERE:
+    # a refusal wired inside the hygiene suite would be a gate in the suite, red
+    # on both arms from its first landing, and subtracted by this very rule.
+    #
+    # STRICTLY ADDITIVE, like the tier above it: it only ever appends reasons.
     else:
         # A status this program does not know is not a pass. Reached only if the
         # helper grows a fourth answer without this branch being taught it.
@@ -1100,6 +1353,29 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         reasons.append(
             f"THE HYGIENE FINDING DIFFERENTIAL RETURNED {hyg_status!r}, which "
             f"this program does not know how to read, so it read nothing.")
+
+    # The rule itself runs AFTER the whole chain above, never inside it: it must
+    # apply whatever status the differential returned, and it must not change
+    # which branch of that chain is taken.
+    if red_since_ledger is None or commit_age is None:
+        # A RULE THAT DID NOT RUN MUST SAY SO. Without the ledger or without a
+        # way to age a commit this cannot answer, and silence here would be
+        # indistinguishable from "every inherited red is owned".
+        disclosures.append("INHERITED_RED_DEADLINE_NOT_EVALUATED")
+        notes.append(
+            "the inherited-red deadline was NOT evaluated — no acknowledgement "
+            "ledger and/or no commit-age function was supplied, so whether a "
+            "gate red on both arms is owned by a live deadline is UNKNOWN here")
+    else:
+        # IMPORTED HERE, NOT AT MODULE SCOPE. This file is executed by the
+        # isolated trusted entry and its import graph is part of what the
+        # protected runtime pins; a top-level `sys.path` insertion in an
+        # authority file changes what every later import resolves to, and it
+        # measurably broke two end-to-end cases when it was one.
+        for reason in _load_red_since().inherited_red_reasons(
+                list((hygiene or {}).get("carried") or []),
+                list(red_since_ledger), commit_age):
+            reasons.append(reason)
 
     if any("assigned at merge" in l for l in land.passed):
         # A DEFERRAL IS AN ACTION ITEM, NOT A CLEAN SHEET. Measured 2026-08-12:
@@ -1257,6 +1533,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="the merge-path landing verdict (chip-AGNOSTIC)")
     ap.add_argument("--base-sha", required=True)
+    ap.add_argument("--base-tree", required=True,
+                    help="tree of the exact BASE commit owning the validator")
     ap.add_argument("--head-sha", required=True)
     ap.add_argument("--verified-sha", required=True,
                     help="the local stand-in for the squash commit whose "
@@ -1299,6 +1577,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "findings are host-dependent")
     ap.add_argument("--candidate-hygiene-host", default="",
                     help="the host the candidate record was measured on")
+    ap.add_argument("--trusted-transition-evidence", default="",
+                    help="parent-owned routed-corpus manifest and independent "
+                         "execution receipts; required by the trusted hygiene "
+                         "judge for an EMPTY-to-expanded transition")
+    ap.add_argument("--protected-transition-receipt", default="",
+                    help="BASE-validator pre/post-identical receipt binding the "
+                         "atomic protected landing-runtime tuple")
     ap.add_argument("--maxfail", type=int, default=10,
                     help="the --maxfail gatekeeper-land.sh passes to pytest; "
                          "used only to tell truncation from a real absence")
@@ -1311,8 +1596,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          f"the 3-way merge, cross-checked by the replay) or "
                          f"{TIER_REBASE_REPLAY} (the fallback: the replay IS "
                          f"the tree under test and the squash-vs-rebase "
-                         f"cross-check is not performed). Any other value "
-                         f"refuses as unmeasurable")
+                         f"cross-check is not performed) or "
+                         f"{TIER_DIRECT_PUSH} (the direct-push path: no PR, no "
+                         f"squash, no forge merge — the commit under gate IS "
+                         f"the commit that lands, so the cross-check is NOT "
+                         f"APPLICABLE rather than not performed). Any other "
+                         f"value refuses as unmeasurable")
     ap.add_argument("--git-version", default="",
                     help="the git version measured on this host, named in the "
                          "tier disclosure so the refusal is actionable")
@@ -1323,6 +1612,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "strong one")
     ap.add_argument("--candidate-gate-rc", type=int, default=0,
                     help="OS exit status of the candidate non-target gate arm")
+    ap.add_argument("--red-since-ledger", default="",
+                    help="tools/ci/gate_red_since.json as the BASE commit "
+                         "carries it. The acknowledgement policy is BASE-owned, "
+                         "like the protected transition manifest: a candidate "
+                         "must not be able to grant itself an amnesty. Absent "
+                         "means the inherited-red deadline is NOT evaluated, "
+                         "and that is DISCLOSED rather than assumed clean")
+    ap.add_argument("--red-since-repo", default="",
+                    help="a repository containing the commits the ledger's "
+                         "`since` fields cite, used only to count commits "
+                         "behind HEAD. Absent means the same disclosure")
     ap.add_argument("--require-composite-gate-record", action="store_true",
                     help="require the B2 rc and matching terminal sentinel; "
                          "used when targeted evidence comes from parallel B1")
@@ -1390,6 +1690,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     dropped: List[str] = []
     truncated = False
     missing_process_files: List[str] = []
+    #: Whether the per-file completeness question was PUT at all, which a reader
+    #: has to be able to tell from an empty list of gaps (vibe-ic#1709).
+    candidate_per_file_checked = False
     aggregate_process_present = False
     if cand is not None:
         candidate_path = Path(a.candidate_junit)
@@ -1398,6 +1701,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         truncated = (bool(dropped) and
                      junit_aggregate_red_count(candidate_path) >= a.maxfail)
         aggregate_process_present = junit_has_aggregate_process(candidate_path)
+        # THE STRUCTURED PATH, CONNECTED (vibe-ic#1709). An unreadable candidate
+        # report is deliberately left out: `cand is None` already refuses via
+        # `candidate_total == 0`, and naming every selected file there would
+        # report a per-file gap for a report nobody could parse.
+        gaps = per_file_record_gaps(
+            candidate_path, selection, aggregate_process_present)
+        candidate_per_file_checked = gaps is not None
+        missing_process_files = gaps or []
     # THE SAME QUESTION OF ARM A (vibe-ic#1443). The list is the base's OWN
     # selection, never `--selection`: a file the PR ADDS is legitimately absent
     # from the base report, and asking about it here would refuse every PR that
@@ -1407,6 +1718,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # the all-or-nothing note.
     base_dropped: List[str] = []
     base_missing_process_files: List[str] = []
+    base_per_file_checked = False
     base_aggregate_process_present = True
     if base_selection:
         if base_raw is None:
@@ -1419,10 +1731,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 - junit_aggregate_files(base_path, base_selection))
             base_aggregate_process_present = junit_has_aggregate_process(
                 base_path)
+            # Over the BASE's own selection, never `--selection` — same reason
+            # as `base_dropped` above: a file the PR ADDS cannot have a record
+            # on a base that does not contain it.
+            base_gaps = per_file_record_gaps(
+                base_path, base_selection, base_aggregate_process_present)
+            base_per_file_checked = base_gaps is not None
+            base_missing_process_files = base_gaps or []
 
     hygiene = read_hygiene_delta(
         a.base_hygiene, a.candidate_hygiene,
-        a.base_hygiene_host, a.candidate_hygiene_host)
+        a.base_hygiene_host, a.candidate_hygiene_host,
+        a.trusted_transition_evidence)
+
+    protected_receipt, protected_transition, protected_error = (
+        read_protected_transition_receipt(
+            a.protected_transition_receipt,
+            base_commit=a.base_sha,
+            candidate_commit=a.verified_sha,
+            base_tree=a.base_tree,
+            candidate_tree=a.verified_tree,
+        ))
 
     v = decide(rebase_status=a.rebase_status, expected_tree=a.expected_tree,
                verified_tree=a.verified_tree,
@@ -1433,6 +1762,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                base_selection_supplied=bool(base_selection),
                replayed_tree=a.replayed_tree, base_land=base_land,
                hygiene=hygiene,
+               red_since_ledger=(
+                   _load_red_since().load_ledger(Path(a.red_since_ledger))
+                   if a.red_since_ledger else None),
+               commit_age=(
+                   _load_red_since().git_age(Path(a.red_since_repo))
+                   if a.red_since_repo else None),
                verification_tier=a.verification_tier,
                git_version=a.git_version, tier_reason=a.tier_reason,
                missing_process_files=missing_process_files,
@@ -1450,6 +1785,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if a.gate_edited:
         v.notes.append("this branch edits the gate that judges it: "
                        + ", ".join(a.gate_edited))
+    if protected_error:
+        v.ok = False
+        v.unmeasurable = True
+        v.reasons.append(
+            "PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED: "
+            + protected_error)
 
     head = ("[PASS] landing_merge_verdict: LAND OK" if v.ok
             else "[FAIL] landing_merge_verdict: REFUSE")
@@ -1477,6 +1818,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "verdict": "LAND_OK" if v.ok else "REFUSE",
             "unmeasurable": v.unmeasurable,
             "base_sha": a.base_sha,
+            "base_tree": a.base_tree,
             "head_sha": a.head_sha,
             "verified_sha": a.verified_sha,
             "rebase_status": a.rebase_status,
@@ -1500,6 +1842,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # "asked and found nothing", because only one of those two says
             # anything about what this branch did to the hygiene suite.
             "hygiene_finding_delta": hygiene,
+            "protected_landing_transition": protected_transition,
+            "protected_transition_receipt": protected_receipt,
             "selection_size": len(selection),
             "dropped_selected_files": dropped,
             "candidate_run_truncated": truncated,
@@ -1509,15 +1853,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # nothing", which is why the size travels with the list.
             "base_selection_size": len(base_selection),
             "dropped_base_selected_files": base_dropped,
-            # Backward-compatible keys. Per-file sessions are diagnostic-only
-            # in aggregate evidence mode, so their absence is not missing
-            # verdict evidence and these lists are intentionally empty.
+            # PER-FILE COMPLETENESS, FROM STRUCTURED JUNIT (vibe-ic#1709). The
+            # `*_checked` flags travel with the lists for the reason
+            # `base_selection_size` travels with `dropped_base_selected_files`:
+            # an empty list means "asked and nothing missing" only when the
+            # question was put, and "aggregate-only evidence, per-file recovery
+            # never ran" otherwise. Two different facts, one shape.
             "missing_candidate_process_files": missing_process_files,
+            "candidate_per_file_records_checked": candidate_per_file_checked,
             "candidate_aggregate_process_present": aggregate_process_present,
             "missing_base_process_files": base_missing_process_files,
+            "base_per_file_records_checked": base_per_file_checked,
             "base_aggregate_process_present": (
                 base_aggregate_process_present),
-            "test_evidence_mode": "aggregate",
+            "test_evidence_mode": ("aggregate+per-file"
+                                   if candidate_per_file_checked
+                                   else "aggregate"),
             "gate_edited": a.gate_edited,
             # ---- WHAT THIS VERDICT DID NOT CHECK, MACHINE-READABLY ----
             # A disclosed weaker check beats a universal refusal ONLY if the
@@ -1528,8 +1879,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # `disclosures` is the stable code list to key on.
             "verification_tier": a.verification_tier,
             "tier_degraded": a.verification_tier != TIER_MERGE_TREE,
+            # THREE VALUES, NOT TWO. `NOT_APPLICABLE` is the direct-push
+            # answer and it is NOT a synonym for `NOT_PERFORMED`: one says the
+            # cross-check was skipped, the other says there was never a second
+            # tree to cross-check. Collapsing them would make a complete
+            # direct-push verdict indistinguishable from a degraded merge one.
             "squash_vs_rebase_cross_check": (
                 "PERFORMED" if a.verification_tier == TIER_MERGE_TREE
+                else "NOT_APPLICABLE"
+                if a.verification_tier == TIER_DIRECT_PUSH
                 else "NOT_PERFORMED"),
             "tier_reason": a.tier_reason,
             "disclosures": v.disclosures,

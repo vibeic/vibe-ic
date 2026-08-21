@@ -439,6 +439,19 @@ def main(argv: list = None) -> int:
 
     findings, stats = audit(project_dir)
     report = build_report(findings, stats, str(project_dir))
+
+    # vibe-ic#1080 — `report["summary"]` is already the machine-readable form
+    # of what this gate measured, so the wiring is to HAND IT OVER rather than
+    # to compute anything new. Filtered to scalars per value, not all-or-
+    # nothing: the flat schema refuses a non-scalar, and one unexpected list
+    # would otherwise drop the whole file and leave this step looking wired
+    # while emitting nothing (measured on step 17 while writing this).
+    import step_metrics as _sm  # noqa: PLC0415
+    _sm.emit_best_effort(project_dir, "34", {
+        k: v for k, v in report["summary"].items()
+        if v is None or isinstance(v, (bool, int, float, str))
+    }, domain="design")
+
     out = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json:
