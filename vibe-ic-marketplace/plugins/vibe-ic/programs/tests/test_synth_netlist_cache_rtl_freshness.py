@@ -42,13 +42,36 @@ def _mk(tmp_path, netlist_mtime, rtl_mtime, rtl_name="top.v"):
     return netlist, rtl
 
 
+#: How the synth DISPATCH is spelled, newest first. The block below ends where
+#: the runner stops deciding about the cache and starts running synth instead,
+#: and that call has been re-spelled once already: `step_synth` is no longer
+#: invoked directly but handed to `step_preflight.gate()` as a callable, so the
+#: original `plan.append(step_synth(` matched nothing and BOTH tests that read
+#: this block failed for a reason that had nothing to do with cache freshness.
+#:
+#: A LIST, not a rewrite: each spelling is checked and the first that matches
+#: wins, so a future re-spelling adds a line instead of turning the tests red
+#: again. It is NOT a weakening — at least one must match or the block cannot
+#: be located and every test that reads it fails loudly, by design.
+_SYNTH_DISPATCH_MARKERS = (
+    'step_synth, project, effective_top',   # v1.10.x: handed to _spf.gate()
+    'plan.append(step_synth(',              # pre-step_preflight direct call
+)
+
+
 def _cache_guard_block() -> str:
     """The region of main() that decides whether to reuse a cached netlist."""
     start = RUNNER_SRC.find("_nl_pdk_ok = (netlist_existing.is_file()")
     assert start != -1, "netlist cache guard not found"
-    end = RUNNER_SRC.find("plan.append(step_synth(", start)
-    assert end != -1, "step_synth fallback not found after the cache guard"
-    return RUNNER_SRC[start:end]
+    ends = [e for e in (RUNNER_SRC.find(m, start)
+                        for m in _SYNTH_DISPATCH_MARKERS) if e != -1]
+    assert ends, (
+        "the synth dispatch was not found after the cache guard, in any known "
+        f"spelling ({', '.join(_SYNTH_DISPATCH_MARKERS)}). Either the runner "
+        "re-spelled it again — add the new spelling to _SYNTH_DISPATCH_MARKERS "
+        "— or the cache guard no longer falls through to synth at all, which "
+        "is the defect these tests exist to catch.")
+    return RUNNER_SRC[start:min(ends)]
 
 
 def test_freshness_check_compares_mtimes_against_the_rtl_dir():
@@ -63,11 +86,23 @@ def test_freshness_check_compares_mtimes_against_the_rtl_dir():
 
 
 def test_stale_rtl_forces_resynthesis():
-    """Detecting staleness must actually clear the reuse flag."""
+    """Detecting staleness must actually clear the reuse flag.
+
+    ANCHORED TO THE STALENESS BRANCH, not to the flag appearing anywhere.
+    A bare `_nl_pdk_ok = False` search passed a mutant that deleted exactly
+    the assignment this test is named after: the block contains TWO such
+    assignments (the other belongs to the producer-identity key), so the
+    search was satisfied by the wrong one and the test could not fail for
+    its own subject. Measured 2026-08-13 while repairing this file's block
+    locator: with the staleness assignment removed, all 16 tests here still
+    passed. It is the branch that has to be pinned, not the string.
+    """
     block = _cache_guard_block()
-    assert re.search(r"_nl_pdk_ok = False", block), (
-        "staleness is detected but the cache is still reused: the guard must "
-        "set the reuse flag False so step_synth re-runs")
+    assert re.search(r"if _stale_rtl:\s*\n\s*_nl_pdk_ok = False", block), (
+        "staleness is detected but the cache is still reused: the `if "
+        "_stale_rtl:` branch must set the reuse flag False so step_synth "
+        "re-runs. A `_nl_pdk_ok = False` elsewhere in the guard does not "
+        "count — that is a different key answering a different question.")
 
 
 def test_unprovable_freshness_is_not_trusted():

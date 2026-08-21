@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "RS-485 (originally 1983; SLLA272D revised 2021) is an electrical-only standard and defines no confidentiality / integrity / authentication features. All bus traffic is in plaintext and visible to every node on the bus. Built-in robustness primitives (differential signaling, common-mode rejection, ESD protection) protect against accidental noise and electrical hazards, not against intentional tampering. Modern industrial security on RS-485-based fieldbuses (Modbus RTU with encrypted tunnel, BACnet/SC, secure DL/T645) is layered ON TOP of the PHY — not part of the RS-485 standard itself."
-  }
-}

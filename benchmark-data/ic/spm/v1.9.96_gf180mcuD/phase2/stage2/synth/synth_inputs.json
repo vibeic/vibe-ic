@@ -1,6 +1,0 @@
-{
-  "netlist": "chip_top_synth.v",
-  "rtl_sha256": {
-    "chip_top.v": "80e9750e1b80071edd8ffadc78d0ccaad0fa980e1321e875a73b1654b3b180bd"
-  }
-}

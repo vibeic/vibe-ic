@@ -53,7 +53,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _hostpaths import require_repo         # noqa: E402  (real in-repo corpus)
+# The real corpus the sweep runs over. It was `_hostpaths.require_repo(
+# "benchmark-data")` while the published cells were in this repository; they
+# are in vibeic/benchmark-data now, so the resolver that knows where to look —
+# and, when there is nowhere, says so as a skip rather than an empty sweep — is
+# `_published_corpus`.
+from _published_corpus import corpus_root, needs_corpus   # noqa: E402
 import fault_atpg_run as fatpg              # noqa: E402
 import design_one_shot_runner as dosr       # noqa: E402
 
@@ -355,16 +360,60 @@ def _sweep_labels(root: Path):
     return old, new
 
 
+def _fire_the_guard(tmp_path_factory, tag: str):
+    """Run ONE injected mapped-but-unconfigured root through the production
+    path and return `(old, new, fired)`.
+
+    Extracted so the REACHABILITY proof below and the corpus sweep further down
+    are the identical measurement rather than two hand-copied ones.
+    """
+    fire_root = _clean_root(tmp_path_factory, tag)
+    _write(fire_root, "netlist.v", UNCONFIGURED_LIB_MAPPED)
+    f_old, f_new = _sweep_labels(fire_root)
+    fired = [(str(fire_root), f_old, f_new)] if f_old != f_new else []
+    return f_old, f_new, fired
+
+
+def _assert_the_guard_fired(f_old, f_new, fired):
+    assert f_old == "generic_unmapped", (
+        "precondition failed: the fixture's cell names now resolve to a "
+        f"configured PDK ({f_old!r}) — pick a different invented library "
+        "so this test keeps measuring the unconfigured-library branch")
+    assert len(fired) >= 1, (
+        "SWEEP DID NOT FIRE: the mapped-unknown case never entered the "
+        "`mapped_unknown_library` branch — the guard's decision point was "
+        "not reached, so the sweep proves nothing (exit-0 on 0 comparisons).")
+    assert (f_old, f_new) == ("generic_unmapped", "mapped_unknown_library"), \
+        f"guard entered the wrong branch: {f_old!r} -> {f_new!r}"
+
+
+def test_the_guard_decision_point_is_reachable(tmp_path_factory):
+    """(b) ON ITS OWN, AND WITHOUT THE PUBLISHED CORPUS.
+
+    Direction (b) of the sweep below — "the guard's decision point is
+    REACHABLE through the real `_dft_atpg_sniff_pdk`, not only by calling the
+    labelling helper directly" — is a claim about THIS PLUGIN, and its whole
+    subject is a root this test writes itself. It is asserted here so it keeps
+    being measured in a checkout that holds no published cells; folding it into
+    a corpus-gated test would have let the plugin lose its only proof that the
+    branch is reachable at all, and lose it silently, the moment the results
+    moved out of this repository.
+    """
+    f_old, f_new, fired = _fire_the_guard(tmp_path_factory, "firereach")
+    _assert_the_guard_fired(f_old, f_new, fired)
+
+
+@needs_corpus
 def test_sweep_reaches_its_guard_and_is_false_positive_free(tmp_path_factory):
     """A SWEEP MUST REACH ITS GUARD — and stay quiet on complete designs.
 
     Two directions, both asserted:
 
-      (a) REAL in-repo corpus — every checked-in
-          `benchmark-data/**/phase2/stage2/synth/netlist.v` is swept through the
-          identical production resolve+sniff+label path and MUST keep its old
-          label. A relabel here would be a false positive on a legitimately-
-          complete design.
+      (a) REAL published corpus — every
+          `**/phase2/stage2/synth/netlist.v` under the published benchmark
+          corpus is swept through the identical production resolve+sniff+label
+          path and MUST keep its old label. A relabel here would be a false
+          positive on a legitimately-complete design.
 
       (b) The guard's decision point is REACHABLE — one injected mapped-but-
           unconfigured root (`UNCONFIGURED_LIB_MAPPED`, a purely invented
@@ -378,11 +427,21 @@ def test_sweep_reaches_its_guard_and_is_false_positive_free(tmp_path_factory):
     to no configured PDK, or this test would silently start measuring the
     named-PDK branch again the next time a library gains a PDK_CONFIG row —
     exactly the failure mode that retired the NanGate45 fixture.
+
+    WHY IT IS CORPUS-GATED. (a) can only be asserted over netlists someone
+    published; those are in vibeic/benchmark-data now, not in this checkout.
+    `assert real_roots` used to be the honest guard against a vacuous sweep and
+    it stays exactly as strict — but "there is no corpus to sweep" is not the
+    same statement as "the sweep found nothing in the corpus", and only the
+    second is a defect. The first is a skip that names the corpus; the second
+    still fails here. (b) is ALSO asserted with no corpus at all, one test up.
     """
-    corpus = require_repo("benchmark-data")
+    corpus = corpus_root()
     real_roots = sorted({p.parents[3] for p in corpus.rglob("netlist.v")
                          if str(p).endswith(_SYNTH_REL)})
-    assert real_roots, "no in-repo corpus netlist found to sweep"
+    assert real_roots, (
+        f"no netlist found to sweep under the published corpus at {corpus} — "
+        f"the corpus is present, so this is an empty sweep, not a missing one")
 
     changed, unchanged = [], []
     for root in real_roots:
@@ -396,21 +455,8 @@ def test_sweep_reaches_its_guard_and_is_false_positive_free(tmp_path_factory):
 
     # (b) The guard's decision point is REACHABLE. Inject one mapped-but-
     #     unconfigured root and run it through the identical production path.
-    fire_root = _clean_root(tmp_path_factory, "sweepfire")
-    _write(fire_root, "netlist.v", UNCONFIGURED_LIB_MAPPED)
-    f_old, f_new = _sweep_labels(fire_root)
-    fired = [(str(fire_root), f_old, f_new)] if f_old != f_new else []
-
-    assert f_old == "generic_unmapped", (
-        "precondition failed: the fixture's cell names now resolve to a "
-        f"configured PDK ({f_old!r}) — pick a different invented library "
-        "so this test keeps measuring the unconfigured-library branch")
-    assert len(fired) >= 1, (
-        "SWEEP DID NOT FIRE: the mapped-unknown case never entered the "
-        "`mapped_unknown_library` branch — the guard's decision point was "
-        "not reached, so the sweep proves nothing (exit-0 on 0 comparisons).")
-    assert (f_old, f_new) == ("generic_unmapped", "mapped_unknown_library"), \
-        f"guard entered the wrong branch: {f_old!r} -> {f_new!r}"
+    f_old, f_new, fired = _fire_the_guard(tmp_path_factory, "sweepfire")
+    _assert_the_guard_fired(f_old, f_new, fired)
 
     # Honest coverage line: what was swept, what stayed quiet, what fired.
     print(f"SWEEP: real_roots={len(real_roots)} unchanged={len(unchanged)} "
