@@ -1,0 +1,30 @@
+{
+  "contract": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+  "declared_schema": "vibeic.ppa.comparison.v2",
+  "measurement_bases": [
+    "post_route_sta",
+    "post_route_sta"
+  ],
+  "ok": false,
+  "problem": {
+    "clock_target_ns": 10.0,
+    "corners": [
+      "ss",
+      "tt",
+      "ff"
+    ],
+    "pdk": "sky130A",
+    "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
+  },
+  "record": "/home/reyerchu/_jxlayer/records/h2h_A.json",
+  "refusal": {
+    "code": "SCOPE_SENTINEL",
+    "message": "arm 'vibe-ic-phase3-defaults''s `timing_wns_ns` scope declares ['rc_corner'] with no value. `null` and \"\" are not unknown-corner markers: two of them compare EQUAL, so two numbers measured under conditions nobody recorded would pass as measured under the SAME conditions. State the field or omit the key."
+  },
+  "roles": {
+    "baselines": [
+      "vibe-ic-phase3-defaults"
+    ],
+    "subject": "vibe-ic-crosslayer-searched"
+  }
+}

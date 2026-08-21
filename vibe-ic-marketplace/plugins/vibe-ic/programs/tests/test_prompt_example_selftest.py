@@ -367,6 +367,12 @@ def test_l_rst_async_n_wrong_fails():
 # (m) TRIGGER guard: a clocked arithmetic example with an un-timed start/valid
 #     handshake -> SKIP (cannot reproduce the pulse), never a false block.
 # --------------------------------------------------------------------------
+#     The gate is on because the assertion is about WHICH skip: without iverilog
+#     the selftest skips for a different and equally correct reason ("iverilog/vvp
+#     not on PATH"), so `"handshake" in res.reason` failed on a host that simply
+#     could not run the check (vibe-ic#1357). Every other simulating test in this
+#     file already carries this marker; this one was missed.
+@_skip_no_iv
 def test_m_untimed_trigger_skips():
     prompt = "Pipelined mult. Example: 6 * 7 = 42.\n"
     rtl = ("module pm(input clk, input start, input [7:0] a, input [7:0] b,\n"

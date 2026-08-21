@@ -263,11 +263,55 @@ def test_phase2_never_keys_on_never_emitted_substring():
 # end-to-end against a REAL yosys synth (only when yosys is present)
 # =========================================================================
 
+#: Bound for the capability probe. Every subprocess in this file stays under
+#: the 60s inner ceiling (180s harness // 3): a bound at or above the harness
+#: bound does not fail the TEST, it outlives the harness and takes the whole
+#: session down, losing every other verdict in the run.
+_PROBE_TIMEOUT_S = 30
+
+
+def _yosys_stat_json_support(exe):
+    """Does THIS yosys accept `stat -json`?
+
+    `shutil.which("yosys")` answers a different question. Yosys has shipped
+    `stat` since forever and `stat -json` only from 0.10, so on a 0.9 host the
+    binary is PRESENT and the option is absent — a third state that a presence
+    check cannot represent, and the reason these two tests are red on every
+    host carrying the distro's 0.9 rather than on hosts missing yosys.
+
+    Probed by EXERCISING the option, not by parsing a version string: a
+    version parse guesses at a capability, this measures it.
+
+    Returns True (supported), False (the option is unknown), or **None** when
+    yosys failed for some OTHER reason. None must NOT skip — a broken yosys is
+    a real failure and swallowing it here would convert this file from a red
+    into a silent no-op, which is strictly worse than the red.
+    """
+    import subprocess
+    p = subprocess.run([exe, "-q", "-p", "stat -json"],
+                       capture_output=True, text=True,
+                       timeout=_PROBE_TIMEOUT_S)
+    if p.returncode == 0:
+        return True
+    if "Unknown option" in (p.stdout + p.stderr):
+        return False
+    return None
+
+
 def test_end_to_end_real_yosys(tmp_path):
     import shutil
     import subprocess
-    if shutil.which("yosys") is None:
+    exe = shutil.which("yosys")
+    if exe is None:
         pytest.skip("yosys not installed")
+    # This test's subject is "does the reporter resolve a real count
+    # end-to-end", NOT "does stat.json exist" — its own final assertion
+    # accepts stat.json, yosys.log OR netlist_scan, because the reporter
+    # documents three sources. So on a yosys without `-json` we exercise the
+    # SAME end-to-end path through a different source rather than skipping:
+    # skipping here would drop live coverage of the fallback the production
+    # reporter actually relies on for such hosts.
+    has_json = _yosys_stat_json_support(exe) is True
     src = tmp_path / "src.v"
     src.write_text(
         "module foo(input a, input b, input clk, output reg y);\n"
@@ -279,11 +323,17 @@ def test_end_to_end_real_yosys(tmp_path):
     script = (
         f"read_verilog {src}; synth -flatten; "
         "write_verilog -noexpr -nostr -noattr netlist.v; "
-        "tee -o stat.json stat -json; stat"
+        + ("tee -o stat.json stat -json; stat" if has_json
+           else "tee -o yosys.log stat")
     )
     proc = subprocess.run(["yosys", "-p", script], cwd=str(sd),
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr[-2000:]
+    # The branch must be the one we asked for; otherwise a probe that silently
+    # answered wrong would let this test pass while measuring the other path.
+    assert (sd / "stat.json").exists() is has_json, (
+        f"probe said stat -json support={has_json} but stat.json "
+        f"exists={(sd / 'stat.json').exists()} — the probe and the run disagree")
     # the REAL stat line format is asserted via the live log
     log_text = proc.stdout + proc.stderr
     assert p2._parse_yosys_stat_cells(log_text) is not None
@@ -419,8 +469,27 @@ def test_end_to_end_real_yosys_hierarchical(tmp_path):
     agree on hierarchy."""
     import shutil
     import subprocess
-    if shutil.which("yosys") is None:
+    exe = shutil.which("yosys")
+    if exe is None:
         pytest.skip("yosys not installed")
+    # Unlike the flat end-to-end above, this test's SUBJECT is the `-json`
+    # design block: it asserts `synth_count_source == "stat.json"` and compares
+    # the design aggregate against the log total. Without `-json` there is no
+    # design block to compare, so the property is UNTESTABLE here — not
+    # violated. Skip naming tool, version and the missing behaviour, so the
+    # skip is auditable rather than a silent hole (vibe-ic#1371's form).
+    _support = _yosys_stat_json_support(exe)
+    if _support is False:
+        _v = subprocess.run([exe, "-V"], capture_output=True, text=True,
+                            timeout=_PROBE_TIMEOUT_S).stdout.strip() or "unknown"
+        pytest.skip(
+            f"yosys present at {exe} ({_v}) but it does not accept "
+            "`stat -json` (the option arrived after 0.9). This test's subject "
+            "IS the -json design block, so it cannot be measured on this host. "
+            "NOT a capability-independent pass: the flat end-to-end test above "
+            "still runs here through the reporter's fallback source.")
+    # _support is None -> yosys failed for some other reason; do NOT skip.
+    # Fall through and let the real assertions report it.
     src = tmp_path / "hier.v"
     src.write_text(
         "module leaf(input a, input b, output y);\n"

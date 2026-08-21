@@ -21,7 +21,10 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import pytest
 
 PROG = Path(__file__).resolve().parent.parent / "rtl_hygiene_lint.py"
 _IV = shutil.which("iverilog")
@@ -124,10 +127,56 @@ def test_netout_silent(tmp_path):
     assert RULE not in r.stdout, r.stdout
 
 
+def _iv_rejects_ansi_output_redeclared() -> bool:
+    """Does THIS iverilog reject the duplicate declaration the rule is about?
+
+    The module docstring above says it "hard-ERRORs on every conforming
+    simulator". That is true of some iverilogs and not others. Measured
+    2026-08-13 on Icarus 11.0: `iverilog -g2012` compiles `_DEFECT` with rc=0
+    and an EMPTY stderr. `cvdp_gate.py` already discloses that the official
+    cvdp-sim scorer runs Icarus 13 precisely because "the accepted-syntax /
+    `sorry:` sets may diverge" between versions.
+
+    So the "does not compile" precondition can only be DEMONSTRATED on a host
+    whose iverilog exhibits it. Everything else in this file is about our own
+    rule and fixer and holds everywhere — including the three legs that assert
+    the FIXED file compiles, which both versions accept.
+
+    Keyed on MEASURED behaviour, never on a version string: a version test goes
+    stale the next time Icarus changes its mind, which is the same mistake one
+    level up.
+    """
+    if not _IV:
+        return False
+    with tempfile.TemporaryDirectory() as td:
+        probe = Path(td) / "probe.v"
+        probe.write_text(_DEFECT)
+        return not _compiles(probe)
+
+
+_IV_REJECTS_DUP = _iv_rejects_ansi_output_redeclared()
+
+
+@pytest.mark.skipif(
+    not _IV_REJECTS_DUP,
+    reason=("this iverilog ACCEPTS an ANSI output re-declared as reg "
+            "(measured: Icarus 11 does; the scorer's Icarus 13 rejects it), "
+            "so 'the defect does not compile' cannot be demonstrated here"),
+)
+def test_the_defect_does_not_compile_before_the_fix(tmp_path):
+    """The precondition `test_fix_...` used to assert inline.
+
+    Split out so that a host whose iverilog accepts the defect reports a SKIP
+    carrying the reason, instead of turning the FIXER's test red for something
+    that is not about the fixer. Where the tool does reject it, this still runs
+    and still fails if the defect ever starts compiling.
+    """
+    p = _write(tmp_path, "d.v", _DEFECT)
+    assert not _compiles(p), "defect must NOT compile before --fix"
+
+
 def test_fix_makes_it_compile_and_preserves_init(tmp_path):
     p = _write(tmp_path, "d.v", _DEFECT)
-    if _IV:
-        assert not _compiles(p), "defect must NOT compile before --fix"
     r = _run(["--fix", str(p)])
     assert "promoted 1 duplicate-declared output port" in r.stdout, r.stdout
     fixed = p.read_text()

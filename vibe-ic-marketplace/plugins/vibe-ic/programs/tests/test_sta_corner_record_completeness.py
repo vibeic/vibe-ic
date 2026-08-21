@@ -772,63 +772,84 @@ def test_measured_shape_with_max_slew_violations_fails(tmp_path):
 
 
 # ── #447 convention applied here: state the denominator ────────────────────
-def test_a_run_with_no_signoff_corner_says_so_instead_of_claiming_MET():
-    """MEASURED on a published cell. R3 — the sign-off MET rule — only examines
-    rows whose `role_class` is "signoff" and SKIPS every other role. On a run
-    whose ONLY corner is `primary`, R3 examined ZERO rows and the verdict line
-    still read "every sign-off corner MET".
+#
+# THESE THREE WERE MEASURED ON PUBLISHED CELLS, AND THAT WAS NEVER THE SUBJECT.
+# `subservient` (zero sign-off corner rows) and `spm` (4-6 rows, 2-4 sign-off)
+# were the convenient real examples of two SHAPES; what is being pinned is what
+# the PROGRAM says about each shape. Reading them from the published tree bought
+# nothing and cost a great deal: the cells moved to vibeic/benchmark-data, so the
+# pair on `subservient` failed on an empty result — a report of a defect where
+# the only fact was that the data had moved — while the `spm` half had been
+# silently dormant even longer, pinned to `v1.5.65_sky130A`, a version directory
+# the published tree no longer carries, so its `if not cell.is_dir(): skip` fired
+# on EVERY host including one holding the whole corpus.
+#
+# Rebuilt on the fixture builders this file already owns, so both shapes are
+# measured in every checkout, and a regression in the vacuous-sentence guard
+# fails here instead of waiting for a corpus. Verified against the published
+# cells before the rewrite: the primary-only fixture reproduces `subservient`'s
+# reading exactly (signoff_corner_rows 0, "NO SIGN-OFF CORNER WAS REPORTED",
+# no "every sign-off corner MET"), and the multi-corner fixture reproduces
+# `spm`'s (corner_rows > 1 with sign-off rows > 0).
+def _primary_only(tmp_path: Path, name: str = "primary_only") -> Path:
+    """A run whose ONLY corner row is `primary` — the `subservient` shape.
+
+    No sign-off stance declaration of either axis, so nothing gives a corner the
+    `signoff` role and R3 has nothing to examine.
+    """
+    run = _run(tmp_path, name)
+    _write(run / "phase2/stage2/constraints/pvt_matrix.json", json.dumps({
+        "version": "1.0", "primary_corner": "TT", "corner_count": 1,
+        "multi_corner": False,
+        "corners": [{"name": "lib__tt_025C_1v80", "label": "TT"}],
+    }))
+    _write(run / "phase3/stage3/sta/sta_spef_based.rpt", _nominal(0.05))
+    return run
+
+
+def test_a_run_with_no_signoff_corner_says_so_instead_of_claiming_MET(tmp_path):
+    """R3 — the sign-off MET rule — only examines rows whose `role_class` is
+    "signoff" and SKIPS every other role. On a run whose only corners are
+    `primary`, R3 examined ZERO rows and the verdict line still read "every
+    sign-off corner MET".
 
     The claim is not false — vacuously every one of zero corners is met — but
     it printed identically to a real multi-corner closure, which is the defect
     this repo has now removed from five separate programs (#447).
-
-    Measured across published cells: spm carries 4-6 corner rows with 2-4
-    sign-off; `subservient` is the only one with ZERO, and it was the only one
-    receiving the vacuous sentence.
     """
-    import pathlib
-    import pytest
-    import sta_corner_record_completeness_check as S
-
-    cell = pathlib.Path(__file__).resolve().parents[5] / \
-        "benchmark-data" / "ic" / "subservient"
-    if not cell.is_dir():
-        pytest.skip("published cell not checked out")
-    d = S.evaluate(cell)
+    d = G.evaluate(_primary_only(tmp_path))
     assert d.get("signoff_corner_rows") == 0, d.get("signoff_corner_rows")
+    assert d.get("corner_rows", 0) > 0, (
+        "the fixture reported no corner row at all — this test would then be "
+        "pinning the vacuous sentence on an empty read, not on the zero-"
+        "sign-off shape")
     joined = " ".join(d.get("reasons") or [])
     assert "NO SIGN-OFF CORNER WAS REPORTED" in joined, joined
     assert "every sign-off corner MET" not in joined, joined
 
 
-def test_a_real_multi_corner_run_still_reports_its_counts():
+def test_a_real_multi_corner_run_still_reports_its_counts(tmp_path):
     """The paired half: a run WITH sign-off corners must still get the normal
     sentence, now carrying both denominators."""
-    import pathlib
-    import pytest
-    import sta_corner_record_completeness_check as S
+    run = _run(tmp_path, "multi_corner_counts")
+    _declare(run)
+    _write(run / "phase3/stage3/sta/sta_spef_multicorner.rpt",
+           _multicorner(6.18, 0.54))
+    _write(run / "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+           _mcorner_ocv(2.68, 0.33))
+    _write(run / "phase3/stage3/sta/sta_spef_based.rpt", _nominal(0.00))
 
-    cell = pathlib.Path(__file__).resolve().parents[5] / \
-        "benchmark-data" / "ic" / "spm" / "v1.5.65_sky130A"
-    if not cell.is_dir():
-        pytest.skip("published cell not checked out")
-    d = S.evaluate(cell)
-    assert d.get("corner_rows", 0) > 1
-    assert d.get("signoff_corner_rows", 0) > 0
+    d = G.evaluate(run)
+    assert d.get("corner_rows", 0) > 1, d.get("corner_rows")
+    assert d.get("signoff_corner_rows", 0) > 0, d.get("signoff_corner_rows")
+    joined = " ".join(d.get("reasons") or [])
+    assert "NO SIGN-OFF CORNER WAS REPORTED" not in joined, joined
 
 
-def test_the_counts_are_exported_in_the_result():
+def test_the_counts_are_exported_in_the_result(tmp_path):
     """A denominator nobody can read is not a denominator — it has to be in
     the machine-readable result, not only in the prose."""
-    import pathlib
-    import pytest
-    import sta_corner_record_completeness_check as S
-
-    cell = pathlib.Path(__file__).resolve().parents[5] / \
-        "benchmark-data" / "ic" / "subservient"
-    if not cell.is_dir():
-        pytest.skip("published cell not checked out")
-    d = S.evaluate(cell)
+    d = G.evaluate(_primary_only(tmp_path, "exported_counts"))
     assert "corner_rows" in d and "signoff_corner_rows" in d, sorted(d)
 
 

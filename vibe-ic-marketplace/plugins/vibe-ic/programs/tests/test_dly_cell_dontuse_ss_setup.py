@@ -20,6 +20,7 @@ These pin the EMISSION contract (chip-AGNOSTIC, no OpenROAD needed):
   buffer_ports, and normal buffers are preserved. Delay macros are legitimate
   ONLY for deliberate hold padding, never as signal/port buffers, in ANY PDK.
 """
+import fnmatch
 import importlib
 import re
 
@@ -36,19 +37,52 @@ def _patterns():
     return re.search(r"\{(.*?)\}", line).group(1).split()
 
 
+def _mode():
+    """The matching mode the emitted block ASKS FOR, read from the flags it
+    passes to `get_lib_cells` on the `$_du_pat` lookup — not from the buffer
+    counter's own unrelated `get_lib_cells *`."""
+    m = re.search(r"get_lib_cells((?: -\w+)*) \$_du_pat", _fallback())
+    flags = m.group(1) if m else ""
+    regexp = "-regexp" in flags
+    return regexp, ("-nocase" in flags and regexp)
+
+
 def _matches(cell):
     """True when the emitted block would exclude ``cell``.
 
-    Mirrors `get_lib_cells -regexp -nocase`, so this is the SAME decision
-    OpenSTA makes -- not a re-statement of the pattern literals. Two measured
+    Mirrors what OpenSTA does with what was ACTUALLY emitted, so this is the
+    SAME decision the tool makes -- not a re-statement of the pattern literals,
+    and not an assumption about which mode the block asked for. Two measured
     facts drive the mirror (OpenSTA inside OpenROAD, in-container):
       * ``-nocase`` is IGNORED without ``-regexp`` -- the tool prints
         ``[WARNING STA-0358] -nocase ignored without -regexp`` and matches
         case-SENSITIVELY (``-nocase -quiet *dly*`` -> 0 cells, ``*DLY*`` -> 4).
+        So a block that passes GLOBS is evaluated as globs, case-sensitively,
+        however it spelled its flags.
       * a ``-regexp`` pattern is anchored to the WHOLE cell name
         (``dly`` -> 0 cells, ``.*dly.*`` -> 4), hence ``fullmatch``.
+
+    2026-08-05: this used to `re.fullmatch` unconditionally. Measured against
+    e3aa9b126 -- the tree before the fix these tests exist for -- that made 3 of
+    this file's 5 pre-fix failures come out as `re.error: nothing to repeat`,
+    because that tree emits globs and a glob is not a regex. The tests did
+    discriminate the landing, but by crashing in Python's regex parser instead of
+    saying which delay cell the emitted set fails to reach. A pattern that is
+    invalid under its own declared mode now reaches NOTHING, which is the
+    truthful answer and the one that makes the assertion readable.
     """
-    return any(re.fullmatch(p, cell, re.IGNORECASE) for p in _patterns())
+    regexp, nocase = _mode()
+
+    def hit(pat):
+        if regexp:
+            try:
+                return bool(re.fullmatch(pat, cell,
+                                         re.IGNORECASE if nocase else 0))
+            except re.error:
+                return False        # OpenSTA would reject it too
+        return fnmatch.fnmatchcase(cell, pat)
+
+    return any(hit(p) for p in _patterns())
 
 
 # Cell names below are FAMILY examples, not any one PDK's catalogue: the

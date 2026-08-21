@@ -1,0 +1,182 @@
+
+========================================================================
+=== PHASE 1 (vendor docs → L1-L23) → phase1_one_shot_runner.py
+========================================================================
+RUNNER_LOCK_REENTRANT: phase1_one_shot_runner re-enters the lock held by parent pid=2156190 on /home/reyerchu/_agent_scratch_ibexsky/run/ibex (#588 delegated sub-run).
+WARN: regmap table read but not registers — phase1/input_doc/ibex_exception_interrupts.txt (rows_read=6, reason=no_name_bearing_column): this table was read and yielded no registers: it has an address-bearing column but no name-bearing column, so every row would be a register no consumer could name, emit or decode
+WARN: regmap table read but not registers — phase1/input_doc/ibex_integration.txt (rows_read=45, reason=address_role_only_from_value_column): this table was read and yielded no registers: its only address-role column is headed by a VALUE keyword (default / value / reset value), which states what a thing is set to and not where it lives, so the hex it holds is a constant and not a register address
+[1/15] Extracting text from input/docs/ ...
+      extracted 18 document(s) → /home/reyerchu/_agent_scratch_ibexsky/run/ibex/extracted_docs/
+[2/15] L1_DATASHEET ...
+      → L1_DATASHEET.json (todo=0, ev=67)
+[3/15] L2_FRS ...
+      → L2_FRS.json (todo=0, ev=102)
+[4/15] L3_CMD_PROTOCOL ...
+      → L3_CMD_PROTOCOL.json (todo=0, ev=11)
+      l3_opcode_name_coverage: PASS: 0/11 opcode(s) carry placeholder names (threshold 0%).
+      hdl_enum_routing: 25 typedef enum(s) declared by staged HDL input(s) — (no destination) x22, L3.opcodes x1, L4.registers x1, L6.fsm_states x1 (every decision recorded in reports/phase1/hdl_enum_routing.json)
+[5/15] L4_REGMAP ...
+      → L4_REGMAP.json (todo=0, ev=34)
+[6/15] L5_ADI_SPEC ...
+      → L5_ADI_SPEC.json (todo=0, ev=0)
+[7/15] L6_CONTROL_LOGIC ...
+      → L6_CONTROL_LOGIC.json (todo=0, ev=14)
+      l4_regmap_phase2_emitter_contract_check: [PASS] l4_regmap_phase2_emitter_contract_check: 145 register(s) yield a unique identifier and an unambiguous decodable address through the emitter's own derive_registers()
+      l4_regmap_enumerated_values_typed_check: [PASS] l4_regmap_enumerated_values_typed_check: 2 multi-bit enum-eligible fields all carry typed code->meaning enumerated_values — examined 2 multi-bit enum-eligible register fields (of 84 considered). This verdict is denominated in FIELDS THAT ARE PRESENT; whether the register set is complete against the input is l4_regmap_declared_register_coverage_check.
+      l4_regmap_declared_register_coverage_check: [PASS] l4_regmap_declared_register_coverage_check: the input declares 145 register address binding(s) and L4 carries all 145
+      l5_analog_block_spec_actionable_check: [SKIP] l5_analog_block_spec_actionable_check: L5 declares no analog_blocks[] (no_analog=True, analog_blocks_detected=False) — the analog-digital interface layer is legitimately empty for a pure-digital design
+      l6_fsm_scaffold_actionable_check: [WARN] l6_fsm_scaffold_actionable_check: L6 attributes its states to 2 DISTINCT state machines — doc:input/docs/ibex_load_store_unit.rst [inferred from documents, 1 state(s)]; ctrl_fsm_e [closed typedef enum, 10 state(s)]. The state list a conforming phase 2 would be handed is their union, not one machine
+[8/15] L7_TEST_DEBUG ...
+      → L7_TEST_DEBUG.json (todo=0, ev=0)
+[9/15] L8_RTL_CONSTANTS ...
+      → L8_RTL_CONSTANTS.json (todo=0, ev=27)
+[10/15] L9_INTEGRATION_SPEC ...
+      → L9_INTEGRATION_SPEC.json (todo=0, ev=0)
+[11/15] L10_TEST_CASES ...
+      → L10_TEST_CASES.json (todo=0, ev=11)
+[12/15] L11_OTP_CONTENT ...
+      → L11_OTP_CONTENT.json (todo=0, ev=0)
+[13/15] L12_BEHAVIORAL_SEQUENCES ...
+      → L12_BEHAVIORAL_SEQUENCES.json (todo=0, ev=11)
+[14/15] L13_LAB_CALIBRATION ...
+      → L13_LAB_CALIBRATION.json (todo=0, ev=0)
+[14b/15] L8_TIMING_WAVEFORM ...
+      → L8_TIMING_WAVEFORM.json (todo=0, ev=13)
+=== l8_doc_clock_freq_synth (ibex) ===
+  verdict: NOT_APPLICABLE
+  scanned: 18 document(s), 0 table(s), 0 row(s) stating a frequency
+  L8 declares clock(s): ['clk_i']
+  [DISCLOSED] no document row states a frequency for: clk_i — left unresolved, NOT defaulted.
+  applied: 0 record(s) filled, 0 already resolved and left byte-identical
+      → seeded extraction_patterns.json with 586/613 backfilled literals (unpromoted 27 kept in extraction_patterns.auto.json)
+[14b2/15] L8 protocol-width extract (R19) ...
+[14b3/15] L8 encoding-table overlay (R41) ...
+[14b7/15] L8_RTL_CONSTANTS universal protocol constants (R48) ...
+[14b6/15] L17/L18/L8_TIMING/L9 batch synth (R46) — DEPRECATED, see 14c3 ...
+[14c/15] L14-L18 protocol spec extract ...
+      → L14_PROTOCOL_VERSIONING.json (todo=0, ev=0)
+      → L15_ENCODING_TABLES.json (todo=0, ev=0)
+      → L16_COMPLIANCE_PROPERTIES.json (todo=0, ev=0)
+      → L17_CHANNEL_SIGNAL_CATALOG.json (todo=0, ev=0)
+      → L18_INTERCONNECT_TOPOLOGY.json (todo=0, ev=0)
+[14c1/15] L1 protocol metadata overlay (R23) ...
+[14b5/15] L12 behavioral sequences overlay (R43) ...
+[14b4/15] L6 FSM/control-logic overlay (R42) ...
+[14c0/15] L9 integration_spec overlay (R40) ...
+[14c1b/15] L17 handshake_pairs overlay (R27) ...
+[14c2/15] L3 protocol mirror from L14-L18 (R21) ...
+[14c5/15] L4/L5/L10/L14/L15 residual cleanup (R52) ...
+[14c4/15] L1/L2/L6/L7/L12 universal protocol doc facts (R50) ...
+[14c3/15] L17/L18/L8_TIMING/L9 batch synth (R46 relocated) ...
+[14c3/15] ic_class re-stamp (all L1-L13 emitted) → processor_cpu
+[14d/15] L19-L23 skeleton emit ...
+=== l21_doc_supply_rail_synth ===
+  verdict: NOT_APPLICABLE
+  scanned: 18 document(s), 0 table(s), 0 qualified as supply table(s)
+  stated: 0 rail(s) (0 POWER, 0 GROUND)
+  adding: 0 domain(s) (0 already declared and left byte-identical)
+=== l21_macro_supply_rail_synth ===
+  verdict: NOT_APPLICABLE
+  count: 0 hard macro(s) with PG pins across 0 LEF file(s), 0 master(s)
+      → L19_CONSTRAINTS_PDK.json (todo=0, ev=1)
+      → L20_DFT_SCAN_TOPOLOGY.json (todo=0, ev=0)
+      → L21_POWER_INTENT.json (todo=0, ev=0)
+      → L22_VERIFICATION_PLAN.json (todo=0, ev=0)
+      → L23_SECURITY_REQUIREMENTS.json (todo=0, ev=0)
+[14d2/15] L24-L27 completeness emit ...
+      → L24_SIGNOFF.json (todo=0, ev=0)
+      → L25_RELIABILITY_MISSION_PROFILE.json (todo=0, ev=0)
+      → L26_MECHANICAL_TRANSDUCTION.json (todo=0, ev=0)
+      → L27_MEMORY_MODULE_SPD.json (todo=0, ev=0)
+      L22 coverage goals: lifted 1 measurable target(s) from the design's own inputs
+[14e/15] serial_peripheral_protocol class synth (R53/R54/R55) ...
+      → R53/R54/R55 SPI synth applied (is_spi=False)
+[14e2/15] bus_interconnect_protocol Tier-2 synth (TileLink / Wishbone) ...
+[14e2b/15] generic drop-in protocol-synth auto-dispatch ...
+[14e3/15] L10↔L3 packet-protocol opcode consistency sweep ...
+      → L3.opcodes non-empty (11) — genuine command IC, L10 left intact
+[15/15] coverage report ...
+      overall.pct = 100.0% (target ≥80%; FAIL if --strict)
+      → /home/reyerchu/_agent_scratch_ibexsky/run/ibex/reports/extraction_coverage_report.json
+
+=== SUMMARY ===
+L docs emitted: 28/28
+Total evidence entries: 291
+Total __TODO__ stubs: 0
+Coverage (curated):  586/586 = 100.0%
+Coverage (hands_on): 586/586 = 100.0%
+Coverage (overall):  100.0%
+Input documents:     18 visited / 18 extracted / 0 UNREAD
+Layer demand:        0 layer(s) demanded by the input, 0 silently empty (zeros measured over 18 input document(s))
+
+=== AI deep-review handoff ===
+After this runner completes, AI MUST invoke the `phase1-completeness-deep-review` skill to verify every fact in input docs lands in generated_docs/L*.json. Deterministic gate: phase1_doc_input_completeness_check.py.
+      l1_pin_bus_width_actionable_check: PASS: 12 bus-confirmed pin(s) all resolve to an actionable integer bit width.
+      l2_named_constant_resolvable_check: PASS: 0 cross-layer named reference(s) resolve to concrete numbers; 10 published timing record(s) carry numeric values.
+      l3_opcode_dispatch_key_actionable_check: PASS: all 11 opcode(s) carry a unique, parseable dispatch key and a unique command mnemonic.
+      l_doc_path_portability_check: l_doc_path_portability_check: PASS (28 L document(s) examined) — every provenance path is project-relative
+      l_doc_generator_stamp: l_doc_generator_stamp: PASS (28 L document(s) examined; CURRENT=28) — running 1.9.82
+      phase1_input_corpus_purity_check: phase1_input_corpus_purity_check: [SKIP] no tooling subtree found under the project — the contamination route this check covers does not exist here (ADVISORY) [ADVISORY]
+      phase1_sufficiency_check: sufficiency verdict: sufficient [ADVISORY]
+          layers=L1,L10,L11,L12,L13,L14,L15,L16,L17,L18,L19,L2,L20,L21,L22,L23,L24,L25,L26,L27,L3,L4,L5,L6,L7,L8,L9 ports=47 sequential=False
+[phase1] expert track (second track) ...
+      INCOMPLETE: phase1_expert_parse_track — the AI sub-track did not deliver a reading (HANDOFF_EMITTED), so the expert expectation was NOT examined; the deterministic findings are a floor, not coverage
+      phase1_expert_parse_track: VACUOUS_PASS (1 finding(s); AI sub-track HANDOFF_EMITTED)
+        [REVIEW] EXPERT_TRACK_AI_SUBTRACK_SKIPPED: The AI sub-track of the Phase-1 expert track did not deliver a reading (HANDOFF_EMITTED): pack written to /home/reyerchu/_agent_scratch_ibexsky/run/ibex/reports/audit/phase1/expert_parse_track_pack; invoke subagent vibe-ic:ic-expert-agent on /home/reyerchu/_agent_scratch_ibexsky/run/ibex/reports/audit/phase1/expert_parse_track_pack/ic_expert_agent_handoff.json and re-run to consume its answer Findings below come from the deterministic sub-track ALONE — read them as a floor, not as coverage.
+        report: /home/reyerchu/_agent_scratch_ibexsky/run/ibex/reports/audit/phase1/expert_parse_track.json
+
+========================================================================
+=== PHASE 2 (= 2a + 2b) → phase2_one_shot_runner.py
+========================================================================
+RUNNER_LOCK_REENTRANT: design_one_shot_runner re-enters the lock held by parent pid=2156190 on /home/reyerchu/_agent_scratch_ibexsky/run/ibex (#588 delegated sub-run).
+[phase2] complexity advisory: complexity score=59.97 tier=MEDIUM (prefer_catalog_glue=False synth_effort=medium fpga_early=True sta_corners=multi) — ADVISORY only
+
+=== design_one_shot_runner DONE — /home/reyerchu/_agent_scratch_ibexsky/run/ibex/reports/orchestrator/phase2_one_shot.json
+verdict: FAIL
+  PASS     rig_topology_skeleton emitted skeleton at rig_topology.json — fill __TODO__ fields before final tape-out audit
+  PASS     phase1_precheck      28/13 L docs present
+  PASS     detect_ic_class      processor_cpu
+  WAIVED   rtl_gen              IC class 'processor_cpu': staged vendor RTL found in input/vendor_rtl/ (22 file(s) (+ 17 more)) — REUSED-IP path: use sk
+  PASS     reused_ip_consume    Staged 23 design-provided build-RTL file(s) into phase2/stage1/rtl/ so synth no longer halts on empty rtl/. Synth top re
+  SKIP     leaf_typo_aliases    no leaf-name typo detected (no alias wrapper needed)
+  SKIP     reset_clock_variant_aliases top 'chip_top' is the runner's auto-wrapper name, absent from rtl/, and rtl/ is not single-leaf-shaped (no unambiguous T
+  PASS     determinism_gates    determinism gates clean over 22 RTL file(s) (clock-divider phase-form + worked-example oracle + clock-divider waveform-r
+  ADVISORY complexity_advisory  complexity score=59.97 tier=MEDIUM (prefer_catalog_glue=False synth_effort=medium fpga_early=True sta_corners=multi) — A
+  SKIP     full_stack_tb_gen    tb_ibex_core_full.v emitted as CONNECTIVITY-ONLY skeleton (30 L9.top_ports → 30 DUT pins, 8 L3 opcodes driven). Function
+  SKIP     l10_unit_tb_gen      no TB produced — L10 carries 11 case(s) [happy_path 11]; the TB producer's scaffold scope is {cpu_functional, functional
+  WAIVED   professional_tb_gen  generic professional TB generated; functional run deferred
+  FAIL     reference_tb         generic full-stack TB (tb_ibex_core_full.v) failed to compile against rtl/ — real structural defect. iverilog rc=2 stder
+  ECO_LOOP eco_loop_iter        ref_tb FAIL → ECO iteration 1/3
+  WAIVED   rtl_gen              IC class 'processor_cpu': staged vendor RTL found in input/vendor_rtl/ (22 file(s) (+ 17 more)) — REUSED-IP path: use sk
+  SKIP     eco_loop_remediation no remediable signature kind in hint — leaving loop to declare FAIL_ECO_INERT
+  FAIL_ECO_INERT eco_loop_iter        ECO iteration 1 produced byte-identical RTL (sha256=d277fa1a833885bd...) to the prior iteration. Next steps: Run `claude
+  FAIL     yosys_synth          rc=127 log_tail=could not create container workdir for SV-frontend fallback
+  SKIP     qsf_gen              DE10 QSF generation SKIPPED: class 'processor_cpu' verification_track='generic_full_stack' half_duplex_bus=False — the A
+  PASS     sdc_gen              emitted ibex_top.sdc (NOTE: clock port(s) taken from L8's DECLARED clock contract: clk_i@10ns on 'clk_i'
+PASS sdc_gen: /
+  PASS     otp_image_check      [SKIP] otp_image_nonzero_check: no L11/L4 OTP layout declares payload-class regions (ID/MSN/ASN/SN/SMA/FCH/etc.)
+  SKIP     fpga_compile         fpga/<name>.qsf missing — caller must produce it
+  SKIP     fpga_burn            no .sof to burn
+  SKIP     usb_hid_tester_verify <half-duplex-tester> board verify SKIPPED: class 'processor_cpu' verification_track='generic_full_stack' half_duplex_bus
+  SKIP     dft_lec_chain        no phase2/stage2/synth/netlist.v (synth produced no mapped netlist) — DFT/post-DFT/LEC not applicable
+  SKIP     arith_declaration_emit emitter fail-closed (rc=1); no file written — arith_declaration_emit: FAIL_CLOSED — required field(s) not derivable:   -
+  PASS     phase2_manifests     11 manifest(s) written
+  WAIVED   final_audit            GATE_RAN l8_clock_period_actionability_check          rc=0           PASS
+  GATE_RAN l9_floorplan_contract_check      
+  PASS     stamp_gate_reports   stamped #484 identity into 19 gate/lint json(s) under reports/phase2/gates, reports/phase2/lint
+final summary: reports/final_summary.md
+
+========================================================================
+=== vibe_ic_one_shot_runner DONE — /home/reyerchu/_agent_scratch_ibexsky/run/ibex/reports/orchestrator/vibe_ic_one_shot.json
+  overall verdict   : FAIL
+  halted at         : phase2
+    phase1   : PASS
+    phase2   : FAIL
+    analog   : SKIPPED
+    phase3   : SKIPPED
+    mixed_signal : SKIPPED
+  duration          : 36.0s
+  final summary     : reports/final_summary.md
+  deliverable       : NOT DELIVERED YET — RUN_STILL_IN_PROGRESS. This run is NOT complete until RESULT.md is authored. NO RESULT / empty output = the run FAILED.
+  self-verify       : python3 /home/reyerchu/_agent_scratch_ibexsky/plugin_1982_fix/programs/run_output_completeness_check.py /home/reyerchu/_agent_scratch_ibexsky/run/ibex
+========================================================================

@@ -1,0 +1,30 @@
+{
+  "contract": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+  "declared_schema": "vibeic.ppa.comparison.v2",
+  "measurement_bases": [
+    "post_route_sta",
+    "post_route_sta"
+  ],
+  "ok": false,
+  "problem": {
+    "clock_target_ns": 10.0,
+    "corners": [
+      "ss",
+      "tt",
+      "ff"
+    ],
+    "pdk": "sky130A",
+    "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
+  },
+  "record": "/home/reyerchu/_jxlayer/records/h2h_B.json",
+  "refusal": {
+    "code": "SCOPE_INCOMPLETE",
+    "message": "arm 'vibe-ic-phase3-defaults''s `power_mw` scope does not declare ['mode']. Both arms declaring nothing would otherwise satisfy equality, and two numbers that say nothing about themselves are not thereby comparable."
+  },
+  "roles": {
+    "baselines": [
+      "vibe-ic-phase3-defaults"
+    ],
+    "subject": "vibe-ic-crosslayer-searched"
+  }
+}
