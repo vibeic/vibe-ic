@@ -1,8 +1,21 @@
 # j63b — the remaining 63x8 reds, re-enumerated, classified and three of them closed
 
-Measured tree: `origin/main` @ `a00f53f20` [v1.11.66] — RE-FETCHED at the end
-of this work and still the head, so nothing here is measured against a main that
-has since moved. Fresh `git worktree`,
+Measured tree: `origin/main` @ `a00f53f20` [v1.11.66]. **Main moved 30 commits
+during this work, to `81cd5321b`** — an earlier revision of this line claimed it
+was still the head, and that claim expired while it stood. The branch is
+REBASED onto `81cd5321b` and every load-bearing figure re-verified there:
+
+```
+d8_missing_caught                347 passed        the headline survives
+flow_manifest_declaration_parity  12 passed        reds 16/17 still closed
+d3_manifest_declaration_parity    13 passed        the second parity gate
+63x8_ledger                       52 passed
+63x8_coverage      2 failed, 28 passed             only reds 14/15, owned elsewhere
+d3_outputs_produced   6 failed, 52 passed, 61 s    unchanged
+mutation_ledger       3 failed, 121 passed         unchanged
+```
+
+Fresh `git worktree`,
 `PYTHONDONTWRITEBYTECODE=1`, corpus pointer UNSET, one pytest process per file.
 Host load recorded per run, because four of the seventeen turn on it.
 
