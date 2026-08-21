@@ -3038,6 +3038,43 @@ four possible homes — but the cost of leaving them unwired is now stated in wh
 they detect rather than in how many they are.
 
 
+## M52 — the link is CONFIRMED: `slot_pad_budget_check` and `0.5ic` are one missing artefact
+
+M51 flagged the connection and declined to assert it. Checking it took two greps,
+and it holds — by source, not by subject matter:
+
+* `slot_pad_budget_check.py:114` reads *"the INGESTED shape that
+  **`submission_template_ingest`** writes — the pad …"*, from
+  `project/input/submission_template/slots` (`:509`).
+* Step **`0.5ic`**'s `programs:` list is **`submission_template_ingest`**.
+
+**The checker consumes exactly what `0.5ic`'s program produces.** And `0.5ic` is
+skipped because its `from: external, check: none` input — the shuttle operator's
+published template — is absent (M36).
+
+**So these are not two open items. They are one missing artefact with two
+symptoms:**
+
+| symptom | recorded as |
+|---|---|
+| `0.5ic` census cell reports `ENFORCED`, live run says `skipped`; no named mutation | 2 reds, "external artefact" (M36) |
+| `slot_pad_budget_check` runs only when its own test does — the checker that measured **5 of 9 designs unbondable** | 1 of the "3 unwired checkers" (M50/M51) |
+
+**And it explains the wiring, charitably.** Wiring `slot_pad_budget_check` today
+would create a gate with nothing to read — an unrunnable or vacuous gate, exactly
+what this repository spends its hygiene suite preventing. **Whether that is why
+it is unwired, or whether it is unwired by oversight, I do not know and am not
+guessing** — the docstring notes it *"can also be pointed straight at an
+un-ingested template"*, so a raw template would serve either way.
+
+**What the next person should take from this:** fetching the shuttle operator's
+template is not a `0.5ic` housekeeping item. It unblocks a step AND a checker
+that has already measured five unbondable designs and currently reports to
+nobody. **That is the highest-value single action named anywhere in this
+document**, and it is an acquisition, not an engineering task — *"data we never
+went and got"*.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3125,7 +3162,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. **Fix the FIXTURE** so Step 4 has no vacuous members, making the waiver branch reachable. Owner's call. | **answered + a fix to avoid** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
-| **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
+| **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — an acquisition, not engineering.** | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | the ratios this document claims to record and does not (M36). Deliberately not re-measured — load-sensitive, shared host. | **an honest gap** |
 
