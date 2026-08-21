@@ -751,3 +751,47 @@ def test_ordinary_spacing_and_qualified_types_are_untouched():
            "  output wire done);\nendmodule\n")
     assert [(p["name"], p["width"]) for p in S.parse_top_ports(rtl, "chip_top")] \
         == [("bus", 8), ("c", 1), ("done", 1)]
+
+
+# --------------------------------------------------------------------------- #
+# the founding defect, re-checked on the REAL IC the docstring names
+# --------------------------------------------------------------------------- #
+# Every test above this line drives synthetic Verilog. The verdict path — the
+# part that decides FITS / DOES_NOT_FIT / UNDECIDED — had no real-artefact
+# coverage at all, because no design in this repository carries ingested slot
+# files. It can still be covered on the PUBLISHED corpus, which does carry the
+# ICs this file cites as its evidence.
+#
+# `_width`'s docstring records the founding defect verbatim: "a design whose
+# entire datapath is parameterised (`host_wdata[BDW-1:0]` etc., 120 real bits)
+# summed to 31 and the gate answered **FITS**". That IC is `edge_llm_accel` and
+# it is in the corpus. Measured there today: still 31, still the same three
+# unresolved ports — and the verdict is UNDECIDED, not FITS.
+#
+# Skips with an actionable reason when $VIBEIC_CORPUS_ROOT is unset, so it
+# costs nothing on a tree that has no corpus.
+
+def test_the_parameterised_datapath_is_still_refused_on_the_real_IC():
+    rtl_dir = _hostpaths.require_corpus(
+        "ic", "edge_llm_accel", "phase2", "stage1", "rtl")
+    src = None
+    for f in sorted(rtl_dir.iterdir()):
+        if f.suffix in (".v", ".sv"):
+            ports = S.parse_top_ports(f.read_text(errors="replace"),
+                                      "edge_llm_accel")
+            if ports:
+                src = ports
+                break
+    if src is None:
+        pytest.skip("no edge_llm_accel top module in the configured corpus")
+
+    budget = S.interface_budget(src)
+    # the number the docstring records as the false-FITS sum
+    assert budget["signal_bits"] == 31
+    # and the ports it names as the cause, still unresolved rather than dropped
+    assert set(budget["unresolved_width_ports"]) >= {"host_wdata", "host_rdata"}
+
+    rep = S.evaluate({"slot_1x1": _slot_ingested()}, src)
+    assert (rep["verdict"], rep["rc"]) == ("UNDECIDED", 2), (
+        "a parameterised datapath summed to a number and PASSED — the defect "
+        "this program was written to end")
