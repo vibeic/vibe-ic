@@ -395,6 +395,41 @@ def _run_rtl_precheck_gate(
     return r.returncode, report
 
 
+#: Directories that BELONG TO EVERYONE, so a marker found in one is evidence
+#: about somebody else's litter, never about this SOF's project. `$HOME` and
+#: `/` are here for the same reason: they are shared by every project the user
+#: owns, so "a project root" is precisely what they cannot be.
+_SHARED_ROOTS = ("/tmp", "/var/tmp", "/dev/shm", "/usr", "/var", "/etc", "/")
+
+
+def _is_shared_directory(path: str) -> bool:
+    """True when `path` is a directory no single project can own.
+
+    WHY THIS EXISTS. `_resolve_project_root_from_sof` scores a directory by
+    whether it CONTAINS a name like `input/`, `rtl/` or `waivers.json`. That is
+    a proxy for "this is a project root", and in a shared directory the proxy
+    fires without the property: measured on this machine, a stray
+    `/tmp/waivers.json` left by an unrelated run in July made the resolver
+    return `/tmp` for a SOF anywhere under it, so the pre-burn
+    flow_compliance audit ran against `/tmp` as though it were the user's
+    project.
+
+    That is not only a test artefact -- it is what a user gets when they burn a
+    SOF from a scratch directory. And because the litter is per-machine, the
+    resulting failure is per-machine too: the same commit is green on a host
+    with a clean `/tmp` and red on one without, which is the worst shape a
+    check can have, because neither result is reproducible from the tree.
+    """
+    real = os.path.realpath(path)
+    home = os.path.realpath(os.path.expanduser("~"))
+    if real == home:
+        return True
+    for shared in _SHARED_ROOTS:
+        if real == os.path.realpath(shared):
+            return True
+    return False
+
+
 def _resolve_project_root_from_sof(sof_path: str) -> Optional[str]:
     """Wave 20 (v0.119.52) helper: walk up from a SOF to the project
     root.
@@ -436,7 +471,7 @@ def _resolve_project_root_from_sof(sof_path: str) -> Optional[str]:
         for hint in ("rtl", "phase23_completion_audit.json", "phase2", "phase3"):
             if os.path.exists(os.path.join(cur, hint)):
                 score += 1
-        if score > 0:
+        if score > 0 and not _is_shared_directory(cur):
             candidates.append((score, cur))
     if not candidates:
         return None

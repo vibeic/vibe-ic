@@ -44,6 +44,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 # Importable as both a script and a module
 try:
@@ -417,7 +418,8 @@ def emit_l_doc_skeleton(l_doc_code: str,
         "evidence": [],
         "extraction_hints": hints,
         "extraction_status": "NOT_YET_EXTRACTED",
-        "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+        "emitted_by": _pmd.emitted_by(
+            "phase1_post_process.emit_l_doc_skeleton"),
     }
 
 
@@ -602,7 +604,7 @@ class PostProcessResult:
             "skeleton_emitted": self.skeleton_emitted,
             "na_stubs_emitted": self.na_stubs_emitted,
             "verdict": self.verdict,
-            "emitted_by": "phase1_post_process v0.1.51",
+            "emitted_by": _pmd.emitted_by("phase1_post_process"),
         }
 
 

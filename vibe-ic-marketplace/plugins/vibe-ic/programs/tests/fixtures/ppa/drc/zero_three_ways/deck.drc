@@ -1,0 +1,7 @@
+# Minimal KLayout DRC deck — three real rules on metal1.
+source($input)
+report("mini metal rules", $output)
+m1 = input(34, 0)
+m1.width(0.23.um).output("m1.1", "m1.1 : min. metal1 width : 0.23um")
+m1.space(0.23.um).output("m1.2", "m1.2 : min. metal1 spacing : 0.23um")
+m1.area < 0.202.um2

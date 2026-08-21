@@ -23,6 +23,18 @@ artefact. `test_real_tree_*` build the index from the actual published tree and
 mutate a REAL audit verdict, so defect-in -> FAIL and defect-out -> PASS is
 demonstrated on the same artefacts CI judges.
 
+WHERE THAT TREE IS NOW
+----------------------
+The published cells moved to https://github.com/vibeic/benchmark-data. This
+checkout still carries `benchmark-data/` — it holds the design INPUTS — so
+`<repo>/benchmark-data/ic` is still a directory, and the old "not checked out"
+guard therefore never fired; the four real-data tests below simply went red
+about a corpus that had moved. `_published_corpus` answers the question the guard meant
+to ask ("is a published CELL readable here?"), and `@needs_corpus` renders "I
+could not look" as a SKIP naming the corpus rather than as a defect claim —
+the same rule vibe-ic#1357 established for an absent TOOL. Where the corpus IS
+readable these four run exactly as before and can still fail.
+
 Fixture cells use deliberately synthetic names (`unit_one`, `unit_two/v0.0.1_procX`)
 — no IC, PDK, vendor or SKU literal, per `source_chip_agnostic_check`.
 """
@@ -37,11 +49,12 @@ from pathlib import Path
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
-REPO = PROGRAMS.parents[3]
 PROG = PROGRAMS / "benchmark_evidence_index.py"
 
 sys.path.insert(0, str(PROGRAMS))
 import benchmark_evidence_index as bei  # noqa: E402
+
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -283,26 +296,42 @@ def test_output_is_a_pure_function_of_the_tree(tree: Path):
 # ─────────────────────────────────────────────────────────────────────
 
 def _real_ic() -> Path:
-    p = REPO / bei.IC_SUBDIR
-    if not p.is_dir():
-        pytest.skip("published tree not checked out")
-    return p
+    """The `ic/` root of the published corpus.
+
+    Only ever reached from under `@needs_corpus`, so it does not need — and must
+    not invent — a skip reason of its own.
+    """
+    return corpus_root() / "ic"
 
 
-def test_real_tree_index_is_in_sync():
+def _corpus_repo_root(tmp_path: Path) -> Path:
+    """A repo-shaped root whose `benchmark-data/` IS the published corpus.
+
+    `benchmark_evidence_index` addresses cells as `<root>/benchmark-data/ic/…`,
+    while a clone of `vibeic/benchmark-data` carries `ic/…` at its top. One
+    symlink restores the shape the program expects. Nothing is copied, and
+    nothing under the corpus is written — every caller below passes `--check`.
+    """
+    root = tmp_path / "corpus_repo"
+    root.mkdir()
+    (root / "benchmark-data").symlink_to(corpus_root())
+    return root
+
+
+@needs_corpus
+def test_real_tree_index_is_in_sync(tmp_path: Path):
     """The committed index describes the committed artefacts. This is the same
     assertion the CI hygiene gate makes; it is duplicated here so a cell landed
     without regenerating fails in pytest too, not only in CI."""
-    _real_ic()
-    r = _run(REPO, "--check")
+    r = _run(_corpus_repo_root(tmp_path), "--check")
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_real_tree_still_holds_all_three_states():
+@needs_corpus
+def test_real_tree_still_holds_all_three_states(tmp_path: Path):
     """If this ever collapses to one state, either the flow converged
     everywhere or the measurement broke. Both are worth a red test."""
-    _real_ic()
-    text, findings = bei.build(REPO)
+    text, findings = bei.build(_corpus_repo_root(tmp_path))
     assert findings == []
     for section in (bei.CONVERGED, bei.RETAINED_FAILURE, bei.UNAUDITED):
         line = [l for l in text.splitlines()
@@ -310,6 +339,7 @@ def test_real_tree_still_holds_all_three_states():
         assert not line.endswith("| 0 |"), f"{section} is empty"
 
 
+@needs_corpus
 def test_real_tree_MUTATION_a_real_verdict_flip_is_caught(tmp_path: Path):
     """Defect-in / defect-out on REAL artefacts.
 
@@ -359,6 +389,7 @@ def test_real_tree_MUTATION_a_real_verdict_flip_is_caught(tmp_path: Path):
     assert bei.build(tmp_path)[0] == baseline, "not attributable to the flip"
 
 
+@needs_corpus
 def test_campaign_status_citations_are_stale_which_is_why_this_is_generated():
     """The measured justification for generating rather than writing.
 
@@ -367,13 +398,20 @@ def test_campaign_status_citations_are_stale_which_is_why_this_is_generated():
     that no longer exist. Pinned as a fact, not an opinion — if someone repairs
     that file, this test tells them to reconsider whether the generated index
     is still needed rather than letting the claim rot in a docstring.
+
+    Needs the corpus even though it was GREEN without it, and that is the whole
+    point: with no published cells every citation dangles, so the assertion
+    "the hand-maintained table has rotted" passes for a reason that says nothing
+    about the table. A pass produced by having nothing to look at is the exact
+    false certificate this file exists to prevent.
     """
-    status = REPO / "benchmark-data" / "BENCHMARK_IC_CAMPAIGN_STATUS.md"
+    root = corpus_root()
+    status = root / "BENCHMARK_IC_CAMPAIGN_STATUS.md"
     if not status.is_file():
         pytest.skip("campaign status not checked out")
     import re
     cited = re.findall(r"`(ic/[A-Za-z0-9_./-]+\.md)`", status.read_text())
     assert cited, "expected the hand-maintained table to cite cell paths"
-    dead = [c for c in cited if not (REPO / "benchmark-data" / c).is_file()]
+    dead = [c for c in cited if not (root / c).is_file()]
     assert dead, ("BENCHMARK_IC_CAMPAIGN_STATUS.md citations now all resolve; "
                   "re-read whether the generated index is still the answer")

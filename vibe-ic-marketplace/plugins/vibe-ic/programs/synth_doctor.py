@@ -45,6 +45,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # Patterns in priority order. The catch-all UNKNOWN is handled separately.
@@ -269,7 +270,7 @@ def diagnose(text: str) -> Dict[str, Any]:
         "verdict": verdict,
         "findings": [f.as_dict() for f in findings],
         "count": len(findings),
-        "emitted_by": "synth_doctor v0.1.96",
+        "emitted_by": _pmd.emitted_by("synth_doctor"),
     }
 
 
@@ -305,7 +306,7 @@ def _cli(argv: Optional[List[str]] = None) -> int:
         # MISSING, not crash: emit an empty CLEAN-equivalent envelope.
         result = {"tool": "synth_doctor", "verdict": "MISSING",
                   "findings": [], "count": 0,
-                  "emitted_by": "synth_doctor v0.1.96"}
+                  "emitted_by": _pmd.emitted_by("synth_doctor")}
         if args.json:
             print(json.dumps(result, indent=2))
         return 2

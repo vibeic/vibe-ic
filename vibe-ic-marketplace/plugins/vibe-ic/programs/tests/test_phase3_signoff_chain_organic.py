@@ -22,6 +22,7 @@ Covers the 7 backlog items:
 """
 import importlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -433,15 +434,45 @@ class TestDontUseTcl:
             "sky130_fd_sc_hd/pnr_excluded.cells")
 
     def test_wired_after_link_design_before_opt(self):
+        """The do-not-use list must land after `read_sdc` and before the
+        wire-RC / optimisation sequence: a pool restriction that arrives after
+        the pick is not a restriction.
+
+        Asserted on the EMITTED ORDER rather than on the template source, and
+        specifically NOT on the adjacency of two literals. The previous form
+        pinned `"{dont_use_block}# === v0.1.26 wire-RC model ==="` — i.e. that
+        NOTHING may ever sit between those two placeholders — so it went red
+        the moment a second pre-optimisation block was added between them,
+        while the property it exists for was untouched. An ordering test that
+        forbids insertion is testing the layout, not the ordering.
+        """
         import inspect
         src = inspect.getsource(runner.step_pnr)
         assert "dont_use_block = _dont_use_tcl(pdk)" in src
-        # ORGANIC #581 — the pnr.tcl template moved into the pure builder
-        # _build_pnr_tcl_text (tclsh-validated); the injection-point pin
-        # moves with it: right after read_sdc, before the wire-RC / opt
-        # sequence.
-        tmpl = inspect.getsource(runner._build_pnr_tcl_text)
-        assert "{dont_use_block}# === v0.1.26 wire-RC model ===" in tmpl
+        tcl = runner._build_pnr_tcl_text(
+            tech_lef_c="/x/tech.lef", cell_lef_c="/x/cell.lef",
+            macro_lefs_tcl="", liberty_c="/x/c.lib", macro_libs_tcl="",
+            netlist_c="/x/d.v", top="d", sdc_c="/x/d.sdc",
+            dont_use_block="#DONT_USE_MARKER\n",
+            metal_prefix="met", die_w=100, die_h=100, core_pad=10,
+            core_w=90, core_h=90, site="unit", out_dir_c="/out",
+            tapcell_block="", pdn_block="", util=0.3,
+            spare_protection_tcl="", spare_postfix_tcl="",
+            clk_buf="BUF", clk_buf_root="BUF", routing_constraint_tcl="",
+            pg_cleanup_block="", spef_repair_block="",
+            antenna_repair_block="", filler_block="")
+        du = tcl.index("#DONT_USE_MARKER")
+        sdc = tcl.index("read_sdc ")
+        wire_rc = tcl.index("set_wire_rc")
+        assert sdc < du < wire_rc, (
+            f"do-not-use at {du} is not between read_sdc ({sdc}) and the "
+            f"wire-RC/opt sequence ({wire_rc})")
+        # ...and before every command that can PICK a cell.
+        for cmd in ("global_placement", "buffer_ports", "repair_design",
+                    "repair_timing", "clock_tree_synthesis"):
+            assert du < tcl.index(cmd), (
+                f"the do-not-use list is emitted after `{cmd}`, which can "
+                f"already have chosen an excluded master")
 
 
 class TestDontUseFamilyFallback:
@@ -451,21 +482,127 @@ class TestDontUseFamilyFallback:
     detailed_route aborted with [ERROR DRT-0085], and write_def emitted a
     signal-UNROUTED DEF (root cause of the LVS_INPUT_DEF_SIGNAL_UNROUTED guard
     on opentitan_aes). The GENERAL fallback excludes the unroutable
-    __probe/__probec/__lpflow_ cell FAMILIES via OpenROAD's own get_lib_cells,
-    so the resizer never picks a probe cell even with no PDK exclude file."""
+    probe/probec/lpflow (and the delay-macro) cell FAMILIES via OpenROAD's own
+    get_lib_cells, so the resizer never picks a probe cell even with no PDK
+    exclude file."""
 
-    def test_fallback_excludes_the_three_unroutable_families(self):
+    @staticmethod
+    def _patterns():
+        """The pattern list AS EMITTED — read out of the Tcl instead of retyped,
+        so the test cannot drift away from the code it is guarding."""
+        m = re.search(r"foreach _du_pat \{([^}]*)\}",
+                      runner._dont_use_family_fallback_tcl())
+        assert m, "no `foreach _du_pat {...}` in the emitted fallback"
+        pats = m.group(1).split()
+        assert pats
+        return pats
+
+    def test_fallback_matches_both_naming_conventions_not_just_open_pdk(self):
+        """THE defect-present test. Every pattern used to be anchored on the
+        OPEN-PDK ``<lib>__<fn>`` double-underscore habit (``*__probe_*``,
+        ``*__dly*``). A commercial library spells the SAME families with bare,
+        upper-case names (``DLY1D1``), so the pattern list matched ZERO cells
+        while the log still printed ``DONT_USE_FALLBACK_APPLIED`` — the guard
+        reported that it ran and protected nothing. Measured consequence on a
+        real run: repair_design picked a 4-stage delay macro as the slew-fix
+        buffer. So the assertion is on BEHAVIOUR over both conventions, not on
+        a spelling: restore any ``__``-anchored pattern and the bare-name rows
+        below stop matching and this test FAILS."""
+        pats = self._patterns()
         tcl = runner._dont_use_family_fallback_tcl()
-        # the exact patterns that matched OpenLane's DONT_USE_CELLS (probe/probec/lpflow)
-        assert "*__probe_*" in tcl
-        assert "*__probec_*" in tcl
-        assert "*__lpflow_*" in tcl
+        # `-regexp` is what makes `-nocase` take effect AT ALL. Measured
+        # in-container (OpenSTA inside OpenROAD): in GLOB mode it prints
+        # `[WARNING STA-0358] -nocase ignored without -regexp` and matches
+        # case-SENSITIVELY — `-nocase -quiet *dly*` returned 0 cells while
+        # `-quiet *DLY*` returned 4. Asking for -nocase without -regexp makes
+        # the guard protect nothing while still logging that it ran.
+        assert "get_lib_cells -regexp -nocase -quiet $_du_pat" in tcl
+        # …and NO executable line may ask for -nocase without it. (Comment
+        # lines quote the STA-0358 warning verbatim, so they are excluded.)
+        for ln in tcl.splitlines():
+            if ln.lstrip().startswith("#") or "-nocase" not in ln:
+                continue
+            assert "-regexp" in ln.split("-nocase")[0], (
+                f"a -nocase without a preceding -regexp is silently ignored "
+                f"by OpenSTA: {ln.strip()!r}")
+
+        def hit(name):
+            # OpenSTA anchors a -regexp pattern to the WHOLE cell name
+            # (measured: `dly` -> 0 cells, `.*dly.*` -> 4), hence fullmatch.
+            return any(re.fullmatch(p, name, re.IGNORECASE) for p in pats)
+
+        must_exclude = [
+            # open-PDK <lib>__<fn> spelling (the only one the old list caught)
+            "sky130_fd_sc_hd__probe_p_8",
+            "sky130_fd_sc_hd__probec_p_8",
+            "sky130_fd_sc_hd__lpflow_inputiso0p_1",
+            "sky130_fd_sc_hd__dlygate4sd3_1",
+            "sky130_fd_sc_hd__dlymetal6s2s_1",
+            "sky130_fd_sc_hd__clkdlybuf4s15_1",
+            "gf180mcu_fd_sc_mcu7t5v0__dlya_1",
+            # bare commercial spelling, upper case — the whole point
+            "DLY1D1", "DLY2D1", "DLY3D1", "DLY4D1",
+            "DELAY2X", "PROBE_X1", "LPFLOW_ISO1",
+        ]
+        missed = [n for n in must_exclude if not hit(n)]
+        assert not missed, (
+            "these cells are the unroutable/delay families the fallback exists "
+            f"to exclude, yet no emitted pattern matches them: {missed}\n"
+            f"patterns as emitted: {pats}")
+
+        must_keep = [
+            # ordinary drive ladder, both conventions — excluding these would
+            # empty the pool the resizer/CTS draw from.
+            "sky130_fd_sc_hd__buf_8", "sky130_fd_sc_hd__inv_2",
+            "sky130_fd_sc_hd__dfxtp_1", "sky130_fd_sc_hd__clkbuf_16",
+            "gf180mcu_fd_sc_mcu7t5v0__buf_20",
+            "BUFD1", "BUFD20", "INVD4", "CLKBUFD20", "DFCRQD1", "NAND2D2",
+        ]
+        wrong = [n for n in must_keep if hit(n)]
+        assert not wrong, (
+            "the fallback would exclude ordinary logic/buffer/flop cells, "
+            f"starving the resizer and CTS: {wrong}\npatterns: {pats}")
+
+    def test_case_insensitive_matching_is_asked_for_in_the_mode_sta_honours(
+            self):
+        """OpenSTA honours ``-nocase`` ONLY with ``-regexp``; in glob mode it
+        warns ``[WARNING STA-0358] -nocase ignored without -regexp`` and matches
+        case-sensitively. Measured in-container on a commercial 180 nm liberty:
+        ``-nocase -quiet *dly*`` -> 0 cells, ``-quiet *DLY*`` -> 4. The run then
+        printed ``DONT_USE_FALLBACK_APPLIED: 0 … usable buffer cells 63 -> 63``,
+        i.e. the guard announced itself and excluded nothing. Because OpenSTA
+        anchors a regexp to the WHOLE cell name, each pattern must also carry
+        its own ``.*`` (measured: ``dly`` -> 0, ``.*dly.*`` -> 4)."""
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "-regexp" in tcl, "case-insensitive matching needs -regexp"
+        for pat in self._patterns():
+            # A GLOB (`*dly*`) fails BOTH halves of this: it does not open or
+            # close with the regex any-run `.*`. Restore the globs and this
+            # test FAILS on the first pattern.
+            assert pat.startswith(".*") and pat.endswith(".*"), (
+                f"{pat!r} is not whole-name-anchored: OpenSTA fullmatches a "
+                "-regexp pattern, so an unanchored stem matches nothing")
+            re.compile(pat)          # must be a valid regex, not a glob
+
+    def test_fallback_pool_emptying_is_measured_and_reverted_never_silent(self):
+        """A wider net can, on a pathological library, exclude EVERY buffer.
+        The block must COUNT what OpenSTA itself calls a buffer before and
+        after, revert the whole set when the count would hit zero, and say so.
+        Delete the revert and this test FAILS."""
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "get_property $_c is_buffer" in tcl   # the resizer's own pool
+        assert "set _du_before" in tcl and "set _du_after" in tcl
+        assert "if {$_du_before > 0 && $_du_after == 0} {" in tcl
+        assert "unset_dont_use $_du_all" in tcl
+        assert "DONT_USE_FALLBACK_REVERTED" in tcl
+        # the before/after counts are REPORTED, not just used internally
+        assert "usable buffer cells $_du_before -> $_du_after" in tcl
 
     def test_fallback_uses_get_lib_cells_over_loaded_liberty(self):
         # GENERAL + authoritative: only excludes cells that actually exist in the
         # loaded liberty (empty-match patterns are skipped), no baked cell literal.
         tcl = runner._dont_use_family_fallback_tcl()
-        assert "get_lib_cells -quiet" in tcl
+        assert "get_lib_cells -regexp -nocase -quiet" in tcl
         assert "set_dont_use $_du_cells" in tcl
         assert "DONT_USE_FALLBACK_APPLIED" in tcl
 
