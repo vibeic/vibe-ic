@@ -51,6 +51,39 @@ an open item at the end rather than filed as a discard.
 
 ---
 
+## The rule for each of the eighteen
+
+The brief asks first for the RULE that would have caught each finding — including
+the ones already fixed, because *"the class can recur in a module nobody has
+touched yet"* and a rule is what lets someone recognise it there. Status is the
+next section; this one is the rules, one line each, stated so they name a class
+rather than a symptom.
+
+| F | the rule that would have caught it | where it stands |
+|---|---|---|
+| 1 | A deferral must name a resolvable owner: a document that excludes items because another producer owns them may not name a producer that does not exist. | program |
+| 2 | An option that names a plug-in point must drive every plug-in that exists, or state per plug-in why it cannot — one blanket refusal for five different situations answers none of them. | program (census over a literal, **A-3**) |
+| 3 | Every measurement name a gate proves from must be emitted by some producer, or the axis is unanswerable and the gate is decorative. | **A-1** — 1 of 9 still unprovable |
+| 4 | A producer's envelope must be one the declared consumer reads; the check belongs to the pair, never to either side. | program (one direction, **A-3**) |
+| 5 | A metric's declared unit must equal the unit its own name requires — two files of one lane may not hold opposite rules. | program |
+| 6 | An artefact a consumer stages from a stamp must carry the stamp, and the emitters that write it must be enumerable so none is missed. | program |
+| 7 | A generated document may claim only what its session's own inputs support; and an axis identical across arms that differ was not measured downstream of the lever. | **A-8**, **C-1** |
+| 8 | Every key a comparison requires of an axis must be emitted by that axis's producer, and never as a null. | **A-2** — power short one key |
+| 9 | Two records under one identity are a conflict only if they disagree; agreement is corroboration, and identical bytes are a parser defect. | program |
+| 10 | De-duplicate by CONTENT, not by path; and a metric emitted once per member of a set needs a scope key naming the member. | program |
+| 11 | A required-view list must be per axis: one unmeasured row on a shared list poisons every axis on it. | program |
+| 12 | An artefact that varies with the implementation may not sit in the identity that must match; and a published claim that a named artefact is absent must be rechecked against the tree. | program, **A-7** |
+| 13 | Same rule as 12's first clause, stated for the contract: the measurement CONFIGURATION is the identity, never the measurement's output. | program |
+| 14 | Nothing that enters a hash identity may carry a path that differs between runs of the same configuration. | program |
+| 15 | An axis must prove from the names its evidence actually prints, or declare itself unprovable — not from a name no artefact emits. | program |
+| 16 | A proof must name the artefact the downstream consumer consumed; a proof about an upstream intermediate does not satisfy an axis scoped to the final one. | program; the tool error behind it is **unsettled** |
+| 17 | A verdict token read from an artefact must be matched against a CLOSED enum, and a token outside it is not-measured with the token quoted — never a pass, never the nearest neighbour. | program |
+| 18 | Where a schema offers two ways to state a check, the consumer must accept both; a verdict-valued check may not be required to produce a count. | program |
+
+Two smaller ones carry rules too: an optional dependency must be bundled or
+capability-checked rather than assumed (**A-12**), and a runtime output path must
+not resolve inside the installed product (**A-6**).
+
 ## The eighteen, and what is true on this tree
 
 Eleven are ALREADY-PROGRAM. For each, the program or census test that enforces
@@ -186,13 +219,29 @@ The cross-layer lane's independent observation of the consequence:
 `h2h_B` refuses `rc=2 SCOPE_INCOMPLETE`, naming that key, on both arms, before
 any value is compared.
 
-**One arm I did not get.** I tried the same diff on the timing axis with a text
-screen over the producer and it reported five required keys missing — including
-one the module demonstrably DOES emit, which the cross-layer lane observed
-carrying a real value on one corner and a null on another. The screen is wrong
-and I am not quoting its number. The timing arm needs the same treatment as the
-power arm — build the records, diff the scope — and it needs an STA fixture to
-do it.
+**The arm I had left open is now closed, and it went the other way.** I first
+tried the timing axis with a text screen, which reported five required keys
+missing. The screen was wrong; read from the module's own declaration instead:
+
+    timing _SCOPE_KEYS (always present)  check clock mode process rc_corner
+                                         stage temperature_c voltage_v
+    REQUIRED_SCOPE[timing_wns_ns]        check mode process rc_corner stage
+                                         temperature_c voltage_v
+    satisfied                            7 of 7
+
+So the required-scope gap is **power-only** on this tree, and the timing producer
+is a **working reference implementation of the rule A-2 asks for** — including
+the harder half: the keys are always PRESENT, and
+`test_every_row_carries_all_eight_scope_keys` refuses an undeclared EXTRA as
+well, on the stated ground that a key nobody declared makes a record
+incomparable to every other record.
+
+That also explains why the cross-layer lane hit `SCOPE_SENTINEL` on timing rather
+than `SCOPE_INCOMPLETE`: timing's failure mode is a key that is present and
+**null**. Between the two producers, both clauses of A-2 are evidenced —
+one is short a key, the other has written a null one — and the record now says
+the check owes three distinct verdicts: absent, present-and-null, and
+undeclared-extra.
 **(o)** yes — it was four keys then and it is one now; the predicate is the same.
 **(d)** yes, and in the other direction too: the record's second clause refuses
 a required key present with a null value, which is the failure the same lane hit
