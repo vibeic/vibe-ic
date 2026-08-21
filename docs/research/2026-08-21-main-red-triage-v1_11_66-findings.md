@@ -1589,6 +1589,76 @@ statement is that the race reproduces on one interpreter and not the other.
 `4/10`. A count without the lane it was taken in is not yet a finding.
 
 
+## M24 — the tamper guards, read properly: a hard Refusal that became a verdict field
+
+M18 concluded the three tamper guards were stale and not a security defect. That
+holds, but M18 read only their exit code. **Reading their full assertions changes
+the explanation and nearly changed the verdict.** Each asserts four things:
+
+```python
+assert r.returncode == 2
+assert doc is None                                             # NO verdict at all
+assert "candidate worktree raw attestation failed" in r.stdout
+assert "after candidate zero-census" in r.stderr
+```
+
+So they do not merely want a refusal — they want a **named attestation guard** to
+fire and refuse as UNMEASURABLE, producing no verdict document. That is a much
+stronger claim than "rc 2", and my planned re-founding (assert the tree digest
+and call it done) would have quietly dropped it. **That would have been the
+relaxation this brief forbids**, and I only avoided it by reading the tests
+instead of the exit codes.
+
+**The guard is NOT lost.** It exists at
+`protected_landing_transition.py:492` and has its own passing unit test
+(`test_protected_landing_transition.py:358`,
+`pytest.raises(P.Refusal, match="worktree raw attestation failed")`).
+
+**Why it no longer fires here, in sequence:**
+
+1. The verifier attests the candidate worktree BEFORE the arms run. At that point
+   nothing has been tampered with, so it passes — the dump shows
+   `[PASS] protected landing transition: STEADY fixture-next -> fixture-next`.
+2. The planted test attempts its tamper INSIDE the hermetic arm, against a
+   read-only object-exact subject.
+3. The real candidate worktree is therefore never dirtied, so any post-run
+   attestation has nothing to catch.
+
+Pre-hermetic the arm ran in the real worktree and could dirty it, and the
+post-run attestation caught it. That is the behaviour these tests were written
+against.
+
+**And the check was not simply deleted — it was moved and GENERALISED.**
+`B1_WORKTREE_STATUS` starts as `unknown` (`gatekeeper-verify-merge.sh:1163`),
+becomes `clean` after the arms (`:1367`), and is passed into the verdict
+(`:1404`). The verdict handles three distinguishable states —
+`unknown` (`landing_merge_verdict.py:1111`), `wrong-head` (`:1116`), and
+anything-not-clean (`:1120`).
+
+**That is rule 9 again, and this time the repository is the one getting it
+right:** a hard `Refusal` raised mid-run has become a verdict field in which "I
+could not determine the worktree status" is a distinct state from "the worktree
+was clean". The generalisation is an improvement. The three tests simply predate
+it.
+
+**Correct re-founding for these three** (C, revised — supersedes the version in
+the proposal document):
+
+* `r.returncode == 1` and `doc["verdict"] == "REFUSE"` — measured, not assumed.
+* `doc["expected_tree"] == doc["verified_tree"]` — the tamper did NOT redefine
+  the tree. This is the property the test's name actually promises.
+* the planted test appears in `doc["delta"]["new_failures"]` — the attempt was
+  OBSERVED rather than silently ignored.
+* and the worktree status reaching the verdict is `clean` — i.e. the tamper never
+  touched the real worktree, which is now the true statement of the guarantee.
+
+Dropping the `doc is None` / `raw attestation failed` assertions is then a
+deliberate, argued retirement of a check the runtime has replaced — **not** a
+convenience. I have NOT implemented it: it turns three reds green, and after
+finding that my first plan for it would have dropped a real assertion, this one
+deserves a reader who is not fourteen hours into the same file.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
