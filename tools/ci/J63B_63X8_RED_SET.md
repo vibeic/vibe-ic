@@ -368,6 +368,46 @@ everything else in that region.** Then run
 `pytest -q programs/tests/test_flow_manifest_declaration_parity.py` — under a
 second, and it is the check that catches this exact mistake.
 
+### The trap is ALL SIX regions, and one of them is a duplicate of main
+
+The manifest is not special. Every one of the six conflicts is asymmetric in the
+same direction — main's later content sits on the HEAD side and a one-sided
+`--theirs` deletes it:
+
+```
+phase1_phase2_phase3.yaml        ours  89 lines   theirs  17
+matrix_d3_output_manifest.json   ours  17         theirs   1
+matrix_63x8/README.md            ours   2         theirs   2
+matrix_63x8/flowref.py           ours  20         theirs  75
+test_matrix_63x8_ledger.py       ours 114         theirs  27
+test_matrix_d2_falsifiable.py    ours 241         theirs 380
+```
+
+**So the right instrument is a REBASE of `jfindings-63x8` onto current main, not
+a merge.** A rebase replays its commits one at a time against what main now
+says and forces each decision to be made on its own; a single six-region merge
+invites exactly one `--theirs` keystroke that silently drops main's work in
+three files.
+
+And the yaml region is worth naming, because it is not a disagreement at all —
+**both sides are the same fix, authored twice.** They declare
+`reports/phase3/magic_illegal_overlap.json` on step 31 for the same dimension-7
+reason (`gate_output_read_elsewhere`), in different prose. Main already carries
+it:
+
+```
+required_outputs on main includes magic_illegal_overlap.json   True
+d3 manifest entry on main                                       PRESENT (UNPROVEN)
+landed by                                                       ff5071caa
+```
+
+So that branch's step-31 d7 commit is superseded — the declaration and the entry
+are on main already, and what it still adds there is a richer `provenance_note`,
+which is a text merge and not a finding. This is the same disease as the premise
+this whole report opens by correcting: **a list written before main moved.**
+Worth re-deriving that branch's remaining findings against current main before
+spending review on them.
+
 ## Reproduce
 
 ```
