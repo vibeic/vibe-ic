@@ -176,6 +176,49 @@ def test_wired_into_field_agent_skill():
         assert v in t, v
 
 
+# ── a FILE DELETION must not crash the bucket sort ─────────────────────────
+#
+# `parse_unified_diff` sets path=None for a `+++ /dev/null` hunk and
+# `_symbol_from_context` returns None for a header that is not a real
+# def/class, so a deletion hunk's bucket label was `None or None` -> None.
+# Mixed with any str label in `sorted({...})` that raised
+# `TypeError: '<' not supported between instances of 'NoneType' and 'str'`.
+# MEASURED: 1 of the 200 most recent origin/main commits crashed this way, and
+# through `handoff_bundle_check` the uncaught exception exited 1 — the same rc
+# as a legitimate INCOMPLETE verdict — with no JSON report written at all.
+
+DIFF_DELETE_PLUS_EDIT = """\
+diff --git a/foo/bar.txt b/foo/bar.txt
+deleted file mode 100644
+--- a/foo/bar.txt
++++ /dev/null
+@@ -1,2 +0,0 @@
+-alpha
+-beta
+diff --git a/foo/baz.txt b/foo/baz.txt
+--- a/foo/baz.txt
++++ b/foo/baz.txt
+@@ -1 +1 @@
+-gamma
++delta
+"""
+
+
+def test_file_deletion_beside_an_edit_does_not_crash():
+    rep = F.classify_diff(DIFF_DELETE_PLUS_EDIT)
+    assert rep["verdict"] in ("CONSUMER_ONLY", "PRODUCER", "MIXED")
+    # every bucket label is a string, so the set is totally ordered
+    for bucket in ("producers", "consumers", "ambiguous"):
+        assert all(isinstance(x, str) for x in rep[bucket]), bucket
+    assert F._DELETED_FILE_LABEL in rep["ambiguous"]
+
+
+def test_deletion_only_diff_does_not_crash():
+    only_delete = DIFF_DELETE_PLUS_EDIT.split("diff --git a/foo/baz.txt")[0]
+    rep = F.classify_diff(only_delete)
+    assert all(isinstance(x, str) for x in rep["ambiguous"])
+
+
 # ── real-git canary: #600's fix commit is a PRODUCER (streamout edit) ───────
 
 def test_real_git_resolves_issue_to_commit():

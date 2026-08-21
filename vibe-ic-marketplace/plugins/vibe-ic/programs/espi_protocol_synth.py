@@ -33,6 +33,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+
 # Generic auto-dispatch opt-in (read by phase1_doc_one_shot_runner [14e2b/15]).
 AUTO_DISPATCH = True
 IC_NAME = "Enhanced Serial Peripheral Interface (eSPI)"
@@ -381,7 +383,7 @@ def _canon():
             # checks submodules[] vs rtl/, so these names MUST match the RTL.
             # ports[] use the `direction` key (input/output/inout) — this is
             # the key both the full_stack TB generator
-            # (phase2_one_shot_runner.step_full_stack_tb_gen) and the L9
+            # (design_one_shot_runner.step_full_stack_tb_gen) and the L9
             # conformance gate read; widths mirror the actual chip_top.v
             # declaration. Outputs are emitted as TB wires (DUT-driven), inputs
             # as TB regs — so the generated TB compiles against the real RTL.
@@ -624,7 +626,7 @@ def apply_espi_synth(generated_docs_dir, is_espi_flag: bool,
         d = json.loads(p.read_text())
         d.update(canon.get(doc, {}))
         d["ic_name"] = name
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(p, d)
     for doc in _FIELDS_DOCS:
         p = gd / f"{doc}.json"
         if not p.is_file():
@@ -636,4 +638,4 @@ def apply_espi_synth(generated_docs_dir, is_espi_flag: bool,
         f.update(canon.get(doc, {}))
         d["fields"] = f
         d["ic_name"] = name
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(p, d)
