@@ -2892,6 +2892,48 @@ and it exists only because M47's liveness sweep sent me back to a red I had
 already "explained".
 
 
+## M49 — the six blocking FAILs were recorded as LABELS. Running them yields findings.
+
+M48 showed that running the flow-gate audit revealed a clause its label hid. The
+same is true of the other five. **I recorded the six blocking hygiene FAILs as a
+list of names and never ran four of them again.**
+
+**Current, measured:**
+
+| gate | now |
+|---|---|
+| `flow-gate enforcement audit` | FAIL — **two clauses**, only one of which I had recorded (M48) |
+| `d3 declaration/manifest parity` | **FIXED — 0 not covered** (M32) |
+| `checker execution wiring` | FAIL — **"3 checker(s) that NOTHING but their own test runs"** |
+| `gates are wired to something` | FAIL — **"3 gate(s) newly consulted by no automatic verdict"** |
+| `declaration scans strip comments` | FAIL — **"5 declaration regex(es) newly scan text no stripper touched"** |
+| `liar census controls still fire` | **not re-run** — it is a wrapped pytest invocation, not a standalone program |
+
+**So "FAIL — 6" is stale: it is at most 5, four confirmed and one unverified.**
+
+**And the labels were hiding the most on-topic finding in the whole engagement.**
+`checker execution wiring` reports **three checkers that nothing but their own
+test runs**. That is this document's entire subject stated by a gate: a checker
+whose only caller is its own test is a checker that guards nothing in
+production. I have spent this branch finding guards that cannot fail, and a gate
+that counts them by name was sitting in my own six-item list, recorded as four
+words.
+
+`gate_is_wired_check` says the same thing one level up — **3 gates consulted by
+no automatic verdict** — which is the exact shape of the `orphan::` clause M48
+found, and of the M13 knobs that never arrive.
+
+**None of these is fixed here and none should be fixed casually:** each names a
+count against a baseline, and closing one means either wiring a checker or
+withdrawing it, which is the same policy/wiring split as the flow-gate item.
+
+**The lesson, and it is M47's generalised:** I recorded the six FAILs as
+identifiers and treated the identifiers as the finding. **A gate name is not a
+finding; the gate's output is.** Two of the six turned out to say something
+materially different from what their names implied, and I only learned that by
+running them — which cost three commands.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
