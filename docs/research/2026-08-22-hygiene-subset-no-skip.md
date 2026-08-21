@@ -991,3 +991,88 @@ runner writes `--summary-json` with a `wiring_errors` array precisely so nobody
 has to pattern-match its console output, and I pattern-matched it twice in one
 section while writing a document about instruments that answer the wrong
 question.
+
+## 18. The wiring errors are a WATCHDOG artifact, and the two graces do not match
+
+§17 left the cause unresolved and named DURATION as the surviving correlate.
+There is a mechanism behind that correlate, it is reproducible on demand, and
+it does not require a busy host to demonstrate — which is why this control was
+runnable here without spending anyone else's measurements.
+
+**The control.** Same tree, same corpus, quiet host, default jobs. The ONLY
+change is the runner's own forward-progress watchdog, `--stall-grace 5`:
+
+```
+[routed-def corpus] note: VIBE_IC_BENCHMARK_DATA overrides …
+WATCHDOG_STALLED: configured forward-progress signals did not advance for > 5s
+                  — killed as hung, not slow.
+
+declared=89 decided=0 passed=0 failed=0 not_checked=89
+wiring_errors: 387
+  parallel coverage: arm A shard 0: PROGRESS_PROTOCOL_INCOMPLETE: attestation
+                     progress ended before assigned gates completed: …
+  parallel coverage: arm A shard 0: no summary (rc=199)
+```
+
+`PROGRESS_PROTOCOL_INCOMPLETE` and `rc=199` are **exactly** the signature
+`jmeas3` reported. They are not a wiring defect in the gates. They are what a
+shard leaves behind when the watchdog kills it: the progress attestation stops
+mid-way, so the coverage protocol finds gates it planned for and no record of
+them finishing, and reports the shard as incomplete.
+
+**So the causal chain is: shard runs slowly -> internal watchdog kills it ->
+its attestation is truncated -> coverage protocol reports
+PROGRESS_PROTOCOL_INCOMPLETE.** Duration was the correlate because slowness is
+the input to the watchdog. Load and corpus binding are two different ways of
+making a shard slow; neither is the cause, which is why §16 and the load
+hypothesis both fit some rows and not others.
+
+### The number that makes this matter: 300 against 1800
+
+```
+repo_hygiene_parallel.DEFAULT_STALL_GRACE_S    = 300     # the runner's INTERNAL watchdog
+gatekeeper_review._HYGIENE_STALL_GRACE_S       = 1800    # the review's OUTER supervisor
+```
+
+and `gatekeeper_review` **never forwards its value to the runner**. Verified by
+AST rather than by grep, after a grep of mine got this wrong in both directions
+within one section: `stall_grace` IS referenced twice inside
+`repo_hygiene_gate`, but both references are to the review's own supervisor
+wrapper —
+
+```
+ 78:  [*command, "--summary-json", str(summary_path)],
+ 80:  stall_grace_s=stall_grace, poll_s=5,
+ 91:  f"record advanced for {stall_grace}s; nothing was concluded"
+```
+
+— and `"--stall-grace"` appears nowhere in `gatekeeper_review.py`. The runner
+therefore always uses its own 300 s.
+
+**There are two independent watchdogs with a 6x mismatch, and the tighter one is
+the one nobody configured.** The review declares 1800 s of patience; the runner
+it launches kills a shard that goes 300 s without a gate record. `jmeas3`'s two
+bound runs took **302 s and 604 s** — both at or over that 300 s line, with 15
+and 19 wiring errors. Every run of mine at or under 193 s produced zero. That is
+six rows now explained by one constant.
+
+**Why this belongs in THIS document rather than filed away.** This branch is
+what makes `gatekeeper_review` actually run the hygiene set (§12), so it is the
+change that puts every landing behind this watchdog. On a contended host a
+landing will now see `ERROR — parallel hygiene incomplete`, refuse, and name
+shards rather than gates. That refusal is CORRECT in the sense that a truncated
+run is not a pass — it is the repo's own `unmeasured-reads-as-a-measured-zero`
+rule holding. But it is a refusal about the HOST, not about the tree, and the
+budget reasoning in §3 and in the lander's comment deserves the correction:
+1800 s was chosen as "the gate's own `_HYGIENE_STALL_GRACE_S`, below which this
+`timeout` would kill runs the gate itself still considers alive". That is still
+a sound outer bound for the `timeout`, but it is NOT the grace that governs the
+set — the set is governed by 300 s, six times tighter, from a different module.
+
+**What I am NOT doing about it.** Raising `DEFAULT_STALL_GRACE_S`, or teaching
+`repo_hygiene_gate` to forward its value, is a flow-level change to a watchdog
+that exists to stop a hung run being read as a slow one. It needs the
+flow-change acceptance standard — a bidirectional control proving the new value
+still catches a genuine hang — and it is not this branch's subject. It is
+reported here, with the reproduction recipe (`--stall-grace 5` on any tree), so
+that whoever takes it has the mechanism rather than a symptom.
