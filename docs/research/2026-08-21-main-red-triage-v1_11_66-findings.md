@@ -1279,7 +1279,7 @@ Every remaining red is now attributed to one of four causes, none of which is
 | n | reds | disposition |
 |--:|---|---|
 | 11 | matrix family | the 54-ID agent's lane |
-| 2 | coverage bridge | **jmain-green's 38** (confirmed against the split), red since v1.11.18, and it poses a verdict-vocabulary DESIGN question: should "oracle PASS with no coverage measurement" be `VACUOUS-PASS` or `WAIVED-DEFERRED`? Same class as the flow-gate intent call — not mine to guess |
+| 2 | coverage bridge | **jmain-green's 38**, red since v1.11.18. ~~a verdict-vocabulary DESIGN question~~ — **narrowed, see M33: both terms are established (1485 / 215 uses) and asymmetric. `WAIVED-DEFERRED` requires a recorded waiver id + owner reason; absent one it is not available and the pass is vacuous. The open item is "is there a waiver?", a lookup — not a vocabulary choice.** |
 | 3 | flow-gate enforcement audit | a POLICY call — but SMALLER than stated here, see **M29**. ~~the flow's `program_exit_zero` clauses make either choice wrong~~: those clauses execute NOWHERE, so `advisory` contradicts nothing and is truthful today. The real question is only whether these two SHOULD be able to stop a step. |
 | 2 | manifest parity | ~~EVIDENCE this host lacks~~ — **WRONG, see M30/M32. 10 of the 15 declared roots ARE here, two carry the artefact. FIXED: 3 reds closed.** |
 | 9 | landing-verdict guard | ~~UNRUNNABLE here~~ — **WRONG, see M8/M18/M26.** It runs on the host in the degraded tier; the two-lane A/B measured **10 BOTH-lane reds**, and designs A and C have since closed **4** of them. 6 remain, each with a named cause (M26). |
@@ -2095,6 +2095,50 @@ equivalent note for `0.5ic`.
 Not mine, not new, and **not previously named by me** — "pre-existing" and
 "known" are different properties and I had been treating them as one. It is a
 third mutation-ledger red awaiting a named mutation, and it is now written down.
+
+
+## M33 — the coverage bridge: not a vocabulary DESIGN question, an availability question
+
+I dispositioned the 2 coverage-bridge reds as posing a *"verdict-vocabulary
+DESIGN question: should 'oracle PASS with no coverage measurement' be
+`VACUOUS-PASS` or `WAIVED-DEFERRED`? … not mine to guess."* Having found all four
+escalations wrong or overstated, I audited this the same way. **It is narrower
+than I framed it, for the same reason as escalation 1: I never checked whether
+the repository already answers it.**
+
+**Both terms are established, not proposed.** `VACUOUS-PASS` appears 1485 times
+in `programs/`, `WAIVED-DEFERRED` 215. This was never a naming choice.
+
+**And they are not two options on one axis.** The repo defines them
+asymmetrically:
+
+* `WAIVED-DEFERRED` — *"an honest waiver"* (`clock_domain_reg_crossing_check.py:19`),
+  carrying a waiver **id and owner reason**:
+  `WAIVED-DEFERRED: waiver id=13 reason='reviewed by owner 2026-07'`, described
+  in-tree as *"THE NO-GATE SKIP LINE, decided deliberately"*. It maps to
+  `"waived"` on the dashboard and exits 0.
+* `VACUOUS-PASS` — the classification for a PASS produced when the thing checked
+  was EMPTY. `drc_vacuous_pass_check.py`, Pillar 2: *"No vacuous result counts as
+  PASS."* It is a DEFECT LABEL, not a verdict anyone assigns themselves.
+
+**So the question is not "which should we choose", it is "which is AVAILABLE".**
+`WAIVED-DEFERRED` is gated on a recorded waiver with an id and an owner. Either
+one exists for this case or it does not, and that is a FACT to look up, not an
+intent to declare. If no such waiver exists, calling it waived would be
+**inventing a waiver nobody granted** — the same class of move as authoring a
+benchmark cell to turn a test green, which this campaign exists to prevent.
+
+**What I did NOT do:** look up whether a waiver id exists for the coverage
+bridge. Those 2 reds are in another agent's set (`jmain-green`'s 38) and I have
+not read their evidence. **But the question I hand over is now "is there a
+waiver?" — answerable — rather than "what should the vocabulary be?" — which
+invited a guess and would have got one.**
+
+**Five "not mine" claims audited, five weakened.** Escalations 1, 2 and 4, and
+now this. The pattern is exact and worth stating once more: **I applied far more
+rigour to the repository's claims than to my own claims about what could not be
+done.** A disposition that hands work away reads as modesty and is therefore the
+least likely thing in a report to be checked — by its author most of all.
 
 
 # ===== REQUESTS TO THE LANDER =====
