@@ -295,3 +295,50 @@ main. Two verdicts changed:
 
 That second one is the argument for re-checking rather than trusting a rescue from an hour ago:
 the rescue covered the head the worktree *had*, and the worktree moved to one nothing covered.
+
+## Stashes — commits on no branch, in nobody's shard, invisible to every sweep so far
+
+jharv3's find, and it is a whole class. A `git stash` entry is a commit holding work that was
+never committed: invisible to a worktree sweep, invisible to `git status` (the files are gone
+from the tree), and a row in no shard. Two traps they named and I inherited:
+
+- **`git stash list` is CLONE-wide.** Counting it per *worktree* multiplies one stash by every
+  worktree sharing that clone.
+- **`refs/stash` points at the top entry only.** `stash@{1}`, `stash@{2}`… exist solely in the
+  stash *reflog* and survive only until it expires — default 90 days here. Walk the reflog.
+
+Swept every clone on all five hosts:
+
+| host | clones | stash commits | holding files that differ from main |
+|---|---|---|---|
+| .105 | 23 | 3 | 3 |
+| .114 | 3 | 0 | — |
+| .112 | 3 | 1 | 1 |
+| .121 | 6 | 3 | 3 |
+| .102 | 81 | 14 | 13 |
+| **total** | **116** | **21** | **20** |
+
+**13 rescued to origin.** One (`fa191b9c34e`) owns a file that is byte-identical to main — nothing
+is lost by its going, and it is named rather than quietly counted as rescued.
+
+### Seven cannot go to origin, and that is a hard limit, not a hook to route around
+
+`harvest/rescue-102-stashes-3-vibe-ic` is **rejected by GitHub**:
+
+    remote: error: File …/reports/14.txt is 234.53 MB; this exceeds GitHub's file size limit of 100.00 MB
+    remote: error: File …/reports/1.txt is 140.94 MB; …
+
+Those 7 stash commits carry benchmark report files far over the limit. There is no push that
+lands them. What was done instead: they are on a **local branch ref** in two clones —
+`/home/reyerchu/vibe-ic` on `.102` *and* on `.105`, both at `9d689074719`. That is a real
+improvement over where they were, because **a stash reflog entry expires and a branch ref does
+not**, and it now exists on two machines rather than one. It is not equivalent to being on origin
+and this file does not claim it is.
+
+### The guard fired, and refusing was right
+
+The `.121` sweep came back `REFUSING: empty authority` rather than reporting zero stashes. The
+cause: four of that host's clones have a **local-path origin**, and `ls-remote` against a local
+path has no `refs/pull/*` at all, so the pull authority was empty. Refusing was correct — asking
+the wrong clone was the bug. The sweep now picks a clone whose origin is `http*`/`git@*` to ask,
+and names which clone it asked.
