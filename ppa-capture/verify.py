@@ -26,6 +26,7 @@ control does not fail, the check reports itself broken rather than passing.
 from __future__ import annotations
 import json, re, sys, difflib, pathlib, collections
 
+SLOW = "--slow" in sys.argv          # run the authoritative forms too
 HERE = pathlib.Path(__file__).resolve().parent
 RECS = json.loads((HERE / "recoveries.json").read_text())
 MD   = (HERE / "RESULT.md").read_text()
@@ -342,6 +343,37 @@ for _sid, _c1, _c2 in _rows:
         _off.append((_sid, _orph))
 check("every sweep-table figure exists in the record it summarises",
       not _off, f"{len(_rows)} rows, off {_off[:3]}")
+
+# 20. every in-repo source the coverage table names must exist. The table is
+#     testimony about what was READ, which no program can verify — but a table
+#     naming a file that is not there is checkable, and that is A-7's class
+#     pointed at the one section of this report built on my word alone.
+# `[a-z]+` cannot match "ppa-e2e" — the digit in the directory name defeats
+# the class, and the check reported 1 source where there are 4. Caught only
+# because 1 looked wrong; a plausible count would have shipped.
+_srcs = set(re.findall(r"`(ppa-[a-z0-9]+/[A-Za-z0-9_./-]+\.md)`", MD))
+control("coverage-sources", not (HERE.parent / "ppa-e2e" / "NO_SUCH.md").is_file())
+_absent = sorted(s for s in _srcs if not (HERE.parent / s).is_file())
+check("every in-repo source named in the coverage table exists",
+      not _absent, f"{len(_srcs)} named, absent {_absent}")
+
+# 21. --slow: the AUTHORITATIVE wiring answer, not the baseline approximation.
+#     Check 18 reads a committed baseline and says so; this runs the gate. The
+#     fast form is the default because it is free; the strong form exists so the
+#     limitation is closable rather than merely disclosed.
+if SLOW:
+    _g = PLUG / "programs" / "gate_is_wired_check.py"
+    _r = subprocess.run([sys.executable, str(_g)], capture_output=True,
+                        text=True, timeout=600)
+    _live = set(re.findall(r"^   ([a-z0-9_]+)$", _r.stdout, re.M))
+    _tg = {pathlib.Path(ROUTING["steps"][r["step"]]["bucket_A_program"]).stem
+           for r in RECS if r["bucket"] == "A" and r.get("step") in ROUTING["steps"]}
+    control("wiring-live", "gate is wired" in _r.stdout or bool(_r.stdout))
+    check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
+          not (_tg & _live), f"live-unwired {sorted(_tg & _live)}")
+else:
+    print("  SKIP  [slow] live wiring check — pass --slow to run it "
+          "(about forty seconds)")
 
 print()
 if fails:

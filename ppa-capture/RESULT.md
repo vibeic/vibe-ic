@@ -910,6 +910,11 @@ routed at one. **The fast form's limit is stated in the check itself:** it canno
 see a program that became unwired *after* the baseline was written; the
 authoritative answer needs the gate itself, about forty seconds. Saying which
 one you ran is the difference between a measurement and a reassurance.
+
+**And the limitation is now closable, not merely disclosed.** `--slow` runs the
+gate and compares the live unwired set against every routed target; the default
+stays fast because it is free. Measured both ways: live-unwired targets, none.
+A disclosed limitation nobody can act on is just a nicer way of not checking.
 The check belongs at emit time, refusing the pairing and saying which half must
 change: wire the program, or route the rule somewhere that runs.
 **(o)** yes. **(d)** yes — it is per record per emit, so every future batch is
@@ -1486,7 +1491,7 @@ lane — the sweep table as the batch grew, and routing. Then it did not cover t
 brief's *first* requirement, the rule stated for each of the eighteen findings,
 nor whether the emitted backlogs still pass the sanitiser that consumes them —
 and two of those were refused on first write, so a later edit could refuse them
-again in silence. **Twenty-six checks now**, the last of them the one that closes the loop:
+again in silence. **Twenty-seven checks now, plus an authoritative mode**, the last of them the one that closes the loop:
 `candidates/` is *generated*, so editing `recoveries.json` without re-emitting
 leaves sketches that still resolve by name, still read plausibly, and describe
 the previous version of the rule. Name resolution cannot see content drift.
@@ -1525,7 +1530,7 @@ between a check that runs and a check that was run once.
 **STATUS**: 29 records emitted and validated — 26 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 ppa-capture/verify.py` (26 checks). No gate
+re-measurable by `python3 ppa-capture/verify.py` (27 fast + 1 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1700,7 +1705,8 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 ppa-capture/verify.py     26 checks, exit 0 = every claim holds
+    python3 ppa-capture/verify.py     27 checks, exit 0 = every claim holds
+    python3 ppa-capture/verify.py --slow   + the authoritative wiring run
 
 **It was held to the two invocation properties this batch records about other
 people's tools.** A-14 is about a documented command that does not run, and A-6
