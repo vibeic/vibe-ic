@@ -49,10 +49,16 @@ are different claims, and collapsing them is the defect #408 is about.
 
 WHICH IMAGE THE ASSET HALF LOOKS INSIDE
 ---------------------------------------
-The asset half's authority is the image `tools/vibeic-eda/VERSION` PINS (or
+The asset half's authority is a DIGEST — `_eda_image.judged_image()`, which
+names the vibeic-eda image already on this host by the bytes it is made of (or
 an explicit `VIBEIC_EDA_IMAGE`). `--container` is a SPEED shortcut for
 reading that same image, and it is used ONLY when the named container is
 actually running it.
+
+It used to be `tools/vibeic-eda/VERSION`, a file in THIS repo holding
+vibeic-eda's version number, so every image release needed a PR here. A digest
+keeps the property that mattered — nobody can re-point it — without the version
+number or the check-in.
 
 It did not used to be. Any live container with the right NAME was believed,
 and a long-lived container keeps the image it was CREATED from forever — a
@@ -108,54 +114,46 @@ def _asset_keys(entry: Dict[str, Any]) -> List[str]:
             and (k.endswith(_ASSET_SUFFIXES) or k in _ASSET_KEYS_EXTRA)]
 
 
-_GHCR_REPO = "ghcr.io/vibeic/vibeic-eda"
+# ONE RULE, ONE IMPLEMENTATION. This file carried the ORIGINAL of the
+# "which image may a blocking gate look inside" logic and kept its own copy of
+# it after `_eda_image` grew the shared one; PR #1760 called folding them a
+# follow-up, and this is that follow-up. Two copies of a rule is drift with a
+# delay fuse — the `_is_mutable_tag` predicate here and the one in `_eda_image`
+# had already diverged in what they accepted.
+import _eda_image as _img
 
-
-def _is_mutable_tag(ref: str) -> bool:
-    """Is this ref's tag a NAME a third party can re-point, rather than an
-    immutable X.Y.Z release? Written against the tag's SHAPE, so `edge` /
-    `nightly` / a bare repo (which means `:latest`) are covered without anyone
-    remembering to add them. Mirrors `sync_image_version.is_mutable_tag`; it is
-    restated rather than imported because the packaged plugin ships no
-    repo-root `tools/`, so an import would be a hard dependency on the
-    development checkout.
-    """
-    tag = ref.rsplit("/", 1)[-1]
-    tag = tag.split(":", 1)[1] if ":" in tag else ""
-    return not re.match(r"^\d+\.\d+\.\d+$", tag)
+_GHCR_REPO = _img.IMAGE_REPO
 
 
 def _image_tag():
-    """The image the repo PINS, or an env override — or None. NEVER a floating tag.
+    """The image this gate may look inside — a DIGEST — or None.
 
-    vibe-ic#927. This gate BLOCKS (rc=1) on what it finds inside the image, so
-    the image it looks in decides a landing verdict. The fallback here used to
-    be `:latest` when no VERSION file was found (the packaged-plugin case), and
-    that made a blocking verdict a function of a MUTABLE THIRD-PARTY POINTER:
-    the fork publishes, `:latest` moves to a different manifest, and this gate's
-    answer changes on an unchanged tree — red for a reason nobody here caused,
-    green again when they ship nothing, and no way to tell those apart.
+    vibe-ic#927 asked the question this answers: this gate BLOCKS (rc=1) on what
+    it finds inside the image, so the image it looks in decides a landing verdict,
+    and `:latest` would make that verdict a function of a mutable third-party
+    pointer.
 
-    Returning None instead is the honest answer: with no anchor there is no
-    pinned image, so the asset half has nothing authoritative to look inside and
-    reports SKIPPED. "I could not look" and "I looked and it is clean" stay
-    different claims, which is the invariant this whole gate is built on.
+    The answer used to be `tools/vibeic-eda/VERSION` — vibeic-eda's version
+    number, stored in THIS repo, which meant a PR here per image release. It is
+    now `_eda_image.judged_image()`, which resolves an immutable digest for the
+    image ALREADY ON THIS HOST. That keeps #927's property, because a digest is
+    not a pointer anyone can re-point; what it drops is the version number, and
+    the cross-repo check-in that came with it.
 
-    An explicit `VIBEIC_EDA_IMAGE` override is still honoured verbatim, floating
-    or not — naming an image by hand IS the operator's deliberate call, and it
-    is announced below rather than silently accepted.
+    None still means what it meant: nothing authoritative to look inside, so the
+    asset half reports SKIPPED. "I could not look" and "I looked and it is clean"
+    stay different claims, which is the invariant this whole gate is built on.
     """
-    ov = os.environ.get("VIBEIC_EDA_IMAGE")
-    if ov:
-        if _is_mutable_tag(ov):
-            print(f"[warn] VIBEIC_EDA_IMAGE={ov} is a floating tag: what this "
-                  f"gate reports can change without any commit in this tree.")
-        return ov
-    for up in Path(__file__).resolve().parents:
-        v = up / "tools" / "vibeic-eda" / "VERSION"
-        if v.is_file():
-            return f"{_GHCR_REPO}:{v.read_text().strip()}"
-    return None
+    judged = _img.judged_image()
+    if judged.ref is None:
+        return None
+    if judged.source == "override" and judged.digest_kind == "image-id":
+        # An operator-named image with no registry identity. Honoured — naming
+        # an image by hand IS the deliberate call — but announced, because a
+        # verdict recorded against it cannot be replayed anywhere else.
+        print(f"[warn] {judged.ref} is identified only by a local image id: a "
+              f"verdict recorded against it cannot be reproduced on another host.")
+    return judged.ref
 
 
 def _image_of_container(container: str):
@@ -279,14 +277,12 @@ def _decide_target(container: str):
     img = _image_tag()
     why: Dict[str, Any] = {"pinned_image": img, "container_rejected": None}
     if img is None:
-        # No anchor in this checkout, so there is no pinned image to be the
-        # authority. vibe-ic#927: the alternative — falling back to the floating
-        # tag — would let a third party's push change this BLOCKING gate's
-        # verdict, so the asset half reports nothing-to-look-at instead.
+        # No vibeic-eda image this host can name, so there is nothing
+        # authoritative to look inside. vibe-ic#927: the alternative — falling
+        # back to a floating tag — would let a third party's push change this
+        # BLOCKING gate's verdict, so the asset half reports nothing-to-look-at.
         why["source"] = None
-        why["no_pin"] = ("no tools/vibeic-eda/VERSION in this checkout and no "
-                         "VIBEIC_EDA_IMAGE override; refusing to fall back to a "
-                         "floating tag whose bytes a third party controls")
+        why["no_pin"] = _img.judged_image().why_not
         return None, why
     if container:
         got = _image_of_container(container)
@@ -342,8 +338,14 @@ def _sh(target, script: str):
     if target is None:
         return subprocess.CompletedProcess([], 1, "", "no target")
     kind, ref = target
+    # `--pull never`: `docker run` on a reference this host does not hold FETCHES
+    # it, and this gate BLOCKS, so a cold host would spend gigabytes inside a
+    # landing check before reporting anything. `_image_tag()` only ever names an
+    # image this host already has, so the flag changes no reachable answer — it
+    # is the guard for the day something else names one it does not.
     cmd = (["docker", "exec", ref, "bash", "-lc", script] if kind == "exec"
            else ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+                 "--pull", "never",
                  "--entrypoint", "bash", ref,
                  "-lc", script])
     return subprocess.run(cmd, capture_output=True, text=True)

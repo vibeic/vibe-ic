@@ -167,6 +167,28 @@ MIN_ABSENT_CONDITION_REASON = 40
 # (step_id, program_or_None, frozenset(condition paths)) -> justification.
 # `program` is None for a step-level condition.
 ALLOWLIST: dict[tuple, str] = {
+    ("36", "ppa_head_to_head_check",
+     "**/*head_to_head*.json"):
+        "The subject is a CLAIM, not a result — the same shape as "
+        "`rtl_bug_report_schema_check` below, with one property that one does "
+        "not have. A PPA head-to-head record is produced by a comparison "
+        "campaign against another flow, never by a design run, so nearly every "
+        "sign-off legitimately files none; the failure this gate exists for, a "
+        "comparison that cannot support the claim printed on it, REQUIRES the "
+        "claim to exist. "
+        "WHY THE CONDITION CANNOT HIDE ONE: the trigger glob IS the checker's "
+        "own `_RECORD_GLOB`, so 'the condition matched nothing' and 'the corpus "
+        "held nothing' are the SAME SET by construction — there is no state in "
+        "which a claim was filed and this clause declined to look. That is what "
+        "separates it from the self-disabling shape this gate exists to refuse, "
+        "where the trigger names an artefact the flow itself produces and its "
+        "absence is the very defect being skipped. "
+        "WHY NOT UNCONDITIONAL, MEASURED: `--corpus .` returns rc 2 on a run "
+        "that files no record, and `check_step` reads ONE vacuous clause beside "
+        "substantive ones as 'every clause was vacuous' (a substantive sub-gate "
+        "appends nothing). Wiring it unconditionally therefore demoted step 36 "
+        "— the tapeout sign-off itself — from PASS to VACUOUS_PASS on every "
+        "ordinary run, which is the mis-fire that withdrew v1.10.14.",
     ("2", "rtl_bug_report_schema_check",
      "reports/phase2/rtl_bugs.json"):
         "The subject is a CLAIM file, not a result. This gate validates the "
