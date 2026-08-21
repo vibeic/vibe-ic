@@ -20,7 +20,9 @@ These pin the EMISSION contract (chip-AGNOSTIC, no OpenROAD needed):
   buffer_ports, and normal buffers are preserved. Delay macros are legitimate
   ONLY for deliberate hold padding, never as signal/port buffers, in ANY PDK.
 """
+import fnmatch
 import importlib
+import re
 
 R = importlib.import_module("phase3_one_shot_runner")
 
@@ -29,36 +31,130 @@ def _fallback():
     return R._dont_use_family_fallback_tcl()
 
 
+def _patterns():
+    """The patterns the emitted block actually feeds `get_lib_cells`."""
+    line = next(l for l in _fallback().splitlines() if "foreach _du_pat" in l)
+    return re.search(r"\{(.*?)\}", line).group(1).split()
+
+
+def _mode():
+    """The matching mode the emitted block ASKS FOR, read from the flags it
+    passes to `get_lib_cells` on the `$_du_pat` lookup — not from the buffer
+    counter's own unrelated `get_lib_cells *`."""
+    m = re.search(r"get_lib_cells((?: -\w+)*) \$_du_pat", _fallback())
+    flags = m.group(1) if m else ""
+    regexp = "-regexp" in flags
+    return regexp, ("-nocase" in flags and regexp)
+
+
+def _matches(cell):
+    """True when the emitted block would exclude ``cell``.
+
+    Mirrors what OpenSTA does with what was ACTUALLY emitted, so this is the
+    SAME decision the tool makes -- not a re-statement of the pattern literals,
+    and not an assumption about which mode the block asked for. Two measured
+    facts drive the mirror (OpenSTA inside OpenROAD, in-container):
+      * ``-nocase`` is IGNORED without ``-regexp`` -- the tool prints
+        ``[WARNING STA-0358] -nocase ignored without -regexp`` and matches
+        case-SENSITIVELY (``-nocase -quiet *dly*`` -> 0 cells, ``*DLY*`` -> 4).
+        So a block that passes GLOBS is evaluated as globs, case-sensitively,
+        however it spelled its flags.
+      * a ``-regexp`` pattern is anchored to the WHOLE cell name
+        (``dly`` -> 0 cells, ``.*dly.*`` -> 4), hence ``fullmatch``.
+
+    2026-08-05: this used to `re.fullmatch` unconditionally. Measured against
+    e3aa9b126 -- the tree before the fix these tests exist for -- that made 3 of
+    this file's 5 pre-fix failures come out as `re.error: nothing to repeat`,
+    because that tree emits globs and a glob is not a regex. The tests did
+    discriminate the landing, but by crashing in Python's regex parser instead of
+    saying which delay cell the emitted set fails to reach. A pattern that is
+    invalid under its own declared mode now reaches NOTHING, which is the
+    truthful answer and the one that makes the assertion readable.
+    """
+    regexp, nocase = _mode()
+
+    def hit(pat):
+        if regexp:
+            try:
+                return bool(re.fullmatch(pat, cell,
+                                         re.IGNORECASE if nocase else 0))
+            except re.error:
+                return False        # OpenSTA would reject it too
+        return fnmatch.fnmatchcase(cell, pat)
+
+    return any(hit(p) for p in _patterns())
+
+
+# Cell names below are FAMILY examples, not any one PDK's catalogue: the
+# double-underscore spelling is the open-PDK `<lib>__<fn>` convention, the bare
+# spelling is the convention every commercial library the flow has met uses.
+_MUST_EXCLUDE = [
+    "sky130_fd_sc_hd__dlygate4sd3_1",     # open-PDK spelling, signal delay
+    "gf180mcu_fd_sc_mcu7t5v0__dlyd_1",    # open-PDK spelling, signal delay
+    "sky130_fd_sc_hd__clkdlybuf4s15_1",   # open-PDK spelling, clock delay
+    "sky130_fd_sc_hd__lpflow_bleeder_1",  # open-PDK spelling, lpflow
+    "sky130_fd_sc_hd__probe_p_8",         # open-PDK spelling, characterization
+    "DLY1D1", "DLY4D1", "dly2d1",         # BARE spelling, signal delay
+    "DELAY2X",                            # BARE spelling, spelled out
+    "CLKDLYBUFX4",                        # BARE spelling, clock delay
+]
+_MUST_KEEP = [
+    "sky130_fd_sc_hd__buf_1", "sky130_fd_sc_hd__clkbuf_16",
+    "BUFD1", "BUFD20", "CLKBUFD1", "CLKBUFD20", "CDMBUFD4",
+    "INVD1", "NAND2D1", "DFCNQD1",
+]
+
+
 def test_signal_delay_family_is_excluded():
-    tcl = _fallback()
-    # both the abbreviated (dlya/dlyb/dlyc/dlyd, dlygate, dlymetal, dlybuf, …)
-    # and spelled-out delay-macro name families are excluded.
-    assert "*__dly*" in tcl
-    assert "*__delay*" in tcl
+    # The CONTRACT is which cells get excluded, not which literal glob is
+    # printed. Asserting the literal is what let the block ship a pattern set
+    # that matched ZERO cells on a commercial library while printing success.
+    for cell in _MUST_EXCLUDE:
+        assert _matches(cell), f"delay/characterization cell not excluded: {cell}"
+
+
+def test_delay_exclusion_is_naming_convention_agnostic():
+    # The defect-present test: with the older patterns (all anchored on the
+    # open-PDK `<lib>__<fn>` double underscore) every BARE-named delay cell
+    # below matched nothing, so the family stayed in the resizer's pool while
+    # the run printed DONT_USE_FALLBACK_APPLIED: 0.
+    for cell in ("DLY1D1", "DLY2D1", "DLY3D1", "DLY4D1", "DELAY1X",
+                 "CLKDLYBUFX2"):
+        assert _matches(cell), (
+            f"{cell} is a delay cell spelled the way a commercial library "
+            "spells it; a pattern set anchored on '__' misses it entirely")
 
 
 def test_delay_exclusion_is_liberty_scoped_and_nonfatal():
     tcl = _fallback()
     # applied over whatever liberty was actually read (empty-match PDKs skip),
-    # via set_dont_use, guarded — never a hard failure on a PDK without them.
-    assert "get_lib_cells -quiet $_du_pat" in tcl
+    # via set_dont_use, guarded -- never a hard failure on a PDK without them.
+    # -regexp is MANDATORY, not stylistic: without it OpenSTA ignores -nocase
+    # (`[WARNING STA-0358]`) and the guard excludes nothing while still
+    # printing DONT_USE_FALLBACK_APPLIED. Measured, not assumed.
+    assert "get_lib_cells -regexp -nocase -quiet $_du_pat" in tcl
     assert "set_dont_use" in tcl
     assert "DONT_USE_FALLBACK_NONFATAL" in tcl
 
 
 def test_normal_buffers_are_NOT_excluded():
     # negative control: the fix must not disable the resizer's real buffers.
-    # A plain buffer / clock buffer exclusion pattern must never be emitted —
-    # only the delay-CLOCK master (__clkdlybuf) and signal delay macros are.
+    # Widening the patterns to reach bare names must not start swallowing the
+    # ordinary buffer / clock-buffer / logic families.
+    for cell in _MUST_KEEP:
+        assert not _matches(cell), f"ordinary cell wrongly excluded: {cell}"
+
+
+def test_exclusion_never_empties_the_buffer_pool():
+    # Second guard: even a correct pattern set can, on some library, match
+    # every buffer there is. The block counts the cells OpenSTA ITSELF calls
+    # buffers before and after, and reverts rather than leave the resizer and
+    # CTS with nothing to insert -- out loud, never silently.
     tcl = _fallback()
-    du_line = next(l for l in tcl.splitlines() if "foreach _du_pat" in l)
-    assert "*__buf_*" not in du_line          # normal signal buffers kept
-    assert "*__clkbuf_*" not in du_line        # CTS clock buffers kept
-    assert "*__clkbuf*" not in du_line
-    # the pre-existing families remain excluded (no regression of the v1.2.86 fix)
-    assert "*__probe_*" in du_line
-    assert "*__lpflow_*" in du_line
-    assert "*__clkdlybuf*" in du_line          # clock DELAY buffer still excluded
+    assert "get_property $_c is_buffer" in tcl
+    assert "unset_dont_use" in tcl
+    assert "DONT_USE_FALLBACK_REVERTED" in tcl
+    assert tcl.index("_du_before") < tcl.index("unset_dont_use")
 
 
 def test_delay_exclusion_precedes_buffer_ports_in_pnr_tcl():
@@ -76,9 +172,10 @@ def test_delay_exclusion_precedes_buffer_ports_in_pnr_tcl():
         clk_buf="BUF", clk_buf_root="BUF", routing_constraint_tcl="",
         pg_cleanup_block="", spef_repair_block="",
         antenna_repair_block="", filler_block="")
-    assert "*__dly*" in tcl
+    marker = "foreach _du_pat"
+    assert marker in tcl
     assert "buffer_ports -inputs" in tcl
-    assert tcl.index("*__dly*") < tcl.index("buffer_ports -inputs")
+    assert tcl.index(marker) < tcl.index("buffer_ports -inputs")
 
 
 def test_delay_exclusion_carries_no_chip_literal():

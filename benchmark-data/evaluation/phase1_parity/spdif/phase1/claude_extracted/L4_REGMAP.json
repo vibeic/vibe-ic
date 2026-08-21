@@ -1,5 +1,0 @@
-{
-  "ic_name": "S/PDIF (IEC 60958 Digital Audio Interface)",
-  "register_map_present": false,
-  "notes": "S/PDIF (IEC 60958 type II) is a wire-level streaming protocol; it does not define an MCU-visible register map at the protocol layer. Concrete S/PDIF transmitter / receiver IP blocks define their own register file at the SoC-integration level — typically: TX/RX FIFO control, sample-rate / bit-clock divisor, channel-status word write/read buffers (consumer 192-bit), user-data buffer (192-bit per channel), validity / parity-error counters, lock-status, IEC 61937 burst detection and bitstream-type readback, mute control. Those are covered by individual IP block guides, not by IEC 60958 itself."
-}
