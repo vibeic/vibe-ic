@@ -50,6 +50,26 @@ WHAT IS DECIDED, AND WHAT IS NOT
     NOT DECIDED anything about area, timing or routability -- a design can fit
                the pads and still not fit the die
 
+ENFORCEMENT: blocking
+=====================
+A DOES_NOT_FIT verdict (rc 1) FAILs the step that guards it. The declaration
+opens this line deliberately: `flow_gate_enforcement_audit` reads it anchored,
+and a mention inside a sentence is not a declaration (#886).
+
+Blocking is only true because `design_one_shot_runner.step_slot_pad_budget`
+SPAWNS this program and maps its exit status to the step verdict. The
+`program_exit_zero` clause in the flow definition is not, by itself, enough:
+those clauses are evaluated by `flow_compliance_check`, which the runner
+invokes as `final_audit` -- the LAST step, after every artefact is written.
+That is the measured #306 defect, and a gate wired only in the YAML can
+describe a run that already happened but cannot refuse one.
+
+WHAT BLOCKING DOES NOT YET MEAN. The FAIL reddens the step and the run's
+aggregate verdict; it does not itself skip Phase 3. Making a pad-budget
+refusal cascade into "do not place and route this" is a policy change to the
+runner's step plan and is left to the maintainer, named here rather than
+implied.
+
 VERDICTS AND EXIT CODES
 =======================
     FITS               rc 0   the declared interface fits a slot as declared

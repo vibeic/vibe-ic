@@ -424,3 +424,67 @@ def test_a_block_comment_is_not_nested_and_ends_at_the_first_terminator():
            '    output wire done\n'
            ');\nendmodule\n')
     assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
+
+
+# --------------------------------------------------------------------------- #
+# driven by a REAL checked-in artefact, not a fixture authored alongside it
+# --------------------------------------------------------------------------- #
+# vibe-ic#400: "a change whose tests are all fixtures authored alongside it
+# cannot distinguish itself from its own absence". Every test above this line
+# is synthetic. These two read RTL that was in the repository before this
+# change existed.
+
+import _hostpaths  # noqa: E402
+
+
+def _real_rtl_files():
+    root = _hostpaths.repo_path(".")
+    files = sorted(p for p in root.rglob("*.v") if ".git" not in p.parts)
+    files += sorted(p for p in root.rglob("*.sv") if ".git" not in p.parts)
+    if not files:
+        pytest.skip("no checked-in RTL in this tree")
+    return files
+
+
+def test_real_in_repo_rtl_still_parses_to_a_port_list():
+    """The stripper runs over real RTL, not only over pathological fixtures.
+    At least one checked-in module header must yield ports — a rewrite that
+    silently returned None everywhere would pass every synthetic test above
+    that asserts a specific list, but not this."""
+    import re
+    mod = re.compile(r"^\s*module\s+([A-Za-z_]\w*)", re.M)
+    parsed = 0
+    for f in _real_rtl_files():
+        txt = f.read_text(errors="replace")
+        for top in sorted(set(mod.findall(txt))):
+            ports = S.parse_top_ports(txt, top)
+            if ports:
+                parsed += 1
+                assert all(p["dir"] in ("input", "output", "inout")
+                           for p in ports)
+                assert all(p["name"] and not p["name"].startswith(("/", "("))
+                           for p in ports), (
+                    f"{f.name}::{top} minted a port out of comment or "
+                    f"attribute text: {[p['name'] for p in ports]}")
+    assert parsed > 0, "no checked-in module header parsed to any port"
+
+
+def test_no_real_in_repo_module_gains_or_loses_a_port_from_the_comment_fix():
+    """A stripper is only safe if it is inert on text that has nothing to
+    strip. Re-parsing each real module with its comments ALREADY removed must
+    give the identical port list — if the two disagree, the stripper is
+    changing something other than comments."""
+    import re
+    mod = re.compile(r"^\s*module\s+([A-Za-z_]\w*)", re.M)
+    checked = 0
+    for f in _real_rtl_files():
+        txt = f.read_text(errors="replace")
+        pre = S._strip_hdl_attributes(S._strip_hdl_comments(txt))
+        for top in sorted(set(mod.findall(txt))):
+            a = S.parse_top_ports(txt, top)
+            b = S.parse_top_ports(pre, top)
+            ka = [(p["dir"], p["name"], p["width"]) for p in (a or [])]
+            kb = [(p["dir"], p["name"], p["width"]) for p in (b or [])]
+            assert ka == kb, f"{f.name}::{top}: {ka} != {kb}"
+            checked += 1
+    assert checked > 0
