@@ -370,8 +370,36 @@ production window is 60 s                  4-6x margin
 
 Red 13 is therefore neither "the host" nor "one long item". It is a driver whose
 renewal cadence has 4-6x margin alone and none at all when three of its own
-nested runs share a machine — which is exactly the configuration
-`test_the_census_block_is_fresh` creates.
+nested runs share a machine.
+
+**A REMEDY ALREADY SHIPS, and it needs no code change.**
+`test_matrix_63x8_coverage.py` exposes `VIBEIC_MATRIX_OUTCOME_WORKERS`
+(`_outcome_worker_cap`), and `test_outcome_worker_cap_reduces_nested_width_
+without_changing_default` already pins that it works. Measured on the FAITHFUL
+configuration — all nine dimension modules through `_run_outcome_reports` at the
+production `60 s` window:
+
+```
+cap unset   width 3   COMPLETED  147.7s, 1060 items   (load 5.82)
+cap unset   width 3   COMPLETED  147.8s, 1060 items   (load 13.11, external contention)
+cap = 1     width 1   COMPLETED  272.9s, 1060 items   (load 18.97, external contention)
+```
+
+So the knob works and costs **1.85x wall-clock** to serialise the waves.
+
+**But its necessity is UNPROVEN, and that is stated rather than glossed.** The
+faithful configuration survived both times, including under deliberate external
+contention at load 13. What reliably kills is *three concurrent whole nested
+runs* — heavier than anything the suite actually does. So:
+
+* if red 13 recurs on a CI host, `VIBEIC_MATRIX_OUTCOME_WORKERS=1` is an
+  operator-level mitigation that changes no assertion, no window and no code,
+  at a measured 1.85x cost;
+* nobody should set it pre-emptively on this evidence, because the condition it
+  guards against was not reproduced in the configuration the suite runs.
+
+That is where this line of investigation ends: mechanism measured, reproduction
+available, remedy shipped and costed, necessity honestly unproven.
 
 ## 13 — not "the host". One item, 18.95 s, against a 60 s window
 
