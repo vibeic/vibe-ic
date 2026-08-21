@@ -741,3 +741,29 @@ guarantee rather than without it. The wiring and the regression came in one
 commit, so the only two ways to land the ruling are this branch or a batch that
 carries the hole — which is precisely why the split-merge in §9 matters and why
 it is worth a re-merge rather than a shrug.
+
+### Where the batch's `expected` digest comes from — the third writer
+
+§9 said the batch "carries the edit without its pin" without naming where the
+pin it DOES carry came from, which left the account one commit short. Measured
+over `81cd5321b..137caae92`:
+
+```
+tools/gatekeeper-land.sh                     : 4232a7301 (jrows), 05732dd26 (this branch)
+programs/ci_harness_timeout_ceiling_check.py : ff7b36be8 (jrows)
+```
+
+So there are three writers, not two. `4232a7301` wired the review and edited the
+lander; `ff7b36be8` — jrows's own follow-up, "my own wiring reddened two gates" —
+re-pinned the digests to match it, which is `dad5d0f1…`, the value the batch
+reports as `expected` today. `05732dd26` then edits that same lander again, and
+`2ce40937c` (not taken) re-pins to `e9d42ab4…`.
+
+That is the whole mechanism in one line: **jrows did the edit-plus-re-pin pair
+correctly, and the partial take of this branch broke the same pair a second
+time.** The remedy is unchanged and the trial merge already demonstrates it —
+taking this branch at its head supplies the missing half.
+
+It is also the argument for treating an edit and its re-pin as atomic rather
+than as two commits that happen to be adjacent: this file has now been split
+from its subject once, by an assembler acting reasonably on a branch name.
