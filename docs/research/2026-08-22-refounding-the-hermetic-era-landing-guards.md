@@ -178,11 +178,44 @@ EMPTY→expanded transition somehow, because that is G5's whole subject; what is
 unknown is whether a test can DRIVE it, or whether it only arises from a real
 benchmark-data pin moving between two real commits.
 
-**The question to answer before building D:** does the A2 corpus ever differ in
-CONTENT from the B2 corpus in a single verification, and if so, what makes it
-differ — the subject tree, the benchmark-data pin, or something the test cannot
-reach? If the answer is the third, D is not implementable as written and the two
-corpus tests need a different re-founding than the one proposed here.
+**CORRECTED AGAIN — my model of D was wrong twice.** Tracing the producer settles
+part of it and narrows the rest.
+
+`build_trusted_transition_evidence()` (`gatekeeper-verify-merge.sh:792-801`) runs
+
+```
+routed_def_corpus.py --repo "$TRUSTED_REPO" \
+  --trusted-manifest "$TRUSTED_TRANSITION_EVIDENCE" \
+  --checkout "$BENCHMARK_B2" --subject-repo "$WT_CAND" \
+  --benchmark-sha "$BENCHMARK_SHA"
+```
+
+Two things follow that I had wrong:
+
+1. **`--trusted-manifest` is an OUTPUT, not an input.** The file is `rm -f`'d at
+   `:793`, written by the program, and checked non-empty at `:801`. So "control
+   the trusted manifest" — the fix I was about to propose after the first
+   correction — is also not a thing a test does.
+2. **The enumeration runs ONCE, against the CANDIDATE** (`--subject-repo
+   "$WT_CAND"`). There is no A2-side call to `routed_def_corpus.py` anywhere in
+   the verifier. So the comparison producing `corpus_transitions` is not
+   "base corpus vs candidate corpus" computed here — my original model — and it
+   is not "manifest vs enumeration" either, which was my first correction.
+
+**What is left, stated as narrowly as I can make it:** the corpus population is
+derived from `$WT_CAND` plus `$BENCHMARK_SHA`, both of which a test CAN influence
+— the candidate subject is the test's own branch, and the benchmark SHA comes
+from the checkout `_verify()` supplies. The base side's gate set comes from the
+A2 arm running `gatekeeper-land.sh` on the base subject, which enumerates for
+itself. So the two sides CAN differ, and the tree is the channel.
+
+**The question that remains:** does `routed_def_corpus.py` take its population
+from the benchmark-data checkout at `$BENCHMARK_SHA` (in which case a test needs
+two benchmark-data commits, and M11 already found the published corpus is empty
+upstream), or from a declaration inside `$WT_CAND` (in which case a test needs
+only two branches)? M10 established that it reads git's INDEX and refuses a
+tree-only copy, which points at the former. **I did not settle this, and I am not
+going to guess it a third time.**
 
 **The general rule this earns, and it applies to B and C as well as D:** every
 "just express it through channel X" claim in this document needs channel X
