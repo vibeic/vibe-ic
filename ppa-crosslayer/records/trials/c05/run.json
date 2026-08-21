@@ -1,0 +1,18 @@
+{
+  "trial": "c05",
+  "levers": {
+    "rtl_variant": "csa_alt_maj",
+    "synthesis_strategy": "none"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.60",
+    "spare_cell_density": "0.02"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 501.735,
+    "cpu_seconds": 995.75,
+    "peak_rss_mb": 1035.1
+  }
+}

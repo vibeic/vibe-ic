@@ -1,8 +1,0 @@
-{
-  "id": "DT2",
-  "name": "Path-delay-fault (at-speed, timing-graded) ATPG",
-  "status": "pending",
-  "phase": "phase2",
-  "folder": "DT2_path_delay_fault_at_speed_timing_graded_atpg",
-  "outputs": []
-}

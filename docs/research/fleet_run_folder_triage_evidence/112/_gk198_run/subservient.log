@@ -1,0 +1,32 @@
+ip_catalog_query: REFUSED self-match 'shared_sram_rf' — catalog entry supplies the IC-under-test's OWN design (shared top/identity token(s): subservient) — offering it would hand back the reference design; REFUSED (#187 benchmark integrity)
+[ADVISORY] CATALOG_GLUE_CLOSURE (#778): 23 staged file(s) NOT reachable from 'chip_top' (4 of 27 reachable) — over-broad set fed to synth. The runner never auto-drops a staged file, but an unreachable prunable-tail file using a cross-file macro it never `include`s can crash yosys-slang opaquely with no author hint. Consider pruning to the closure. Examples: gpio_periph.v, serv_aligner.v, serv_alu.v, serv_bufreg.v, serv_bufreg2.v, serv_compdec.v, serv_csr.v, serv_ctrl.v
+/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/programs/design_one_shot_runner.py:8032: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "timestamp": _dt_p.datetime.utcnow().isoformat() + "Z",
+[phase2] complexity advisory: complexity score=47.5 tier=MEDIUM (prefer_catalog_glue=False synth_effort=medium fpga_early=True sta_corners=multi) — ADVISORY only
+
+=== design_one_shot_runner DONE — /home/reyerchu/_gk198_run/subservient/reports/orchestrator/phase2_one_shot.json
+verdict: FAIL
+  SKIP     rig_topology_skeleton existing rig_topology kept: rig_topology.json
+  PASS     phase1_precheck      24/13 L docs present
+  PASS     detect_ic_class      processor_cpu
+  WAIVED   rtl_gen              IC class 'processor_cpu' registered but rtl_gen=null. Recommended action: AI invokes skill `catalog-glue-author`.
+IP cat
+  SKIP     reused_ip_consume    phase2/stage1/rtl/ already holds 27 RTL file(s) — a deterministic generator / author owns it; CONSUME skipped
+  SKIP     leaf_typo_aliases    no leaf-name typo detected (no alias wrapper needed)
+  SKIP     reset_clock_variant_aliases top reset/clock ports already canonical
+  PASS     determinism_gates    determinism gates clean over 27 RTL file(s) (clock-divider phase-form + worked-example oracle; both self-skip when not a
+  ADVISORY complexity_advisory  complexity score=47.5 tier=MEDIUM (prefer_catalog_glue=False synth_effort=medium fpga_early=True sta_corners=multi) — AD
+  SKIP     full_stack_tb_gen    tb_chip_top_full.v emitted as CONNECTIVITY-ONLY skeleton (11 L9.top_ports → 11 DUT pins, 0 L3 opcodes driven). Functiona
+  PASS     l10_unit_tb_gen      emitted 10 functional_vector unit TB(s) instantiating DUT 'chip_top' under /home/reyerchu/_gk198_run/subservient/phase2/
+  WAIVED   professional_tb_gen  generic professional TB generated; functional run deferred
+  WAIVED   reference_tb         AID reference TB SKIPPED (class 'processor_cpu' verification_track='generic_full_stack' half_duplex_bus=False — the AID 
+  PASS     yosys_synth          netlist=netlist_yosys.v cells=17003 synth_top=chip_top frontend=read_verilog_v2005
+  SKIP     qsf_gen              DE10 QSF generation SKIPPED: class 'processor_cpu' verification_track='generic_full_stack' half_duplex_bus=False — the A
+  PASS     sdc_gen              emitted subservient.sdc (PASS sdc_gen: /home/reyerchu/_gk198_run/subservient/phase2/stage1/fpga/subservient.sdc (clock=i
+  SKIP     dft_insertion        DFT scan inserted; OSS ATPG coverage engine-limited (pdk=generic) → disclosed capability-gap
+  SKIP     post_dft_opt         no scan netlist → post-DFT disclosed-skip
+  SKIP     lec_equivalence      LEC produced no report (rc=1) → disclosed-skip
+  PASS     phase2_manifests     11 manifest(s) written
+  FAIL     final_audit            backlog_sanitize_check (NOT INVOKED: argparse rejected the umbrella's argv: one of the arguments --file --dir is requi
+  PASS     stamp_gate_reports   stamped #484 identity into 24 gate/lint json(s) under reports/phase2/gates, reports/phase2/lint
+final summary: reports/final_summary.md

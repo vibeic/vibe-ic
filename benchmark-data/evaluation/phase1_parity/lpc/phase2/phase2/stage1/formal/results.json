@@ -1,5 +1,0 @@
-{
-  "verdict": "PASS",
-  "evidence": "iverilog reference TB scenarios",
-  "all_proved": true
-}

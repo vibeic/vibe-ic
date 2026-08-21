@@ -1,0 +1,37 @@
+Round complete. Here is the result.
+
+## The number
+
+**SS-corner setup: −2.14 ns → +3.33 ns. TNS −17.85 → 0.00. Hold MET at +0.31 ns.**
+
+The 2.92 ns gap that defined the last three rounds is **closed**, with 3.33 ns of margin and — the stronger form — **no violating path at all** at that corner. The 25.907 ns period was never touched.
+
+## What closed it
+
+yosys's default ABC script for `-liberty` runs `&fraig -x; scorr; dc2` — **redundancy-removal passes**. A parallel-prefix adder is *deliberately* redundant; that duplication is the speed. Those passes merge it back into a serial carry chain. Proof is in the mapped cells: a stride-3, twelve-deep alternating `a311oi/o311ai` chain — a carry chain, not a prefix tree.
+
+The fix is **two `(* keep *)` prefixes on two wire declarations**. Isolated 32-bit adder, stock ABC script: **22 cells on the critical path → 8**. No plugin change needed for it.
+
+This also means the flow's own `ADDER_MAP_FILE` knob — a facility for a design to declare a fast adder — is silently defeated by the mapper it feeds. Chip-agnostic, and why three rounds of adder work bought less than they should have.
+
+## Finish line — shipped run `d2`, rc read directly
+
+```
+run_output_completeness_check.py   rc=0  [PASS] COMPLETE          ✅
+benchmark_result_md_lint.py        rc=0  all 7 § 6 sections       ✅
+flow_compliance_check.py --strict  rc=1  PASS=28 FAIL=6 MISSING=1 ❌
+```
+**2 of 3. Not an official PASS.** Remaining: 2404 max-slew DRVs (mine), 22 real routing DRCs (mine), and three tool defects — the aging corner, the ATPG budget, the FMEDA false positive.
+
+## Corrections to my own work
+
+- **I killed the wrong arm.** Reaping `pgrep -f "[l]ec_equiv.ys"` matched `d0`'s phase-3 LEC too. Rather than ship a control carrying a self-inflicted FAIL, I restarted all three from a clean re-stage — cost 70 minutes, bought a better experiment.
+- The isolated-adder result licensed a global ABC-script swap. At full-design scope **every** such arm was worse.
+- My depth metric ranked `d1` better than `d0`; the sign-off SPEF says `d1` is **worse**. Partial application of the fix is worse than none.
+- Your −2.92 ns baseline is stale: the control re-measures **−2.14 ns** at v1.8.99 (the `bound: int = 3` is gone, the die sizing changed).
+
+## Biggest new defect
+
+**The aging sign-off corner reads the pre-PnR netlist with no parasitics** — −100.49 ns on a design that meets at **+11.29 ns**. A 112 ns error that blocks every design. Fix implemented, demonstrated, and negative-controlled: it clears the step on the passing arm and provably does *not* rescue the failing one.
+
+Findings: `/home/reyerchu/_c_sha2_findings.md` (1117 lines). Host clean, 12 production containers healthy throughout, shared checkout untouched.
