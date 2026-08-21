@@ -1272,7 +1272,7 @@ Every remaining red is now attributed to one of four causes, none of which is
 | 11 | matrix family | the 54-ID agent's lane |
 | 2 | coverage bridge | **jmain-green's 38** (confirmed against the split), red since v1.11.18, and it poses a verdict-vocabulary DESIGN question: should "oracle PASS with no coverage measurement" be `VACUOUS-PASS` or `WAIVED-DEFERRED`? Same class as the flow-gate intent call — not mine to guess |
 | 3 | flow-gate enforcement audit | a POLICY call: two gates must declare `ENFORCEMENT: blocking\|advisory`, and the flow's `program_exit_zero` clauses make either choice wrong without a wiring change |
-| 2 | manifest parity | EVIDENCE this host lacks: 0 of the manifest's 15 declared run roots are present |
+| 2 | manifest parity | ~~EVIDENCE this host lacks~~ — **WRONG, see M30/M32. 10 of the 15 declared roots ARE here, two carry the artefact. FIXED: 3 reds closed.** |
 | 9 | landing-verdict guard | the guard is UNRUNNABLE here — needs docker CLI + git >= 2.38 + a non-`$HOME` subject in ONE environment |
 | 2 | `magic` flake, 0.8 s lease family | characterised, ratios recorded |
 
@@ -2160,7 +2160,7 @@ read-only mount topology, M15). Vacuity alone did not seem sufficient grounds.
 | item | what is missing | who can supply it |
 |---|---|---|
 | Flow-gate enforcement audit (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT: blocking\|advisory`, but their `program_exit_zero:` clauses (flow lines 1847, 5788) make either choice wrong without a wiring change | a POLICY call, not a measurement |
-| `flow_manifest_declaration_parity` (2 reds) | a run root from the manifest's declared 15; **0 of the 15 are on this host** | anyone with a real run root |
+| ~~`flow_manifest_declaration_parity`~~ **CLOSED (M32)** — it was 3 reds, not 2 | ~~a run root from the declared 15; 0 of the 15 are on this host~~ **That blocker was false: 10 of 15 are here and two carry the artefact. Entry measured at 1919 B; gate now 0 not covered.** | nobody — done |
 | Re-founding the 10 knob-dependent tests (M13) | six test-only env knobs cannot cross the hermetic arm boundary, and `os.kill(arm_pid, 0)` is a host-namespace assertion about a container-namespace process | a POLICY call: re-found on `/evidence` + arm receipts + `landing_completion_record.py`, or punch a test-only hole in `_LAND_REVIEWED_ENV_NAMES` plus a writable mount. I recommend the former and did neither. |
 
 ## D. Corrections to my own earlier reports, so you do not act on the old ones
