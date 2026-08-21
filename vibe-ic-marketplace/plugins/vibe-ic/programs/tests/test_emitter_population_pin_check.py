@@ -1132,6 +1132,55 @@ def test_the_population_floor_holds_at_exactly_two(tmp_path):
                 f"compared -- silently: {found}")
 
 
+#: TWO counters in one emitted script. `_a` is honest. `_b` carries a phantom
+#: site inside a DENYING comment and a RETIRED threshold, so both polarity paths
+#: fire on one counter while the other must be untouched.
+EMITTER_TWO_COUNTERS = (
+    'def s():\n    return (\n'
+    '        "  if {[catch {x}]} { incr _a }\\n"\n'
+    '        "  if {[catch {y}]} { incr _a }\\n"\n'
+    '        "  if {$_a >= 2} { puts A }\\n"\n'
+    '        "  # the retry path does not incr _b; it re-issues\\n"\n'
+    '        "  if {[catch {p}]} { incr _b }\\n"\n'
+    '        "  if {[catch {q}]} { incr _b }\\n"\n'
+    '        "  if {[catch {r}]} { incr _b }\\n"\n'
+    '        "  # $_b >= 9 is no longer the threshold\\n"\n'
+    '        "  if {$_b >= 3} { puts B }\\n")\n')
+
+
+def test_two_counters_in_one_script_do_not_contaminate_each_other():
+    """`counters_of` keeps one `refused` list for the whole script while
+    counting each name separately, and every other test here uses exactly ONE
+    counter -- so a bug that attributed a denial to the wrong counter, or let
+    one counter's denied site suppress another's, had nowhere to show.
+
+    Both failure directions are covered by the one fixture: `_b`'s phantom site
+    and retired threshold must be dropped from `_b` and MUST NOT touch `_a`,
+    which is honest at 2 sites and a denominator of 2. If the two ever share
+    state, `_a` moves -- and `_a` moving is the silent kind, because a guard
+    that quietly stops comparing a correct counter still prints PASS.
+
+    The real tree has exactly one counter, so this shape is not reachable from
+    the shipped corpus and only a constructed input can reach it."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+
+    rows, refused = E.counters(EMITTER_TWO_COUNTERS)
+    sites = {name: n for name, n, _ in rows}
+    dens = {name: sorted(v for _, v in d) for name, _, d in rows}
+
+    assert sites == {"_a": 2, "_b": 3}, (
+        f"a counter's site count moved; the two are sharing state: {sites}")
+    assert dens == {"_a": [2], "_b": [3]}, (
+        f"a denominator crossed counters or a retired one survived: {dens}")
+    # both of `_b`'s denials fired, and each names `_b` in its evidence
+    assert len(refused) == 2, refused
+    for what, matched, word in refused:
+        assert "_b" in matched, (
+            f"a denial on `_b` was recorded against something else: "
+            f"{what} {matched!r} ({word})")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
