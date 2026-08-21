@@ -609,7 +609,11 @@ if SLOW:
 _tally = re.findall(r"^ {4,}Bucket-A records\s+(\d+)(.*)$", MD, re.M)
 _nA = sum(1 for r in RECS if r["bucket"] == "A")
 control("prose-tally", bool(_tally) and all(x.isdigit() for x, _ in _tally))
-_bad = [x for x, rest in _tally if int(x) != _nA and "(" not in rest]
+# The LEADING number is always the current one; a parenthetical carries the
+# historical figure. The first version exempted any line with a parenthesis,
+# which let "28 (26 when the rubric was applied)" stand against a live 29 --
+# the exemption covered the wrong half of the line.
+_bad = [x for x, rest in _tally if int(x) != _nA]
 check("prose tallies match the live Bucket-A count", not _bad,
       f"{len(_tally)} tally line(s), live count {_nA}" + (f", stale: {_bad}" if _bad else ""))
 

@@ -1005,7 +1005,7 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            28     (22 when the rule was written)
+    Bucket-A records            29     (22 when the rule was written)
     distinct target programs    16
     targets that are unwired     0
 
@@ -1527,11 +1527,26 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          28     (26 when the rubric was applied)
+    Bucket-A records                          29     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
-**And the check itself is A-27's worked example, twice over.** The first run
+**Routing aptness, checked separately from routing existence.** The verifier
+confirms each record's routed program EXISTS; it cannot confirm the routed
+program is the right one, and a misroute sends the implementing lane to the wrong
+file. Screened by asking which programs each `fix_action` names and whether the
+routed one is among them:
+
+    Bucket-A records naming any program at all           29
+    naming a program OTHER than the routed one            3
+    of those, a genuine misroute                          0
+
+All three name a gate that landed on `main` during this branch and is offered as
+a starting point — *build on this file* — rather than as the owner of the fix.
+The screen over-matches by construction, since it cannot tell a routing target
+from a reference, so the three were read rather than counted.
+
+**And the buildability check itself is A-27's worked example, twice over.** The first run
 reported **14 of 26 missing a refusal** — because the pattern `\brefus\b`
 cannot match the word *refuse*, the `\b` falling between `s` and `e`. A-27 says
 to validate a screen against a known instance before quoting its number; doing
