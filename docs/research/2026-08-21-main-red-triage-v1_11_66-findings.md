@@ -1,6 +1,32 @@
-# findings — agent `ptmo`, RUN 8: v1.11.62, and the ownership question
+# findings — agent `ptmo`: the v1.11.66 red triage, and what auditing my own claims found
 
-host 8hd-3 · 2026-08-21
+host 8hd-3 · started 2026-08-21 · **32 sections; read this header before M0**
+
+**SCOPE HAS GROWN PAST THE TITLE IT STARTED WITH.** This began as RUN 8 —
+"v1.11.62 and the ownership question" — and M0 below still states that premise,
+correctly, as the premise OF RUN 8. The document now runs to M36 and the branch
+is cut from `6d06ba664` ("final disposition at v1.11.66"). **M0 is history, not
+the current base.**
+
+**If you read only one thing, read `REQUESTS TO THE LANDER` at the end.** It is
+the only section maintained as a current summary; everything between M0 and it is
+a chronological log in which later sections retract earlier ones.
+
+**What the log is mostly about, in the end.** It began as a triage of main's reds
+and became, roughly half by volume, an audit of MY OWN claims — because those
+turned out to be the least reliable thing in it:
+
+* **six disposition rows audited → six corrections.** Not one survived as written.
+* **six "not mine" claims audited → five collapsed, one held** with a better
+  framing. A blocker reads as modesty and is therefore the last thing anyone
+  re-checks, its author included.
+* **seven instrument defects catalogued**, of which THREE reported my own work as
+  more successful than it was.
+* **nine retractions of published findings**, plus three near-misses that
+  measurement killed before publication.
+
+The reds are in the tables. The reason to keep the rest is that most of what went
+wrong here was not in the repository.
 
 ## M0 — PREMISE: main is v1.11.62. NEITHER of the two changes is in the tree.
 
