@@ -203,7 +203,23 @@ tests, so the arm proves each guard reddens against the defect it guards.
 Run serially in a dedicated worktree; the tree is `git checkout -- .` between
 mutations and ends `porcelain=0`.
 
-MUTATION_TABLE_PLACEHOLDER
+Base for every arm: `08d398576` (this branch's head at the time), reddening
+against a clean 116 passed / 11 skipped / 2 xfailed.
+
+| # | mutation | reddens | node ids |
+|---|---|---|---|
+| M1 | revert 15.5ic's condition to the pre-v1.11.38 operator-only form | 8 failed, 108 passed, 11 skipped, 2 xfailed in 40.94s | `test_condition_layer_cell[self_tapeout_pdk_ships_no_shuttle::15.5ic]`<br>`test_condition_layer_cell[self_tapeout_pdk_ships_a_shuttle::15.5ic]`<br>`test_condition_layer_cell[shuttle_chip_template_not_fetched::15.5ic]`<br>`test_condition_layer_cell[two_router_files_at_once::15.5ic]`<br>…and 4 more |
+| M2 | the same, on 26.5ic | 8 failed, 108 passed, 11 skipped, 2 xfailed in 41.66s | `test_condition_layer_cell[self_tapeout_pdk_ships_no_shuttle::26.5ic]`<br>`test_condition_layer_cell[self_tapeout_pdk_ships_a_shuttle::26.5ic]`<br>`test_condition_layer_cell[shuttle_chip_template_not_fetched::26.5ic]`<br>`test_condition_layer_cell[two_router_files_at_once::26.5ic]`<br>…and 4 more |
+| M3 | the same, on 37.5ic | 8 failed, 108 passed, 11 skipped, 2 xfailed in 41.85s | `test_condition_layer_cell[self_tapeout_pdk_ships_no_shuttle::37.5ic]`<br>`test_condition_layer_cell[self_tapeout_pdk_ships_a_shuttle::37.5ic]`<br>`test_condition_layer_cell[shuttle_chip_template_not_fetched::37.5ic]`<br>`test_condition_layer_cell[two_router_files_at_once::37.5ic]`<br>…and 4 more |
+| M4 | delete step 37.5ip from the flow | 23 failed, 93 passed, 11 skipped, 2 xfailed in 39.18s | `test_the_matrix_covers_every_path_step_the_flow_declares`<br>`test_condition_layer_cell[self_tapeout_pdk_ships_no_shuttle::37.5ip]`<br>`test_condition_layer_cell[self_tapeout_pdk_ships_a_shuttle::37.5ip]`<br>`test_condition_layer_cell[shuttle_chip_template_fetched::37.5ip]`<br>…and 19 more |
+| M5 | re-add `37.5self` as a step (the retired third route) | 2 failed, 114 passed, 11 skipped, 2 xfailed in 40.91s | `test_the_matrix_covers_every_path_step_the_flow_declares`<br>`test_a_step_the_flow_does_not_carry_reads_MISSING_and_never_a_skip` |
+| M6 | make `die_finishing_check` exit 0 unconditionally | 6 failed, 110 passed, 11 skipped, 2 xfailed in 40.27s | `test_no_gate_of_a_running_path_step_passes_on_an_empty_tree[self_tapeout_pdk_ships_no_shuttle::26.5ic]`<br>`test_no_gate_of_a_running_path_step_passes_on_an_empty_tree[self_tapeout_pdk_ships_a_shuttle::26.5ic]`<br>`test_no_gate_of_a_running_path_step_passes_on_an_empty_tree[shuttle_chip_template_fetched::26.5ic]`<br>`test_no_gate_of_a_running_path_step_passes_on_an_empty_tree[shuttle_chip_template_not_fetched::26.5ic]`<br>…and 2 more |
+| M7 | make `digital_hardmacro_check` exit 2 unconditionally (it can only ever say CANNOT CHECK) | 1 failed, 115 passed, 11 skipped, 2 xfailed in 40.30s | `test_the_gate_of_every_path_step_can_reach_a_RED_verdict[37.5ip]` |
+| M8 | give 0.5ic a `condition`, so the unconditioned router can skip | 13 failed, 103 passed, 11 skipped, 2 xfailed in 41.31s | `test_condition_layer_cell[self_tapeout_pdk_ships_no_shuttle::0.5ic]`<br>`test_condition_layer_cell[self_tapeout_pdk_ships_a_shuttle::0.5ic]`<br>`test_condition_layer_cell[shuttle_chip_template_not_fetched::0.5ic]`<br>`test_condition_layer_cell[ip_hardmacro::0.5ic]`<br>…and 9 more |
+| M9b | make the two-router contradiction UNDETECTABLE (`_routers_present` sees one where there are two) | 1 failed, 115 passed, 11 skipped, 2 xfailed in 41.47s | `test_two_router_files_at_once_are_refused_and_the_control_is_not` |
+| M10 | give step 38 the chip-path condition — i.e. LAND the F3 remedy | 4 failed, 113 passed, 11 skipped, 1 xfailed in 64.67s (0:01:04) | `test_the_matrix_covers_every_path_step_the_flow_declares`<br>`test_exactly_one_step_after_the_IP_terminal_has_no_way_to_not_apply`<br>`test_an_IP_does_not_owe_the_foundry_handoff_kit`<br>`test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be` |
+| M11 | wire an unwired producer up (`pad_ring_gen` into phase3_one_shot_runner) | 1 failed, 115 passed, 11 skipped, 2 xfailed in 41.03s | `test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be` |
+| M12 | take a wired producer dark (`digital_hardmacro_gen`'s dispatch target renamed) | 1 failed, 115 passed, 11 skipped, 2 xfailed in 41.23s | `test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be` |
 
 ### The arm that found a real weakness in my own test
 
@@ -293,10 +309,17 @@ AB_PLACEHOLDER
        name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
    ```
 
-   Verified as mutation M10: with it applied, the xfail XPASSes (the anti-rot
-   fires) and no other cell in this matrix moves. **Do not land it without
-   deciding F3's open question first** — an IP might deserve an IP-shaped
-   handoff kit rather than a skip.
+   Verified as mutation M10. With it applied the xfail XPASSes — the anti-rot
+   fires — and **three other tests go red, all of them correctly**, because
+   step 38 becomes a path step by this matrix's own derivation:
+   `test_the_matrix_covers_every_path_step_the_flow_declares` (38 is not in
+   `DECLARED_PATH_STEPS`), `test_exactly_one_step_after_the_IP_terminal_has_no_way_to_not_apply`
+   (the owed set becomes `{39}`) and
+   `test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be`
+   (`foundry_handoff_package_check` enters the producer set). Landing the edit
+   means updating those three expectations in the same commit; they are data,
+   not logic. **Do not land it without deciding F3's open question first** —
+   an IP might deserve an IP-shaped handoff kit rather than a skip.
 
 4. **F1 — a 19th declaration question.** A declared submission target would let
    37.5ic's operator arm tell "there is no operator to ask" from "we never went
