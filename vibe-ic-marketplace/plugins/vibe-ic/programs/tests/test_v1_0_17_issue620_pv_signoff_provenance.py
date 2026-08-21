@@ -51,8 +51,21 @@ def _mk(tmp_path, with_drc=True, with_lvs=True, with_gds=True):
                     "outputs": {"phase3/stage3/pnr/routed.def": "sha256:bb"}}) + "\n")
     (tmp_path / "reports" / "phase3").mkdir(parents=True)
     if with_drc:
+        # A real, clean KLayout report database. It used to be the one-line
+        # stub `"<klayout drc-rdb> total 0 violations"`, which was fine while
+        # the declarer hardcoded `tool: "klayout"` for whatever sat at this
+        # path — and that hardcoding is exactly the defect the sign-off
+        # producer work closes. The attribution is now derived from the
+        # artefact, so the fixture has to BE the thing it stands for. Same
+        # subject (provenance bookkeeping), honest input.
         (tmp_path / "reports/phase3/drc_signoff.rpt").write_text(
-            "<klayout drc-rdb> total 0 violations\n")  # real clean DRC
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+            "<report-database>\n"
+            "  <generator>drc: script='/pdk/tech/klayout/drc/deck.lydrc'"
+            "</generator>\n"
+            "  <top-cell>chip_top</top-cell>\n"
+            "  <items></items>\n"
+            "</report-database>\n")
     if with_lvs:
         (tmp_path / "reports/phase3/lvs.rpt").write_text(
             "Circuits match uniquely.\n")

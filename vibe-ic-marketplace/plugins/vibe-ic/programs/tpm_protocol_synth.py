@@ -25,6 +25,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -35,7 +38,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def _ensure_dict(d: dict, key: str) -> dict:
@@ -917,7 +922,7 @@ def _l9(gd: Path) -> None:
         "protocol-level normative spec; the integrating SoC / motherboard adds the "
         "platform-specific TPM Interface Specification (LPC / SPI / I2C TIS-PTP) "
         "plus the chassis-level TPM-presence + reset + locality-4 (H-CRTM) wiring.")
-    _force(d, "top_module", "TPM_2_0_Library_Architecture")
+    _ptm.apply(d, "TPM_2_0_Library_Architecture")
     d.setdefault("integration_overview", {
         "interface_choices":  "LPC (4-wire data + LFRAME# + LCLK + LRESET#), SPI (4-wire), I2C (2-wire).",
         "register_file_base": "0xFED40000 (PC platform; per TIS/PTP).",

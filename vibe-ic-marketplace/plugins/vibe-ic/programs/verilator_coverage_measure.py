@@ -19,7 +19,7 @@ Usage:
     # sim/cov_build/main.cpp — see your project's conventions)
     python3 verilator_coverage_measure.py measure \\
         --rtl-dir rtl \\
-        --top sn2025_top \\
+        --top example_top \\
         --main sim/cov_build/main.cpp \\
         --out reports/coverage/coverage_actual.json
 
@@ -28,10 +28,40 @@ Usage:
         --coverage-json reports/coverage/coverage_actual.json \\
         --min-line 70 --min-toggle 60 --min-branch 70
 
-Exit code:
-    0 — all thresholds met AND artefact appears tool-generated
+Exit code (`measure`):
+    0 — all thresholds met
     1 — threshold(s) below target
-    2 — artefact missing / hand-edited / not tool-generated
+
+Exit code (`check`) — COVERAGE-CREDIT SPLIT of the two meanings that used to
+share exit 2. `flow_compliance_check._check_program_exit_zero` maps rc=2 onto
+VACUOUS_PASS ("the input this gate audits does not apply to this project"),
+and VACUOUS_PASS was counted into `pass_count`. So every rc=2 this program
+returned bought the enclosing step PASS credit — including for an artefact
+that EXISTS at the declared coverage path but carries no coverage in it.
+An artefact under the coverage path with no `totals.*` is a MISLABELLED
+artefact, not an inapplicable input.
+(State AS MEASURED THEN. `flow_compliance_check` has since dropped
+VACUOUS_PASS from the executed-PASS numerator — the tier leaves X and stays
+in Y — so an rc=2 no longer buys PASS credit. The split below is unaffected:
+a mislabelled artefact must be rc=1 whatever the tier above it counts, and
+this program's own rc=2 was the mechanism by which step 4 was measured
+VACUOUS_PASS on the host that found the numerator defect.)
+
+    0 — a real measurement is present and every threshold is met
+    1 — a DEFECT: below threshold, OR the artefact at the declared path is
+        corrupt / mislabelled / forged, OR no measurement exists on a host
+        where the Verilator toolchain that would have taken it IS installed
+    3 — a DISCLOSED capability gap (printed with the `PASS_WITH_WAIVERS`
+        stdout sentinel `_check_program_exit_zero` requires): no coverage
+        measurement AND no Verilator on PATH to have taken one. The step
+        resolves to WAIVED-DEFERRED — reviewable, review_required, and
+        REMOVED from the executed-PASS numerator — instead of silently
+        counting as a pass.
+
+    rc=2 is no longer emitted by `check`. Other programs that legitimately
+    use the input-missing convention (foundry_handoff_package_check,
+    mixed_signal_merge_check) are untouched: the semantics change is local
+    to this program, not to `_check_program_exit_zero`.
 
 Generality: works for any Verilator-compatible RTL. Threshold defaults are
 conservative; tighten per project maturity.
@@ -41,6 +71,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -278,6 +309,86 @@ def artefact_looks_tool_generated(json_payload: Dict[str, Any]) -> Tuple[bool, s
     return True, "ok"
 
 
+# ----- artefact classification --------------------------------------
+#
+# The declared coverage path is shared: `design_one_shot_runner` writes a
+# FUNCTIONAL-verification verdict payload (verdict / evidence /
+# verification_track / scenarios_covered) to
+# reports/phase2/coverage/coverage_actual.json, the same path the flow YAML
+# declares as the coverage artefact this gate audits. Such a payload carries
+# no `totals` container at all — no line/toggle/branch was ever measured —
+# so the coverage gate must NAME that collision rather than treat the path
+# as an inapplicable input.
+
+#: Keys that assert a coverage NUMBER. A payload carrying one of these while
+#: carrying no `totals` container is a coverage CLAIM with no measurement
+#: behind it — a forgery, never a capability gap.
+_BARE_COVERAGE_CLAIM_KEYS = (
+    "line_pct", "toggle_pct", "branch_pct",
+    "line_coverage", "toggle_coverage", "branch_coverage",
+    "coverage_pct", "coverage_percent", "line_coverage_pct",
+)
+
+#: Artefact kinds that are always a DEFECT, whatever the host toolchain is.
+_DEFECT_KINDS = ("corrupt", "malformed", "forged")
+#: Artefact kinds meaning "no coverage measurement exists at this path".
+_NO_MEASUREMENT_KINDS = ("absent", "foreign")
+
+
+def classify_coverage_artefact(path: Path) -> Tuple[str, str, Dict[str, Any]]:
+    """Classify what actually sits at the declared coverage path.
+
+    Returns ``(kind, detail, payload)``:
+
+      ``measured``  a well-formed tool-generated coverage artefact — apply
+                    thresholds to it.
+      ``absent``    nothing at the path.
+      ``foreign``   valid JSON with NO ``totals`` container: another producer
+                    owns this path and no coverage was measured here.
+      ``corrupt``   the file exists but is not parseable JSON.
+      ``malformed`` claims to be coverage (``totals`` present) but the
+                    container is incomplete / its coverage.dat backlink is
+                    dead.
+      ``forged``    a coverage number asserted with no measurement behind it
+                    — well-formed counters carrying estimation language, or a
+                    bare percentage claim with no ``totals``. This is the
+                    exact "≥ 95 % estimated" shape the gate exists to reject.
+    """
+    if not path.exists():
+        return "absent", f"no artefact at {path}", {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001 — any unparseable file is corrupt
+        return "corrupt", f"{path}: parse error: {exc}", {}
+    if not isinstance(data, dict):
+        return ("corrupt",
+                f"{path}: top level is {type(data).__name__}, not an object",
+                {})
+
+    totals = data.get("totals")
+    if not isinstance(totals, dict) or not totals:
+        claims = [k for k in _BARE_COVERAGE_CLAIM_KEYS if k in data]
+        if claims:
+            return ("forged",
+                    f"{path}: asserts coverage via {claims} with no `totals` "
+                    f"container behind it — a coverage claim is not a "
+                    f"coverage measurement", data)
+        owner = (data.get("verification_track") or data.get("verdict")
+                 or "another producer")
+        return ("foreign",
+                f"{path}: carries no `totals` container — the file at the "
+                f"declared coverage path is a {owner!r} payload written by "
+                f"another producer, so line/toggle/branch was never measured "
+                f"here", data)
+
+    ok, reason = artefact_looks_tool_generated(data)
+    if ok:
+        return "measured", "ok", data
+    if reason.startswith("estimation keyword"):
+        return "forged", f"{path}: {reason}", data
+    return "malformed", f"{path}: {reason}", data
+
+
 # ----- CLI ----------------------------------------------------------
 
 
@@ -305,20 +416,72 @@ def cmd_measure(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Exit code + stdout sentinel `flow_compliance_check._check_program_exit_zero`
+#: recognises as "PASSED WITH WAIVERS" -> step tier WAIVED-DEFERRED. Both are
+#: required there, so a stray rc=3 from an unrelated program is never waived.
+WAIVER_EXIT_CODE = 3
+WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS"
+
+#: The named capability this gate needs. Printed so the deferral is
+#: attributable, in the same shape the flow's other cap-gap waivers use.
+COVERAGE_CAPABILITY = "cap:verilator_coverage_toolchain"
+
+#: Which executable's presence decides "capability gap" vs "defect". Made
+#: overridable so a test harness (or a container that ships Verilator under
+#: another name) can PIN the decision rather than inherit whatever the host
+#: happens to have. Note the only direction this can move a verdict is
+#: FAIL -> WAIVED-DEFERRED, which is still not a PASS and is printed in full.
+VERILATOR_BIN_ENV = "VIBE_IC_VERILATOR_BIN"
+VERILATOR_BIN_DEFAULT = os.environ.get(VERILATOR_BIN_ENV, "verilator")
+
+
+def _report_no_measurement(args: argparse.Namespace, kind: str,
+                           detail: str) -> int:
+    """No coverage measurement exists at the declared path.
+
+    Whether that is a DEFECT or a disclosed capability gap turns on one
+    question the gate can answer for itself: was the toolchain that would
+    have taken the measurement even installed?
+      * absent  -> rc 3 + sentinel: EXPLAIN the gap (WAIVED-DEFERRED,
+                   review_required, not counted as executed-PASS).
+      * present -> rc 1: the capability existed and the measurement was
+                   simply never taken. That is a defect, not an exemption.
+    """
+    tool = shutil.which(args.verilator_bin)
+    if tool is None:
+        print(f"[check] coverage NOT measured — {detail}")
+        print(f"[check] {args.verilator_bin!r} is not on PATH, so no "
+              f"line/toggle/branch coverage could have been produced on this "
+              f"host. Disclosing a named capability gap "
+              f"({COVERAGE_CAPABILITY}) — NOT certifying the step. "
+              f"Remediation: install Verilator and run "
+              f"`verilator_coverage_measure measure --out "
+              f"{args.coverage_json}`.")
+        print(f"{WAIVER_STDOUT_SENTINEL}: coverage deferred on "
+              f"{COVERAGE_CAPABILITY} (review_required — a tapeout review "
+              f"must close this before production)")
+        return WAIVER_EXIT_CODE
+    print(f"[check] FAIL — {detail}", file=sys.stderr)
+    print(f"[check] {args.verilator_bin!r} IS installed ({tool}): the "
+          f"capability to measure coverage was available and no measurement "
+          f"was taken. This is a defect, not a capability gap.",
+          file=sys.stderr)
+    return 1
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     p = Path(args.coverage_json)
-    if not p.exists():
-        print(f"[check] missing: {p}", file=sys.stderr)
-        return 2
-    try:
-        data = json.loads(p.read_text())
-    except Exception as e:
-        print(f"[check] parse error: {e}", file=sys.stderr)
-        return 2
-    ok, reason = artefact_looks_tool_generated(data)
-    if not ok:
-        print(f"[check] artefact not tool-generated: {reason}", file=sys.stderr)
-        return 2
+    kind, detail, data = classify_coverage_artefact(p)
+    if kind in _DEFECT_KINDS:
+        # A file that exists at the declared coverage path but is corrupt,
+        # mislabelled-as-coverage, or forged is a DEFECT — never the
+        # "input not applicable" exemption. Before the coverage-credit split all three
+        # returned rc=2 and bought the step a PASS-counted VACUOUS_PASS.
+        print(f"[check] artefact not tool-generated ({kind}): {detail}",
+              file=sys.stderr)
+        return 1
+    if kind in _NO_MEASUREMENT_KINDS:
+        return _report_no_measurement(args, kind, detail)
     totals = data["totals"]
     line_pct = totals["line"]["pct"]
     toggle_pct = totals["toggle"]["pct"]
@@ -359,6 +522,13 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--min-line", type=float, default=70.0)
     c.add_argument("--min-toggle", type=float, default=60.0)
     c.add_argument("--min-branch", type=float, default=70.0)
+    c.add_argument(
+        "--verilator-bin", default=VERILATOR_BIN_DEFAULT,
+        help=("executable whose presence on PATH decides whether an absent "
+              f"measurement is a disclosed capability gap (rc=3) or a defect "
+              f"(rc=1). Overridable via ${VERILATOR_BIN_ENV} so a harness can "
+              f"pin the capability decision instead of inheriting the host's. "
+              f"Default: verilator"))
     c.set_defaults(func=cmd_check)
 
     return p

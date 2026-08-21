@@ -29,6 +29,8 @@ import shlex
 import sys
 from pathlib import Path
 
+from _source_pin import func_src
+
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
@@ -90,8 +92,7 @@ def test_supervisor_ceiling_wrap_is_unchanged_by_the_refactor():
 def test_every_raw_exec_now_carries_a_container_side_deadline(mod_name):
     """Regression lock: the three runners that leaked must keep the wrap."""
     src = (PROGRAMS / f"{mod_name}.py").read_text()
-    start = src.index("def _docker_exec_raw")
-    body = src[start:start + 2500]
+    body = func_src(src, "_docker_exec_raw")
     assert "wrap_with_container_timeout" in body, (
         f"{mod_name}._docker_exec_raw lost its container-side deadline — a "
         "host timeout there orphans the in-container tool")
@@ -134,8 +135,7 @@ def test_sh_lc_is_also_covered():
 def test_run_helper_applies_the_wrap():
     """Regression lock on the call path, not just the helper."""
     src = (PROGRAMS / "design_one_shot_runner.py").read_text()
-    start = src.index("def _run(cmd: List[str]")
-    body = src[start:start + 1200]
+    body = func_src(src, "_run")
     assert "_docker_exec_argv_with_deadline" in body, (
         "_run stopped hardening docker-exec argvs — a host timeout there "
         "orphans the in-container tool")
@@ -147,8 +147,7 @@ def test_lec_run_docker_helper_carries_a_container_side_deadline():
     handler proves a timeout is an expected outcome — so the leak was an
     expected outcome too. Fixed by pattern from the measured Phase-2 leak."""
     src = (PROGRAMS / "lec_run.py").read_text()
-    start = src.index("def _docker(container: str")
-    body = src[start:start + 1600]
+    body = func_src(src, "_docker")
     assert "wrap_with_container_timeout" in body, (
         "lec_run._docker lost its container-side deadline — a host timeout "
         "there orphans a yosys equivalence run inside the container")

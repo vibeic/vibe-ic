@@ -111,7 +111,7 @@ def _run_step_synth(tmp_path: Path, proj: Path, monkeypatch):
     so all three define-carrying commands are captured."""
     captured: list[str] = []
 
-    def fake_exec(container, cmd, marker=None, timeout=1800):
+    def fake_exec(container, cmd, marker=None, timeout=1800, **_kw):
         captured.append(cmd)
         return 1, "", "stubbed failure"
 
@@ -122,9 +122,14 @@ def _run_step_synth(tmp_path: Path, proj: Path, monkeypatch):
     lib = tmp_path / "fake.lib"
     lib.write_text("library (fake) { cell (INV) { area : 1.0; } }\n")
     mlibs, mlefs, mgds, mv = p3._discover_local_macros(proj)
-    pdk = p3.PdkConfig(name="t", liberty=lib, tech_lef=tmp_path / "t.lef",
-                       cell_lef=tmp_path / "c.lef", cell_gds=tmp_path / "c.gds",
-                       site="unit", drc_deck=tmp_path / "d.lydrc",
+    # PdkConfig declares these as `str` (in-container paths) and every
+    # production construction site passes a str — `_registry_glob_one` returns
+    # Optional[str]. Passing Path here violated that contract and crashed
+    # `_synth_dont_use_cells` on `pdk.liberty.split("/")` with
+    # AttributeError: 'PosixPath' object has no attribute 'split'.
+    pdk = p3.PdkConfig(name="t", liberty=str(lib), tech_lef=str(tmp_path / "t.lef"),
+                       cell_lef=str(tmp_path / "c.lef"), cell_gds=str(tmp_path / "c.gds"),
+                       site="unit", drc_deck=str(tmp_path / "d.lydrc"),
                        macro_libs=mlibs, macro_lefs=mlefs, macro_gds=mgds,
                        macro_v=mv)
     res = p3.step_synth(proj, "chip_top", pdk, "no-such-container")
@@ -424,10 +429,10 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
     try:
         subprocess.run(["docker", "exec", container, "sh", "-c",
                         f"rm -rf {tag} && mkdir -p {tag}"],
-                       check=True, capture_output=True, timeout=120)
+                       check=True, capture_output=True, timeout=60)
         for f in sorted(tmp_path.iterdir()):
             subprocess.run(["docker", "cp", str(f), f"{container}:{tag}/"],
-                           check=True, capture_output=True, timeout=120)
+                           check=True, capture_output=True, timeout=60)
         libread = ""
         if stage_macro:
             libread = (f"read_liberty -lib -ignore_miss_dir -setattr blackbox "
@@ -441,10 +446,10 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
             ["docker", "exec", container, "sh", "-c",
              f"PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH; "
              f"cd {tag} && yosys -p '{script}'"],
-            capture_output=True, text=True, timeout=600).stdout
+            capture_output=True, text=True, timeout=60).stdout
     finally:
         subprocess.run(["docker", "exec", container, "sh", "-c",
-                        f"rm -rf {tag}"], capture_output=True, timeout=120)
+                        f"rm -rf {tag}"], capture_output=True, timeout=60)
     stat = out.split("=== chip_top ===")[-1]
 
     if expect == "macro":

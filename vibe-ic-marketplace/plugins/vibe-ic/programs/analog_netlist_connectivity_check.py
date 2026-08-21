@@ -45,9 +45,14 @@ Usage:
     python3 analog_netlist_connectivity_check.py <project_dir> --json out.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: at least one .sp deck was parsed and its connectivity graph is
+        clean
     1 = FAIL (floating node / unused port)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no analog directory, or no .sp file in
+        it, so no connectivity graph was built at all. #521: both used to be
+        rc 0, on 196 of the 200 tracked project roots. This is the branch the
+        "Honest-FAIL guarantees" note above was written to protect. Also rc 2
+        for an IO / parse error.
 
 chip-AGNOSTIC.
 """
@@ -66,6 +71,9 @@ try:
     _HAVE_PL = True
 except Exception:  # pragma: no cover
     _HAVE_PL = False
+
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 GATE = "analog_netlist_connectivity_check"
 
@@ -300,16 +308,22 @@ def main(argv: Optional[list] = None) -> int:
 
     result = run_audit(args.project_dir)
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
     else:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] {GATE}")
+        print(_vx.verdict_line(GATE, result.passed, skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
-    return 0 if result.passed else 1
+
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

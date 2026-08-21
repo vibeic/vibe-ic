@@ -4,7 +4,7 @@ description: Run Phase 1 (natural-language → L1-L27 JSON + human MD) via the d
 argument-hint: <project-dir> [--ic-name <name>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-phase1 <project-dir>` (e.g. `/vibe-ic-phase1 1st_benchmark_sn2025/phase2_v0119.48-vendor`).
+> `/vibe-ic-phase1 <project-dir>` (e.g. `/vibe-ic-phase1 1st_benchmark_example/phase2_v0119.48-vendor`).
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 

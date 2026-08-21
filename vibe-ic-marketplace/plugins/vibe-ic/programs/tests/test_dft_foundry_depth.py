@@ -293,6 +293,20 @@ def _setup_signoff(tmp_path: Path, *, stuck=96.3, with_transition=True,
             "reason": trans_reason,
         }
     (d / "coverage.json").write_text(json.dumps(cov))
+    if with_transition and engine_limited:
+        # The at-speed mechanism plan that `fault_atpg_run.run_transition_atpg`
+        # writes on every engine-limited run, before it emits the record this
+        # fixture hand-authors. `dft_signoff_check` requires the document the
+        # ENGINE_LIMITED tier calls "documented", so a fixture without it was
+        # describing a state no producer creates. Adding the artefact, not
+        # relaxing the check; `test_signoff_engine_limited_without_plan_fails`
+        # is the negative twin.
+        plan = tmp_path / "phase2/stage2/dft/transition_atpg_plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# At-speed (launch-off-capture) transition ATPG plan\n\n"
+            "Mechanism, clocking, capture window and the engine limitation "
+            "this tier is accepted on.\n" + ("detail line\n" * 20))
     # BSDL plan — run the CLI so bsdl_plan.json is persisted exactly as the
     # real flow produces it.
     net = tmp_path / "net.v"

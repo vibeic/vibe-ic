@@ -140,7 +140,7 @@ def _sky130_nom_tlef() -> str | None:
         r = subprocess.run(
             ["docker", "run", "--rm", "--entrypoint", "bash",
              "hpretl/iic-osic-tools:latest", "-lc", f"cat {p}"],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=60)
         if r.returncode == 0 and "VIA" in r.stdout:
             return r.stdout
     except Exception:

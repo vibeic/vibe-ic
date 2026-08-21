@@ -1,0 +1,46 @@
+*SPEF "IEEE 1481-1999"
+*DESIGN "fixture_top"
+*DATE "not a run artefact - hand-authored fixture"
+*VENDOR "vibe-ic regression fixture"
+*PROGRAM "hand-authored"
+*VERSION "1.0"
+// SI-BOUNDED SPEF (SETUP corner) — Miller-Coupling-Factor delay bound
+// Cc*MCF folded to victim ground, MCF=2 in-window / 1 decoupled
+// window overlap gated by OpenSTA arrival windows (guard=0.0ns; unknown window => assume overlap)
+// CONSERVATIVE BOUND, not PrimeTime-SI iterative waveform delay; no glitch/noise analysis; NOT silicon-proven
+*DESIGN_FLOW "NETLIST_TYPE_VERILOG"
+*DIVIDER /
+*DELIMITER :
+*BUS_DELIMITER []
+*T_UNIT 1 NS
+*C_UNIT 1 PF
+*R_UNIT 1 OHM
+*L_UNIT 1 HENRY
+
+*NAME_MAP
+*1 net_a
+*2 net_b
+
+*D_NET *1 0.4
+*CONN
+*I ua:Z O *D BUF
+*I ua:B I *D DFF
+*CAP
+1 ua:Z 0.1
+2 ua:B 0.1
+4 ua:Z 0.2
+*RES
+1 ua:Z ua:B 10
+*END
+
+*D_NET *2 0.4
+*CONN
+*I ub:Z O *D BUF
+*I ub:A I *D DFF
+*CAP
+1 ub:Z 0.1
+2 ub:A 0.1
+3 ub:Z 0.2
+*RES
+1 ub:Z ub:A 10
+*END

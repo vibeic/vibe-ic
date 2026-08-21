@@ -84,6 +84,7 @@ class Stats:
     gds_layers: List[str] = field(default_factory=list)
     map_targets: List[str] = field(default_factory=list)
     lib_layers: List[str] = field(default_factory=list)
+    macro_layers: List[str] = field(default_factory=list)
     declared_layers: List[str] = field(default_factory=list)
     orphans: List[str] = field(default_factory=list)
     layermap_applied: bool = False
@@ -176,7 +177,8 @@ def declared_layers(cfg: Dict[str, Any]) -> Set[LayerKey]:
 # ---------------------------------------------------------------------------
 def audit(gds: Path, layermap: Optional[Path], lib_gds: Optional[Path],
           signoff_config: Optional[Path],
-          require_layermap: bool = True) -> Tuple[List[Finding], Stats]:
+          require_layermap: bool = True,
+          macro_gds: Optional[List[Path]] = None) -> Tuple[List[Finding], Stats]:
     findings: List[Finding] = []
     stats = Stats()
 
@@ -209,6 +211,28 @@ def audit(gds: Path, layermap: Optional[Path], lib_gds: Optional[Path],
         except (OSError, struct.error):
             lib_layers = set()
 
+    # Hard-macro / IP GDS layers are legitimate library geometry too:
+    # the design's own vendor macro GDS is MERGED into the streamed
+    # GDS, so its layers are drawn-on-purpose, not orphans. Without
+    # this, any design integrating a hard-macro GDS whose layers are
+    # absent from the std-cell library GDS gets a FALSE ORPHAN_LAYER.
+    # chip-AGNOSTIC: the paths come from the design's own macro GDS.
+    macro_layers: Set[LayerKey] = set()
+    for _mg in (macro_gds or []):
+        _mgp = Path(_mg)
+        if _mgp.is_file():
+            try:
+                macro_layers |= scan_gds_layers(_mgp)
+            except Exception as _mexc:   # noqa: BLE001 — best-effort:
+                # a macro-scan failure must NEVER skip the whole
+                # conformance check; surface it (WARN, never swallow)
+                # so a macro-contributed layer that then shows as an
+                # orphan below is explained rather than mysterious.
+                findings.append(Finding(
+                    "WARNING", "MACRO_GDS_UNSCANNED",
+                    f"could not scan macro GDS {_mgp.name}: {_mexc}",
+                    "its layers were NOT added to the allowed set"))
+
     cfg_layers: Set[LayerKey] = set()
     if signoff_config and signoff_config.is_file():
         try:
@@ -217,12 +241,13 @@ def audit(gds: Path, layermap: Optional[Path], lib_gds: Optional[Path],
         except (OSError, ValueError):
             cfg_layers = set()
 
-    allowed = map_targets | lib_layers | cfg_layers
+    allowed = map_targets | lib_layers | macro_layers | cfg_layers
     orphans = sorted(gds_layers - allowed) if allowed else []
 
     stats.gds_layers = [_fmt(k) for k in sorted(gds_layers)]
     stats.map_targets = [_fmt(k) for k in sorted(map_targets)]
     stats.lib_layers = [_fmt(k) for k in sorted(lib_layers)]
+    stats.macro_layers = [_fmt(k) for k in sorted(macro_layers)]
     stats.declared_layers = [_fmt(k) for k in sorted(cfg_layers)]
     stats.orphans = [_fmt(k) for k in orphans]
 
@@ -230,7 +255,8 @@ def audit(gds: Path, layermap: Optional[Path], lib_gds: Optional[Path],
         findings.append(Finding(
             "ERROR", "ORPHAN_LAYER",
             f"{len(orphans)} GDS layer(s) match no streamout-map target, "
-            f"library-GDS layer or declared sign-off layer",
+            f"library-GDS layer, hard-macro-GDS layer or declared "
+            f"sign-off layer",
             "orphans: " + ", ".join(_fmt(k) for k in orphans)))
 
     # A map target that names a routing purpose but received nothing is the
@@ -257,6 +283,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--gds", required=True, type=Path)
     ap.add_argument("--layermap", type=Path)
     ap.add_argument("--lib-gds", type=Path)
+    ap.add_argument("--macro-gds", type=Path, nargs="*", default=[],
+                    help="hard-macro / IP GDS file(s) whose layers are "
+                         "legitimate merged library geometry")
     ap.add_argument("--signoff-config", type=Path)
     ap.add_argument("--allow-missing-layermap", action="store_true",
                     help="do not flag an absent map (non-sign-off streamout)")
@@ -266,7 +295,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         findings, stats = audit(args.gds, args.layermap, args.lib_gds,
                                 args.signoff_config,
-                                require_layermap=not args.allow_missing_layermap)
+                                require_layermap=not args.allow_missing_layermap,
+                                macro_gds=args.macro_gds)
     except Exception as exc:                       # noqa: BLE001
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -286,6 +316,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  populated GDS layers : {len(stats.gds_layers)}")
     print(f"  map targets          : {len(stats.map_targets)}")
     print(f"  library GDS layers   : {len(stats.lib_layers)}")
+    print(f"  macro GDS layers     : {len(stats.macro_layers)}")
     print(f"  declared layers      : {len(stats.declared_layers)}")
     for f in findings:
         print(f"  [{f.severity}] {f.category}: {f.message}")

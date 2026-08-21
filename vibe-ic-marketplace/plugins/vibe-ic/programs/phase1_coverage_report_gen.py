@@ -39,6 +39,7 @@ CLI
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -263,8 +264,68 @@ def _load_explicit_patterns(project: Path):
                     tuples.append((it, it))
             if tuples:
                 out[filename] = tuples
+        out = _reconcile_with_docs(project, out)
         return out, cand
     return {}, None
+
+
+
+_RE_NUM_UNIT_SPACE = re.compile(r"(?<=[0-9])[ \u00a0\u3000]+(?=[A-Za-z\u00b0\u00b5\u03bc])")
+
+
+def _is_auto_seeded(label: str) -> bool:
+    """True for entries the seeder harvested, not a human's curation."""
+    return str(label or "").strip().lower().startswith("auto-discovered")
+
+
+def _lit_in(lit: str, hay_low: str) -> bool:
+    """Credit a literal the extractor stored in NORMALISED form.
+
+    Mirrors extraction_coverage_check._lit_present. The extractor writes
+    `<value> <unit>` typed fields with the separating space removed, so a
+    verbatim-only test reports the extractor's own successful extraction as
+    a coverage gap. The collapse is anchored between a digit and a
+    unit-leading letter, so it cannot join two unrelated tokens.
+    """
+    low = lit.lower()
+    if low in hay_low:
+        return True
+    squeezed = _RE_NUM_UNIT_SPACE.sub("", lit).lower()
+    return squeezed != low and squeezed in hay_low
+
+
+def _reconcile_with_docs(project, patterns):
+    """Drop AUTO-SEEDED literals absent from their own source document.
+
+    The canonical pattern file is seeded once and then loaded verbatim
+    forever, so literals a later documentation edit DELETED stay pinned in
+    the denominator where nothing can ever credit them. Human-curated
+    entries are never pruned -- a curated pattern is deliberately allowed
+    not to occur in the document.
+    """
+    out = {}
+    for filename, tuples in patterns.items():
+        text = None
+        for sub in (_pl.input_doc_dir(project), project / "input" / "docs"):
+            for cand in (sub / filename,
+                         sub / (pathlib.Path(filename).stem + ".md"),
+                         sub / (pathlib.Path(filename).stem + ".txt")):
+                if cand.is_file():
+                    try:
+                        text = cand.read_text(errors="replace")
+                    except OSError:
+                        text = None
+                    break
+            if text is not None:
+                break
+        if text is None:
+            out[filename] = tuples
+            continue
+        kept = [(lit, lbl) for lit, lbl in tuples
+                if not _is_auto_seeded(lbl) or lit in text]
+        if kept:
+            out[filename] = kept
+    return out
 
 
 def _autodiscover_patterns(project: Path, *, persist: bool = True):
@@ -555,7 +616,7 @@ def _credit_with_quality(patterns,
             # Find which classifications contain the literal.
             classes = []
             for field_val_low, entries in field_index.items():
-                if lit_low in field_val_low:
+                if _lit_in(literal, field_val_low):
                     for e in entries:
                         classes.append(e["classification"])
             ent = {"literal": literal, "label": label}
@@ -572,7 +633,7 @@ def _credit_with_quality(patterns,
                 # (covers cases where the value is split across small
                 # nested fields that the field walker enumerated as
                 # separate strings).
-                if lit_low in l_text_low:
+                if _lit_in(literal, l_text_low):
                     quality_dist["high"] += 1
                     primary_hit.append(ent)
                     full_hit.append(ent)
@@ -637,7 +698,7 @@ def _build_per_doc(patterns, l_text):
         hit_list = []
         miss_list = []
         for literal, label in items:
-            if literal.lower() in haystack_low:
+            if _lit_in(literal, haystack_low):
                 hit_list.append({"literal": literal, "label": label})
             else:
                 miss_list.append({"literal": literal, "label": label})

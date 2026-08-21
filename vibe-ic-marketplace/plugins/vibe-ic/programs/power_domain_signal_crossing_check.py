@@ -220,16 +220,45 @@ _L21_OFF_KEYS = ("switchable", "power_down", "can_power_down", "off_capable",
 
 
 def parse_l21(fields):
-    """Extract (domains, iso_domains, ls_domains) from an L21 fields dict."""
+    """Extract (domains, iso_domains, ls_domains) from an L21 fields dict.
+
+    #312-family: `isolation_cells` and `level_shifters` are read here and
+    populated by NO producer — measured across 311 real L-docs, the keys are
+    present in 27 and carry a value in 0. On this fallback path both sets are
+    therefore ALWAYS empty, and `crossing_missing` reads an empty set as "no
+    strategy scopes this domain" — so every crossing that requires protection
+    is reported UNPROTECTED. That is a false FAIL, and it can only fire on
+    exactly the designs that reach this path (a populated `power_domains`,
+    itself present in only 3 of 30).
+
+    An absent field means the layer SAYS NOTHING about protection, which is
+    not the same as saying there is none. `l21_states_protection` reports
+    which of the two it was, so the caller can decline to judge instead of
+    manufacturing a finding out of a missing producer."""
     domains = {}
     iso_domains = set()
     ls_domains = set()
     for d in fields.get("power_domains") or []:
         if not isinstance(d, dict) or not d.get("name"):
             continue
+        # #598: a RAIL declaration is not a domain. `l21_macro_supply_rail_synth`
+        # emits one entry per macro GROUND pin so the Phase-3 consumer can bind
+        # it, and it carries the design's primary `power_net` because that
+        # consumer requires one. Read as a domain it becomes a phantom named
+        # after a ground pin, holding the 1.2 V core rail at 0.0 V.
+        if d.get("is_power_domain") is False:
+            continue
         name = _norm(d["name"])
-        volt = _num(d.get("voltage", d.get("nominal_voltage",
-                    d.get("supply_voltage"))))
+        # `voltage_v` FIRST: it is what every producer actually writes
+        # (l21_doc_supply_rail_synth, l21_macro_supply_rail_synth,
+        # phase1_layer_demand_probe, phase1_doc_one_shot_runner), and none of
+        # the three names read here was ever one of them. Measured across the
+        # repo: 4 producers write `voltage_v`, 0 write `voltage`. Every domain
+        # therefore arrived with `voltage: null`, and a level shifter is
+        # required exactly when two voltages DIFFER — so with all of them
+        # unknown, `needs_ls` could never once be True.
+        volt = _num(d.get("voltage_v", d.get("voltage",
+                    d.get("nominal_voltage", d.get("supply_voltage")))))
         off = any(bool(d.get(k)) for k in _L21_OFF_KEYS)
         # power_states list: an OFF/CORRUPT state marks the domain switchable
         for st in (d.get("power_states") or []):
@@ -242,6 +271,9 @@ def parse_l21(fields):
                 elements.add(e)
         domains[name] = {"voltage": volt, "off_capable": off,
                          "elements": elements}
+    global _L21_STATED_PROTECTION
+    _L21_STATED_PROTECTION = bool(fields.get("isolation_cells")
+                                  or fields.get("level_shifters"))
     for iso in fields.get("isolation_cells") or []:
         if isinstance(iso, dict) and iso.get("domain"):
             iso_domains.add(_norm(iso["domain"]))
@@ -358,6 +390,17 @@ def required_protection(drv, recv, domains):
     return needs_iso, needs_ls
 
 
+# True once an L21 parse has seen a NON-EMPTY isolation/level-shifter list.
+# False means the power-intent layer said nothing about protection at all.
+_L21_STATED_PROTECTION = True
+
+
+def l21_states_protection() -> bool:
+    """Did the last L21 parse find ANY protection statement? False means the
+    layer is silent, not that the design is unprotected."""
+    return _L21_STATED_PROTECTION
+
+
 def crossing_missing(crossing, domains, iso_domains, ls_domains):
     """Return the list of protections a crossing REQUIRES but the UPF strategy
     does not cover.  Empty list => protected."""
@@ -393,6 +436,22 @@ def audit(domains, iso_domains, ls_domains, crossings):
                 why.append("borders a power-down-capable domain")
             if needs_ls:
                 why.append("crosses a voltage boundary")
+            if not l21_states_protection():
+                # The layer is SILENT about protection (the fields exist in
+                # the schema and no producer fills them). Reporting
+                # UNPROTECTED here states a fact the input never provided.
+                findings.append({
+                    "severity": "WARNING",
+                    "rule": "PROTECTION_UNSTATED",
+                    "message": (
+                        f"net '{c['net']}' crosses {c['driver_domain']} -> "
+                        f"{c['receiver_domain']} ({'; '.join(why)}), and the "
+                        f"power-intent layer states NO isolation or "
+                        f"level-shifter strategy at all — so whether it is "
+                        f"protected CANNOT be determined from this input. "
+                        f"Not reported as unprotected: an absent statement "
+                        f"is not a statement of absence.")})
+                continue
             findings.append({
                 "severity": "ERROR", "rule": "UNPROTECTED_SIGNAL_CROSSING",
                 "message": (
@@ -509,13 +568,45 @@ def main(argv=None):
                 domains, iso_domains, ls_domains, crossings)
             if n_unprot > 0:
                 verdict, rc = "FAIL", 1
+            elif not crossings:
+                # #598: NOTHING WAS EXAMINED. Reaching here means >= 2 domains
+                # are declared and not one crossing could be derived — the
+                # domains carry no `elements`, so no instance could be placed
+                # in one. "0 crossings, all protected" is a claim about a
+                # denominator that was never established, and it was being
+                # counted as a substantive PASS.
+                verdict, rc = "PASS", 0
+                findings.append({
+                    "severity": "WARNING", "rule": "NO_CROSSINGS_DERIVED",
+                    "message": (
+                        f"{len(domains)} power domain(s) declared and NO signal "
+                        f"crossing could be derived at all — the domains carry "
+                        f"no element/instance list, so no net can be attributed "
+                        f"to one. Nothing about isolation or level shifting was "
+                        f"checked here; this is an absent basis, not a clean "
+                        f"result.")})
             else:
                 verdict, rc = "PASS", 0
+                unknown_v = sorted(n for n, d in domains.items()
+                                   if d.get("voltage") is None)
+                if unknown_v:
+                    # A level shifter is required exactly when two voltages
+                    # DIFFER. An unknown voltage cannot differ from anything, so
+                    # that half of the check is silently inert for these.
+                    findings.append({
+                        "severity": "WARNING", "rule": "VOLTAGE_UNSTATED",
+                        "message": (
+                            f"{len(unknown_v)} of {len(domains)} domain(s) state "
+                            f"no voltage ({', '.join(unknown_v)}), so the "
+                            f"level-shifter half of this check could not fire "
+                            f"for any crossing touching them. Isolation was "
+                            f"still checked.")})
                 findings.append({
                     "severity": "INFO", "rule": "ALL_CROSSINGS_PROTECTED",
                     "message": (f"{n_inter} inter-domain signal crossing(s) "
-                                f"derived; all covered by a UPF isolation / "
-                                f"level-shifter strategy.")})
+                                f"derived from {len(crossings)} examined; all "
+                                f"covered by a UPF isolation / level-shifter "
+                                f"strategy.")})
 
     out = {
         "gate": _GATE_NAME,

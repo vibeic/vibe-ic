@@ -29,7 +29,18 @@ Failure rules:
                               / measurement_count keys
   A9_HW_MEAS_NO_NUMERICS   — no numeric measurement entries
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
+Project-level verdicts (no `--block`):
+  VACUOUS_PASS — no `analog_block_list.json` under `phase3/analog/` or
+                 `phase1/analog/`, or it declares no blocks; or NO declared
+                 block carries bench data at all. That last tier is the
+                 deliberate simulation-only close: headless and CI analog
+                 runs must remain possible, and they are DISCLOSED rather
+                 than reported as a bench-verified PASS.
+  INCOMPLETE   — SOME declared blocks carry bench data and others carry none
+                 (exit 1). Such a run used to print "PASS: 1/N block(s)
+                 clean", byte-identical in verdict to an N/N bench-verified
+                 close; the gate now names the unmeasured blocks.
+  PASS         — every declared block carries a substantive measurement.
 chip-AGNOSTIC.
 """
 from __future__ import annotations
@@ -40,8 +51,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
+    BLOCK_LIST_ABSENT_REASON,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail,
+    emit_incomplete,
 )
 
 GATE = "analog_a9_hw_verify_check"
@@ -120,8 +133,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            BLOCK_LIST_ABSENT_REASON)
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:
@@ -162,6 +174,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                             f"all {len(missing_seen)} block(s) missing "
                             f"hw_measurements.json; defer to skill "
                             f"`{SKILL}`.")
+    if missing_seen:
+        # PARTIAL block coverage — see the A7 note. This is the tier A9's own
+        # flow entry says it exists to differentiate: "a simulation-only close
+        # stays legal ... but stops being reported as an undifferentiated
+        # PASS". Only the ALL-missing tier was differentiated (VACUOUS_PASS,
+        # above). A project with bench data for 1 of N declared blocks still
+        # printed "PASS: 1/N block(s) clean" — byte-identical in verdict to an
+        # N/N bench-verified close. INCOMPLETE names the unmeasured blocks
+        # instead. The sim-only close is untouched: no bench data anywhere
+        # still takes the VACUOUS_PASS above.
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 
