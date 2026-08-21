@@ -91,7 +91,8 @@ class _FakePdkConfig:
     """Minimal stand-in for PdkConfig to bypass _detect_pdk."""
     def __init__(self, drc_deck=None, calibre_drc=None,
                  calibre_lvs=None, calibre_lvs_device=None,
-                 macro_gds=None, macro_v=None, name="test"):
+                 macro_gds=None, macro_v=None, name="test",
+                 bridge_magicrc=None, bridge_netgen_setup=None):
         self.drc_deck = drc_deck
         self.calibre_drc = calibre_drc
         self.calibre_lvs = calibre_lvs
@@ -99,31 +100,50 @@ class _FakePdkConfig:
         self.macro_gds = macro_gds
         self.macro_v = macro_v
         self.name = name
+        # v1.3.83 step_lvs consults the PDK-bridge OSS-LVS tech before
+        # dead-ending on a missing calibre binary; the fake must carry these
+        # (default None = no bridge) or the attribute access raises.
+        self.bridge_magicrc = bridge_magicrc
+        self.bridge_netgen_setup = bridge_netgen_setup
 
 
 def test_step_drc_env_unavailable_when_calibre_deck_present_but_binary_absent(
         tmp_path: Path) -> None:
+    # 2026-07-12: step_drc first tries the native `svrfdrc` buddy (runs the
+    # Calibre .rule deck license-free). Only when BOTH `calibre` AND the
+    # svrfdrc buddy are absent does it emit ENV_UNAVAILABLE — and the
+    # missing_tool names both.
     pdk = _FakePdkConfig(
         drc_deck=None,
         calibre_drc="/path/to/calibre_drc.rule")
     with patch(
         "programs.phase3_one_shot_runner._tool_in_path",
         return_value=False,
+    ), patch(
+        "programs.phase3_one_shot_runner._svrfdrc_bin_container",
+        return_value=None,
     ):
         res = step_drc(tmp_path, "top", pdk, "test-container")
     assert res.status == "ENV_UNAVAILABLE"
-    assert res.extras.get("missing_tool") == "calibre"
+    assert res.extras.get("missing_tool") == "calibre|svrfdrc"
     assert "ENV gap" in res.detail
 
 
-def test_step_drc_waived_when_calibre_deck_and_binary_both_present(
+def test_step_drc_waived_when_calibre_binary_present_but_svrf_engine_absent(
         tmp_path: Path) -> None:
+    # 2026-07-12: sign-off DRC PREFERS the native `svrfdrc` buddy (runs the real
+    # Calibre deck license-free). WAIVED (defer to offline `calibre`) now happens
+    # ONLY when the buddy is unavailable while the `calibre` binary IS present.
+    # Mock the buddy absent so the probe is deterministic (no real docker exec).
     pdk = _FakePdkConfig(
         drc_deck=None,
         calibre_drc="/path/to/calibre_drc.rule")
     with patch(
         "programs.phase3_one_shot_runner._tool_in_path",
         return_value=True,
+    ), patch(
+        "programs.phase3_one_shot_runner._svrfdrc_bin_container",
+        return_value=None,
     ):
         res = step_drc(tmp_path, "top", pdk, "test-container")
     assert res.status == "WAIVED"

@@ -148,3 +148,49 @@ def test_no_block_list_is_vacuous(tmp_path: Path) -> None:
     p.mkdir()
     verdict, results = audit(p, _DEFAULT_MIN_ITERS, _DEFAULT_MIN_STAGES)
     assert verdict == "VACUOUS_PASS" and results == []
+
+
+# --- the exit code is what the flow reads, and no test called main()
+
+def test_main_exits_non_zero_when_no_block_converged(monkeypatch, tmp_path):
+    """`gate_cli_mutation_probe` reported this gate SILENT: neutering `main()`
+    reddened nothing.
+
+    Every test above drives `audit()` and asserts the VERDICT it returns. The
+    flow reads the EXIT CODE, and nothing exercised the mapping between them —
+    so the gate could have started answering 0 to every unconverged HIL log
+    with the suite still green.
+    """
+    import analog_hil_convergence_log_check as M
+    (tmp_path / "phase3").mkdir()
+    monkeypatch.setattr(M, "audit", lambda p, i, s: ("FAIL", []))
+    assert M.main([str(tmp_path)]) == 1
+
+
+def test_main_exits_zero_on_a_converged_run(monkeypatch, tmp_path):
+    """The other direction, or the test above is met by a gate that always
+    fails."""
+    import analog_hil_convergence_log_check as M
+    (tmp_path / "phase3").mkdir()
+    monkeypatch.setattr(M, "audit", lambda p, i, s: ("PASS", []))
+    assert M.main([str(tmp_path)]) == 0
+
+
+def test_main_exits_zero_and_says_why_when_the_gate_is_inapplicable(
+        monkeypatch, tmp_path):
+    """VACUOUS_PASS carries a written reason — a zero with no reason is the
+    shape this repo keeps retiring."""
+    import analog_hil_convergence_log_check as M
+    (tmp_path / "phase3").mkdir()
+    monkeypatch.setattr(M, "audit", lambda p, i, s: ("VACUOUS_PASS", []))
+    out = tmp_path / "r.json"
+    assert M.main([str(tmp_path), "--json", str(out)]) == 0
+    import json
+    assert json.loads(out.read_text()).get("reason"), \
+        "VACUOUS_PASS was emitted with no reason recorded"
+
+
+def test_main_refuses_on_a_missing_project(tmp_path):
+    """rc 2: the question could not be asked, which is not a pass."""
+    import analog_hil_convergence_log_check as M
+    assert M.main([str(tmp_path / "nope")]) == 2

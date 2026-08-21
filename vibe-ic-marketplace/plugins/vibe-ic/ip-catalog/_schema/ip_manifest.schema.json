@@ -45,13 +45,13 @@
     },
     "implements": {
       "type": "object",
-      "description": "Capability claims that Plugin uses to match against L1-L23 spec facts",
+      "description": "Capability claims that Plugin uses to match against L1-L27 spec facts",
       "additionalProperties": true
     },
     "matches_when": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Plain-English query patterns Plugin's catalog selector evaluates against L1-L23 facts. Each pattern is a chip-AGNOSTIC condition on extracted spec facts."
+      "description": "Plain-English query patterns Plugin's catalog selector evaluates against L1-L27 facts. Each pattern is a chip-AGNOSTIC condition on extracted spec facts."
     },
     "interface": {
       "type": "object",
