@@ -42,10 +42,35 @@ expressed as an env flag does not.
 
 Today: the stub writes `$PROBE_DIR/${ARM}.started` to an unmounted host path.
 
-Proposed: assert on the **arm receipt**, which the parent already has and already
-validates. `A2.started` becomes *"the A2 receipt exists, its `arm` field is A2,
-and its `completion` is complete"*. Strictly stronger than the marker — the
-receipt is digest-attested and the marker was an empty file anyone could touch.
+**CORRECTED.** My first version of this said "assert on the arm receipt". **That
+is not implementable and I should have checked before recommending it as the
+cheapest item.** The receipts live under `RUN="$(mktemp -d -t gkverify.XXXXXX)"`
+(`gatekeeper-verify-merge.sh:276`) — a directory the verifier creates for itself
+and never tells the caller about. `_verify()` returns only the process result and
+the `--json` verdict document. A test has no path to those files.
+
+The real answer is better, and it was already in front of me: **the verdict
+document itself carries per-arm evidence**, and one existing test already uses it
+as a liveness check —
+
+```python
+assert doc["base_land"] is not None, "arm A2 never ran, so the gate tier was asserted"
+```
+
+(`test_end_to_end_a_known_good_branch_is_allowed`, green in both lanes today.)
+
+So all four arms are observable from the object `_verify()` already returns:
+
+| arm | assertion | source |
+|---|---|---|
+| A2 | `doc["base_land"] is not None` | `landing_merge_verdict.py:1838` |
+| B2 | `doc["land"] is not None` | `:1831` |
+| A1 | `base_total > 0` | `:404` |
+| B1 | `candidate_total > 0` | `:405` |
+
+No receipts, no temp directory, no env knob, and **no new plumbing of any kind** —
+the data already crosses and one test already reads it. This is now the cheapest
+item by a wide margin, and it stays first in the suggested order.
 
 ### B. The interrupt/cleanup guarantee (G4, both tests)
 
@@ -129,6 +154,14 @@ it is written down.** That is the same lesson as the retractions in the findings
 document, arrived at once more — this time while writing a caveat rather than a
 finding, which is if anything the easier place to be careless.
 
-What remains genuinely unverified, and stands: none of this is implemented or
-run, and the judgement that a receipt-based liveness check is *sufficient* for
-what G6 wanted is mine, not a measurement.
+**SECOND RETRACTED CAVEAT.** I also wrote that "a receipt-based liveness check is
+sufficient for G6" was my judgement rather than a measurement. That caveat is
+obsolete because the design it hedged is gone: receipts are unreachable from a
+test, and A now rests on `doc["base_land"]`/`doc["land"]`, which an existing
+green test already asserts for exactly this purpose. The hedge was on the wrong
+sentence — the thing I should have checked was not whether receipts were
+*sufficient* but whether they were *reachable*, and they are not.
+
+What remains genuinely unverified, and stands: **none of this is implemented or
+run.** B and D still need new fixture scaffolding (a sentinel commit; a two-corpus
+fixture), and neither is sketched here beyond the mechanism.
