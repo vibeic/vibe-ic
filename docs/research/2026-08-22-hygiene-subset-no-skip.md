@@ -1385,3 +1385,45 @@ requires re-assembling the batch's take of this work from the squashed commit,
 and re-pointing `land/batch67-assembled` is not mine to do — the same boundary
 `jmeas3` drew and I agreed with. The artefact is pushed and named so the
 decision is cheap for whoever holds it; the decision itself is not mine.
+
+### Correcting §23: the remedy exists, and it is NOT cheap
+
+§23 ended "the artefact is pushed and named so the decision is cheap for
+whoever holds it". That sentence was written without testing it, and testing it
+shows it is wrong. Measured:
+
+```
+merge squashed into the CURRENT batch 137caae925
+    -> CONFLICT, 1 file: programs/gatekeeper_review.py
+       (the batch already carries that content by a different route, so git is
+        reconciling two unrelated commits making the same change)
+    -> and it would not help anyway: the multi-commit commits stay ANCESTORS,
+       so the finding stays
+
+re-assemble from 546487a8a + main(81cd5321b) + squashed
+    -> CONFLICT, 8 files on the FIRST merge (main moved 30 commits past the
+       batch base in v1.11.68)
+```
+
+**So clearing my finding requires rebuilding the batch WITHOUT the `8c409aa5a`
+merge — a real assembly job with eight conflicts, not a re-point.** The only
+route that removes the offending commits is one that drops them from the
+history, and every cheaper route leaves them as ancestors.
+
+That leaves the holder of batch 67 a genuine trade, and it is theirs, not mine:
+
+* **land with it disclosed** — the finding is docs-only, the final text is
+  correct, and the error it retracts is itself documented in §6. The gate is
+  BLOCKING, so this needs an explicit decision rather than silence.
+* **re-assemble** — clears it, costs eight conflict resolutions plus a re-run.
+
+I have no view on which is right and it would be presumptuous to offer one; the
+point of this subsection is that §23 understated the cost and somebody choosing
+between them should not inherit my optimism.
+
+**The general lesson, which is the same one this document keeps finding:** I
+asserted a cost without measuring it, in a document whose entire subject is
+claims that were not measured. Two commands would have caught it, and the only
+reason it was caught at all is that I went back to test an implicit claim rather
+than a stated one. A remedy is not verified until the remedy itself has been
+run, not merely the artefact it produces.
