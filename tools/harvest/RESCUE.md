@@ -460,3 +460,46 @@ reported `covered=0 uncovered=163` — a total failure that reads exactly like a
 **Coverage must be verified where the objects are.** Checking `.102`'s commits from `.105` said
 316 uncovered; the same check on `.102` said 0. My clone simply did not have the objects, and
 "absent here" was being reported as "unpreserved".
+
+## Every ABANDON re-checked against the untracked-file defect
+
+jharv3 found an ABANDON in shard C resting on "identical HEAD tree AND both working trees clean"
+where the tree half was true and the clean half was false: two worktrees each carried an
+**untracked** `HANDOFF_TO_GATEKEEPER.md`, different files, absent from main, on no ref. Their
+general point is the one that matters:
+
+> LANDED and ABANDON are claims about a **directory**. Tree identity, merge-base, reverse-apply
+> and per-file sha256 of owned files all describe **committed history only**. None can see an
+> uncommitted edit or an untracked file — and that is exactly the content that exists in one place.
+
+They re-measured shard B's three ABANDONs and all my LANDED rows on their own hosts and found
+them sound — `_jlandpar/wtgates` and `wttests` share head `01f0086263e` and tree `956e469a778`
+with `_jlandpar/dev`, all three trees genuinely clean; `_jppa_p0/tree` at its judged head and
+clean. A citable negative result, in `FALSE_LANDED_shards_a_b.md`.
+
+That left my **26 ABANDONs in the two extras files**, which nobody had checked. Re-measured with
+`--untracked-files=normal`, hashing every modified and untracked path against `origin/main` so
+"dirty" is a content statement rather than a count:
+
+| file | ABANDONs | dirty with content not on main |
+|---|---|---|
+| `verdicts_extra_8hd9.tsv` | 5 | **0** |
+| `verdicts_extra_8hd7.tsv` | 21 | **0** |
+
+All 26 clean. Two on `.102` show a single status line each — both deletions, which lose nothing
+further. **All 30 of my ABANDONs are now verified against this defect**, 4 by jharv3 on their
+hosts and 26 here.
+
+My judge already measured the working tree for the *verdict* (`git status --porcelain`, which
+includes untracked by default, forces KEEP), which is why the defect did not reach my rows. That
+was luck of construction rather than foresight: I had not separately audited the ABANDONs, and
+ABANDON is the unrecoverable direction.
+
+## Relay for shard A
+
+jharv3 found **four wrong LANDED rows in `verdicts_shard_a.tsv`**, all on `.120` —
+`_agentjob_i1015/wt`, `_agent_scratch_whatif/wt_C`, `_wt_1236`, `_wt_1486` — where eleven files
+are absent from `origin/main` entirely, five of them whole test programs. Working states preserved
+as `harvest/rescue-120-falselanded-*`. **`jharvest-triage` is not reachable from this session** —
+it does not appear in the peer list — so this branch is the relay. The flip to RECOVER is that
+shard's owner's call and neither of us has edited their file.
