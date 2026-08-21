@@ -558,6 +558,102 @@ with DIFFERENT parametrisations run to run, on the pristine tree. Two runs both
 reading "2 failed" had different node IDs. It is pre-existing, timing-sensitive,
 and not attributable to this change — recorded here so nobody attributes it.
 
+### M16 — the flake I nearly misattributed, run to ground: the HARNESS resurrects a removed container
+
+In M15 I recorded a pre-existing flake in
+`test_malformed_progress_is_norecord_and_cleanup_is_owned` and left it at "timing
+sensitive, not mine". That was not good enough, and characterising it properly
+changed the answer twice.
+
+**First correction: it is NOT load-confounded.** After three consecutive green
+full-file runs on a quiet machine I was about to write "only appears under
+contention". The next runs refuted that:
+
+```
+r1..r6   17 passed
+r7       2 failed  [duplicate] [nan]
+r8       3 failed  [duplicate] [malformed] [nan]
+r9       2 failed  [malformed] [nan]
+r10      2 failed  [duplicate] [malformed]
+```
+
+**4 of 10 runs, each of the three parametrisations failing exactly 3 times**, on
+an idle host. Had I stopped at three green runs I would have published the wrong
+cause. Disk was 38% full and 13% inodes, so it is not exhaustion either.
+
+**The failing assertion is not the one the name suggests.** It is not the
+refusal that is flaky — `returncode == 2`, `[NORECORD]`, no receipt and no
+output dir all hold every time. It is:
+
+```python
+assert not (case["state"] / "container.json").exists()
+```
+
+the *cleanup* half. So the shape is "the runner refused correctly but appears to
+have leaked the container it created".
+
+**And the runner did NOT leak it.** Its own call log for a failing case:
+
+```
+container create ... / container inspect ... / container start --attach
+container kill  vibeic-candidate-<id>
+container rm --force
+container inspect vibeic-candidate-<id>      <- verifies absence
+volume rm --force / volume inspect
+```
+
+Kill, force-remove, then inspect to confirm absence. That is exactly right.
+
+**The defect is in the test harness.** `container.json` on a failing case is
+**0 bytes**, with an mtime LATER than the `container rm` entry in the call log.
+`FAKE_DOCKER`'s `save_container` did:
+
+```python
+container_path(...).write_text(json.dumps(doc), encoding="utf-8")
+```
+
+Two races in one line:
+
+1. **Resurrection.** The attached child writes its final `State` after the run.
+   If `container rm` unlinks the record first, this call RE-CREATES it — after
+   the runner has already removed it and verified it absent. Real docker cannot
+   resurrect a removed container; only the simulation can.
+2. **Torn write.** `write_text` truncates before writing, so a kill in between
+   leaves a 0-byte file. A 0-byte file still `exists()`, so it still reads as
+   "the container is present" — the same collapse rule 9 forbids, in a harness
+   rather than a gate.
+
+**FIXED** in the harness, not the runner:
+
+```python
+def save_container(doc, create=False):
+    path = container_path(doc["Name"].lstrip("/"))
+    if not create and not path.exists():
+        return                     # a removed container stays removed
+    tmp = path.parent / (path.name + ".%d.tmp" % os.getpid())
+    tmp.write_text(json.dumps(doc), encoding="utf-8")
+    os.replace(tmp, path)          # atomic: no 0-byte window
+```
+
+with `create=True` at the single `container create` site.
+
+**A/B, same tree, only `save_container` differing** (both lanes carry the M15
+`rw_bind` test, so both are 17 tests):
+
+| lane | full-file runs with >=1 failure |
+|---|--:|
+| before the harness fix | **4 / 10** |
+| after the harness fix | **0 / 12** |
+
+The "before" arm IS the mutation arm: it is the pristine `save_container`
+measured over ten runs, not an assertion that it would fail.
+
+**This is why it matters beyond one flake.** A 4-in-10 red in the landing
+runtime's own test file, whose message says "cleanup is not owned", points
+directly at `hermetic_candidate_runner.py` leaking containers — a plausible,
+serious, and completely false conclusion. It is the same lesson as the seal-ring
+retraction: the failing thing was the fixture, not the subject.
+
 ### One defect or several
 
 **ONE defect, six unreachable knobs, ten affected tests** (7 red after M14, 1

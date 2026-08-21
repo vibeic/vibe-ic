@@ -57,9 +57,21 @@ def load_container(name):
         fail("Error: No such container: " + name)
     return json.loads(path.read_text(encoding="utf-8"))
 
-def save_container(doc):
-    container_path(doc["Name"].lstrip("/")).write_text(
-        json.dumps(doc), encoding="utf-8")
+def save_container(doc, create=False):
+    path = container_path(doc["Name"].lstrip("/"))
+    # Two harness races, both of which made a CORRECT runner look like it had
+    # leaked a container it force-removed and verified absent.
+    #   1. `container rm` can land while an attached child is still finishing.
+    #      A removed container must STAY removed; re-creating the record here
+    #      resurrected it after the runner had already checked.
+    #   2. write_text truncates before writing, so a kill in between left a
+    #      0-byte record -- which still `exists()`, and so still read as
+    #      "the container is present".
+    if not create and not path.exists():
+        return
+    tmp = path.parent / (path.name + ".%d.tmp" % os.getpid())
+    tmp.write_text(json.dumps(doc), encoding="utf-8")
+    os.replace(tmp, path)
 
 if args[:2] == ["image", "inspect"]:
     print(json.dumps([{"Architecture": "amd64", "Id": IMAGE_ID,
@@ -187,7 +199,7 @@ elif args[:2] == ["container", "create"]:
             "Running": False, "Status": "created",
         },
     }
-    save_container(doc)
+    save_container(doc, create=True)
     (root / "evidence").mkdir(exist_ok=True)
     print(CID)
 elif args[:2] == ["container", "inspect"]:
