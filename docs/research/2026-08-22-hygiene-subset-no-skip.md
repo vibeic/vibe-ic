@@ -656,3 +656,63 @@ This is worth stating plainly because it is the one way this branch could be
 blamed for someone else's red: it is the change that makes the hygiene set
 actually execute inside the review, so it is the change present the first time
 anyone SEES those wiring errors from the review's mouth.
+
+## 13. Re-measured against the current head, and the noise floor caught a false positive
+
+`jmeas3` warned that its full-suite instrument has a **+/-10 test-id noise
+floor** — two runs of the SAME tree on the SAME host disagreed on ten ids, and
+its raw "5 new red / 8 fixed" collapsed to ZERO new red after isolated re-runs.
+Every differential in §7 and §9 was a SINGLE run per arm, so that warning
+applies to them directly and it was acted on rather than noted.
+
+Re-measured on the CURRENT head `137caae92`, same 17-file selection (all 17
+exist there), arms sequential, and the candidate arm run TWICE:
+
+```
+batch as it stands  137caae92          : 16 failed, 457 passed, 5 skipped  (901s)
+137caae92 + this branch, run 1         : 11 failed, 462 passed, 5 skipped (1052s, load ~31)
+137caae92 + this branch, run 2         : 10 failed, 463 passed, 5 skipped  (686s, load ~6)
+```
+
+**What merging this branch CLEARS — exactly the six predicted, by name:**
+
+```
+- test_ci_harness_timeout_ceiling_check.py::test_a_recorded_advisory_that_stopped_existing_is_deleted
+- test_ci_harness_timeout_ceiling_check.py::test_each_root_prints_its_own_file_count
+- test_ci_harness_timeout_ceiling_check.py::test_semantic_landing_harness_has_no_elapsed_ceiling
+- test_ci_harness_timeout_ceiling_check.py::test_the_advisory_residual_does_not_grow_unreviewed
+- test_ci_harness_timeout_ceiling_check.py::test_the_json_record_carries_what_the_text_says
+- test_ci_harness_timeout_ceiling_check.py::test_the_shipped_tree_is_clean
+```
+
+This is the §9 finding restated in the units that matter to a landing. The
+split-merge does not merely make a program exit 1 — it costs the batch **six
+named test nodes**, all in the file that pins the landing script by digest, and
+taking this branch at its head clears all six and nothing else.
+
+**And the one apparent NEW red was noise, which is why the repeat run existed.**
+Run 1 reported one failure the as-is arm did not have:
+
+```
++ test_landing_merge_verdict.py::test_the_tier_the_script_picks_matches_this_hosts_real_capability
+```
+
+Run 2, same tree, same selection, same host, does NOT have it. The two runs
+differ on that id and on nothing else. Its name states what it measures — the
+tier the script picks against **this host's real capability** — and run 1 ran at
+load ~31 against run 2's ~6. So it is load-dependent, it is not a regression
+introduced by this branch, and a single-run differential would have reported it
+as one.
+
+**The measured noise floor of THIS selection is 1 id, not 10.** That is smaller
+than `jmeas3`'s full-suite figure and it is not a contradiction: this selection
+is 17 files and ~478 tests where theirs was the full suite over ~77 reds. The
+number that matters is that it is NOT ZERO — so the honest form of the §7 and
+§9 differentials is "single run per arm, noise floor unmeasured at the time",
+and this section is the one that measures it. The six cleared ids reproduce on
+both runs, which is what makes them a result rather than a sample.
+
+**Net for the landing: taking this branch clears 6 and adds 0.** The ten that
+remain on both arms — nine in `test_landing_merge_verdict.py` and the
+`checker_execution_wiring_audit` one — are the same ten carried on clean main
+in §7, and they are not this branch's.
