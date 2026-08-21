@@ -1655,8 +1655,8 @@ Each mutation was reverted immediately and the working tree confirmed
 byte-identical afterwards (`git diff --exit-code`, zero dirty entries, three
 times).
 
-**Extended to ten, and one of the runs disproved a claim.** The same procedure
-was applied to seven more of the sixteen:
+**Extended to eleven, and one of the runs disproved a claim.** The same
+procedure was applied to eight more of the sixteen:
 
     F-10  de-duplicate by CONTENT, not by path
           -> 3 failed   test_one_measurement_is_not_counted_twice
@@ -1671,14 +1671,16 @@ was applied to seven more of the sixteen:
 
 Two more were driven the same way:
 
+    F-1   an excluded lever's owner must RESOLVE, or it is unowned
+          -> 1 failed   test_with_the_owner_absent_the_reason_says_unowned_not_delegated
     F-14  absolute host paths in an emitted deck are detected
           -> 5 failed   test_the_real_defect_goes_red
     (lane) a bad invocation is 3, not the could-not-check code
           -> 20 failed  test_unknown_flag_is_bad_invocation_not_undetermined
 
-So **ten of the sixteen ALREADY-PROGRAM claims have now been driven: nine fire
-and one cannot.** The six not driven are named rather than left to look covered:
-F-1 and the bundled-schema entry were not attempted; F-13 is enforced by a
+So **eleven of the sixteen ALREADY-PROGRAM claims have now been driven: ten fire
+and one cannot.** The five not driven are named rather than left to look covered:
+the bundled-schema entry was not attempted; F-13 is enforced by a
 document and a naming convention, which a mutation cannot address; and the
 vacuous-population census plus the two denominator gates resisted an honest
 probe — the probe I built pointed each gate at a synthetic directory, and
