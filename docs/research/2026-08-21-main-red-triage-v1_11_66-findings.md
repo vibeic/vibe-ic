@@ -1205,3 +1205,58 @@ each bought with a false finding: the scratch root must be SHORT (a long path
 fills fixed-size evidence windows) and OUTSIDE `$HOME` (the hermetic runner
 refuses a subject under it). `/tmp/ps` satisfies both; the descriptive path I
 used for most of this job satisfies neither.
+
+# ===== REQUESTS TO THE LANDER =====
+
+Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
+files. **No program, no gate, no flow, no version, no baseline was touched.**
+
+## A. Take freely — strict improvements, no decision needed
+
+| # | change | why it is safe |
+|---|---|---|
+| 1 | `test_hermetic_candidate_runner.py`: `save_container` gains `create=` and writes atomically (M16) | HARNESS only. Kills a **4-in-10** flake whose message falsely accuses `hermetic_candidate_runner.py` of leaking containers. A/B 4/10 -> 0/12. The runner is untouched. |
+| 2 | `test_hermetic_candidate_runner.py`: new `rw_bind` behaviour + `test_a_read_write_subject_bind_refuses_before_the_candidate_starts` (M15) | ADDITIVE. First coverage of the `"bind is not exact/read-only"` refusal. Mutation arm proven: delete the `RW is not False` clause and it goes red. |
+| 3 | `test_landing_merge_verdict.py`: the G4 diagnosis fix (M8) | Does NOT change any verdict. Converts a misattributed `TimeoutExpired` into a message naming the true cause, and stops leaking the verifier process. The two tests stay RED either way. |
+
+## B. ONE DECISION I NEED FROM YOU — a green becomes a red
+
+Change 4 (M14) in `test_landing_merge_verdict.py` makes
+`test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta` **fail where it
+currently passes.**
+
+* It passes today only because it reads `delta.get("corpus_transitions", [])`.
+  **Measured: the key is ABSENT, not empty.** It has been exercising the
+  empty<->empty path, not the expanded<->expanded path its docstring names.
+* Its sibling reads the same key with a bare subscript and is already RED with
+  `KeyError` on the identical condition.
+* This is not a new defect. It is the M13 defect moved from the silent column to
+  the loud one.
+
+**Take it** if you want the landing gate to stop believing a green it cannot
+fail. **Defer it** if adding a red now is worse for you than a known-false green
+— but then please record it, because nothing else will surface it.
+
+I did NOT do the same to `test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts`,
+which is also vacuous, because its property IS guaranteed elsewhere (the arm's
+read-only mount topology, M15). Vacuity alone did not seem sufficient grounds.
+
+## C. Three things I could not settle, and what each needs
+
+| item | what is missing | who can supply it |
+|---|---|---|
+| Flow-gate enforcement audit (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT: blocking\|advisory`, but their `program_exit_zero:` clauses (flow lines 1847, 5788) make either choice wrong without a wiring change | a POLICY call, not a measurement |
+| `flow_manifest_declaration_parity` (2 reds) | a run root from the manifest's declared 15; **0 of the 15 are on this host** | anyone with a real run root |
+| Re-founding the 10 knob-dependent tests (M13) | six test-only env knobs cannot cross the hermetic arm boundary, and `os.kill(arm_pid, 0)` is a host-namespace assertion about a container-namespace process | a POLICY call: re-found on `/evidence` + arm receipts + `landing_completion_record.py`, or punch a test-only hole in `_LAND_REVIEWED_ENV_NAMES` plus a writable mount. I recommend the former and did neither. |
+
+## D. Corrections to my own earlier reports, so you do not act on the old ones
+
+1. **"G4 is unsettleable on this host"** — WRONG. It is 8/8 deterministic and
+   fully settled (M8, M13).
+2. **"9 landing-verdict reds are UNRUNNABLE here"** — at least 2 are runnable;
+   the verifier completes in the degraded rebase-replay tier. The docker/git-2.38
+   explanation does not cover G4.
+3. **"G5 and G6 are OPEN"** — both CLOSED, and they are the same defect as G4,
+   not three findings (M13).
+4. **The `test_malformed_progress` flake is "load-confounded"** — WRONG, and I
+   nearly published it. It reproduces 4/10 on an idle host (M16).
