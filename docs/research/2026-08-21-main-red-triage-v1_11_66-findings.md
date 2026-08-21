@@ -3763,6 +3763,45 @@ tonight that has happened**, and it is worth distinguishing: five of my blockers
 were false, this one was merely badly stated.
 
 
+## M70 — the "orphan" is ALREADY WIRED. M48 said it needs wiring; it needs a classification fixed.
+
+Auditing the last blocker shaped like a capability claim: M48's *"`orphan::silent_decline_audit`
+declares an intent nothing wires — needs WIRING or withdrawal"*.
+
+**Measured. It is wired**, in the protected hygiene script:
+
+```
+tools/ci/repo_hygiene_gates.sh:1213
+  run "silent remedy decline"  "$PLUGIN" python3 programs/silent_decline_audit.py programs --ratchet
+```
+
+**And it declares `ENFORCEMENT: advisory`** in its own docstring. So it is neither
+undeclared nor uninvoked.
+
+**Why the audit calls it an orphan.** `flow_gate_enforcement_audit` scans *"every
+`program_exit_zero` gate in the FLOW definition"*. `silent_decline_audit` is a
+**hygiene** gate, run from `repo_hygiene_gates.sh`, and appears in no flow clause.
+It carries a flow-gate `ENFORCEMENT:` declaration while not being a flow gate —
+so the audit sees a declaration with no flow wiring and reports `orphan::`.
+
+**So M48's fix is wrong.** Wiring it into the flow would be wiring a hygiene gate
+into a place it does not belong, to satisfy an audit that is looking in the wrong
+scope for it. **The real question is a classification one:** should a hygiene gate
+carry an `ENFORCEMENT:` declaration at all, or should the audit's ORPHAN rule
+recognise hygiene-script wiring as wiring?
+
+**That is genuinely not mine** — and this time for a reason I can state without
+inventing a constraint: `repo_hygiene_gates.sh` is **protected, `roles=['authority']`**,
+and either resolution changes what the audit counts. **But it is a one-line
+declaration or a scope rule, not the "wiring job" I filed.**
+
+**Seventh blocker examined, and the tally is now stark:** five were outright
+false, one was badly stated, and this one was **wrong about the work required**.
+**Not one of the seven survived inspection unchanged.** Every single one was a
+claim about what could not be done, written confidently, and never re-derived
+until I made a rule of doing so.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3846,7 +3885,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 
 | item | what is missing | kind |
 |---|---|---|
-| **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **TWO clauses, see M48 — declaring `advisory` does NOT close it.** (a) `area_total_vs_budget_check` + `tapeout_docs_gen` declare no `ENFORCEMENT`: one line each, `advisory` truthful (M29). (b) `orphan::silent_decline_audit` **declares an intent nothing wires** — needs WIRING or withdrawal, which no declaration fixes. | **policy + a wiring job** |
+| **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **TWO clauses, see M48 — declaring `advisory` does NOT close it.** (a) `area_total_vs_budget_check` + `tapeout_docs_gen` declare no `ENFORCEMENT`: one line each, `advisory` truthful (M29). (b) ~~`orphan::silent_decline_audit` needs WIRING~~ — **M70: it IS wired** (`repo_hygiene_gates.sh:1213`) and DOES declare `ENFORCEMENT: advisory`. The flow audit scans only FLOW `program_exit_zero` clauses, and this is a HYGIENE gate, so it reads as an orphan. **A classification question** — should a hygiene gate carry `ENFORCEMENT:` at all, or should ORPHAN recognise hygiene wiring? — not a wiring job. Protected file, `roles=['authority']`. | **policy + a scope rule** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described. **M68: the "needs a cell authored" premise is FALSE** — a real published cell with a routed DEF is TRACKED in git's index on this host (`ic/spm/v1.5.58_ihp-sg13g2`, 17210 tracked benchmark-data paths); stage it and point `VIBE_IC_BENCHMARK_DATA` at it. Authoring remains forbidden and unnecessary. **A and C are DONE** (4 reds closed). | **decision + evidence** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
