@@ -948,6 +948,15 @@ makes it worth doing:
     module-scope third-party imports in the test tree, unguarded   51
     distinct packages involved                                      1
 
+*Re-run on the merged tree with the screen this record states — third-party means
+resolving nowhere in the repository, and the test runner itself is excluded
+because a missing runner is not a collection hazard: **50 occurrences in 50
+files, still exactly one package**. Main touched six test files and none is in
+the set, so the one-file drift predates the merge. The screen warning below was
+re-earned in the act of re-running it: dropping the directory term from the
+in-repo name set — keeping only module stems — reported 174 files instead of 50,
+which is the same over-match in the same place.*
+
 Exactly one package — so the fix is bounded and mechanical. **Proven, with a
 positive control on the same blocked dependency:**
 
