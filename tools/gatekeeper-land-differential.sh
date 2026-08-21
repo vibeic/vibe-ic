@@ -155,6 +155,15 @@ set -uo pipefail
 # hook originates in a worktree, and `git -C` does not override it.
 unset GIT_DIR GIT_WORK_TREE
 export GIT_NO_REPLACE_OBJECTS=1
+# BYTECODE WRITING IS OFF FOR EVERY CHILD THIS SCRIPT SPAWNS, and it is asserted
+# below rather than left as a habit. The four arms run in throwaway worktrees and
+# every gate that imports a shipped module writes `.pyc` INTO the tree it is
+# measuring. `.pyc` is gitignored, so `git status`, `git add -A` and
+# `suite_write_guard` are all silent about it, while `_run_isolation.snapshot`
+# walks the filesystem and sees every one — which is how a differential suite
+# failed 13 of 39 on 2026-08-21 naming a single stray artefact, and passed 33
+# with zero failures after a clean. `-B` would not do: it is not inherited.
+export PYTHONDONTWRITEBYTECODE=1
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_REF="origin/main"; JSON_OUT=""; REPO=""; KEEP=0; NO_STAMP=0
@@ -233,6 +242,26 @@ if [ "$BASE_SHA" = "$HEAD_SHA" ]; then
 fi
 if ! "${G[@]}" merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"; then
   die "HEAD does not descend from $BASE_REF — rebase first; a differential against a base you are not on measures nothing"
+fi
+# THE SAME REFUSAL, ASKED OF THE TREES INSTEAD OF THE ANCESTRY.
+#
+# `BASE_SHA = HEAD_SHA` above is a commit-identity test, and this repository
+# SQUASH-lands: a branch whose content already reached the trunk and was then
+# rebased has a DIFFERENT HEAD and IDENTICAL bytes in every file it touches.
+# Ancestry says there is a range; the trees say there is nothing in it, and four
+# throwaway checkouts plus an hour of gates then measure the base against itself.
+#
+# `--claim work` puts the landing gate's own premise to the blob objects — the
+# same instrument `tools/ci/trusted_worktree_attest.py` uses — so the exit code
+# is about the CLAIM and nothing here has to invert a verdict. rc 1 means the
+# premise is false; rc 2 means the branch touches nothing at all.
+if EMPTY="$(python3 "$REPO/$PLUGIN_REL/programs/landing_noop_verdict_check.py" \
+        --repo "$REPO" --branch "$HEAD_SHA" --target "$BASE_SHA" \
+        --claim work 2>&1)"; then
+  :
+else
+  printf '%s\n' "$EMPTY" | tail -6 | sed 's/^/          /'
+  die "every path this branch touches is already byte-identical to $BASE_REF — there is nothing to land, and ancestry cannot see it"
 fi
 
 # THE JUDGE. On the merge path it comes from the VERIFIER's repo and never the
@@ -344,11 +373,53 @@ RUN_BASE_ARMS=1
 "${G[@]}" worktree add -q --detach "$WT_CAND_TESTS" "$HEAD_SHA" || die "cannot create the candidate-test worktree"
 "${G[@]}" worktree add -q --detach "$WT_CAND_GATES" "$HEAD_SHA" || die "cannot create the candidate-gate worktree"
 CAND_PLUGIN="$WT_CAND_TESTS/$PLUGIN_REL"
+# The throwaway checkout is attestable, or the arms do not start. This costs
+# milliseconds against arms that cost an hour, and it asks the two questions the
+# clean-worktree preflight above cannot: is bytecode writing off for the children
+# (the export at the top of this file, verified rather than assumed), and does
+# this tree already carry residue a previous killed run left behind? A fresh
+# `git worktree add --detach` satisfies both; a reused `$RUN` directory does not.
+if ! ATT="$(python3 "$REPO/$PLUGIN_REL/programs/attestation_preflight_check.py" \
+        --repo "$WT_CAND_TESTS" "$CAND_PLUGIN/programs" 2>&1)"; then
+  printf '%s\n' "$ATT" | tail -8 | sed 's/^/          /'
+  die "the candidate checkout would make the arms measure their own residue"
+fi
 ( cd "$CAND_PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE_SHA" ) \
     > "$RUN/selection.txt" 2>"$RUN/selection.err"
-if [ ! -s "$RUN/selection.txt" ]; then
-  echo "--- the targeted selection produced no file; that is not a clean result:"
+# A MINIMUM, NOT AN EMPTINESS TEST, AND THE FLOOR IS DERIVED RATHER THAN TYPED.
+#
+# `[ ! -s ]` sees only the extreme case, and it does not even refuse: it prints
+# and carries on. Two failures measured on 2026-08-21, one day apart, both green
+# to every instrument that was watching:
+#
+#   an EMPTY list runs EVERY test — `xargs -a <empty> pytest` passes pytest no
+#     path at all, so it falls back to `testpaths` and collects the whole suite.
+#     A selector that timed out wrote a zero-byte list and two arms launched an
+#     unbounded sweep across two clones.
+#   a list naming a path that DOES NOT EXIST collects nothing and exits 0.
+#
+# The floor is the selector's OWN smoke set, resolved against the candidate tree
+# the way the selector resolves it (a basename that does not exist is skipped, so
+# the floor shrinks with the tree and can never become a stale census pin).
+SEL_FLOOR="$( cd "$CAND_PLUGIN" && python3 - <<'PYFLOOR'
+import sys
+sys.path.insert(0, "programs")
+from pathlib import Path
+import ci_targeted_test_select as S
+tests = Path("programs/tests")
+print(sum(1 for b in S.SMOKE_BASENAMES if (tests / b).is_file()))
+PYFLOOR
+)"
+if ! [ "${SEL_FLOOR:-0}" -ge 1 ] 2>/dev/null; then
+  die "the selector's own smoke floor could not be derived, so the selection has no denominator to be judged against"
+fi
+if ! SEL_GUARD="$( cd "$CAND_PLUGIN" && python3 \
+        programs/generated_test_list_min_guard.py "$RUN/selection.txt" \
+        --min "$SEL_FLOOR" --root . 2>&1 )"; then
+  echo "--- the targeted selection may not be handed to a runner:"
+  printf '%s\n' "$SEL_GUARD" | tail -6 | sed 's/^/      /'
   tail -5 "$RUN/selection.err" | sed 's/^/      /'
+  die "the targeted selection is below its own smoke floor or names a path that does not exist"
 fi
 
 if [ "$RUN_BASE_ARMS" = "1" ]; then

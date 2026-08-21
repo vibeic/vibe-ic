@@ -193,6 +193,48 @@ def test_an_unknown_flag_is_rc3_not_argparse_2(tmp_path):
     assert "USAGE_ERROR:" in r.stderr, r.stderr
 
 
+# ── the same measurement, the opposite claim ─────────────────────────────────
+
+def test_claim_work_passes_when_the_lane_really_carries_something(tmp_path):
+    """`--claim work` is the landing gate's premise. The exit code answers the
+    CLAIM, so neither caller has to invert a verdict in their head."""
+    repo = _repo(tmp_path)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "trunk moves on")
+    r = _run("--repo", repo, "--branch", "lane", "--target", "trunk",
+             "--claim", "work")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    assert "there is work to land" in r.stdout, r.stdout
+
+
+def test_claim_work_refuses_a_landing_whose_bytes_are_already_there(tmp_path):
+    """THE ANCESTRY TRAP. `gatekeeper-land-differential.sh` refuses a landing
+    when `BASE_SHA = HEAD_SHA`, which is ancestry. A branch squash-landed and
+    then rebased has a DIFFERENT HEAD and IDENTICAL bytes, and an hour of gates
+    then runs over a landing with nothing in it."""
+    repo = _repo(tmp_path)
+    _write(repo, "a.txt", "two\n")
+    _write(repo, "gen/INDEX.md", "generated v2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "squash of the lane")
+    assert _git(repo, "rev-parse", "trunk").stdout.strip() \
+        != _git(repo, "rev-parse", "lane").stdout.strip(), \
+        "the fixture is wrong: the two tips are the same commit, which ancestry " \
+        "already catches, so it proves nothing"
+
+    r = _run("--repo", repo, "--branch", "lane", "--target", "trunk",
+             "--claim", "work")
+    assert r.returncode == RC_FAIL, \
+        "an empty landing passed the premise:\n" + r.stdout
+    assert "carries nothing" in r.stdout, r.stdout
+
+
+def test_an_unknown_claim_is_rc3_not_argparse_2(tmp_path):
+    repo = _repo(tmp_path)
+    r = _run("--repo", repo, "--branch", "lane", "--target", "trunk",
+             "--claim", "maybe")
+    assert r.returncode == RC_USAGE, r.stdout + r.stderr
+
+
 # ── discrimination: revert the rule, the refusal disappears ──────────────────
 
 def test_reverting_the_refusal_makes_the_partial_land_pass(tmp_path):

@@ -51,10 +51,25 @@ instead would reintroduce the defect one category down — the measured lane had
 three non-generated files and one generated one, and an exclusion would have
 made the report say "one file" about a four-file loss.
 
+THE EXIT CODE IS ABOUT THE CLAIM, NOT ABOUT THE TREES
+=====================================================
+Two callers ask opposite questions of the same measurement, so the CLAIM is an
+argument rather than something a reader has to invert in their head:
+
+    --claim noop   (default)  "nothing to land"      — a batch landing's verdict
+    --claim work              "there is work here"   — a landing gate's premise
+
+`--claim work` exists because this repository already carries the weak form of
+the same mistake: `tools/gatekeeper-land-differential.sh` refuses a landing when
+`BASE_SHA = HEAD_SHA`, which is ANCESTRY. A branch that was squash-landed and
+then rebased has a different HEAD and identical bytes, and an hour of gates runs
+over a landing with nothing in it.
+
 EXIT CODES
 ==========
-    0  every touched path is byte-identical: the no-op verdict is VERIFIED
-    1  REFUSED — at least one touched path differs; the paths are printed
+    0  the CLAIM holds — no touched path differs under `--claim noop`, at least
+       one does under `--claim work`
+    1  REFUSED — the claim does not hold; the differing paths are printed
     2  VACUOUS — the branch touches NO path relative to the merge base, so
        there is no landing claim to check (`_vacuous_exit`'s tier, and it is
        announced, never a silent pass)
@@ -64,7 +79,8 @@ EXIT CODES
 USAGE
 -----
     landing_noop_verdict_check.py --branch <ref> --target <ref>
-                                 [--repo DIR] [--generated GLOB]... [--json OUT]
+                                 [--claim noop|work] [--repo DIR]
+                                 [--generated GLOB]... [--json OUT]
 
 chip-AGNOSTIC: git plumbing only. No design, PDK, vendor, node or SKU literal.
 """
@@ -183,6 +199,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--generated", action="append", default=[], metavar="GLOB",
                     help="label (never waive) a differing path as generated, so "
                          "the report names the right remedy; repeatable")
+    ap.add_argument("--claim", choices=("noop", "work"), default="noop",
+                    help="what the caller asserts about these two trees; the "
+                         "exit code answers THAT, so neither caller has to "
+                         "invert a verdict")
     ap.add_argument("--json", type=Path)
     args = ap.parse_args(argv)
 
@@ -211,6 +231,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     report = {
         "tool": TOOL,
         "branch": branch, "target": target, "merge_base": base,
+        "claim": args.claim,
         "touched": len(rows),
         "identical": len(rows) - len(differing),
         "differing": [{"path": p, "verdict": v,
@@ -231,13 +252,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     if differing:
         for p, v in differing:
             tag = " [generated]" if is_generated(p, args.generated) else ""
-            print(f"  [NOT LANDED] {p}{tag} — {_WHY[v]}")
-        print(f"[FAIL] {TOOL}: {len(differing)} of {len(rows)} path(s) the "
-              f"branch touches are NOT byte-identical to {args.target} "
-              f"({len(gen)} generated, {len(differing) - len(gen)} not). A "
-              f"no-op landing verdict over this pair is wrong: re-run the "
-              f"generator on the merged tree for the generated ones and apply "
-              f"the lane's bytes for the rest.")
+            print(f"  [{'NOT LANDED' if args.claim == 'noop' else 'TO LAND'}] "
+                  f"{p}{tag} — {_WHY[v]}")
+        if args.claim == "noop":
+            print(f"[FAIL] {TOOL}: {len(differing)} of {len(rows)} path(s) the "
+                  f"branch touches are NOT byte-identical to {args.target} "
+                  f"({len(gen)} generated, {len(differing) - len(gen)} not). A "
+                  f"no-op landing verdict over this pair is wrong: re-run the "
+                  f"generator on the merged tree for the generated ones and "
+                  f"apply the lane's bytes for the rest.")
+            return _vac.RC_FAIL
+        print(f"[PASS] {TOOL}: {len(differing)} of {len(rows)} path(s) the "
+              f"branch touches differ from {args.target}; there is work to land")
+        return _vac.RC_PASS
+
+    if args.claim == "work":
+        print(f"[FAIL] {TOOL}: all {len(rows)} path(s) the branch touches are "
+              f"already byte-identical to {args.target}, so this landing "
+              f"carries nothing. Ancestry says otherwise — a squash-landed "
+              f"branch that was then rebased has a different HEAD and the same "
+              f"bytes — and an hour of gates over an empty landing measures "
+              f"the base.")
         return _vac.RC_FAIL
 
     print(f"[PASS] {TOOL}: all {len(rows)} path(s) the branch touches are "
