@@ -380,3 +380,75 @@ def test_the_runner_and_the_flow_clause_declare_THE_SAME_report_path():
     assert m, "the runner declares no report path for this step"
     assert m.group(1) in _clause(), (
         f"runner writes {m.group(1)!r}, flow clause says {_clause()!r}")
+
+
+# --------------------------------------------------------------------------- #
+# the fourth verdict: a PASS that is CONDITIONAL on a human decision
+# --------------------------------------------------------------------------- #
+# The program has four verdicts and everything above exercises three. The one
+# left out is the subtle one, and it is the only PASS that does not mean what a
+# PASS normally means.
+#
+# FITS_AFTER_FOLD is rc 0, so the step is green — correctly: refusing it would
+# block a design a competent bond-out fits. But it means "fits ONLY IF a named
+# fold is taken", and the program says in the same breath that whether that
+# fold is safe is a PROTOCOL fact it will not decide. So the green must carry
+# the condition with it. A bare PASS here would read as "this bonds out" when
+# what was measured is "this bonds out if somebody folds two buses and nobody
+# has checked that they are never live together".
+
+def _foldable_project() -> Path:
+    return _project(T._RTL_FOLDABLE, with_slots=True)
+
+
+def test_a_design_that_fits_only_after_folding_is_not_BLOCKED():
+    """The direction that matters first: a legitimate design must not be
+    refused by arithmetic that a real pin-out would have solved."""
+    R = _runner()
+    assert R.step_slot_pad_budget(_foldable_project(), "chip_top").status == "PASS"
+    passed, vacuous, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
+    assert (passed, vacuous) == (True, False)
+    assert rep["verdict"] == "FITS_AFTER_FOLD"
+
+
+def test_the_conditional_pass_is_DISCLOSED_and_not_a_bare_green():
+    """The operator-visible line must name the verdict, not just the status —
+    otherwise the condition is lost at exactly the moment somebody reads
+    'PASS' and stops looking."""
+    R = _runner()
+    sr = R.step_slot_pad_budget(_foldable_project(), "chip_top")
+    assert "FITS_AFTER_FOLD" in sr.detail, (
+        f"the step passed without naming the condition: {sr.detail!r}")
+
+
+def test_the_record_names_the_fold_and_refuses_to_call_it_safe():
+    """The fold is an INVITATION to a human decision, recorded with the
+    signals that could drive it. If the gate ever claimed the fold was safe it
+    would be inventing a pin-out."""
+    _, _, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
+    cands = rep["fold_candidates"]
+    assert cands, "a FITS_AFTER_FOLD verdict that names no fold is unactionable"
+    assert cands[0]["input_bus"] and cands[0]["output_bus"] and cands[0]["width"]
+    assert "NOT DECIDED HERE" in cands[0]["safety"]
+    assert any("protocol-safe" in s for s in rep["does_not_decide"])
+
+
+def test_the_fold_does_not_rewrite_the_declared_number():
+    """The DECLARED count is what the design actually asks for; the folded one
+    is a hypothetical. Reporting only the second would launder a decision
+    nobody took into a measurement."""
+    _, _, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
+    assert rep["declared_signal_bits"] == 75
+    assert rep["signal_bits_after_folding_every_candidate"] == 43
+    assert rep["declared_signal_bits"] != rep["signal_bits_after_folding_every_candidate"]
+
+
+def test_all_four_verdicts_are_reachable_through_the_wiring():
+    """Coverage stated as an assertion rather than assumed from the tests that
+    happen to exist: every verdict the program can return must have been driven
+    through the clause at least once."""
+    seen = set()
+    for rtl, slots in ((_HOPELESS, True), (T._RTL_FITS, True),
+                       (T._RTL_FOLDABLE, True), (T._RTL_FITS, False)):
+        seen.add(_drive(rtl, slots)[2]["verdict"])
+    assert seen == {"DOES_NOT_FIT", "FITS", "FITS_AFTER_FOLD", "UNDECIDED"}, seen
