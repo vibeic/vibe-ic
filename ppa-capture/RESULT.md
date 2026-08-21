@@ -1463,12 +1463,20 @@ deliverable were *agreement* failures with nothing missing. And every check runs
 a control that must fail first — if the control passes, the check reports itself
 BROKEN instead of green.
 
-**Extended to the claims that had already drifted once.** The first version
+**Extended twice, each time to something it did not cover.** The first version
 checked fourteen things and not the two that had actually gone stale during the
-lane — the sweep table as the batch grew, and routing. It now checks eighteen,
-including that every Bucket-A rule has a sweep-table row, that every record
-names a routed step whose program is on disk, and that the count in the title
-matches the two tables holding it.
+lane — the sweep table as the batch grew, and routing. Then it did not cover the
+brief's *first* requirement, the rule stated for each of the eighteen findings,
+nor whether the emitted backlogs still pass the sanitiser that consumes them —
+and two of those were refused on first write, so a later edit could refuse them
+again in silence. **Twenty checks now.**
+
+**Both new controls were weak and were replaced.** One asserted a row number
+that could never appear; the other asserted the sanitiser file exists. Neither
+demonstrates the check can fail, which is precisely what A-27 was tightened to
+require. They now ask for a nineteenth rule that is not there, and run the
+sanitiser against a deliberately malformed backlog — and both must fail before
+their check is believed.
 
 That second property paid immediately: **on its first run the harness declared
 its own measurement control broken.** The control string was *"a claim with no

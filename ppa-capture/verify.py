@@ -175,6 +175,40 @@ control("already-program", claimed is not None)
 check("the title's already-program count matches the tables",
       claimed == tbl, f"title {claimed}, tables {tbl}")
 
+# 12. the brief's FIRST requirement: a rule for each of the eighteen findings.
+#     That table is the primary deliverable and nothing checked it until now.
+rule_rows = re.findall(r"^\| (\d{1,2}) \| ", MD, re.M)
+seen = {int(x) for x in rule_rows}
+# SEPARATION, not existence: asking for a rule that is not there must FAIL.
+control("eighteen-rules", not (seen >= set(range(1, 20))))
+check("a rule is stated for each of the eighteen findings",
+      seen >= set(range(1, 19)), f"missing {sorted(set(range(1,19)) - seen)}")
+
+# 13. the emitted backlogs still pass the sanitiser that consumes them.
+#     Two of them were REFUSED on first write (see A-9); a later edit to a
+#     field the sanitiser constrains would refuse them again, silently, because
+#     nothing in this batch re-runs it.
+import subprocess
+SAN = PLUG / "programs" / "backlog_sanitize_check.py"
+yamls = sorted(CAND.rglob("*.yaml"))
+# SEPARATION: the sanitiser must REFUSE a deliberately malformed backlog.
+# `SAN.is_file()` only proved the file exists, which validates nothing.
+import tempfile
+with tempfile.TemporaryDirectory() as _d:
+    _bad = pathlib.Path(_d) / "ORGANIC-19700101-control.yaml"
+    _bad.write_text("type: bug\ncomponent: not-a-valid-component-shape\n")
+    _r = subprocess.run([sys.executable, str(SAN), "--file", str(_bad)],
+                        capture_output=True, text=True, timeout=120)
+control("sanitiser", SAN.is_file() and _r.returncode != 0)
+bad_yaml = []
+for y in yamls:
+    r = subprocess.run([sys.executable, str(SAN), "--file", str(y)],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        bad_yaml.append(y.name)
+check("every emitted backlog passes its own sanitiser",
+      not bad_yaml, f"{len(yamls)} checked, refused: {bad_yaml}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
