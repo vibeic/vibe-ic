@@ -16,11 +16,32 @@ without checking that ``MET<N>`` is the LEF's TOPMOST routing layer. On a LEF
 with more layers than the deck expects, that widens an INTERMEDIATE thin routing
 layer using a rule written for the top metal.
 
+WHAT THIS FILE PINS, AND WHAT IT DOES NOT (measured 2026-08-05)
+==============================================================
+Sections 1-4 and the two paired-guard tests in section 5 are REGRESSION GUARDS
+FOR OLDER WORK. All nine of them PASS unchanged against e3aa9b126, the tree
+immediately before 41c49f94d, so none of them discriminates that landing. The
+landing commit said of the paired guard that it "is now pinned by a test of its
+own"; the pin it refers to (`test_topmetal_width_fix_skips_a_stack_the_deck_does
+_not_describe`) already existed, and 41c49f94d changed only the wording of one
+assertion in `test_topmetal_width_fix_still_fires_on_the_matching_stack`. That
+claim is corrected here rather than left standing.
+
+Section 6 is the part that DOES discriminate it, and it belongs here rather than
+in the deck-rule file next door because it needs no new deck rule at all: with
+the SAME width-only deck used throughout this file, raising WIDTH alone leaves
+the staged LEF geometrically self-inconsistent — WIDTH + SPACING greater than
+PITCH, a track grid too fine to hold a legal wire on every track, so the router
+legally uses adjacent tracks and manufactures spacing violations BY
+CONSTRUCTION. Measured on e3aa9b126: 0.44 + 0.28 = 0.72um of demand left on a
+0.66um pitch.
+
 Every fixture below uses synthetic library, deck and layer names.
 """
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -223,7 +244,13 @@ def test_topmetal_width_fix_still_fires_on_the_matching_stack(
     lef.write_text(_tech_lef(5, 0.28))         # top metal under the deck's 0.44
     out, notes = p3._discover_topmetal_width_fix(tmp_path, str(deck), lef)
     assert out != lef, "a corrected LEF should have been staged"
-    assert notes and "topmetal-width-fix" in notes[0]
+    # The note is tagged `[topmetal-deck-lef-fix]`: the pass reconciles the
+    # deck's WIDTH, SPACING, PITCH and top-cut SPACING, so the older
+    # `topmetal-width-fix` tag named one quarter of what it does. Asserted on
+    # the SUBSTANCE — which rule fired and on which layer — so a future
+    # re-tagging cannot make this test go quiet either.
+    assert notes and "TOPMETAL_5" in notes[0] and "MET5" in notes[0], notes
+    assert "Mt.W.1" in notes[0] and "0.44" in notes[0], notes
     assert "0.44" in Path(out).read_text()
 
 
@@ -236,3 +263,106 @@ def test_topmetal_width_fix_is_a_noop_when_the_lef_already_honors_the_deck(
     lef.write_text(_tech_lef(5, 0.44))
     out, notes = p3._discover_topmetal_width_fix(tmp_path, str(deck), lef)
     assert out == lef and not notes
+
+
+# --------------------------------------------------------------------------
+# 6. The staged LEF must be a stack a router can legally use.
+#
+# Everything above this line passes on e3aa9b126 too. This section is what
+# discriminates 41c49f94d, and it uses the SAME width-only deck as the rest of
+# the file — the point is that fixing the WIDTH rule ALONE is what breaks the
+# geometry, so no new deck rule is needed to show it.
+# --------------------------------------------------------------------------
+def _tech_lef_spaced(n_routing: int, top_width: float, *,
+                     top_spacing: float = 0.28, pitch: float = 0.66) -> str:
+    """`_tech_lef` plus the SPACING every real tech LEF declares.
+
+    A separate builder on purpose: the nine tests above are regression guards
+    for older work and must keep running against byte-identical fixtures.
+    """
+    out = ["VERSION 5.7 ;"]
+    for i in range(1, n_routing + 1):
+        w = top_width if i == n_routing else 0.28
+        s = top_spacing if i == n_routing else 0.28
+        out.append(
+            f"LAYER MET{i}\n"
+            f"  TYPE ROUTING ;\n"
+            f"  DIRECTION {'HORIZONTAL' if i % 2 else 'VERTICAL'} ;\n"
+            f"  PITCH {pitch} ;\n"
+            f"  WIDTH {w} ;\n"
+            f"  MINWIDTH {w} ;\n"
+            f"  SPACING {s} ;\n"
+            f"END MET{i}")
+    out.append("END LIBRARY")
+    return "\n".join(out) + "\n"
+
+
+def _met_layer(lef_text: str, name: str) -> dict:
+    seg = lef_text[lef_text.index(f"LAYER {name}\n"):]
+    seg = seg[:seg.index(f"END {name}")]
+    return {k.lower(): float(v) for k, v in
+            re.findall(r"^\s*(PITCH|WIDTH|MINWIDTH|SPACING)\s+([\d.]+)\s*;",
+                       seg, re.MULTILINE)}
+
+
+def test_the_staged_lef_can_hold_a_legal_wire_on_every_track(
+        tmp_path: Path) -> None:
+    """THE defect this landing fixes, on this file's own deck.
+
+    The deck states a top-metal minimum WIDTH the LEF under-declares. Raising
+    WIDTH and leaving PITCH is not a fix: the routing grid then has a pitch
+    FINER than width+space, so a wire that is legal on one track is illegal
+    against its neighbour, and the router — which can only see the LEF — draws
+    exactly that and hands the sign-off deck a wall of spacing violations it
+    manufactured itself.
+
+    Measured on e3aa9b126 with the fixture below: WIDTH 0.44, SPACING 0.28,
+    PITCH 0.66 — 0.72um of demand on a 0.66um grid.
+    """
+    p3 = _p3()
+    deck = tmp_path / "deck.rule"
+    deck.write_text(_DECK)
+    lef = tmp_path / "libx_5lm_tech.lef"
+    lef.write_text(_tech_lef_spaced(5, 0.28))       # top metal under the deck
+    out, notes = p3._discover_topmetal_width_fix(tmp_path, str(deck), lef)
+    assert out != lef, "a corrected LEF should have been staged"
+    met5 = _met_layer(Path(out).read_text(), "MET5")
+    assert met5["width"] == 0.44 and met5["minwidth"] == 0.44, met5
+    assert met5["width"] + met5["spacing"] <= met5["pitch"], (
+        f"the staged LEF is geometrically self-inconsistent: WIDTH "
+        f"{met5['width']} + SPACING {met5['spacing']} = "
+        f"{met5['width'] + met5['spacing']} exceeds PITCH {met5['pitch']}, so "
+        f"no legal wire exists on every track and the router produces spacing "
+        f"violations by construction\nnotes: {notes}")
+
+
+def test_a_stack_with_room_already_keeps_its_pitch(tmp_path: Path) -> None:
+    """The pitch is DERIVED, never set to a constant, and never LOWERED. A LEF
+    whose grid already has room for the widened wire must keep the grid it
+    shipped with — coarsening it would cost routing resource for nothing."""
+    p3 = _p3()
+    deck = tmp_path / "deck.rule"
+    deck.write_text(_DECK)
+    lef = tmp_path / "libx_5lm_tech.lef"
+    lef.write_text(_tech_lef_spaced(5, 0.28, pitch=2.0))
+    out, _notes = p3._discover_topmetal_width_fix(tmp_path, str(deck), lef)
+    met5 = _met_layer(Path(out).read_text(), "MET5")
+    assert met5["width"] == 0.44, met5
+    assert met5["pitch"] == 2.0, (
+        f"the pitch was rewritten to {met5['pitch']} on a stack that already "
+        f"had room for width+space")
+
+
+def test_an_intermediate_layer_is_never_touched(tmp_path: Path) -> None:
+    """Over-breadth guard for section 6: the reconciliation is about the layer
+    the deck's TOPMETAL option names. Every other layer must come through the
+    staging byte-for-byte, pitch included."""
+    p3 = _p3()
+    deck = tmp_path / "deck.rule"
+    deck.write_text(_DECK)
+    lef = tmp_path / "libx_5lm_tech.lef"
+    lef.write_text(_tech_lef_spaced(5, 0.28))
+    out, _notes = p3._discover_topmetal_width_fix(tmp_path, str(deck), lef)
+    staged = Path(out).read_text()
+    for lower in ("MET1", "MET2", "MET3", "MET4"):
+        assert _met_layer(staged, lower) == _met_layer(lef.read_text(), lower)

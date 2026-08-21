@@ -57,6 +57,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+
 
 # ---------------------------------------------------------------------------
 # Per-PDK power-net default lists. These are the names Magic's `ext2spice`
@@ -211,7 +213,8 @@ def build_supplementary_setup_tcl(
     out: List[str] = []
     out.append(
         "#---------------------------------------------------------------\n"
-        "# Vibe-IC plugin v0.1.49 — supplementary Netgen LVS setup\n"
+        f"# Vibe-IC plugin v{_pmd.running_plugin_version()} — supplementary "
+        "Netgen LVS setup\n"
         "# Closes the open-source SkyWater-style net-level gap by\n"
         "# globalising power nets and (optionally) flattening top\n"
         "# circuits to match the layout vs schematic hierarchy.\n"

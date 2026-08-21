@@ -10,7 +10,7 @@ Both gates had drifted to a bare ``manufacturing/`` prefix that no producer
 and no other checker uses.  The measured consequence was not a loud error:
 the gate returned rc=2 ("input not applicable"), ``flow_compliance_check``
 mapped that to VACUOUS_PASS, and VACUOUS_PASS is added into ``pass_count``
-(flow_compliance_check.py:6619) — so a project holding complete, correct fab
+(flow_compliance_check.py:7017) — so a project holding complete, correct fab
 and packaging data was scored as a pass on the grounds that it did not
 exist, while the step's own ``evidence[]`` listed the very files.
 

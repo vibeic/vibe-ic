@@ -30,6 +30,7 @@ import ic_class_profile as icp  # noqa: E402
 import design_one_shot_runner as p2  # noqa: E402
 import flow_compliance_check as fcc  # noqa: E402
 import analog_content_detected_must_emit_l5_check as acd  # noqa: E402
+import _vacuous_exit as _vx  # noqa: E402
 
 NBA_GATE = PROGRAMS / "nba_shift_register_same_cycle_read_check.py"
 
@@ -175,6 +176,30 @@ def test_generic_class_real_compile_failure_still_fails(tmp_path):
     sr = p2.step_reference_tb(proj, top, "processor_cpu")
     assert sr.status == "FAIL"
     assert "defect" in sr.detail.lower() or "compile" in sr.detail.lower()
+
+
+def test_absent_compiler_is_distinguished_from_a_rejected_source():
+    """vibe-ic#1394 — the predicate that separates "could not measure" from
+    "measured and found a defect". Host-independent: no simulator needed.
+
+    The NEGATIVE direction is the load-bearing half. A genuine compile error
+    over a missing `include` also says "No such file or directory", so a
+    predicate that matched on that phrase would convert real structural
+    defects into skips — the inverse of the bug, and strictly worse than it.
+    """
+    # Failed to EXECUTE: our own wrappers' marker, and the shell's own rc.
+    assert p2._compiler_was_not_found(
+        127, "", "COMMAND_NOT_FOUND: [Errno 2] No such file or "
+                 "directory: 'iverilog'")
+    assert p2._compiler_was_not_found(
+        127, "", "bash: line 1: : command not found")
+    # RAN and rejected the source -> must NOT read as not-found, even when the
+    # message carries the very phrase a missing binary produces.
+    assert not p2._compiler_was_not_found(
+        1, "", "core_top.v:3: Include file foo.vh not found: "
+               "No such file or directory")
+    assert not p2._compiler_was_not_found(1, "", "syntax error near '$$$'")
+    assert not p2._compiler_was_not_found(0, "", "")
 
 
 def test_qsf_gen_skips_for_generic_class_without_board_top(tmp_path):
@@ -384,8 +409,15 @@ def test_mixed_line_negation_is_per_hit():
 
 
 def test_negated_analog_gate_skips_full_run(tmp_path):
-    """End-to-end: docs that ONLY negate analog content → gate SKIPs
-    (no analog keywords counted)."""
+    """End-to-end: docs that ONLY negate analog content → gate SKIPs.
+
+    The SUBJECT of this test — negation suppresses the keyword hit, so no
+    analog class is claimed — is unchanged. What changed in #833 is the rc
+    that "no analog class was claimed" leaves behind: it used to be 0, which
+    the P0 structural umbrella credited as an executed PASS for a gate that
+    had compared no doc evidence against any L5 record. It is now
+    `_vx.RC_VACUOUS`, so this file no longer pins the vacuous credit.
+    """
     proj = tmp_path
     docs = proj / "input" / "docs"
     docs.mkdir(parents=True)
@@ -397,7 +429,7 @@ def test_negated_analog_gate_skips_full_run(tmp_path):
     gate = PROGRAMS / "analog_content_detected_must_emit_l5_check.py"
     r = subprocess.run([sys.executable, str(gate), str(proj)],
                        capture_output=True, text=True)
-    assert r.returncode == 0
+    assert r.returncode == _vx.RC_VACUOUS, r.stdout + r.stderr
     assert "SKIP" in r.stdout
 
 

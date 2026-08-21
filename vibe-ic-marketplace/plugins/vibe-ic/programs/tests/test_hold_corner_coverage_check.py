@@ -1,5 +1,7 @@
 """Unit tests for `hold_corner_coverage_check.py`."""
 import importlib
+import json
+from pathlib import Path
 
 mod = importlib.import_module("hold_corner_coverage_check")
 
@@ -341,3 +343,486 @@ class TestTheStanceCannotOutrankTheScript:
         assert "source[tcl] FAIL" in printed
         assert "CONTRADICTION" in printed
         assert json.loads(out.read_text())["contradiction"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A DECLARED CORNER IS THE CLAIM; A CORNER IN A LIBERTY FILENAME IS NOT
+#
+# The emitter writes its hold banner as
+#     === HOLD corner: process=FF liberty=<path> ===
+# and the module docstring names that banner as RULE 2's primary evidence. It
+# could not be read: `=` was absent from `_PROC_RE`'s delimiter class, so
+# `process=FF` yielded NOTHING and the only corner the line produced came from
+# the Liberty FILENAME beside it. On the usual naming conventions the two agree
+# and the gate looks correct. The tests below are the two directions in which
+# they DISAGREE — one produces a false FAIL, the other a false PASS — plus the
+# two cases that must be untouched.
+#
+# BIDIRECTIONAL NEGATIVE CONTROL — measured against the byte-identical pre-fix
+# module (`git show e3aa9b12:…/hold_corner_coverage_check.py`, md5
+# d0390374c2f89145e3c227ceb4367e8d), same test file, `5 failed, 31 passed`:
+#
+#   FAILED  …declared_ff_is_read_when_the_liberty_filename_has_no_corner_token
+#           the false FAIL: rc=1 NO_FEED_CORNER on a banner reading process=FF
+#   FAILED  …a_declared_slow_corner_is_not_masked_by_a_fast_liberty_filename
+#           the false PASS: rc=0 HOLD_AT_FF on a banner reading process=SS
+#   FAILED  …the_delimiter_class_reads_an_equals_assignment      (root cause)
+#   FAILED  …a_declared_slow_corner_alone_still_fails
+#           pre-fix this reached FAIL, but via NO_FEED_CORNER — right verdict,
+#           wrong reason, and the reason is what a reader acts on
+#   FAILED  …an_assignment_to_a_non_corner_word_is_not_a_corner  (helper absent)
+#
+#   passed  …reverse_declared_ff_with_a_matching_filename_still_passes
+#   passed  …a_view_line_without_an_assignment_is_unchanged
+#
+# The last two are the REVERSE cases and they must pass on BOTH sides. They are
+# what stops this fix from being "narrow the rule until the bad case stops
+# firing": the common shape (declaration and filename agreeing at FF) and the
+# space-delimited MCMM shape are pinned unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LIB_WITH_TOKEN = "/pdk/lib/acme_sc__ff_n40C_1v95.lib"
+_LIB_NO_TOKEN = "/pdk/lib/acme_sc_core_lib.lib"
+#: The SLOW liberty, used below for the mirror direction: a banner declaring
+#: FF beside the `__ss_` file `read_liberty` actually takes on that same line.
+_LIB_SLOW = "/pdk/lib/acme_sc__ss_100C_1v60.lib"
+
+
+def _banner_tcl(process: str, liberty: str) -> str:
+    """The emitter's own hold script shape: a Liberty read, the `=== HOLD
+    corner: process=<X> liberty=<path> ===` banner, and the min report."""
+    return (
+        f"read_liberty {liberty}\n"
+        f'puts $_f "=== HOLD corner: process={process} liberty={liberty}, '
+        f'SPEF=x.spef ==="\n'
+        f"report_checks -path_delay min -digits 3\n"
+    )
+
+
+class TestDeclaredCornerOutranksTheLibertyFilename:
+
+    def test_declared_ff_is_read_when_the_liberty_filename_has_no_corner_token(
+            self):
+        """FALSE FAIL. A PDK whose Liberty filenames carry no corner
+        designator is an ordinary naming convention, not a defect. The banner
+        says `process=FF`; the gate reported `NO_FEED_CORNER` — "no corner
+        could be identified" — while quoting that very line back in
+        `hold_feed_lines`."""
+        verdict, rc, rep = mod.evaluate(_banner_tcl("FF", _LIB_NO_TOKEN))
+        assert (verdict, rc) == ("PASS", 0)
+        assert rep["reason"] == "HOLD_AT_FF"
+        assert rep["judged_corners"] == ["FF"]
+        assert rep["view_line_assigned_corners"] == ["FF"]
+
+    def test_a_declared_slow_corner_is_not_masked_by_a_fast_liberty_filename(
+            self):
+        """FALSE PASS — the defect this gate exists to catch. The script
+        declares `process=SS`, which under-reports hold violations. Reading the
+        union of the line let `_ff_` in the filename supply an FF the
+        declaration never claimed, and the gate returned PASS/`HOLD_AT_FF`
+        under basis `declared_hold_view` — i.e. asserting it had judged the
+        declaration it could not read."""
+        verdict, rc, rep = mod.evaluate(_banner_tcl("SS", _LIB_WITH_TOKEN))
+        assert (verdict, rc) == ("FAIL", 1)
+        # REASON REVISED, verdict unchanged. The first repair of this case read
+        # the declaration as DECIDING and reported HOLD_NOT_AT_FF — "the hold
+        # analysis ran at SS". It did not: the `read_liberty` on that same line
+        # took the `_ff_` file, and the emitter puts the path there precisely
+        # because "a section headed process=SS proved nothing about which file
+        # was read". What is known is that the two disagree; which one the tool
+        # obeyed is not. See TestTheCornerIsNotAlwaysMeasurable below — this
+        # line is the SS-declared half of a symmetric pair, and reporting it as
+        # a measured SS is what made the FF-declared half a PASS.
+        assert rep["reason"] == "HOLD_CORNER_CONTRADICTION"
+        assert rep["hold_corner_measured"] is False
+        # The filename's corner is DISCLOSED, never silently dropped.
+        assert rep["hold_corner_contradictions"][0]["assigned"] == ["SS"]
+        assert rep["hold_corner_contradictions"][0]["also_on_line"] == ["FF"]
+
+    def test_reverse_declared_ff_with_a_matching_filename_still_passes(self):
+        """REVERSE CASE. The overwhelmingly common shape — declaration and
+        filename AGREE at FF — must be untouched. A fix that reached the two
+        cases above by narrowing what counts as evidence would break this
+        one."""
+        verdict, rc, rep = mod.evaluate(_banner_tcl("FF", _LIB_WITH_TOKEN))
+        assert (verdict, rc) == ("PASS", 0)
+        assert rep["reason"] == "HOLD_AT_FF"
+        assert rep["judged_corners"] == ["FF"]
+
+    def test_a_declared_slow_corner_alone_still_fails(self):
+        """REVERSE CASE. Already correct before the fix; must stay correct.
+        Pins that the new assignment path did not become a way to PASS."""
+        verdict, rc, rep = mod.evaluate(_banner_tcl("SS", _LIB_NO_TOKEN))
+        assert (verdict, rc) == ("FAIL", 1)
+        assert rep["reason"] == "HOLD_NOT_AT_FF"
+
+    def test_a_view_line_without_an_assignment_is_unchanged(self):
+        """REVERSE CASE. `set_hold_view -corner ff_view` names its corner
+        space-delimited, with no `=`. Such lines have always resolved through
+        the union rule and must continue to — the fix adds a stronger reading
+        where one exists, it does not remove the fallback."""
+        tcl = ("read_liberty /pdk/lib/acme_sc__ff_n40C_1v95.lib\n"
+               "set_hold_view -corner ff_view\n"
+               "report_checks -path_delay min\n")
+        verdict, rc, rep = mod.evaluate(tcl)
+        assert (verdict, rc) == ("PASS", 0)
+        assert rep["corner_basis"] == "declared_hold_view"
+        assert "view_line_assigned_corners" not in rep
+
+    def test_the_delimiter_class_reads_an_equals_assignment(self):
+        """The one-character root cause, pinned directly so a future edit to
+        `_PROC_RE` cannot silently re-open it."""
+        assert mod._corners_in("process=FF") == ["FF"]
+        assert mod._corners_in("corner=ss,") == ["SS"]
+        # and the pre-existing delimiters keep working
+        assert mod._corners_in("process FF") == ["FF"]
+        assert mod._corners_in("lib__tt_025C.lib") == ["TT"]
+
+    def test_an_assignment_to_a_non_corner_word_is_not_a_corner(self):
+        """`_CORNER_ASSIGN_RE` must not fire on assignments whose value merely
+        STARTS with a corner designator."""
+        assert mod._assigned_corners_in("process=ffast_model") == []
+        assert mod._assigned_corners_in("corner=ssub") == []
+        assert mod._assigned_corners_in("mode=functional") == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE CORNER IS NOT ALWAYS MEASURABLE, AND THAT IS ITS OWN ANSWER
+#
+# The repair above closed a false PASS by making an explicit `process=`
+# assignment DECIDE the hold-view line. That is the same defect inverted: the
+# printed BANNER LABEL became sole arbiter and the `ss` liberty that
+# `read_liberty` takes ON THE SAME LINE became "incidental". The emitter that
+# writes that banner says the opposite in its own comment
+# (`phase3_one_shot_runner._emit_mcorner_ocv_sta`):
+#
+#     "a section headed process=SS proved nothing about which file was read"
+#
+# — which is WHY the path is printed beside the label. So the label is a
+# declaration and the path is the evidence, and the module docstring's own rule
+# applies to them: A DECLARED FIELD DOES NOT OUTRANK THE EVIDENCE IT CLAIMS TO
+# SUMMARISE. When they disagree the corner is NOT MEASURED, in EITHER
+# direction, and "not measured" may never be spelled PASS.
+#
+# Second hole, same shape: an assignment PRESENT but unreadable —
+# `process=$::env(HOLD_CORNER)`, `process=SF`, `process=bci` — produced no
+# assigned corner and fell straight back to the Liberty FILENAME, i.e. to the
+# evidence the line above had just been rewritten to distrust, silently.
+#
+# BIDIRECTIONAL CONTROL — this whole test file RUN, verbatim, against the two
+# earlier modules, each dropped in unchanged. Failure MODE recorded per test,
+# because "it goes red" is worth nothing if it goes red on an AttributeError.
+#
+#   vs the module that opened the holes — this branch's first commit,
+#   `hold_corner_coverage_check.py` @ 3b6dd39ad, md5
+#   b0bd7bd076761cd1b242df319c238a2f:            10 failed, 39 passed
+#
+#     BEHAVIOURAL — a wrong VERDICT, no new symbol involved — 7
+#       …declared_ff_is_not_believed_over_the_slow_liberty_on_the_same_line
+#           ('PASS', 0) — banner FF beside the __ss_ lib read on that line
+#       …the_two_directions_of_the_disagreement_are_treated_alike
+#           ('PASS',0,'HOLD_AT_FF') vs ('FAIL',1,'HOLD_NOT_AT_FF') — the two
+#           halves of one disagreement land on opposite verdicts
+#       …an_unreadable_corner_assignment_does_not_fall_back_to_the_filename
+#           ('PASS', 0) — `process=$::env(HOLD_CORNER)`, judged off the filename
+#       …a_corner_outside_the_ff_ss_tt_model_is_not_read_as_ff
+#           ('PASS', 0) at process='SF'
+#       …two_assignments_that_disagree_are_a_contradiction
+#           ('PASS', 0) — `process=FF corner=SS`, union contains FF
+#       …a_not_measured_script_is_not_masked_by_a_passing_stance
+#           ('PASS', 0) at PROJECT level
+#       …the_third_state_is_rc_1_and_not_the_disclosed_skip_tier
+#           rc 0, not 1
+#
+#     BEHAVIOURAL, REASON ONLY — the verdict was already right there — 1
+#       …a_declared_slow_corner_is_not_masked_by_a_fast_liberty_filename
+#           'HOLD_NOT_AT_FF' vs 'HOLD_CORNER_CONTRADICTION'. (FAIL, 1) on both
+#           sides; what changed is the claim the report makes about WHY, and
+#           the reason is what a reader acts on.
+#
+#     DIES ON A NEW SYMBOL — no behaviour asserted — 2
+#       …every_reachable_verdict_says_whether_the_corner_was_measured
+#           KeyError: 'hold_corner_measured'
+#       …the_strict_key_set_excludes_the_ambiguous_keys
+#           AttributeError: no `_process_assignment_sites`
+#
+#     GREEN THERE, ON PURPOSE — the reverse controls — 4
+#       …reverse_the_shape_of_the_four_corroborated_flips_still_passes
+#       …reverse_a_measured_slow_corner_is_still_a_measured_defect
+#       …reverse_an_rc_corner_assignment_is_not_a_process_claim
+#       …reverse_the_disclosed_skip_tier_is_unchanged
+#
+#   vs the pre-branch module @ b85d68acc, md5 d0390374c2f89145e3c227ceb4367e8d:
+#                                                15 failed, 34 passed
+#   the 5 the first commit already documented (one of them,
+#   …not_masked_by_a_fast_liberty_filename, is also in the list above), the
+#   other 9 from that list, and …reverse_the_shape_of_the_four_corroborated_
+#   flips_still_passes — which is RED there and MUST be: that IS the flip the
+#   first commit earned, so this file pins it from both ends.
+#   …two_assignments_that_disagree_are_a_contradiction reddens there for a
+#   different reason ('NO_FEED_CORNER' — `=FF` and `=SS` were both invisible).
+#   The other three reverse controls are green on ALL THREE modules.
+#
+# The reverse controls are what stops this being "narrow the rule until nothing
+# fires": the shape of the four corpus decks this branch's first commit
+# repaired must keep PASSing, the measured-SS defect must stay a DEFECT rather
+# than dissolve into an unmeasurable, the published `HOLD corner: min-RC` line
+# must not be mistaken for a process claim, and the rc=2 disclosed-skip tier
+# must keep meaning "no artefact" alone.
+#
+# CORPUS BLAST RADIUS — all 14 hold Tcl decks published under `benchmark-data/`
+# (`*hold*.tcl`), each run through `evaluate` on all three modules. This branch
+# is byte-for-byte IDENTICAL to its first commit over the whole corpus:
+#   6 FAIL(HOLD_NOT_AT_FF), 2 FAIL(NO_FEED_CORNER), 6 PASS(HOLD_AT_FF)
+# and the four decks the first commit flipped FAIL(NO_FEED_CORNER)->PASS still
+# flip: caravel_user_project/clean_run_v1432_commercial,
+# caravel_user_project/clean_run_v1432int_commercial, sha256/clean_run_v1461_0223
+# and spm/clean_run_v1432int_commercial — all `sta/sta_mcorner_ocv_hold.tcl`.
+# Not one deck moved in either direction. The new states fire on NO published
+# deck, which is why the tests above construct them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestTheCornerIsNotAlwaysMeasurable:
+
+    def test_declared_ff_is_not_believed_over_the_slow_liberty_on_the_same_line(
+            self):
+        """FALSE PASS, the mirror of the one the first commit closed.
+
+        `read_liberty` takes the `__ss_` file; the banner beside it prints
+        `process=FF`. Making the label sole arbiter certified the fast corner
+        for a hold sign-off run against the slow library — the exact
+        under-reporting of hold violations this gate exists to catch, reached
+        through the repair rather than around it.
+        """
+        verdict, rc, rep = mod.evaluate(_banner_tcl("FF", _LIB_SLOW))
+        assert (verdict, rc) == ("FAIL", 1)
+        assert rep["reason"] == "HOLD_CORNER_CONTRADICTION"
+        assert rep["hold_corner_measured"] is False
+        c = rep["hold_corner_contradictions"][0]
+        assert (c["assigned"], c["also_on_line"]) == (["FF"], ["SS"])
+
+    def test_the_two_directions_of_the_disagreement_are_treated_alike(self):
+        """The asymmetry IS the bug, so it is pinned directly.
+
+        A rule that fails `process=SS`+`_ff_` and passes `process=FF`+`_ss_`
+        is not reading the line, it is preferring a corner. Both are one
+        disagreement seen from two sides and both must reach the same state.
+        """
+        ss_v, ss_rc, ss_rep = mod.evaluate(_banner_tcl("SS", _LIB_WITH_TOKEN))
+        ff_v, ff_rc, ff_rep = mod.evaluate(_banner_tcl("FF", _LIB_SLOW))
+        assert (ss_v, ss_rc, ss_rep["reason"]) == (
+            ff_v, ff_rc, ff_rep["reason"])
+        assert (ss_v, ss_rc) == ("FAIL", 1)
+
+    def test_an_unreadable_corner_assignment_does_not_fall_back_to_the_filename(
+            self):
+        """An assignment the gate cannot read is not the absence of one.
+
+        `process=$::env(HOLD_CORNER)` states that the line decides the hold
+        corner AND withholds which. Yielding no assigned corner made it
+        indistinguishable from a line that assigned nothing, so the union rule
+        resumed and the verdict came off the Liberty FILENAME — the evidence
+        the assignment supersedes, and the evidence this branch had just
+        argued must not decide on its own.
+        """
+        verdict, rc, rep = mod.evaluate(
+            _banner_tcl("$::env(HOLD_CORNER)", _LIB_WITH_TOKEN))
+        assert (verdict, rc) == ("FAIL", 1)
+        assert rep["reason"] == "HOLD_CORNER_UNRESOLVED"
+        assert rep["hold_corner_measured"] is False
+        assert rep["hold_corner_unreadable_assignments"][0]["assignments"] == [
+            {"key": "process", "value": "$::env"}]
+        # and it must NOT have quietly judged the filename's FF instead
+        assert "judged_corners" not in rep
+
+        # the same line with a SLOW filename must reach the SAME state — the
+        # answer may not depend on the token the gate is no longer reading.
+        _v, _rc, rep_ss = mod.evaluate(
+            _banner_tcl("$::env(HOLD_CORNER)", _LIB_SLOW))
+        assert rep_ss["reason"] == "HOLD_CORNER_UNRESOLVED"
+
+    def test_a_corner_outside_the_ff_ss_tt_model_is_not_read_as_ff(self):
+        """`SF` is a real cross corner and `bci` is a real PDK corner name.
+
+        Neither classifies FF/SS/TT, and this gate's whole model is those
+        three. Dropping them left the filename to answer — so a hold sign-off
+        explicitly declared at a corner that is NOT the fast one certified as
+        the fast one.
+        """
+        for value in ("SF", "bci", "fs", ""):
+            verdict, rc, rep = mod.evaluate(
+                _banner_tcl(value, _LIB_WITH_TOKEN))
+            assert (verdict, rc) == ("FAIL", 1), f"process={value!r}"
+            assert rep["reason"] == "HOLD_CORNER_UNRESOLVED", f"{value!r}"
+            assert rep["hold_corner_measured"] is False, f"{value!r}"
+
+    def test_two_assignments_that_disagree_are_a_contradiction(self):
+        """Two explicit assignments, no filename involved at all.
+
+        Judging their union means "FF is present somewhere" satisfies the
+        gate, which is how a line that says the hold view is SS passed.
+        """
+        tcl = ("read_liberty /pdk/lib/acme_sc_core_lib.lib\n"
+               'puts $_f "=== HOLD corner: process=FF corner=SS '
+               'liberty=/pdk/lib/acme_sc_core_lib.lib ==="\n'
+               "report_checks -path_delay min\n")
+        verdict, rc, rep = mod.evaluate(tcl)
+        assert (verdict, rc) == ("FAIL", 1)
+        assert rep["reason"] == "HOLD_CORNER_CONTRADICTION"
+        assert rep["hold_corner_contradictions"][0]["kind"] == (
+            "assignments_disagree")
+        assert rep["hold_corner_contradictions"][0]["assigned"] == ["FF", "SS"]
+
+    def test_every_reachable_verdict_says_whether_the_corner_was_measured(
+            self):
+        """The three states, machine-readable rather than inferred.
+
+        A reader acting on `FAIL` alone cannot tell "the hold corner is the
+        wrong one" from "the hold corner was never read", and those call for
+        different repairs — one is a flow bug, the other is a checker that
+        must not be believed.
+        """
+        cases = {
+            "HOLD_AT_FF": (_banner_tcl("FF", _LIB_WITH_TOKEN), True),
+            "HOLD_NOT_AT_FF": (_banner_tcl("SS", _LIB_SLOW), True),
+            "HOLD_CORNER_CONTRADICTION": (
+                _banner_tcl("FF", _LIB_SLOW), False),
+            "HOLD_CORNER_UNRESOLVED": (
+                _banner_tcl("$corner", _LIB_WITH_TOKEN), False),
+            "NO_FEED_CORNER": (
+                "read_liberty /pdk/lib/acme_sc_core_lib.lib\n"
+                "report_checks -path_delay min\n", False),
+        }
+        for reason, (tcl, measured) in cases.items():
+            _v, _rc, rep = mod.evaluate(tcl)
+            assert rep["reason"] == reason, f"{reason}: got {rep['reason']}"
+            assert rep["hold_corner_measured"] is measured, reason
+        # and a PASS is only ever reachable from a MEASURED reading
+        for reason, (tcl, measured) in cases.items():
+            v, rc, _rep = mod.evaluate(tcl)
+            assert (v == "PASS") <= measured, (
+                f"{reason} reached PASS without measuring the corner")
+
+    def test_a_not_measured_script_is_not_masked_by_a_passing_stance(
+            self, tmp_path):
+        """PROJECT level — where "never PASS" is actually enforceable.
+
+        `_SEVERITY` ranks NOT CHECKED BELOW PASS on purpose, so putting the
+        third state in the rc=2 disclosed-skip tier would have let a stance
+        declaring `hold_process_corner: "FF"` swallow an unreadable script
+        whole and answer rc=0 PASS. MEASURED with the two branches returning
+        rc=2: `rc=0 PASS`, deciding source `stance`. Hence rc=1.
+        """
+        proj = tmp_path / "run"
+        (proj / "reports/phase3").mkdir(parents=True)
+        (proj / "reports/phase3/mcorner_ocv_stance.json").write_text(
+            json.dumps({"hold_process_corner": "FF",
+                        "setup_process_corner": "SS",
+                        "multi_process_corner": True, "report": "x.rpt"}))
+        (proj / "phase3/stage3/sta").mkdir(parents=True)
+        (proj / "phase3/stage3/sta/sta_mcorner_ocv_hold.tcl").write_text(
+            _banner_tcl("$::env(HOLD_CORNER)", _LIB_WITH_TOKEN))
+        verdict, rc, rep = mod.judge_project(proj)
+        assert (verdict, rc) == ("FAIL", 1)
+        assert rep["reason"] == "HOLD_CORNER_UNRESOLVED"
+        assert rep["deciding_source"] == "tcl"
+        assert rep["contradiction"] is True
+        assert {s["source"]: s["verdict"] for s in rep["sources"]} == {
+            "stance": "PASS", "tcl": "FAIL"}
+
+    def test_the_strict_key_set_excludes_the_ambiguous_keys(self):
+        """Which keys may declare "unreadable" is MEASURED, not preferred.
+
+        Across the 291 Tcl decks published under `benchmark-data/`, the values
+        `corner` / `view` / `mode` carry on a hold-view line are `max-RC`,
+        `min-RC`, `drive` and — on the emitter's own banner, `HOLD corner:
+        process=FF` — the nested string `process=FF`. None is a process-corner
+        claim, so a value they fail to resolve is not evidence that the
+        process corner went unstated. `process` / `pvt` / `operating_condition`
+        / `opcond` are unambiguous and carry the strict reading.
+        """
+        assert mod._process_assignment_sites("process=FF") == [
+            ("process", "FF")]
+        assert mod._process_assignment_sites("pvt: ss") == [("pvt", "ss")]
+        assert mod._process_assignment_sites("opcond=$::env(X)") == [
+            ("opcond", "$::env")]
+        # the ambiguous keys are NOT strict sites …
+        assert mod._process_assignment_sites("HOLD corner: max-RC") == []
+        assert mod._process_assignment_sites("view=hold_view mode=func") == []
+        # … but stay readable in the POSITIVE direction
+        assert mod._assigned_corners_in("corner=ff") == ["FF"]
+        # `set_operating_conditions` is a command, not an assignment
+        assert mod._process_assignment_sites(
+            "set_operating_conditions -analysis_type single ff_1p10v") == []
+
+    # ── REVERSE CONTROLS — green on BOTH sides, by design ────────────────
+
+    def test_reverse_the_shape_of_the_four_corroborated_flips_still_passes(
+            self):
+        """DO NOT LOSE THE REAL FIX.
+
+        The four corpus decks this branch's first commit turned from
+        FAIL(NO_FEED_CORNER) to PASS — caravel_user_project
+        clean_run_v1432_commercial and clean_run_v1432int_commercial, sha256
+        clean_run_v1461_0223, spm clean_run_v1432int_commercial — all carry
+        exactly this shape: a banner declaring FF beside a Liberty whose name
+        encodes no corner at all. Each is independently corroborated by its own
+        `mcorner_ocv_stance.json` (setup=SS, hold=FF, multi=True, setup and
+        hold reading DIFFERENT liberty files). If this test reddens, the
+        repair has been undone.
+        """
+        verdict, rc, rep = mod.evaluate(_banner_tcl("FF", _LIB_NO_TOKEN))
+        assert (verdict, rc) == ("PASS", 0)
+        assert rep["reason"] == "HOLD_AT_FF"
+        assert rep["view_line_assigned_corners"] == ["FF"]
+
+    def test_reverse_a_measured_slow_corner_is_still_a_measured_defect(self):
+        """The third state must not swallow the second.
+
+        Declaration and filename AGREEING at the slow corner is the defect
+        this gate was built for, and it is MEASURED — not a contradiction, not
+        unreadable. If every awkward line became "not measured", the gate
+        would stop naming the failure it exists to name.
+        """
+        verdict, rc, rep = mod.evaluate(_banner_tcl("SS", _LIB_SLOW))
+        assert (verdict, rc) == ("FAIL", 1)
+        assert rep["reason"] == "HOLD_NOT_AT_FF"
+        assert rep["judged_corners"] == ["SS"]
+
+    def test_reverse_an_rc_corner_assignment_is_not_a_process_claim(self):
+        """`# SETUP corner: max-RC   HOLD corner: min-RC` is published by the
+        SPEF emitter and appears verbatim in the corpus. `min-RC` is an
+        interconnect corner; reading it as an unresolved PROCESS corner would
+        redden a deck that never claimed one."""
+        tcl = ("read_liberty /pdk/lib/acme_sc__ff_n40C_1v95.lib\n"
+               'puts $_f "# SETUP corner: max-RC   HOLD corner: min-RC"\n'
+               "report_worst_slack -min\n")
+        verdict, rc, rep = mod.evaluate(tcl)
+        assert (verdict, rc) == ("PASS", 0)
+
+    def test_reverse_the_disclosed_skip_tier_is_unchanged(self):
+        """rc=2 still means what it meant: NO hold sign-off artefact at all.
+
+        The third state added above must not leak into this one — an absent
+        artefact and a self-contradictory artefact are different findings, and
+        only the first is a disclosed skip.
+        """
+        verdict, rc, rep = mod.judge_project(Path("/nonexistent/run"))
+        assert (verdict, rc) == ("NOT CHECKED", 2)
+        assert rep["reason"] == "NO_HOLD_SIGNOFF_ARTEFACT"
+        # a NAMED but missing input stays an honest FAIL, not a skip
+        assert mod.evaluate(None)[1] == 1
+
+    def test_the_third_state_is_rc_1_and_not_the_disclosed_skip_tier(self):
+        """Where the third state is FILED, pinned as a claim.
+
+        rc=2 would have been the tempting home for "could not measure", and it
+        is the wrong one: `_SEVERITY` ranks NOT CHECKED BELOW PASS, so at
+        project level a stance declaring FF would swallow it — see
+        `test_a_not_measured_script_is_not_masked_by_a_passing_stance`, which
+        is the same claim run end to end.
+        """
+        _v, rc_unmeasurable, _r = mod.evaluate(
+            _banner_tcl("$::env(X)", _LIB_WITH_TOKEN))
+        assert rc_unmeasurable == 1
