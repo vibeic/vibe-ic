@@ -1433,6 +1433,21 @@ run "flow-gate grid" "$PLUGIN" python3 programs/flow_gate_grid.py
 
 run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_check.py
 
+# The same flow document's OTHER graph: the `closed_loop` edges. Wired here
+# because it was the SEVENTH name that `checker_execution_wiring_audit` and
+# `gate_is_wired_check` both reported, and the only reason both exited 1 —
+# `closed_loop_edge_check` landed with no flow gate clause, and its one
+# non-comment consumer was a file under `programs/tests/`, which is not a wiring
+# surface. A gate reachable only from a test does not run on a design, so the
+# check that made `closed_loop` declarations falsifiable was itself consulted by
+# no automatic verdict (docs/PPA_CURRENT_STATE.md section 5).
+#
+# rc RE-MEASURED on this base before wiring, not carried over from another tree:
+# rc 0, "checked 22 declared closed_loop edge(s) over 69 step(s); every edge
+# resolves to a declared step, closes a loop, carries a trigger, and leaves a
+# step whose gate can produce a verdict."
+run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py"
+
 # The census the two gates above feed into, and the one thing in this family that
 # a HUMAN had to remember to run.
 #
