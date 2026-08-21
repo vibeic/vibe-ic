@@ -524,3 +524,58 @@ carrying its own acceptance evidence rather than at the end of this one.
 7. **`phase3_one_shot_runner`'s discarded exit code** (section 6) — recorded as
    the `REPORT` channel, not fixed. If you want the crash path closed, the fix
    is a staleness check in `_derive_headline_verdict`, not a plumbing change.
+
+---
+
+## MERGE ONTO v1.11.51 (by the matrix substrate owner)
+
+This branch was cut at v1.11.33, before `jmatrix/63x8-main-reds` landed as
+v1.11.44. Four of its six commits are INDEPENDENT re-derivations of the same
+findings; three dropped as already upstream on rebase. The branch is not wrong,
+it is early — and where the two lanes disagreed, a test decided, never a
+preference. Per file:
+
+| file | kept | what decided it |
+|---|---|---|
+| `test_matrix_63x8_ledger.py` | **both notes, jm9's constants** | jm9 owns the DIMENSION axis (`DIMS 8→9`, `CELLS 552→621`); the landed note owns the STEP axis. Independent, so keeping only the later note loses why the earlier number moved. |
+| `test_matrix_63x8_ledger.py` (entries) | **neither — re-derived** | landed 163/121, jm9 162/120, the live tree **164/122**. A third entry (step 31 `drc_signoff.json`) landed after both notes. |
+| `test_matrix_d2_falsifiable.py` | **jm9's fixture**, duplicate key removed | Both lanes wrote a `CLAUSE_FIXTURE` entry under the SAME dict key — the second silently won, the first was dead code reading as live. Both redden, neither is `ABSENCE_RED`; jm9's reaches `CLX_NOT_EQUIVALENT`, the relation the step exists for, through the program's own status ladder. |
+| `test_matrix_d8_missing_caught.py` | **jm9's reading** | Its own `test_the_two_readings_of_self_written_agree`, written for this merge, decided it. |
+| `matrix_mutation_ledger.py` | **landed notes** | Eight conflicts, all comment-style; both lanes recorded REDDENED for the same twelve mutations. The landed notes carry the replay timings. Verified: 12 mutations carry `1.6x`, `measured.reddened == len(applies_to)` for every one. |
+
+### The d8 decision, because it went against the substrate owner
+
+Two lanes answered "is this row gradable?" two ways — yaml INFERENCE
+(`_gate_written_paths`) and on-disk MEASUREMENT (`_survived_the_gate`). They part
+on step 2:
+
+    step 2    reports/phase2/lint/rtl_hygiene.json
+              the gate command NAMES it as a --json target   (inference: not gradable)
+              the file SURVIVED the gate on disk             (measurement: gradable)
+    step 1.6x named, and did NOT survive — both readings agree
+
+A `--json` flag is an intention; only the disk says what happened. The inference
+over-predicts for any clause whose program does not run. So
+`CONTENT_ARM_UNGRADABLE_SELF_WRITTEN` drops to `("1.6x",)` and step 2 goes BACK
+into `CONTENT_ARM_BLIND` — removing it was the substrate owner's error, and the
+measurement restores it. The divergence itself is pinned in BOTH directions so
+the test still fires for a new one; its message anticipated one direction and the
+measured case is the other.
+
+### Measured
+
+Nine-dimension census regenerated: **621 cells, 621/621 accounted**, 60 anchored
+figures fresh. `test_matrix_d8_missing_caught.py` 347 passed.
+
+By TEST ID over all `test_matrix_*` files, serially in the container:
+
+| | failed | passed |
+|---|---|---|
+| bare `origin/main` v1.11.51 | 39 | 1119 |
+| this branch | **34** | **1209** |
+
+**Introduced: 0** (`comm -13` empty). **Closed: 5** — the three census-freshness
+IDs, the figure-coverage ID, and the entries pin. The 34 that remain are red on
+bare main and are outside this lane.
+
+`git diff --stat origin/main..HEAD` is 16 files — lane-sized.
