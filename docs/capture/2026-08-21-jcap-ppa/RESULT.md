@@ -1583,6 +1583,31 @@ Not "sixteen verified guards", and not a bare name count either. The claims are
 demonstrably not resting on tests that assert only the happy path, and the
 residual is a regex's blind spot rather than a doubt about the guards.
 
+**And then the question was answered by EXECUTION rather than by inspection**,
+for the three findings the brief singles out. Everything above reads code; a
+named negative arm can still be vacuous, so each guard was made to fail by
+breaking the product it protects, one line at a time:
+
+    F-4  a carrier declaration changed to the wrong envelope
+         -> 1 failed  test_the_three_shipped_producers_write_documents_the_consumer_READS
+    F-5  an area metric named `…_um2` declared with unit `count`
+         -> 2 failed  test_no_declared_unit_contradicts_its_metric_name
+    F-9  the value comparison collapsed so a conflict reads as corroboration
+         -> 5 failed  test_the_SAME_bytes_giving_TWO_values_is_a_parser_defect
+
+Baseline before each: 13 passed. **Each failure NAMES the class it is supposed to
+catch** — which is the part that matters, because a guard can go red and be
+uninformative, and a red that names something else is not coverage of this class.
+Each mutation was reverted immediately and the working tree confirmed
+byte-identical afterwards (`git diff --exit-code`, zero dirty entries, three
+times).
+
+This is deliberately NOT wired into `verify.py`. A verifier that edits the
+product tree to prove a point is a verifier that can leave the tree edited, and
+this batch already records what an unnoticed tree write costs. The procedure is
+written down here so it can be repeated by hand; the three commands are in the
+list above.
+
 ## The honest sentences, checked verbatim against the records
 
 The deliverable owes, *"for each Bucket B/C/D, the one honest sentence the ladder
