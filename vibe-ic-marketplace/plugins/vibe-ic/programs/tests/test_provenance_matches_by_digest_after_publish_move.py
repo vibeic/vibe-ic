@@ -138,15 +138,17 @@ def test_end_to_end_a_tampered_artefact_still_fails(tmp_path):
 def test_the_published_cells_that_moved_their_gds_resolve():
     """The three cells that motivated this. Without the digest route they
     report the GDS as undeclared — a FAIL for a publish-time move."""
-    cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.9.94_sky130A",
+    cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.10.18_sky130A",
              "spm/v1.9.96_gf180mcuD"]
-    seen = 0
+    seen, absent = 0, []
     for name in cells:
         d = _CORPUS / name
         if not (d / "provenance.jsonl").is_file():
+            absent.append(name)
             continue
         gds = list((d / "phase3" / "stage4" / "gds").glob("*.gds"))
         if not gds:
+            absent.append(f"{name} (no GDS)")
             continue
         seen += 1
         r = subprocess.run(
@@ -157,4 +159,12 @@ def test_the_published_cells_that_moved_their_gds_resolve():
         assert r.returncode == 0, (name, r.stdout + r.stderr)
     if seen == 0:
         pytest.skip("published corpus not checked out")
-    assert seen == 3, f"only {seen} of 3 cells present"
+    # DERIVED FROM THE ROSTER ABOVE, not typed beside it. The literal `3` was
+    # `len(cells)` written a second time, so editing the roster silently made
+    # the two disagree — and when a cell was withdrawn the message said "only 2
+    # of 3" without naming which. The claim is unchanged: this test names
+    # specific cells and a missing one is a real finding, not a smaller run.
+    assert seen == len(cells), (
+        f"{len(absent)} of the {len(cells)} cell(s) this test names are no "
+        f"longer published: {absent}. Either they were withdrawn — in which "
+        f"case pick their successors — or the roster is stale.")

@@ -37,6 +37,20 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parents[1] / "formal_harness_gen.py"
 
+#: Bound for the launch in `_run`. NOT a round number picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed.
+#: The landed value was 120. MEASURED here: this generator runs against a
+#: three-module Verilog string held in this file and takes 0.05 s worst of 5
+#: calls, so 60 s is ~1200x headroom and the bound is a hang detector, which is
+#: all it was ever meant to be.
+_GEN_TIMEOUT_S = 60
+
 
 def _run(tmp_path: Path, rtl: str, top: str) -> dict:
     src = tmp_path / "design.v"
@@ -45,7 +59,7 @@ def _run(tmp_path: Path, rtl: str, top: str) -> dict:
     subprocess.run(
         [sys.executable, str(PROG), "--rtl", str(src), "--top", top,
          "--out", str(tmp_path / "harness.sv"), "--json", str(out_json)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=_GEN_TIMEOUT_S)
     return json.loads(out_json.read_text())
 
 

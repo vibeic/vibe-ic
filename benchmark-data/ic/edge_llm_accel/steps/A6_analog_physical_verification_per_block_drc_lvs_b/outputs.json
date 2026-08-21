@@ -1,8 +1,0 @@
-{
-  "id": "A6",
-  "name": "Analog Physical Verification (per-block DRC + LVS before merge)",
-  "status": "na",
-  "phase": "analog",
-  "folder": "A6_analog_physical_verification_per_block_drc_lvs_b",
-  "outputs": []
-}

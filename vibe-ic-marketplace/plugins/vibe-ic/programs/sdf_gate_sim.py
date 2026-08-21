@@ -46,6 +46,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 try:
     import _path_layout as _pl
@@ -779,7 +781,7 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
         **parsed,
     }
     log_text = build_results_log(meta, sim_stdout)
-    (sim_dir / "results.log").write_text(log_text)
+    _aa.write_text(sim_dir / "results.log", log_text)
     # sha256×sky130A / #SS-SETUP — on a PASS, also drop the pass.flag Step 29's
     # gate_predicate (files_exist: [results.log, pass.flag]) checks, so EVERY
     # audit path (required_outputs OR-gate and the strict gate_predicate AND-gate)
@@ -787,10 +789,10 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
     # audit and the final audit can disagree on a race. Written only from the
     # real PASS verdict (never fabricated).
     if str(parsed.get("verdict")) == "PASS":
-        (sim_dir / "pass.flag").write_text(
+        _aa.write_text(sim_dir / "pass.flag",
             f"PASS {parsed.get('passed')}/{parsed.get('total')} vectors "
             f"(sdf_gate_sim; post-layout gate-level functional sim)\n")
-    (sim_dir / "results.json").write_text(json.dumps({
+    _aa.write_text(sim_dir / "results.json", json.dumps({
         "program": "sdf_gate_sim", "version": "1.0.0",
         "verdict": parsed["verdict"],
         "annotated_interconnect_delays": parsed["annotated_interconnect_delays"],

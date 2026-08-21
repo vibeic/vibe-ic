@@ -592,3 +592,155 @@ def test_one_physical_report_reached_by_two_globs_is_not_a_disagreement(
     rep = G.check(run)
     assert rep.orchestrator["source"] == "strictest_phase"
     assert "candidates" not in rep.orchestrator
+
+
+# ===========================================================================
+# vibe-ic#883 — THE COMPLETION AUDIT IS A VERDICT SOURCE TOO.
+#
+# The module's docstring cited `phase23_completion_audit.json` from the day it
+# was written and never read it. Because an AGGREGATE report short-circuits the
+# candidate search, a FAIL audit sat invisibly behind a PASS aggregate — and the
+# check returned exit 0 on the exact deliverable-over-FAIL shape it exists to
+# catch. Measured on the shipped tree
+# benchmark-data/ic/caravel_user_project/v1.9.43_sky130A; the false certificate
+# stood 6 days and was retired by a human, not by this gate.
+#
+# These tests are the defect-direction mutation for that escape: revert the fix
+# and the first two FAIL.
+# ===========================================================================
+def _add_audit(run: Path, verdict: str,
+               name: str = "phase23_completion_audit.json") -> Path:
+    d = run / "reports" / "audit"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / name
+    p.write_text(json.dumps({"phase": "all", "verdict": verdict}, indent=2))
+    return p
+
+
+def test_defect_pass_aggregate_hides_fail_completion_audit(tmp_path):
+    """THE #883 escape, reproduced exactly: deliverable PASS, aggregate
+    orchestrator PASS, completion audit FAIL. The aggregate must NOT be allowed
+    to short-circuit past the audit."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS_WITH_WAIVERS")
+    _add_audit(run, "FAIL")
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", rep.state
+    assert rep.rc == 1
+    # The audit must be NAMED as the source, so a reader can see which record
+    # decided it rather than having to infer it.
+    assert "completion_audit" in str(rep.orchestrator.get("source"))
+    assert rep.orchestrator["verdict"] == "FAIL"
+    # And the displaced value is retained: a choice was made, not hidden.
+    assert rep.orchestrator["displaced"]["verdict"] == "PASS_WITH_WAIVERS"
+
+
+def test_defect_fail_audit_beats_pass_when_no_aggregate_exists(tmp_path):
+    """Same escape through the per-phase lane rather than the aggregate lane."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS",
+                 orch_name="phase3_one_shot.json")
+    _add_audit(run, "FAIL")
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", rep.state
+    assert rep.rc == 1
+
+
+def test_lenient_audit_never_overrides_a_strict_orchestrator(tmp_path):
+    """The asymmetry is preserved. A PASS audit must NOT rescue a deliverable
+    from a FAIL orchestrator — that would open the escape from the other side."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL")
+    _add_audit(run, "PASS")
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", rep.state
+    assert rep.rc == 1
+
+
+def test_underclaiming_over_a_fail_audit_is_still_not_a_failure(tmp_path):
+    """Honest direction: deliverable FAIL over an audit FAIL is consistent, and
+    a deliverable stricter than the record is never punished."""
+    run = _mkrun(tmp_path, deliverable=_FAIL_MD, orch_verdict="PASS")
+    _add_audit(run, "FAIL")
+    rep = G.check(run)
+    assert rep.rc == 0, rep.state
+
+
+def test_audit_absent_changes_nothing(tmp_path):
+    """No audit in the tree -> byte-identical behaviour to before #883."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    rep = G.check(run)
+    assert rep.rc == 0, rep.state
+    assert rep.orchestrator["source"] == "aggregate"
+
+
+def test_agreeing_audit_is_recorded_even_when_it_changes_nothing(tmp_path):
+    """A consulted-and-agreed audit must still be visible in the evidence, or
+    'the audit was read' and 'there was no audit' look identical."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    _add_audit(run, "PASS")
+    rep = G.check(run)
+    assert rep.rc == 0, rep.state
+    assert rep.orchestrator["audit_verdict"] == "PASS"
+
+
+# ===========================================================================
+# vibe-ic#897 — AN UNREADABLE SECOND OPINION MUST NOT READ AS AGREEMENT.
+#
+# `_load_verdict_json` collapses missing / wrong-key / empty / zero-byte /
+# malformed into ONE `None`, so "there is no audit" and "the audit is corrupt"
+# arrived identically — and the gate printed "agrees in polarity" having read
+# one record while the run shipped two. Four of the five measured silencing
+# edits now DISCLOSE. The fifth (delete the file) still passes, and that is
+# stated rather than papered over: an absent file is genuinely
+# indistinguishable from a run that never produced one.
+# ===========================================================================
+def _audit(run: Path, body: str | None, name="phase23_completion_audit.json"):
+    d = run / "reports" / "audit"
+    d.mkdir(parents=True, exist_ok=True)
+    if body is not None:
+        (d / name).write_text(body)
+
+
+@pytest.mark.parametrize("body,label", [
+    (json.dumps({"result": "FAIL"}), "wrong key"),
+    ("{}", "empty object"),
+    ("", "zero bytes"),
+    ("{not json", "malformed"),
+])
+def test_an_unreadable_audit_is_disclosed_not_called_agreement(
+        tmp_path, body, label):
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    _audit(run, body)
+    rep = G.check(run)
+    assert rep.verdict == "DISCLOSED", f"{label}: {rep.verdict} / {rep.state}"
+    assert rep.orchestrator.get("audit_unreadable"), label
+    assert "did not parse" in rep.reason.lower(), label
+    # Still not a FAIL: an unreadable record is not evidence of contradiction,
+    # and failing here would adjudicate a question the gate just said it
+    # cannot put.
+    assert rep.rc == 0, label
+
+
+def test_a_readable_agreeing_audit_is_still_a_clean_pass(tmp_path):
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    _audit(run, json.dumps({"verdict": "PASS"}))
+    rep = G.check(run)
+    assert rep.verdict == "PASS" and rep.state == "CONSISTENT", rep.state
+    assert not rep.orchestrator.get("audit_unreadable")
+
+
+def test_a_readable_fail_audit_still_beats_a_pass_aggregate(tmp_path):
+    """The #883 behaviour must survive the #897 change."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    _audit(run, json.dumps({"verdict": "FAIL"}))
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", rep.state
+    assert rep.rc == 1
+
+
+def test_no_audit_file_at_all_is_not_reported_as_unreadable(tmp_path):
+    """The honest limit of this fix, pinned so it cannot drift silently: an
+    ABSENT audit is indistinguishable from a run that never produced one, so
+    it stays a clean PASS and is NOT claimed as a lost second opinion."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    rep = G.check(run)
+    assert rep.verdict == "PASS", rep.verdict
+    assert not rep.orchestrator.get("audit_unreadable")

@@ -131,6 +131,66 @@ def _capture_container_image(project: Path, container: str,
     return rec
 
 
+def _capture_pdk_revision(project: Path, container: str) -> Dict[str, Any]:
+    """Record WHICH PDK REVISION this run signed off against, into
+    `reports/pdk_revision.json`.
+
+    THE OTHER HALF OF `_capture_container_image`. That function exists because
+    a run's tool identity was unrecorded and every sign-off number was
+    therefore unattributable to a toolchain. The PDK half of the same claim was
+    unrecorded too, and worse: every place a run said anything about its PDK
+    said the REQUEST — `--pdk <name>`, `env_PDK_ROOT`, the registry entry, the
+    published cell's own directory name. None of them names the revision the
+    tools actually read, so two runs against a re-pulled volume are identical
+    in the record and were measured against different data.
+
+    Called AFTER the phases, not before, and the order is load-bearing:
+    `pdk_revision_resolve --from-run` derives the trees from the absolute
+    library paths in the run's OWN tool logs — what RAN, rather than what was
+    configured — and those logs do not exist yet at the point the image
+    identity is taken.
+
+    BEST-EFFORT FOR THE RUN, BLOCKING AT PUBLISH. This never fails a run: the
+    record's job is to state what was found, including "NOT DETERMINED", and a
+    run that halted early or was told --skip-phase3 legitimately has no PDK to
+    name. `benchmark_evidence_publish` is where the record becomes a
+    requirement, because that is the act — publishing a sign-off number — that
+    the missing revision makes unreproducible.
+    """
+    out = _pl.reports_dir(project) / "pdk_revision.json"
+    try:
+        import pdk_revision_resolve as _prr
+        fs = _prr.Fs(container)
+        trees, scanned = _prr.candidate_trees_from_run(project, fs)
+        resolved = [_prr.resolve_tree(fs, t) for t in trees]
+        rec = _prr.build_record(
+            resolved, f"container:{container}", "run tool logs",
+            note=(f"derived from {scanned} tool log(s) under {project}; "
+                  f"{len(trees)} tree(s) offered a declared-revision artefact"))
+        if not trees:
+            rec["reason"] = (
+                f"no PDK tree was derivable from this run: {scanned} tool "
+                f"log(s) scanned, none naming an absolute library path under a "
+                f"tree that declares a revision. A run with no physical "
+                f"implementation is in this state legitimately; a run that "
+                f"placed and routed is not.")
+    except Exception as exc:                                # noqa: BLE001
+        rec = {"schema": 1,
+               "resolved": False,
+               "revision": None,
+               "trees": [],
+               "read_in": f"container:{container}",
+               "derived_from": "run tool logs",
+               "reason": f"the PDK revision could not be resolved: "
+                         f"{type(exc).__name__}: {exc}"}
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    return rec
+
+
 def _deliverable_self_check(project: Path) -> Dict[str, Any]:
     """v1.3.51 FINALIZE self-check: run run_output_completeness_check on this
     run_dir so the run self-verifies its own deliverable before claiming done.
@@ -543,6 +603,28 @@ def main() -> int:
                         "route-plateauing low utilization on a fixed 1500x1500 die")
     p.add_argument("--util", type=float, default=0.4)
     p.add_argument("--pdk", default="auto")
+    # vibe-ic 87ad3dfdf — THE REFUSAL NAMED A FLAG THIS ENTRY POINT COULD NOT
+    # EXPRESS. `--allow-pdk-target-mismatch` existed only on
+    # phase3_one_shot_runner. This runner is the canonical front door
+    # (`/vibe-ic-all`) and forwarded ONLY --allow-oss-pdk-fallback, so a
+    # DELIBERATE cross-PDK port was unreachable from it: the user hit
+    # "declared PDK != resolved PDK, REFUSED", read a message telling them to
+    # pass a flag, and had no way to pass it without abandoning the front door
+    # and driving phase 3 by hand.
+    #
+    # The refusal itself is CORRECT and stays: measured on sha256 x gf180mcuD,
+    # L19 derives pdk_target=sky130 from L1, and L7's 9-corner sign-off table
+    # plus L9's SDC are sky130_fd_sc_hd-specific — so gf180 numbers cannot
+    # claim that sign-off. (Control: spm's L1 names gf180mcuD as a SECOND
+    # target with its own library, period and utilisation, which is why
+    # spm x gf180mcuD converges legitimately.) What was missing was the
+    # documented way to SAY "I know, measure it anyway and disclose it".
+    p.add_argument("--allow-pdk-target-mismatch", action="store_true",
+                   help="Pass through to phase3: acknowledge IN WRITING that "
+                        "the PDK being measured is NOT the one the design's "
+                        "own L-docs declare. The run is then a DISCLOSED "
+                        "cross-PDK port — it may not claim the design's L7 "
+                        "sign-off, whose corners are declared per-PDK.")
     p.add_argument("--allow-oss-pdk-fallback", action="store_true",
                    help="Pass through to phase3: acknowledge an "
                         "open-source in-container PDK fallback even "
@@ -884,6 +966,8 @@ def main() -> int:
                    "--pdk", args.pdk]
         if getattr(args, "allow_oss_pdk_fallback", False):
             p3_args.append("--allow-oss-pdk-fallback")
+        if getattr(args, "allow_pdk_target_mismatch", False):
+            p3_args.append("--allow-pdk-target-mismatch")
         rc = _run_phase("PHASE 3 (synth → PnR → GDS → DRC → LVS)",
                          runner, p3_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase3_one_shot.json"))
@@ -939,6 +1023,16 @@ def main() -> int:
     else:
         plan.append(("mixed_signal", "SKIPPED", 0))
 
+    # ---------------- What this run signed off AGAINST ----------------
+    # Taken here rather than beside the image capture because it reads the
+    # run's own tool logs, which do not exist until the phases have run.
+    _pdk_rec = _capture_pdk_revision(project, args.container)
+    if not _pdk_rec.get("resolved"):
+        advisories.append(
+            f"PDK revision NOT RECORDED: {_pdk_rec.get('reason')} — this run's "
+            f"sign-off cannot be re-derived, and benchmark_evidence_publish "
+            f"will REFUSE to stage it (see reports/pdk_revision.json)")
+
     # ---------------- Aggregate ----------------
     digital_verdicts = [v for n, v, _ in plan
                         if n not in ("analog", "mixed_signal")
@@ -956,6 +1050,9 @@ def main() -> int:
         # published number is attributable to a toolchain without a second
         # file lookup.
         "container_image": _img_rec,
+        # WHICH PDK REVISION the run signed off against — the other half of
+        # the same attribution, and the half nothing recorded before.
+        "pdk_revision": _pdk_rec,
         "verdict": overall,
     }
     # v1.6.32: emit canonical final_summary.md (best-effort). Note that

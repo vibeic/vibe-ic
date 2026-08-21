@@ -1,7 +1,39 @@
 #!/usr/bin/env python3
 """Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 
-THIS GATE BLOCKS (rc=1).
+THIS GATE BLOCKS (rc=1) — a statement about this program's VERDICT SEVERITY,
+not about where its verdict is consumed. Those are two different axes, and the
+second one is declared immediately below: a gate that says nothing about it is
+the defect `flow_gate_enforcement_audit` exists to catch, and silence there is
+not a decision.
+
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 21 while step 21 is running. What it DOES have, and this is why `advisory`
+here is not "ignorable": it is a gate leg of step 21 in the flow's BLOCKING
+slot (`program_exit_zero`, never `advisory_program_exit_zero`), so when
+`flow_compliance_check` evaluates that clause an rc=1 FAILs the step, and that
+verdict reaches the run's headline through
+`reports/audit/phase23_completion_audit.json`, which
+`phase3_one_shot_runner._derive_headline_verdict` reads. MEASURED on a copy of
+a published run-root: the evaluator's own step report lists this program under
+step 21's `measures`. What `flow_gate_enforcement_audit` scores is the narrower
+question "can this verdict stop the step it guards", and the answer there is
+no; `advisory` is that audit's token for that answer.
+
+WHY IT IS NOT PROMOTED TO INLINE-BLOCKING, MEASURED. The one inline pattern the
+phase-3 runner has — `_DECLARED_SIGNOFF_GATES` / `_run_declared_signoff_gate` —
+routes every rc other than 0 and 1 to BLOCKED (non-green), deliberately, because
+for a sign-off gate "could not check" is not a pass. This gate's rc=2 means
+something different: no DEF, no macro LEF, no placed macro, or no OBS in any of
+them, i.e. there was legitimately no obstruction to cross. Over the 15 published
+phase-3 run-roots under `benchmark-data/ic`, invoked exactly as a caller would:
+rc 2 on all 15, rc 0 and rc 1 on none. Wiring it into that table would therefore
+turn every one of those published runs non-green for owning no macro
+obstruction, which is the false alarm this gate's own rc-2 branch was written to
+avoid. The flow's rc=2 -> VACUOUS_PASS encoding is the correct consumer; that
+table is not. Promotion needs an inline consumer that PRESERVES
+rc=2 -> VACUOUS_PASS at the step that owns the subject — a flow-owner change
+with its own blast radius, not a side effect of recording this decision.
 
 WHY IT EXISTS
 -------------
@@ -114,11 +146,27 @@ a staged macro LEF need not be named `macro*`, so discovery decided the verdict
 at least as much as the geometry did. A file's content answers "does this
 define a MACRO" directly; its path and name only guess at it.
 
-WHAT THIS FILE DOES NOT DO. It is not registered in
-`flow/phase1_phase2_phase3.yaml` and no runner invokes it; its only caller is
-`tools/ci/repo_hygiene_gates.sh`, under `run_tolerating_uncheckable`, over the
-tracked cells carrying `phase3/stage3/pnr/routed.def`. See #828 part 2 — not
-addressed here.
+WHERE IT RUNS (#828 part 2, closed). This file used to say: "It is not
+registered in `flow/phase1_phase2_phase3.yaml` and no runner invokes it; its
+only caller is `tools/ci/repo_hygiene_gates.sh`." A gate whose verdict is
+blocking and that no flow step runs enforces nothing on a real design — it
+reproduced this defect in seconds on a routed DEF and was never asked to.
+
+It is now a gate leg of STEP 21 (Routing), the step that PRODUCES routed.def,
+so the metal it examines exists by the time it is asked. The clause is
+UNCONDITIONAL — the sentence here previously said it was conditioned on staging
+a LEF, and the flow definition says the opposite in the comment above the clause
+itself: a `**/*.lef` trigger is what `flow_condition_reachability_check` calls
+SELF-DISABLING, so the gate is asked on every run and answers for itself. Every
+refusal it makes (no LEF at all, an incomplete LEF set, discarded OBS evidence,
+a truncated read) reaches the flow as rc=2 -> VACUOUS_PASS and is disclosed
+rather than passed. The CI caller in `tools/ci/repo_hygiene_gates.sh` is
+unchanged and still sweeps the tracked cells.
+
+SEE ALSO `macro_obs_load_parity_check`, which asks the prior question this gate
+cannot: whether the obstructions this file PARSES are the obstructions the tool
+LOADED. This gate reads the LEF with the plugin's own parser, so on a design
+whose OBS section the reader discarded it measures geometry the run never had.
 """
 from __future__ import annotations
 
@@ -128,6 +176,68 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+import _routed_checker_progress as _routed_progress
+import _semantic_child_progress as _semantic_progress
+
+
+PROGRESS_SCOPE = "routed-def:macro-obs-geometry-intersect"
+_ACTIVE_INPUT_PLAN: Optional[_routed_progress.FiniteInputPlan] = None
+
+
+def _read_input_text(path: Path) -> str:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.text_for(path, errors="replace")
+    return Path(path).read_text(errors="replace")
+
+
+def _is_default_routed_def(relative: str) -> bool:
+    path = Path(relative)
+    return (path.parent.as_posix() == "phase3/stage3/pnr"
+            and path.name.startswith("routed")
+            and path.suffix == ".def")
+
+
+def _default_macro_lef_population(project: Path) -> List[Path]:
+    """Historical triple-glob order before content-based LEF filtering."""
+    ordered: List[Path] = []
+    seen = set()
+    for pattern in (
+            "input/pdk/**/*.lef", "phase3/**/macro*.lef", "**/*.lef"):
+        for path in sorted(Path(project).glob(pattern)):
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path.absolute()
+            if resolved in seen or not path.is_file():
+                continue
+            seen.add(resolved)
+            ordered.append(path)
+    return ordered
+
+
+def _input_plan(project: Path) -> _routed_progress.FiniteInputPlan:
+    project = Path(project)
+    index = _routed_progress.IndexSnapshot(project)
+    routed = index.select(
+        _is_default_routed_def,
+        sorted(project.glob("phase3/stage3/pnr/routed*.def")),
+        population="macro OBS routed DEF population")
+    lefs = index.select(
+        lambda relative: relative.endswith(".lef"),
+        _default_macro_lef_population(project),
+        population="macro OBS LEF population")
+    reads = [
+        *_routed_progress.planned_reads("routed-def", routed),
+        *_routed_progress.planned_reads("macro-lef", lefs),
+    ]
+    return _routed_progress.FiniteInputPlan(
+        [index.population_unit("macro-obs:git-index")], reads)
+
+
+def semantic_progress_units(cell: Path) -> List[str]:
+    """Trusted parent's exact finite manifest for the default cell argv."""
+    return _input_plan(Path(cell)).units
 
 _MACRO_RE = re.compile(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$", re.S | re.M)
 _SIZE_RE = re.compile(r"^\s*SIZE\s+([\d.-]+)\s+BY\s+([\d.-]+)\s*;", re.M)
@@ -265,6 +375,11 @@ _PATH_HEAD_RE = re.compile(
 # coordinate may be `*`, which DEF defines as "repeat the one before it".
 _PATH_POINT_RE = re.compile(r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)(?:\s+-?\d+)?\s*\)")
 
+# `+ SHAPE <token>` — a per-PATH declaration, which is the whole point of
+# reading it here rather than over the net entry. See
+# `parse_routed_segments_with_gaps`.
+_SHAPE_RE = re.compile(r"\+\s*SHAPE\s+(\w+)", re.I)
+
 
 # A via placed INSIDE a wiring path: a bare identifier sitting between two
 # coordinate groups. LEF/DEF 5.8: "If you specify a via, layerName for the next
@@ -337,18 +452,24 @@ def _path_segments(body: str, head_layer: str,
     a partial denominator published as a clean verdict is the same defect this
     gate exists to catch, one scale down. So the abandonment is returned —
     `{via, layer_at_stop, points_read, points_unread}` — and every caller up to
-    the exit code carries it."""
+    the exit code carries it.
+
+    An abandonment is recorded only when coordinate points REMAIN. A path whose
+    unresolvable via is its last token left nothing unexamined, so reporting it
+    as abandoned reports a gap that does not exist — and because any gap forces
+    rc=2, one via-only entry withheld a verdict on the whole design. See the
+    comment at the via branch."""
     segs: List[Tuple[str, int, int, int, int]] = []
     layer = head_layer
     px: Optional[int] = None
     py: Optional[int] = None
     read = 0
 
-    def _stop(via: str, why: str) -> Tuple[List[Any], Dict[str, Any]]:
-        total = len(_PATH_POINT_RE.findall(body))
+    def _stop(via: str, why: str, unread: int
+              ) -> Tuple[List[Any], Dict[str, Any]]:
         return segs, {"via": via, "reason": why, "layer_at_stop": layer,
                       "head_layer": head_layer, "points_read": read,
-                      "points_unread": max(0, total - read)}
+                      "points_unread": unread}
 
     for tm in _PATH_TOKEN_RE.finditer(body):
         a, b, name = tm.group(1), tm.group(2), tm.group(3)
@@ -361,9 +482,32 @@ def _path_segments(body: str, head_layer: str,
             # the token is not vocabulary.
             if px is None or name.upper() in _PATH_KEYWORDS:
                 continue
+            # AN UNRESOLVABLE VIA COSTS NOTHING WHEN THE PATH ENDS AT IT.
+            # A via-only entry — `NEW <layer> 0 ( x y ) <viaName>` — is how DEF
+            # spells a bare via drop in a special net, and it is ordinary: a
+            # PDN's layer-to-layer stack is written that way. The via is the
+            # LAST token of its path, so there is no metal after it whose layer
+            # could be unknown, and a via is a point, which cannot SPAN an
+            # obstruction under any reading. Treating it as an abandoned path
+            # made this gate return rc=2 CANNOT DETERMINE for every design that
+            # contains one, i.e. for essentially every real PDN — a refusal
+            # earned by nothing that was actually left unexamined.
+            #
+            # The condition is COUNTED, not assumed: the remaining coordinate
+            # points are re-scanned from the via's own position. Where metal
+            # really does follow an unresolvable via the gap is recorded
+            # exactly as before, because that metal's layer really is unknown
+            # and this gate does not guess a layer on a verdict that blocks.
+            # Counting from the position (rather than `total - read`) also
+            # avoids the pre-existing off-by-one from a leading `*` point,
+            # which `read` never counts but `total` does.
+            unread = len(_PATH_POINT_RE.findall(body[tm.end():]))
             pair = via_layers.get(name)
             if pair is None:
-                return _stop(name, "via not defined in this DEF's VIAS section")
+                if not unread:
+                    break
+                return _stop(name, "via not defined in this DEF's VIAS section",
+                             unread)
             lo, hi = pair
             # the via connects two routing layers; move to whichever is not the
             # one we are on. If neither matches, the path is not describable.
@@ -372,7 +516,10 @@ def _path_segments(body: str, head_layer: str,
             elif layer.lower() == hi.lower():
                 layer = lo
             else:
-                return _stop(name, f"via connects {lo}/{hi}, path is on {layer}")
+                if not unread:
+                    break
+                return _stop(name, f"via connects {lo}/{hi}, path is on {layer}",
+                             unread)
             continue
         x = px if a == "*" else int(a)
         y = py if b == "*" else int(b)
@@ -399,7 +546,23 @@ def parse_routed_segments_with_gaps(
 
     `abandoned_paths` is the honest denominator. A path this parser could not
     follow to its end is metal it did not look at, and the caller must be able
-    to tell that from metal it looked at and cleared."""
+    to tell that from metal it looked at and cleared.
+
+    SHAPE IS A PROPERTY OF THE PATH, NOT OF THE NET. DEF states it per path
+    (`+ ROUTED <layer> <w> + SHAPE FOLLOWPIN`), and one supply net carries many
+    paths of different shapes — that is what a power grid IS: follow-pins on the
+    lowest layer and STRIPEs above them, all on the same net. Deriving the flag
+    from `"FOLLOWPIN" in entry`, i.e. from a substring of the WHOLE net entry,
+    labels every strap of a net that has any follow-pin anywhere as a follow-pin
+    itself. The label then names the wrong kind of metal on a gate whose finding
+    a person has to act on, and it cannot be off in the other direction, so it
+    reads as corroboration: every finding agreeing on the shape looks like a
+    coherent story about the cell rows.
+
+    The shape is read from the PATH's own text, and its absence means the path
+    declared none — not that a sibling path declared one. The head match is
+    searched too, because `_PATH_HEAD_RE` can consume a leading `+ SHAPE <tok>`
+    before the layer token."""
     segs: List[Dict[str, Any]] = []
     gaps: List[Dict[str, Any]] = []
     sec = re.search(r"^\s*SPECIALNETS\b(.*?)^\s*END\s+SPECIALNETS",
@@ -410,14 +573,17 @@ def parse_routed_segments_with_gaps(
     for entry in re.split(r"\n\s*-\s+", sec.group(1)):
         nm = re.match(r"\s*(\S+)", entry)
         net = nm.group(1) if nm else "?"
-        fp = "FOLLOWPIN" in entry
         heads = list(_PATH_HEAD_RE.finditer(entry))
         for i, hm in enumerate(heads):
             end = heads[i + 1].start() if i + 1 < len(heads) else len(entry)
-            path_segs, gap = _path_segments(
-                entry[hm.end():end], hm.group(1), via_layers)
+            body = entry[hm.end():end]
+            shm = _SHAPE_RE.search(hm.group(0) + " " + body)
+            shape = shm.group(1).upper() if shm else None
+            fp = (shape == "FOLLOWPIN")
+            path_segs, gap = _path_segments(body, hm.group(1), via_layers)
             for layer, x1, y1, x2, y2 in path_segs:
                 segs.append({"layer": layer, "net": net, "followpin": fp,
+                             "shape": shape,
                              "x1": min(x1, x2), "y1": min(y1, y2),
                              "x2": max(x1, x2), "y2": max(y1, y2)})
             if gap is not None:
@@ -596,8 +762,34 @@ def audit(def_text: str, macro_lef_texts: Sequence[str],
                         "inst": inst["inst"], "master": inst["master"],
                         "layer": layer, "net": s["net"],
                         "followpin": s["followpin"],
+                        "shape": s.get("shape"),
                         "seg": [s["x1"], s["y1"], s["x2"], s["y2"]],
                     })
+    # THE COMPARISON, PER LAYER — and the layers it never had metal for.
+    #
+    # A crossing can only be found on a layer where BOTH an obstruction rect and
+    # a supply segment exist. The verdict publishes one number over all layers,
+    # so a layer that contributed an obstruction but for which the reader
+    # produced NO segment at all is indistinguishable from a layer that was
+    # compared and came back clean. It is not the same fact, and it is the one
+    # the reader most needs: an upper-layer strap is normally reached THROUGH a
+    # via, so a truncated path removes that layer's metal entirely and the layer
+    # then silently drops out of the comparison while the total still reads as
+    # if it covered everything.
+    #
+    # Stated rather than inferred. `_no_segment_layers` is what this gate was
+    # SILENT about; it is not a finding and does not move the verdict.
+    _obs_layers = sorted({layer.lower()
+                          for m in placed
+                          for (layer, *_r) in with_obs[m["master"]]["obs"]})
+    _seg_layers = {s["layer"].lower() for s in segs}
+    _no_segment_layers = [ly for ly in _obs_layers if ly not in _seg_layers]
+
+    findings_by_layer: Dict[str, int] = {}
+    for _f in findings:
+        k = _f["layer"].lower()
+        findings_by_layer[k] = findings_by_layer.get(k, 0) + 1
+
     # #828 — the denominator this gate could not see. A master that is
     # PLACED but that no supplied LEF declares at all is a master whose OBS,
     # if it has one, was never in the comparison. Disclosed here rather than
@@ -642,6 +834,55 @@ def audit(def_text: str, macro_lef_texts: Sequence[str],
                                  for lbl, e in d],
             })
 
+    # WHY THE COUNT MAY NOT BE QUOTED AS A TOTAL.
+    #
+    # `len(findings)` is the number of crossings this comparison FOUND. It is
+    # the number of crossings that EXIST only when the comparison saw all of its
+    # own inputs. Three conditions, each already measured above, break that:
+    #
+    #   * an abandoned path      — supply metal whose layer is unknown, so it
+    #                              was never intersected with anything;
+    #   * discarded OBS evidence — obstruction rects the LEF set carried and the
+    #                              merge did not consume;
+    #   * a placed master with no LEF — a footprint whose obstructions, if any,
+    #                              were never in the comparison at all.
+    #
+    # Under any of them the number is a FLOOR. `main` already said so in prose
+    # at the bottom of a FAIL report; the report a consumer actually parses said
+    # nothing, so `len(rep["findings"])` was quotable as a total with no way to
+    # learn it was not one. The flag travels WITH the count, in the same object,
+    # because a caveat in a different place from the number it qualifies is a
+    # caveat that will be separated from it.
+    _floor_reasons: List[str] = []
+    if gaps:
+        _floor_reasons.append(
+            f"{len(gaps)} wiring path(s) abandoned before their end "
+            f"({sum(g['points_unread'] for g in gaps)} coordinate point(s) "
+            f"unread) — that supply metal was never intersected")
+    if discarded:
+        _floor_reasons.append(
+            f"{len(discarded)} placed master(s) had OBS rect(s) in the LEF set "
+            f"that this comparison did not consume")
+    if without_lef:
+        _floor_reasons.append(
+            f"{len(without_lef)} placed master(s) have no LEF declaration in "
+            f"the set that was read, so their obstructions — if any — were "
+            f"never compared")
+    # NOT a floor reason on its own, and the distinction is the whole point. A
+    # macro may declare an obstruction on a layer the design simply carries no
+    # supply metal on; 0 findings there is then a TRUE clearance, and calling it
+    # a gap would be this gate crying wolf. It becomes a gap only in the
+    # presence of truncation — an upper-layer strap is normally reached THROUGH
+    # a via, so an abandoned path removes that layer's metal entirely and the
+    # layer drops out of the comparison while the total reads as if it covered
+    # everything. That conjunction is the condition, and it is stated as one.
+    if gaps and _no_segment_layers:
+        _floor_reasons.append(
+            "no supply segment was read on obstruction layer(s) "
+            + ", ".join(_no_segment_layers)
+            + " AND the read was truncated, so metal on those layer(s) may "
+              "exist unread — a count of 0 there is silence, not a clearance")
+
     return {
         "masters_with_obs": sorted(with_obs),
         "placed_instances": len(placed),
@@ -656,6 +897,16 @@ def audit(def_text: str, macro_lef_texts: Sequence[str],
         "truncated_paths": gaps,
         "unread_points": sum(g["points_unread"] for g in gaps),
         "findings": findings,
+        # The count, and whether it may be read as a total. See above.
+        "findings_count": len(findings),
+        "findings_by_layer": findings_by_layer,
+        "count_is_floor": bool(_floor_reasons),
+        "count_floor_reasons": _floor_reasons,
+        # Layers an obstruction was declared on and for which the reader
+        # produced no supply metal. The gate is SILENT about these; a 0 in
+        # `findings_by_layer` for such a layer is not a clean result.
+        "obs_layers_compared": _obs_layers,
+        "obs_layers_with_no_supply_segment_read": _no_segment_layers,
         "placed_masters": len(placed_masters),
         "masters_declared_by_lef": sorted(obs_by_master),
         "placed_masters_without_lef": without_lef,
@@ -692,19 +943,16 @@ def discover_macro_lefs(proj: Path) -> List[Path]:
 
     chip-AGNOSTIC: pure LEF grammar; no vendor, PDK or path literal beyond
     the two legacy globs it preserves."""
-    ordered: List[Path] = []
-    seen = set()
-    for pat in ("input/pdk/**/*.lef", "phase3/**/macro*.lef", "**/*.lef"):
-        for p in sorted(proj.glob(pat)):
-            rp = p.resolve()
-            if rp in seen or not p.is_file():
-                continue
-            seen.add(rp)
-            ordered.append(p)
+    if _ACTIVE_INPUT_PLAN is not None:
+        # The held, verified population is the decision input.  Re-globbing or
+        # restatting the pathname here would reopen a transient TOCTOU window.
+        ordered = _ACTIVE_INPUT_PLAN.paths("macro-lef")
+    else:
+        ordered = _default_macro_lef_population(proj)
     out: List[Path] = []
     for p in ordered:
         try:
-            text = p.read_text(errors="replace")
+            text = _read_input_text(p)
         except OSError:
             continue
         if _MACRO_RE.search(text):
@@ -721,12 +969,37 @@ def main(argv=None) -> int:
     ap.add_argument("--json", dest="json_out", type=Path, default=None)
     a = ap.parse_args(argv)
 
+    global _ACTIVE_INPUT_PLAN
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        try:
+            if progress.enabled:
+                if (a.def_path is not None or a.macro_lefs is not None
+                        or a.json_out is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "routed parent progress covers the default DEF/LEF "
+                        "population only")
+                _ACTIVE_INPUT_PLAN = _input_plan(a.project_dir)
+                _ACTIVE_INPUT_PLAN.materialize(progress)
+            rc = _main_parsed(a)
+            if _ACTIVE_INPUT_PLAN is not None:
+                _ACTIVE_INPUT_PLAN.checkpoint_decision(
+                    fresh_plan=_input_plan(a.project_dir))
+            return rc
+        finally:
+            _ACTIVE_INPUT_PLAN = None
+
+
+def _main_parsed(a) -> int:
+
     proj = a.project_dir
     def_p = a.def_path
     if def_p is None:
-        cands = sorted(proj.glob("phase3/stage3/pnr/routed*.def"))
+        cands = (_ACTIVE_INPUT_PLAN.paths("routed-def")
+                 if _ACTIVE_INPUT_PLAN is not None else
+                 sorted(proj.glob("phase3/stage3/pnr/routed*.def")))
         def_p = cands[0] if cands else None
-    if def_p is None or not def_p.is_file():
+    if (def_p is None
+            or (_ACTIVE_INPUT_PLAN is None and not def_p.is_file())):
         print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no routed DEF "
               f"under {proj}. NOT a pass.", file=sys.stderr)
         return 2
@@ -738,7 +1011,7 @@ def main(argv=None) -> int:
     labels = []
     for p in lefs:
         try:
-            texts.append(p.read_text(errors="replace"))
+            texts.append(_read_input_text(p))
         except OSError:
             continue
         labels.append(str(p))
@@ -749,7 +1022,7 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
-    rep = audit(def_p.read_text(errors="replace"), texts, labels)
+    rep = audit(_read_input_text(def_p), texts, labels)
     if a.json_out:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)
         a.json_out.write_text(json.dumps(rep, indent=2) + "\n")
@@ -812,25 +1085,61 @@ def main(argv=None) -> int:
         if len(gaps) > 8:
             print(f"   … {len(gaps) - 8} more")
 
+    is_floor = rep["count_is_floor"]
+
+    def _name_the_floor() -> None:
+        """Say WHY the number is a floor, next to the number itself."""
+        print("\n  THIS COUNT IS A FLOOR, NOT A TOTAL — it is what this "
+              "comparison found, not\n  what the layout contains, because the "
+              "comparison did not see all of its\n  own inputs:")
+        for r in rep["count_floor_reasons"]:
+            print(f"   - {r}")
+
     if f:
         fp = sum(1 for x in f if x["followpin"])
-        print(f"[FAIL] {len(f)} supply segment(s) SPAN a placed macro's declared "
-              f"obstruction ({fp} of them follow-pins):")
+        # "at least N", not "N", whenever the read was incomplete. The gate
+        # already conceded this in prose at the BOTTOM of the report, three
+        # screens below the number a reader quotes — and a caveat that far from
+        # its number is a caveat that gets separated from it. The headline is
+        # the only place that cannot be read without the qualifier.
+        _n = f"at least {len(f)}" if is_floor else f"{len(f)}"
+        _fpn = f"at least {fp}" if is_floor else f"{fp}"
+        print(f"[FAIL] {_n} supply segment(s) SPAN a placed macro's declared "
+              f"obstruction ({_fpn} of them follow-pins):")
         for x in f[:12]:
+            # The path's OWN declared shape, not a flag derived from a
+            # substring of the whole net entry. `SHAPE (none)` is a real and
+            # different fact from `SHAPE STRIPE`, so it is printed rather than
+            # collapsed into the absence of a FOLLOWPIN token.
             print(f"   {x['inst']} ({x['master']}) {x['layer']}: net {x['net']}"
-                  f"{' FOLLOWPIN' if x['followpin'] else ''}  seg {x['seg']}")
+                  f"  SHAPE {x.get('shape') or '(none)'}  seg {x['seg']}")
         if len(f) > 12:
             print(f"   … {len(f) - 12} more")
         print("\n  A macro OBS is the vendor's statement of where the integrator "
               "may not put\n  metal. It is not in the PDK deck, so sign-off DRC "
               "cannot see this; and the\n  wire is attached to the right net, so "
               "a connectivity audit cannot either.")
+        # The per-layer split, published BY the gate rather than left to a
+        # consumer to derive from `findings` — because a layer missing from
+        # that derivation is invisible, and a layer with no supply metal read
+        # is exactly the case that goes missing.
+        print("\n  BY LAYER: " + ", ".join(
+            f"{ly}={n}" for ly, n in sorted(rep["findings_by_layer"].items()))
+            + f"   (obstruction layer(s) compared: "
+              f"{', '.join(rep['obs_layers_compared']) or 'none'})")
+        if gaps and rep["obs_layers_with_no_supply_segment_read"]:
+            print("  SILENT ON: "
+                  + ", ".join(rep["obs_layers_with_no_supply_segment_read"])
+                  + " — an obstruction was declared on these layer(s), NO "
+                    "supply\n  segment was read on any of them, and the read "
+                    "was truncated. Their metal may\n  exist unread, so the "
+                    "absence of a finding there is silence, not a clearance.")
         if gaps:
             _name_the_gaps()
         if discarded:
             _name_the_discarded()
-        if gaps or discarded:
-            print("\n  So this count is a FLOOR, not the total.")
+        if is_floor:
+            _name_the_floor()
         return 1
 
     # #828 — reached only when nothing was found to complain about. Whether
