@@ -1169,8 +1169,11 @@ Nor can the corpus be synthesised: copies of one cell would still take the
 refusal path, so a fabricated 114-cell corpus would measure the same nothing,
 114 times.
 
-**The decisive test is cheap and it is `jmeas3`'s to run: `--stall-grace 900` on
-its tree and corpus.** Three outcomes, all informative:
+**The decisive test is ONE COMMAND and it is `jmeas3`'s to run:
+`--stall-grace 900` on its tree and corpus.** ("Cheap" would be another
+unmeasured cost claim: it is one invocation, but bounded by the 900 s it
+grants, so budget up to ~15 min rather than the ~70 s the `--stall-grace 5`
+reproduction took.) Three outcomes, all informative:
 
 * completes, 0 wiring errors, wall > 300 s — the grace was the whole cause, and
   a full published corpus simply needs more than 300 s.
@@ -1396,6 +1399,10 @@ requires re-assembling the batch's take of this work from the squashed commit,
 and re-pointing `land/batch67-assembled` is not mine to do — the same boundary
 `jmeas3` drew and I agreed with. The artefact is pushed and named so the
 decision is cheap for whoever holds it; the decision itself is not mine.
+**[SUPERSEDED — see "Correcting §23" below: this was asserted without being
+run, and it is false. Merging the remedy conflicts and would not help; a real
+re-assembly costs EIGHT conflicts. The sentence is left standing rather than
+deleted so the correction has something to correct, but do not act on it.]**
 
 ### Correcting §23: the remedy exists, and it is NOT cheap
 
