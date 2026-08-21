@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 31 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 31 records, and the sixteen already-program claims of which fifteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -7,10 +7,13 @@ eighteen end-to-end findings are already enforced by a shipped program or a
 general census test, and were fixed between the run that found them and this
 tree.** Add the smaller `jsonschema` item, which is not one of the eighteen, and
 four more classes drawn from the six lane records, and the count is
-**11 + 1 + 4 = 16**. Those sixteen produced no record; duplicating them would be
+**11 + 1 + 4 = 16** claims examined — of which **fifteen hold and one, F-2, is
+disproven by execution**: its guard's predicate is satisfied by a production
+fallback and cannot fail. Those sixteen produced no record; duplicating them would be
 worse than skipping them.
 
-Two of the sixteen are marked *conditional* rather than clean. The brief's test
+Two of the sixteen were marked *conditional* rather than clean, and one of those
+two, F-2, was later disproven outright. The brief's test
 for a landed fix — can the class recur in a module nobody has touched? — is
 really a question about whether the guard's population is DISCOVERED or
 DECLARED, and theirs is declared. Both are flagged in the table and folded into
@@ -133,7 +136,7 @@ it now — checked by reading it, not by trusting the fix note.
 | F | already enforced by | general over |
 |---|---|---|
 | F-1 no owner for the excluded levers | `crosslayer_search_space.py` emits `UNOWNED` when the named owner does not resolve; `tests/test_ppa_pnr_search_space.py:340,362` has both arms | any deferral; the owner is resolved from the tree |
-| F-2 `--backend` drove nothing | the driver seam in `_ppa/backends/__init__.py` (`extract_records` / `NO_DRIVER_REASON`); `test_ppa_producer_consumer_agreement.py::test_every_backend_is_drivable_or_says_WHY_NOT` | **conditionally.** The census iterates a literal 5-tuple, not the package. `load()` imports directly, so a sixth module IS drivable — it is just invisible to the guard and to the alternatives a refusal prints. See **A-3** |
+| F-2 `--backend` drove nothing | the driver seam in `_ppa/backends/__init__.py` (`extract_records` / `NO_DRIVER_REASON`); `test_ppa_producer_consumer_agreement.py::test_every_backend_is_drivable_or_says_WHY_NOT` | **NO — and this one was DISPROVEN by execution, not merely qualified.** The guard asserts each backend is drivable or raises with a reason of at least 40 characters. But `driver_for` synthesises a fallback reason when the module declares none, and the fallback is far longer than 40 characters — so the predicate is satisfied by construction for every backend and the guard cannot fail. Proven: deleting `NO_DRIVER_REASON` outright from the `opensta` backend (whole assignment, mutation re-parsed with `ast.parse` to confirm it is still valid Python) leaves the suite at **0 failed, 0 errors**. The separate literal-5-tuple limitation still stands on top of that. See **A-3** |
 | F-4 producers emit envelopes the consumer refuses | `_ppa/metrics.py:963-965` registers all three carriers; `test_ppa_producer_consumer_agreement.py` §2 walks the whole envelope namespace | **in one direction.** Every REGISTERED carrier is checked to read; that every PRODUCER's envelope is registered is asserted over three literals. See **A-3** |
 | F-5 declared unit vs required unit | `_ppa/area.py:188` moved to the name-derived unit; same test file §1 walks the whole area registry | every area metric, added or existing |
 | F-9 two readings of one metric under one scope | `_ppa/metrics.py:582-676` separates corroboration from conflict; `test_ppa_second_record_identity.py`, 12 tests | any second record under one identity |
@@ -1617,6 +1620,37 @@ Each mutation was reverted immediately and the working tree confirmed
 byte-identical afterwards (`git diff --exit-code`, zero dirty entries, three
 times).
 
+**Extended to six, and the sixth run disproved a claim.** The same procedure was
+applied to five more of the sixteen:
+
+    F-10  de-duplicate by CONTENT, not by path
+          -> 3 failed   test_one_measurement_is_not_counted_twice
+    F-11  required views are PER AXIS, not global
+          -> 24 failed  test_a_corner_independent_axis_no_longer_needs_the_timing_corners
+    F-15  the hold axis proves from the worst-slack name too
+          -> 9 failed   test_worst_slack_and_wns_are_the_same_predicate
+    F-18  a verdict spelling may not be silently dropped
+          -> 3 failed   test_the_accept_set_is_the_one_the_feasibility_axis_declares
+    F-2   a backend states its OWN reason for not being drivable
+          -> 0 failed, 0 errors   <-- THE GUARD CANNOT FAIL
+
+So **six of the sixteen ALREADY-PROGRAM claims are now proven by execution and
+one is disproven by it.** F-2's guard requires each backend to be drivable or to
+raise with a reason of at least forty characters — and the production seam
+supplies a generic fallback reason, comfortably longer than forty characters,
+whenever a module declares none. The predicate is therefore true by construction
+and no backend can violate it. Three mutations were needed to establish that
+honestly: renaming the shared constant proved nothing (both the code and the test
+read the same symbol, so they stayed consistent), and deleting one line of a
+multi-line assignment produced invalid Python, whose green result was an artefact
+rather than a finding. Only the third — removing the whole assignment and
+re-parsing the file to confirm it still compiles — is evidence.
+
+The narrow syntactic form of this, a raise whose message is `<lookup> or
+<default literal>`, occurs at **one** production site in the tree, so it is
+recorded here with its measured population rather than promoted to a rule with
+an implied breadth it has not earned.
+
 This is deliberately NOT wired into `verify.py`. A verifier that edits the
 product tree to prove a point is a verifier that can leave the tree edited, and
 this batch already records what an unnoticed tree write costs. The procedure is
@@ -1963,9 +1997,10 @@ rather than in a command line that would fail for whoever tried it.
 ## Summary
 
 **STATUS**: 31 records emitted and validated — 28 Bucket A, 2 C, 1 T, zero B,
-zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
+zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
+execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (40 fast + 4 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (41 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1987,7 +2022,7 @@ bucket. My 27 resolve as:
 
 | resolution | n | records |
 |---|---:|---|
-| ALREADY-PROGRAM | 16 | not records — listed above with their enforcing program |
+| ALREADY-PROGRAM | 16 claims, **15 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
 | **EXTRACT-NEW** | 5 | A-3, A-4, A-13, A-22, A-25 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
@@ -2143,7 +2178,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            40 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            41 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -2163,7 +2198,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     40 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     41 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other

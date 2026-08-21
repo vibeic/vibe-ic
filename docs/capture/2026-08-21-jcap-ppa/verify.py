@@ -164,8 +164,13 @@ check("every Bucket-A target program exists on disk", not badprog, str(badprog[:
 # 11. the already-program count in the title matches the two tables that hold it
 WORDS = {"eleven": 11, "twelve": 12, "fourteen": 14, "fifteen": 15,
          "sixteen": 16, "seventeen": 17, "eighteen": 18}
-m = re.search(r"and the (\w+) rules that were already programs", MD)
-claimed = WORDS.get(m.group(1)) if m else None
+# `claimed_ap`, not `claimed`: that name is already bound above for the summary
+# file list. Rebinding it worked only because the first use is consumed before
+# this line -- which is the shadowing trap check 36 refuses for `def` names, and
+# variables are not covered by it.
+m = re.search(r"and the (\w+) already-program claims of which (\w+) hold", MD)
+claimed_ap = WORDS.get(m.group(1)) if m else None
+holding_ap = WORDS.get(m.group(2)) if m else None
 # COUNT THE TWO ALREADY-PROGRAM TABLES STRUCTURALLY, by their header rows.
 # Prose-anchored splitting was tried twice and was wrong twice (23, then 27):
 # the anchors sit near other tables and the span swallowed them. A table is
@@ -182,9 +187,17 @@ def _table_rows(header: str) -> int:
     return n
 tbl = (_table_rows("| F | already enforced by | general over |")
        + _table_rows("| class | already enforced by |"))
-control("already-program", claimed is not None)
+# One claim of the sixteen (F-2) is disproven by execution: its guard's predicate
+# is satisfied by a production fallback, so it cannot fail. The title states both
+# numbers and both are checked -- a count that quietly kept saying sixteen would
+# be asserting coverage this report has since shown it does not have.
+_disproven = MD.count("DISPROVEN by execution") + MD.count("disproven by\nexecution")
+control("already-program", claimed_ap is not None and holding_ap is not None)
 check("the title's already-program count matches the tables",
-      claimed == tbl, f"title {claimed}, tables {tbl}")
+      claimed_ap == tbl, f"title {claimed_ap}, tables {tbl}")
+check("the title's holding count is the claims minus the disproven",
+      holding_ap == tbl - 1 and _disproven >= 1,
+      f"holding {holding_ap}, claims {tbl}, disproven markers {_disproven}")
 
 # 12. the brief's FIRST requirement: a rule for each of the eighteen findings.
 #     That table is the primary deliverable and nothing checked it until now.
