@@ -378,8 +378,8 @@ that path** — sharing a docstring with it is not attachment, which is the enti
 branch where the artefact was found missing is correct by construction, and the
 two survivors are exactly that.
 
-**This rule runs CLEAN on the tree today — the only one of the fourteen that
-does.** Its motivating instance was fixed at its one site. It is worth having
+**This rule runs CLEAN on the tree today — the only one of the thirteen
+Bucket-A rules that does.** Its motivating instance was fixed at its one site. It is worth having
 anyway: that site was guarded by hand for one string, and nothing stops the next
 stub from carrying the next one.
 **(o)** yes: the claim reduces to a path, the path resolves, the check is a file
@@ -736,8 +736,8 @@ augments to be reported rather than applied by N agents in parallel:
 
 The skill's rule is that a new Bucket-A guard must run CLEAN before it ships,
 because *"a guard that flags the very state you just shipped is not a guard, it's
-a bug."* That rule is about **false** positives. **12 of these 14 fire on this
-tree today, and every one of them is a TRUE positive** — each names a measured
+a bug."* That rule is about **false** positives. **12 of these 13 Bucket-A rules
+fire on this tree today, and every one of them is a TRUE positive** — each names a measured
 defect quoted in its record. **A-7 is the one that runs clean**, and it says so.
 
 Two rules were narrowed BY the sweep rather than merely checked against it, and
@@ -762,7 +762,7 @@ track can re-judge the same input — and (b) a **named AI cross-check plus a
 converge step**, run even when the program says PASS. A verdict with no attached
 evidence cannot be cross-checked and is incomplete.
 
-It applies to all 14 records, and it is stated here rather than pasted into each
+It applies to all 13 Bucket-A records, and is stated here rather than in each
 `fix_action`. **That is a deliberate call with a cost**, so it is written down:
 `recoveries.json` is the machine-readable artefact an implementer reads, and a
 requirement living only in this prose can be missed. The concrete form is the
