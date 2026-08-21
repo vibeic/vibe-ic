@@ -37,3 +37,91 @@ domain wants. A backend that notices a violation count is zero and returns
 either duplicate it or contradict it. So a backend's whole job is: this is what
 the tool said, this is the scope it said it in, and this is what it did NOT say.
 """
+
+# ---------------------------------------------------------------------------
+# THE DRIVER SEAM
+# ---------------------------------------------------------------------------
+# `ppa_metric_extract.py --backend TOOL` refused for EVERY tool until v1.11.33,
+# including the five that exist, with "ppa_metric_extract does not drive
+# backends yet". Measured: five backend modules ship and the canonical
+# extraction CLI could extract from none of them, so a downloaded plugin had no
+# supported way to turn a tool artefact into records at all.
+#
+# A backend that can turn ONE artefact path into canonical records declares
+# `extract_records(path, **opts)`. A backend that CANNOT declares
+# `NO_DRIVER_REASON` saying why, and the CLI prints that reason instead of a
+# blanket refusal. Both are read by attribute, so teaching a backend to be
+# driven is a change to that backend and to nothing else -- this file does not
+# hold a list that can go stale behind the tree.
+#
+# The reason for the split is the one in the module docstring above: a backend
+# PARSES. `opensta.py` produces a `Report`, and turning that into rows is
+# `_ppa/timing.py`'s job because deciding what a slack MEANS is a domain rule;
+# `orfs.py` reads AutoTuner result rows the search layer already holds. Neither
+# is a defect, and neither may be papered over by inventing a reader here.
+import importlib
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+#: Every backend module in this package. Named, not globbed: a file that
+#: appears here without anyone deciding it is a backend is exactly the drift
+#: this package's ownership rule exists to prevent.
+BACKENDS: Tuple[str, ...] = ("librelane", "openroad", "opensta", "orfs", "yosys")
+
+DRIVER_ATTR = "extract_records"
+NO_DRIVER_ATTR = "NO_DRIVER_REASON"
+REQUIRES_ATTR = "EXTRACT_REQUIRES"
+
+
+class BackendNotDrivable(Exception):
+    """The backend exists and declares that it cannot be driven from a path.
+
+    Carries the module's own stated reason. NOT the same exception as "no such
+    backend": "this tool has no parser" and "this parser is not a record
+    producer" are different sentences to whoever has to fix the invocation.
+    """
+
+    def __init__(self, tool: str, reason: str, requires: Tuple[str, ...] = ()):
+        super().__init__(reason)
+        self.tool = tool
+        self.reason = reason
+        self.requires = tuple(requires)
+
+
+def load(tool: str):
+    """The backend module for `tool`. Raises ImportError if there is none."""
+    return importlib.import_module(f"{__name__}.{tool}")
+
+
+def driver_for(tool: str) -> Callable[..., List[Dict[str, Any]]]:
+    """`tool`'s path->records driver, or raise `BackendNotDrivable` with the
+    module's own reason. Never returns a stub that yields `[]`: a tool that
+    cannot be read must not produce an empty record set."""
+    mod = load(tool)
+    fn = getattr(mod, DRIVER_ATTR, None)
+    if fn is None:
+        raise BackendNotDrivable(
+            tool,
+            getattr(mod, NO_DRIVER_ATTR, None)
+            or (f"`_ppa/backends/{tool}.py` declares no {DRIVER_ATTR}() and no "
+                f"{NO_DRIVER_ATTR}, so nothing here can say what it reads"))
+    return fn
+
+
+def drivable() -> Tuple[str, ...]:
+    """Every backend that can be driven from a path, for a refusal that names
+    the alternatives instead of leaving a caller to guess."""
+    out = []
+    for tool in BACKENDS:
+        try:
+            driver_for(tool)
+        except (BackendNotDrivable, ImportError):
+            continue
+        out.append(tool)
+    return tuple(out)
+
+
+def requirements(tool: str) -> Tuple[str, ...]:
+    """Options `tool`'s driver cannot work without (e.g. yosys needs `stage`:
+    the two blocks it prints are two stages of one run and neither the path nor
+    the text says which). Declared by the backend, never guessed here."""
+    return tuple(getattr(load(tool), REQUIRES_ATTR, ()) or ())
