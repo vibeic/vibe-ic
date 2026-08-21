@@ -1934,12 +1934,57 @@ def matrix_na_precondition(step_id):
     return G.na_precondition(step_id)
 
 
+def matrix_not_measured_reason(step_id):
+    """What this cell could not look at, or None if it could look at everything.
+
+    THE FOURTH STATE, by owner ruling 2026-08-21. The condition is the one the
+    cell test already skipped on, lifted out of the test body so the GRID can
+    carry it instead of the cell reporting `passed` while asserting nothing:
+
+      * the cell shows no finding, AND
+      * it holds a waiver, AND
+      * W2's OBSERVED half observed nothing, AND
+      * there is no corpus.
+
+    All four are required. A waived cell with nothing to show, on a tree where
+    nothing was observed and no corpus can be read, is UNMEASURABLE rather than
+    healed — the finding its waiver names may be exactly one of the
+    record-promoted ones that vanished with the published cells. Reporting the
+    strict-xfail XPASS there would tell an author to delete a waiver on the
+    strength of evidence nobody read.
+
+    A cell that genuinely healed still XPASSes wherever the record binding is
+    alive, because `observed_writes()` and `corpus_root()` are both re-derived
+    live: this state self-invalidates the moment either comes back.
+    """
+    if G.findings_for(step_id):
+        return None
+    if _waiver_for(step_id) is None:
+        return None
+    if R.observed_writes() or corpus_root() is not None:
+        return None
+    return (
+        "the cell holds a waiver and shows no finding, but W2's observed half "
+        "observed nothing and no corpus is readable here, so whether the "
+        "waiver's finding healed or merely became unreadable was not measured. "
+        "Both `observed_writes()` and the corpus pointer are re-read live, so "
+        "this self-invalidates when either returns.")
+
+
 def matrix_cell_state(step_id) -> str:
-    """``"ENFORCED"`` / ``"WAIVED"`` / ``"NA"`` for one cell of this dimension."""
+    """``ENFORCED`` / ``WAIVED`` / ``NA`` / ``NOT_MEASURED`` for one cell.
+
+    PRECEDENCE: NA and WAIVED outrank NOT_MEASURED, which outranks ENFORCED.
+    A registered waiver is a decision that was made; this host being unable to
+    verify whether it healed does not unmake it. So step 34 stays WAIVED here
+    and its unreadability is carried on the OUTCOME axis, where it belongs.
+    """
     if matrix_na_precondition(step_id) is not None:
         return "NA"
     if _waiver_for(step_id) is not None:
         return "WAIVED"
+    if matrix_not_measured_reason(step_id) is not None:
+        return "NOT_MEASURED"
     return "ENFORCED"
 
 
