@@ -61,9 +61,26 @@ not make one. So at set level UNDETERMINED (rc=2) takes precedence over
 INFEASIBLE (rc=1). Nothing is lost: both block, every per-candidate verdict is
 in the JSON, and every finding is printed regardless of which code is returned.
 
+AND THE FOURTH AXIS STATUS, WHICH IS NEITHER A PASS NOR A HOLE
+==============================================================
+Most axes always apply: every design that is routed has a DRC answer owed of
+it. One does not. DESIGN-FOR-ECO readiness -- does this design carry the spare
+cells that make a post-tape-out bug fixable by a metal-only ECO -- is a
+requirement the DESIGN declares, and a design that declares none is not
+thereby failing. So `AXIS_NOT_APPLICABLE` exists, it is produced only by an
+axis that consults a declaration of its own applicability, and it contributes
+nothing to the candidate verdict in either direction.
+
+What it must never do is hide. The row is on EVERY verdict, it names which of
+the four declaration states was read -- NOT_DECLARED, NOT_REQUIRED, UNREADABLE,
+REQUIRED -- and it lists, by name, every obligation the run did not prove.
+"nobody declared a requirement" and "the design declared it needs none" are
+different facts about a design and they do not share a code.
+
 chip-AGNOSTIC: nothing here names an IC, a vendor, an SKU or a process. Every
 threshold in the default axis set is either zero violations, a non-negative
-slack, or a limit the CONTRACT declares -- never a number invented here.
+slack, or a limit the CONTRACT declares -- never a number invented here. The
+ECO axis holds no spare count, no density and no cell kind for the same reason.
 """
 from __future__ import annotations
 
@@ -79,7 +96,13 @@ __all__ = [
     "METRIC_SCHEMA", "FEASIBILITY_SCHEMA",
     "STATUS_MEASURED", "COMPARABLE_STATUSES", "METRIC_STATUSES",
     "KIND_SLACK_NONNEG", "KIND_COUNT_ZERO", "KIND_VERDICT_IN", "KIND_LIMIT_MAX",
+    "KIND_LIMIT_MIN",
     "AXIS_SATISFIED", "AXIS_VIOLATED", "AXIS_WAIVED", "AXIS_UNDETERMINED",
+    "AXIS_NOT_APPLICABLE",
+    "ECO_AXIS", "ECO_M_COUNT", "ECO_M_SURVIVING", "ECO_M_POSITIONS",
+    "ECO_M_TIE_OFF", "ECO_M_PADS", "eco_metric_for_kind",
+    "ECO_REQUIRED", "ECO_NOT_REQUIRED", "ECO_NOT_DECLARED", "ECO_UNREADABLE",
+    "eco_requirement_state", "eco_proofs_and_limits",
     "FEASIBLE", "INFEASIBLE", "UNDETERMINED",
     "Proof", "Axis", "DEFAULT_AXES",
     "FeasibilityPolicy", "PenaltyWeights",
@@ -121,12 +144,26 @@ KIND_VERDICT_IN = "verdict_in"
 #: value <= a limit the CONTRACT declares. There is no built-in number: a limit
 #: this module invented would be a chip-specific constant in agnostic source.
 KIND_LIMIT_MAX = "limit_max"
+#: value >= a floor the CONTRACT declares. The mirror of KIND_LIMIT_MAX and it
+#: exists for the same reason: a violation can be a number that is too SMALL.
+#: A design-for-ECO spare population is the case that forced it -- "at least
+#: this many spare cells survive" is a requirement, and a gate that could only
+#: express ceilings could not state it at all. There is no built-in floor here
+#: either; a floor this module invented would be a design decision in agnostic
+#: source.
+KIND_LIMIT_MIN = "limit_min"
 
 # --- axis and candidate verdicts -------------------------------------------
 AXIS_SATISFIED = "SATISFIED"
 AXIS_VIOLATED = "VIOLATED"
 AXIS_WAIVED = "WAIVED"
 AXIS_UNDETERMINED = "UNDETERMINED"
+#: The axis asks a question this design has not been asked to answer. It is not
+#: SATISFIED -- nothing was proved -- and it is not UNDETERMINED -- nothing was
+#: owed. It exists so an axis whose APPLICABILITY is itself declared can say
+#: "no requirement was declared" without that reading as either a pass or a
+#: hole. Only an axis that consults a declaration of applicability produces it.
+AXIS_NOT_APPLICABLE = "NOT_APPLICABLE"
 
 FEASIBLE = "FEASIBLE"
 INFEASIBLE = "INFEASIBLE"
@@ -155,6 +192,20 @@ C_WAIVER_UNKNOWN_AXIS = "FEAS_WAIVER_UNKNOWN_AXIS"
 C_WAIVER_ON_UNMEASURED = "FEAS_WAIVER_ON_UNMEASURED"
 C_WAIVERS_DISABLED = "FEAS_WAIVERS_DISABLED"
 C_OK = "FEAS_OK"
+# --- design-for-ECO applicability ------------------------------------------
+#: No `eco_readiness` block at all: nothing declared a requirement, so this run
+#: makes no ECO-readiness finding. NOT the same as the next one.
+C_ECO_NOT_DECLARED = "FEAS_ECO_NOT_DECLARED"
+#: A declaration exists and says this design requires no spare population.
+C_ECO_NOT_REQUIRED = "FEAS_ECO_NOT_REQUIRED"
+#: A declaration exists and could not be read as one. Somebody tried to state a
+#: requirement; refusing is the only safe reading of a requirement nobody can
+#: parse, so this is UNDETERMINED and never NOT_APPLICABLE.
+C_ECO_DECLARATION_UNREADABLE = "FEAS_ECO_DECLARATION_UNREADABLE"
+#: `required: true` with no floor, no kind and no other stated obligation. It
+#: asserts the design needs ECO readiness and then says nothing that could be
+#: checked, which is a contradiction and not a pass.
+C_ECO_REQUIREMENT_EMPTY = "FEAS_ECO_REQUIREMENT_EMPTY"
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +236,262 @@ class Axis:
     """
     name: str
     groups: Tuple[Tuple[Proof, ...], ...]
+
+
+# ---------------------------------------------------------------------------
+# DESIGN-FOR-ECO READINESS -- an axis whose APPLICABILITY is itself declared
+# ---------------------------------------------------------------------------
+# WHY THIS AXIS IS NOT A COLUMN IN A TABLE OF NUMBERS.
+#
+# A spare/ECO cell population is what makes a bug found after tape-out fixable
+# by a METAL-ONLY ECO. Remove it and the only remaining repair is a base-layer
+# respin -- a new mask set. So for a tape-out-bound design a spare population is
+# not a quantity to be traded against area on a Pareto front; it is a property
+# the design is required to HAVE, and a candidate that does not have it is not
+# a cheaper candidate, it is a different and unshippable one.
+#
+# MEASURED, and this is why the axis exists at all: in a published cross-layer
+# search over one design, the winning place-and-route arm deleted all ten of the
+# design's spare cells (`--spare-density 0`) and bought roughly a third of its
+# own area margin doing it, while a sibling arm that kept all ten was still
+# ahead of it on BOTH area and power. The search had already found the right
+# answer. Nothing stopped it publishing the wrong ones beside it, because
+# "spares deleted" was a column in the record and not a verdict over it.
+#
+# THE THREE RULES THIS IMPLEMENTS, AND WHY EACH ONE IS A REFUSAL
+# ==============================================================
+# 1. THE REQUIREMENT IS DECLARED, NEVER ASSUMED. This module contains no
+#    spare-cell count, no density and no kind list. Every floor comes from the
+#    design's own `eco_readiness` declaration. A design that declares none is
+#    NOT thereby failing -- but the record must not silently collapse the two
+#    ways of declaring none, so `NOT_DECLARED` (nobody stated a requirement)
+#    and `NOT_REQUIRED` (somebody stated that there is none) are DIFFERENT
+#    states with different codes, and both are visible on the axis row.
+#
+# 2. ABSENT IS NOT ZERO. A candidate whose spare population could not be read
+#    is UNDETERMINED, exactly like every other unmeasured axis here. It is
+#    never "0 spares, therefore fails" -- that convicts a run nobody looked at
+#    -- and never "no data, therefore passes". The record shape does that work:
+#    the producer emits NOT_MEASURED with a reason and NO value, and
+#    `_record_defect` refuses it before any comparison happens.
+#
+# 3. THE COUNT IS NOT THE WHOLE PROPERTY. Ten spares of the wrong kind, ten
+#    spares in one corner of the die, or ten spares with floating inputs are
+#    not ECO readiness. So the declaration may ask for a kind mix, a spatial
+#    spread, tie-off, spare pads and survival-to-the-shipped-netlist, and each
+#    one becomes its own proof. What it may NOT do is make this axis claim more
+#    than it measured: only proofs the declaration ASKS FOR are run, and every
+#    obligation this gate did not prove is listed by name in the axis row's
+#    `applicability.not_proved`. If all the artefacts can support is a count,
+#    the record says it is a count.
+ECO_AXIS = "eco_readiness"
+
+#: How many spare/ECO cells the flow's own insertion plan recorded.
+ECO_M_COUNT = "design_for_eco.spares.count"
+#: How many of them are still named by the SHIPPED artefacts after every
+#: optimisation pass that could have stripped them. A different fact from the
+#: one above, and the one that actually bears on a post-tape-out repair.
+ECO_M_SURVIVING = "design_for_eco.spares.surviving.count"
+#: Distinct placement positions the spares occupy. A SPREAD PROXY, not
+#: reachability: see `applicability.not_proved`.
+ECO_M_POSITIONS = "design_for_eco.spares.distinct_positions.count"
+#: Whether every spare input is tied off. A verdict, not a count.
+ECO_M_TIE_OFF = "design_for_eco.spares.tie_off.verdict"
+#: Reserved spare ECO pads, for a design whose repair has to reach a pin.
+ECO_M_PADS = "design_for_eco.spare_pads.count"
+
+
+def eco_metric_for_kind(kind: str) -> str:
+    """The per-kind spare count metric. One metric NAME per kind, not one
+    metric with the kind in `scope`, because each kind carries its OWN declared
+    floor and a proof holds exactly one `limit_key`."""
+    return f"design_for_eco.spares.kind.{kind}.count"
+
+
+ECO_REQUIRED = "REQUIRED"
+ECO_NOT_REQUIRED = "NOT_REQUIRED"
+ECO_NOT_DECLARED = "NOT_DECLARED"
+ECO_UNREADABLE = "UNREADABLE"
+
+
+def _pos_int(v: Any) -> Optional[int]:
+    """`v` as a non-negative int, or None if it is not one. `True` is not 1."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if isinstance(v, float) and v != int(v):
+        return None
+    n = int(v)
+    return n if n >= 0 else None
+
+
+def eco_requirement_state(decl: Any) -> Tuple[str, str, Dict[str, Any]]:
+    """(state, code, detail) for a design's ECO-readiness declaration.
+
+    The FOUR answers are deliberately four and not two:
+
+        NOT_DECLARED   no `eco_readiness` block. Nobody was asked. The axis
+                       makes no finding and says so.
+        NOT_REQUIRED   a block that says this design requires no spares --
+                       `required: false`, or a floor of 0 with nothing else
+                       asked for. A statement, not a silence.
+        REQUIRED       a block with at least one checkable obligation.
+        UNREADABLE     a block that is not an object, or one that says
+                       `required: true` and then states nothing checkable.
+                       Somebody tried to state a requirement and this module
+                       cannot tell what it is; refusing is the only safe read.
+    """
+    if decl is None:
+        return ECO_NOT_DECLARED, C_ECO_NOT_DECLARED, {
+            "reason": ("the contract carries no `eco_readiness` block, so no "
+                       "spare/ECO population was required of this design and "
+                       "this run makes no ECO-readiness finding about it")}
+    if not isinstance(decl, Mapping):
+        return ECO_UNREADABLE, C_ECO_DECLARATION_UNREADABLE, {
+            "reason": (f"`eco_readiness` is {type(decl).__name__}, not an "
+                       "object; a requirement nobody can parse is refused, "
+                       "not waived")}
+
+    required = decl.get("required")
+    floor = _pos_int(decl.get("min_spare_cells"))
+    kinds_raw = decl.get("min_spare_cells_by_kind")
+    kinds: Dict[str, int] = {}
+    if isinstance(kinds_raw, Mapping):
+        for k, v in kinds_raw.items():
+            n = _pos_int(v)
+            if isinstance(k, str) and k.strip() and n:
+                kinds[k.strip()] = n
+    positions = _pos_int(decl.get("min_distinct_positions"))
+    pads = _pos_int(decl.get("min_spare_pads"))
+    tie_off = bool(decl.get("require_tie_off"))
+    preservation = bool(decl.get("require_preservation"))
+
+    obligations: Dict[str, Any] = {}
+    if floor:
+        obligations["min_spare_cells"] = floor
+    if kinds:
+        obligations["min_spare_cells_by_kind"] = dict(sorted(kinds.items()))
+    if positions:
+        obligations["min_distinct_positions"] = positions
+    if pads:
+        obligations["min_spare_pads"] = pads
+    if tie_off:
+        obligations["require_tie_off"] = True
+    if preservation:
+        obligations["require_preservation"] = True
+
+    if required is False:
+        return ECO_NOT_REQUIRED, C_ECO_NOT_REQUIRED, {
+            "reason": ("the declaration states `required: false`: this design "
+                       "asks for no spare/ECO population"),
+            "obligations_ignored": obligations}
+    if obligations:
+        return ECO_REQUIRED, C_OK, {"obligations": obligations}
+    if required is True:
+        return ECO_UNREADABLE, C_ECO_REQUIREMENT_EMPTY, {
+            "reason": ("the declaration says `required: true` and then states "
+                       "no floor, no kind, no spread, no pad count and no "
+                       "tie-off or preservation obligation. There is nothing "
+                       "here to check, and a requirement with nothing to check "
+                       "is not a satisfied one")}
+    return ECO_NOT_REQUIRED, C_ECO_NOT_REQUIRED, {
+        "reason": ("the declaration states no obligation and does not say "
+                   "`required: true`, so it declares that this design needs "
+                   "no spare/ECO population")}
+
+
+#: Every obligation this axis knows how to prove, and the sentence that says
+#: what it is. `not_proved` is built by SUBTRACTION from this table, so an
+#: obligation added here and forgotten in the declaration is disclosed by
+#: construction rather than by somebody remembering to mention it.
+ECO_OBLIGATIONS: Tuple[Tuple[str, str], ...] = (
+    ("min_spare_cells",
+     "how many spare/ECO cells the insertion plan recorded"),
+    ("min_spare_cells_by_kind",
+     "how many spares of each named kind -- a mux2 cannot do a flop's repair"),
+    ("min_distinct_positions",
+     "how many distinct placement positions the spares occupy"),
+    ("require_tie_off",
+     "whether every spare input is tied off rather than left floating"),
+    ("min_spare_pads",
+     "how many spare ECO pads are reserved"),
+    ("require_preservation",
+     "how many spares are still named by the SHIPPED artefacts after every "
+     "optimisation pass that could have stripped them"),
+)
+
+#: What this axis CANNOT establish from any artefact the flow produces, stated
+#: unconditionally on every applicable row. These are not obligations somebody
+#: forgot to declare; they are properties of ECO readiness that no count, no
+#: position list and no tie-off report can answer.
+ECO_NEVER_PROVED: Tuple[Mapping[str, str], ...] = (
+    {"property": "eco_reachability",
+     "reason": ("whether a metal-only ECO could actually route from a given "
+                "failing net to a given spare depends on the routing "
+                "resources left around BOTH, and no artefact here is a "
+                "routability answer. Distinct placement positions are a "
+                "spread PROXY and are reported as one")},
+    {"property": "kind_sufficiency",
+     "reason": ("whether the declared kind mix can implement the repairs this "
+                "design will actually need is a judgement about future bugs. "
+                "This axis checks the mix against the declaration and makes "
+                "no claim that the declaration is the right mix")},
+    {"property": "post_eco_timing",
+     "reason": ("whether a repair built from these spares would still meet "
+                "timing is a question for an STA run on the ECO netlist, "
+                "which does not exist yet")},
+)
+
+
+def eco_proofs_and_limits(decl: Any
+                          ) -> Tuple[Tuple[Proof, ...],
+                                     Dict[str, Dict[str, Any]],
+                                     List[str]]:
+    """(proofs, limits, obligations-NOT-asked-for) for one declaration.
+
+    ONLY what the declaration asks for becomes a proof. That is rule 1 in the
+    header working in the direction people forget: a gate that also checked the
+    obligations nobody declared would be inventing requirements, which is the
+    same defect as inventing a threshold.
+    """
+    state, _code, detail = eco_requirement_state(decl)
+    if state != ECO_REQUIRED:
+        return (), {}, [name for name, _ in ECO_OBLIGATIONS]
+    obligations: Mapping[str, Any] = detail.get("obligations") or {}
+    proofs: List[Proof] = []
+    limits: Dict[str, Dict[str, Any]] = {}
+
+    floor = obligations.get("min_spare_cells")
+    if floor:
+        limits[ECO_M_COUNT] = {"min": floor, "unit": "count"}
+        proofs.append(Proof(ECO_M_COUNT, KIND_LIMIT_MIN,
+                            limit_key=ECO_M_COUNT))
+    for kind, n in (obligations.get("min_spare_cells_by_kind") or {}).items():
+        metric = eco_metric_for_kind(kind)
+        limits[metric] = {"min": n, "unit": "count"}
+        proofs.append(Proof(metric, KIND_LIMIT_MIN, limit_key=metric))
+    positions = obligations.get("min_distinct_positions")
+    if positions:
+        limits[ECO_M_POSITIONS] = {"min": positions, "unit": "count"}
+        proofs.append(Proof(ECO_M_POSITIONS, KIND_LIMIT_MIN,
+                            limit_key=ECO_M_POSITIONS))
+    if obligations.get("require_tie_off"):
+        proofs.append(Proof(ECO_M_TIE_OFF, KIND_VERDICT_IN,
+                            accept=("TIED_OFF",)))
+    pads = obligations.get("min_spare_pads")
+    if pads:
+        limits[ECO_M_PADS] = {"min": pads, "unit": "count"}
+        proofs.append(Proof(ECO_M_PADS, KIND_LIMIT_MIN, limit_key=ECO_M_PADS))
+    if obligations.get("require_preservation"):
+        # Survival is held to the SAME floor as insertion when one is declared.
+        # A design that requires ten spares and ships nine has nine, whatever
+        # the plan said it inserted.
+        surviving_floor = floor if floor else 1
+        limits[ECO_M_SURVIVING] = {"min": surviving_floor, "unit": "count"}
+        proofs.append(Proof(ECO_M_SURVIVING, KIND_LIMIT_MIN,
+                            limit_key=ECO_M_SURVIVING))
+
+    not_asked = [name for name, _ in ECO_OBLIGATIONS if name not in obligations]
+    return tuple(proofs), limits, not_asked
 
 
 #: WHY `worst_slack_ns` IS A GROUP AND NOT A RELAXATION.
@@ -220,6 +527,7 @@ class Axis:
 #: `phase3_one_shot_runner._report_wns_tcl`) so that future runs state the fact
 #: directly. This group is what makes the axis provable on the runs that already
 #: exist, and on any tool that reports a worst slack and not a wns.
+
 DEFAULT_AXES: Tuple[Axis, ...] = (
     Axis("setup", ((Proof("timing.setup.wns_ns", KIND_SLACK_NONNEG),),
                    (Proof("timing.setup.worst_slack_ns", KIND_SLACK_NONNEG),),
@@ -244,6 +552,14 @@ DEFAULT_AXES: Tuple[Axis, ...] = (
                        limit_key="reliability.em.worst_ratio"),))),
     Axis("equivalence", ((Proof("equivalence.verdict", KIND_VERDICT_IN,
                                 accept=("PROVEN", "EQUIVALENT")),),)),
+    #: The proofs here are a PLACEHOLDER and are never the ones evaluated:
+    #: `_evaluate_axis` rebuilds this axis from the design's own declaration
+    #: before it runs, so the obligations checked are exactly the obligations
+    #: declared. The entry exists in the table so that the axis is a ROW on
+    #: every verdict -- including on a design that declared nothing, which is
+    #: the case where an absent row would read as "no problem here".
+    Axis(ECO_AXIS, ((Proof(ECO_M_COUNT, KIND_LIMIT_MIN,
+                           limit_key=ECO_M_COUNT),),)),
 )
 
 
@@ -263,10 +579,10 @@ class FeasibilityPolicy:
     required_views: Tuple[Mapping[str, Any], ...] = ()
     #: Per-axis override of `required_views`, keyed by axis name.
     #:
-    #: WHY ONE GLOBAL LIST WAS NOT ENOUGH. The nine axes are not measured in one
+    #: WHY ONE GLOBAL LIST WAS NOT ENOUGH. The axes are not measured in one
     #: scope namespace. Setup and hold sign off across process corners; DRC, LVS,
-    #: antenna, IR, EM and equivalence are single measurements over one database
-    #: and have no process corner at all. With one global list, a contract that
+    #: antenna, IR, EM, equivalence and design-for-ECO readiness are single
+    #: measurements over one database and have no process corner at all. With one global list, a contract that
     #: declared the timing corners it signs off at ALSO demanded those corners of
     #: DRC -- so either DRC was permanently uncovered, or its producer had to
     #: emit the same measurement once per corner under a fabricated scope, N
@@ -285,6 +601,18 @@ class FeasibilityPolicy:
         field(default_factory=dict)
     limits: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     allow_waivers: bool = True
+    #: The design's own DESIGN-FOR-ECO declaration, verbatim, or None when the
+    #: contract carried none.
+    #:
+    #: WHY IT IS A FIELD OF ITS OWN AND NOT A ROW IN `limits`. `limits` answers
+    #: "what number does this threshold take"; this answers "is there a
+    #: requirement at all". Collapsing them makes an ABSENT limit and a
+    #: DECLARED-ZERO limit the same input, and those are the two states the ECO
+    #: axis exists to keep apart -- one is "nobody asked", the other is
+    #: "somebody said no spares are needed". The floors this declaration
+    #: implies are derived into `limits` at evaluation time by
+    #: `eco_proofs_and_limits`, so nothing here is a number this module chose.
+    eco_requirement: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -318,6 +646,11 @@ class AxisResult:
     detail: Tuple[Mapping[str, Any], ...] = ()
     waiver_ids: Tuple[str, ...] = ()
     coverage: Tuple[Mapping[str, Any], ...] = ()
+    #: For an axis whose APPLICABILITY is itself declared: which of the four
+    #: declaration states was read, what obligations it produced, and -- the
+    #: part a reader is entitled to and would otherwise have to infer -- what
+    #: this axis did NOT prove. Absent on the axes that always apply.
+    applicability: Optional[Mapping[str, Any]] = None
 
     def as_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"axis": self.name, "status": self.status,
@@ -326,6 +659,8 @@ class AxisResult:
                              "coverage": [dict(x) for x in self.coverage]}
         if self.waiver_ids:
             d["waiver_ids"] = list(self.waiver_ids)
+        if self.applicability is not None:
+            d["applicability"] = dict(self.applicability)
         return d
 
 
@@ -444,6 +779,25 @@ def _evaluate_one(rec: Mapping[str, Any], proof: Proof,
             # comparisons do not, which is why only this kind checks it.
             return AXIS_UNDETERMINED, (C_UNIT_MISMATCH,), ev
         ok = value <= lim["max"]
+        return (AXIS_SATISFIED if ok else AXIS_VIOLATED,
+                (C_OK,) if ok else (C_VIOLATION,), ev)
+
+    if proof.kind == KIND_LIMIT_MIN:
+        lim = policy.limits.get(proof.limit_key)
+        if not isinstance(lim, Mapping) or not _is_number(lim.get("min")):
+            # Same refusal as the ceiling kind, for the same reason: a floor
+            # this module supplied would be a design decision in agnostic
+            # source, and "at least however many happen to be there" is not a
+            # requirement.
+            return AXIS_UNDETERMINED, (C_LIMIT_NOT_DECLARED,), ev
+        ev["limit"] = dict(lim)
+        if str(lim.get("unit", "")) != str(rec.get("unit", "")):
+            return AXIS_UNDETERMINED, (C_UNIT_MISMATCH,), ev
+        if value < 0:
+            # A negative population is not "very few"; it is a broken parse,
+            # and convicting a design on one would be convicting the parser.
+            return AXIS_UNDETERMINED, (C_NEGATIVE_COUNT,), ev
+        ok = value >= lim["min"]
         return (AXIS_SATISFIED if ok else AXIS_VIOLATED,
                 (C_OK,) if ok else (C_VIOLATION,), ev)
 
@@ -594,6 +948,87 @@ def _evaluate_proof(records: Sequence[Any], proof: Proof,
 
 def _evaluate_axis(records: Sequence[Any], axis: Axis,
                    policy: FeasibilityPolicy) -> AxisResult:
+    """Adjudicate one axis. The DISPATCHER, so the ECO axis cannot be reached
+    by its placeholder proofs from any caller, including a test."""
+    if axis.name == ECO_AXIS:
+        return _evaluate_eco_axis(records, policy)
+    return _evaluate_axis_table(records, axis, policy)
+
+
+def _eco_not_proved(state: str, not_asked: Sequence[str]
+                    ) -> List[Dict[str, Any]]:
+    """Every ECO obligation this run did NOT establish, and why not.
+
+    Built by SUBTRACTION from `ECO_OBLIGATIONS` plus the unconditional
+    `ECO_NEVER_PROVED` rows, so a reader of a SATISFIED axis can see the shape
+    of the claim rather than having to assume it covers everything. An axis
+    that proved a count and printed nothing else would be read as having
+    proved ECO readiness.
+    """
+    if state == ECO_NOT_DECLARED:
+        why = ("no ECO-readiness requirement was declared for this design, so "
+               "nothing was owed and nothing was checked")
+    elif state == ECO_NOT_REQUIRED:
+        why = "the declaration states this design requires no spare population"
+    elif state == ECO_UNREADABLE:
+        why = ("the declaration could not be read as a requirement, so no "
+               "obligation could be derived from it")
+    else:
+        why = "the declaration does not ask for it"
+    rows: List[Dict[str, Any]] = [
+        {"obligation": name, "would_have_stated": desc, "reason": why}
+        for name, desc in ECO_OBLIGATIONS if name in set(not_asked)]
+    rows.extend(dict(x) for x in ECO_NEVER_PROVED)
+    return rows
+
+
+def _evaluate_eco_axis(records: Sequence[Any],
+                       policy: FeasibilityPolicy) -> AxisResult:
+    """The design-for-ECO axis, whose proof set is the DESIGN'S declaration.
+
+    Three outcomes before any record is read, and they are three because
+    collapsing any pair of them is a lie somebody would act on:
+
+        NOT_DECLARED / NOT_REQUIRED  -> NOT_APPLICABLE. No requirement, so no
+            finding. The row is still PRESENT and still says which of the two
+            it was, because an absent row reads as a satisfied one.
+        UNREADABLE                   -> UNDETERMINED. A requirement was stated
+            and cannot be parsed; refusing is the only safe reading.
+        REQUIRED                     -> the declared obligations are proved
+            from the candidate's own canonical records, through exactly the
+            same machinery every other axis uses, so an unmeasured spare
+            population is UNDETERMINED and never "0 spares, fails".
+    """
+    decl = policy.eco_requirement
+    state, code, detail = eco_requirement_state(decl)
+    proofs, limits, not_asked = eco_proofs_and_limits(decl)
+    app: Dict[str, Any] = {
+        "state": state,
+        "declaration_present": decl is not None,
+        "not_proved": _eco_not_proved(state, not_asked),
+    }
+    app.update({k: v for k, v in detail.items()})
+    if state in (ECO_NOT_DECLARED, ECO_NOT_REQUIRED):
+        return AxisResult(ECO_AXIS, AXIS_NOT_APPLICABLE, (code,),
+                          applicability=app)
+    if state == ECO_UNREADABLE:
+        return AxisResult(ECO_AXIS, AXIS_UNDETERMINED, (code,),
+                          applicability=app)
+    # The floors travel in `limits` so `_evaluate_one` reads them the one way
+    # it reads every threshold. Nothing below this line is ECO-specific.
+    sub_policy = dataclasses.replace(
+        policy, limits={**dict(policy.limits), **limits})
+    result = _evaluate_axis_table(
+        records, Axis(ECO_AXIS, (tuple(proofs),)), sub_policy)
+    app["proofs"] = [{"metric": p.metric, "kind": p.kind,
+                      "limit": dict(limits.get(p.limit_key, {})) or None,
+                      "accept": list(p.accept) or None}
+                     for p in proofs]
+    return dataclasses.replace(result, applicability=app)
+
+
+def _evaluate_axis_table(records: Sequence[Any], axis: Axis,
+                         policy: FeasibilityPolicy) -> AxisResult:
     views = views_for(axis.name, policy)
     group_status: List[str] = []
     codes: List[str] = []
@@ -792,6 +1227,12 @@ def policy_from_document(doc: Mapping[str, Any]) -> FeasibilityPolicy:
     if not isinstance(limits, Mapping):
         limits = {}
     allow = doc.get("allow_waivers")
+    #: The declaration is carried through VERBATIM and is not normalised here.
+    #: `eco_requirement_state` is the one reader, and a second normalisation
+    #: on the way in is how a malformed declaration becomes a well-formed one
+    #: that says something nobody wrote. A key that is absent stays absent, so
+    #: "no declaration" survives as None all the way to the axis.
+    eco = doc.get("eco_readiness") if "eco_readiness" in doc else None
     return FeasibilityPolicy(
         axes=DEFAULT_AXES,
         required_views=views,
@@ -799,6 +1240,7 @@ def policy_from_document(doc: Mapping[str, Any]) -> FeasibilityPolicy:
         limits={str(k): dict(v) for k, v in limits.items()
                 if isinstance(v, Mapping)},
         allow_waivers=True if allow is None else bool(allow),
+        eco_requirement=eco,
     )
 
 
