@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1164
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1164)
+- **Total programs (excluding helpers / shims):** 1171
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1171)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1155 |
+| `any` | 1162 |
 
 ## Alphabetical listing
 
@@ -272,6 +272,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dead_timing_constant_warn` | any | — | Scan all RTL files for `define macros and localparam declarations whose |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `decap_route_short_guard` | any | — | remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ... |
+| `declared_basis_matches_the_session_inputs` | any | — | the stage a report claims must be the stage its own session measured. |
 | `declared_clock_period` | any | — | read the clock period the DESIGN declares for the library this run is actually building against. |
 | `declared_pdk_is_the_pdk_used_check` | any | — | the PDK that ran must be the PDK declared. |
 | `def_gds_port_power_restore` | any | — | restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p... |
@@ -347,6 +348,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
 | `ethernet_protocol_synth` | any | v0.1.84 | IEEE 802.3 Ethernet-class protocol synth helper. |
 | `evidence_citation_resolves_check` | any | — | a cited evidence artifact must EXIST. |
+| `explicit_argument_outranks_the_environment_pointer` | any | — | whatever a gate scanned, it says so. |
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json. |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
@@ -634,6 +636,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
+| `local_clone_does_not_borrow_objects` | any | — | a prepared checkout owns its objects. |
 | `loop_admission_guard` | any | — | loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills. |
 | `loop_watchdog_compliance_check` | any | — | FORCE the watchdog primitive. |
 | `lora_protocol_synth` | any | — | LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN). |
@@ -854,6 +857,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `practical_notes_specificity_check` | any | — | meta-gate for plugin docs. |
 | `pre_awake_silence_check` | any | — | M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak... |
 | `prefix_adder_synth_recipe` | any | — | parallel-prefix adder structuring (QoR recipe). |
+| `prepared_checkout_states_the_revision_it_holds` | any | — | which commit is in there. |
+| `printed_remedy_runs_as_printed` | any | — | a remedy you can paste is a remedy. |
 | `professional_tb_check` | any | — | Phase-2 gate for the professional cocotb TB path. |
 | `professional_tb_gen` | any | — | deterministic PROFESSIONAL testbench generator. |
 | `profibus_protocol_synth` | any | — | PROFIBUS (Process Field Bus) protocol synth helper. |
@@ -876,6 +881,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `provenance_hash_audit` | any | v0.114 | v0.114 (BACKLOG-v10 P2.3). |
 | `provenance_logger` | any | — | Wrap a tool invocation, record hashed provenance. |
 | `provenance_output_hash_completeness_check` | any | v0.2.102 | verify that `<project>/provenance.jsonl` carries a complete, on-disk-verifiable hash chain of every tool invocation's outputs. |
+| `provenance_value_is_resolved_not_constant` | any | — | an artefact says where its numbers came from by RESOLVING it, never by typing it. |
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
 | `psm_analysis_coverage` | any | — | which power nets did the grid analysis actually answer? |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
@@ -1100,6 +1106,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tb_timing_extremes_check` | any | — | LL-6. |
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run. |
 | `tb_vcs_only_construct_remediate` | any | — | ORGANIC #717 |
+| `test_aggregate_carries_its_runtime_identity` | any | — | a failure count names the runtime that produced it, or it may not be subtracted from another. |
 | `testbench_exists_check` | any | — | Deterministic testbench existence and coverage checker. |
 | `testbench_gen` | any | — | emit unit testbenches from L10 test_cases. |
 | `tester_oracle_health_check` | any | v0.45 | Prove the tester works before iterating RTL. |
@@ -1236,7 +1243,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1155 programs)
+### `any` (1162 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1481,6 +1488,7 @@ _(no programs in this group)_
 - `dead_timing_constant_warn` — Scan all RTL files for `define macros and localparam declarations whose
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `decap_route_short_guard` — remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ...
+- `declared_basis_matches_the_session_inputs` — the stage a report claims must be the stage its own session measured.
 - `declared_clock_period` — read the clock period the DESIGN declares for the library this run is actually building against.
 - `declared_pdk_is_the_pdk_used_check` — the PDK that ran must be the PDK declared.
 - `def_gds_port_power_restore` — restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p...
@@ -1555,6 +1563,7 @@ _(no programs in this group)_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
 - `ethernet_protocol_synth` — IEEE 802.3 Ethernet-class protocol synth helper.  _[v0.1.84]_
 - `evidence_citation_resolves_check` — a cited evidence artifact must EXIST.
+- `explicit_argument_outranks_the_environment_pointer` — whatever a gate scanned, it says so.
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json.  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
@@ -1841,6 +1850,7 @@ _(no programs in this group)_
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
+- `local_clone_does_not_borrow_objects` — a prepared checkout owns its objects.
 - `loop_admission_guard` — loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills.
 - `loop_watchdog_compliance_check` — FORCE the watchdog primitive.
 - `lora_protocol_synth` — LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN).
@@ -2061,6 +2071,8 @@ _(no programs in this group)_
 - `practical_notes_specificity_check` — meta-gate for plugin docs.
 - `pre_awake_silence_check` — M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak...
 - `prefix_adder_synth_recipe` — parallel-prefix adder structuring (QoR recipe).
+- `prepared_checkout_states_the_revision_it_holds` — which commit is in there.
+- `printed_remedy_runs_as_printed` — a remedy you can paste is a remedy.
 - `professional_tb_check` — Phase-2 gate for the professional cocotb TB path.
 - `professional_tb_gen` — deterministic PROFESSIONAL testbench generator.
 - `profibus_protocol_synth` — PROFIBUS (Process Field Bus) protocol synth helper.
@@ -2083,6 +2095,7 @@ _(no programs in this group)_
 - `provenance_hash_audit` — v0.114 (BACKLOG-v10 P2.3).  _[v0.114]_
 - `provenance_logger` — Wrap a tool invocation, record hashed provenance.
 - `provenance_output_hash_completeness_check` — verify that `<project>/provenance.jsonl` carries a complete, on-disk-verifiable hash chain of every tool invocation's outputs.  _[v0.2.102]_
+- `provenance_value_is_resolved_not_constant` — an artefact says where its numbers came from by RESOLVING it, never by typing it.
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
 - `psm_analysis_coverage` — which power nets did the grid analysis actually answer?
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
@@ -2305,6 +2318,7 @@ _(no programs in this group)_
 - `tb_timing_extremes_check` — LL-6.
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run.
 - `tb_vcs_only_construct_remediate` — ORGANIC #717
+- `test_aggregate_carries_its_runtime_identity` — a failure count names the runtime that produced it, or it may not be subtracted from another.
 - `testbench_exists_check` — Deterministic testbench existence and coverage checker.
 - `testbench_gen` — emit unit testbenches from L10 test_cases.
 - `tester_oracle_health_check` — Prove the tester works before iterating RTL.  _[v0.45]_
