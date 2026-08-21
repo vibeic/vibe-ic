@@ -75,15 +75,21 @@ with a non-zero count, and when the run is not enforcing it says so in the same
 breath — a guard that can be off and does not say it is off is the vacuous pass
 this repository keeps removing.
 
-WHAT TRIGGERS IT IN PRACTICE: AN ANCHOR BUMP
-============================================
-This is not background flakiness. Two of the sites pin the CURRENT anchor
-literal, so the day `tools/vibeic-eda/VERSION` moves, every host that has not
-yet pulled the new tag silently stops running them — measured in vibe-ic#1088 as
-2 SKIPPED before the pull and 12 passed / 0 skipped after, on one unchanged
-tree. v1.10.33 has just moved that anchor to 0.2.89, and six machines land in
-parallel, so the window in which a false green is cheapest to produce and most
-expensive to trust is open right now.
+WHAT TRIGGERS IT IN PRACTICE: THE IMAGE THIS HOST HAS
+=====================================================
+This is not background flakiness. It is decided by whether the host holds a
+vibeic-eda image at all — measured in vibe-ic#1088 as 2 SKIPPED before the pull
+and 12 passed / 0 skipped after, on one unchanged tree.
+
+It used to be worse in a way worth recording, because the shape recurs. Two of
+the sites pinned the CURRENT ANCHOR LITERAL, read from `tools/vibeic-eda/VERSION`
+— vibeic-eda's version number kept in this repo — so the day that file moved,
+every host that had not yet pulled the new TAG silently stopped running them. A
+version number nobody had pulled turned a passing test into a skip with no
+change to the test. The anchor is gone; the image is now identified by the DIGEST
+of what the host actually has (`_eda_image.judged_image`), which cannot go stale
+against itself. The skip that remains means the host has no image, which is a
+true fact about the host and is what this tier is for.
 
 THE THIRD STATE: A PROBE THAT NEVER ANSWERED (vibe-ic#1283)
 ===========================================================
@@ -171,8 +177,8 @@ def skip_not_verified(reason: str, remedy: str = "") -> None:
     that the thing it verifies WITH is out of reach: the EDA image, a running
     container, a PDK file inside one. *remedy* is the command that would make
     the run answerable, and it is part of the contract rather than a nicety —
-    the failure mode this tier exists for is an anchor bump nobody noticed, and
-    "pull this tag" is the whole fix.
+    the failure mode this tier exists for is a host that quietly has no image,
+    and "pull this image" is the whole fix.
     """
     import pytest  # local: the substrate stays importable without pytest
 
