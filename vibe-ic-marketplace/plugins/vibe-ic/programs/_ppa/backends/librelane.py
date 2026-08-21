@@ -354,3 +354,25 @@ def _bbox_area(base: str, raw: str, scope: Mapping[str, Any],
         "scope": dict(scope),
         "source": dict(source),
     }
+
+
+# ── the driver seam (`_ppa/backends/__init__.py`) ───────────────────────────
+def extract_records(path, **_opts):
+    """Canonical records from a LibreLane metrics file, or a run directory.
+
+    `read_metrics` already accepts either and returns the file it actually read
+    plus that file's hash, so the record's provenance names the artefact rather
+    than the directory it was found under.
+
+    NOTE, and it is not small: the records this returns do NOT yet satisfy
+    `_ppa/metrics.validate` -- measured 2026-08-21, every MEASURED row comes
+    back BAD_METRIC_NAME (LibreLane's `design__instance__area` is not a dotted
+    canonical name), SCOPE_INCOMPLETE (no `stage`) and NO_UNIT (no `unit` key at
+    all). Driving this backend is therefore honest about what it produces and
+    the assembler will refuse the rows; mapping LibreLane's keys onto canonical
+    names and units needs evidence for each unit that this lane does not have,
+    and inventing them is the defect `openroad.py` refuses by name ("It does not
+    map a `-metrics` JSON key whose unit it could not establish from evidence").
+    """
+    metrics, read_path, sha = read_metrics(path)
+    return to_records(metrics, source_path=read_path, source_sha256=sha)

@@ -92,6 +92,8 @@ __all__ = [
     "check_contract_identity", "check_scope_parity", "check_stage_basis_agreement",
     "check_feasibility", "check_tuning_parity",
     "derive_feasibility", "pareto_relation", "score",
+    "VERDICT_CLEAN", "CHECK_CLEAN", "CHECK_VIOLATIONS",
+    "CHECK_NOT_CHECKED",
 ]
 
 RC_OK = 0
@@ -430,6 +432,23 @@ def check_scope_parity(arms: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
                     "satisfy equality, and two numbers that say nothing about "
                     "themselves are not thereby comparable.",
                     RC_UNDETERMINED)
+            # PRESENT-BUT-NULL is the same hole one step in. `k not in sc` is
+            # satisfied by `{"process": None}`, and two arms that both declare
+            # `process: None` then compare EQUAL and buy the parity they were
+            # meant to be refused. Producers reach for null exactly when they
+            # could not read the field -- which is when the refusal matters
+            # most -- so a required key must carry a stated value or be absent.
+            blank = [k for k in REQUIRED_SCOPE[axis]
+                     if sc.get(k) is None or sc.get(k) == ""]
+            if blank:
+                raise Refusal(
+                    "SCOPE_SENTINEL",
+                    f"arm {flow!r}'s `{axis}` scope declares {blank} with no "
+                    "value. `null` and \"\" are not unknown-corner markers: two "
+                    "of them compare EQUAL, so two numbers measured under "
+                    "conditions nobody recorded would pass as measured under "
+                    "the SAME conditions. State the field or omit the key.",
+                    RC_UNDETERMINED)
         for flow, sc in scopes[1:]:
             ref_flow, ref_sc = scopes[0]
             if dict(sc) != dict(ref_sc):
@@ -504,37 +523,139 @@ def check_stage_basis_agreement(arms: Sequence[Mapping[str, Any]]) -> None:
 FEASIBILITY_FLOOR = ("drc", "lvs", "antenna", "setup", "hold", "drv")
 
 
+#: The three shapes a check may state its result in, and what each means.
+#:
+#: `violations`  a non-negative integer count.        0 is clean.
+#: `status`      CLEAN / VIOLATIONS / NOT_CHECKED.    a stated classification.
+#: `verdict`     a literal, for a check that has no count.
+#:
+#: WHY THERE ARE THREE. Requiring a count on every check is a TYPE ERROR on the
+#: checks that do not produce one. LVS answers "do these two circuits match, and
+#: which circuit was compared" -- a verdict about a named top-level cell, not a
+#: population. The only way to express an LVS-clean arm used to be
+#: `violations: 0`, which is a slightly odd thing to write about a verdict and
+#: which invites arithmetic on it downstream. And `status` was documented by the
+#: `comparison.v2` schema as a first-class alternative for years while this
+#: function ignored it, so a record that VALIDATED against the shipped schema
+#: and declared `status: CLEAN` on every axis derived as NOT_CHECKED and the
+#: whole arm was refused. Measured: with `status: CLEAN` alone the head-to-head
+#: refused naming ['antenna','drc','drv','hold','lvs','setup']; with
+#: `violations: 0` added for the three physical checks it refused naming only
+#: ['drv','hold','setup'], which was the accurate answer.
+CHECK_CLEAN = "CLEAN"
+CHECK_VIOLATIONS = "VIOLATIONS"
+CHECK_NOT_CHECKED = "NOT_CHECKED"
+
+#: Verdict literals that mean a verdict-shaped check is clean, per check name.
+#: Sourced from the accept sets `_ppa/feasibility.py` declares on the matching
+#: axis, so there is ONE statement in this repository of what an LVS pass looks
+#: like. A check name absent from this map has no verdict spelling and must
+#: state a count or a status.
+VERDICT_CLEAN: Dict[str, Tuple[str, ...]] = {
+    "lvs": ("CLEAN", "MATCH"),
+    "equivalence": ("PROVEN", "EQUIVALENT"),
+}
+
+
+def _check_result(name: str, c: Mapping[str, Any]) -> Tuple[str, Any, str]:
+    """One check -> (CLEAN | VIOLATIONS | NOT_CHECKED, evidence, why).
+
+    A check may state its result more than one way. When it does, the statements
+    must AGREE, and when they do not the COUNT wins: `violations: 3` is a
+    measurement and `status: CLEAN` beside it is an assertion, and this module's
+    whole stance is that an assertion beside its own evidence is where a record
+    has room to be dishonest cheaply. The disagreement is reported either way.
+    """
+    n = c.get("violations")
+    has_count = isinstance(n, int) and not isinstance(n, bool) and n >= 0
+    status = c.get("status") if c.get("status") in (
+        CHECK_CLEAN, CHECK_VIOLATIONS, CHECK_NOT_CHECKED) else None
+    verdict = c.get("verdict")
+    accept = VERDICT_CLEAN.get(name, ())
+    has_verdict = isinstance(verdict, str) and bool(verdict.strip()) and accept
+
+    if status == CHECK_NOT_CHECKED:
+        # An explicit "I did not check this" outranks everything else on the
+        # record: a count left over from an earlier run must not resurrect it.
+        return CHECK_NOT_CHECKED, None, "the check declares status NOT_CHECKED"
+
+    stated: List[str] = []
+    if has_count:
+        stated.append(CHECK_VIOLATIONS if n > 0 else CHECK_CLEAN)
+    if status in (CHECK_CLEAN, CHECK_VIOLATIONS):
+        stated.append(status)
+    if has_verdict:
+        stated.append(CHECK_CLEAN if verdict.strip().upper() in
+                      {a.upper() for a in accept} else CHECK_VIOLATIONS)
+
+    if not stated:
+        if verdict is not None and not accept:
+            return (CHECK_NOT_CHECKED, None,
+                    f"the check states verdict {verdict!r}, but {name!r} has no "
+                    "verdict spelling; state `violations` or `status`")
+        return (CHECK_NOT_CHECKED, None,
+                "the check states no `violations` count, no `status` and no "
+                "`verdict` this check name accepts")
+
+    if len(set(stated)) > 1:
+        # Contradiction. The count is the measurement, so it decides; the
+        # disagreement is named so nobody has to diff the record to find it.
+        decided = (CHECK_VIOLATIONS if has_count and n > 0
+                   else CHECK_CLEAN if has_count
+                   else CHECK_VIOLATIONS)
+        return decided, n if has_count else None, (
+            f"the check contradicts itself: violations={n!r}, status="
+            f"{c.get('status')!r}, verdict={verdict!r}. The measured count "
+            "decides; an assertion beside its own evidence does not.")
+    return stated[0], (n if has_count else verdict if has_verdict else None), ""
+
+
 def derive_feasibility(arm: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
     """FEASIBLE / INFEASIBLE / NOT_CHECKED, derived from the arm's own evidence.
 
-    Derived and never read off a `verdict` key, for the same reason the PPA
-    verdict is derived: an assertion beside its own evidence is the one place a
-    record has room to be dishonest cheaply.
+    Derived and never read off a `verdict` key ON THE ARM, for the same reason
+    the PPA verdict is derived: an assertion beside its own evidence is the one
+    place a record has room to be dishonest cheaply. A `verdict` on an
+    individual CHECK is a different thing -- it is that check's result, the only
+    form some checks have, and `_check_result` adjudicates it against the accept
+    set the feasibility axis declares.
     """
     checks = (arm.get("feasibility") or {}).get("checks")
     if not isinstance(checks, Mapping) or not checks:
         return "NOT_CHECKED", {"reason": "no `feasibility.checks`"}
     violating: Dict[str, Any] = {}
     unchecked: List[str] = []
+    reasons: Dict[str, str] = {}
+    contradicting: List[str] = []
     for name in sorted(set(FEASIBILITY_FLOOR) | set(checks)):
         c = checks.get(name)
         if not isinstance(c, Mapping):
             unchecked.append(name)
+            reasons[name] = ("the arm declares no object for this check"
+                             if c is None else
+                             f"`checks.{name}` is {type(c).__name__}, not an object")
             continue
-        if c.get("status") == "NOT_CHECKED":
+        result, evidence, why = _check_result(name, c)
+        if why:
+            reasons[name] = why
+            if "contradicts itself" in why:
+                contradicting.append(name)
+        if result == CHECK_NOT_CHECKED:
             unchecked.append(name)
-            continue
-        n = c.get("violations")
-        if isinstance(n, bool) or not isinstance(n, int) or n < 0:
-            unchecked.append(name)
-            continue
-        if n > 0:
-            violating[name] = n
+        elif result == CHECK_VIOLATIONS:
+            violating[name] = evidence if evidence is not None else \
+                c.get("status") or c.get("verdict")
+    detail: Dict[str, Any] = {}
+    if reasons:
+        detail["reasons"] = reasons
+    if contradicting:
+        detail["contradicting"] = sorted(contradicting)
     if violating:
-        return "INFEASIBLE", {"violating": violating, "not_checked": unchecked}
+        return "INFEASIBLE", {"violating": violating,
+                              "not_checked": unchecked, **detail}
     if unchecked:
-        return "NOT_CHECKED", {"not_checked": unchecked}
-    return "FEASIBLE", {"checked": sorted(checks)}
+        return "NOT_CHECKED", {"not_checked": unchecked, **detail}
+    return "FEASIBLE", {"checked": sorted(checks), **detail}
 
 
 def check_feasibility(arms: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:

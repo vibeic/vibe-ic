@@ -167,14 +167,48 @@ def test_vacuous_an_empty_directory_exits_two_not_zero(tmp_path):
 
 
 def test_vacuous_an_empty_directory_writes_no_bundle_that_reads_as_clean(tmp_path):
+    """What the name says. Until v1.11.33 the body admitted the opposite: a
+    bundle WAS written, `{"records": []}`, byte-identical to a run that read a
+    tree and found nothing. The exit code was honest and the file was not, and
+    a downstream reader opens the file."""
     d = tmp_path / "empty"
     d.mkdir()
     out = tmp_path / "bundle.json"
     p = run("--records", str(d), "--out", str(out))
     assert p.returncode == 2
-    # A bundle IS written for the honest-partial case, but the run exits 2 and
-    # says so; the invariant that matters is that the exit code is not 0.
     assert "no document was named or found" in p.stderr
+    assert not out.exists(), out.read_text()
+
+
+def test_vacuous_every_input_unreadable_writes_no_bundle(tmp_path):
+    """Rule 9 at the artefact level. Nothing was read, so there is no record
+    set -- empty or otherwise -- to write down."""
+    d = tmp_path / "records"
+    d.mkdir()
+    (d / "broken.json").write_text("{not json", encoding="utf-8")
+    (d / "other.json").write_text('{"schema": "something.else.v1"}',
+                                  encoding="utf-8")
+    out = tmp_path / "bundle.json"
+    p = run("--records", str(d), "--out", str(out))
+    assert p.returncode == 2
+    assert not out.exists(), out.read_text()
+    assert "not one document was read" in p.stderr
+
+
+def test_a_partial_read_writes_a_bundle_that_SAYS_it_is_partial(tmp_path):
+    """The honest-partial case still produces a bundle -- and the bundle names
+    what it could not read, so a reader who opens the file and not the exit
+    code can still see it."""
+    d = tmp_path / "records"
+    d.mkdir()
+    put(d / "area.json", AREA)
+    (d / "broken.json").write_text("{not json", encoding="utf-8")
+    out = tmp_path / "bundle.json"
+    p = run("--records", str(d), "--out", str(out))
+    assert p.returncode == 2
+    doc = json.loads(out.read_text())
+    assert len(doc["records"]) == 1
+    assert [u["path"] for u in doc["inputs_unreadable"]] == [str(d / "broken.json")]
 
 
 def test_vacuous_a_named_file_that_is_missing_exits_two(tmp_path):
@@ -217,6 +251,9 @@ def test_no_arguments_is_a_bad_invocation_not_a_pass():
     p = run()
     assert p.returncode != 0
     assert p.returncode != 1
+    # PPA_INTERFACES §1: 3 is BAD INVOCATION, 2 is "I could not check". A typo
+    # and an unreadable input must not leave a caller the same exit code.
+    assert p.returncode == 3, (p.returncode, p.stderr)
 
 
 def test_the_report_names_its_denominator(tmp_path):
@@ -256,3 +293,72 @@ def test_every_extract_verdict_carries_a_machine_readable_code(tmp_path):
     put(d / "b.json", other)
     assert run("--records", str(d), "--json", str(out)).returncode == 1
     assert json.loads(out.read_text())["code"] == "RECORD_REFUSED"
+
+
+# ── F-2: `--backend` drove no backend, including the ones that exist ────────
+# Until v1.11.33 every `--backend TOOL` exited 2 with "ppa_metric_extract does
+# not drive backends yet", for all five backends that ship. The canonical
+# extraction CLI could extract from no tool at all, so a downloaded plugin had
+# no supported route from a tool artefact to a record.
+
+OPENROAD_LOG = """\
+OpenROAD 26Q3-984-g09d67f08f8
+[INFO IFP-0100] Die BBox:  (  0.000  0.000 ) ( 142.000 142.000 ) um
+[INFO IFP-0102] Core area:                        12294.374 um^2
+[INFO IFP-0105] Number of instances:                    252
+[INFO DRT-0194] Start detail routing.
+[INFO DRT-0199]   Number of violations = 0.
+[INFO DRT-0198] Complete detail routing.
+Total wire length = 12704 um.
+Total number of vias = 2502.
+"""
+
+
+def test_the_backend_seam_actually_EXTRACTS(tmp_path):
+    """THE F-2 GUARD, end to end through the process. Not "a backend declares a
+    driver" -- that can be true while the CLI still extracts nothing -- but
+    "records came out of a real artefact and into a bundle"."""
+    log = tmp_path / "openroad.log"
+    log.write_text(OPENROAD_LOG, encoding="utf-8")
+    out = tmp_path / "bundle.json"
+    p = run("--backend", "openroad", "--from", str(log), "--out", str(out))
+    assert p.returncode == 0, p.stdout + p.stderr
+    doc = json.loads(out.read_text())
+    assert len(doc["records"]) > 0, "the backend was driven and indexed nothing"
+    assert all(r["schema"] == M.SCHEMA_ID for r in doc["records"])
+    assert any(r["metric"] == "route.wirelength.um" and r.get("value") == 12704.0
+               for r in doc["records"]), "the figure the log states is missing"
+
+
+def test_a_backend_that_cannot_be_driven_gives_its_OWN_reason(tmp_path):
+    """A blanket refusal for every tool is what hid F-2 for eleven versions.
+    A backend that is not a record producer must say so in its own words, and
+    name what IS drivable."""
+    art = tmp_path / "sta.rpt"
+    art.write_text("worst slack max 5.24\n", encoding="utf-8")
+    p = run("--backend", "opensta", "--from", str(art))
+    assert p.returncode == 2, p.stdout + p.stderr
+    assert "[CANNOT CHECK]" in p.stderr
+    assert "not into records" in p.stderr, p.stderr
+    assert "openroad" in p.stderr, "the refusal names no drivable alternative"
+
+
+def test_vacuous_a_backend_with_no_artefact_refuses_and_writes_nothing(tmp_path):
+    """--from naming nothing is not an empty extraction."""
+    out = tmp_path / "bundle.json"
+    p = run("--backend", "openroad", "--from", str(tmp_path / "nope.log"),
+            "--out", str(out))
+    assert p.returncode == 2
+    assert not out.exists()
+    assert "no such artefact" in p.stderr
+
+
+def test_a_backend_that_needs_an_option_refuses_rather_than_defaulting(tmp_path):
+    """yosys prints two statistics blocks in one transcript and they are two
+    stages of one run. Defaulting the stage compares a pre-techmap count
+    against a mapped one and nothing downstream can see it happened."""
+    art = tmp_path / "stat.txt"
+    art.write_text("=== design hierarchy ===\n   cells 252\n", encoding="utf-8")
+    p = run("--backend", "yosys", "--from", str(art))
+    assert p.returncode == 3, (p.returncode, p.stdout, p.stderr)
+    assert "--stage" in p.stderr

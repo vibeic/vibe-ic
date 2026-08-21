@@ -242,3 +242,80 @@ def test_nothing_is_written_unless_json_is_asked_for(tmp_path):
     report = json.loads(out.read_text())
     assert report["program"] == "ppa_problem_integrity_check"
     assert report["rc"] == 0
+
+
+# ── F-13: which artefacts belong to `analysis` ──────────────────────────────
+# PPA_INTERFACES §3.1. An artefact that varies with the implementation may not
+# sit in `analysis`. The rule was implicit until v1.11.33 and its most natural
+# reading -- "analysis artefacts" = "the artefacts the analysis produced" --
+# makes the gate refuse EVERY legitimate comparison, because sign-off reports
+# are outputs of the implementation and of course they differ.
+
+def _different_rtl_and_its_sta(root: Path) -> None:
+    """What really happens: change the RTL and the STA report changes too.
+
+    The stock `_different_rtl` moves only `rtl/top.v`, so the misfiled report
+    stays byte-identical and the defect stays hidden. A design whose RTL moved
+    and whose timing report did NOT is not a run anybody has.
+    """
+    _different_rtl(root)
+    (root / "sta" / "setup.rpt").write_text("wns -0.087\n")
+
+
+def test_a_report_declared_under_analysis_is_named_as_MISFILED(tmp_path):
+    """The negative arm. Two runs that ARE comparable -- same problem, same
+    toolchain, different implementation -- are refused because a sign-off
+    report was declared under `analysis`, and the reader must be told that is
+    the cause rather than handed a bare digest mismatch."""
+    baseline = _build_arm(tmp_path, "baseline")
+    candidate = _build_arm(tmp_path, "candidate",
+                           mutate_tree=_different_rtl_and_its_sta)
+    verdict = run_cli(INTEGRITY, "--baseline", str(baseline),
+                      "--candidate", str(candidate),
+                      "--require-implementation-differs")
+    assert verdict.returncode == 1, verdict.stdout + verdict.stderr
+    seen = codes(verdict)
+    assert "PPA-C-012" in seen, seen
+    assert "PPA-C-016" in seen, (
+        "the analysis identity moved WITH the implementation and nothing said "
+        "the artefact was misfiled:\n" + verdict.stdout + verdict.stderr)
+    text = verdict.stdout + verdict.stderr
+    assert "sta_setup" in text, text
+    assert "may not sit in `analysis`" in text, text
+
+
+def test_moving_that_report_to_implementation_makes_the_pair_COMPARABLE(tmp_path):
+    """The positive arm, and the whole point of the rule: with `analysis`
+    holding the measurement CONFIGURATION only and the report moved to
+    `implementation`, the same two runs compare cleanly. Nothing about the runs
+    changed -- only where the artefact was declared."""
+    fixed = copy.deepcopy(base_declaration())
+    report = fixed["analysis"]["artefacts"].pop()
+    assert report["role"] == "sta_setup", report
+    fixed["implementation"]["artefacts"].append(report)
+
+    baseline = _build_arm(tmp_path, "baseline", declaration=fixed)
+    candidate = _build_arm(tmp_path, "candidate", declaration=fixed,
+                           mutate_tree=_different_rtl_and_its_sta)
+    verdict = run_cli(INTEGRITY, "--baseline", str(baseline),
+                      "--candidate", str(candidate),
+                      "--require-implementation-differs")
+    assert verdict.returncode == 0, verdict.stdout + verdict.stderr
+    assert "PPA-C-016" not in codes(verdict)
+    assert "PPA-C-012" not in codes(verdict)
+
+
+def test_analysis_moving_ALONE_is_not_reported_as_misfiling(tmp_path):
+    """The discriminator. `analysis` differing while the implementation does
+    NOT is a real difference in how the two numbers were taken -- a moved
+    corner -- and calling that a misfiled artefact would send the reader to fix
+    the wrong thing."""
+    moved = copy.deepcopy(base_declaration())
+    moved["analysis"]["facts"][0]["value"] = "fast"
+    baseline = _build_arm(tmp_path, "baseline")
+    candidate = _build_arm(tmp_path, "candidate", declaration=moved)
+    verdict = run_cli(INTEGRITY, "--baseline", str(baseline),
+                      "--candidate", str(candidate))
+    assert verdict.returncode == 1, verdict.stdout + verdict.stderr
+    assert "PPA-C-012" in codes(verdict)
+    assert "PPA-C-016" not in codes(verdict), verdict.stdout + verdict.stderr

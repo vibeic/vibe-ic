@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import canonical_json as _cj
+from .backends import opensta as _opensta
 
 __all__ = [
     "SCHEMA_METRIC", "PARSER",
@@ -451,9 +452,34 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
                   "activity_basis": basis,
                   "liberty": report.get("liberty"),
                   "tool": report.get("tool")}
+    # ── the PVT the liberty file names ────────────────────────────────────
+    # `_ppa/benchmark.REQUIRED_SCOPE["power_mw"]` needs stage, mode, process,
+    # voltage_v, temperature_c and activity_basis before two power numbers may
+    # be compared at all. This module emitted four of the six, so every shipped
+    # power record was refused SCOPE_INCOMPLETE by the head-to-head before it
+    # could compare anything -- while carrying, in `scope.liberty`, the file
+    # name that states three of the missing four, and while the same lane
+    # shipped the parser for it.
+    #
+    # ONLY WHAT THE PARSER RESOLVED IS EMITTED. `check_scope_parity` tests
+    # required keys for PRESENCE, so `process: None` would satisfy the key check
+    # and then compare equal to another `None` -- two records that say nothing
+    # about their corner, passing as the same corner. That is worse than the
+    # refusal it replaces. A field the stem does not state is left OUT, the
+    # refusal stands, and the reason the parser gave is recorded below.
+    pvt = _opensta.parse_liberty_pvt(report.get("liberty"))
+    for key, val in (("process", pvt.process), ("voltage_v", pvt.voltage_v),
+                     ("temperature_c", pvt.temperature_c)):
+        if val is not None:
+            base_scope[key] = val
     provenance = {"activity_corroboration": act.get("corroboration"),
                   "activity_reason": act.get("reason"),
-                  "declared_mode": act.get("declared_mode")}
+                  "declared_mode": act.get("declared_mode"),
+                  # The parser's own account of what it could not read, kept
+                  # beside the scope it did not fill. `ambiguous:...` means the
+                  # stem carried two candidates and it refused to pick one.
+                  "liberty_pvt_stem": pvt.stem,
+                  "liberty_pvt_gaps": dict(pvt.gaps) or None}
     if extra_scope:
         base_scope.update(extra_scope)
 

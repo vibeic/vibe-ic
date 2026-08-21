@@ -1,0 +1,18 @@
+{
+  "trial": "z02",
+  "levers": {
+    "rtl_variant": "csa_add1",
+    "synthesis_strategy": "none"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.30",
+    "spare_cell_density": "0.02"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 268.064,
+    "cpu_seconds": 329.747,
+    "peak_rss_mb": 600.9
+  }
+}

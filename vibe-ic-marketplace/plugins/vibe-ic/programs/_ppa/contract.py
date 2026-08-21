@@ -135,6 +135,7 @@ FINDING_CODES = {
     "PPA-C-013": "the two arms have the same implementation identity",
     "PPA-C-014": "an image pins bytes but its OCI version label could not be read",
     "PPA-C-015": "a key was resolved by authority; the overridden values are named",
+    "PPA-C-016": "an artefact that varies with the implementation is declared under `analysis`",
 }
 
 def finding(code: str, severity: str, message: str, **detail: Any) -> Dict[str, Any]:

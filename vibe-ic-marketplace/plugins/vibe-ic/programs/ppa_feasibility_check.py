@@ -47,6 +47,7 @@ chip-AGNOSTIC.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import pathlib
 import sys
@@ -99,6 +100,16 @@ def _report(results: List[feas.FeasibilityResult], rc: int,
         "policy": {
             "axes": [a.name for a in policy.axes],
             "required_views": [dict(v) for v in policy.required_views],
+            "required_views_by_axis": {
+                k: [dict(v) for v in vs]
+                for k, vs in sorted((policy.required_views_by_axis or {}).items())},
+            # The views each axis was ACTUALLY asked for, resolved. The two
+            # fields above are what the contract wrote; this is what the gate
+            # used, and printing only the first would leave a reader deriving
+            # the fallback by hand.
+            "views_used_by_axis": {
+                a.name: [dict(v) for v in feas.views_for(a.name, policy)]
+                for a in policy.axes},
             "limits": {k: dict(v) for k, v in policy.limits.items()},
             "allow_waivers": policy.allow_waivers,
         },
@@ -176,8 +187,11 @@ def main(argv=None) -> int:
     policy = feas.policy_from_document(
         contract_doc if isinstance(contract_doc, Mapping) else {})
     if args.no_waivers:
-        policy = feas.FeasibilityPolicy(policy.axes, policy.required_views,
-                                        policy.limits, allow_waivers=False)
+        # `replace` and not a positional rebuild: a positional constructor
+        # silently reassigns every field when one is inserted, and this one
+        # already dropped `limits` into `required_views_by_axis` the moment that
+        # field was added. dataclasses.replace cannot make that mistake.
+        policy = dataclasses.replace(policy, allow_waivers=False)
 
     results = feas.adjudicate_set(candidates, policy)
     rc = feas.set_exit_code(results)

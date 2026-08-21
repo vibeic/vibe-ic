@@ -309,9 +309,16 @@ def test_vacuous_arms_are_never_rc0_or_rc1(tmp_path):
 
 
 def test_bad_invocation_is_not_a_design_finding():
-    with pytest.raises(SystemExit) as excinfo:
-        chk.main([])
-    assert excinfo.value.code == 2  # argparse's own; never 1
+    # PPA_INTERFACES §1: 3 is BAD INVOCATION; 2 is UNDETERMINED ("I could not
+    # look") and must never be mapped to PASS by a flow gate -- which is how a
+    # caller that treats 2 as "nothing to check here" swallows a typo'd flag
+    # and carries on green. This test previously asserted argparse's own 2,
+    # which satisfied its stated intent (never 1) but pinned the wrong one of
+    # the two remaining codes.
+    rc = chk.main([])
+    assert rc == 3, (
+        f"a bad invocation must be rc=3, got {rc}. 2 there is UNDETERMINED "
+        f"and a caller cannot tell it from an artefact that was not present.")
 
 
 def test_cli_returns_the_contract_codes(tmp_path):

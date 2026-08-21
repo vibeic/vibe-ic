@@ -893,6 +893,34 @@ class GateOnlyEval:
 
 #: Reason prefixes flow_compliance_check uses to move a passing gate OUT of the
 #: plain PASS bucket. Read live from the module so a renamed prefix is noticed.
+#:
+#: `__JSON_VACUOUS_HINT__` ADDED 2026-08-21. It had been missing since it was
+#: introduced, and the omission was charging a step for disclosing through the
+#: STRONGER of the two vacuity channels.
+#:
+#: The consumer treats it as a peer of the other three, in one `elif` chain:
+#: `flow_compliance_check.py` ~8099 dispatches `_JSON_VACUOUS_HINT_PREFIX`,
+#: `_VACUOUS_HINT_PREFIX`, `_WAIVER_HINT_PREFIX` and `_SKIP_HINT_PREFIX` through
+#: the same branch structure, and ~10040 reads it to resolve the VACUOUS_PASS
+#: tier. And it is the channel the consumer's OWN comment prefers: the JSON hint
+#: is raised from the gate's `--json` report because (#887) "a disclosure a
+#: project-path length can delete is not a disclosure, and stdout is exactly
+#: that channel — the consumer sees only the last 300 chars".
+#:
+#: MEASURED before the change, over every step whose gate passes on an empty
+#: project: L1b fires on ['1.6x'] with three prefixes and on [] with four.
+#: NOTHING ELSE MOVES — the other sixteen already disclose through one of the
+#: original three or take the conditional-skip escape — so this widens the
+#: accepted disclosure set by exactly one channel and excuses exactly one step,
+#: the one whose gate writes `"status": "NOT_APPLICABLE"` into its own report
+#: and is read as vacuous by the flow for that reason.
+#:
+#: The three EXCLUDED hints are excluded on purpose and are pinned by
+#: `test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name`:
+#:   `_RAN_HINT_PREFIX`      — says the gate RAN. The opposite of a skip.
+#:   `_ADVISORY_HINT_PREFIX` — an advisory clause never blocked, so its pass was
+#:                             never in the plain PASS bucket to be moved out of.
+#:   `_STRUCTURE_ONLY_HINT_PREFIX` — a different tier about CONTENT, not a skip.
 def _disclosure_prefixes() -> Tuple[str, ...]:
     _ensure_programs_on_path()
     import flow_compliance_check as _fcc  # type: ignore
@@ -919,6 +947,71 @@ def _disclosure_prefixes() -> Tuple[str, ...]:
             _fcc._SKIP_HINT_PREFIX,
             _fcc._WAIVER_HINT_PREFIX,
             _fcc._JSON_VACUOUS_HINT_PREFIX)
+
+
+#: Hints the consumer's tier chain dispatches that this leg deliberately does
+#: NOT count as a skip disclosure. Every exclusion is conservative — it can only
+#: keep L1b CHARGING, never excuse a step — and each is justified from the
+#: consumer's own text rather than from the name:
+#:
+#:   _RAN_HINT_PREFIX        says the gate RAN. The opposite of a skip.
+#:   _ADVISORY_HINT_PREFIX   an advisory clause never blocked, so its pass was
+#:                           never in the plain PASS bucket to be moved out of.
+#:   _STRUCTURE_ONLY_HINT_PREFIX  a different tier, about artefact CONTENT.
+#:   _NOT_APPLICABLE_HINT_PREFIX  the consumer's own comment settles this one:
+#:                           "VISIBLE, NOT TIER-CHANGING ... It cannot promote
+#:                           or demote a step; it makes the non-verdict
+#:                           readable." A hint that leaves the step in the plain
+#:                           PASS bucket is not a disclosure L1b may accept, or
+#:                           L1b would excuse a pass the flow still counts.
+#:   _SUBSTANTIVE_HINT_PREFIX  asserts the gate DID audit, by another route —
+#:                           the opposite of the vacuity L1b looks for. A gate
+#:                           claiming substance on a tree containing NOTHING is
+#:                           precisely what this leg exists to charge.
+_EXCLUDED_TIER_HINTS: Tuple[str, ...] = (
+    "_RAN_HINT_PREFIX", "_ADVISORY_HINT_PREFIX", "_STRUCTURE_ONLY_HINT_PREFIX",
+    "_NOT_APPLICABLE_HINT_PREFIX", "_SUBSTANTIVE_HINT_PREFIX")
+
+
+def test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name():
+    """A disclosure channel added to the consumer must not go unnoticed here.
+
+    `__JSON_VACUOUS_HINT__` existed in `flow_compliance_check`, moved the step
+    tier, and was absent from `_disclosure_prefixes` — so L1b charged a step
+    that HAD disclosed. This is the guard that makes the next one loud: every
+    hint prefix the consumer dispatches in its tier chain must be either
+    accepted as a disclosure or named in `_EXCLUDED_TIER_HINTS` with a reason
+    beside it. Silence is not a decision.
+    """
+    _ensure_programs_on_path()
+    import flow_compliance_check as _fcc  # type: ignore
+
+    src = Path(_fcc.__file__).read_text(encoding="utf-8")
+    marker = "if hint.startswith(_RAN_HINT_PREFIX):"
+    assert src.count(marker) == 1, (
+        f"the gate-hint tier chain is no longer identifiable by "
+        f"{marker!r} ({src.count(marker)} matches); this guard can no longer "
+        f"find the branch it is about")
+    start = src.index(marker)
+    chain = src[start:start + 3000]
+    dispatched = {
+        name for name in dir(_fcc)
+        if name.endswith("_HINT_PREFIX") and f"startswith({name})" in chain}
+    accepted = {n for n in dir(_fcc)
+                if n.endswith("_HINT_PREFIX")
+                and getattr(_fcc, n) in _disclosure_prefixes()}
+    unclassified = dispatched - accepted - set(_EXCLUDED_TIER_HINTS)
+    assert not unclassified, (
+        f"the consumer's tier chain dispatches {sorted(unclassified)}, which "
+        f"L1b neither accepts as a disclosure nor excludes by name. A gate "
+        f"disclosing through one of them would be charged as UNDISCLOSED — "
+        f"exactly what __JSON_VACUOUS_HINT__ was doing to step 1.6x. Decide "
+        f"which it is and say so here.")
+    stale = set(_EXCLUDED_TIER_HINTS) - dispatched
+    assert not stale, (
+        f"{sorted(stale)} are excluded here but the consumer no longer "
+        f"dispatches them in its tier chain; the exclusion is describing an "
+        f"older module")
 
 
 def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:

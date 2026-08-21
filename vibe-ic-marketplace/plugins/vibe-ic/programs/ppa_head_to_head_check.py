@@ -186,6 +186,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 import _corpus_location as _corpus  # sibling program, one seam for all corpora
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import benchmark as _bench  # the fairness conditions, and their argument
 
 RC_OK = _bench.RC_OK
@@ -652,10 +653,14 @@ def check_corpus(named: Path, may_be_absent: bool = False) -> int:
     print(f"ppa_head_to_head_check --corpus {corpus}: "
           f"{len(recs)} head-to-head record(s) found")
     if not recs:
-        print("VACUOUS: the corpus carries no head-to-head record, so nothing "
-              "was validated. This is NOT a pass — the first head-to-head run "
-              "has not been published yet (vibe-ic#1121). rc=2.",
-              file=sys.stderr)
+        # The MARKER, not just the word. PPA_INTERFACES §1 requires
+        # `[CANNOT CHECK]` or `[REFUSE]` on a 2 so that a caller can find one
+        # by grep rather than by reading English -- and "VACUOUS", however
+        # honest, is not the string anything downstream looks for.
+        print(f"{cli_exit.MARK_CANNOT_CHECK} VACUOUS: the corpus carries no "
+              "head-to-head record, so nothing was validated. This is NOT a "
+              "pass — the first head-to-head run has not been published yet "
+              "(vibe-ic#1121). rc=2.", file=sys.stderr)
         return RC_UNDETERMINED
     rcs = [main([str(r)]) for r in recs]
     worst = worst_rc(rcs)
@@ -687,12 +692,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "excuses a $VIBE_IC_BENCHMARK_DATA that is set and "
                          "unreadable.")
     ap.add_argument("--json", default=None, help="optional JSON report path")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
     if args.corpus is not None:
         return check_corpus(Path(args.corpus).resolve(),
                             args.corpus_may_be_absent)
     if not args.record:
-        ap.error("give a record path or --corpus DIR")
+        return cli_exit.refuse(ap.prog, "give a record path or --corpus DIR")
 
     rc, report = evaluate(Path(args.record))
     print(format_report(rc, report))
