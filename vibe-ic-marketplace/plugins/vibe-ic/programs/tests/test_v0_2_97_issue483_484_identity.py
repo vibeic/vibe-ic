@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """v0.2.97 — ORGANIC-20260606 #483 (LOW, 2 cosmetics) + #484 (MEDIUM).
 
-#483 symptom (1): phase2_one_shot_runner._oracle_coverage_evidence grepped
+#483 symptom (1): design_one_shot_runner._oracle_coverage_evidence grepped
   only the program-oracle-TB token ``ORACLE_VECTOR <name> PASS``. Real /
   full-stack oracle TBs print the compact ``VEC <n> <name> PASS`` shape, so
   scenarios_covered came back EMPTY on a real-shaped transcript (vector
@@ -49,7 +49,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 import phase3_one_shot_runner as p3  # noqa: E402
 import final_report_generate as frg  # noqa: E402
 import cross_design_identity_check as cdi  # noqa: E402

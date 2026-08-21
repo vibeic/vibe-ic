@@ -25,13 +25,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _source_pin import func_src
+
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import oracle_tb_gen as OTG  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
-_P2_SRC = (PLUGIN / "programs" / "phase2_one_shot_runner.py").read_text()
+_P2_SRC = (PLUGIN / "programs" / "design_one_shot_runner.py").read_text()
 _REG = json.loads((PLUGIN / "programs" / "ic_class_registry.json").read_text())
 
 
@@ -137,7 +139,11 @@ def test_oracle_tb_catches_wrong_dut(tmp_path):
 
 def test_skeleton_completion_is_waived_not_pass():
     i = _P2_SRC.index('"FULL_STACK_TB_DONE" in out')
-    window = _P2_SRC[i:i + 2200]
+    # Window widened (ORGANIC #654 inserted the connectivity-bridge emission
+    # + capability-gap waiver comment block ahead of the `fallback_skill`
+    # extra in this same WAIVED return; the assertions below still pin the
+    # skeleton-completion-is-WAIVED-not-PASS contract).
+    window = _P2_SRC[i:i + 3800]
     assert '"reference_tb", "WAIVED"' in window
     assert '"fallback_skill": "testbench-author"' in window
     assert "#439" in window
@@ -145,13 +151,22 @@ def test_skeleton_completion_is_waived_not_pass():
 
 def test_runner_tries_oracle_before_skeleton():
     i = _P2_SRC.index("oracle_tbs = sorted(sim_dir.glob")
-    window = _P2_SRC[i - 1200:i + 1200]
+    # Window widened (#745): the arithmetic closed-form oracle generator
+    # (arith_oracle_tb_gen) is now tried first, so the deterministic-replay
+    # oracle_tb_gen import + the _run_oracle_tb call legitimately sit further
+    # down the same routing region. Both must still precede the skeleton path.
+    window = _P2_SRC[i - 1200:i + 2600]
     assert "_run_oracle_tb" in window
     assert "import oracle_tb_gen" in window
+    # the closed-form arithmetic oracle is tried BEFORE the replay oracle
+    assert "import arith_oracle_tb_gen" in window
+    assert (window.index("import arith_oracle_tb_gen")
+            < window.index("import oracle_tb_gen"))
 
 
 def test_oracle_pass_requires_all_goldens():
-    i = _P2_SRC.index("def _run_oracle_tb")
-    window = _P2_SRC[i:i + 4200]
+    # (was a hand-widened 6000-char window, re-widened whenever the function
+    #  grew; func_src covers the whole function and needs no maintenance.)
+    window = func_src(_P2_SRC, "_run_oracle_tb")
     assert "ORACLE_TB_DONE pass=" in window
     assert "n_total > 0 and n_pass == n_total" in window
