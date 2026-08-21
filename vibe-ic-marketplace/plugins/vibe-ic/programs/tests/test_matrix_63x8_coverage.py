@@ -154,7 +154,13 @@ DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8,)
 #: the silent shape to refuse. A new step means eight new cells whose predicates
 #: nobody has looked at, so the count change must redden HERE, by name, and be
 #: acknowledged in the same commit that adds the step.
-GRID_AS_MEASURED: Tuple[int, int, int] = (67, 8, 536)
+#: 2026-08-21: (67, 8, 536) -> (69, 8, 552). TWO steps arrived and one left,
+#: which is why the cell count moves by 16 and not by 8: 0.5ic (vibe-ic#1744)
+#: and 1.6x (`7fcbc7397`) joined, 37.5self (`867de4289`) left. Both tuples
+#: below are RE-DERIVED from `flowref.step_ids()` in flow order, never appended
+#: to — a hand-edited pin is how v1.10.38 shipped a 28-entry tuple over a
+#: 27-step population.
+GRID_AS_MEASURED: Tuple[int, int, int] = (69, 8, 552)
 
 #: The flow's step ids, in declaration order, as measured 2026-07-28. Pinned
 #: alongside the count so a rename or an add-plus-remove — which leaves the
@@ -179,13 +185,13 @@ GRID_AS_MEASURED: Tuple[int, int, int] = (67, 8, 536)
 #: Declared where it runs — after step 37 writes the chip GDS, beside the two
 #: routes it is mutually exclusive with.
 STEP_IDS_AS_MEASURED: Tuple[str, ...] = (
-    'D1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', 'FS1',
-    'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8',
-    'A9', '14', '15', '15.5ic', '16', '17', '18', '19', '20', '21', '22',
-    'DT2', 'DT3', '23', '24', '25', '26', '26.5ic', '27', '28', '29', '30',
-    '31', '32', '33', '34', '35', '36', '37', '37.5ip', '37.5ic', '37.5self',
-    '38',
-    '39', 'M1', 'M2', 'M3', 'M4', '40', '41', '42', '43', '44', 'P0',
+    'D1', '0.5ic', '1', '1.6x', '2', '3', '4', '5', '6', '7', '8', '9',
+    '10', '11', 'FS1', 'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5',
+    'A6', 'A7', 'A8', 'A9', '14', '15', '15.5ic', '16', '17', '18',
+    '19', '20', '21', '22', 'DT2', 'DT3', '23', '24', '25', '26',
+    '26.5ic', '27', '28', '29', '30', '31', '32', '33', '34', '35',
+    '36', '37', '37.5ip', '37.5ic', '38', '39', 'M1', 'M2', 'M3', 'M4',
+    '40', '41', '42', '43', '44', 'P0',
 )
 
 #: Written to a scratch dir and loaded with ``-p``; dumps what pytest really

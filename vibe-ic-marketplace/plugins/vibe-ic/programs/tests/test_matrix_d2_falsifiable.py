@@ -183,8 +183,8 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 172<!--figure:blocking_clauses--> blocking clauses over
-67<!--figure:gated_steps--> gated steps. This is the denominator a reader
+LIVE, not remembered: 176<!--figure:blocking_clauses--> blocking clauses over
+68<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name
 the bindings that produced them (vibe-ic#961). Do not hand-edit them.
@@ -461,6 +461,25 @@ def _w(root: Path, rel: str, content) -> Path:
 
 def _f_empty(p: Path) -> None:
     """Nothing was produced at all. The commonest real failure."""
+
+
+def _f_crosslayer_search_undeclared(p: Path) -> None:
+    """A cross-layer search that SNAPSHOTTED a baseline and reported nothing.
+
+    Step 1.6x's gate is unconditional on purpose — its own yaml comment records
+    that a `files_exist` condition was refused by
+    `flow_condition_reachability_check` as "a check disabled by exactly the
+    situation it was written for". The consequence is that on an EMPTY project
+    the checker correctly answers NOT_APPLICABLE and exits 0, so EMPTY cannot
+    reach its FAIL branch and the step read as "gate CANNOT FAIL".
+
+    That is a limit of the FIXTURE, not of the gate: the program's fail branch
+    is one marker away. Writing the baseline snapshot alone says a search ran
+    and declared no rewrite-fidelity report, which is the defect the step
+    exists for. MEASURED: `crosslayer_rewrite_equivalence_check .` exits 1 with
+    CLX_BASELINE_PRESENT_NO_REPORT on exactly this tree.
+    """
+    _w(p, "reports/crosslayer/baseline_rtl", "phase2/stage1/rtl/top.v\n")
 
 
 def _f_rtl_bad(p: Path) -> None:
@@ -1536,6 +1555,7 @@ def _f_extract_illegal_overlap(p: Path) -> None:
 
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
+    "CROSSLAYER_SEARCH_UNDECLARED": _f_crosslayer_search_undeclared,
     "RTL_BAD": _f_rtl_bad,
     "ANALOG_P3": _f_analog_p3,
     "A0_SKIPPED": _f_a0_skipped,
@@ -1578,6 +1598,12 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
 #: not redden it) fails loudly rather than silently keeping a stale recipe.
 #: Clauses absent from this table use ``EMPTY``.
 CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
+    # Step 1.6x's single blocking clause. EMPTY reaches NOT_APPLICABLE -> rc 0,
+    # which is the CORRECT answer for a design that ran no cross-layer search
+    # and is therefore no answer at all to "can this gate fail?". The fixture
+    # writes the baseline snapshot only: a search that ran and declared no
+    # rewrite-fidelity report. See _f_crosslayer_search_undeclared.
+    ("1.6x", 'crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json'): "CROSSLAYER_SEARCH_UNDECLARED",
     # vibe-ic#700 wired this into D1. EMPTY cannot redden it: absence of the
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.

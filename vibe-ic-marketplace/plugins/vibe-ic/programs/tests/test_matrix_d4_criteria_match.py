@@ -823,7 +823,7 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(cells) == len(F.step_ids()) == 68, (
+    assert len(cells) == len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
         f"the flow declares {len(F.step_ids())} steps; dimension {DIM} carries "
         f"{len(cells)} cells — the ledger and the yaml have diverged"
     )
@@ -854,7 +854,7 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(cells) - len(waived) == 68 and not waived, (
+    assert len(cells) - len(waived) == 69 and not waived, (   # 68 -> 69: step 1.6x
         f"{len(cells) - len(waived)} cells are enforced and {len(waived)} are "
         f"waived; this module was reported as enforcing all 63 with no "
         f"waiver. Update the report, or explain the change."

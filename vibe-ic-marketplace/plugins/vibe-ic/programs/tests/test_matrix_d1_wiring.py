@@ -1163,8 +1163,32 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: is dispatched by any runner at all, so there is no branch to hang either
 #: producer off; wiring one would mean inventing that dispatch, which is a flow
 #: change and not a pin repair. Being here is the DISCLOSURE, not permission.
+#: 2026-08-21 — THREE ENTRIES ADDED, FROM TWO SEPARATE CAUSES, and the two are
+#: worth keeping apart because a single-cause story would be wrong here.
+#:
+#:   ("1.6x", "crosslayer_search_space")
+#:   ("1.6x", "crosslayer_rewrite_equivalence")
+#:       `7fcbc7397` added step 1.6x with a `programs:` array of three and a
+#:       gate that runs exactly one of them, `crosslayer_rewrite_equivalence
+#:       _check`. The other two are the PRODUCERS the checker reads after: the
+#:       search-space emitter and the equivalence prover. Same shape as the
+#:       nine entries below — a generator an agent runs, advertised by the step
+#:       and dispatched by no runner.
+#:
+#:   ("0.5ic", "tapeout_declaration_gen")
+#:       NOT from that commit, and this is measured, not assumed:
+#:       `git log -S'      - tapeout_declaration_gen'` over the yaml returns
+#:       `00d9dc261` (v1.11.4), four releases earlier, which added it to
+#:       0.5ic's `programs:` and wired it to nothing. At `ff5071caa`, when this
+#:       pin was last set, the entry did not exist in the yaml at all.
+#:
+#: So this pin was stale for TWO independent reasons before either was noticed,
+#: which is the argument for reading it rather than moving it.
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("0.5ic", "submission_template_ingest"),
+    ("0.5ic", "tapeout_declaration_gen"),
+    ("1.6x", "crosslayer_rewrite_equivalence"),
+    ("1.6x", "crosslayer_search_space"),
     ("15.5ic", "pad_ring_gen"),
     ("6", "debug_first_pass"),
     ("6", "fpga_test_harness_gen"),
