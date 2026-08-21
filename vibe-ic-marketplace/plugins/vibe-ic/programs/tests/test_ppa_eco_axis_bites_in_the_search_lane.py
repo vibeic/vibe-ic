@@ -48,7 +48,7 @@ from _ppa import feasibility as F               # noqa: E402
 from _ppa import search as S                    # noqa: E402
 from _ppa import search_feasibility as SF       # noqa: E402
 from test_ppa_eco_readiness_axis import (       # noqa: E402
-    CHECK, DECL, VIEW, axis_of, cand, clean_nine, policy, run_cli, spares)
+    CHECK, DECL, VIEW, axis_of, cand, clean_nine, policy, rec, run_cli, spares)
 
 #: A candidate identical to a preserving one on every other axis, whose whole
 #: spare population is gone. This is the published PnR-only winner's shape:
@@ -634,3 +634,79 @@ def test_negative_control_the_route_is_what_flips_it_not_the_records(tmp_path):
     assert without.verdict != with_route.verdict
     assert (without.eligible_for_promotion, with_route.eligible_for_promotion) \
         == (True, False)
+
+
+# ---------------------------------------------------------------------------
+# THE ARITHMETIC IS ON THE VERDICT -- checkable without re-running the flow
+# ---------------------------------------------------------------------------
+# A refusal a reader has to reproduce in order to understand is a refusal that
+# gets argued with. The row must carry the numbers it refused on: what the
+# design was required to have, what its insertion plan recorded, and how many
+# of those reached the shipped artefacts.
+def _stripped_row(surviving=9, floor_decl=None):
+    """Declared floor 10 with preservation required; `surviving` shipped."""
+    decl = dict(floor_decl or DECL, require_preservation=True)
+    ms = clean_nine() + spares(count=10) + [rec(F.ECO_M_SURVIVING, surviving)]
+    pol = F.policy_from_document({"required_views": [dict(VIEW)],
+                                  "eco_readiness": decl})
+    r = F.promotion_verdict(cand("stripped", ms), pol)
+    return r, axis_of(r)
+
+
+def _by_metric(row_dict):
+    return {e["metric"]: e for e in row_dict["evidence"] if "metric" in e}
+
+
+def test_acceptance_the_row_states_the_floor_the_plan_and_the_survivors():
+    """Three numbers, all on the published row: what was REQUIRED, what the
+    insertion plan RECORDED, and what SURVIVED to the shipped artefacts."""
+    r, axis = _stripped_row(surviving=9)
+    assert r.verdict == F.INFEASIBLE
+    assert axis.status == F.AXIS_VIOLATED
+
+    ev = _by_metric(axis.as_dict())
+    inserted = ev[F.ECO_M_COUNT]
+    survived = ev[F.ECO_M_SURVIVING]
+
+    assert inserted["value"] == 10                    # the plan recorded ten
+    assert survived["value"] == 9                     # nine reached the ship
+    assert survived["limit"]["min"] == 10             # ten were required
+    assert inserted["limit"]["min"] == 10
+
+
+def test_acceptance_a_reader_can_do_the_subtraction_from_the_json_alone():
+    """The whole clause, as one assertion: SERIALISE the verdict, throw the
+    objects away, and recover how many spares went missing from the document a
+    reader is actually handed."""
+    r, _axis = _stripped_row(surviving=9)
+    doc = json.loads(json.dumps(r.as_dict()))
+    row = [a for a in doc["axes"] if a["axis"] == F.ECO_AXIS][0]
+    ev = _by_metric(row)
+
+    required = ev[F.ECO_M_SURVIVING]["limit"]["min"]
+    survived = ev[F.ECO_M_SURVIVING]["value"]
+    assert required - survived == 1, (required, survived)
+    assert row["status"] == "VIOLATED"
+
+
+def test_acceptance_the_row_states_them_when_it_PASSES_too(tmp_path):
+    """A reader checking whether the floor was the right floor should not have
+    to make the axis fail first. The satisfied row carries the same numbers."""
+    r, axis = _stripped_row(surviving=10)
+    assert r.verdict == F.FEASIBLE, r.codes
+    assert axis.status == F.AXIS_SATISFIED
+    ev = _by_metric(axis.as_dict())
+    assert ev[F.ECO_M_SURVIVING]["value"] == 10
+    assert ev[F.ECO_M_SURVIVING]["limit"]["min"] == 10
+
+
+def test_acceptance_the_floor_on_the_row_is_the_designs_and_not_the_gates():
+    """Change the declaration, and the number published as the floor changes
+    with it. A floor that stayed at 10 would be a design decision living in
+    chip-agnostic source -- which is the thing this axis is built not to do."""
+    _r7, axis7 = _stripped_row(surviving=9, floor_decl=dict(
+        DECL, min_spare_cells=7))
+    ev = _by_metric(axis7.as_dict())
+    assert ev[F.ECO_M_SURVIVING]["limit"]["min"] == 7
+    # and nine against a floor of seven is not a violation at all
+    assert axis7.status == F.AXIS_SATISFIED
