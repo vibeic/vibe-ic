@@ -69,6 +69,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:  # config-driven NDA-token source (detector reconstructs SKU from encoded form)
     import _commercial_pdk as _cpdk
@@ -604,7 +605,7 @@ def main(argv: List[str] = None) -> int:
     out = json.dumps(report, indent=2, ensure_ascii=False)
     if args.json_out:
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json_out).write_text(out)
+        atomic_write_text(Path(args.json_out), out)
     print(out)
     return 0 if is_pass else 1
 
