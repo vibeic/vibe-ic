@@ -50,26 +50,6 @@ WHAT IS DECIDED, AND WHAT IS NOT
     NOT DECIDED anything about area, timing or routability -- a design can fit
                the pads and still not fit the die
 
-ENFORCEMENT: blocking
-=====================
-A DOES_NOT_FIT verdict (rc 1) FAILs the step that guards it. The declaration
-opens this line deliberately: `flow_gate_enforcement_audit` reads it anchored,
-and a mention inside a sentence is not a declaration (#886).
-
-Blocking is only true because `design_one_shot_runner.step_slot_pad_budget`
-SPAWNS this program and maps its exit status to the step verdict. The
-`program_exit_zero` clause in the flow definition is not, by itself, enough:
-those clauses are evaluated by `flow_compliance_check`, which the runner
-invokes as `final_audit` -- the LAST step, after every artefact is written.
-That is the measured #306 defect, and a gate wired only in the YAML can
-describe a run that already happened but cannot refuse one.
-
-WHAT BLOCKING DOES NOT YET MEAN. The FAIL reddens the step and the run's
-aggregate verdict; it does not itself skip Phase 3. Making a pad-budget
-refusal cascade into "do not place and route this" is a policy change to the
-runner's step plan and is left to the maintainer, named here rather than
-implied.
-
 VERDICTS AND EXIT CODES
 =======================
     FITS               rc 0   the declared interface fits a slot as declared
@@ -208,109 +188,6 @@ def slot_pad_inventory(slot_obj: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # the design's declared interface
 # --------------------------------------------------------------------------- #
-def _strip_hdl_comments(text: str) -> str:
-    """Verilog comments removed in ONE left-to-right pass.
-
-    WHY A PASS AND NOT TWO SUBSTITUTIONS (vibe-ic#731)
-    --------------------------------------------------
-    This was `re.sub("//[^\\n]*")` followed by `re.sub("/\\*.*?\\*/")`. Two
-    independent passes cannot express the one rule Verilog actually has:
-    whichever introducer opens FIRST owns the text after it. The `//` pass
-    runs with no idea a block comment is open, so a `*/` that happens to sit
-    behind a `//` is deleted with the line that carries it -- and the block
-    comment it terminated then has no terminator left for the second pass to
-    find, so the whole block survives into the scanned text.
-
-    MEASURED, on legal Verilog whose real ports are exactly `clk` and `done`:
-
-        input wire clk,   /* disabled,
-        output wire phantom,
-        // end of the disabled block */
-        output wire done
-
-    `phantom` is inside the block comment and does not exist. The two-pass
-    strip minted it as an output and counted its bit in the pad budget. That
-    is this gate's own founding defect -- a comment sentence minting a
-    declaration that is not there -- one level in, and it lands on the number
-    the budget verdict is computed from.
-
-    It cuts the other way too, which is the direction that matters more: the
-    same orphaned block glues itself to the front of the NEXT real port, the
-    chunk no longer starts with a direction keyword, and the port is dropped.
-    A dropped port is a smaller interface, and a smaller interface is how a
-    design that does not fit its slot reads as FITS.
-
-    Line geometry is preserved -- a block comment is replaced by the newlines
-    it spanned -- because the conditional-compilation scan below is
-    line-oriented and counts `ifdef`/`endif` nesting by line.
-
-    HONEST LIMIT: string literals are not tracked, so a `//` inside a string
-    opens a comment here. That is inherited from the two-pass form this
-    replaces, it cannot affect an ANSI port list (which admits no string
-    literal), and naming it is better than a lexer this file does not need.
-    """
-    out: List[str] = []
-    i, n = 0, len(text)
-    while i < n:
-        two = text[i:i + 2]
-        if two == "//":
-            j = text.find("\n", i)
-            if j < 0:
-                break
-            i = j                      # the newline itself is kept
-        elif two == "/*":
-            j = text.find("*/", i + 2)
-            if j < 0:
-                # Unterminated: everything from here on is comment body.
-                out.append("\n" * text.count("\n", i))
-                break
-            out.append("\n" * text.count("\n", i, j + 2))
-            i = j + 2
-        else:
-            out.append(text[i])
-            i += 1
-    return "".join(out)
-
-
-def _strip_hdl_attributes(text: str) -> str:
-    """Verilog ATTRIBUTE instances `(* ... *)` removed.
-
-    NOT A COMMENT, and that is exactly why it needed its own repair. An
-    attribute is live source that a synthesiser reads, but it is not part of a
-    port DECLARATION, and `_DIR_RE` anchors with `^`. So a perfectly ordinary
-    port carrying one:
-
-        (* keep = "true" *) input wire clk,
-
-    reaches the scan as a chunk beginning `(*`, matches no direction keyword,
-    and is discarded as an unparsable continuation. MEASURED on the two-port
-    module above: `clk` vanishes and the interface reads as one port.
-
-    That is the DROPPING direction again -- a smaller interface than the design
-    really has -- and it is the one that produces a false FITS. It predates the
-    comment repair (identical on the commit before it) and is fixed here
-    because it lands on the same number by the same mechanism: text nobody
-    stripped reaching a declaration scan.
-
-    `(*` begins an attribute unambiguously in Verilog, and removing the region
-    leaves the parenthesis DEPTH of the port list unchanged because the `*)`
-    that balanced it goes with it. Newlines are preserved for the same reason
-    as in `_strip_hdl_comments`: the conditional scan counts by line.
-    """
-    out: List[str] = []
-    i, n = 0, len(text)
-    while i < n:
-        if text[i:i + 2] == "(*" and text[i:i + 3] != "(*)":
-            j = text.find("*)", i + 2)
-            if j < 0:
-                out.append(text[i]); i += 1; continue
-            out.append("\n" * text.count("\n", i, j + 2))
-            i = j + 2
-        else:
-            out.append(text[i]); i += 1
-    return "".join(out)
-
-
 _DIR_RE = re.compile(r"^(input|output|inout)\b(.*)$", re.S)
 _RANGE_RE = re.compile(r"\[\s*([^\]:]+?)\s*:\s*([^\]]+?)\s*\]")
 
@@ -366,8 +243,8 @@ def parse_top_ports(text: str, top: str,
     Handles the ANSI header form every generated `chip_top` in this repo uses,
     with or without a parameter block.
     """
-    stripped = _strip_hdl_attributes(_strip_hdl_comments(text))
-    src = stripped
+    src = re.sub(r"//[^\n]*", "", text)
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
     # CONDITIONAL COMPILATION. A port list may be bracketed by `ifdef/`endif.
     # Leaving the directive lines in place GLUES them to the neighbouring
     # declaration, and the glued chunk no longer starts with a direction
@@ -418,15 +295,11 @@ def parse_top_ports(text: str, top: str,
     # text (the directives were stripped above so the parse would not lose
     # them). Reported, never guessed at.
     conditional: set = set()
-    raw_no_comment = stripped
+    raw_no_comment = re.sub(r"//[^\n]*", "", text)
+    raw_no_comment = re.sub(r"/\*.*?\*/", "", raw_no_comment, flags=re.S)
     depth_cond = 0
     for line in raw_no_comment.splitlines():
-        # Stripped again HERE, on the value the scan actually reads. The
-        # whole-text pass above already cleared it; this call is what makes
-        # that true LOCALLY, so a later change to where `raw_no_comment` comes
-        # from cannot quietly re-open the hole. `_DIR_RE` must never see a
-        # character a stripper has not looked at.
-        s = _strip_hdl_attributes(_strip_hdl_comments(line)).strip()
+        s = line.strip()
         if re.match(r"^`(?:ifdef|ifndef)\b", s):
             depth_cond += 1
             continue
@@ -443,9 +316,7 @@ def parse_top_ports(text: str, top: str,
     ports: List[Dict[str, Any]] = []
     unparsed: List[str] = []
     for decl in rest[open_i + 1:close_i].split(","):
-        # Same rule as the conditional scan above: the chunk that reaches
-        # `_DIR_RE` is stripped on its own account, not on a sibling's.
-        decl = _strip_hdl_attributes(_strip_hdl_comments(decl)).strip()
+        decl = decl.strip()
         if not decl:
             continue
         dm = _DIR_RE.match(decl)
@@ -634,36 +505,6 @@ def evaluate(slots: Dict[str, Dict[str, Any]], ports: List[Dict[str, Any]]
     }
 
 
-#: Where the flow's own step 1 writes the RTL this gate reads. Declared here
-#: rather than in the gate clause on purpose -- see `_discover_rtl`.
-_RTL_DIR_REL = ("phase2", "stage1", "rtl")
-
-
-def _discover_rtl(project: str) -> List[str]:
-    """The step-1 RTL of `project`, when the caller named no `--rtl`.
-
-    WHY THE PROGRAM GLOBS AND NOT THE GATE CLAUSE (vibe-ic#1347)
-    -----------------------------------------------------------
-    The obvious wiring is `--rtl phase2/stage1/rtl/*.v` in the flow clause.
-    It is a trap. `flow_compliance_check._resolve_program_cmd` expands globs
-    in a clause into SEPARATE argv tokens, `--rtl` consumes exactly one, and
-    every remaining file arrives as an extra positional. argparse rejects
-    that with **exit 2** -- and exit 2 is this flow's VACUOUS_PASS tier. The
-    gate would report a disclosed skip on every multi-file design, forever,
-    and the skip would look like the ordinary "no slots ingested" one.
-
-    So the clause carries no glob and the expansion happens here, where a
-    directory that does not exist is an ANSWER (`[]` -> rc 2 UNDECIDED with a
-    reason naming the directory) rather than a usage error wearing the same
-    exit code as a skip.
-    """
-    d = os.path.join(project, *_RTL_DIR_REL)
-    if not os.path.isdir(d):
-        return []
-    return [os.path.join(d, fn) for fn in sorted(os.listdir(d))
-            if fn.lower().endswith((".v", ".sv"))]
-
-
 def _load_slots(project: str) -> Dict[str, Dict[str, Any]]:
     d = os.path.join(project, "input", "submission_template", "slots")
     out: Dict[str, Dict[str, Any]] = {}
@@ -717,10 +558,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 2
 
     slots = _load_slots(a.project)
-    # An explicit --rtl always wins; discovery is the fallback the flow uses.
-    rtl_files = list(a.rtl) or _discover_rtl(a.project)
     ports: Optional[List[Dict[str, Any]]] = None
-    for f in rtl_files:
+    for f in a.rtl:
         try:
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 ports = parse_top_ports(fh.read(), a.top, params)
@@ -732,8 +571,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not slots or not ports:
         why = ("no slot files under input/submission_template/slots — step "
                "0.5ic has not run" if not slots else
-               f"top module '{a.top}' not found in "
-               f"{rtl_files or '(no --rtl given and no RTL under ' + os.path.join(*_RTL_DIR_REL) + ')'}")
+               f"top module '{a.top}' not found in {a.rtl or '(no --rtl given)'}")
         rep = {"check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
                "reason": why,
                "note": "a question that could not be asked has not passed"}

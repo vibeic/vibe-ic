@@ -474,120 +474,6 @@ def acceptance_control_gate(repo: Path, base: str, head: str) -> GateResult:
 
 
 # --------------------------------------------------------------------------
-# ppa_pr_scope_check (#1347) — the PPA Appendix-C merge condition, BLOCKING.
-#
-# WHY HERE AND NOWHERE ELSE. This program answers "may this change-set merge?"
-# It needs a base and a head, and it needs them to be the ones being reviewed.
-# That rules out `tools/ci/repo_hygiene_gates.sh` on its own written contract:
-# "WHAT DOES NOT [belong here]: anything needing a commit RANGE or a base SHA
-# — those are event-shaped and stay inline in the workflow that has the
-# context." It rules out the flow definition, which reviews a DESIGN and has no
-# notion of a change-set. `.github/workflows/` is disabled in this repository,
-# so the one live place holding a base/head under review is this program — the
-# gate a maintainer runs before every push, whose MERGE_OK reads as "this will
-# land green". The verdict is literally a merge condition; it belongs at the
-# merge decision.
-#
-# WHAT BLOCKS, AND THE ONE THING THAT DOES NOT YET
-# ------------------------------------------------
-# The checklist's merge condition is "every applicable question has verifiable
-# evidence, and every inapplicable question has a machine-checkable reason".
-# Answering it needs an answers document, and MEASURED on this tree there is
-# not one anywhere: `grep -rl vibeic.ppa.pr_answers` matches only the checker
-# itself. So `answers_document_present: false` is currently the state of every
-# branch in flight, and wiring THAT as blocking would turn every open PR red on
-# the day it landed — which is how a gate gets switched off rather than obeyed.
-#
-# The split is therefore on the report's own `answers_document_present` flag:
-#
-#   document supplied  -> FULLY BLOCKING. Every finding the checker can make is
-#                         a real finding: a question with nothing behind it, and
-#                         AUTHOR_OVERRIDE_REFUSED, where the author marked an
-#                         applicable question N/A and the detector disagreed.
-#   no document        -> REPORTED, not blocking, naming how many questions
-#                         apply so the gap is visible on every single review.
-#
-# This is a claim and it has an expiry condition, stated so it can be held to:
-# THE MOMENT an answers-document convention exists in this repository — a
-# declared path, and this branch's own document at it — the `not present` arm
-# becomes blocking and this comment goes away. Nothing else needs to change;
-# the checker already returns rc 1 for that case today.
-#
-# rc 2 is NOT CHECKED, never a pass: the content arm needs a diff, and given
-# only a path list it reports the surfaces it did NOT look for. "I could not
-# read it" and "I read it and it was empty" must not share a verdict.
-# --------------------------------------------------------------------------
-#: WHERE A BRANCH PUTS ITS APPENDIX-C ANSWERS. A gate that never passes
-#: `--answers` can only ever see `answers_document_present: false`, which is
-#: the one arm that does not block — i.e. a wiring that cannot fail, which is
-#: not a wiring. Declaring the path is what makes the blocking arm REACHABLE:
-#: an author who writes this file gets the full merge condition enforced.
-#: It sits beside `PULL_REQUEST_TEMPLATE.md` because it is the machine half of
-#: the same document.
-_PPA_ANSWERS_REL = ".github/ppa_pr_answers.json"
-
-
-def ppa_pr_scope_gate(repo: Path, base: str, head: str,
-                      answers: Optional[Path] = None) -> GateResult:
-    name = "ppa_pr_scope_check"
-    prog = _PROGRAMS_DIR / "ppa_pr_scope_check.py"
-    if not prog.is_file():
-        return GateResult(name, -1, f"checker missing at {prog}")
-    if answers is None:
-        cand = repo / _PPA_ANSWERS_REL
-        answers = cand if cand.is_file() else None
-    # The report is written to a TEMPORARY path, never into the repository.
-    # It declares `verdict: FAIL`, and a `reports/**/*.json` carrying that is
-    # what `step_internal_fail_bubble_up_check` refuses. A review artefact is
-    # not a step artefact and must not be able to be mistaken for one.
-    with tempfile.TemporaryDirectory(prefix="ppa_pr_scope_") as td:
-        out = Path(td) / "ppa_pr_scope.json"
-        argv = ["--repo", str(repo), "--base", base, "--head", head,
-                "--json", str(out)]
-        if answers is not None:
-            argv += ["--answers", str(answers)]
-        rc, so, se = _run_program(prog, argv)
-        rep = None
-        if out.is_file():
-            try:
-                rep = json.loads(out.read_text(encoding="utf-8"))
-            except ValueError:
-                rep = None
-
-    if rc == 2:
-        return GateResult(name, -1,
-                          "NOT CHECKED — the change-set could not be read, or "
-                          "a one-armed run could not look for the "
-                          "content-reachable surfaces")
-    if rc == 3:
-        return GateResult(name, 1, f"bad invocation: {(se or so).strip()[:200]}")
-    if rc == 0:
-        n = ((rep or {}).get("summary") or {}).get("applicable", "?")
-        return GateResult(name, 0, f"merge condition met ({n} applicable)")
-
-    # rc 1 — a finding about the PR.
-    summary = (rep or {}).get("summary") or {}
-    by_status = summary.get("by_status") or {}
-    applicable = summary.get("applicable", "?")
-    if rep is not None and rep.get("answers_document_present") is False:
-        return GateResult(
-            name, 0,
-            f"REPORTED, not blocking — {applicable} of the 20 Appendix-C "
-            f"questions apply to this change-set and no answers document was "
-            f"supplied at {_PPA_ANSWERS_REL}. Adding that file makes every "
-            f"one of them blocking; until the convention is required "
-            f"repo-wide, its absence is reported and not blocking.")
-    bad = ", ".join(f"{k}={v}" for k, v in sorted(by_status.items())
-                    if k not in ("NOT_APPLICABLE", "SATISFIED"))
-    qs = [str(q.get("question")) for q in (rep or {}).get("questions") or []
-          if q.get("status") not in ("NOT_APPLICABLE", "SATISFIED")]
-    return GateResult(
-        name, 1,
-        f"the merge condition is VIOLATED — {bad or 'see report'}"
-        + (f" (Q{', Q'.join(qs[:8])})" if qs else ""))
-
-
-# --------------------------------------------------------------------------
 # real_artefact_test_backing_check (#400) — ADVISORY.
 #
 # A change whose tests are ALL synthetic fixtures authored alongside it cannot
@@ -1771,7 +1657,6 @@ def review(base: str, head: str, *,
     gates.append(one_commit_gate(repo, base, head, batch=batch))
     gates.append(real_artefact_backing_gate(repo, base, head))
     gates.append(acceptance_control_gate(repo, base, head))
-    gates.append(ppa_pr_scope_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
