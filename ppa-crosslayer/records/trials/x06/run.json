@@ -1,0 +1,18 @@
+{
+  "trial": "x06",
+  "levers": {
+    "rtl_variant": "nr_csel8",
+    "synthesis_strategy": "none"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.30",
+    "spare_cell_density": "0.02"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 345.559,
+    "cpu_seconds": 550.016,
+    "peak_rss_mb": 619.2
+  }
+}

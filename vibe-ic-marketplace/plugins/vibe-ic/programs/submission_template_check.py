@@ -115,10 +115,44 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling imports below resolve however this is invoked
 
 import _submission_template as ST  # noqa: E402
+import _tapeout_declaration as TD  # noqa: E402  the OTHER half of step 0.5ic
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402  vibe-ic#1082
 
 
 PROGRAM = "submission_template_check"
+
+
+def _declared_absence_router(project: Path) -> Optional[str]:
+    """Which router file a DECLARED absence of a template lives in, or None.
+
+    STEP 0.5ic HAS TWO PROGRAMS AND THEY BOTH WRITE HERE. `submission_template_
+    ingest` records the absence and writes `NO_TEMPLATE.txt`;
+    `tapeout_declaration_gen` — the other half of the SAME step — then RETIRES
+    that marker on purpose when the design declares `deliverable=DIE`, because
+    `NO_TEMPLATE.txt` is the IP terminal's router (37.5ip) and a die must not
+    select it. It writes `SELF_TAPEOUT.txt` in its place.
+
+    So a declared absence legitimately lives in either file, and which one is
+    decided by the design's own declaration rather than by this checker.
+    (`slots/*.yaml` is the third router and is not an absence at all.)
+
+    A FILE COUNTS ONLY WHEN IT CARRIES ITS PRODUCER'S MARKER on the first line.
+    That is the same test both producers already apply before retiring a marker
+    of their own: a file some other hand left behind is evidence of nothing,
+    and accepting it would let an empty file of the right name buy a pass.
+    """
+    for rel, marker in ((ST.NO_TEMPLATE_REL, ST.NO_TEMPLATE_MARKER),
+                        (TD.SELF_TAPEOUT_REL, TD.SELF_TAPEOUT_MARKER)):
+        path = project / rel
+        if not path.is_file():
+            continue
+        try:
+            head = path.read_text(errors="replace").splitlines()[:1]
+        except OSError:
+            continue
+        if head and head[0].strip() == marker:
+            return rel
+    return None
 
 
 def _refusal(rule: str, message: str, **extra) -> Dict[str, Any]:
@@ -266,6 +300,14 @@ def evaluate(project: Path, doc: Optional[dict],
     on_disk = sorted(slots_dir.glob("*.yaml")) if slots_dir.is_dir() else []
     no_tmpl = project / ST.NO_TEMPLATE_REL
     examined["slot_files_on_disk"] = len(on_disk)
+    # A FILESYSTEM FACT, AND IT MUST STAY ONE. This says whether the IP
+    # terminal's router is on disk, marker or no marker, because the refusal
+    # that reads it — NEVER_LOOKED / NO_TEMPLATE_WITHOUT_REASON, "and the file
+    # IS on disk, which is the file the flow selects its IP path on" — exists
+    # precisely to name a stray one nobody declared. Requiring a marker here
+    # would hide the case the sentence was written for. The marker-checked
+    # question is a DIFFERENT question and is reported separately, below, as
+    # `declared_absence_router`.
     examined["path_router_on_disk"] = no_tmpl.is_file()
 
     if report_problem is not None:
@@ -326,14 +368,46 @@ def evaluate(project: Path, doc: Optional[dict],
         # the producer's own predicate so a file one wrote can never be one the
         # other would have refused.
         if ST.declares_no_template(status, why):
-            if not no_tmpl.is_file():
+            # THE DECLARED ABSENCE HAS TWO LEGITIMATE HOMES, NOT ONE.
+            #
+            # This clause named `NO_TEMPLATE.txt` alone, and that made THE
+            # SELF-TAPE-OUT ROUTE IMPASSABLE. Measured by driving step 0.5ic's
+            # own two programs, in the order the flow declares them, on a die
+            # with no operator:
+            #
+            #   submission_template_ingest  -> status=ABSENT, writes
+            #                                  NO_TEMPLATE.txt
+            #   tapeout_declaration_gen     -> RETIRES NO_TEMPLATE.txt on
+            #                                  purpose and writes
+            #                                  SELF_TAPEOUT.txt
+            #   submission_template_check   -> rc 1, NO_TEMPLATE_FILE_MISSING
+            #
+            # The step's own gate refused the tree the step's own producers had
+            # just built, and 0.5ic gates the whole chip path behind it. The
+            # step's SECOND gate clause already reads it the other way:
+            # `tapeout_declaration_check` PASSES that same tree and names
+            # `SELF_TAPEOUT.txt` as its router.
+            #
+            # NOTHING IS WIDENED BY THIS. The absence must still be DECLARED,
+            # it must still live in a file the flow reads, and that file must
+            # still carry its producer's marker. The only change is that the
+            # checker now accepts the file the design's own declaration
+            # selected instead of insisting on the one the other half of its
+            # step deliberately retired.
+            router = _declared_absence_router(project)
+            if router is None:
                 refusals.append(_refusal(
                     "NO_TEMPLATE_FILE_MISSING",
-                    f"the record DECLARES there is no template and "
-                    f"{ST.NO_TEMPLATE_REL} is not there. A design that targets "
-                    f"no shuttle must still SAY so, in the file the flow reads.",
+                    f"the record DECLARES there is no template and neither "
+                    f"{ST.NO_TEMPLATE_REL} nor {TD.SELF_TAPEOUT_REL} is there "
+                    f"carrying its producer's marker. A design that targets no "
+                    f"shuttle must still SAY so, in a file the flow reads: "
+                    f"{ST.NO_TEMPLATE_REL} routes the IP terminal and "
+                    f"{TD.SELF_TAPEOUT_REL} routes a die doing its own "
+                    f"tape-out.",
                     declared_reason_chars=len(why)))
             else:
+                examined["declared_absence_router"] = router
                 na_reason = why
         else:
             extra = ("" if not no_tmpl.is_file() else
