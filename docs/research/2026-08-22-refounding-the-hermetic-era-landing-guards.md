@@ -277,17 +277,11 @@ confirmed (M15, implemented and passing in both lanes). **D's is not.**
 * Thirteen tests rewritten, in a file inside the protected closure. Not small.
 * **B and D need a fixture that can supply two corpora and a sentinel commit.**
   That is new test scaffolding, not a one-line change.
-* **B carries an operational risk on a shared host, and I did not implement it
-  for that reason.** It works by making an arm hang on a TERM-ignoring
-  `while :; do sleep 30; done` and then relying on the cleanup path to kill it.
-  If cleanup is broken — which is the very thing the guard exists to detect — the
-  test leaves a hung container and a live process behind. On this machine, which
-  has been measured at load 276 with no free memory and is shared with other
-  agents, running a guard whose failure mode is "leak a container" is not a
-  decision to take unilaterally at the end of a session. It is the last item in
-  the suggested order for this reason as well as cost.
+* **B's operational risk is BOUNDABLE — my first statement of it was
+  overcautious, and the corrected reason is different. See the tail of this
+  document.**
 * C partially exists already (M15).
-* A is the cheapest and closes four tests.
+* A is the cheapest and closes ONE test (corrected above).
 
 **Suggested order: A, then C, then D, then B** — cheapest and most independent
 first, and each is separately landable.
@@ -362,3 +356,39 @@ ordering guard needs per-arm completion times, which `landing_completion_record.
 could carry but does not surface to the verdict today. **That is a genuine
 reduction in claimed coverage and it should be read as one** — the coverage was
 never there; only the claim was.
+
+
+# ===== B: correcting my own reason for not building it =====
+
+I wrote that B was not implemented because it makes an arm hang on a
+TERM-ignoring loop and, if cleanup is broken, leaks a container and a live
+process on a shared host at load 276. True as far as it goes — but stated that
+way it sounds like an unavoidable hazard, and **it is not. It is boundable, and
+the bound should ship with the design rather than be rediscovered.**
+
+**The bound.** Wrap the interruption in a `finally` that:
+
+1. kills the recorded verifier process group by PID — the helper already does
+   exactly this on its failure path;
+2. force-removes any container carrying this run's label, using the run id
+   captured from `refs/gk-verify/*` inside the existing poll loop (above).
+
+Both targets are recorded values, not patterns, which satisfies the standing rule
+against `pkill` on anything that could match one's own command line. Residual risk
+is then only the case where BOTH the product's cleanup and the test's own bound
+fail — far narrower than "it leaks whenever cleanup is broken", which is the
+normal, expected, correctly-RED outcome.
+
+**So the honest reason I did not build it is not the hazard.** B is the largest of
+the four — a sentinel-commit fixture plus a rewiring of the stub's hang guard,
+inside the protected closure — and I have a MEASURED non-zero error rate on much
+smaller edits in this same session: an anchor that spanned a line break and
+silently matched nothing, and a three-line anchor that orphaned a fourth
+assertion. Both were caught; the second only because the orphan happened to be an
+assertion rather than a line whose loss would quietly weaken a test.
+
+A large change to a landing-gate file, authored at the end of a long session by
+someone with that error rate, is a bad trade against a guard that is currently
+red-and-explained rather than silently wrong. **That is a judgement about
+sequencing and about me, not about the hazard** — and it is the version I should
+have written the first time. Whoever builds B should take the bound above with it.
