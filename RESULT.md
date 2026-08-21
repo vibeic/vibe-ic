@@ -450,9 +450,9 @@ chip-AGNOSTIC guard over 1550 plugin source files.
 
 ---
 
-# REQUESTS TO THE LANDER
+## REQUESTS TO THE LANDER
 
-## R1 — a PREPARE for one protected path (BLOCKING for this branch)
+### R1 — a PREPARE for one protected path (BLOCKING for this branch)
 
 This branch changes the bytes of exactly one of the 47 protected paths and does
 **not** touch the manifest, so it is the ACTIVATE half and
@@ -483,7 +483,7 @@ tools/ci/repo_hygiene_gates.sh=<this branch's copy>`, so nothing is transcribed.
 
 The change is two `run` lines plus their comments — the wiring for rules 3 and 4.
 
-## R2 — `protected_landing_transition.py` refuses without naming the paths
+### R2 — `protected_landing_transition.py` refuses without naming the paths
 
 Rule 5 is enforced, and its refusal is one sentence short of actionable:
 
@@ -512,7 +512,7 @@ I did not make this change: `tools/ci/protected_landing_transition.py` is itself
 protected (role `authority`), and a second protected path in one landing doubles
 the PREPARE. Say the word and it arrives as its own lane with its own numbers.
 
-## R3 — two seams in the protected landing RUNTIME that I deliberately left alone
+### R3 — two seams in the protected landing RUNTIME that I deliberately left alone
 
 Both are already wired on the differential path, so nothing is unguarded; these
 are the SAME holes in the files a merge-path landing uses, which are protected.
@@ -533,7 +533,7 @@ Neither is in this branch, because each would be another protected-path ACTIVATE
 role `authority`). If you want them, say so and I will produce the bytes and the
 sha256/size pairs the same way as R1.
 
-## R4 — the batch lander itself is rule 1's real caller
+### R4 — the batch lander itself is rule 1's real caller
 
 `landing_noop_verdict_check` is wired to this repository's own landing gate, but
 the failure it was distilled from happened in the FLEET batch lander — the thing
@@ -550,7 +550,7 @@ rc 1 means the no-op verdict is wrong and the paths are printed, split into
 generated (re-run the generator on the merged tree) and not (apply the lane's
 bytes).
 
-## R5 — pre-existing reds this branch did not touch
+### R5 — pre-existing reds this branch did not touch
 
 `gate_is_wired_check` / `checker_execution_wiring_audit` are red on pristine
 `origin/main` with `closed_loop_edge_check`, `ppa_pr_scope_check` and
