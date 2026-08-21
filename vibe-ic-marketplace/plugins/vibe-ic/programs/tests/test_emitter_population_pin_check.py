@@ -401,8 +401,11 @@ def test_a_test_that_DENIES_a_phrase_is_not_a_pin(tmp_path):
     doc = json.loads((tmp_path / "r.json").read_text())
     assert doc["findings"] == [], doc
     assert doc["pins_examined"] == 0, doc
+    # The evidence names the CONSTRUCT, not a word out of the line: the pin
+    # side is read on Python's negation grammar, so `not in` is reported rather
+    # than the bare "not" a prose vocabulary would have matched.
     assert [(d["what"], d["denial"]) for d in doc["denied_by_polarity"]] == [
-        ("test pin", "not")], doc
+        ("test pin", "not in")], doc
 
 
 def test_the_emitter_side_is_NOT_asked_the_same_question(tmp_path):
@@ -544,6 +547,56 @@ def test_the_narrowing_loses_no_site_in_any_emitter_spelling():
         counter, sites, dens = rows[0]
         assert (counter, sites) == ("_n", 3), f"{name}: read {sites} site(s)"
         assert sorted({v for _, v in dens}) == [3], f"{name}: dens {dens}"
+
+
+#: How a test spells a pin, and whether it is one. `True` means the line PINS
+#: the value (it must be compared against the emitter); `False` means the line
+#: DENIES it (comparing it refuses a correct test).
+_PIN_SPELLINGS = [
+    ('assert "of 3 repairs refused" in script()', True),
+    ('assert "of 3 repairs refused" not in script()', False),
+    ('assert "of 3 repairs refused" in script(), "no PARTIAL line"', True),
+    ('assert "of 3 repairs refused" in script()  # not 2 any more', True),
+    ('self.assertNotIn("of 3 repairs refused", script())', False),
+    ('assert not any("of 3 repairs refused" in s for s in [script()])', False),
+    ('assert script() != "of 3 repairs refused"', False),
+]
+
+
+def test_the_pin_reader_gets_every_negation_spelling_right():
+    """THE MEASUREMENT THAT MOVED THIS READER OFF THE PROSE VOCABULARY.
+
+    `pins` first asked `_prose_polarity` over the source statement. Over these
+    spellings that got THREE wrong, in BOTH directions -- the assertion MESSAGE
+    and the trailing COMMENT each carry a negation word that governs nothing,
+    so a real pin was dropped and CHECK B quietly compared less than it read;
+    and `assertNotIn` has no word boundary before "Not", so the denial was
+    MISSED and the false refusal `pins` exists to stop came straight back.
+
+    A test denies a containment in the ways the LANGUAGE provides, and those are
+    productions of Python's grammar -- enumerable and unambiguous. `counters` on
+    the other side of this file reads real English and does consult the
+    vocabulary; the two readers follow their two subjects.
+
+    The last case is the CONTROL on reach: a negation in a DIFFERENT statement
+    must not deny this one."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+
+    head = "from thing_emit import script\n\n\ndef test_p():\n"
+    for line, is_a_pin in _PIN_SPELLINGS:
+        kept, refused = E.pins(head + "    " + line + "\n")
+        assert bool(kept) is is_a_pin, (
+            f"{line!r} read as {'a pin' if kept else 'a denial'}; "
+            f"refused={refused}")
+        assert bool(refused) is (not is_a_pin), (line, refused)
+
+    outer = (head + "    if not script():\n        pass\n"
+             + '    assert "of 3 repairs refused" in script()\n')
+    kept, refused = E.pins(outer)
+    assert kept and not refused, (
+        "a negation in an enclosing statement denied an assertion it does not "
+        f"govern: {refused}")
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────

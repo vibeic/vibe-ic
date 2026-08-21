@@ -202,19 +202,27 @@ def _emitted_strings(text: str) -> List[Tuple[int, int, str]]:
         tree = ast.parse(text)
     except SyntaxError:
         return []
+    return [(n.lineno, n.col_offset, n.value) for n in _emitted_nodes(tree)]
+
+
+def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
+    """The `ast.Constant` behind every emitted string, in source order.
+
+    THE ONE PLACE that decides what counts as emitted -- `_emitted_strings`
+    wants the text, `pins` wants the node so it can ask what the surrounding
+    code does with it, and a second copy of this rule is how the two would come
+    to disagree about which strings are prose about the code.
+    """
     skip: Set[int] = set()
     for n in ast.walk(tree):
         if isinstance(n, ast.Expr) and isinstance(n.value,
                                                   (ast.Constant, ast.JoinedStr)):
             for part in ast.walk(n.value):
                 skip.add(id(part))
-    out: List[Tuple[int, int, str]] = []
-    for n in ast.walk(tree):
-        if id(n) in skip:
-            continue
-        if isinstance(n, ast.Constant) and isinstance(n.value, str):
-            out.append((n.lineno, n.col_offset, n.value))
-    out.sort()
+    out = [n for n in ast.walk(tree)
+           if isinstance(n, ast.Constant) and isinstance(n.value, str)
+           and id(n) not in skip]
+    out.sort(key=lambda n: (n.lineno, n.col_offset))
     return out
 
 
@@ -284,6 +292,58 @@ def phrases(text: str) -> Dict[str, Set[Tuple[str, int]]]:
     return out
 
 
+def denies_containment(node: ast.AST, parent: Dict[int, ast.AST]) -> Optional[str]:
+    """The Python construct by which the statement around `node` DENIES it, or
+    None.
+
+    THE PIN SIDE IS NOT PROSE, and that is the whole reason this is a grammar
+    walk rather than a call to `_prose_polarity`. A test denies a containment in
+    exactly the ways the LANGUAGE provides -- `not in`, `not`, `!=`,
+    `assertNotIn` -- and those are productions of Python's grammar, unambiguous
+    and enumerable, the same argument the polarity gate's own `_NOT_PROSE`
+    register makes about LEF, DEF and Liberty.
+
+    MEASURED over six realistic assertion spellings, the prose vocabulary got
+    THREE of them wrong, in both directions:
+
+        assert "of 3 repairs refused" in script(), "no PARTIAL line"
+            the assertion MESSAGE carries "no" -> a real pin dropped
+        assert "of 3 repairs refused" in script()   # not 2 any more
+            a trailing comment carries "not" -> a real pin dropped
+        self.assertNotIn("of 3 repairs refused", script())
+            "assertNotIn" has no word boundary before "Not" -> denial MISSED,
+            which puts the false refusal this function exists to stop straight
+            back
+
+    Both directions matter and neither is cosmetic: a dropped pin is CHECK B
+    quietly comparing less than it read, and a missed denial is a correct test
+    refused. The grammar walk gets all six right.
+
+    THE CLIMB STOPS AT THE ENCLOSING STATEMENT. A negation further out belongs
+    to different code -- an `if not x:` wrapping the whole test body does not
+    deny this assertion -- so the walk answers for one statement and no more.
+    """
+    cur = node
+    while True:
+        up = parent.get(id(cur))
+        if up is None:
+            return None
+        if isinstance(up, ast.UnaryOp) and isinstance(up.op, ast.Not):
+            return "not"
+        if isinstance(up, ast.Compare):
+            if any(isinstance(o, ast.NotIn) for o in up.ops):
+                return "not in"
+            if any(isinstance(o, ast.NotEq) for o in up.ops):
+                return "!="
+        if isinstance(up, ast.Call) and isinstance(up.func, ast.Attribute) \
+                and (up.func.attr.startswith("assertNot")
+                     or up.func.attr.startswith("assertIsNot")):
+            return up.func.attr
+        if isinstance(up, ast.stmt):
+            return None
+        cur = up
+
+
 def pins(text: str) -> Tuple[Dict[str, Set[Tuple[str, int]]],
                              List[Tuple[str, int, str]]]:
     """``({tail: {(value, lineno)}}, [(phrase, lineno, denial)])`` -- what a test
@@ -301,36 +361,36 @@ def pins(text: str) -> Tuple[Dict[str, Set[Tuple[str, int]]],
     self-consistent 4-site emitter: rc=1, one finding, both files correct. Same
     shape as #706, on the pin side.
 
-    THE DENIAL IS IN THE CODE, NOT IN THE STRING. `not in` is spelled outside
-    the literal, so `is_denied` on the literal's own value cannot see it. The
-    scope is taken over the SOURCE STATEMENT the literal begins in, anchored at
-    the start of its line and bounded by `sentence_scope` with the same record
-    break `counters` declares -- a Python statement is line-structured the way
-    an emitted script is. Anchoring on the LINE rather than on the literal's
-    column is deliberate: `col_offset` is measured in UTF-8 bytes, so a line
-    carrying a multi-byte character ahead of the literal would push the anchor
-    past the end of its own statement.
+    WHAT ASKS THE QUESTION is `denies_containment`, a walk over Python's own
+    negation grammar rather than `_prose_polarity` -- see the measurement there
+    for why, and note that `counters` on the OTHER side of this file does read
+    real English and does consult the vocabulary. The two subjects differ; the
+    readers follow the subjects.
 
     WHAT IT REFUSES IS RETURNED, not dropped -- a pin the guard declined to
     compare is a pin it did not check, and this file prints its reach.
     """
     kept: Dict[str, Set[Tuple[str, int]]] = {}
     refused: List[Tuple[str, int, str]] = []
-    starts, acc = [], 0
-    for raw in text.splitlines(keepends=True):
-        starts.append(acc)
-        acc += len(raw)
-    for lineno, _, value in _emitted_strings(text):
-        anchor = starts[lineno - 1] if 0 < lineno <= len(starts) else 0
-        lo, hi = sentence_scope(text, anchor, min(anchor + 1, len(text)),
-                                extra_breaks=_RECORD_BREAKS)
-        word = is_denied(text[lo:hi])
-        for m in PHRASE.finditer(value):
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return kept, refused
+    parent: Dict[int, ast.AST] = {}
+    for n in ast.walk(tree):
+        for child in ast.iter_child_nodes(n):
+            parent[id(child)] = n
+    for node in _emitted_nodes(tree):
+        hits = list(PHRASE.finditer(node.value))
+        if not hits:
+            continue
+        word = denies_containment(node, parent)
+        for m in hits:
             tail = m.group(2).strip()
             if word:
-                refused.append((f"of {m.group(1)} {tail}", lineno, word))
+                refused.append((f"of {m.group(1)} {tail}", node.lineno, word))
                 continue
-            kept.setdefault(tail, set()).add((m.group(1), lineno))
+            kept.setdefault(tail, set()).add((m.group(1), node.lineno))
     return kept, refused
 
 
