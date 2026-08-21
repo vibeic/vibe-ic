@@ -3559,6 +3559,41 @@ remaining turns is verified with `git log origin/<branch>..HEAD`, not with the
 absence of an error from `git push`.
 
 
+## M65 — the headline RE-VERIFIED, and it holds
+
+`9 failed -> 6 failed` appears in **nine places** across the two documents. M47
+established that a red inventory is a measurement with a timestamp and that reds
+close silently — `test_flow_compliance_check_gate` did exactly that. So the
+number was carried, not known.
+
+**Re-measured, whole file, host lane:**
+
+```
+6 failed, 128 passed in 406.68s
+```
+
+and diffed by ID against the six recorded after design C:
+
+```
+NEWLY RED: (none)     NOW GREEN: (none)     — identical sets
+```
+
+The six are unchanged: the two G4 TERM tests (design B), the two M25 no-event
+tests, G5's `trusted_verifier`, and M14's deliberate red.
+
+**So the headline stands in all nine places, and now carries a fresh
+timestamp rather than an inherited one.** I diffed IDs rather than compare
+counts because two runs reading the same total with different sets is a trap this
+document has fallen into twice — once with `2 failed` at different
+parametrisations, once with a truncated capture that made a rename look like a
+fix.
+
+**A confirmation is worth recording when the alternative was assumption.** This
+is the second negative result in three sections (M64 was the first), and both
+existed because I had asserted something repeatedly enough that it had stopped
+looking like a claim.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
