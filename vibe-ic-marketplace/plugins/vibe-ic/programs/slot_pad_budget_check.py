@@ -17,6 +17,15 @@ step 0.5ic.
     edge_llm_accel           120                     52                2.3x
     edge_llm_matmul_accel    107                     52                2.1x
 
+THOSE ARE ELABORATED COUNTS, and saying so costs one line and saves a reader an
+hour. Every figure above assumes the design's width parameters were SUPPLIED.
+Run the same design without them and this program does not return a smaller
+number -- it returns UNDECIDED, because a width nobody supplied is not a pad
+count it may invent. Re-measured on the published corpus: the first row sums to
+502 of its elaborated total with four widths unresolved, and the verdict is
+UNDECIDED, not a 502-bit refusal. A reader who compares an unelaborated run
+against this table and finds it short has found that rule, not a defect.
+
 The pad inventory is not a guess and not a constant written into this file: step
 0.5ic ingests the shuttle operator's own slot files, and each one LISTS ITS PADS
 BY INSTANCE, per die side. This gate counts them.
