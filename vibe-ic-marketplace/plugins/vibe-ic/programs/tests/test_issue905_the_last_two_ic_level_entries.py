@@ -94,6 +94,8 @@ sys.path.insert(0, str(_PROGRAMS))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import test_matrix_d3_outputs_produced as D3  # noqa: E402
+from _published_corpus import (  # noqa: E402
+    SKIP_REASON, corpus_root, needs_corpus)
 
 #: The IC-level tree #905 reports, and the published cell beside it.
 _IC_LABEL = "benchmark-data/ic/u_hawaii_adc"
@@ -101,19 +103,73 @@ _CELL_LABEL = "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A"
 #: The step whose evidence is the whole reason the tree is retained.
 _HELD_BY_STEP = "A9"
 
+#: Every label in this file is spelled the way the manifest spells it — from
+#: the repository root, `benchmark-data/...`. When the trees themselves live in
+#: a clone of `vibeic/benchmark-data`, that prefix is the clone's root.
+_LABEL_PREFIX = "benchmark-data/"
 
-def _repo() -> Path:
-    repo = D3._plugin_tree.repo_root()
-    if repo is None:
-        pytest.skip("repository root not resolvable")
-    return Path(repo)
+
+# --------------------------------------------------------------------------- #
+# WHERE THE SUBJECT IS
+# --------------------------------------------------------------------------- #
+# EVERY assertion in this file is about PUBLISHED TREES: the IC-level
+# `phase3/` + `reports/` pair, and the published cell `v1.9.86_sky130A/`
+# beside them. All of it moved to https://github.com/vibeic/benchmark-data.
+#
+# The old guard here was `(_repo() / _IC_LABEL).is_dir()` and it does NOT
+# detect that. `benchmark-data/ic/u_hawaii_adc/` still exists in this
+# checkout — it holds `input/docs/`, the design input the flow reads — so the
+# guard was satisfied by a directory carrying no `phase3/`, no `reports/` and
+# no cell, and four assertions about a retired tree read as findings against
+# this one. "The corpus is elsewhere" was rendered as "step A9 is unevidenced".
+#
+# So the location is asked of `_published_corpus`, which answers the question
+# the assertions actually depend on — is a published CELL readable — and
+# skips, once, with one reason, when the answer is no.
+def _corpus() -> Path:
+    root = corpus_root()
+    if root is None:
+        pytest.skip(SKIP_REASON)
+    return root
+
+
+def _under_corpus(label: str) -> Path:
+    return _corpus() / label[len(_LABEL_PREFIX):]
 
 
 def _ic() -> Path:
-    p = _repo() / _IC_LABEL
+    p = _under_corpus(_IC_LABEL)
     if not p.is_dir():
-        pytest.skip(f"{_IC_LABEL} not checked out")
+        pytest.skip(f"{_IC_LABEL} not in the corpus at {_corpus()}")
     return p
+
+
+def _run_roots():
+    """`D3.run_roots()`, and the same roots relocated when the corpus is.
+
+    `D3.run_roots()` composes `repo_root() / rel`, so it finds these trees only
+    in a checkout that still carries them. Nothing about ADMISSIBILITY is
+    relaxed here and nothing is re-implemented: the manifest supplies the
+    labels and the kinds, and each candidate is admitted by D3's OWN predicate
+    for its kind (`_ADMISSIBILITY`) — a `repo` root still has to carry a runner
+    marker, a `published` root still has to show a converged audit verdict, and
+    a `home` root is still not searched for at all. The only thing that moves
+    is where `benchmark-data/` is read from, which is the whole subject of this
+    branch.
+    """
+    out = dict(D3.run_roots())
+    if _IC_LABEL in out:
+        return out
+    root = _corpus()
+    for label, meta in D3.manifest()["run_roots"].items():
+        admits = D3._ADMISSIBILITY.get(meta["kind"])
+        rel = meta["rel"]
+        if admits is None or not rel.startswith(_LABEL_PREFIX):
+            continue
+        cand = root / rel[len(_LABEL_PREFIX):]
+        if cand.is_dir() and admits(cand):
+            out[label] = D3.RunRoot(label=label, kind=meta["kind"], path=cand)
+    return out
 
 
 def _run_gate(gate: str, project: Path):
@@ -148,6 +204,7 @@ def _ic_level_entries():
 # --------------------------------------------------------------------------- #
 # 1 — the reason on record died with #1024, and nothing replaced it
 # --------------------------------------------------------------------------- #
+@needs_corpus
 def test_the_ic_level_tree_no_longer_owns_an_l21_of_its_own():
     """`phase1/` is where the hollow L21 lived, and #1024 retired `phase1/`."""
     ic = _ic()
@@ -191,6 +248,7 @@ def test_both_trees_fire_the_same_l21_rule_so_l21_retains_nothing():
 # --------------------------------------------------------------------------- #
 # 2 — what actually holds the two entries
 # --------------------------------------------------------------------------- #
+@needs_corpus
 def test_the_ic_level_run_root_is_admitted_only_by_reports_orchestrator():
     """`reports/` is 2 files and is the tree's entire claim to be evidence."""
     ic = _ic()
@@ -220,6 +278,7 @@ def test_removing_reports_orchestrator_makes_the_tree_inadmissible(tmp_path):
         "tree's retention reason has changed")
 
 
+@needs_corpus
 def test_step_a9_is_evidenced_only_by_the_ic_level_tree():
     """THE RELEASE CONDITION for #905's last two entries.
 
@@ -227,8 +286,8 @@ def test_step_a9_is_evidenced_only_by_the_ic_level_tree():
     artefact, `phase3/` and `reports/` have no remaining reader and BOTH can be
     retired — at which point this file goes with them.
     """
-    ic = _ic()  # skips ONLY if the tree is not checked out at all
-    roots = D3.run_roots()
+    ic = _ic()  # skips ONLY if the corpus has no such tree at all
+    roots = _run_roots()
     assert _IC_LABEL in roots, (
         f"{_IC_LABEL} is checked out but is NOT an admissible run root. Do not "
         f"read this as 'nothing to test': it means the tree stopped being "
@@ -264,10 +323,11 @@ def test_step_a9_is_evidenced_only_by_the_ic_level_tree():
         f"retention.json, and delete this file with them.")
 
 
+@needs_corpus
 def test_every_other_ic_level_entry_already_resolves_under_the_cell():
     """11 of the 12 do. Only A9 makes the tree a premise rather than a habit."""
-    _ic()  # skips ONLY if the tree is not checked out at all
-    roots = D3.run_roots()
+    _ic()  # skips ONLY if the corpus has no such tree at all
+    roots = _run_roots()
     for label in (_IC_LABEL, _CELL_LABEL):
         assert label in roots, (
             f"{label} is checked out but is not an admissible run root; the "
@@ -284,5 +344,16 @@ def test_every_other_ic_level_entry_already_resolves_under_the_cell():
         f"the set of IC-level entries the published cell cannot serve moved: "
         f"{held!r}. #905 retains the tree for {_HELD_BY_STEP} alone; anything "
         f"else in this list is a new dependency that needs its own reason.")
-    assert len(served) == 11, (
-        f"expected 11 IC-level entries servable by the cell, got {len(served)}")
+    # `len(served) == 11` restated the size of `_ic_level_entries()`. The claim
+    # is the PARTITION the line above already makes the load-bearing half of:
+    # every IC-level entry is either served by the published cell or is the one
+    # step #905 retains the tree for — nothing falls outside, nothing is in
+    # both. Derived from the same iteration, so publishing a twelfth entry
+    # changes the number without breaking the claim, and a second unservable
+    # entry breaks `held` above, which is where it should break.
+    assert served, (
+        "the published cell serves NO IC-level entry, so #905's premise — "
+        "that the tree is retained for one step alone — is not being measured")
+    assert (len(served) + len(held)
+            == len(list(_ic_level_entries()))), (served, held)
+    assert not set(served) & set(held), (served, held)

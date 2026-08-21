@@ -177,6 +177,68 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+import _routed_checker_progress as _routed_progress
+import _semantic_child_progress as _semantic_progress
+
+
+PROGRESS_SCOPE = "routed-def:macro-obs-geometry-intersect"
+_ACTIVE_INPUT_PLAN: Optional[_routed_progress.FiniteInputPlan] = None
+
+
+def _read_input_text(path: Path) -> str:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.text_for(path, errors="replace")
+    return Path(path).read_text(errors="replace")
+
+
+def _is_default_routed_def(relative: str) -> bool:
+    path = Path(relative)
+    return (path.parent.as_posix() == "phase3/stage3/pnr"
+            and path.name.startswith("routed")
+            and path.suffix == ".def")
+
+
+def _default_macro_lef_population(project: Path) -> List[Path]:
+    """Historical triple-glob order before content-based LEF filtering."""
+    ordered: List[Path] = []
+    seen = set()
+    for pattern in (
+            "input/pdk/**/*.lef", "phase3/**/macro*.lef", "**/*.lef"):
+        for path in sorted(Path(project).glob(pattern)):
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path.absolute()
+            if resolved in seen or not path.is_file():
+                continue
+            seen.add(resolved)
+            ordered.append(path)
+    return ordered
+
+
+def _input_plan(project: Path) -> _routed_progress.FiniteInputPlan:
+    project = Path(project)
+    index = _routed_progress.IndexSnapshot(project)
+    routed = index.select(
+        _is_default_routed_def,
+        sorted(project.glob("phase3/stage3/pnr/routed*.def")),
+        population="macro OBS routed DEF population")
+    lefs = index.select(
+        lambda relative: relative.endswith(".lef"),
+        _default_macro_lef_population(project),
+        population="macro OBS LEF population")
+    reads = [
+        *_routed_progress.planned_reads("routed-def", routed),
+        *_routed_progress.planned_reads("macro-lef", lefs),
+    ]
+    return _routed_progress.FiniteInputPlan(
+        [index.population_unit("macro-obs:git-index")], reads)
+
+
+def semantic_progress_units(cell: Path) -> List[str]:
+    """Trusted parent's exact finite manifest for the default cell argv."""
+    return _input_plan(Path(cell)).units
+
 _MACRO_RE = re.compile(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$", re.S | re.M)
 _SIZE_RE = re.compile(r"^\s*SIZE\s+([\d.-]+)\s+BY\s+([\d.-]+)\s*;", re.M)
 _OBS_RE = re.compile(r"^\s*OBS\s*$(.*?)(?=^\s*(?:PIN|END)\b)", re.S | re.M)
@@ -881,19 +943,16 @@ def discover_macro_lefs(proj: Path) -> List[Path]:
 
     chip-AGNOSTIC: pure LEF grammar; no vendor, PDK or path literal beyond
     the two legacy globs it preserves."""
-    ordered: List[Path] = []
-    seen = set()
-    for pat in ("input/pdk/**/*.lef", "phase3/**/macro*.lef", "**/*.lef"):
-        for p in sorted(proj.glob(pat)):
-            rp = p.resolve()
-            if rp in seen or not p.is_file():
-                continue
-            seen.add(rp)
-            ordered.append(p)
+    if _ACTIVE_INPUT_PLAN is not None:
+        # The held, verified population is the decision input.  Re-globbing or
+        # restatting the pathname here would reopen a transient TOCTOU window.
+        ordered = _ACTIVE_INPUT_PLAN.paths("macro-lef")
+    else:
+        ordered = _default_macro_lef_population(proj)
     out: List[Path] = []
     for p in ordered:
         try:
-            text = p.read_text(errors="replace")
+            text = _read_input_text(p)
         except OSError:
             continue
         if _MACRO_RE.search(text):
@@ -910,12 +969,37 @@ def main(argv=None) -> int:
     ap.add_argument("--json", dest="json_out", type=Path, default=None)
     a = ap.parse_args(argv)
 
+    global _ACTIVE_INPUT_PLAN
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        try:
+            if progress.enabled:
+                if (a.def_path is not None or a.macro_lefs is not None
+                        or a.json_out is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "routed parent progress covers the default DEF/LEF "
+                        "population only")
+                _ACTIVE_INPUT_PLAN = _input_plan(a.project_dir)
+                _ACTIVE_INPUT_PLAN.materialize(progress)
+            rc = _main_parsed(a)
+            if _ACTIVE_INPUT_PLAN is not None:
+                _ACTIVE_INPUT_PLAN.checkpoint_decision(
+                    fresh_plan=_input_plan(a.project_dir))
+            return rc
+        finally:
+            _ACTIVE_INPUT_PLAN = None
+
+
+def _main_parsed(a) -> int:
+
     proj = a.project_dir
     def_p = a.def_path
     if def_p is None:
-        cands = sorted(proj.glob("phase3/stage3/pnr/routed*.def"))
+        cands = (_ACTIVE_INPUT_PLAN.paths("routed-def")
+                 if _ACTIVE_INPUT_PLAN is not None else
+                 sorted(proj.glob("phase3/stage3/pnr/routed*.def")))
         def_p = cands[0] if cands else None
-    if def_p is None or not def_p.is_file():
+    if (def_p is None
+            or (_ACTIVE_INPUT_PLAN is None and not def_p.is_file())):
         print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no routed DEF "
               f"under {proj}. NOT a pass.", file=sys.stderr)
         return 2
@@ -927,7 +1011,7 @@ def main(argv=None) -> int:
     labels = []
     for p in lefs:
         try:
-            texts.append(p.read_text(errors="replace"))
+            texts.append(_read_input_text(p))
         except OSError:
             continue
         labels.append(str(p))
@@ -938,7 +1022,7 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
-    rep = audit(def_p.read_text(errors="replace"), texts, labels)
+    rep = audit(_read_input_text(def_p), texts, labels)
     if a.json_out:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)
         a.json_out.write_text(json.dumps(rep, indent=2) + "\n")

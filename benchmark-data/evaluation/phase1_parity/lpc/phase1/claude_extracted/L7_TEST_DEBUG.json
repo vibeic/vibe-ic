@@ -1,9 +1,0 @@
-{
-  "ic_name": "Low Pin Count (LPC) Interface",
-  "test_debug": {
-    "reset": "LRESET# (== PCI RST#) resets all LPC peripherals",
-    "abort": "LFRAME# low for >=4 LCLK clocks with LAD=1111 aborts the current cycle",
-    "sync_observe": "Observe the SYNC field on LAD to see READY/WAIT/ERROR",
-    "serirq_observe": "SERIRQ stream serializes IRQ0..IRQ15 for interrupt debug"
-  }
-}

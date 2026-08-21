@@ -1,5 +1,0 @@
-{
-  "ic_name": "MIL-STD-1553B (Military Data Bus)",
-  "lab_calibration_present": false,
-  "notes": "MIL-STD-1553B is a wire-level protocol; there is no analog reference / trim / calibration loop in the protocol itself. Bit-rate tolerance (±0.1 % long-term / ±0.01 % short-term) is a system-integration concern. Physical layer parameters are pinned to fixed tolerances (78 Ω twinax 70-85 Ω, transmitter 18-27 Vp-p, isolation transformer 1:1.41 ± 3 %, isolation resistor 0.75 × Zo ± 2 % or 55 Ω ± 2 % direct-coupled) so no calibration loop is needed. Production lab verification is performed via the SAE AS4112 RT Production Test Plan + waveform-quality measurement against MIL-HDBK-1553A."
-}
