@@ -767,3 +767,62 @@ taking this branch at its head supplies the missing half.
 It is also the argument for treating an edit and its re-pin as atomic rather
 than as two commits that happen to be adjacent: this file has now been split
 from its subject once, by an assembler acting reasonably on a branch name.
+
+## 15. Auditing my own §7 evidence: what "11 NOT CHECKED" actually was
+
+§12 established that this branch makes the review run the set through the
+PARALLEL runner, and that `jmeas3` measured that runner carrying wiring errors
+on its trees. That puts a question mark over §7's own headline — if the runner
+is unreliable, then "89/89 gates ran; 9 failed; 11 NOT CHECKED" might be partly
+a measurement of the runner rather than of the tree. So the runner was driven
+directly, with the corpus bound, and its per-label record read.
+
+```
+repo_hygiene_parallel.py --summary-json …   (188s, VIBE_IC_BENCHMARK_DATA bound)
+declared=89  ran=89  decided=78  passed=69  failed=9  not_checked=11
+wiring_errors=[]
+```
+
+**The 11 NOT CHECKED are missing-input UNDETERMINEDs, and they are correct.**
+Six are PPA gates, and the remaining five are `macro OBS not crossed (spm)`,
+`new tool diagnostic id (spm)`, `blocker list contract on committed reports`,
+`engineering evidence fresh`, `input-doc claims vs installed PDK`. All are
+invoked through `run_tolerating_uncheckable`. Driving one of them by hand:
+
+```
+$ python3 programs/ppa_contract_check.py --contract $ROOT/benchmark-data/ppa/contract.json
+[CANNOT CHECK] ppa_contract_check: …/benchmark-data/ppa/contract.json: absent
+   No contract was read, so nothing has been established about this run.
+   This is NOT a finding about the design.
+rc 2
+```
+
+`benchmark-data/` is not in this repository — the published corpus moved to
+`vibeic/benchmark-data`, so the in-tree path these gates name does not exist.
+The gates say so, in the exact vocabulary this repo uses for the distinction,
+and the runner carries it through as NOT CHECKED rather than as a pass. That is
+the `unmeasured-reads-as-a-measured-zero` failure mode NOT happening, and it is
+worth recording as such: §7's "11 NOT CHECKED (not a pass)" was reporting an
+honest refusal, not a defect and not a runner artifact.
+
+**The 9 FAILs are real and are the tree's, not the runner's**: `flow-gate
+enforcement audit`, `L-doc field producer`, `evidence citation resolves`,
+`checker execution wiring`, `gates are wired to something`, `declaration scans
+strip comments`, `published-evidence index honest`, `d3 declaration/manifest
+parity`, `liar census controls still fire`. None is about the landing path this
+branch edits.
+
+**Where this DIVERGES from `jmeas3`, stated rather than smoothed over.** It
+measured 15 and 19 wiring errors on its two trees, every one
+`PROGRESS_PROTOCOL_INCOMPLETE` / watchdog `outcome=stalled rc=199`. This run
+reports **zero**. The runs are not comparable enough to call either wrong: the
+trees differ (`a00f53f20` / `833e8493f` vs this branch), and this run had
+`VIBE_IC_BENCHMARK_DATA` bound at a real corpus checkout while I do not know
+whether theirs did — a gate that cannot reach the corpus takes a different path
+to its verdict than one that can. The honest statement is that the wiring
+errors are real where they were seen and did not reproduce here, and that the
+binding is the first variable to control if anyone wants to settle it.
+
+**Net effect on §6-§7:** the headline stands and is slightly stronger than it
+was written. The set genuinely ran, its refusals are honest refusals with named
+missing inputs, and none of its 9 failures belongs to this branch.
