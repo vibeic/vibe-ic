@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1159
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1159)
+- **Total programs (excluding helpers / shims):** 1160
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1160)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1150 |
+| `any` | 1151 |
 
 ## Alphabetical listing
 
@@ -832,6 +832,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ppa_contract_build` | any | — | build the measurement contract for one PPA run. |
 | `ppa_contract_check` | any | — | the validator, and what it must REFUSE. |
 | `ppa_diagnostic_router` | any | — | CLI: run Program-First diagnosis over a situation; hand off only on a waive. |
+| `ppa_eco_spare_records` | any | — | the design-for-ECO spare population, as canonical metric records the promotion gate can adjudicate. |
 | `ppa_feasibility_check` | any | — | the hard promotion gate, as a flow-callable gate. |
 | `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2. |
 | `ppa_measurement_check` | any | — | The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided. |
@@ -1231,7 +1232,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1150 programs)
+### `any` (1151 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2034,6 +2035,7 @@ _(no programs in this group)_
 - `ppa_contract_build` — build the measurement contract for one PPA run.
 - `ppa_contract_check` — the validator, and what it must REFUSE.
 - `ppa_diagnostic_router` — CLI: run Program-First diagnosis over a situation; hand off only on a waive.
+- `ppa_eco_spare_records` — the design-for-ECO spare population, as canonical metric records the promotion gate can adjudicate.
 - `ppa_feasibility_check` — the hard promotion gate, as a flow-callable gate.
 - `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2.
 - `ppa_measurement_check` — The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided.
