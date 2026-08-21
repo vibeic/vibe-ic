@@ -126,6 +126,31 @@ origin/jpadsite/pad-site    along-from-oriented-footprint = False  (2 tainted na
 **The exact decision:** the input is the function's AST. The decision is
 reachability from one call. Deterministic.
 
+### Why citing upstream is not the same as being pinned to it
+
+Measured on the pre-fix tree, and it is the sharpest form of this finding: the
+correct upstream rule was written down **one line above the code that violates
+it**.
+
+```
+#    on every side: the rotation puts a cell's width along the row.
+boxes = [PR.footprint(lib.masters[...], orient, units) for i in insts]
+along = [b[0] if axis == "x" else b[1] for b in boxes]
+```
+
+The comment is right. The next statement takes the orientation-dependent
+extent. The knowledge was present, correct, and cited — it just was not
+executable, and nothing compared the prose to the code beneath it.
+
+This is not one module's slip. Verified over program bodies: 6 programs both
+reference an upstream tree and use comparison language, and reading all six,
+**none** pins one of our computations against upstream's. They cite upstream as
+documentation for what to expect — several say "measured out of the pinned
+image, not remembered", which is the repo's own good habit — and then the
+reading freezes into a comment at authoring time and is never re-checked. That
+is exactly the gap this rule closes, and it is why the rule is about making the
+citation executable rather than about requiring one.
+
 F1 and F2 are the same rule at two granularities — the **input set** drifted
 and the **arithmetic** drifted — which is worth saying plainly, because it means
 one guard family closes both and the second instance was already latent when
