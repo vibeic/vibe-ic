@@ -331,6 +331,72 @@ def _to_container_path(host_path: str, container: str) -> str:
     return p
 
 
+#: Where a step records that one artefact is a COPY of another it wrote.
+#: Read by `_ppa/timing.py` so a mirrored report is not counted twice.
+ARTEFACT_MIRRORS_REL = "reports/phase3/artefact_mirrors.json"
+
+
+def _publish_artefact_mirror(src: Path, dst: Path, project: Path,
+                             produced_by: str) -> List[str]:
+    """Copy `src` to `dst` AND record that `dst` is a MIRROR of `src`.
+
+    MEASURED DEFECT: this flow publishes each sign-off STA report into two
+    directories, because five shipped checkers read the `reports/phase3/`
+    copy and the step writes the `phase3/stage3/sta/` one. `_ppa/timing.py`
+    reads both directories, so one measurement arrived as two records under one
+    scope, and ALL 20 (metric, scope) groups in the timing document collided as
+    CONFLICTING_RECORD:
+
+        sha256(phase3/stage3/sta/sta_spef_based.rpt)
+            == sha256(reports/phase3/sta_spef_based.rpt)
+
+    The emitter is not where that is fixed: both locations are load-bearing,
+    and dropping either one breaks a consumer. But the READER cannot tell a
+    mirror from a genuine second measurement that happens to agree to the
+    byte — and collapsing by content hash alone would erase the second one,
+    which is a real reading of a real artefact. Only the step that made the
+    copy knows it is a copy, so the step says so here.
+
+    Idempotent: keyed on the mirror path, so a re-run replaces its entry
+    rather than growing the list. Returns the paths written."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    # BYTES, not decoded text: a mirror that is not byte-exact is not a mirror,
+    # and the digest below is the one an auditor reproduces with `sha256sum`.
+    body = src.read_bytes()
+    dst.write_bytes(body)
+    manifest = project / ARTEFACT_MIRRORS_REL
+    doc: Dict[str, object] = {"schema": "vibeic.artefact_mirrors.v1",
+                              "mirrors": []}
+    if manifest.is_file():
+        try:
+            loaded = json.loads(manifest.read_text())
+            if isinstance(loaded, dict) and isinstance(loaded.get("mirrors"), list):
+                doc = loaded
+        except (OSError, ValueError):
+            # A manifest we cannot parse is replaced, not appended to: a
+            # half-read list would silently drop entries a consumer needs.
+            pass
+    rel_mirror = str(dst.relative_to(project))
+    rel_of = str(src.relative_to(project))
+    entries = [e for e in doc["mirrors"]                     # type: ignore[index]
+               if not (isinstance(e, dict) and e.get("mirror") == rel_mirror)]
+    entries.append({
+        "mirror": rel_mirror,
+        "of": rel_of,
+        # The digest AT THE MOMENT OF COPYING. A consumer that finds either
+        # file no longer matching must NOT collapse the pair: they have
+        # diverged, and two different contents are two facts.
+        # `sha256:<hex>`, the spelling `_ppa/backends/opensta.file_digest`
+        # already publishes, so the consumer compares like with like instead of
+        # stripping a prefix one side happens not to write.
+        "sha256": "sha256:" + hashlib.sha256(body).hexdigest(),
+        "declared_by": produced_by,
+    })
+    doc["mirrors"] = sorted(entries, key=lambda e: e["mirror"])
+    _aa.write_text(manifest, json.dumps(doc, indent=2) + "\n")
+    return [str(dst), str(manifest)]
+
+
 def _emitted_script_root_tcl(script_path: Path, project: Path) -> str:
     """Tcl prologue defining `$RUN_ROOT` from the script's OWN location.
 
@@ -32165,8 +32231,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(spef_sta_rpt))
             mirror = rpt_phase3 / "sta_spef_based.rpt"
             if _signoff_regen(mirror, primary_def):
-                mirror.write_text(spef_sta_rpt.read_text())
-                written.append(str(mirror))
+                written.extend(_publish_artefact_mirror(
+                    spef_sta_rpt, mirror, project, "_emit_spef_sta"))
     spef_sta_ok = spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0
 
     # --- TAPEOUT-SIGNOFF P1: multi-corner SPEF (min/nom/max) + corner STA -----
@@ -32205,8 +32271,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     written.append(str(mc_sta_rpt))
                     mc_mirror = rpt_phase3 / "sta_spef_multicorner.rpt"
                     if _signoff_regen(mc_mirror, primary_def):
-                        mc_mirror.write_text(mc_sta_rpt.read_text())
-                        written.append(str(mc_mirror))
+                        written.extend(_publish_artefact_mirror(
+                            mc_sta_rpt, mc_mirror, project,
+                            "_emit_corner_spef_sta"))
         _corners = sorted(corner_spefs)
         _multi = len(corner_spefs) >= 2
         mc_stance.write_text(json.dumps({
@@ -32306,8 +32373,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 written.append(str(mc_ocv_rpt))
                 mc_ocv_mirror = rpt_phase3 / "sta_mcorner_ocv.rpt"
                 if _signoff_regen(mc_ocv_mirror, primary_def):
-                    mc_ocv_mirror.write_text(mc_ocv_rpt.read_text())
-                    written.append(str(mc_ocv_mirror))
+                    written.extend(_publish_artefact_mirror(
+                        mc_ocv_rpt, mc_ocv_mirror, project,
+                        "_emit_mcorner_ocv_sta"))
                 # Parse the REAL per-corner worst slack (surface the violation).
                 setup_wns, hold_wns = _parse_mcorner_ocv_slacks(
                     mc_ocv_rpt.read_text(errors="replace"))
