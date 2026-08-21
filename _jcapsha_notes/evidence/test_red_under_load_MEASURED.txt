@@ -124,3 +124,19 @@ STATUS: environmental, established. NOT a regression, and not attributable to
 this branch -- which was already proven independently, since the failing program
 contains zero references to the one shipped file this branch changes. The 55s
 bound was never raised.
+
+--- CLEAN ADJUDICATION, at last, and it is GREEN ---
+
+The load finally fell and STAYED down for the whole run, which is what the two
+earlier attempts never had:
+
+    load at start 14.95   ->   load at end 14.75      (32 cores)
+    rc 0       87 passed, 4 skipped in 37.27s
+
+Same tree, same four suites, same 55s bound -- untouched. Green.
+
+That closes it: the red was environmental, it is now confirmed by a clean run as
+well as by the positive control, and nothing in the tree was changed to obtain
+either. Three attempts were needed because the first two were adjudicated under
+a load that was still moving, and a wall-clock verdict taken then is not a
+verdict.
