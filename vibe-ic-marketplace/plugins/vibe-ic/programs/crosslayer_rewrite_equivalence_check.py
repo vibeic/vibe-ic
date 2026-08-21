@@ -78,6 +78,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#1470
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -193,7 +194,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                    "baseline_marker": str(marker), "report": str(rp)}
         out = project / args.json
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(out,
+                          json.dumps(payload, indent=2) + "\n",
+                          encoding="utf-8")
         print(f"[{PROGRAM}] NOT_APPLICABLE — no cross-layer search was run.")
         return 0
 
@@ -226,8 +229,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                "search_space_problems": space_problems}
     out = project / args.json
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-                   encoding="utf-8")
+    atomic_write_text(out,
+                      json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+                      encoding="utf-8")
     print(f"[{PROGRAM}] {status}: {why}", file=sys.stderr if not ok
           else sys.stdout)
     return 0 if ok else 1

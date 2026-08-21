@@ -1238,8 +1238,14 @@ def validate(waiver: Waiver) -> Tuple[str, ...]:
     citation was false while this function returned ``()``.
     """
     problems = []
-    if waiver.dim not in range(1, 9):
-        problems.append(f"dim {waiver.dim!r} is not in 1..8")
+    # Local import: `cells` is the single declaration of how many dimensions
+    # exist, and hard-coding the range here is how this check went on saying
+    # "1..8" after a ninth dimension landed. Imported inside the function so the
+    # module-level import graph stays one-directional.
+    from . import cells as _cells
+    if waiver.dim not in _cells.DIMENSIONS:
+        problems.append(
+            f"dim {waiver.dim!r} is not one of {list(_cells.DIMENSIONS)}")
     if not flowref.has_step(waiver.step_id):
         problems.append(f"step {waiver.step_id!r} is not declared in the flow yaml")
     reason = (waiver.reason or "").strip()
