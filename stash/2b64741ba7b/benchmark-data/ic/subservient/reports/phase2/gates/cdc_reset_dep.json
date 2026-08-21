@@ -1,0 +1,144 @@
+{
+  "program": "reset_dependency_check",
+  "passed": true,
+  "findings": [],
+  "summary": {
+    "files_scanned": 192,
+    "violations": 0,
+    "files_skipped": 33,
+    "skipped": [
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/phase2/stage2/synth/netlist_yosys.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/phase2/stage2/synth/_dlatch_map.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/phase2/stage2/synth/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/phase2/stage2/synth/chip_top_synth.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/phase3/stage3/pnr/chip_top_pnr.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/phase3/stage3/pnr/subservient_pnr.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/phase2/stage2/dft/cut_netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/phase2/stage2/dft/scan_netlist_prelim.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/phase2/stage2/synth/netlist_yosys.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/phase2/stage2/synth/_dlatch_map.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/phase2/stage2/synth/subservient_synth.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/phase2/stage2/synth/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/phase3/stage3/pnr/subservient_pnr.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/steps/14_synthesis_handoff_gate_pre_pnr_yosys_script_netl/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1467_sky130a_20260721/steps/9_synthesis_yosys_mapped_netlist/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/phase2/stage2/dft/cut_netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/phase2/stage2/dft/scan_netlist_prelim.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/phase2/stage2/synth/netlist_yosys.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/phase2/stage2/synth/_dlatch_map.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/phase2/stage2/synth/subservient_synth.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/phase2/stage2/synth/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/phase3/stage3/pnr/subservient_pnr.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/steps/14_synthesis_handoff_gate_pre_pnr_yosys_script_netl/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/clean_run_v1462_sky130a_20260720/steps/9_synthesis_yosys_mapped_netlist/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/phase2/stage2/dft/cut_netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/phase2/stage2/dft/scan_netlist_prelim.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/phase2/stage2/synth/netlist_yosys.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/phase2/stage2/synth/_dlatch_map.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/phase2/stage2/synth/subservient_synth.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/phase2/stage2/synth/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/phase3/stage3/pnr/subservient_pnr.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/steps/14_synthesis_handoff_gate_pre_pnr_yosys_script_netl/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/verify_issue189_20260721/steps/9_synthesis_yosys_mapped_netlist/netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      }
+    ]
+  }
+}

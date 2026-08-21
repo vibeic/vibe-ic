@@ -1,0 +1,70 @@
+type: bug
+severity: P1
+component: program:test_matrix_63x8_coverage
+plugin_version: "1.10.4"
+
+title: >-
+  The 63x8 census reports ENFORCED for 26 cells whose live predicate is currently failing, and
+  the published census table no longer reproduces
+
+pattern: |
+  A coverage ledger reports a cell's STATE — enforced, waived, not-applicable — and that state
+  is derived from how the cell is configured, not from whether its predicate currently passes.
+  The two are independent, and nothing in the reported number distinguishes "a live predicate
+  runs and passes" (which is what the state is documented to mean) from "a live predicate runs
+  and fails". A reader quoting the census is therefore told a cell is enforcing at the exact
+  moment its enforcement is broken.
+
+  The ledger is otherwise unusually rigorous — strict xfail waivers, self-invalidating NAs, a
+  documented ban on asserting stored verdicts — which is what makes this gap worth closing
+  rather than tolerating: it is the one number in the system that a reader is invited to quote,
+  and it is the one number that does not consult the tests.
+
+  MEASURED on the maintainer host, current checkout:
+
+    live census      504 cells   ENFORCED 481   WAIVED 11   NA 12
+    README table     504 cells   ENFORCED 483   WAIVED  9   NA 12     (does not reproduce)
+
+    suite state      all 8 dimension modules
+      d1  green      d2  green      d5  green      d6  green      d8  green
+      d3  22 failed  (19 cell-level: 10 11 12 15 17 19 20 21 22 23 24 25 26 29 30 32 M2 M3 M4)
+      d4   1 failed  (step 1)
+      d7   9 failed  ( 6 cell-level: D1 11 24 27 34 M2)
+      totals: 32 failures, 841 passed, 11 xfailed
+
+    cells classified ENFORCED whose predicate is RED:  26 of 481
+
+  The failures are real findings, not infrastructure noise. d4/step1 reports that the step's
+  gate reads 1 of its 3 declared required_outputs — `reports/phase1/extraction_coverage_report.md`
+  and `.json` are claimed as deliverables and checked by no clause of the step's own gate. The
+  d3 failures report a stale write ledger: "the ledger says NOT WRITTEN (absent) but the commit
+  that carries the ledger also carries [the path] (tracked at HEAD) ... this dimension would
+  refuse a real artefact on its word". Both are the ledger working correctly and reporting a
+  defect; the census is what fails to carry that news.
+
+  The README's own instruction — "never quote this table without re-running it" — is the right
+  instinct and is not sufficient, because re-running it reproduces the same state-only number.
+
+suggested_fix: |
+  Give the census a second axis and make it impossible to report the first without the second.
+  `state_census()` should return, or be joined against, the cell's live test OUTCOME, so the
+  reportable shape is (state x outcome) — ENFORCED-and-green, ENFORCED-and-red, WAIVED, NA — and
+  a single "ENFORCED: 481" can no longer be quoted on its own. The coverage module already
+  collects the eight modules through pytest's own machinery, so the outcome is available where
+  the state is computed.
+
+  Then hold the README to it: regenerate the census table from a run rather than maintaining it
+  by hand, and add a test asserting the committed table equals the freshly computed one. The
+  table is currently stale in three rows (d2, d3, d5) and states that A8's dimension-3 cell "stays
+  WAIVED" while the live census reports it ENFORCED — a documented narrative outliving the
+  measurement it describes.
+
+  Fixing the 26 red cells is separate work and should stay separate; this issue is only that a
+  red cell is being counted as an enforcing one.
+
+id: "ORGANIC-20260808-the-census-reports-enforced-for-cells-whose-predicate-is-red"
+submitted_at: "2026-08-08T23:45:00+08:00"
+session_context: >-
+  2026-08-08 adversarial review of the 63x8 flow-gate compliance matrix. The census was
+  reproduced with the documented command, then all eight dimension modules were executed and the
+  failing cell ids diffed against the cells the census reported as ENFORCED.

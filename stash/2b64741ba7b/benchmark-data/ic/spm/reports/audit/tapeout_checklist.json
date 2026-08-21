@@ -1,0 +1,72 @@
+{
+  "program": "signoff_audit:tapeout",
+  "passed": false,
+  "findings": [
+    {
+      "rule": "TAPEOUT_GDS_EXISTS",
+      "severity": "INFO",
+      "message": "Declared stream-out GDS found: spm.gds (798418 bytes, GDSII HEADER record present)",
+      "file": "_diag_v1837_firstpass_20260730/phase3/stage4/gds/spm.gds"
+    },
+    {
+      "rule": "TAPEOUT_NETLIST_EXISTS",
+      "severity": "INFO",
+      "message": "Tape-out netlist found: spm_pnr.v",
+      "file": "_diag_v1837_firstpass_20260730/phase3/stage3/pnr/spm_pnr.v"
+    },
+    {
+      "rule": "TAPEOUT_TIMING_EXISTS",
+      "severity": "INFO",
+      "message": "Timing report found: sta_spef_repaired.rpt",
+      "file": "_diag_v1837_firstpass_20260730/phase3/stage3/pnr/sta_spef_repaired.rpt"
+    },
+    {
+      "rule": "TAPEOUT_DRC_LIBRARY_INTERNAL_WAIVED",
+      "severity": "WARNING",
+      "message": "signoff DRC report 'drc_signoff.rpt' carries 3 violation(s) but design-level count is 0 (100% stdcell-library-internal per rule-layer classify #513) — DRC slot credited as a library-internal waiver; tapeout verdict demoted to PASS_WITH_WAIVERS (no cascaded waiver needed).",
+      "file": "_diag_v1837_secondpass_20260730/reports/phase3/drc_signoff.rpt"
+    },
+    {
+      "rule": "TAPEOUT_LVS_MATCH",
+      "severity": "INFO",
+      "message": "LVS sign-off report 'lvs.rpt': genuine netgen match (unique match + Final result line)",
+      "file": "reports/phase3/lvs.rpt"
+    },
+    {
+      "rule": "TAPEOUT_SI_ABSENT",
+      "severity": "ERROR",
+      "message": "SI crosstalk-delay sign-off refused (ABSENT): no SI crosstalk-delay verdict at reports/phase3/si_mcf_sta_check.json. That is not a vacuous check — it is the ABSENCE of one. Nothing ran, so there is no disclosure to accept and no waiver can cover it.",
+      "file": "reports/phase3/si_mcf_sta_check.json"
+    }
+  ],
+  "summary": {
+    "evidence": {
+      "gds": true,
+      "netlist": true,
+      "timing": true,
+      "drc": "library_internal_waived",
+      "lvs": true
+    },
+    "evidence_count": 5,
+    "threshold": 5,
+    "env_unavailable_steps": [],
+    "drc_library_internal_waived": true,
+    "lvs_power_pin_only_waived": false,
+    "lvs_report": "reports/phase3/lvs.rpt",
+    "lvs_verdict": "GENUINE_MATCH",
+    "si_signoff": {
+      "state": "ABSENT",
+      "report": "reports/phase3/si_mcf_sta_check.json",
+      "verdict": "",
+      "vacuity_code": "",
+      "folds_proved": 0,
+      "waived": false,
+      "waiver_approver": "",
+      "waiver_reason": "",
+      "waiver_refused": "",
+      "accepted_vacuity_codes": [],
+      "why": "no SI crosstalk-delay verdict at reports/phase3/si_mcf_sta_check.json. That is not a vacuous check — it is the ABSENCE of one. Nothing ran, so there is no disclosure to accept and no waiver can cover it."
+    },
+    "verdict_tier": "FAIL"
+  }
+}

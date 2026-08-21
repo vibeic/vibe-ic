@@ -1,0 +1,72 @@
+{
+  "program": "signoff_audit:tapeout",
+  "passed": false,
+  "findings": [
+    {
+      "rule": "TAPEOUT_GDS_EXISTS",
+      "severity": "INFO",
+      "message": "Declared stream-out GDS found: subservient.gds (2124686 bytes, GDSII HEADER record present)",
+      "file": "clean_run_v1462_sky130a_20260720/phase3/stage4/gds/subservient.gds"
+    },
+    {
+      "rule": "TAPEOUT_NETLIST_EXISTS",
+      "severity": "INFO",
+      "message": "Tape-out netlist found: subservient_pnr.v",
+      "file": "clean_run_v1462_sky130a_20260720/phase3/stage3/pnr/subservient_pnr.v"
+    },
+    {
+      "rule": "TAPEOUT_TIMING_EXISTS",
+      "severity": "INFO",
+      "message": "Timing report found: sta_spef_repaired.rpt",
+      "file": "clean_run_v1462_sky130a_20260720/phase3/stage3/pnr/sta_spef_repaired.rpt"
+    },
+    {
+      "rule": "TAPEOUT_DRC_CLEAN",
+      "severity": "INFO",
+      "message": "signoff DRC report 'drc_signoff.rpt': 0 violations (count parsed, not just existence)",
+      "file": "reports/phase3/drc_signoff.rpt"
+    },
+    {
+      "rule": "TAPEOUT_LVS_MISMATCH",
+      "severity": "ERROR",
+      "message": "LVS report 'lvs.rpt' carries a real signal-net mismatch — an open connectivity defect. Never waved through.",
+      "file": "reports/phase3/lvs.rpt"
+    },
+    {
+      "rule": "TAPEOUT_SI_ABSENT",
+      "severity": "ERROR",
+      "message": "SI crosstalk-delay sign-off refused (ABSENT): no SI crosstalk-delay verdict at reports/phase3/si_mcf_sta_check.json. That is not a vacuous check — it is the ABSENCE of one. Nothing ran, so there is no disclosure to accept and no waiver can cover it.",
+      "file": "reports/phase3/si_mcf_sta_check.json"
+    }
+  ],
+  "summary": {
+    "evidence": {
+      "gds": true,
+      "netlist": true,
+      "timing": true,
+      "drc": true,
+      "lvs": false
+    },
+    "evidence_count": 4,
+    "threshold": 5,
+    "env_unavailable_steps": [],
+    "drc_library_internal_waived": false,
+    "lvs_power_pin_only_waived": false,
+    "lvs_report": "reports/phase3/lvs.rpt",
+    "lvs_verdict": "SIGNAL_NET_MISMATCH",
+    "si_signoff": {
+      "state": "ABSENT",
+      "report": "reports/phase3/si_mcf_sta_check.json",
+      "verdict": "",
+      "vacuity_code": "",
+      "folds_proved": 0,
+      "waived": false,
+      "waiver_approver": "",
+      "waiver_reason": "",
+      "waiver_refused": "",
+      "accepted_vacuity_codes": [],
+      "why": "no SI crosstalk-delay verdict at reports/phase3/si_mcf_sta_check.json. That is not a vacuous check — it is the ABSENCE of one. Nothing ran, so there is no disclosure to accept and no waiver can cover it."
+    },
+    "verdict_tier": "FAIL"
+  }
+}

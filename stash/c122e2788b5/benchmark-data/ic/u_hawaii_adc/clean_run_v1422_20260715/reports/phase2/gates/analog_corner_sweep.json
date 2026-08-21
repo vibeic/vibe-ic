@@ -1,0 +1,24 @@
+{
+  "gate": "analog_a4_corner_sweep_check",
+  "verdict": "FAIL",
+  "blocks_checked": 2,
+  "blocks_pass": 0,
+  "blocks_missing": 0,
+  "blocks_fail": 2,
+  "blocks_structure_only": 0,
+  "structure_only_blocks": [],
+  "findings": [
+    {
+      "block": "delta_sigma",
+      "rule": "A4_DESIGN_CONTENT_UNDECLARED",
+      "rel_path": "phase3/analog/delta_sigma/corner_results.json",
+      "detail": "the artefact declares simulated corners, and the artefact records no `design_content` at all. A deck rendered from a library topology and a deck rendered from a design sized to its spec are indistinguishable in every other field of this file. The producer must republish the upstream `design_content` record; absence of it is not evidence of design content, and an artefact that will not say what circuit it simulated must not certify this step. Declaring `structure_only` is not a penalty — it certifies, in its own disclosed tier."
+    },
+    {
+      "block": "ldo",
+      "rule": "A4_DESIGN_CONTENT_UNDECLARED",
+      "rel_path": "phase3/analog/ldo/corner_results.json",
+      "detail": "the artefact declares simulated corners, and the artefact records no `design_content` at all. A deck rendered from a library topology and a deck rendered from a design sized to its spec are indistinguishable in every other field of this file. The producer must republish the upstream `design_content` record; absence of it is not evidence of design content, and an artefact that will not say what circuit it simulated must not certify this step. Declaring `structure_only` is not a penalty — it certifies, in its own disclosed tier."
+    }
+  ]
+}

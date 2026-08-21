@@ -1,0 +1,72 @@
+type: bug
+severity: P0
+component: program:cdc_async_input_check
+plugin_version: "1.10.4"
+
+title: >-
+  Two blocking gates return exit 0 with no output on a project containing nothing, and the
+  silence keeps them inside the published executed-PASS numerator
+
+pattern: |
+  A checker that scans a file set treats "the set was empty" as "no violations found" and
+  returns success. The verdict is literally true and completely uninformative, and because it
+  carries no disclosure, every consumer downstream is entitled to read it as a measurement.
+  The flow already has the vocabulary to say this honestly — a VACUOUS_PASS tier that keeps
+  its own label and its own counter — and it is the SILENCE, not the exit code, that defeats
+  it: the tier is entered by printing a sentinel, so a gate that passes vacuously without
+  saying so is scored a plain PASS and lands in the `X/Y executed PASS` headline a reviewer
+  reads. A vacuous pass that discloses costs the run a labelled tier; a vacuous pass that stays
+  quiet is promoted to evidence.
+
+  MEASURED. Every one of the flow's 159 exec-type gate clauses was run against an empty
+  directory. 27 returned exit 0. 24 of those disclosed — VACUOUS_PASS, "skipped: no L7
+  document", NOT_APPLICABLE, "no analog_block_list.json ... nothing was examined". Three did
+  not, and two of the three are unconditional `program_exit_zero` clauses on the same step:
+
+    $ mkdir empty && cd empty
+    $ python3 programs/cdc_async_input_check.py . --json reports/phase2/gates/x.json
+      exit 0, 0 bytes of output
+    $ python3 programs/reset_dependency_check.py . --json reports/phase2/gates/x.json
+      exit 0, 0 bytes of output
+    $ cat reports/phase2/gates/x.json
+      { "program": "reset_dependency_check", "passed": true, "findings": [],
+        "summary": { "files_scanned": 0, "violations": 0, ... } }
+
+  The report states `files_scanned: 0` and `passed: true` in the same object. The evidence that
+  nothing was examined is in the artefact, and the verdict was formed without consulting it —
+  the same shape the deliverable-consistency work already named ("it had both numbers in hand
+  and never compared them").
+
+  The two sibling clauses of the SAME step's `all_of` behave correctly on the identical empty
+  tree — cdc_crossing_check exits 1, clock_domain_reg_crossing_check exits 2 — which is what
+  makes this a defect rather than a design decision: four gates asked one question about one
+  tree and gave two different answers.
+
+  The third silent case is yosys_script_template_check on step 14 (optional clause).
+
+suggested_fix: |
+  For each of the three, decide the honest verdict for an empty scan set and emit it in the
+  form the flow already understands. The two step-3 gates scan RTL: with zero files scanned
+  they have measured nothing, so the correct answer is the disclosed tier — print the
+  `VACUOUS_PASS:` sentinel naming the empty input set — or rc 2 ("cannot read my inputs"),
+  matching whichever of the two siblings the flow owner considers correct for this step. Both
+  are already-supported outcomes and neither invents a new verdict.
+
+  Then make the class un-reintroducible, which matters more than the three fixes. Add a
+  chip-AGNOSTIC test that runs every exec-type gate clause in the flow against an empty
+  directory and asserts that any clause exiting 0 emits a recognised disclosure sentinel. That
+  test is cheap (159 clauses, ~2 minutes measured), it starts at 3 known failures rather than
+  an unknown number, and it converts "which gates can pass without looking at anything" from an
+  investigation into a standing assertion.
+
+  Consider also asserting the weaker invariant directly in the report schema: a verdict object
+  carrying a zero scan-count and `passed: true` must also carry a disclosure field. 36 programs
+  emit a `files_scanned` summary, so the invariant has real reach beyond these three.
+
+id: "ORGANIC-20260808-two-blocking-gates-certify-an-empty-tree-in-silence"
+submitted_at: "2026-08-08T23:44:00+08:00"
+session_context: >-
+  2026-08-08 adversarial review of the 63x8 flow-gate compliance matrix, answering "which cells
+  can return PASS without having examined anything" by executing every gate clause the flow
+  declares against an empty project directory and classifying the exit-0 population by whether
+  it disclosed.

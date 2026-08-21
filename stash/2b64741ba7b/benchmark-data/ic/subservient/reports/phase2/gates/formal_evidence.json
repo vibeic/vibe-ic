@@ -1,0 +1,11 @@
+{
+  "program": "formal_proof_evidence_check",
+  "version": "1.0.0",
+  "findings": [
+    "SBY_REFS_DANGLING (#417, non-verdict): the verdict rests on phase2/stage1/formal/subservient.sby, but 1 other .sby reference file(s) that do not exist — constraints.sby: rtl/*.sv",
+    "EVIDENCE_MISSING (#448): results.json evidence 'phase2/stage1/formal/sby_subservient.log' does not exist or is empty"
+  ],
+  "sby": "phase2/stage1/formal/subservient.sby",
+  "sby_log": "phase2/stage1/formal/subservient/logfile.txt",
+  "verdict": "FAIL"
+}

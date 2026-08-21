@@ -1,0 +1,18 @@
+{
+  "verdict": "VACUOUS_PASS_UNCONFIRMED",
+  "reason_class": "inline_yosys_p_mode_unconfirmed",
+  "reason": "no .ys scripts found AND no inline `yosys -p` runner-mode markers detected. Gate stays rc=0 (vacuous) but reviewers should confirm a synthesis step actually ran \u2014 otherwise a missing synth artefact is being silently masked.",
+  "inline_evidence": [],
+  "project": "/home/reyerchu/vibe-ic/benchmark-data/ic/sha256",
+  "findings": [],
+  "handoff_netlist_audit": {
+    "handoff_netlist": "phase2/stage2/synth/netlist.v",
+    "present": true,
+    "bytes": 2437447,
+    "has_module": true,
+    "stale_vs_scripts": [],
+    "producer_scripts": [],
+    "scripts_considered": 0
+  },
+  "messages": []
+}

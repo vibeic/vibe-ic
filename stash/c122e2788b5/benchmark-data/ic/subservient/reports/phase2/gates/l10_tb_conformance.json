@@ -1,0 +1,126 @@
+{
+  "total": 10,
+  "ok": 0,
+  "fail": 7,
+  "waived": 3,
+  "checklist_gaps": 0,
+  "capability_gap": "cap:conditional_feature_undeclared",
+  "capability_gaps": [
+    "cap:conditional_feature_undeclared"
+  ],
+  "analog_anchor": null,
+  "cpu_oracle_anchor": null,
+  "sim_tree_drives_dut": false,
+  "vacuous_sim_tree": true,
+  "vacuous_testbench_files": [
+    "phase2/stage1/sim/tb/l10_coverage_trace.v"
+  ],
+  "results": [
+    {
+      "id": "blinky_hex",
+      "category": "functional_vector",
+      "evidence": [],
+      "pass": false,
+      "status": "fail",
+      "waived": false,
+      "review_required": false,
+      "capability_gap": null
+    },
+    {
+      "id": "hello_hex",
+      "category": "functional_vector",
+      "evidence": [],
+      "pass": false,
+      "status": "fail",
+      "waived": false,
+      "review_required": false,
+      "capability_gap": null
+    },
+    {
+      "id": "rv32i_40",
+      "category": "functional_vector",
+      "evidence": [],
+      "pass": false,
+      "status": "fail",
+      "waived": false,
+      "review_required": false,
+      "capability_gap": null
+    },
+    {
+      "id": "zifencei",
+      "category": "functional_vector",
+      "evidence": [],
+      "pass": false,
+      "status": "fail",
+      "waived": false,
+      "review_required": false,
+      "capability_gap": null
+    },
+    {
+      "id": "plugin_m_mul_div",
+      "category": "functional_vector",
+      "evidence": [
+        "WAIVED-DEFERRED: case text references an optional Plugin-selectable feature ('M') that the design's declaration.json does not confirm as selected for this build (cap:conditional_feature_undeclared); cannot fabricate a golden for an unconfirmed feature (§4.05) — review_required"
+      ],
+      "pass": false,
+      "status": "waived",
+      "waived": true,
+      "review_required": true,
+      "capability_gap": "cap:conditional_feature_undeclared"
+    },
+    {
+      "id": "plugin_zicsr_csr_access_timer_irq",
+      "category": "functional_vector",
+      "evidence": [
+        "WAIVED-DEFERRED: case text references an optional Plugin-selectable feature ('Zicsr') that the design's declaration.json does not confirm as selected for this build (cap:conditional_feature_undeclared); cannot fabricate a golden for an unconfirmed feature (§4.05) — review_required"
+      ],
+      "pass": false,
+      "status": "waived",
+      "waived": true,
+      "review_required": true,
+      "capability_gap": "cap:conditional_feature_undeclared"
+    },
+    {
+      "id": "plugin_c_16_bit_compressed",
+      "category": "functional_vector",
+      "evidence": [
+        "WAIVED-DEFERRED: case text references an optional Plugin-selectable feature ('C') that the design's declaration.json does not confirm as selected for this build (cap:conditional_feature_undeclared); cannot fabricate a golden for an unconfirmed feature (§4.05) — review_required"
+      ],
+      "pass": false,
+      "status": "waived",
+      "waived": true,
+      "review_required": true,
+      "capability_gap": "cap:conditional_feature_undeclared"
+    },
+    {
+      "id": "reset_n_cycle_instruction",
+      "category": "functional_vector",
+      "evidence": [],
+      "pass": false,
+      "status": "fail",
+      "waived": false,
+      "review_required": false,
+      "capability_gap": null
+    },
+    {
+      "id": "reset_assert_sram",
+      "category": "functional_vector",
+      "evidence": [],
+      "pass": false,
+      "status": "fail",
+      "waived": false,
+      "review_required": false,
+      "capability_gap": null
+    },
+    {
+      "id": "i_rst_glitch_instruction_fetch_race",
+      "category": "functional_vector",
+      "evidence": [],
+      "pass": false,
+      "status": "fail",
+      "waived": false,
+      "review_required": false,
+      "capability_gap": null
+    }
+  ]
+}

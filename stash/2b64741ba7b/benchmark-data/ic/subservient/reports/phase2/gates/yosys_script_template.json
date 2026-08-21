@@ -1,0 +1,20 @@
+{
+  "verdict": "VACUOUS_PASS",
+  "reason_class": "inline_yosys_p_mode_confirmed",
+  "reason": "no .ys scripts found, BUT inline `yosys -p` runner mode is positively confirmed by project markers (1 evidence path(s)); gate is legitimately not applicable.",
+  "inline_evidence": [
+    "reports/orchestrator/phase3_one_shot.json"
+  ],
+  "project": "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient",
+  "findings": [],
+  "handoff_netlist_audit": {
+    "handoff_netlist": "phase2/stage2/synth/netlist.v",
+    "present": true,
+    "bytes": 1878601,
+    "has_module": true,
+    "stale_vs_scripts": [],
+    "producer_scripts": [],
+    "scripts_considered": 0
+  },
+  "messages": []
+}

@@ -1,0 +1,46 @@
+{
+  "inserted": 5,
+  "survived": 5,
+  "removed": [],
+  "untagged": [],
+  "all_keep_attr_intact": true,
+  "keep_check_applied": false,
+  "verdict": "PASS",
+  "artefact_labels": [
+    "netlist"
+  ],
+  "program": "spare_cell_preservation_check",
+  "version": "1.1.0",
+  "project_dir": ".",
+  "artefact_paths": {
+    "netlist": "phase3/stage3/pnr/chip_top_pnr.v"
+  },
+  "artefact_read_status": {
+    "netlist": "READ"
+  },
+  "artefact_agreement": {
+    "status": "SINGLE_WITNESS",
+    "recorded_spare_instances": 5,
+    "witnesses": {
+      "netlist": {
+        "path": "phase3/stage3/pnr/chip_top_pnr.v",
+        "read": "READ",
+        "spares_named": [
+          "spare_aoi_0",
+          "spare_inverter_0",
+          "spare_mux2_0",
+          "spare_nand2_0",
+          "spare_nor2_0"
+        ],
+        "partial": false
+      }
+    },
+    "excluded": {},
+    "disagreements": []
+  },
+  "output_files": [
+    {
+      "path": "phase3/stage3/pnr/chip_top_pnr.v"
+    }
+  ]
+}

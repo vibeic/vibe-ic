@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "version": "0.119.62",
+  "run_at": "2026-08-03T02:16:26.975730+00:00",
+  "phase": "all",
+  "strict_structural": false,
+  "strict_step_artifacts": false,
+  "verdict": "FAIL",
+  "gates": [
+    {
+      "name": "provenance_hash_audit",
+      "verdict": "FAIL",
+      "message": "[FAIL] provenance_hash_audit"
+    },
+    {
+      "name": "fpga_sdc_clock_constraint_check",
+      "verdict": "FAIL",
+      "message": "FAIL — FPGA_SDC_PERIOD_MISMATCH"
+    },
+    {
+      "name": "provenance_output_hash_completeness_check",
+      "verdict": "FAIL",
+      "message": "FAIL: 8 provenance fault(s) — 12 declared output(s): 4 verified on disk, 0 verified through a disclosed relocation, 0 NOT VERIFIABLE HERE (absent, disclosed as not shipped, digest recorded)"
+    },
+    {
+      "name": "agent_report_sha256_attestation_check",
+      "verdict": "FAIL",
+      "message": "FAIL: 2 attestation gap(s):"
+    }
+  ],
+  "failed_gates": [
+    "provenance_hash_audit",
+    "fpga_sdc_clock_constraint_check",
+    "provenance_output_hash_completeness_check",
+    "agent_report_sha256_attestation_check"
+  ],
+  "failed_gate_count": 4,
+  "passed_gate_count": 151,
+  "step_counts": {
+    "PASS": 3,
+    "FAIL": 12,
+    "MISSING": 24,
+    "WAIVED": 3,
+    "DEFERRED-BY-UPSTREAM": 0,
+    "SKIPPED-CONDITION": 8,
+    "SKIPPED-SETUP-REQUIRED": 0,
+    "VACUOUS_PASS": 5,
+    "STRUCTURE-ONLY": 0,
+    "INCOMPLETE": 0,
+    "PASS_VOIDED_BY_DEPENDENCY": 8
+  },
+  "structural_fail_lines": [],
+  "step_artifact_fail_lines": [],
+  "missing_required_artifacts": [],
+  "open_source_constraints_deferrals": [],
+  "open_source_blocked_self_skipped_steps": [],
+  "command_argv": [
+    "/tmp/claude-1000/-home-reyerchu-openclaw-zero-token/a857c45b-74d8-40b3-ba4f-eba088c7aa84/scratchpad/wt-refute/vibe-ic-marketplace/plugins/vibe-ic/programs/flow_compliance_check.py",
+    ".",
+    "--lenient",
+    "--json",
+    "/tmp/fcc_spm.json"
+  ]
+}

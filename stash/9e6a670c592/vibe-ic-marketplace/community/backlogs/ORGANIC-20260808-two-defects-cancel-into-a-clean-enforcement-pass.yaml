@@ -1,0 +1,88 @@
+type: bug
+severity: P1
+component: program:flow_gate_enforcement_audit
+plugin_version: "1.10.4"
+
+title: >-
+  The enforcement audit reads its own documentation as a blocking declaration and cannot see
+  its own filename shape, so two defects cancel into a clean PASS
+
+pattern: |
+  A gate's only failing condition requires the subject to have OPTED IN by declaring an intent.
+  Silence is therefore exemption: a component that says nothing about itself can never trip the
+  check, no matter how it is wired. The published verdict then reads as a statement about the
+  whole population when it is a statement about the small self-declaring minority — and the
+  incentive it creates is to stop declaring.
+
+  Layered on top, two independent parsing defects in the same program cancel each other so that
+  the escape is invisible even for the one component that DOES trip the condition — itself.
+
+  MEASURED on the current tree:
+
+    gates in flow definition        120
+      declared intent                23   (blocking 4, advisory 19)
+      UNDECLARED                     97
+    contradictions (declared blocking AND audit-only)   0   -> exit 0, PASS
+
+  All 4 gates declaring blocking happen to be wired inline, so the exit-1 branch is currently
+  unreachable by any state of the 97 undeclared gates. The audit's PASS is a statement about
+  2.7% of the flow's 150 real gate programs.
+
+  Defect A — prose read as declaration. `_DECL_RE` scans the first 4000 characters for
+  `ENFORCEMENT:\s*(blocking|advisory)`. flow_gate_enforcement_audit.py:32 is the sentence that
+  DOCUMENTS the convention:
+
+      `ENFORCEMENT: blocking` or `ENFORCEMENT: advisory`
+
+  so the audit reads itself as declaring blocking. This is the failure mode the matrix
+  substrate's own README warns about in rule 3 — strip comments and strings before scanning —
+  applied to the declaration channel instead of the call-site channel.
+
+  Defect B — orphan scan glob. Orphans are searched with
+  `programs.glob("*_check.py") + programs.glob("*_disclosure.py")`. The flow's gate programs use
+  at least nine suffixes; that glob matches 107 of 120 names the audit sees, and cannot match
+  `*_audit.py`. So the tool's own false blocking declaration is hidden by the tool's own blind
+  spot, and the result is exit 0.
+
+  PROVEN by mutation. Widening only the glob (adding _audit/_lint/_track/_run/_emit/_closure)
+  and changing nothing else:
+
+    ORPHANED — declare an intent but are NOT in the flow definition:
+      flow_gate_enforcement_audit  (declared blocking)
+      silent_decline_audit         (declared advisory)
+    [FAIL] 2 NEW gate(s) declare an intent they are not wired for
+    exit 1
+
+  silent_decline_audit is a REAL orphan with a REAL declaration (line 38) that the shipped glob
+  cannot reach — so widening the glob finds true debt, not only the self-match.
+
+suggested_fix: |
+  Three separable changes, smallest first.
+
+  1. Stop matching prose. Read the declaration from the module docstring only, require it at
+     line start (allowing leading whitespace) and reject a line where the token is wrapped in
+     backticks or quotes — the existing `_LONE_MODE_RE` guard on the verdict_mode channel is
+     the right precedent and shows the shape is already understood. Pin this program's own
+     source as the regression fixture: flow_gate_enforcement_audit must report UNDECLARED
+     about itself.
+
+  2. Make the orphan scan's population match the flow's. Glob `*.py` and decide membership by
+     whether the module declares an intent, rather than by filename shape; a filename convention
+     is a proxy for "is a gate" and the flow already disproves it — 13 of the gates it names do
+     not match the current glob.
+
+  3. Close the opt-in exemption, which is the finding that outlives the other two. An
+     UNDECLARED gate is not a passing gate; it is an unanswered question. Report the undeclared
+     population as its own tier with its own count in the headline, and put it under the same
+     shrink-only baseline discipline the contradiction set already has, so 97 can only go down.
+     That converts silence from an exemption into recorded debt without the audit deciding
+     enforcement policy on its own — the constraint the program's own comments correctly insist
+     on.
+
+id: "ORGANIC-20260808-two-defects-cancel-into-a-clean-enforcement-pass"
+submitted_at: "2026-08-08T23:43:00+08:00"
+session_context: >-
+  2026-08-08 adversarial review of the 63x8 flow-gate compliance matrix. The self-match was
+  found by printing the exact source line behind every declaration the audit reported; the
+  cancellation was confirmed by mutating only the orphan glob in a scratch copy and observing
+  exit 1.

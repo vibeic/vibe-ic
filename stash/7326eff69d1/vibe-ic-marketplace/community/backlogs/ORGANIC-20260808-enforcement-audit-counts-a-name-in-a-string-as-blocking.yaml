@@ -1,0 +1,80 @@
+type: bug
+severity: P0
+component: program:flow_gate_enforcement_audit
+plugin_version: "1.10.4"
+
+title: >-
+  The audit that decides which gates can stop a run scores ENFORCED on a filename appearing
+  inside a string, never on the exit code being consumed
+
+pattern: |
+  A program built to expose "declares blocking, wired advisory" measures the wiring with a
+  proxy — does this gate's filename appear inside any string literal in a runner — and reports
+  the proxy under the property's name ("ENFORCED (can block)"). The proxy and the property
+  come apart exactly where it matters: a runner that INVOKES a gate and discards its return
+  code is indistinguishable, to this measurement, from a runner that blocks on it. The result
+  is an enforcement census that overstates enforcement, published by the one tool a reviewer
+  consults to find out whether enforcement is real.
+
+  This is the same defect class the tool was written to name, one level up: the tool measures
+  something adjacent to the question and reports it as if it answered the question.
+
+  MEASURED on the current tree — 4 of the 19 gates reported ENFORCED cannot block anything,
+  because their sole call site discards the exit code:
+
+    rtl_hygiene_lint       design_one_shot_runner.py:1368
+                           `rc, out, err = _run([...])` — rc is bound and never read; only
+                           stdout is parsed for a repair count. Invoked as a --fix fixer.
+    dfm_screen_check       phase3_one_shot_runner.py:30690
+                           `subprocess.run(..., check=False)` with the result not bound at
+                           all; the adjacent comment says "best-effort ... the gate re-runs
+                           it for the verdict".
+    sdc_syntax_check       phase3_one_shot_runner.py:29980
+                           `r = subprocess.run(...)`; r is never read. The comment states the
+                           intent plainly: "emitting here makes the required_outputs gate
+                           (file presence) pass without depending on the gate's invocation
+                           order" — the runner pre-creates the artefact whose presence a
+                           later gate checks, which is worse than non-blocking.
+    bsdl_emit              design_one_shot_runner.py:11128
+                           `subprocess.run(...)` inside try/except-pass, result not bound.
+                           The `r.returncode` read 12 lines later belongs to a different,
+                           earlier subprocess, and the verdict it feeds is "PASS" or
+                           "PASS_W_WARN" — that site has no FAIL branch at all.
+
+  The remaining 15 are genuine: they reach a StepResult FAIL or the _run_declared_signoff_gate
+  helper, which is well built and routes every non-verdict exit code to a non-green state.
+
+  Corrected headline, hand-verified call site by call site: 16 gate programs can stop a run
+  inline (the 15 above plus post_route_signoff_corner_check, which the audit cannot see at all
+  — see the companion population issue). The audit advertises 19.
+
+suggested_fix: |
+  Replace the string-literal proxy with a measurement of consumption. A call site should count
+  as ENFORCED only when the invocation's exit code reaches a control-flow decision — the
+  returned value is bound AND read in a branch, or the call is `check=True`, or it flows into
+  a helper whose contract is to convert rc into a verdict (`_run_declared_signoff_gate` is the
+  existing example and can be recognised by name).
+
+  An AST walk over the runner sources is the honest implementation and removes the regex's
+  other liabilities at the same time; a text scan cannot distinguish `rc` read from `rc`
+  discarded. Add a third state so the census stays truthful rather than merely stricter:
+
+    ENFORCED     exit code consumed in a branch that can change the run's verdict
+    INVOKED_ONLY invoked, exit code discarded — reads as enforcement, is not
+    AUDIT_ONLY   reached only through the final compliance audit
+
+  Pin the four sites above as regression fixtures: each must classify INVOKED_ONLY before any
+  behaviour change, so a later decision to actually block on one of them is visible as a
+  deliberate move between states rather than a silent re-classification.
+
+  Note that fixing the CLASSIFICATION is separable from fixing the WIRING, and only the first
+  belongs in this change — turning any of these four into real blockers changes what runs fail
+  and is a flow-owner decision.
+
+id: "ORGANIC-20260808-enforcement-audit-counts-a-name-in-a-string-as-blocking"
+submitted_at: "2026-08-08T23:41:00+08:00"
+session_context: >-
+  2026-08-08 adversarial review of the 63x8 flow-gate compliance matrix. Every one of the 19
+  ENFORCED classifications was traced to its call site and read; the four above discard the
+  exit code, which the audit's own docstring promise ("a runner invokes it inline, so it can
+  stop the step it guards") asserts they do not.

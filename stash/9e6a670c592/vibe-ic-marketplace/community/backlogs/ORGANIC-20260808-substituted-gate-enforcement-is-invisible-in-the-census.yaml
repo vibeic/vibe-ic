@@ -1,0 +1,59 @@
+type: enhancement
+severity: P2
+component: program:test_matrix_63x8_coverage
+plugin_version: "1.10.4"
+
+title: >-
+  45 of dimension 8's 61 enforcing cells are certified with the step's gate replaced by a stub,
+  and the census renders them identically to the 16 measured with the real gate
+
+pattern: |
+  To make a downgrade reachable at all, a test substitutes the subject's gate with a stub that
+  holds the verdict at a known tier, then verifies the framework's downgrade fires. That is a
+  legitimate and well-reasoned technique — without it the cell could not be falsified — but it
+  changes what the passing cell PROVES: it proves the framework's catcher works, not that this
+  step's own gate would ever reach the tier where the catcher fires. The distinction is
+  disclosed carefully in the owning module and in the substrate README, and it is erased at the
+  exact point of consumption, because the census renders a substituted-gate cell and a
+  real-gate cell as the same token.
+
+  A disclosure that lives only in a docstring is not read by anyone quoting the number. This is
+  the same "a signal that exists and is not read" shape the analog A3/A4 structure-only work
+  already fixed one layer down.
+
+  MEASURED live (not quoted from the docstring):
+
+    dimension 8 cells                        63
+      ENFORCED                               61
+      measured with the step's OWN gate      16   D1 1 2 12 14 28 30 32 35 38 A1 A2 A4 A5 A6 A8
+      measured with a SUBSTITUTED gate       45
+
+  The module states the gap plainly and pins the real-gate population so it cannot shrink
+  silently — "It does NOT close the gap — 45 steps' real gates FAIL on a synthesized tree and
+  need a converged project no CI has". The honesty is already there; the reporting is what is
+  missing.
+
+suggested_fix: |
+  Carry the evidence STRENGTH into the census alongside the state, so dimension 8 reports
+  16 real-gate + 45 substituted-gate rather than 61 undifferentiated ENFORCED. This composes
+  with the (state x outcome) axis proposed for the red-cell issue and should land in the same
+  shape: the reportable unit becomes state x outcome x evidence-strength, and no single
+  aggregate can be quoted that hides a substitution.
+
+  The generalisation is worth stating in the substrate README next to the three-state rule,
+  because dimension 8 is not the only place it applies: dimension 3 falls back to a committed
+  manifest for its externally-attested steps, and dimensions 2, 4 and 6 answer their question of
+  a CLAUSE while the ledger's unit is a STEP. Each is disclosed in its own module and none is
+  visible in the census.
+
+  Closing the 45 properly needs a converged project tree in CI, which is a much larger piece of
+  work and explicitly not what this asks for. This asks only that the number stop presenting
+  substituted-gate evidence as if it were real-gate evidence.
+
+id: "ORGANIC-20260808-substituted-gate-enforcement-is-invisible-in-the-census"
+submitted_at: "2026-08-08T23:46:00+08:00"
+session_context: >-
+  2026-08-08 adversarial review of the 63x8 flow-gate compliance matrix. The real-gate
+  population was recomputed by driving the dimension-8 sweep directly rather than reading its
+  pinned constant, and diffed against the cells the census reports as ENFORCED for that
+  dimension.

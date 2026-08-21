@@ -1,0 +1,37 @@
+{
+  "program": "analog_netlist_pdk_check",
+  "version": "1.0.0",
+  "passed": false,
+  "findings": [
+    {
+      "rule": "NO_MODEL_INCLUDE",
+      "severity": "ERROR",
+      "message": "No .include or .lib directive found. SPICE netlist must include PDK device models.",
+      "file": "phase3/analog/delta_sigma/delta_sigma.sp",
+      "line": 0
+    },
+    {
+      "rule": "NO_MODEL_INCLUDE",
+      "severity": "ERROR",
+      "message": "No .include or .lib directive found. SPICE netlist must include PDK device models.",
+      "file": "phase3/analog/ldo/ldo.sp",
+      "line": 0
+    }
+  ],
+  "summary": {
+    "skipped": false,
+    "files_checked": 2,
+    "files_pass": 0,
+    "files_stub": 0,
+    "files_fail": 2,
+    "body_connection_errors": 0,
+    "unknown_pdk_model_errors": 0,
+    "declared_pdk_target": "sg13g2",
+    "pdk_mismatch_errors": 0,
+    "pdk_mismatch_waived": false,
+    "native_pdk_source": null,
+    "native_pdk_lib_count": 0,
+    "pass": false,
+    "verdict_tier": "PASS"
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "version": "0.119.62",
+  "run_at": "2026-08-03T02:16:19.306350+00:00",
+  "phase": "all",
+  "strict_structural": false,
+  "strict_step_artifacts": false,
+  "verdict": "FAIL",
+  "gates": [
+    {
+      "name": "gap_reset_granularity_check",
+      "verdict": "FAIL",
+      "message": "[ERROR] read-error: Could not read file: [Errno 2] No such file or directory: '/home/reyerchu/vibe-ic/benchmark-data/ic/sha256/clean_run_v1422_20260715/steps/14_synthesis_handoff_gate_pre_pnr_yosys_sc"
+    },
+    {
+      "name": "device_response_no_br_check",
+      "verdict": "FAIL",
+      "message": "[ERROR] read-error: Could not read: [Errno 2] No such file or directory: '/home/reyerchu/vibe-ic/benchmark-data/ic/sha256/clean_run_v1422_20260715/steps/14_synthesis_handoff_gate_pre_pnr_yosys_script_"
+    },
+    {
+      "name": "provenance_hash_audit",
+      "verdict": "FAIL",
+      "message": "[FAIL] provenance_hash_audit"
+    },
+    {
+      "name": "fpga_sdc_clock_constraint_check",
+      "verdict": "FAIL",
+      "message": "FAIL — FPGA_SDC_PERIOD_MISMATCH"
+    },
+    {
+      "name": "l6_fsm_scaffold_actionable_check",
+      "verdict": "FAIL",
+      "message": "[FAIL] l6_fsm_scaffold_actionable_check: 1 L6 item(s) are not actionable by their consumers (parts checked: fsm)"
+    },
+    {
+      "name": "project_outputs_in_tree_check",
+      "verdict": "FAIL",
+      "message": "[WARN] project_outputs_in_tree_check: 1 dangling external-path reference(s) (file no longer exists — likely lost to /tmp sweep):"
+    },
+    {
+      "name": "agent_report_sha256_attestation_check",
+      "verdict": "FAIL",
+      "message": "FAIL: 2 attestation gap(s):"
+    },
+    {
+      "name": "ic_class_consistency_check",
+      "verdict": "FAIL",
+      "message": "FAIL — Wave 42 / SF6: facts.yaml ↔ L docs / RTL inconsistency (5 issue(s)):"
+    }
+  ],
+  "failed_gates": [
+    "gap_reset_granularity_check",
+    "device_response_no_br_check",
+    "provenance_hash_audit",
+    "fpga_sdc_clock_constraint_check",
+    "l6_fsm_scaffold_actionable_check",
+    "project_outputs_in_tree_check",
+    "agent_report_sha256_attestation_check",
+    "ic_class_consistency_check"
+  ],
+  "failed_gate_count": 8,
+  "passed_gate_count": 152,
+  "step_counts": {
+    "PASS": 3,
+    "FAIL": 4,
+    "MISSING": 42,
+    "WAIVED": 2,
+    "DEFERRED-BY-UPSTREAM": 0,
+    "SKIPPED-CONDITION": 8,
+    "SKIPPED-SETUP-REQUIRED": 0,
+    "VACUOUS_PASS": 3,
+    "STRUCTURE-ONLY": 0,
+    "INCOMPLETE": 0,
+    "PASS_VOIDED_BY_DEPENDENCY": 1
+  },
+  "structural_fail_lines": [],
+  "step_artifact_fail_lines": [],
+  "missing_required_artifacts": [
+    "waivers.json"
+  ],
+  "open_source_constraints_deferrals": [],
+  "open_source_blocked_self_skipped_steps": [],
+  "command_argv": [
+    "/tmp/claude-1000/-home-reyerchu-openclaw-zero-token/a857c45b-74d8-40b3-ba4f-eba088c7aa84/scratchpad/wt-refute/vibe-ic-marketplace/plugins/vibe-ic/programs/flow_compliance_check.py",
+    ".",
+    "--lenient",
+    "--json",
+    "/tmp/fcc_sha256.json"
+  ]
+}

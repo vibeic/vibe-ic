@@ -1,0 +1,192 @@
+{
+  "program": "sdc_syntax_check",
+  "passed": true,
+  "findings": [
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "clean_run_v1462_sky130a_20260720/phase2/stage1/fpga/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 4 timing constraint(s): ['set_false_path']",
+      "file": "clean_run_v1462_sky130a_20260720/phase2/stage1/fpga/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "clean_run_v1462_sky130a_20260720/phase2/stage2/constraints/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "clean_run_v1462_sky130a_20260720/phase2/stage2/constraints/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "clean_run_v1462_sky130a_20260720/phase3/stage3/pnr/constraint.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "clean_run_v1462_sky130a_20260720/phase3/stage3/pnr/constraint.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "clean_run_v1462_sky130a_20260720/steps/7_constraint_setup_sdc_pvt_matrix/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "clean_run_v1462_sky130a_20260720/steps/7_constraint_setup_sdc_pvt_matrix/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "clean_run_v1467_sky130a_20260721/phase2/stage1/fpga/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 14 timing constraint(s): ['set_false_path', 'set_input_delay', 'set_output_delay']",
+      "file": "clean_run_v1467_sky130a_20260721/phase2/stage1/fpga/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "clean_run_v1467_sky130a_20260721/phase2/stage2/constraints/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "clean_run_v1467_sky130a_20260721/phase2/stage2/constraints/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "clean_run_v1467_sky130a_20260721/phase3/stage3/pnr/constraint.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "clean_run_v1467_sky130a_20260721/phase3/stage3/pnr/constraint.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "clean_run_v1467_sky130a_20260721/steps/7_constraint_setup_sdc_pvt_matrix/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "clean_run_v1467_sky130a_20260721/steps/7_constraint_setup_sdc_pvt_matrix/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "phase2/stage1/fpga/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 20 timing constraint(s): ['set_false_path', 'set_input_delay', 'set_output_delay']",
+      "file": "phase2/stage1/fpga/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "phase2/stage2/constraints/chip_top.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "phase2/stage2/constraints/chip_top.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "phase3/stage3/pnr/constraint.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "phase3/stage3/pnr/constraint.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "verify_issue189_20260721/phase2/stage1/fpga/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 14 timing constraint(s): ['set_false_path', 'set_input_delay', 'set_output_delay']",
+      "file": "verify_issue189_20260721/phase2/stage1/fpga/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "verify_issue189_20260721/phase2/stage2/constraints/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "verify_issue189_20260721/phase2/stage2/constraints/subservient.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "verify_issue189_20260721/phase3/stage3/pnr/constraint.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "verify_issue189_20260721/phase3/stage3/pnr/constraint.sdc"
+    },
+    {
+      "rule": "CLOCK_PERIOD_OK",
+      "severity": "INFO",
+      "message": "Clock period 10.0ns (100.0 MHz)",
+      "file": "verify_issue189_20260721/steps/7_constraint_setup_sdc_pvt_matrix/subservient.sdc"
+    },
+    {
+      "rule": "TIMING_FOUND",
+      "severity": "INFO",
+      "message": "Found 2 timing constraint(s): ['set_input_delay', 'set_output_delay']",
+      "file": "verify_issue189_20260721/steps/7_constraint_setup_sdc_pvt_matrix/subservient.sdc"
+    }
+  ],
+  "summary": {
+    "files_checked": 15,
+    "valid_files": 15,
+    "errors": 0,
+    "clocks_found": 15
+  }
+}
