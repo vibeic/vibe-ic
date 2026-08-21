@@ -470,6 +470,22 @@ def test_integrity_conflicting_identity_is_refused(tmp_path, contract_doc,
     assert "claimed by 2 documents that DISAGREE" in r.stderr
 
 
+def _flags_named(stderr: str) -> list:
+    """The flags the refusal says were GIVEN — from the claim, not from beside it.
+
+    MEASURED 2026-08-22, and the reason this helper exists rather than a bare
+    `assert "--baseline" in stderr`: the refusal also prints GUIDANCE listing
+    every legal mode, and that guidance contains the literal `--baseline`. A
+    substring check over the whole message therefore passes even when the
+    "were given together" clause has stopped naming the flag — the mutation
+    that drops `--baseline` from the clause was run and the substring form did
+    NOT catch it. This reads only the text BEFORE `were given together`, which
+    is the clause that makes the claim.
+    """
+    head = stderr.split("were given together", 1)[0]
+    return [f for f in ("--baseline", "--candidate", "--corpus") if f in head]
+
+
 def test_integrity_two_population_sources_together_is_bad_invocation(
         tmp_path, contract_doc):
     """WHAT SURVIVED THE 2026-08-22 RULING, and what did not.
@@ -497,15 +513,15 @@ def test_integrity_two_population_sources_together_is_bad_invocation(
     r = gate(INTEGRITY_GATE, "--candidate", str(one), "--corpus", str(c))
     assert r.returncode == 3, r.stdout + r.stderr
     assert "bad invocation" in r.stderr
-    assert "--candidate" in r.stderr and "--corpus" in r.stderr
+    assert _flags_named(r.stderr) == ["--candidate", "--corpus"], r.stderr
 
     # All three: the pair question and the corpus question at once.
     r = gate(INTEGRITY_GATE, "--baseline", str(one), "--candidate", str(one),
              "--corpus", str(c))
     assert r.returncode == 3, r.stdout + r.stderr
     assert "bad invocation" in r.stderr
-    for flag in ("--baseline", "--candidate", "--corpus"):
-        assert flag in r.stderr, f"the refusal does not name {flag}"
+    assert _flags_named(r.stderr) == ["--baseline", "--candidate",
+                                      "--corpus"], r.stderr
 
 
 def test_integrity_baseline_against_corpus_is_a_question_not_a_mistake(
