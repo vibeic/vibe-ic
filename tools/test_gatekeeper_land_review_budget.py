@@ -253,3 +253,33 @@ def test_the_function_is_not_silently_treated_as_a_missing_command(tmp_path):
     assert "command not found" not in out, out
     assert "127" not in out, out
     assert failed == 0, out
+
+
+def test_the_cheap_tier_exits_before_the_review_is_reached():
+    """A `--cheap-only` run has no hygiene record, so if it reached the review
+    the review would correctly refuse — and every cheap-only run would block.
+
+    The review is fed `--hygiene-record-in`, which is written by the full
+    tier's hygiene lane. `--cheap-only` returns before that lane exists, so the
+    record would be absent and `hygiene_gate_from_record` would return rc 2
+    UNDETERMINED, which this file's other tests prove is blocking. That is the
+    correct answer to a missing record and the wrong outcome for a mode whose
+    whole point is to be fast, so the two must not meet.
+
+    Measured at the time of writing: the cheap-tier exit is line 609 and the
+    review is line 1563. Pinned by ORDER rather than by those numbers, which
+    move whenever anything above them does.
+    """
+    src = LANDER.read_text(encoding="utf-8")
+    lines = src.splitlines()
+    cheap = next(i for i, l in enumerate(lines)
+                 if l.startswith('if [ "$CHEAP_ONLY" = "1" ]'))
+    # the `exit` that closes that branch, not merely where it opens
+    cheap_exit = next(i for i, l in enumerate(lines[cheap:cheap + 6], cheap)
+                      if l.strip().startswith("exit "))
+    review = next(i for i, l in enumerate(lines)
+                  if l.startswith('run "full:gatekeeper-review"'))
+    assert cheap_exit < review, (
+        f"the cheap tier's exit (line {cheap_exit + 1}) no longer precedes the "
+        f"review (line {review + 1}); a --cheap-only run would reach a review "
+        f"with no hygiene record and block")
