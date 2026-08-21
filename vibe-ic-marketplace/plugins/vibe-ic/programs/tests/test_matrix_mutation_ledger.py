@@ -86,7 +86,7 @@ import yaml
 
 import matrix_mutation_ledger as L
 from matrix_63x8 import flowref as F
-from matrix_63x8.cells import DIMENSION_NAMES
+from matrix_63x8.cells import DIMENSION_NAMES, DIMENSIONS
 
 
 def _domain_progress(scope: str, completed: int, total: int) -> None:
@@ -1900,7 +1900,7 @@ def test_not_falsifiable_cells_are_published_and_specific():
             problems.append(
                 f"{nf.step_id}/d{nf.dim}: names a step the flow does not "
                 f"declare, so the finding is about nothing")
-        if nf.dim not in range(1, 9):
+        if nf.dim not in DIMENSIONS:
             problems.append(f"{nf.step_id}/d{nf.dim}: dimension out of range")
         if len(nf.tried) < 1:
             problems.append(
@@ -1931,6 +1931,55 @@ def test_not_falsifiable_cells_are_published_and_specific():
 # ══════════════════════════════════════════════════════════════════════
 # Guards on this file's own instruments
 # ══════════════════════════════════════════════════════════════════════
+#: Dimensions of the live matrix that this ledger does NOT carry cells for,
+#: each with the reason. `CELL_TESTS` is what decides the ledger's grid, and
+#: nothing required it to cover every declared dimension — so a dimension added
+#: to the matrix simply contributed no cells here and no test said a word.
+#: Silent absence is the one thing this campaign refuses, so it is named.
+LEDGER_DIMENSIONS_NOT_COVERED: Dict[int, str] = {
+    9: ("verdict_consumed, added 2026-08-21. Its cells are NOT in this ledger. "
+        "Registering them means a measured `applies_to` sweep over all 69 "
+        "steps for each mutation shape, which is a sweep this change did not "
+        "run — and an entry whose applies_to was not measured is exactly what "
+        "LOCK 1 exists to refuse. The dimension is not unguarded in the "
+        "meantime: test_matrix_d9_verdict_consumed.py carries its own mutation "
+        "arms for all three legs plus both control arms, and they RUN on every "
+        "session. What is missing is this ledger's per-cell reach, not "
+        "falsifiability evidence."),
+}
+
+
+def test_the_ledger_names_every_dimension_it_does_not_cover():
+    """A dimension outside this ledger must be DECLARED, never merely absent.
+
+    `census()` derives its grid from `CELL_TESTS`, so a dimension with no entry
+    there contributes no cells and no assertion notices. That is silent absence
+    — "a cell with no test is not covered", one level up. This test makes the
+    gap loud in both directions: a dimension that leaves the ledger must be
+    named here, and one that JOINS it must be removed from this map in the same
+    change, so the declaration cannot rot into a description of an older tree.
+    """
+    covered = set(L.CELL_TESTS)
+    declared = set(DIMENSIONS)
+    missing = declared - covered
+    assert missing == set(LEDGER_DIMENSIONS_NOT_COVERED), (
+        f"dimension(s) {sorted(missing)} of the live matrix carry no cells in "
+        f"this ledger, and the declared set is "
+        f"{sorted(LEDGER_DIMENSIONS_NOT_COVERED)}.\n"
+        f"Undeclared: {sorted(missing - set(LEDGER_DIMENSIONS_NOT_COVERED))} — "
+        f"their cells are contributing nothing to the coverage arithmetic and "
+        f"nothing said so.\n"
+        f"Stale: {sorted(set(LEDGER_DIMENSIONS_NOT_COVERED) - missing)} — now "
+        f"covered; delete the entry in the change that covered it.")
+    assert not (covered - declared), (
+        f"CELL_TESTS names dimension(s) {sorted(covered - declared)} that the "
+        f"matrix does not declare; the ledger would census cells that do not "
+        f"exist")
+    for dim, reason in LEDGER_DIMENSIONS_NOT_COVERED.items():
+        assert len(reason.strip()) >= 60, (
+            f"dimension {dim}'s exclusion reason is too short to check")
+
+
 def test_the_cell_test_addresses_are_real_pytest_nodes():
     """Every address :data:`CELL_TESTS` names must collect, or a replay would be
     measuring nothing and reporting a tidy green.
