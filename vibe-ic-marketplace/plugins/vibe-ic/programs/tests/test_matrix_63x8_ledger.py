@@ -679,35 +679,53 @@ def test_output_entries_classify_into_the_four_kinds():
     # declared it and still does — what changed is that it is now written on
     # every path, including the paths where the operator was never asked.
     # = FILE 114 + 2 + 1 + 2 = 119; GLOB and ANY_OF untouched.
-    # 2026-08-21: 161 -> 163, FILE 119 -> 121, TWO entries with two owners.
-    # Two lanes moved this constant in the same batch and BOTH were re-derived
-    # rather than incremented, so the merged value is re-derived once more here
-    # and MEASURED on this tree, not added up from the two notes:
+    # 2026-08-21: 161 -> 164, FILE 119 -> 122, THREE entries with three owners.
+    # RE-DERIVED on the merged tree, as the note this replaces instructed, and
+    # the re-derivation is why the number moved again: that note pinned 163/121
+    # while the live tree already answered 164/122. A merged pin that is added
+    # up from two lanes' notes is stale the moment a third lane lands.
     #
-    #   +1  step 1.6x's `reports/crosslayer/rewrite_equivalence_check.json`,
-    #       added by `7fcbc7397` with none of these pins moved (lane
-    #       jmatrix/63x8-main-reds).
-    #   +1  step 15.5ic's `reports/phase3/pad_assignment.json`, the report of
+    #   +1  step 1.6x  `reports/crosslayer/rewrite_equivalence_check.json`
+    #       (lane jmatrix/63x8-main-reds, from `7fcbc7397`).
+    #   +1  step 15.5ic `reports/phase3/pad_assignment.json`, the report of
     #       `pad_assignment_gen` — the new AUTHOR of
     #       `phase3/stage3/pnr/pad_assignment.json`. That path had two
-    #       references in the repository before, and BOTH were readers, so
-    #       15.5ic could only ever take `pad_ring_gen`'s SKIP branch (lane
+    #       references before and BOTH were readers, so 15.5ic could only ever
+    #       take `pad_ring_gen`'s SKIP branch (lane
     #       cpath/pad-and-seal-ring-chip-path, vibe-ic#1410).
+    #   +1  step 31   `reports/phase3/drc_signoff.json`, written by
+    #       `drc_report_check` and read by `general_precheck` while no step
+    #       declared it — dimension 7's W1 finding, closed by declaring it.
+    #
+    # MEASURED, by diffing the (step, entry) SET between the v1.11.18 yaml and
+    # this tree: exactly those two paths were added since, none removed,
+    # 162 -> 164. The 1.6x entry is older than that window and is measured
+    # below.
+    #
+    # THE ATTRIBUTION DISPUTE IS SETTLED, AND BOTH LANES WERE RIGHT — about
+    # DIFFERENT increments. Driving `flowref` at each revision's yaml through
+    # `VIBE_IC_MATRIX_FLOW_YAML` and counting entries:
+    #
+    #     ff5071caa    steps 68  entries 154  FILE 114   no 1.6x, no 37.5self
+    #     7fcbc7397~1  steps 69  entries 160  FILE 118   no 1.6x, 37.5self YES
+    #     7fcbc7397    steps 70  entries 161  FILE 119   1.6x ARRIVES
+    #     867de4289    steps 69  entries 162  FILE 120   37.5self RETIRED
+    #
+    # There are TWO +1s in that span, one per commit. `7fcbc7397` moved
+    # 160 -> 161 and that is step 1.6x; `867de4289` moved 161 -> 162 and that is
+    # the 37.5self/37.5ic swap. Neither lane was wrong; each attributed the
+    # increment it had measured, and the disagreement was that both were
+    # describing "the first +1" when there were two.
+    #
+    # All three entries are plain FILE — no glob, no OR — so GLOB and ANY_OF are
+    # untouched, which is what makes the attribution checkable rather than
+    # asserted.
     #
     # `padring.def` does NOT gain an `OR ...SKIPPED.txt` alternative and stays a
     # plain FILE: a seal ring can legitimately not apply, a pad ring on a die
     # cannot, so a skipped pad ring must stay MISSING.
-    #
-    # The two lanes attributed the FIRST +1 to different commits — one to
-    # 7fcbc7397's step 1.6x, one to v1.11.18's 37.5self/37.5ic swap. They agree
-    # on every measured number and disagree only on the story; the attribution
-    # is worth settling and is NOT settled here.
-    #
-    # Both entries are plain FILE — no glob, no OR — so GLOB and ANY_OF are
-    # untouched, which is what makes the attribution checkable rather than
-    # asserted.
-    assert sum(seen.values()) == 163, seen
-    assert seen[F.FILE] == 121
+    assert sum(seen.values()) == 164, seen
+    assert seen[F.FILE] == 122
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
