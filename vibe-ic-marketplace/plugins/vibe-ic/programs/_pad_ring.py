@@ -143,18 +143,32 @@ THE IO CELL LIBRARY — FOUND, NOT DRAWN
 ======================================
 Located by the layout convention PDK DISTRIBUTIONS use —
 `<root>/<tree>/libs.ref/<library whose name carries the io token>/lef/*.lef` —
-never by naming a process, a foundry or a library. MEASURED over the 6 PDK
-trees the pinned image ships (names withheld; this is a count, not an
-inventory):
+never by naming a process, a foundry or a library. RE-MEASURED 2026-08-22 by
+sweeping every PDK tree the pinned image ships (names withheld; this is a
+count, not an inventory):
 
-    4 trees carry such a library, holding 15, 22, 22 and 71 distinct masters
-    2 trees carry none
-    of the 4, only 2 ship the PAD-class SITE records `PAD_SITE_NAME` and
-    `PAD_CORNER_SITE_NAME` refer to; the other 2 ship masters and no site
+    7 trees swept
+    4 carry an IO cell library; 3 carry none
+    of the 4, 2 declare their pad sites as LEF SITE records
+             and 2 declare them in the TECH view, via `PAD_FAKE_SITES`
+    0 declare them in neither, and 0 declare one site at two sizes
 
-That last line is why `PAD_SITE_NOT_FOUND` is a real branch and not a
-defensive one: on half the IO libraries in the image, upstream's own placer
-would exit 1 on its first lookup.
+The count that was here before was right and the conclusion drawn from it was
+not. It read: "only 2 ship the PAD-class SITE records ... the other 2 ship
+masters and no site", and concluded "on half the IO libraries in the image,
+upstream's own placer would exit 1 on its first lookup."
+
+IT WOULD NOT. Upstream creates those sites from `PAD_FAKE_SITES` before its
+first lookup ever runs, which is exactly what those 2 distributions declare and
+what this module had not been reading. The libraries are not siteless; they
+declare their sites in the other view and say so in a comment. That mistaken
+sentence is what kept `PAD_SITE_NOT_FOUND` firing against PDKs that had
+declared the site, so it is corrected here rather than deleted — the wrong
+inference is the more useful record.
+
+`PAD_SITE_NOT_FOUND` remains a real branch, on its true grounds: a site name
+that NEITHER view declares. The sweep above is the standing evidence that it
+fires on no real PDK in the image.
 
 chip-AGNOSTIC: no chip, vendor, SKU, foundry, library or process-node literal.
 The only fixed strings are DEF/LEF keywords, upstream's variable names, the

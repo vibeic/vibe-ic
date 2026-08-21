@@ -1233,6 +1233,31 @@ def test_the_inert_disclosure_is_in_every_report_including_the_skip(tmp_path):
         assert rep["rotation_vertical_inert"]["honoured"] is False
 
 
+def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
+    """WHY PART 3 OF THE RULE IS LOAD-BEARING, proved rather than argued.
+
+    The gate re-derives every pad's footprint from the master and the DEF
+    ORIENTATION and compares it with the extents the report claims. So had the
+    extent been corrected without also correcting the emitted orientation —
+    the option that would have left the declared rotation in the DEF beside a
+    footprint contradicting it — this gate would have refused the result.
+
+    Written as a test so that stays true: put the DECLARED orientation back on
+    a vertical pad and watch the artefact stop corroborating itself.
+    """
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    declared = PR.normalise_orient(_config()["PAD_ROTATION_VERTICAL"])
+    assert declared != PR.VERTICAL_SIDE_ORIENT["W"], (
+        "premise: the declared rotation and the placer's are different")
+    victim = next(p["instance"] for p in CHK._unwrap(_report(root))[0]["pads"]
+                  if p["side"] == "W")
+    _edit_def(root, _line(root, victim),
+              _line(root, victim).rsplit(" ", 2)[0] + f" {declared} ;")
+    assert _chk(root) == 1
+    assert "PAD_FOOTPRINT_DISAGREES_WITH_LIBRARY" in _rules(root)
+
+
 # --------------------------------------------------------------------------- #
 # REAL PDKs, not fixtures.
 #
