@@ -2427,14 +2427,51 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | the ratios this document claims to record and does not (M36). Deliberately not re-measured — load-sensitive, shared host. | **an honest gap** |
 
-## D. Corrections to my own earlier reports, so you do not act on the old ones
+## D. Corrections to my own earlier reports — the complete list
 
-1. **"G4 is unsettleable on this host"** — WRONG. It is 8/8 deterministic and
-   fully settled (M8, M13).
-2. **"9 landing-verdict reds are UNRUNNABLE here"** — at least 2 are runnable;
-   the verifier completes in the degraded rebase-replay tier. The docker/git-2.38
-   explanation does not cover G4.
-3. **"G5 and G6 are OPEN"** — both CLOSED, and they are the same defect as G4,
-   not three findings (M13).
-4. **The `test_malformed_progress` flake is "load-confounded"** — WRONG, and I
-   nearly published it. It reproduces 4/10 on an idle host (M16).
+This section listed FOUR corrections while the log had accumulated roughly a
+dozen more. It is the section whose whole job is to stop you acting on a
+superseded claim, so its being stale was the worst instance of the pattern this
+document keeps finding. Complete now.
+
+**Claims about the repository that were wrong:**
+
+1. **"G4 is unsettleable on this host"** — WRONG. 8/8 deterministic, fully
+   settled (M8, M13).
+2. **"9 landing-verdict reds are UNRUNNABLE here"** — WRONG. It runs in the
+   degraded tier; the two-lane A/B measured 10 BOTH-lane reds, 4 since closed
+   (M8, M18, M26).
+3. **"G5 and G6 are OPEN"** — CLOSED, and the same defect as G4 (M13).
+4. **"No test in `test_landing_merge_verdict.py` runs in the pinned image"** —
+   WRONG. **112 of 134 pass there** (M17). Written from memory, not re-run.
+5. **"0 of the manifest's 15 declared run roots are on this host"** — WRONG.
+   **10 of 15 are here**, two carry the artefact (M30). I resolved relative paths
+   against the wrong base and reported the zero as absence.
+6. **"the flow's `program_exit_zero:` clauses make either ENFORCEMENT choice
+   wrong"** — WRONG. Those clauses execute nowhere; `advisory` contradicts
+   nothing (M29).
+7. **"the coverage bridge poses a vocabulary DESIGN question"** — NARROWED. Both
+   terms are established and asymmetric; it is a waiver lookup (M33).
+8. **"matrix family — the 54-ID agent's lane"** — named a PERSON, not a
+   requirement; and 8 of the 11 are one cause, not three groups (M34, M35).
+
+**Claims about my own work that were wrong:**
+
+9. **"the `test_malformed_progress` flake is load-confounded"** — WRONG, 4/10 on
+   an idle host, and it is HOST-ONLY: the image never reproduces it (M16, M23).
+10. **"design A closes four tests"** — ONE. And its first specification rested on
+    arm receipts, which **no test can reach** (proposal, corrected twice).
+11. **"B is unbuilt because it leaks a container"** — the hazard is BOUNDABLE; the
+    real reason is sequencing and my measured error rate (proposal).
+12. **"this host cannot check the container label"** — WRONG, one grep settled it
+    from source (proposal).
+13. **"`magic` / 0.8 s lease — ratios recorded"** — UNBACKED. There are no ratios
+    in this document (M36).
+14. **"9 → 6 reds"** — a HOST number. CI is **unchanged at 22 → 22**; the repair
+    is invisible to the landing lane (M27).
+
+**Three near-misses that measurement killed before publication**, listed because
+each would have been believed: "three tamper guards fail in the strong tier" (the
+tamper simply fails now), a `git stash` control that measured my own file and
+would have confirmed my conclusions circularly, and a `tail -3` capture that
+reported a fix I had not made.
