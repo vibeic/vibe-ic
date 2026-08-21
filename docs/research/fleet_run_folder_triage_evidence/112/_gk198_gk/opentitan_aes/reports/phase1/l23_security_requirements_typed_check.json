@@ -1,0 +1,38 @@
+{
+  "gate": "l23_security_requirements_typed_check",
+  "project": "/home/reyerchu/vibe-ic/benchmark-data/ic/opentitan_aes",
+  "verdict": "PASS_WITH_ADVISORY",
+  "blocking_findings": [],
+  "advisory_findings": [
+    {
+      "id": "REQUIREMENT_OUTSIDE_CONSUMING_LAYER",
+      "severity": "ADVISE",
+      "detail": "The design's own inputs declare a security requirement in 2 input-doc location(s) and 0 sibling-L-doc location(s), but L23 carries 0 typed records (security_requirements_present=False). The L21 shape: present somewhere, absent from the layer that would consume it. ADVISE not BLOCK because L23 has NO consumer anywhere in the plugin — there is no downstream contract to protect. Promote to BLOCKS the moment any step reads L23.",
+      "evidence": [
+        {
+          "source": "/home/reyerchu/vibe-ic/benchmark-data/ic/opentitan_aes/phase1/input_doc/aes_theory_of_operation.txt",
+          "line": 445,
+          "match": "Fault Injection",
+          "context": "d of every encryption/decryption. This prevents Hamming distance leakage between the states of the last two rounds as well as between output and input data. ## Fault Injection Fault injection (FI) attacks can be distingu"
+        },
+        {
+          "source": "/home/reyerchu/vibe-ic/benchmark-data/ic/opentitan_aes/phase1/input_doc/aes_theory_of_operation.txt",
+          "line": 447,
+          "match": "Fault injection",
+          "context": "ption/decryption. This prevents Hamming distance leakage between the states of the last two rounds as well as between output and input data. ## Fault Injection Fault injection (FI) attacks can be distinguished based on t"
+        }
+      ]
+    }
+  ],
+  "evidence": {
+    "l23_path": "/home/reyerchu/vibe-ic/benchmark-data/ic/opentitan_aes/phase1/generated_docs/L23_SECURITY_REQUIREMENTS.json",
+    "applicability": "APPLICABLE",
+    "security_record_count": 0,
+    "typed_record_count": 0,
+    "security_requirements_present": false,
+    "secure_boot": false,
+    "asserts_security": false,
+    "security_requirement_hits_input_docs": 2,
+    "security_requirement_hits_sibling_l_docs": 0
+  }
+}

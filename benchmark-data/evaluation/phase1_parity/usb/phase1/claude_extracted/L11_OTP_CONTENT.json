@@ -1,5 +1,0 @@
-{
-  "ic_name": "Universal Serial Bus (USB 2.0)",
-  "otp_present": false,
-  "notes": "USB 2.0 is a wire-level + framework spec; no OTP / fuse content at the protocol layer. Individual USB devices may hard-wire VID/PID/iSerial strings into ROM/OTP (per USB-IF vendor-ID assignment) but this is a per-device choice, not protocol-defined."
-}

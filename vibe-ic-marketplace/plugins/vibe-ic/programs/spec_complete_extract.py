@@ -60,6 +60,7 @@ if _HERE not in sys.path:
 # adapter over THIS engine). They are pure-string functions — no record coupling.
 import cvdp_complete_extract as _impl  # noqa: E402
 import verilog_width_resolve as _W  # noqa: E402
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 def _place_interface(prompt: str, inputs: List[str], outputs: List[str],
@@ -655,7 +656,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     spec = assess_spec(prompt, ins, outs)
     out = json.dumps(spec, indent=2, ensure_ascii=False)
     if a.json:
-        open(a.json, "w").write(out + "\n")
+        atomic_write_text(a.json, out + "\n")
     print(f"completeness: {spec['completeness']}")
     print(f"reason: {spec['completeness_reason']}")
     if spec["gaps"]:

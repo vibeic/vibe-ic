@@ -39,10 +39,15 @@ def _capture_required(monkeypatch) -> dict:
     seen: dict = {}
     real = APDC.resolve_deck_context
 
-    def _spy(pdk_selector, res=None, required=(), reader=None, container=""):
+    # **kw, not a copy of the signature: the resolver grew a `domain` keyword
+    # (vibe-ic#903's per-block half) and a spy that mirrored the old parameter
+    # list swallowed the TypeError inside A3's try/except, so this test went
+    # red for a reason that had nothing to do with role filtering.
+    def _spy(pdk_selector, res=None, required=(), reader=None, container="",
+             **kw):
         seen["required"] = tuple(required)
         return real(pdk_selector, res=res, required=required,
-                    reader=reader, container=container)
+                    reader=reader, container=container, **kw)
 
     monkeypatch.setattr(APDC, "resolve_deck_context", _spy)
     return seen

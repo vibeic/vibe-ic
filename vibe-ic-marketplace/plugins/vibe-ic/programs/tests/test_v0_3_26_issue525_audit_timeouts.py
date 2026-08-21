@@ -233,8 +233,30 @@ def test_phase23_runner_uses_shared_summary_helper():
 
 
 def test_final_report_constants_are_aliases():
-    # LOW (review): constants must alias the _path_layout single source.
+    """LOW (review): constants must alias the _path_layout single source.
+
+    Compared through `g._pl` -- the module object `final_report_generate`
+    ITSELF aliased -- not through this file's own `import _path_layout`.
+
+    Those are not always the same object. Under whole-directory collection
+    `_path_layout` is imported twice (27 files in this suite reload or pop
+    modules from sys.modules), and then every one of these `is` checks compares
+    equal-but-distinct constants across two module instances:
+
+        pytest <this file>                                  passed
+        pytest programs/tests -k <this test>                 FAILED
+            AssertionError: assert 900 is 900
+
+    900 is outside CPython's small-int cache, so identity across two module
+    objects is never guaranteed -- the assertion was measuring which import
+    graph pytest happened to build, not whether the constants alias.
+
+    The claim itself is unweakened, and is the reason `is` rather than `==` is
+    right here: an independent literal in `final_report_generate` compiles to a
+    different object than `_path_layout`'s and still fails this.
+    """
     import final_report_generate as g
-    assert g.AUDIT_TIMEOUT_DEFAULT_S is _pl.AUDIT_TIMEOUT_DEFAULT_S
-    assert g.AUDIT_TIMEOUT_CAP_S is _pl.AUDIT_TIMEOUT_CAP_S
-    assert g.AUDIT_TIMEOUT_ENV is _pl.AUDIT_TIMEOUT_ENV
+    src = g._pl
+    assert g.AUDIT_TIMEOUT_DEFAULT_S is src.AUDIT_TIMEOUT_DEFAULT_S
+    assert g.AUDIT_TIMEOUT_CAP_S is src.AUDIT_TIMEOUT_CAP_S
+    assert g.AUDIT_TIMEOUT_ENV is src.AUDIT_TIMEOUT_ENV

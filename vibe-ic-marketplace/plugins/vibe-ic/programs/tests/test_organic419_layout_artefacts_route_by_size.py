@@ -27,7 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
+from _published_corpus import cell_dirs, needs_corpus
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
@@ -35,6 +35,19 @@ import size_policy_drift_check as D  # noqa: E402
 import tracked_blob_size_guard as G  # noqa: E402
 
 _REPO = _PROGRAMS.parents[3]
+
+
+def _tracked_blobs_at_head(repo: Path) -> int:
+    """How many blobs git holds at HEAD, counted WITHOUT the guard.
+
+    Deliberately not `git ls-files`: that reads the INDEX, which a staged edit
+    moves independently of HEAD, and the guard weighs HEAD.
+    """
+    r = subprocess.run(
+        ["git", "-C", str(repo), "ls-tree", "-r", "--full-tree", "HEAD"],
+        capture_output=True, text=True, check=True)
+    return sum(1 for line in r.stdout.splitlines()
+               if line.split("\t", 1)[0].split()[1:2] == ["blob"])
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -100,10 +113,34 @@ def test_the_guard_runs_from_any_directory(tmp_path):
 
 def test_this_repo_is_under_the_ceiling_today():
     """The measurement the ceiling was chosen from. If this ever fails, the
-    ceiling did not start clean and the finding above is stale."""
+    ceiling did not start clean and the finding above is stale.
+
+    NOT A CORPUS TEST, and deliberately not marked as one. Its subject is what
+    THIS repository tracks, and every blob it weighs is still here — read the
+    failure before assuming the cause: `big == []` never stopped holding. What
+    broke at the 2026-08 split was the population floor `seen > 10000`, a
+    constant measured when the published cells lived in this tree (21967 tracked
+    entries then, 5298 now that the result cells are in `vibeic/benchmark-data`).
+    Pointing `$VIBE_IC_BENCHMARK_DATA` at a clone does not put them back, so a
+    skip keyed on the corpus would fire forever and the guard would never run
+    again.
+
+    The floor is asked of the tree instead of pinned to a number, which is also
+    why it cannot go stale a second time: every blob git lists at HEAD must have
+    been weighed. That is strictly stronger than a threshold — a guard that
+    enumerated a subtree (the #416 bug) or dropped rows while parsing fails it,
+    and those are the ways `big == []` becomes a lie.
+    """
     big, seen = G.oversized(_REPO)
     assert big == [], big
-    assert seen > 10000, seen
+    tracked = _tracked_blobs_at_head(_REPO)
+    assert seen == tracked, (
+        f"the guard weighed {seen} blob(s) but git holds {tracked} at HEAD — "
+        f"it did not look at the whole tree, so `no oversized blob` is not a "
+        f"result")
+    assert tracked > 1000, (
+        f"only {tracked} tracked blob(s): this is not a populated repository, "
+        f"and a clean answer over it means nothing")
 
 
 # ── the drift check ─────────────────────────────────────────────────────────
@@ -150,16 +187,34 @@ def test_reverting_to_an_extension_only_rule_is_caught(tmp_path):
 
 # ── the reference cells, which the old rule rejected ────────────────────────
 
-@pytest.mark.parametrize("cell", ["v1.5.58_ihp-sg13g2", "v1.5.65_sky130A",
-                                  "v1.9.96_gf180mcuD"])
-def test_the_three_reference_cells_pass_their_own_structure_check(cell):
+@needs_corpus
+def test_the_reference_cells_pass_their_own_structure_check():
     """Every one of them FAILED on NO_RAW_GEOMETRY before #419, naming the
-    .gds/.def/.spef the repository had already decided to accept."""
-    d = _REPO / "benchmark-data" / "ic" / "spm" / cell
-    if not d.is_dir():
-        pytest.skip("published cell not present")
-    r = subprocess.run(
-        [sys.executable,
-         str(_PROGRAMS / "benchmark_evidence_structure_check.py"), str(d)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout
+    .gds/.def/.spef the repository had already decided to accept.
+
+    DRIVEN BY THE CORPUS RATHER THAN BY THREE HARD-CODED NAMES. This was
+    `@parametrize("cell", ["v1.5.58_ihp-sg13g2", "v1.5.65_sky130A",
+    "v1.9.96_gf180mcuD"])` with an inline `skip("published cell not present")`,
+    which after the 2026-08 split skipped all three every run and said nothing
+    about why or where the cells went. Worse, it would have gone on skipping
+    per-name even with a corpus supplied: a published snapshot legitimately
+    carries a different set (today's holds `v1.10.18_sky130A` where the issue
+    measured `v1.5.65_sky130A`), and a name-keyed skip turns that into silence.
+
+    So the population is whatever spm cells the corpus publishes, and it is
+    asserted non-empty — the check runs on all of them or the test fails. The
+    one skip left is `needs_corpus`: no corpus, no cells to check, said in the
+    suite's single wording.
+    """
+    cells = [c for c in cell_dirs() if c.parent.name == "spm"]
+    assert len(cells) >= 3, (
+        f"the corpus publishes {len(cells)} spm cell(s); #419 was measured on "
+        f"three reference cells and this is the population that carries the "
+        f"raw geometry the old NO_RAW_GEOMETRY rule rejected: "
+        f"{[str(c) for c in cells]}")
+    for d in cells:
+        r = subprocess.run(
+            [sys.executable,
+             str(_PROGRAMS / "benchmark_evidence_structure_check.py"), str(d)],
+            capture_output=True, text=True)
+        assert r.returncode == 0, (d, r.stdout)
