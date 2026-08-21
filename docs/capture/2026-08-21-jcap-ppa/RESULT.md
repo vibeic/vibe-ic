@@ -2171,7 +2171,13 @@ Work through it in sequence. Step 1 gates the rest.
 4. **Wire the verifier** — one line in the pinned hygiene gates, which this lane
    could not touch.
 5. **File the Bucket-T roadmap entry** in `benchmark-data/`, the repository this
-   branch cannot reach.
+   branch cannot reach — but **not before attaching the crash artefacts**. The
+   ten committed bad samples do not contain the crash: three JSON files each, no
+   log, no error file, and a runner exit of 1 that the golden arm also records,
+   so nothing in the tree distinguishes them from a passing run. A maintainer
+   receiving them can reproduce nothing. Attach the tool's own exit status and
+   stderr tail for at least one arm, and the post-route netlist for that arm,
+   then file. This is `A-15` as a precondition rather than a lesson.
 6. Then **proceed to** the **Bucket-C provenance plumbing**, which is the precondition for the
    header rule and the reason that record is C rather than A.
 
