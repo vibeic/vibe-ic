@@ -1,6 +1,7 @@
 """Unit tests for `ppa_predict_aggregate.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("ppa_predict_aggregate")
 
 
@@ -67,4 +68,5 @@ class TestMarkdownEmit:
     def test_attribution(self):
         e = mod.build_estimate(rtl_cell_count=100)
         d = e.as_dict()
-        assert "v0.1.50" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"ppa_predict_aggregate v{shipped_plugin_version()}"

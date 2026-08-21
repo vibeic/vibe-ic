@@ -21,8 +21,13 @@ Schema
 This gate reads `waivers.json` (top-level list OR `{"waivers": [...]}`
 OR `{"waived_steps": [...]}`) and inspects each entry's `approved_at`
 field (ISO-8601 date or datetime). If `approved_at` is missing,
-`waivers_schema_check` already flags it — staleness gate is silent
-on that entry to avoid double-counting.
+`waivers_schema_check` flags it (`approved-at-missing`) — this gate
+stays silent on that entry to avoid double-counting, but COUNTS it
+and says so in `skipped_reason`, because an entry that cannot be
+aged is a hole in this gate's coverage, not a clean result. #519:
+that cross-reference used to be false (the schema gate did not flag
+it), so 0 of the corpus's 19 entries were ageable and this gate had
+never aged a single waiver anywhere while reporting a clean skip.
 
 False-alert guards
 ==================
@@ -31,7 +36,8 @@ False-alert guards
     audit).
   - Silent for waiver entries that have a non-empty `closure_proof`
     field — the waiver is closed, not stale.
-  - Silent for entries missing `approved_at` (other gate handles).
+  - Silent for entries missing `approved_at` (other gate handles) —
+    but counted in `entries_unageable` and named in `skipped_reason`.
   - Silent for entries with `approved_at` that doesn't parse — would
     create noise; format is the schema gate's job.
   - Silent if `--warn-days <= 0` (gate explicitly disabled).
@@ -48,6 +54,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from gate_utils import read_text as _read
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _waiver_entries as _we  # noqa: E402  (after sys.path bootstrap)
 
 
 @dataclass
@@ -91,10 +101,18 @@ def _load_waivers(project: Path) -> tuple[Path | None, list]:
         if isinstance(data, list):
             return cand, data
         if isinstance(data, dict):
-            for k in ("waivers", "waived_steps", "entries"):
-                v = data.get(k)
-                if isinstance(v, list):
-                    return cand, v
+            # #519 — the UNION of both canonical keys, via the shared reader.
+            # This was a first-list-wins scan, so a file carrying entries under
+            # BOTH keys had one of them silently dropped: whichever key came
+            # later in the tuple was never read, and the gate aged only half
+            # the file while reporting on all of it. `entries` is retained
+            # after them as this gate's own historical third spelling.
+            found = _we.entries(data)
+            if found:
+                return cand, found
+            v = data.get("entries")
+            if isinstance(v, list):
+                return cand, v
         return cand, []
     return None, []
 
@@ -120,6 +138,9 @@ def inspect(project: Path, warn_days: int = 90,
         "warn_days": warn_days,
         "err_days": err_days,
         "entries_examined": 0,
+        "entries_unageable": 0,
+        "entries_closed": 0,
+        "entries_total": 0,
         "stale_warn": [],
         "stale_err": [],
         "skipped_reason": "",
@@ -133,6 +154,7 @@ def inspect(project: Path, warn_days: int = 90,
         summary["skipped_reason"] = "no waivers.json"
         return findings, summary
     summary["waivers_path"] = str(cand.relative_to(project))
+    summary["entries_total"] = len(entries)
     if not entries:
         summary["skipped_reason"] = "waivers.json has no entries"
         return findings, summary
@@ -143,9 +165,20 @@ def inspect(project: Path, warn_days: int = 90,
         if not isinstance(e, dict):
             continue
         if _is_closed(e):
+            summary["entries_closed"] += 1
             continue
         approved = _parse_iso(e.get("approved_at", ""))
         if approved is None:
+            # #519 — NOT silence. This gate deferred to `waivers_schema_check`
+            # ("already flags it") for entries lacking `approved_at`; that gate
+            # did not in fact flag it, so an un-ageable waiver was reported by
+            # nobody. Measured over the corpus, 0 of 19 entries carried an
+            # `approved_at`, meaning this gate had never aged a single waiver
+            # anywhere while reporting a clean skip. The schema gate now warns
+            # (`approved-at-missing`); this gate COUNTS the population so its
+            # own output states how much of the file it could not audit
+            # instead of implying it audited all of it.
+            summary["entries_unageable"] += 1
             continue
         summary["entries_examined"] += 1
         age_days = (now - approved).days
@@ -185,10 +218,31 @@ def inspect(project: Path, warn_days: int = 90,
                 file=summary["waivers_path"],
             ))
     if summary["entries_examined"] == 0:
-        summary["skipped_reason"] = (
-            "no waiver entries with parseable approved_at and no "
-            "closure_proof"
-        )
+        # #519 — say WHICH silence this is. "no entries with parseable
+        # approved_at" read identically whether the file held 0 waivers or 19
+        # un-ageable ones; only the second is a coverage hole worth knowing
+        # about, and it was the universal case.
+        if summary["entries_unageable"]:
+            summary["skipped_reason"] = (
+                f"{summary['entries_unageable']} of "
+                f"{summary['entries_total']} open waiver entr"
+                f"{'y' if summary['entries_unageable'] == 1 else 'ies'} carr"
+                f"{'ies' if summary['entries_unageable'] == 1 else 'y'} no "
+                f"parseable `approved_at`, so NONE could be aged — this gate "
+                f"audited nothing. `approved_at` is the human approver's "
+                f"dated signature and is never stamped automatically, because "
+                f"a machine-written approval date would be a self-approval. "
+                f"An entry deferred under a machine-generated attestation "
+                f"(`waivers` dialect) legitimately carries none and is tracked "
+                f"by its `ticket` instead; for the entries that a human did "
+                f"approve, `waivers_schema_check` reports the missing "
+                f"signature date as `approved-at-missing`."
+            )
+        else:
+            summary["skipped_reason"] = (
+                "no waiver entries with parseable approved_at and no "
+                "closure_proof"
+            )
     return findings, summary
 
 

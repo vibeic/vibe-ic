@@ -694,6 +694,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not offenses:
         n = len(list(pdir.glob("*.py")))
+        # vibe-ic#564 — "0 file(s) scanned" and PASS is a verdict about a
+        # population that was never read. rc 2 is the disclosed-skip
+        # convention; the P0 umbrella reads the code, not the sentence.
+        if n == 0:
+            print(f"VACUOUS_PASS: loop_watchdog_compliance_check scanned 0 "
+                  f"file(s) under {pdir} — nothing was examined, which is not "
+                  f"a clean result", file=sys.stderr)
+            return 2
         print(f"loop_watchdog_compliance_check: PASS — {n} file(s) scanned, "
               f"no unguarded long sub-process or unbounded risky loop.")
         return 0

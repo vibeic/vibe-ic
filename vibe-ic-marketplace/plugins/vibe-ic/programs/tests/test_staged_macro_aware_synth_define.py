@@ -111,7 +111,7 @@ def _run_step_synth(tmp_path: Path, proj: Path, monkeypatch):
     so all three define-carrying commands are captured."""
     captured: list[str] = []
 
-    def fake_exec(container, cmd, marker=None, timeout=1800):
+    def fake_exec(container, cmd, marker=None, timeout=1800, **_kw):
         captured.append(cmd)
         return 1, "", "stubbed failure"
 
@@ -429,10 +429,10 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
     try:
         subprocess.run(["docker", "exec", container, "sh", "-c",
                         f"rm -rf {tag} && mkdir -p {tag}"],
-                       check=True, capture_output=True, timeout=120)
+                       check=True, capture_output=True, timeout=60)
         for f in sorted(tmp_path.iterdir()):
             subprocess.run(["docker", "cp", str(f), f"{container}:{tag}/"],
-                           check=True, capture_output=True, timeout=120)
+                           check=True, capture_output=True, timeout=60)
         libread = ""
         if stage_macro:
             libread = (f"read_liberty -lib -ignore_miss_dir -setattr blackbox "
@@ -446,10 +446,10 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
             ["docker", "exec", container, "sh", "-c",
              f"PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH; "
              f"cd {tag} && yosys -p '{script}'"],
-            capture_output=True, text=True, timeout=600).stdout
+            capture_output=True, text=True, timeout=60).stdout
     finally:
         subprocess.run(["docker", "exec", container, "sh", "-c",
-                        f"rm -rf {tag}"], capture_output=True, timeout=120)
+                        f"rm -rf {tag}"], capture_output=True, timeout=60)
     stat = out.split("=== chip_top ===")[-1]
 
     if expect == "macro":

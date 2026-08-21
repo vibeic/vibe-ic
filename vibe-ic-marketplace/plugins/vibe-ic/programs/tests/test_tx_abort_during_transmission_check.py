@@ -116,7 +116,7 @@ endmodule
     assert rpt["passed"] is False
 
 
-# -- Test: self-skip when no TX modules --
+# -- Test: no TX module is VACUOUS (rc 2), not a PASS (#515) --
 
 def test_skip_no_tx_modules(tmp_path):
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
@@ -127,7 +127,9 @@ module mac(input clk, output reg [3:0] state);
 endmodule
 """)
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
+    assert rpt["summary"]["reason"] == "no_tx_modules"
+    assert "VACUOUS_PASS:" in r.stderr, r.stderr

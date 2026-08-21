@@ -91,13 +91,33 @@ def test_reject_duplicate_id(tmp_path):
 
 
 def test_reject_id_out_of_range(tmp_path):
+    """#526 relocated the FATALITY of this finding without weakening it.
+
+    An id naming no flow step is still REPORTED, and `--strict-ids` still
+    exits 1 on it — that half is asserted below and is what a standalone gate
+    invocation asks for. What changed is the DEFAULT, because these findings
+    are also consumed by `flow_compliance_check`, which turns any error into
+    `SystemExit(1)`: an `id: 99` waiver is inert there (it is filed under a
+    key no flow step has and exempts nothing), so making it fatal withheld
+    nothing and instead deleted the entire compliance report — 63 step
+    verdicts and every advisory — to complain about a waiver that did
+    nothing. The complaint survives; the report does too.
+    """
     _write(tmp_path / "waivers.json", {
         "waived_steps": [
             {"id": 99, "reason": "this is a sufficiently long reason string to pass", "approver": "reyerchu"}
         ]
     })
+    strict = subprocess.run(
+        [sys.executable, str(SCRIPT), str(tmp_path), "--strict-ids"],
+        capture_output=True, text=True)
+    assert strict.returncode == 1
+
     r = _run(tmp_path)
-    assert r.returncode == 1
+    assert r.returncode == 0
+    assert "id-range" in r.stdout, (
+        "the finding must still be reported when it is not fatal — a "
+        "downgrade that also silenced it would be a real weakening")
 
 
 def test_malformed_json(tmp_path):

@@ -18,6 +18,18 @@ true by construction, not by bookkeeping. What these tests pin is the
 construction itself, read from the OTHER side of any future duplication:
 the AST of `_detect_pdk`, not a parallel constant.
 
+MEASURED CORRECTION (vibe-ic#452). Main DOES now carry a parallel
+acceptance constant: `_PDK_NAMED_BRANCHES` at phase3_one_shot_runner.py
+:4876, feeding `_known_pdk_names()`, feeding the `_assert_pdk_name_
+resolvable` gate that runs as `_detect_pdk`'s FIRST statement (#389's
+fail-closed fix). So the acceptance set really does sit ahead of the chain
+— the withdrawn branch's shape — but fail-closed and, as measured, in
+sync. This file used to assert `"_PDK_NAMED_BRANCHES" not in _SRC`; that
+assertion was RED on main for an unknown length of time, and a substring
+search could not have told a definition from a mention anyway. It is
+replaced by the invariant that shape can actually violate: no named branch
+may be unreachable behind the gate.
+
 #389 recurred three times because each fix added another named branch. The
 next person to add one is exactly who these tests speak to.
 """
@@ -92,13 +104,149 @@ def test_the_refusal_sits_after_every_named_branch():
             f"refused with a message claiming it matches none")
 
 
-def test_no_parallel_acceptance_constant_exists():
-    """The withdrawn branch's mechanism was a hand-maintained tuple that
-    nothing derived and nothing checked. If an acceptance set is ever
-    (re)introduced, it must be DERIVED from the chain — at which point this
-    test should be updated to assert equality against `_branch_literals()`,
-    a check that reads the OTHER side of the duplication and can fail."""
-    assert "_PDK_NAMED_BRANCHES" not in _SRC
+def _string_collection_consts(tree: ast.AST):
+    """Every `NAME = (<string literals>, …)` ASSIGNMENT in `tree`, as
+    ``{name: (lineno, frozenset_of_values)}``.
+
+    Read from assignment NODES. A comment or a docstring that merely NAMES a
+    constant is not an assignment and is correctly invisible here — which is
+    the entire point of this extractor existing. Collections holding anything
+    other than string literals are skipped: this is about name sets.
+    """
+    out = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign):
+            targets, value = n.targets, n.value
+        elif isinstance(n, ast.AnnAssign):
+            targets, value = [n.target], n.value
+        else:
+            continue
+        if not isinstance(value, (ast.Tuple, ast.List, ast.Set)):
+            continue
+        elts = list(value.elts)
+        vals = {e.value for e in elts
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+        if not elts or len(vals) != len(elts):
+            continue
+        for t in targets:
+            if isinstance(t, ast.Name):
+                out[t.id] = (n.lineno, frozenset(vals))
+    return out
+
+
+def _acceptance_gate_constant_names():
+    """Which module-level constants the FAIL-CLOSED acceptance gate actually
+    reads, derived from `_known_pdk_names`'s own AST rather than named here.
+
+    `_detect_pdk`'s first statement is `_assert_pdk_name_resolvable(override)`,
+    which refuses any `--pdk` name not in `_known_pdk_names()`. So the gate
+    genuinely does sit BEFORE the branch chain on main — the shape #409
+    recorded. Sourcing the constant NAME from the gate's own AST means
+    renaming or replacing the constant cannot silently empty this check.
+    """
+    fn = next((n for n in ast.walk(_TREE)
+               if isinstance(n, ast.FunctionDef) and n.name == "_known_pdk_names"),
+              None)
+    if fn is None:
+        return set()
+    read = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+    return read & set(_string_collection_consts(_TREE))
+
+
+def _registry_names():
+    """The other lane `_known_pdk_names` unions in — read from the shipped
+    JSON, the way the code reads it."""
+    import json
+    try:
+        reg = json.loads((_PROGRAMS / "pdk_registry.json").read_text())
+    except (OSError, ValueError):
+        return set()
+    return {e["name"] for e in (reg.get("pdks") or []) if e.get("name")}
+
+
+def test_the_constant_detector_reads_definitions_not_mentions():
+    """BOTH HALVES, pinned on synthetic source so neither depends on what
+    `phase3_one_shot_runner.py` happens to contain today.
+
+    This test file's predecessor asserted `"_PDK_NAMED_BRANCHES" not in _SRC`.
+    A substring search over source text cannot tell a DEFINITION from a
+    MENTION: it fires on the comment above the constant, on this docstring's
+    own vocabulary if it lived in that file, and on a `# never add
+    _PDK_NAMED_BRANCHES` warning — while a constant spelled any other name
+    slips past untouched. Structure is the fix, and a structural detector is
+    only trustworthy if its blindness to prose AND its sight of real
+    assignments are both nailed down.
+    """
+    # (1) BLIND to mentions — comment, then docstring.
+    comment = ast.parse(
+        '# _PDK_NAMED_BRANCHES = ("sky130A", "nangate45") must never exist\n'
+        'X = 1\n')
+    assert "_PDK_NAMED_BRANCHES" not in _string_collection_consts(comment)
+    doc = ast.parse(
+        '"""Do not reintroduce _PDK_NAMED_BRANCHES = (\'sky130A\',)."""\n'
+        'X = 1\n')
+    assert "_PDK_NAMED_BRANCHES" not in _string_collection_consts(doc)
+
+    # (2) SIGHTED on a real assignment — the half that makes (1) non-vacuous.
+    real = ast.parse('_PDK_NAMED_BRANCHES = ("sky130A", "nangate45")\n')
+    got = _string_collection_consts(real)
+    assert "_PDK_NAMED_BRANCHES" in got, (
+        "the detector missed a plain module-level assignment — every other "
+        "assertion built on it is vacuous")
+    assert got["_PDK_NAMED_BRANCHES"][1] == {"sky130A", "nangate45"}
+    # annotated form must be seen too, or the drift just needs a type hint
+    ann = ast.parse('_PDK_NAMED_BRANCHES: tuple = ("asap7",)\n')
+    assert _string_collection_consts(ann)["_PDK_NAMED_BRANCHES"][1] == {"asap7"}
+
+
+def test_no_named_branch_is_unreachable_behind_the_acceptance_gate():
+    """#409's mechanism, now CHECKED instead of forbidden.
+
+    The parallel acceptance constant this file once asserted the ABSENCE of
+    now EXISTS on main — `_PDK_NAMED_BRANCHES`, feeding `_known_pdk_names()`,
+    feeding the `_assert_pdk_name_resolvable` gate that runs as `_detect_pdk`'s
+    first statement. That is the withdrawn branch's shape: an acceptance set
+    ahead of the branch chain. It is fail-closed and currently in sync, so the
+    honest invariant is not "this must not exist" — it is the one thing that
+    shape can get wrong.
+
+    THE DIRECTION THAT MATTERS IS ADDITION. Add `override == "<new>"` to
+    `_detect_pdk` and forget the acceptance set, and the gate refuses `--pdk
+    <new>` before the chain is ever reached: the new hand-written lane is
+    UNREACHABLE DEAD CODE, which is verbatim what #409 measured on the
+    withdrawn branch. #389 recurred three times because each fix added a named
+    branch, so this is the edit that will actually be made.
+
+    The other direction is not a finding: a name accepted by the gate with no
+    branch falls through to the chain's own refusal, which is true by
+    construction (`test_the_refusal_sits_after_every_named_branch`).
+
+    Read from the AST of the chain and the AST of the gate — the two OTHER
+    sides of the duplication, never the same constant the code reads.
+    """
+    branches = {v for _, v in _branch_literals()}
+    assert branches, "no named branches found — extractor broken"
+
+    const_names = _acceptance_gate_constant_names()
+    assert const_names, (
+        "`_known_pdk_names` reads no string-collection constant — either the "
+        "gate was restructured or the extractor is broken; either way this "
+        "test would silently pass on anything")
+
+    consts = _string_collection_consts(_TREE)
+    accepted = set()
+    for name in const_names:
+        accepted |= consts[name][1]
+    accepted |= _registry_names()
+
+    unreachable = branches - accepted
+    assert not unreachable, (
+        f"{sorted(unreachable)} have a hand-written branch in `_detect_pdk` "
+        f"but are not in the acceptance set the fail-closed gate consults "
+        f"({sorted(const_names)} + pdk_registry.json). `--pdk <name>` is "
+        f"refused by `_assert_pdk_name_resolvable` BEFORE the chain runs, so "
+        f"those branches are unreachable dead code — the exact defect "
+        f"vibe-ic#409 recorded on the withdrawn branch.")
 
 
 def test_each_named_branch_returns_before_the_refusal():

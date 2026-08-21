@@ -19,6 +19,39 @@ description: "Verify that all required artifacts exist and pass quality checks b
 
 # Checkpoint Gate — Phase Transition Verification
 
+> ## ⚠️ `checkpoint_gate_check.py` HAS ROTTED — DO NOT RUN IT AS A GATE (vibe-ic#693)
+>
+> This document used to instruct an agent to run `checkpoint_gate_check.py`
+> and act on its verdict. **That program now FAILS 46 of 46 run trees on a
+> working checkout at all three checkpoints — 138 of 138 invocations, and
+> every red is path rot, not a defect.** It addresses a directory layout the flow abandoned
+> (`phase1_spec/*` instead of `phase1/generated_docs/`), and two of its
+> sub-checks actively mis-read a healthy run: the CP2 required-file glob for
+> RTL resolves to the **formal** file (`[PASS] file:rtl →
+> phase2/stage1/formal/formal_spm.sv` — a false MATCH, not a false miss), and
+> `cell_count` reports `0 cell(s)` on a run that placed real cells.
+>
+> An agent following the instruction below will be told a healthy design
+> cannot advance. Acting on that verdict is wrong; so is learning to ignore a
+> gate.
+>
+> **REPLACED BY the per-step gate set**, which is what the flow actually runs:
+>
+> | this checkpoint asks | the flow already answers with |
+> |---|---|
+> | CP1 L-doc presence | `phase1_doc_presence_check` (the one sub-check here that still passes) |
+> | CP2 synth / DEF / GDS / DRC | flow steps 14 / 16 / 31 / 37 — `gds_substance_check`, `drc_report_check`, `provenance_check` |
+> | CP3 FPGA sign-off | step 37 + the FPGA cap-gap waiver machinery |
+>
+> The program is recorded in
+> `programs/checker_execution_wiring_baseline.json :: unwired_by_decision`
+> with the full measurement, and `checker_execution_wiring_audit` re-derives
+> that claim on every CI run — so if anything ever wires it, CI says so
+> instead of licensing it silently. Repairing it means rewriting the checklist
+> against the current layout (or deleting it), **not** wiring it.
+>
+> Use the per-step gates below the fold for the phase-transition question.
+
 Verify all required deliverables exist and meet quality standards before allowing the design to proceed to the next phase.
 
 ## Deterministic gate (run this FIRST — single command per checkpoint)

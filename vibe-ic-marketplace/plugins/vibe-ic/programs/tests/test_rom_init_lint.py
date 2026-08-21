@@ -97,3 +97,67 @@ endmodule
 """)
     r = _run(f)
     assert r.returncode == 0
+
+
+# ── the $readmem* exemption, and the two controls that keep it honest ──────────
+# Measured on a real design: the gate fired on code that ALREADY implemented
+# remediation (B) from its own fix_hint, and failed the whole cell for it. The
+# exemption is keyed on the SAME memory, so a gate that merely stops firing would
+# be caught by the two negative controls below.
+
+_ZERO_THEN_READMEM = """\
+module m;
+  reg [7:0] mem [0:127];
+  integer i;
+  initial begin
+    for (i = 0; i < 128; i = i + 1) mem[i] = 8'h00;
+    $readmemh("rom.hex", mem);
+  end
+endmodule
+"""
+
+_ZERO_ONLY = """\
+module n;
+  reg [7:0] mem [0:127];
+  integer i;
+  initial begin
+    for (i = 0; i < 128; i = i + 1) mem[i] = 8'h00;
+  end
+endmodule
+"""
+
+_ZERO_THEN_READMEM_OTHER_MEM = """\
+module o;
+  reg [7:0] mem [0:127];
+  reg [7:0] other [0:127];
+  integer i;
+  initial begin
+    for (i = 0; i < 128; i = i + 1) mem[i] = 8'h00;
+    $readmemh("rom.hex", other);
+  end
+endmodule
+"""
+
+
+def _scan_src(tmp_path, src, name="d.v"):
+    import rom_init_lint as R
+    f = tmp_path / name
+    f.write_text(src)
+    return R.scan_file(f)
+
+
+def test_zeroing_loop_followed_by_readmem_of_the_same_mem_is_not_a_defect(tmp_path):
+    """The zeroing loop is a benign prologue; the array's contents come from the file."""
+    assert _scan_src(tmp_path, _ZERO_THEN_READMEM) == []
+
+
+def test_zeroing_loop_with_no_readmem_still_fires(tmp_path):
+    """NEGATIVE CONTROL: distinguishes 'the exemption works' from 'the rule died'."""
+    f = _scan_src(tmp_path, _ZERO_ONLY)
+    assert len(f) == 1 and f[0].rule == "quartus-unsafe-rom-init"
+
+
+def test_readmem_into_a_different_mem_still_fires(tmp_path):
+    """NEGATIVE CONTROL: an exemption keyed on mere PRESENCE would leak here."""
+    f = _scan_src(tmp_path, _ZERO_THEN_READMEM_OTHER_MEM)
+    assert len(f) == 1 and f[0].rule == "quartus-unsafe-rom-init"

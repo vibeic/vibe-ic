@@ -247,6 +247,165 @@ def test_layer_cannot_corroborate_itself(tmp_path):
     assert "DEFAULT_VALUE_KEY_IS_NOT_A_DESIGN_ENTITY" in _errs(r), r.stdout
 
 
+# ---------------------------------------------------------------------------
+# RAIL: the SCOPE of the status-vs-payload verdict.
+#
+# STATUS_CONTRADICTS_PAYLOAD has two producing branches that emit the SAME
+# category, so asserting the category alone cannot tell them apart and cannot
+# tell a correctly-scoped verdict from an overreaching one. Every test below
+# therefore asserts the BRANCH, identified by evidence the branches do not
+# share, never by the category name.
+# ---------------------------------------------------------------------------
+def _finding(cp: subprocess.CompletedProcess, cat: str) -> dict | None:
+    for f in json.loads(cp.stdout)["findings"]:
+        if f["category"] == cat:
+            return f
+    return None
+
+
+def _branch(cp: subprocess.CompletedProcess) -> str | None:
+    """Which STATUS_CONTRADICTS_PAYLOAD branch fired, or None.
+
+    The empty-payload branch carries only the status; the all-failed branch
+    additionally carries the populated set it is making a claim about. That
+    difference is what distinguishes them — the category string does not.
+    """
+    f = _finding(cp, "STATUS_CONTRADICTS_PAYLOAD")
+    if f is None:
+        return None
+    return "ALL_FAILED" if "populated" in f["evidence"] else "EMPTY_PAYLOAD"
+
+
+# A document whose only fact-bearing content is a failed harvest: the universal
+# claim IS true here, so the verdict must survive. This is the shape the repair
+# must not delete.
+_ONLY_FACT_BEARING_FIELD_FAILED = {
+    "extraction_status": "EXTRACTED",
+    "fields": {
+        "default_signal_values": {"always": "6'b0.            |",
+                                  "which": "40 bit wide counters"},
+        # Narrative only — approximate, so it can neither convict nor acquit.
+        "id_routing": {"description": "the fabric widens the id on the way out"},
+    },
+}
+
+# The same failure, in a document that ALSO populated substantive containers
+# the gate was never told about. The failure is identical; the universal claim
+# is now false.
+_FAILED_FIELD_BESIDE_SURVIVING_CONTENT = {
+    "extraction_status": "EXTRACTED",
+    "fields": {
+        "default_signal_values": {"always": "6'b0.            |",
+                                  "which": "40 bit wide counters"},
+        "id_routing": {"description": "the fabric widens the id on the way out"},
+        # Container names this gate has never enumerated, holding real content.
+        "supported_topologies": [{"name": "point to point",
+                                  "description": "two endpoints, no arbiter"},
+                                 {"name": "shared bus",
+                                  "description": "many endpoints, one arbiter"}],
+        "role_summary": [{"role": "initiator", "description": "issues requests"}],
+        "ordering_guarantees": {"per_stream": "responses keep request order"},
+    },
+}
+
+
+def test_NEGATIVE_verdict_stands_when_the_only_fact_bearing_field_failed(tmp_path):
+    """The universal claim is true here, so the ERROR must still fire."""
+    proj, schema = _mk(tmp_path, _ONLY_FACT_BEARING_FIELD_FAILED)
+    r = _run(proj, "--schema-file", str(schema))
+    assert _branch(r) == "ALL_FAILED", r.stdout
+    assert "STATUS_PARTIALLY_EARNED" not in _cats(r), r.stdout
+
+
+def test_POSITIVE_verdict_is_scoped_down_when_other_content_survived(tmp_path):
+    """Same failure, but content the verdict never tested also exists.
+
+    The failure itself must still be reported; what must NOT be reported is a
+    verdict over the whole layer.
+    """
+    proj, schema = _mk(tmp_path, _FAILED_FIELD_BESIDE_SURVIVING_CONTENT)
+    r = _run(proj, "--schema-file", str(schema))
+    assert _branch(r) is None, "overreaching verdict survived: " + r.stdout
+    # The genuine sub-finding is untouched — this is a scoping fix, not a
+    # deletion.
+    assert "DEFAULT_VALUE_KEY_IS_NOT_A_DESIGN_ENTITY" in _errs(r), r.stdout
+    w = _finding(r, "STATUS_PARTIALLY_EARNED")
+    assert w is not None and w["severity"] == "WARNING", r.stdout
+    assert w["evidence"]["failed"] == ["default_signal_values"], w
+    assert set(w["evidence"]["surviving"]) == {
+        "supported_topologies", "role_summary", "ordering_guarantees"}, w
+
+
+def test_payload_window_counts_containers_the_gate_never_enumerated(tmp_path):
+    """The regression guard for the defect class itself.
+
+    The payload was identified by an allow-list of container names that matched
+    exactly ONE producer's fixed schema, so containers written by every other
+    producer were invisible and the verdict's scope claim covered fields it had
+    never looked at. Identification is now by subtracting the closed envelope,
+    so an unrecognised container counts as payload by default.
+    """
+    proj, schema = _mk(tmp_path, {
+        "extraction_status": "EXTRACTED",
+        "fields": {"a_container_no_list_anticipates": [{"k": "v"}],
+                   "another_one_entirely": {"k": "v"}}})
+    info = json.loads(_run(proj, "--schema-file", str(schema)).stdout)["info"]
+    assert set(info["payload_fields_populated"]) == {
+        "a_container_no_list_anticipates", "another_one_entirely"}, info
+
+
+def test_envelope_is_never_mistaken_for_payload(tmp_path):
+    """Schema bookkeeping must not acquit a layer.
+
+    Producers copy identity keys down into the payload container, so subtracting
+    the envelope has to happen wherever the key sits. If bookkeeping counted as
+    surviving payload, a document with nothing but a failed harvest would look
+    partly earned.
+    """
+    doc = json.loads(json.dumps(_ONLY_FACT_BEARING_FIELD_FAILED))
+    doc["fields"]["ic_name"] = "widget_top"
+    doc["fields"]["schema_version"] = "v0.0.0"
+    doc["fields"]["_private_bookkeeping"] = {"merged": True}
+    proj, schema = _mk(tmp_path, doc)
+    r = _run(proj, "--schema-file", str(schema))
+    assert _branch(r) == "ALL_FAILED", r.stdout
+    info = json.loads(r.stdout)["info"]
+    assert "ic_name" not in info["payload_fields_populated"], info
+    assert "_private_bookkeeping" not in info["payload_fields_populated"], info
+
+
+def test_narrative_content_alone_cannot_acquit_the_status(tmp_path):
+    """W1's rule applied symmetrically.
+
+    Prose may not carry the verdict against the layer; it equally may not carry
+    the verdict for it. A document whose only non-failed content is narrative
+    has still earned nothing.
+    """
+    doc = json.loads(json.dumps(_ONLY_FACT_BEARING_FIELD_FAILED))
+    doc["fields"]["typical_topologies"] = ["a shared bus with one arbiter"]
+    doc["fields"]["multi_copy_atomicity"] = {"note": "single copy only"}
+    proj, schema = _mk(tmp_path, doc)
+    r = _run(proj, "--schema-file", str(schema))
+    assert _branch(r) == "ALL_FAILED", r.stdout
+
+
+def test_empty_payload_branch_is_distinguishable_from_all_failed(tmp_path):
+    """Both branches remain reachable and are told apart by their evidence."""
+    proj, schema = _mk(tmp_path, {"extraction_status": "EXTRACTED",
+                                  "fields": {"interconnect_rules": [],
+                                             "default_signal_values": {},
+                                             "id_routing": {}}})
+    assert _branch(_run(proj, "--schema-file", str(schema))) == "EMPTY_PAYLOAD"
+
+
+def test_a_clean_layer_gets_neither_verdict(tmp_path):
+    """The mirror: no failure, so neither the verdict nor its scoped sibling."""
+    proj, schema = _mk(tmp_path, _WELL_FORMED)
+    r = _run(proj, "--schema-file", str(schema))
+    assert _branch(r) is None, r.stdout
+    assert "STATUS_PARTIALLY_EARNED" not in _cats(r), r.stdout
+
+
 def test_no_design_or_vendor_literal_in_the_gate():
     src = PROG.read_text()
     body = src.split('"""', 2)[-1]

@@ -18,6 +18,7 @@ Cases 2-4 are the gate's reason to exist: `gds_size_check` reports
 from __future__ import annotations
 
 import os
+import random
 import struct
 from pathlib import Path
 
@@ -80,8 +81,27 @@ def _stub_86() -> bytes:
     raise AssertionError("could not build an 86-byte stub")
 
 
+#: SEEDED, not `os.urandom`. This case asserts a specific finding CATEGORY over
+#: a blob that was REGENERATED EVERY RUN, so its verdict was a draw. It failed a
+#: landing gate on `MALFORMED_RECORD` while five consecutive local runs were
+#: green.
+#:
+#: HONESTLY: the failing draw was NOT reproduced. Twelve seeds all yield
+#: `MALFORMED_RECORD`, so the alternative outcome is rare — this removes the
+#: POSSIBILITY rather than diagnosing the byte pattern that produced it. That is
+#: still the right change, because the shape is the worst kind: a case that
+#: passes almost always and fails occasionally teaches the reader to re-run
+#: until green, and that is how a REAL failure gets waved through.
+#:
+#: The bytes stay arbitrary with respect to GDSII, which is all the control
+#: needs; only their reproducibility changes.
+_BIG_RANDOM_SEED = 20260802
+
+
 def _big_random(kb: int = 150) -> bytes:
-    return _rec(0x0002, struct.pack(">h", 600)) + os.urandom(kb * 1024)
+    rnd = random.Random(_BIG_RANDOM_SEED)
+    return (_rec(0x0002, struct.pack(">h", 600))
+            + bytes(rnd.getrandbits(8) for _ in range(kb * 1024)))
 
 
 def _big_empty_library(kb: int = 150) -> bytes:

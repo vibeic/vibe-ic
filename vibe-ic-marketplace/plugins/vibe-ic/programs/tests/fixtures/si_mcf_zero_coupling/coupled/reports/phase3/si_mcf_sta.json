@@ -1,0 +1,23 @@
+{
+  "program": "si_mcf_sta",
+  "version": "1.0.0",
+  "spef": "design.spef",
+  "overlap_guard_ns": 0.0,
+  "coupling_pairs": 1,
+  "nominal": {
+    "worst_setup_slack_ns": 7.37,
+    "worst_hold_slack_ns": 0.39
+  },
+  "corners": {
+    "setup": {
+      "bounded_spef": "design.mcf_setup.spef",
+      "worst_slack_before_ns": 7.37,
+      "worst_slack_after_ns": 7.34
+    },
+    "hold": {
+      "bounded_spef": "design.mcf_hold.spef",
+      "worst_slack_before_ns": 0.39,
+      "worst_slack_after_ns": 0.39
+    }
+  }
+}

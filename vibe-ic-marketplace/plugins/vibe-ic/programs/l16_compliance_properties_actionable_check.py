@@ -1,15 +1,45 @@
 #!/usr/bin/env python3
 """l16_compliance_properties_actionable_check.py — SEMANTIC gate for L16.
 
-VERDICT MODE: **BLOCKS** (exit 1 on any ERROR finding). `--advisory` downgrades
-to exit 0 for a soak/report-only run.
+VERDICT MODE: **ADVISES**. The process exit code is unchanged — exit 1 on an
+ERROR finding, `--advisory` downgrades it — but the mode this program DECLARES
+about itself, which `flow_gate_enforcement_audit.py` reads and which decides
+where the flow may wire it, is ADVISES.
 
-WHY IT BLOCKS
--------------
-L16's consumers are the SVA property-stub generator
+ENFORCEMENT — WHY THE DECLARATION CHANGED (vibe-ic#316)
+--------------------------------------------------------
+It said BLOCKS, and nothing wired it anywhere: `flow_gate_enforcement_audit`
+recorded it as an ORPHAN — declaring an intent it could not act on, because it
+never ran. It was held out of the flow's advisory slot PRECISELY because it
+said BLOCKS, so the over-claim was what kept it from executing at all.
+
+That mattered more here than for its siblings, because this gate had never
+returned a finding on a real input. Measured over the twelve cells published
+under `benchmark-data/ic/`: rc=0 on eleven, SKIP on the twelfth. Its "zero
+false positives" was VACUOUS — the same empty-result-read-as-a-clean-one shape
+the gates below exist to reject, one level up. Promoting an unmeasured gate to
+blocking would have been promoting a claim, not a capability.
+
+Wired into the flow's advisory slot it now judges every real project. If it
+starts finding things, the evidence to argue a promotion will exist; if it
+never does over a real corpus, that is worth knowing too.
+
+WHY THIS LAYER IS LOAD-BEARING
+------------------------------
+L16's readers are the SVA property-stub generator
 (`professional_tb_gen.build_assertions`) and the compliance-vector catalog
-(`phase2_scaffold_gen.emit_compliance_vectors`). Both turn an L16 property into
-a verification obligation. A property that carries no machine-usable anchor
+(`phase2_scaffold_gen.emit_compliance_vectors`). They are not the same kind of
+thing and #509 measured the difference: `professional_tb_gen` RUNS — the flow
+wires it at `phase1_phase2_phase3.yaml` step `professional_tb_gen`, driven by
+`design_one_shot_runner.step_professional_tb_gen` — while `phase2_scaffold_gen`
+is a CONTRACT ORACLE no runner and no flow step calls, at any version. So the
+first turns an L16 property into a verification obligation, and the second
+states the obligation a conforming phase 2 would owe. Rail 1 below is
+unaffected either way: a program that opens only a filename which exists in
+zero runs cannot reach this layer whether it runs today or is the
+specification something else must satisfy tomorrow.
+
+A property that carries no machine-usable anchor
 becomes a 120-char comment: the layer looks populated, the completeness report
 says CAPTURED, and the verification obligation reaches NOBODY. That is the same
 false-CAPTURED shape as the L21_POWER_INTENT defect that aborted a whole
@@ -57,6 +87,23 @@ E2 STATUS_CONTRADICTS_PAYLOAD — extraction_status claims success, zero
 E3 NO_ACTIONABLE_PROPERTY_IN_CONSUMER_WINDOW — properties exist, but none
    inside the window the consumer actually reads carries a resolvable anchor.
    The SVA generator provably receives zero bindable obligations.
+E4 PAYLOAD_WITHOUT_EXTRACTION — the MIRROR of E2, and the arm this file's
+   own `_STATUS_FOUND_NOTHING` vocabulary was declared for and never wired to.
+   The producer's own `extraction_status` says extraction contributed NOTHING,
+   yet the layer ships properties. Both halves were written by the same
+   emitter in the same emission, so the layer contradicts itself and no
+   consumer can tell which of the properties extraction actually supports.
+   E2 catches "status claims success, payload empty"; without E4 the opposite
+   direction was unchecked, and a status field that lies is worse than a
+   missing layer in EITHER direction.
+
+   WHAT E4 DELIBERATELY DOES NOT ASSERT: where the content came from. The
+   sibling rails L17-E1 / L18-E4 word the same shape as "template content from
+   an unrelated protocol"; that provenance claim was MEASURED FALSE on the
+   published parity corpus, where such payloads are authored per cell for that
+   cell's own subject. E4 asserts only the self-contradiction, which is read
+   directly off the two fields. Widening it to a provenance claim would
+   reintroduce the over-reaching verdict that was removed one layer over.
 W1 LOW_ACTIONABLE_RATIO (<50%)              — advisory.
 W2 NO_EXTRACTION_EVIDENCE                   — advisory.
 W3 CONSUMER_STALE_FILENAME_FALLBACK         — advisory: a literal that misses,
@@ -417,6 +464,30 @@ def audit(project: Path, programs_dir: Path, window: int,
                 f"(extraction_status={status!r}). Truthful — PASS."))
         return findings, info
 
+    # -- E4 PAYLOAD_WITHOUT_EXTRACTION (the mirror of E2) --------------------
+    # Reached only when the layer IS populated, so this arm and HONEST_EMPTY
+    # above are exhaustive over the found-nothing statuses: empty is truthful
+    # and passes, populated is self-contradictory and is reported.
+    if status in _STATUS_FOUND_NOTHING:
+        raw_ev = raw.get("extraction_evidence") or raw.get("evidence")
+        findings.append(Finding(
+            "ERROR", "PAYLOAD_WITHOUT_EXTRACTION",
+            f"{doc_name} reports extraction_status={status!r} — the producer "
+            f"says extraction contributed nothing — yet the layer ships "
+            f"{len(props)} propert(ies), and extraction_evidence is "
+            f"{'empty' if not raw_ev else 'present'}. Both fields were "
+            f"written by the same emitter in the same emission, so the layer "
+            f"contradicts itself: every property still reaches the SVA "
+            f"generator's consumer window as a verification obligation, and "
+            f"nothing downstream can tell which of them extraction actually "
+            f"supports. This finding asserts ONLY that self-contradiction — "
+            f"it makes no claim about where the content came from.",
+            {"status": status,
+             "properties_found": len(props),
+             "extraction_evidence_empty": not bool(raw_ev),
+             "emitted_by": raw.get("emitted_by"),
+             "property_containers": sorted({k for k, _ in props})}))
+
     results = []
     for idx, (container, item) in enumerate(props):
         ok, how, ev = property_anchor(item, universe)
@@ -471,7 +542,18 @@ def build_report(project: Path, findings: List[Finding],
         "program": "l16_compliance_properties_actionable_check",
         "version": "1.0.0",
         "layer": "L16",
-        "verdict_mode": "BLOCKS",
+        # vibe-ic#316 — was "BLOCKS". Nothing wired this gate anywhere, so
+        # `flow_gate_enforcement_audit` recorded it as an ORPHAN that declares
+        # an intent it cannot act on: it could not block, it could not even
+        # run. Held out of the advisory slot precisely BECAUSE it said BLOCKS,
+        # which is how the declaration kept it from executing at all.
+        # Measured over the 12 published cells under benchmark-data/ before
+        # changing this: rc=0 on eleven, SKIP on one — it has never returned a
+        # finding on a real input, so promoting it to blocking would be
+        # promoting an unmeasured gate. ADVISES + wired into the flow's
+        # advisory slot makes it judge real data; the evidence to argue a
+        # promotion can then exist.
+        "verdict_mode": "ADVISES",
         "project": str(project),
         "summary": {
             "pass": not errs,

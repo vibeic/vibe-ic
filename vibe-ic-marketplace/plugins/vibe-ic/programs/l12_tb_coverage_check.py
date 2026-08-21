@@ -248,7 +248,12 @@ def main(argv: list[str]) -> int:
 
     project = Path(args.project_dir).resolve()
     l12 = Path(args.l12) if args.l12 else _pl.generated_docs_dir(project) / "L12_BEHAVIORAL_SEQUENCES.json"
-    tb_dir = Path(args.tb_dir) if args.tb_dir else _pl.sim_dir(project) / "tb"
+    # vibe-ic#599: this had NO fallback — `sim_dir(project)/"tb"` or an error.
+    # The flow writes `sim_full_stack/`, so the gate reported "TB dir not found"
+    # on a project holding a real testbench and four L10 test cases, and step 4
+    # was credited with no coverage measurement at all.
+    tb_dir = (Path(args.tb_dir) if args.tb_dir
+              else (_pl.resolve_tb_dir(project) or _pl.sim_dir(project) / "tb"))
     json_out = Path(args.json) if args.json else _pl.report_path(project, "gates/l12_tb_coverage.json")
     ic_class = Path(args.ic_class) if args.ic_class else None
 

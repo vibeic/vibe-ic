@@ -1161,9 +1161,22 @@ def _step_listing_html(project: str, sid: str, proj_q: str = "") -> bytes:
 
 def _step_file_response(project: str, folder: str, name: str):
     """Return (bytes, ctype) for a file inside <project>/steps/<folder>/, or
-    None on a bad/traversing/oversized path. Path-traversal guarded."""
-    if not folder or not name or "/" in folder or "\\" in folder \
-            or "/" in name or "\\" in name or ".." in folder or ".." in name:
+    None on a bad/traversing/oversized path. Path-traversal guarded.
+
+    `folder` is a MULTI-SEGMENT relative path since step_output_collector
+    nests it phase/stage/id_slug (owner directive), so a blanket "no slash"
+    rejection would refuse every legitimate step — it did, until this fix;
+    caught by test_web_stepfile_path_traversal_guarded exercising a real
+    materialized index rather than a hand-picked flat folder string. Each
+    segment is checked individually so traversal embedded at any depth
+    (`a/../../..`, a leading `/`, a bare `..` segment) is still rejected,
+    and the resolved directory is re-verified to still be inside `steps/`
+    as a second, path-independent guard.
+    """
+    if not folder or not name or "\\" in name or "/" in name or ".." in name:
+        return None
+    segs = folder.split("/")
+    if any((not s) or s in (".", "..") or "\\" in s for s in segs):
         return None
     root = _steps_root(project)
     target = (root / folder / name)
@@ -1172,6 +1185,8 @@ def _step_file_response(project: str, folder: str, name: str):
         # the symlink target may live outside steps/, but the LINK itself must
         # be directly inside steps/<folder>/ (guards traversal via the request).
         link_parent = (root / folder).resolve()
+        if not str(link_parent).startswith(str(root.resolve()) + "/"):
+            return None
         if link_parent != target.parent.resolve() or not real.exists() \
                 or real.is_dir():
             return None

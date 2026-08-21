@@ -9,21 +9,51 @@ the canonical per-block A2 artefact:
 with substance:
 
   * file size ≥ 200 bytes (a placeholder line is < 50 bytes)
-  * names at least one transistor / circuit primitive (chip-AGNOSTIC
-    keyword panel: 'pmos', 'nmos', 'transistor', 'mirror',
-    'cascode', 'differential', 'amplifier', 'topology selected',
-    'opamp', 'op-amp', 'common-source', 'common-gate',
-    'source-follower', 'comparator', 'bandgap', 'oscillator',
-    'reference', 'driver', 'switch', 'capacitor', 'resistor',
-    'inductor', 'load', 'bias', 'pole', 'zero', 'feedback',
-    'open-loop', 'closed-loop', 'stage'). Lower-cased substring.
+  * names at least one CIRCUIT-SPECIFIC primitive — a term that cannot
+    plausibly appear in ordinary non-technical prose ('pmos', 'nmos',
+    'mosfet', 'transistor', 'cascode', 'current mirror', 'differential',
+    'amplifier', 'opamp', 'common-source', 'bandgap', 'oscillator',
+    'comparator', 'capacitor', 'resistor', 'inductor', 'ldo',
+    'regulator', 'charge pump', 'widlar', 'bjt', 'topology selected',
+    …). Lower-cased substring over the whole file text.
+
+  A2 measures VOCABULARY, not circuit structure. It is a substance
+  floor ("did the skill describe a circuit at all?"), NOT a topology
+  parser — a prose paragraph that names a cascode is accepted without
+  any check that the cascode is wired to anything. That limit is
+  deliberate and disclosed here so no reader mistakes a PASS for
+  structural verification.
+
+  The GENERIC panel below ('stage', 'load', 'switch', 'bias',
+  'driver', 'feedback', 'reference', 'pole', 'zero', 'mirror', …) is
+  CORROBORATION ONLY and can never satisfy the gate on its own. It
+  used to sit in the same flat panel as the specific terms, which made
+  the substance floor vacuous: a 486-byte office memo about a company
+  picnic ("first stage", "feedback session", "load of paperwork",
+  "driver of the shuttle bus", "bias toward the beach", "switch to the
+  park") scored six hits and PASSed A2.
 
 Failure rules:
   A2_TOPOLOGY_MISSING       — topology.md absent
   A2_TOPOLOGY_EMPTY         — present but < 200 bytes (placeholder)
-  A2_TOPOLOGY_NO_PRIMITIVE  — present but lists no primitive
+  A2_TOPOLOGY_NO_PRIMITIVE  — present but names no circuit vocabulary
+                              at all (neither panel hit)
+  A2_TOPOLOGY_GENERIC_ONLY  — present, but every hit is an ordinary
+                              English word from the generic panel; no
+                              circuit-specific term was named
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
+VACUOUS_PASS when no `analog_block_list.json` exists under
+`phase3/analog/` (the analog runner's root) or `phase1/analog/` (the
+root every A-step's flow `condition:` names), or it declares no blocks.
+
+INCOMPLETE (rc=1) in project mode when SOME declared blocks have a
+topology.md and others have none: A2 cannot be certified done while a
+declared block has produced nothing. All blocks missing stays
+VACUOUS_PASS (defer to the skill).
+
+Artefact resolution: `phase3/analog/<block>/topology.md` (what the analog
+runner writes) OR `phase2/analog/<block>/topology.md` (what the flow
+declares as A2's required_output).
 
 Exit codes / CLI: see `analog_a1_spec_extract_check.py`.
 chip-AGNOSTIC — keyword panel is generic analog vocabulary.
@@ -35,30 +65,51 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
+    BLOCK_LIST_ABSENT_REASON,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
-    artefact_missing_for_block, emit_pass, emit_fail,
+    artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
+    resolve_block_artefact,
 )
 
 GATE = "analog_a2_topology_select_check"
 SKILL = "analog-topology-select"
 MIN_BYTES = 200
+DECLARED_PHASE = 2
 
-_PRIMITIVE_KEYWORDS_LC: tuple[str, ...] = (
-    "pmos", "nmos", "transistor", "mirror", "cascode", "differential",
+# ── substance panels ──────────────────────────────────────────────────────
+# SPECIFIC: terms that do not occur in ordinary non-technical English. A hit
+# here is on its own evidence that the document describes a circuit.
+_SPECIFIC_PRIMITIVES_LC: tuple[str, ...] = (
+    "pmos", "nmos", "mosfet", "transistor", "cascode", "differential",
     "amplifier", "topology selected", "opamp", "op-amp",
     "common-source", "common-gate", "source-follower", "comparator",
-    "bandgap", "oscillator", "reference", "driver", "switch",
-    "capacitor", "resistor", "inductor", "load", "bias",
-    "pole", "zero", "feedback", "open-loop", "closed-loop", "stage",
+    "bandgap", "oscillator", "current mirror", "current source",
+    "capacitor", "resistor", "inductor",
     "brokaw", "widlar", "wilson", "ldo", "regulator", "charge pump",
     "ring oscillator", "rc oscillator", "bjt",
+    "phase margin", "slew rate", "transconductance",
+)
+
+# GENERIC: words that name a circuit concept AND are ordinary English. A hit
+# here CORROBORATES a specific hit; it can never satisfy the gate alone.
+# 'mirror' is generic; 'current mirror' (above) is the specific spelling.
+_GENERIC_TERMS_LC: tuple[str, ...] = (
+    "mirror", "reference", "driver", "switch", "load", "bias",
+    "pole", "zero", "feedback", "open-loop", "closed-loop", "stage",
+)
+
+# Kept as the union so any external reader of the panel (docs, tests) still
+# sees the full vocabulary. NOT used for the verdict — see `_check_block`.
+_PRIMITIVE_KEYWORDS_LC: tuple[str, ...] = (
+    _SPECIFIC_PRIMITIVES_LC + _GENERIC_TERMS_LC
 )
 
 
 def _check_block(project: Path, block: str
                  ) -> tuple[Optional[str], List[dict]]:
-    path = project / "phase3" / "analog" / block / "topology.md"
-    if not path.is_file():
+    path, found = resolve_block_artefact(
+        project, block, "topology.md", DECLARED_PHASE)
+    if not found:
         return "MISSING", [{
             "block": block, "rule": "A2_TOPOLOGY_MISSING",
             "rel_path": str(path.relative_to(project)),
@@ -79,15 +130,30 @@ def _check_block(project: Path, block: str
             "rel_path": str(path.relative_to(project)),
             "detail": f"{size}B < min {MIN_BYTES}B (placeholder?)",
         }]
-    hits = [kw for kw in _PRIMITIVE_KEYWORDS_LC if kw in text]
-    if not hits:
+    # The verdict asserts the GOOD thing is PRESENT: at least one term that
+    # ordinary prose cannot supply. Generic hits are reported for diagnosis
+    # but never promote the verdict on their own.
+    specific = [kw for kw in _SPECIFIC_PRIMITIVES_LC if kw in text]
+    generic = [kw for kw in _GENERIC_TERMS_LC if kw in text]
+    if specific:
+        return "PASS", []
+    if generic:
         return "FAIL", [{
-            "block": block, "rule": "A2_TOPOLOGY_NO_PRIMITIVE",
+            "block": block, "rule": "A2_TOPOLOGY_GENERIC_ONLY",
             "rel_path": str(path.relative_to(project)),
-            "detail": "no transistor/primitive keyword found "
-                      "(panel = pmos|nmos|mirror|cascode|opamp|...)",
+            "detail": (
+                "only ordinary-English terms matched "
+                f"({'|'.join(sorted(generic))}) — none of them is evidence "
+                "that a circuit topology was described; name a "
+                "circuit-specific primitive (pmos|nmos|cascode|"
+                "current mirror|opamp|bandgap|...)"),
         }]
-    return "PASS", []
+    return "FAIL", [{
+        "block": block, "rule": "A2_TOPOLOGY_NO_PRIMITIVE",
+        "rel_path": str(path.relative_to(project)),
+        "detail": "no transistor/primitive keyword found "
+                  "(panel = pmos|nmos|cascode|current mirror|opamp|...)",
+    }]
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -101,8 +167,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            BLOCK_LIST_ABSENT_REASON)
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:
@@ -142,6 +207,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return vacuous_pass(GATE, args,
                             f"all {len(missing_seen)} block(s) missing "
                             f"topology.md; defer to skill `{SKILL}`.")
+    if missing_seen:
+        # Mixed PASS + missing. Until v1.7.36 this fell through to
+        # emit_pass, certifying A2 done on partial block coverage.
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 

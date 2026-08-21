@@ -151,7 +151,7 @@ def test_end_to_end_phase1_populates_l9_top_module_and_ports(tmp_path):
     (proj / "input" / "phase1_prompt.md").write_text(PRIORITY_ENCODER_PROMPT)
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
     r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-800:]
     l9 = json.loads((proj / "phase1" / "generated_docs"
                      / "L9_INTEGRATION_SPEC.json").read_text())

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("phase1_post_process")
 
 
@@ -27,23 +28,57 @@ class TestHallucScrub:
         assert log == []
         assert doc["ic_name"] == "AMBA AXI Protocol Specification"
 
-    def test_opcode_page_number_scrubbed(self):
-        # v0.2.13 — both hexes are scrubbed (2 entries) AND the now-zombie
-        # entries are dropped from `opcodes` (1 more entry), leaving the
-        # list empty. This is the AMBA-AXI false-FAIL fix: a bus protocol
-        # with no real opcodes must end up with opcodes=[] so the
-        # l3_opcode_name_coverage gate VACUOUS_PASSes instead of seeing
-        # 100% OPCODE_NAME_UNKNOWN placeholders.
-        doc = {"opcodes": [{"hex": "0x16", "name": "?"},
-                            {"hex": "0x48", "name": "?"}]}
+    # #454 follow-up — the hard-coded hex VALUE blocklist is GONE. It used
+    # to delete `0x16 / 0x17 / 0x23 / 0x24 / 0x47 / 0x48 / 0x55 / 0x56` out
+    # of ANY design's command table because a bus-figure bit-position axis
+    # had once been scraped at those offsets. A named command carrying one
+    # of those encodings is ordinary, and the artefact is now refused at
+    # source on the row's SHAPE
+    # (`phase1_doc_one_shot_runner._i454_bit_position_ruler_row`).
+    @pytest.mark.parametrize("hex_value", [
+        "0x16", "0x17", "0x23", "0x24", "0x47", "0x48", "0x55", "0x56",
+    ])
+    def test_named_command_at_a_formerly_blocklisted_encoding_survives(
+            self, hex_value):
+        doc = {"opcodes": [{"hex": hex_value, "name": "VOUT_MAX"}],
+               "no_opcodes_in_input": False,
+               "placeholder_opcode_count": 0}
         log = mod.scrub_l_doc(doc, "L3_CMD_PROTOCOL")
-        scrub_entries = [s for s in log
-                         if s.pattern_name == "opcode_from_two_digit_decimal_page_number"]
-        drop_entries = [s for s in log
-                        if s.pattern_name == "drop_scrubbed_opcode_zombie"]
-        assert len(scrub_entries) == 2
-        assert len(drop_entries) == 1
-        assert doc["opcodes"] == []
+        assert log == [], f"{hex_value} was scrubbed: {log}"
+        assert doc["opcodes"] == [{"hex": hex_value, "name": "VOUT_MAX"}]
+        assert doc["no_opcodes_in_input"] is False
+
+    def test_no_scrub_pattern_keys_on_a_list_of_encodings(self):
+        """A scrub pattern may key on a value that is never legitimate for
+        the field. It may NOT key on an alternation of hex encodings: an
+        encoding is data, and the same encoding is genuine in the next
+        design. This is the invariant the removed blocklist violated."""
+        for pat in mod.HALLUC_PATTERNS:
+            src = pat.value_pattern.pattern
+            assert "0x" not in src.lower(), (
+                f"scrub pattern {pat.name!r} keys on hex encodings "
+                f"({src!r}); an encoding blocklist deletes genuine data. "
+                "Refuse the row at source on its shape instead.")
+
+    def test_refusal_audit_trail_is_not_overwritten_by_a_scrub(self):
+        """The emitter's honest-uncertainty record carries a bare `hex`
+        leaf. The removed blocklist matched the bare key `hex` ANYWHERE in
+        the document, so it overwrote the very audit trail that records why
+        a row was refused. Nothing may do that."""
+        doc = {
+            "opcodes": [],
+            "no_opcodes_in_input": True,
+            "non_command_row_refusal_count": 3,
+            "non_command_row_refusals": [
+                {"hex": "0x17", "reason": "signal_name_notation"},
+                {"hex": "0x23", "reason": "signal_name_notation"},
+                {"hex": "0x24", "reason": "bit_position_ruler_row"},
+            ],
+        }
+        log = mod.scrub_l_doc(doc, "L3_CMD_PROTOCOL")
+        assert log == []
+        assert [r["hex"] for r in doc["non_command_row_refusals"]] == [
+            "0x17", "0x23", "0x24"]
 
     def test_legitimate_opcode_not_scrubbed(self):
         doc = {"opcodes": [{"hex": "0xAB", "name": "WRITE_REG"}]}
@@ -52,12 +87,16 @@ class TestHallucScrub:
         assert doc["opcodes"][0]["hex"] == "0xAB"
 
     def test_drop_scrubbed_opcode_zombie_recomputes_flags(self):
-        # A bus-protocol L3 that synthesised 2 page-number opcodes, with
-        # the emitter's sibling flags set as if those opcodes were real.
-        # After scrub+drop, the list is empty and the flags are corrected.
+        # The zombie drop is sentinel-driven and stays general: an entry
+        # whose `hex` is the scrub sentinel carries no encoding, so it must
+        # leave `opcodes` and the sibling flags must be recomputed.
+        # (Driven through the sentinel directly — #454 follow-up removed the
+        # hex-value blocklist that used to produce it.)
         doc = {
-            "opcodes": [{"hex": "0x23", "name": "OPCODE_NAME_UNKNOWN"},
-                        {"hex": "0x55", "name": "OPCODE_NAME_UNKNOWN"}],
+            "opcodes": [{"hex": "<HALLUCINATION_SCRUBBED>",
+                         "name": "OPCODE_NAME_UNKNOWN"},
+                        {"hex": "<HALLUCINATION_SCRUBBED>",
+                         "name": "OPCODE_NAME_UNKNOWN"}],
             "no_opcodes_in_input": False,
             "placeholder_opcode_count": 2,
             "no_opcode_names_in_input": True,
@@ -138,7 +177,9 @@ class TestSkeletonEmission:
 
     def test_skeleton_attribution(self):
         sk = mod.emit_l_doc_skeleton("L14", "bus_interconnect_protocol")
-        assert "v0.1.51" in sk["emitted_by"]
+        assert sk["emitted_by"] == (
+            "phase1_post_process.emit_l_doc_skeleton "
+            f"v{shipped_plugin_version()}")
 
 
 class TestPostProcessIntegration:
@@ -234,4 +275,5 @@ class TestDoctrineCompliance:
             scrubbed_count=0, scrub_log=[], skeleton_emitted=[],
             na_stubs_emitted=[], verdict="PASS")
         d = rep.as_dict()
-        assert "v0.1.51" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"phase1_post_process v{shipped_plugin_version()}"

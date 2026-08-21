@@ -23,8 +23,19 @@ Failure rules:
   A1_SPEC_EMPTY          — parsed but empty / no fields
   A1_SPEC_NO_FIELDS      — declares 0 spec entries
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or
-empty — the project is digital-only / pre-A1.
+VACUOUS_PASS when no `analog_block_list.json` exists under
+`phase3/analog/` (the analog runner's root) or `phase1/analog/` (the root
+every A-step's flow `condition:` names), or it declares no blocks — the
+project is digital-only / pre-A1.
+
+INCOMPLETE (rc=1) in project mode when SOME declared blocks have a
+spec.json and others have none: A1 cannot be certified done while a
+declared block has produced nothing. All blocks missing stays
+VACUOUS_PASS (defer to the skill).
+
+Artefact resolution: `phase3/analog/<block>/spec.json` (what the analog
+runner writes) OR `phase1/analog/<block>/spec.json` (what the flow
+declares as A1's required_output).
 
 Usage:
     python3 analog_a1_spec_extract_check.py <project_dir>
@@ -34,6 +45,7 @@ Usage:
 Exit codes:
     0  PASS / VACUOUS_PASS
     1  FAIL (artefact present but stub / empty / unparsable)
+       OR INCOMPLETE (project mode, partial block coverage)
     2  artefact missing in --block mode (runner translates → WAIVED)
        OR project_dir is not a directory.
 
@@ -47,12 +59,17 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
+    BLOCK_LIST_ABSENT_REASON,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
-    artefact_missing_for_block, emit_pass, emit_fail,
+    artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
+    resolve_block_artefact,
 )
 
 GATE = "analog_a1_spec_extract_check"
 SKILL = "analog-spec-extract"
+# The flow declares A1's output at `phase1/analog/*/spec.json`; the analog
+# runner writes it to the canonical `phase3/analog/<block>/`. Read both.
+DECLARED_PHASE = 1
 
 # Recognised flat-dict spec keys (chip-AGNOSTIC sample of common
 # analog block performance specs across amp / regulator / timing /
@@ -96,8 +113,9 @@ def _check_block(project: Path, block: str) -> tuple[Optional[str], List[dict]]:
     """Return (status, findings) where status is one of
     "PASS" | "MISSING" | "FAIL".  MISSING is per-block-only and
     becomes either WAIVED (--block mode) or a FAIL (project mode)."""
-    spec_path = project / "phase3" / "analog" / block / "spec.json"
-    if not spec_path.is_file():
+    spec_path, found = resolve_block_artefact(
+        project, block, "spec.json", DECLARED_PHASE)
+    if not found:
         return "MISSING", [{
             "block": block,
             "rule": "A1_SPEC_MISSING",
@@ -162,8 +180,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            BLOCK_LIST_ABSENT_REASON)
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:
@@ -199,10 +216,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 missing_seen[0]["rel_path"], SKILL)
         return emit_pass(GATE, args, summary)
 
-    # Project mode: any FAIL → FAIL. Missing-only → still PASS but
-    # surface count in summary (the project-level audit treats this
-    # as "deferred" via separate plumbing — flow_compliance treats
-    # rc=2 as skip; here every block missing == VACUOUS).
+    # Project mode: any FAIL → FAIL. All blocks missing → VACUOUS (the
+    # skill has not run yet). SOME blocks missing → INCOMPLETE (rc=1):
+    # the declared block list is the denominator, so a step cannot be
+    # certified done while a declared block has no spec at all.
     if findings:
         return emit_fail(GATE, args, findings, summary)
     if missing_seen and blocks_pass == 0:
@@ -212,7 +229,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return vacuous_pass(GATE, args,
                             f"all {len(missing_seen)} block(s) missing "
                             f"spec.json; defer to skill `{SKILL}`.")
-    # Mixed PASS + missing → still PASS overall (some blocks done).
+    if missing_seen:
+        # Mixed PASS + missing. Until v1.7.36 this fell through to
+        # emit_pass, certifying A1 done on partial block coverage.
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 

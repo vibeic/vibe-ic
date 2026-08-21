@@ -24,8 +24,14 @@ Tests below:
   (A) the coverage-manifest block: oracle-PASS → coverage PASS citing
       oracle.log with REAL per-vector scenarios; FAIL/WAIVED/no-log → SKIP.
   (B) END-TO-END self-verification: build an oracle-track replica project,
-      run the REAL flow_compliance_check --stage 1, assert Step 4 == PASS
-      and counted in executed-PASS. (This is the gap the prior fix missed.)
+      run the REAL flow_compliance_check --stage 1, assert Step 4 is lifted
+      out of SKIPPED-CONDITION. (This is the gap the prior fix missed.)
+      CORRECTED by the coverage-credit split: these used to assert Step 4 ==
+      PASS and +1 executed-PASS. An oracle functional PASS is not Verilator
+      coverage, and this replica measures none, so the honest tier is a
+      disclosed WAIVED-DEFERRED (review_required, NOT executed-PASS) — and a
+      plain FAIL on a host that HAS the toolchain. See the corrected tests'
+      own docstrings for the old expectation and why it was wrong.
   (C) regression guards for the prior CORRECT behaviour (ref_tb path,
       negative SKIP self-reports) + anti-canned source guard.
   (D) incidental legacy stale-SKIP top-level sim/results.xml replacement.
@@ -197,12 +203,36 @@ def _build_oracle_replica(project: Path, vp: int, vt: int,
     P.step_emit_phase2_manifests(project, [_oracle_step(status, vp, vt, fv)])
 
 
-def _run_compliance_stage1(project: Path) -> str:
+#: Pin the Verilator-capability decision so these end-to-end assertions are a
+#: property of the FLOW, not of whatever the CI host happens to have
+#: installed. `verilator_coverage_measure check` reads this env var to decide
+#: whether an absent coverage measurement is a disclosed capability gap
+#: (rc=3 -> WAIVED-DEFERRED) or a defect (rc=1 -> FAIL).
+_NO_VERILATOR = "__vibeic_no_such_verilator__"
+
+
+def _run_compliance_stage1(project: Path,
+                           verilator_bin: str = _NO_VERILATOR) -> str:
+    import os as _os
+    env = dict(_os.environ)
+    env["VIBE_IC_VERILATOR_BIN"] = verilator_bin
     r = subprocess.run(
         [sys.executable, str(PROG_DIR / "flow_compliance_check.py"),
          str(project), "--stage", "1"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=env)
     return r.stdout + r.stderr
+
+
+def _executed_pass(out: str) -> int:
+    m = re.search(r"\((\d+)/(\d+) executed PASS", out)
+    assert m, out
+    return int(m.group(1))
+
+
+def _waived(out: str) -> int:
+    m = re.search(r"WAIVED-DEFERRED=(\d+)", out)
+    assert m, out
+    return int(m.group(1))
 
 
 def _step4_line(out: str) -> str:
@@ -212,40 +242,80 @@ def _step4_line(out: str) -> str:
     return ""
 
 
-def test_e2e_oracle_pass_makes_step4_pass(tmp_path):
+# --- CORRECTED (coverage-credit split) -------------------------------------
+# The two tests below used to assert that an oracle-track PASS makes Step 4
+# a PASS and ADDS ONE to the headline "x/y executed PASS". They ENCODED THE
+# DEFECT this file's own fix introduced at the flow level:
+#
+#   #460 resolved a Step-4 SKIPPED-CONDITION by having design_one_shot_runner
+#   write a FUNCTIONAL-verification verdict payload (verdict / evidence /
+#   verification_track=oracle_tb / scenarios_covered — no `totals` container)
+#   to reports/phase2/coverage/coverage_actual.json, the path the flow
+#   declares as the Verilator coverage artefact. Step 4's own gate then runs
+#   `verilator_coverage_measure check` against that path. No line / toggle /
+#   branch coverage exists anywhere in these replicas, and none was measured.
+#
+# An oracle functional PASS is a real verification result, but it is not
+# coverage, and Step 4 is "Simulation (testbench-based + L10/L12 coverage +
+# Verilator coverage)". A gate may EXPLAIN an absent artefact; it may not
+# CERTIFY the step done without one. So the corrected requirement is:
+#   * an oracle PASS still LIFTS Step 4 out of SKIPPED-CONDITION — that was
+#     #460's actual complaint and it still holds;
+#   * an oracle PASS is still DISTINGUISHABLE from an oracle FAIL;
+#   * but it is a DISCLOSED, review_required deferral, NOT executed-PASS.
+# The assertions are corrected to a stricter verdict, not relaxed.
+
+
+def test_e2e_oracle_pass_lifts_step4_out_of_skipped_condition(tmp_path):
+    """WAS `assert "PASS" in line`. #460's real complaint — Step 4 stuck at
+    SKIPPED-CONDITION for a genuine oracle PASS — is still fixed."""
     _build_oracle_replica(tmp_path, 3, 3, "PASS")
     out = _run_compliance_stage1(tmp_path)
     line = _step4_line(out)
     assert line, f"Step 4 not in output:\n{out}"
-    assert "PASS" in line and "SKIPPED-CONDITION" not in line, \
-        f"Step 4 not PASS:\n{line}"
+    assert "SKIPPED-CONDITION" not in line, f"Step 4 back to #460's bug:\n{line}"
+    assert "WAIVED-DEFERRED" in line, (
+        f"an oracle PASS with no coverage measurement must be a disclosed "
+        f"deferral:\n{line}")
 
 
-def test_e2e_step4_counted_in_executed_pass(tmp_path):
-    """The headline 'x/y executed PASS' must INCREASE by exactly one when
-    the oracle track passes vs when it is left SKIPPED-CONDITION — i.e. the
-    fixed Step 4 is genuinely counted in executed-PASS, not merely 'not
-    FAIL'."""
-    # baseline: a FAILing oracle (Step 4 not counted as executed PASS)
+def test_e2e_oracle_pass_is_deferred_not_counted_without_coverage(tmp_path):
+    """WAS `assert good_pass == base_pass + 1` — i.e. it demanded that an
+    oracle PASS with NO coverage measurement be counted into the headline
+    executed-PASS numerator. It must not be. It must instead appear in the
+    WAIVED-DEFERRED bucket, which is reviewable and leaves the required
+    denominator alone."""
     base = tmp_path / "base"
     _build_oracle_replica(base, 3, 8, "FAIL")
     base_out = _run_compliance_stage1(base)
-    m_base = re.search(r"\((\d+)/(\d+) executed PASS", base_out)
-    assert m_base, base_out
-    base_pass = int(m_base.group(1))
 
-    # genuine PASS: Step 4 must now be counted in executed PASS
     good = tmp_path / "good"
     _build_oracle_replica(good, 3, 3, "PASS")
     good_out = _run_compliance_stage1(good)
-    m_good = re.search(r"\((\d+)/(\d+) executed PASS", good_out)
-    assert m_good, good_out
-    good_pass = int(m_good.group(1))
 
-    assert good_pass == base_pass + 1, (
-        f"oracle PASS did not add one executed-PASS step "
-        f"(base={base_pass}, good={good_pass})\n--- base ---\n{base_out}\n"
-        f"--- good ---\n{good_out}")
+    # Still DISTINGUISHABLE from a failing oracle (the honesty #460 bought).
+    assert "FAIL" in _step4_line(base_out), _step4_line(base_out)
+    assert "WAIVED-DEFERRED" in _step4_line(good_out), _step4_line(good_out)
+
+    # But NOT certified: no coverage was measured, so the executed-PASS
+    # numerator must not grow, and the deferral must be visible.
+    assert _executed_pass(good_out) == _executed_pass(base_out), (
+        f"an unmeasured coverage step was counted as executed PASS\n"
+        f"--- base ---\n{base_out}\n--- good ---\n{good_out}")
+    assert _waived(good_out) == _waived(base_out) + 1, (
+        f"the deferral was not disclosed in the WAIVED-DEFERRED bucket\n"
+        f"--- base ---\n{base_out}\n--- good ---\n{good_out}")
+
+
+def test_e2e_oracle_pass_is_a_hard_fail_when_verilator_is_installed(tmp_path):
+    """The deferral is a CAPABILITY gap, not a standing exemption: on a host
+    that HAS the toolchain, an oracle PASS with no coverage measurement is a
+    plain Step-4 FAIL."""
+    _build_oracle_replica(tmp_path, 3, 3, "PASS")
+    out = _run_compliance_stage1(tmp_path, verilator_bin="sh")
+    line = _step4_line(out)
+    assert line, out
+    assert "FAIL" in line, f"toolchain present but step 4 not red:\n{line}"
 
 
 def test_e2e_oracle_fail_step4_not_pass(tmp_path):

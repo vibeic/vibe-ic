@@ -187,7 +187,7 @@ def _run_equiv_in_container(ys_text: str, ys_path: Path) -> dict:
     cmd = (f"export PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH && "
            f"yosys -s {ys_path} 2>&1")
     r = subprocess.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     log = "\n".join(ln for ln in (r.stdout or "").splitlines()
                     if not ln.lstrip().startswith("[INFO]"))
     return L.parse_equiv_log(log)

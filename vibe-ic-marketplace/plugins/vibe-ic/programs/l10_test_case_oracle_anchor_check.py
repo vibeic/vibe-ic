@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """l10_test_case_oracle_anchor_check.py — L10 CONSUMER-CONTRACT gate.
 
-BLOCKS (exit 1).  Rationale for blocking, not advising: the consumers of
+BLOCKS (exit 1).  Rationale for blocking, not advising: the readers of
 L10 do not fail when a case is unusable — they *silently* degrade.
-``testbench_gen._emit_case_tb`` appends the case to ``report['skipped']``
-when the handle is not a legal Verilog identifier, and when the case has
-no oracle it still emits a TB carrying ``ORACLE_NONE`` plus a
-``SUBSTANCE_OK`` print.  ``phase2_scaffold_gen`` copies the case text into
-``compliance_vectors.txt`` verbatim.  Nothing downstream ever reports that
-the case was never actually checked, so an unverifiable case credits
-itself in every coverage count it appears in.  A gate that only advised
-would reproduce failure (b) of the motivating defect — a FAIL that the
-flow walks straight past.
+``testbench_gen._emit_case_tb`` — which the flow does run, at
+``phase1_phase2_phase3.yaml`` step ``testbench_gen`` — appends the case to
+``report['skipped']`` when the handle is not a legal Verilog identifier,
+and when the case has no oracle it still emits a TB carrying
+``ORACLE_NONE`` plus a ``SUBSTANCE_OK`` print.  ``phase2_scaffold_gen``
+would copy the case text into ``compliance_vectors.txt`` verbatim — that
+one is a CONTRACT ORACLE and no flow step runs it (#509), so it states
+what a conforming phase 2 owes rather than what happens.  Either way
+nothing downstream reports that the case was never actually checked, so
+an unverifiable case credits itself in every coverage count it appears
+in.  A gate that only advised would reproduce failure (b) of the
+motivating defect — a FAIL that the flow walks straight past.
 
 WHAT THIS GATE IS *NOT*
 -----------------------

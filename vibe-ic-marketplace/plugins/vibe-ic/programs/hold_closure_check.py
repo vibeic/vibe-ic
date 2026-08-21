@@ -39,6 +39,12 @@ Substance verification (deterministic, no fabrication)
      * worst hold slack >= 0  => PASS. (hold WNS >= 0 is a STRUCTURAL signoff
        fact, not a fabricated chip-specific threshold — slack < 0 is a
        violation by definition in STA.)
+   The FAIL verdict also NAMES THE ARC KIND (#762): when the worst violating
+   path's required time is a `library non-sequential hold time` increment, the
+   message says so and points at the integration-level repair, because that
+   violation is a stability window the macro's own Liberty declares between two
+   SIGNAL pins and hold-buffer insertion provably cannot close it. This changes
+   the WORDING, never the verdict — a negative hold slack still FAILs.
 
 3. FALLBACK evidence — DEF diff vs the pre-hold input.
    When NO parseable hold report exists, prove the fixing step did real work by
@@ -232,6 +238,77 @@ def _find_hold_reports(project: Path) -> List[Path]:
     return cands
 
 
+# --------------------------------------------------------------------------
+# Arc-kind attribution for the violating path (vibe-ic#762)
+# --------------------------------------------------------------------------
+# A negative hold slack whose required time is dominated by a LIBRARY
+# NON-SEQUENTIAL arc is not a clock-skew problem and hold-buffer insertion
+# cannot close it. The macro's own Liberty states a stability window between
+# two SIGNAL pins (`timing_type : non_seq_hold_falling`), and STA prints it in
+# the path as an explicit `library non-sequential hold time` increment:
+#
+#     9.00    9.34   library non-sequential hold time
+#
+# Reporting only the slack (`-8.68`) points the reader at the router — closing
+# 8.68 ns of DATA-path hold with buffers is on the order of 87 stages — when
+# the repair is at the integration level (hold the constrained pin across the
+# strobe, or launch the strobe from a later edge). So the verdict NAMES the arc
+# kind. It does NOT change the verdict: a negative hold slack still FAILs.
+#
+# Universal `report_checks` wording, no tool/PDK/vendor literal.
+_PATH_BLOCK_RE = re.compile(r"(?m)^[ \t]*Startpoint[ \t]*:")
+_PATH_END_SLACK_RE = re.compile(
+    r"(-?\d+\.?\d*)\s+slack\s*\((?:MET|VIOLATED)\)", re.I)
+_NON_SEQ_INCR_RE = re.compile(
+    r"(?m)^[ \t]*(-?\d+\.?\d*)[ \t]+-?\d+\.?\d*[ \t]+library[ \t]+"
+    r"non-?sequential[ \t]+(setup|hold)[ \t]+time", re.I)
+_ENDPOINT_RE = re.compile(r"(?m)^[ \t]*Endpoint[ \t]*:[ \t]*(\S+)")
+_STARTPOINT_RE = re.compile(r"(?m)^[ \t]*Startpoint[ \t]*:[ \t]*(\S+)")
+
+
+def _non_sequential_hold_paths(text: str) -> List[dict]:
+    """Path blocks in a `report_checks` report whose required time includes a
+    `library non-sequential hold time` increment.
+
+    Returns ``[{slack, non_seq_ns, startpoint, endpoint}, ...]``. Empty for any
+    report that carries no such increment, so a design with no non-sequential
+    arc is byte-identically unaffected."""
+    out: List[dict] = []
+    bounds = [m.start() for m in _PATH_BLOCK_RE.finditer(text or "")]
+    if not bounds:
+        return out
+    bounds.append(len(text or ""))
+    for i in range(len(bounds) - 1):
+        block = (text or "")[bounds[i]:bounds[i + 1]]
+        incs = [(float(m.group(1)), m.group(2).lower())
+                for m in _NON_SEQ_INCR_RE.finditer(block)]
+        incs = [(v, k) for v, k in incs if k == "hold"]
+        if not incs:
+            continue
+        slacks = []
+        for m in _PATH_END_SLACK_RE.finditer(block):
+            try:
+                slacks.append(float(m.group(1)))
+            except (TypeError, ValueError):
+                continue
+        sp = _STARTPOINT_RE.search(block)
+        ep = _ENDPOINT_RE.search(block)
+        out.append({
+            "slack": min(slacks) if slacks else None,
+            "non_seq_ns": max(v for v, _ in incs),
+            "startpoint": sp.group(1) if sp else None,
+            "endpoint": ep.group(1) if ep else None,
+        })
+    return out
+
+
+def _non_seq_attribution(path: Path) -> List[dict]:
+    try:
+        return _non_sequential_hold_paths(path.read_text(errors="replace"))
+    except OSError:
+        return []
+
+
 def _parse_worst_hold_slack(path: Path) -> Tuple[Optional[float], List[float]]:
     """Return (worst_slack, all_slacks). worst_slack is the MINIMUM hold slack
     found (most negative). None when no hold-slack number is parseable."""
@@ -346,6 +423,7 @@ def evaluate(project: Path) -> Tuple[str, int, List[dict], dict]:
     hold_reports = _find_hold_reports(project)
     parsed_any_report = False
     worst_overall: Optional[float] = None
+    non_seq_paths: List[dict] = []
     for rpt in hold_reports:
         worst, slacks = _parse_worst_hold_slack(rpt)
         if worst is None:
@@ -358,18 +436,61 @@ def evaluate(project: Path) -> Tuple[str, int, List[dict], dict]:
             "message": f"{rel}: worst hold slack {worst} "
                        f"({len(slacks)} slack value(s) parsed)",
         })
+        for blk in _non_seq_attribution(rpt):
+            blk["report"] = rel
+            non_seq_paths.append(blk)
         worst_overall = worst if worst_overall is None else min(worst_overall, worst)
 
     if parsed_any_report:
         summary["evidence"] = "hold_report"
         summary["worst_hold_slack"] = worst_overall
+        if non_seq_paths:
+            summary["non_sequential_hold_paths"] = non_seq_paths
         # Universal STA structural fact: hold slack < 0 is a violation.
         if worst_overall is not None and worst_overall < 0:
+            # #762 — NAME the arc kind when the worst violating path's required
+            # time is a library NON-SEQUENTIAL hold arc. Same FAIL, accurate
+            # vocabulary: the previous message said "re-CTS / insert delay
+            # cells", which is the one repair that provably cannot close it.
+            worst_ns = None
+            for blk in non_seq_paths:
+                s = blk.get("slack")
+                if isinstance(s, float) and abs(s - worst_overall) < 1e-9:
+                    worst_ns = blk
+                    break
+            if worst_ns is not None:
+                summary["worst_hold_arc_kind"] = "library_non_sequential_hold"
+                summary["worst_hold_non_seq_ns"] = worst_ns.get("non_seq_ns")
+                msg = (
+                    f"hold report shows NEGATIVE worst hold slack "
+                    f"{worst_overall} — and the WORST path's required time is "
+                    f"a library NON-SEQUENTIAL hold arc of "
+                    f"{worst_ns.get('non_seq_ns')} ns "
+                    f"(endpoint {worst_ns.get('endpoint')}), not a clock-skew "
+                    f"shortfall. A non-sequential arc is a stability window "
+                    f"the macro's OWN Liberty declares between two SIGNAL "
+                    f"pins, so it is an INTEGRATION requirement: hold the "
+                    f"constrained pin across the reference edge (de-assert "
+                    f"the driving register's enable) or launch the strobe "
+                    f"from a later edge. Hold-buffer / delay-cell insertion "
+                    f"cannot close it — the whole window would have to be "
+                    f"built out of delay stages. See "
+                    f"macro_non_seq_arc_contract_check, which reports this "
+                    f"requirement at Step 7 from the staged macro's own "
+                    f"Liberty.")
+            else:
+                msg = (f"hold report shows NEGATIVE worst hold slack "
+                       f"{worst_overall} — hold violation not closed by "
+                       f"Step-20 fixing (re-CTS / insert delay cells)")
+                if non_seq_paths:
+                    summary["worst_hold_arc_kind"] = "sequential"
+                    msg += (f"; NB {len(non_seq_paths)} OTHER path(s) in this "
+                            f"report are constrained by a library "
+                            f"non-sequential hold arc — those are integration "
+                            f"requirements that delay cells cannot close")
             findings.append({
                 "severity": "FAIL", "rule": "HOLD_SLACK_NEGATIVE",
-                "message": f"hold report shows NEGATIVE worst hold slack "
-                           f"{worst_overall} — hold violation not closed by "
-                           f"Step-20 fixing (re-CTS / insert delay cells)",
+                "message": msg,
             })
             return "FAIL", 1, findings, summary
         findings.append({
@@ -473,11 +594,47 @@ def _emit(args, project: Path, verdict: str, findings: List[dict],
     print(f"  verdict: {verdict}")
     if "worst_hold_slack" in summary:
         print(f"  worst hold slack: {summary['worst_hold_slack']}")
+    if "worst_hold_arc_kind" in summary:
+        print(f"  worst-path arc kind: {summary['worst_hold_arc_kind']}"
+              + (f" ({summary['worst_hold_non_seq_ns']} ns)"
+                 if "worst_hold_non_seq_ns" in summary else ""))
     if "inserted_instance_delta" in summary:
         print(f"  inserted instance delta: {summary['inserted_instance_delta']}")
     for f in findings:
         if f["severity"] in ("FAIL", "WAIVED"):
             print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
+
+    # vibe-ic#1080 — the numbers this gate COMPUTED, handed over at the one
+    # point it publishes them. Keys are written out in full rather than as
+    # bare names because `worst hold slack` is a TIMING quantity and the
+    # instance counts are DESIGN ones; `emit` keeps an already-qualified key
+    # as it stands, which is what lets one call site place each number in its
+    # own domain instead of flattening them into whichever domain was passed.
+    #
+    # `ws` is the ORFS tail for worst slack and `step_metrics.DIRECTIONS`
+    # declares it `higher`, so a run-to-run `diff` can say better/worse about
+    # hold closure without anybody teaching it what hold slack means.
+    #
+    # Every value below is a scalar BY INSPECTION of `evaluate`; the list-
+    # valued `non_sequential_hold_paths` is deliberately absent, and its size
+    # is carried as a count instead.
+    import step_metrics as _sm  # noqa: PLC0415
+    _m = {
+        "20__flow__verdict": verdict,
+        "20__flow__findings_count": len(findings),
+        "20__flow__evidence": summary.get("evidence"),
+    }
+    if summary.get("worst_hold_slack") is not None:
+        _m["20__timing__hold__ws"] = summary["worst_hold_slack"]
+    if summary.get("non_sequential_hold_paths") is not None:
+        _m["20__timing__non_sequential_hold_path_count"] = len(
+            summary["non_sequential_hold_paths"] or [])
+    for _k in ("post_hold_components", "post_cts_components",
+               "inserted_instance_delta", "post_hold_size", "post_cts_size"):
+        if isinstance(summary.get(_k), (int, float)) \
+                and not isinstance(summary.get(_k), bool):
+            _m[f"20__design__{_k}"] = summary[_k]
+    _sm.emit_best_effort(project, "20", _m)
 
 
 def main(argv=None) -> int:

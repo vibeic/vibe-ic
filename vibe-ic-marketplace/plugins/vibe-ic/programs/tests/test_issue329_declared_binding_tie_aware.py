@@ -261,9 +261,19 @@ def test_329_one_measured_rail_lifts_the_blindness(tmp_path):
     lef = _project(tmp_path, {"fields": {}})
     pnr = tmp_path / "phase3" / "stage3" / "pnr"
     pnr.mkdir(parents=True)
+    # A ROUTED shape, not a bare connect-all-by-name. #668 made
+    # `measured_rails()` count only rails the PDN actually BUILT — a
+    # `- VDD ( * VDD ) + USE POWER ;` with no stripe, via or followpin is a name
+    # and nothing else, and this fixture predates that distinction. What it
+    # means to say is "a rail was MEASURED", so it now carries the conductor
+    # that makes that true.
     (pnr / "routed.def").write_text(
-        "SPECIALNETS 2 ;\n- VDD ( * VDD ) + USE POWER ;\n"
-        "- VSS ( * VSS ) + USE GROUND ;\nEND SPECIALNETS\n")
+        "SPECIALNETS 2 ;\n"
+        "- VDD ( * VDD ) + USE POWER\n"
+        "  + ROUTED met4 1600 + SHAPE STRIPE ( 1000 0 ) ( 1000 20000 ) ;\n"
+        "- VSS ( * VSS ) + USE GROUND\n"
+        "  + ROUTED met4 1600 + SHAPE STRIPE ( 2000 0 ) ( 2000 20000 ) ;\n"
+        "END SPECIALNETS\n")
     d = p3._macro_supply_preroute_decision(tmp_path, _Pdk(lef),
                                            netlist_text=_NL_TIED)
     if d.get("env_blind"):

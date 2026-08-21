@@ -199,7 +199,10 @@ class TestParsingRobustness:
     def test_chip_agnostic_no_literal_source(self):
         # Guard the gate itself: no chip/project literal in the matching rules.
         import inspect
-        src = inspect.getsource(mod)
+        from _source_pin import code_only
+        # CODE only: a comment in the module stating this very property
+        # would otherwise turn the test red (measured: 1 failed).
+        src = code_only(inspect.getsource(mod))
         # The parser must key only on generic precheck stage names.
         assert "caravel_user_project" not in src
         assert "user_project_wrapper" not in src

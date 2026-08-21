@@ -1,5 +1,0 @@
-{
-  "ic_name": "S/PDIF (IEC 60958 Digital Audio Interface)",
-  "lab_calibration_present": false,
-  "notes": "IEC 60958 type II (S/PDIF) is a digital wire-level protocol; it does not define an analog reference / trim / calibration loop at the protocol layer. Connected audio DACs and ADCs may have their own factory or live calibration (DC offset trim, gain trim, dither shaping), and S/PDIF transmitter/receiver ICs may calibrate Toslink LED drive current, coax-driver output level (0.5–0.6 Vpp) or PLL VCO tuning, but those are per-device implementation choices, not part of the IEC 60958 protocol."
-}

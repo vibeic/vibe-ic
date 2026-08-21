@@ -100,25 +100,38 @@ def test_source_flop_presence_blocks_false_not_applicable():
 # PI/PO pairs, 0 residual flops — so DT1/DT2 measure real coverage instead of a
 # false N/A. Skipped when the vibeic-eda container is unavailable.
 # ---------------------------------------------------------------------------
-def _docker_image_available() -> bool:
-    import shutil
-    import subprocess
-    if not shutil.which("docker"):
-        return False
-    try:
-        r = subprocess.run(["docker", "image", "inspect",
-                            "ghcr.io/vibeic/vibeic-eda:0.2.30"],
-                           capture_output=True, timeout=30)
-        return r.returncode == 0
-    except Exception:
-        return False
+import pytest
+
+import _eda_image as _img
 
 
-import pytest  # noqa: E402
+def _local_eda_image():
+    """The probe must name an image this machine actually has — a pinned
+    literal went stale the moment the anchor stopped being written."""
+    return _img.local_image() or _img.IMAGE_REPO + ":latest"  # noqa: E402
+# vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
+# one passed. Declared through `not_verified_tier` so the run's roll-up
+# cannot count them under `passed`; see that module's docstring.
+# vibe-ic#1283 — and the probe is TRI-STATE, not a bool. What used to be here
+# was `except Exception: return False`, which files a probe that TIMED OUT
+# under the same reason as a probe that looked and found nothing. `docker image
+# inspect` reads local metadata and answers in milliseconds on an idle box; on
+# a loaded one it loses the race, and the old shape then published "container
+# not available" about an image whose presence it never established.
+from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
+                               probe_skip_reason)
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
+RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
+
+_IMAGE_STATE, _IMAGE_DETAIL = probe(
+    ["docker", "image", "inspect", _local_eda_image()])
 
 
-@pytest.mark.skipif(not _docker_image_available(),
-                    reason="vibeic-eda container not available")
+@pytest.mark.skipif(
+    _IMAGE_STATE != PROBE_PRESENT,
+    reason=probe_skip_reason(_IMAGE_STATE, _IMAGE_DETAIL,
+                             "vibeic-eda container not available",
+                             RUN_REMEDY))
 def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path):
     import fault_atpg_run as far  # noqa: E402
     nl = tmp_path / "phase2" / "stage2" / "synth" / "spm_synth.v"
@@ -132,7 +145,7 @@ def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path):
     assert cells == "sky130_fd_sc_hd__dfxtp_1"          # the fix detects it
     cut_rel = "phase2/stage2/dft/cut_netlist.v"
     ok, msg = tdf._ensure_cut(tmp_path, "phase2/stage2/synth/spm_synth.v",
-                              cut_rel, "clk", None, None, timeout=300)
+                              cut_rel, "clk", None, None, timeout=60)
     assert ok, msg
     cut_text = (tmp_path / cut_rel).read_text()
     _t, _pi, _po, pairs = tdf.parse_cut_ports(cut_text)

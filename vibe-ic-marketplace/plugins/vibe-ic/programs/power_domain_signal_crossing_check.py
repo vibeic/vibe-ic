@@ -241,9 +241,24 @@ def parse_l21(fields):
     for d in fields.get("power_domains") or []:
         if not isinstance(d, dict) or not d.get("name"):
             continue
+        # #598: a RAIL declaration is not a domain. `l21_macro_supply_rail_synth`
+        # emits one entry per macro GROUND pin so the Phase-3 consumer can bind
+        # it, and it carries the design's primary `power_net` because that
+        # consumer requires one. Read as a domain it becomes a phantom named
+        # after a ground pin, holding the 1.2 V core rail at 0.0 V.
+        if d.get("is_power_domain") is False:
+            continue
         name = _norm(d["name"])
-        volt = _num(d.get("voltage", d.get("nominal_voltage",
-                    d.get("supply_voltage"))))
+        # `voltage_v` FIRST: it is what every producer actually writes
+        # (l21_doc_supply_rail_synth, l21_macro_supply_rail_synth,
+        # phase1_layer_demand_probe, phase1_doc_one_shot_runner), and none of
+        # the three names read here was ever one of them. Measured across the
+        # repo: 4 producers write `voltage_v`, 0 write `voltage`. Every domain
+        # therefore arrived with `voltage: null`, and a level shifter is
+        # required exactly when two voltages DIFFER — so with all of them
+        # unknown, `needs_ls` could never once be True.
+        volt = _num(d.get("voltage_v", d.get("voltage",
+                    d.get("nominal_voltage", d.get("supply_voltage")))))
         off = any(bool(d.get(k)) for k in _L21_OFF_KEYS)
         # power_states list: an OFF/CORRUPT state marks the domain switchable
         for st in (d.get("power_states") or []):
@@ -553,13 +568,45 @@ def main(argv=None):
                 domains, iso_domains, ls_domains, crossings)
             if n_unprot > 0:
                 verdict, rc = "FAIL", 1
+            elif not crossings:
+                # #598: NOTHING WAS EXAMINED. Reaching here means >= 2 domains
+                # are declared and not one crossing could be derived — the
+                # domains carry no `elements`, so no instance could be placed
+                # in one. "0 crossings, all protected" is a claim about a
+                # denominator that was never established, and it was being
+                # counted as a substantive PASS.
+                verdict, rc = "PASS", 0
+                findings.append({
+                    "severity": "WARNING", "rule": "NO_CROSSINGS_DERIVED",
+                    "message": (
+                        f"{len(domains)} power domain(s) declared and NO signal "
+                        f"crossing could be derived at all — the domains carry "
+                        f"no element/instance list, so no net can be attributed "
+                        f"to one. Nothing about isolation or level shifting was "
+                        f"checked here; this is an absent basis, not a clean "
+                        f"result.")})
             else:
                 verdict, rc = "PASS", 0
+                unknown_v = sorted(n for n, d in domains.items()
+                                   if d.get("voltage") is None)
+                if unknown_v:
+                    # A level shifter is required exactly when two voltages
+                    # DIFFER. An unknown voltage cannot differ from anything, so
+                    # that half of the check is silently inert for these.
+                    findings.append({
+                        "severity": "WARNING", "rule": "VOLTAGE_UNSTATED",
+                        "message": (
+                            f"{len(unknown_v)} of {len(domains)} domain(s) state "
+                            f"no voltage ({', '.join(unknown_v)}), so the "
+                            f"level-shifter half of this check could not fire "
+                            f"for any crossing touching them. Isolation was "
+                            f"still checked.")})
                 findings.append({
                     "severity": "INFO", "rule": "ALL_CROSSINGS_PROTECTED",
                     "message": (f"{n_inter} inter-domain signal crossing(s) "
-                                f"derived; all covered by a UPF isolation / "
-                                f"level-shifter strategy.")})
+                                f"derived from {len(crossings)} examined; all "
+                                f"covered by a UPF isolation / level-shifter "
+                                f"strategy.")})
 
     out = {
         "gate": _GATE_NAME,

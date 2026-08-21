@@ -79,6 +79,26 @@ _SIDECAR_RELS = (
 _HANDOFF_MODULE = "ic_expert_backup_pack"
 _PHASE1_RUNNERS = ("phase1_doc_one_shot_runner.py", "phase1_one_shot_runner.py")
 
+# The Phase-1 expert PARSE track's own report. Added when the track was wired:
+# it is the track's DIRECT statement that it ran, and it exists for designs
+# whose run produced no sidecar patches at all.
+#
+# The track deliberately does not write the sidecar. The three gates that read
+# the sidecar MERGE it into the haystack they then measure for completeness, so
+# a track writing there would supply its own score — the `rail_undeclared`
+# failure mode #309 named, in a different place. That means the sidecar alone
+# can no longer answer "did the track run?", and reading only the sidecar would
+# report NEVER_RAN for a track that demonstrably ran. Its report is checked
+# first for exactly that reason.
+_TRACK_REPORT_RELS = (
+    # Canonical first — `_path_layout.report_path("phase1/…")` routes Phase-1
+    # audit reports under reports/audit/. The flat path is accepted too so a
+    # hand-staged project is not mistaken for a track that never ran.
+    "reports/audit/phase1/expert_parse_track.json",
+    "reports/phase1/expert_parse_track.json",
+)
+_TRACK_PROGRAM = "phase1_expert_parse_track.py"
+
 
 def find_sidecar(project: Path) -> Optional[Path]:
     for rel in _SIDECAR_RELS:
@@ -94,6 +114,15 @@ def expert_track_wired(programs_dir: Path) -> bool:
     This is the difference between "the track is missing today" and "the track
     exists but produced nothing for this design" — without it, NEVER_RAN could
     not be told apart from a design whose sidecar was simply deleted.
+
+    ONE level of indirection counts. A runner that invokes the expert PARSE
+    track, which itself imports the hand-off module, has wired the track just
+    as surely as a runner importing it directly — and demanding the direct
+    import would force the wiring into an artificial shape purely to satisfy
+    this detector. The hop is bounded to one and BOTH ends must be real: the
+    runner has to name the track program, and that program has to genuinely
+    import or call the hand-off module. A runner naming a track program that
+    does not reach the hand-off is still NOT wired.
     """
     # Match an IMPORT or CALL, never a bare mention. #306 established this the
     # hard way: `cts_quality_check` appears in a runner COMMENT, and counting
@@ -105,26 +134,106 @@ def expert_track_wired(programs_dir: Path) -> bool:
         r"|import[ \t]+" + re.escape(_HANDOFF_MODULE) + r"\b)"
         r"|\b" + re.escape(_HANDOFF_MODULE) + r"\s*\.\s*\w+\s*\(",
         re.M)
+    # The one permitted hop: a track program that really reaches the hand-off.
+    track = programs_dir / _TRACK_PROGRAM
+    track_reaches_handoff = bool(
+        track.is_file() and pat.search(track.read_text(errors="replace")))
+    # A bare mention of the track in a COMMENT must not count either — same
+    # lesson, one level down. Require the runner to name the program FILE.
+    track_ref = re.compile(
+        r"[\"'][^\"'\n]*" + re.escape(_TRACK_PROGRAM) + r"|"
+        r"\b_?EXPERT_TRACK\s*=\s*[\"'][^\"'\n]*"
+        + re.escape(_TRACK_PROGRAM))
+
     for r in _PHASE1_RUNNERS:
         p = programs_dir / r
         if not p.is_file():
             continue
-        if pat.search(p.read_text(errors="replace")):
+        src = p.read_text(errors="replace")
+        if pat.search(src):
+            return True
+        if track_reaches_handoff and track_ref.search(src):
             return True
     return False
 
 
+def find_track_report(project: Path) -> Optional[Path]:
+    for rel in _TRACK_REPORT_RELS:
+        p = project / rel
+        if p.is_file():
+            return p
+    return None
+
+
+def _from_track_report(path: Path, wired: bool) -> Dict[str, Any]:
+    """Execution state read from the expert PARSE track's own report.
+
+    This is the track's DIRECT statement that it ran, and it is the only
+    honest source once the track stopped writing the sidecar (it must not
+    write the haystack the completeness gates then measure). `findings` plays
+    the part `patches` plays for the sidecar: some means the track ran and had
+    something to say, none means it ran and genuinely had nothing.
+
+    `ai_subtrack` is carried through because a run whose AI half was
+    SKIPPED-CONDITION covered less ground than one whose AI half ran, and a
+    reader comparing two zeros needs to know which kind each is — the same
+    distinction this whole program exists to preserve, one level in.
+    """
+    try:
+        blob = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError) as e:
+        return {"state": "MALFORMED", "wired": wired, "sidecar": None,
+                "track_report": str(path), "patch_count": 0, "layers": [],
+                "detail": (f"the expert-track report does not parse "
+                           f"({e.__class__.__name__}); unreadable evidence is "
+                           f"not evidence")}
+    findings = blob.get("findings")
+    if not isinstance(findings, list) or "verdict" not in blob:
+        return {"state": "MALFORMED", "wired": wired, "sidecar": None,
+                "track_report": str(path), "patch_count": 0, "layers": [],
+                "detail": "the expert-track report has no verdict/findings"}
+    ai = (blob.get("ai_subtrack") or {}).get("status", "UNKNOWN")
+    # Count findings about the DESIGN only. A finding about the TRACK (its AI
+    # half was unavailable on this host) says nothing was found in the design,
+    # and counting it as RAN would report "the track found something" for a run
+    # that found nothing — the same two-zeros conflation this program exists to
+    # prevent, one level in.
+    design = [f for f in findings
+              if isinstance(f, dict) and f.get("about", "design") == "design"]
+    n = len(design)
+    return {
+        "state": "RAN" if n else "RAN_EMPTY",
+        "wired": wired, "sidecar": None, "track_report": str(path),
+        "patch_count": n,
+        "layers": sorted({f.get("layer") for f in design if f.get("layer")}),
+        "ai_subtrack": ai,
+        "detail": (
+            f"the expert track ran (verdict {blob['verdict']}, AI sub-track "
+            f"{ai}) and named {n} finding(s)" if n else
+            f"the expert track ran (AI sub-track {ai}) and named NO findings — "
+            f"a real zero, distinct from NEVER_RAN"),
+    }
+
+
 def assess(project: Path, programs_dir: Path) -> Dict[str, Any]:
-    sidecar = find_sidecar(project)
     wired = expert_track_wired(programs_dir)
+    # The track's own report first: it is the direct statement of execution,
+    # and it exists for runs that produced no sidecar patches at all.
+    track_report = find_track_report(project)
+    if track_report is not None:
+        return _from_track_report(track_report, wired)
+
+    sidecar = find_sidecar(project)
     if sidecar is None:
         state = "NEVER_RAN"
         detail = ("no expert-track sidecar, and no Phase-1 runner invokes "
                   f"{_HANDOFF_MODULE} — any ai_captured count is 0 because the "
                   "track does not run, NOT because it ran and found nothing"
                   ) if not wired else (
-                  "no expert-track sidecar for this project (the track is "
-                  "wired, so this design simply has no patches recorded)")
+                  "no expert-track report and no sidecar for this project — "
+                  "the track is wired but left no evidence here, so Phase 1 "
+                  "did not reach it (a project staged by hand, or a run that "
+                  "stopped earlier)")
         return {"state": state, "wired": wired, "sidecar": None,
                 "patch_count": 0, "layers": [], "detail": detail}
     try:

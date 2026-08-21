@@ -180,10 +180,16 @@ def test_step_drc_env_unavailable_names_buddy(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# v1.4.38 — DRC wall-clock budget (ic2-sha256 commercial PDK sha256 floor): the stall
+# v1.4.38 — DRC wall-clock budget (commercial-PDK sign-off floor): the stall
 # watchdog never kills a 100%-CPU tool, so svrfdrc's pathological single-thread
-# derived-layer build ran 4.4h unbounded. A non-completing DRC is an HONEST
-# SKIPPED-CONDITION (perf ceiling), never a FAIL or a silent multi-hour hang.
+# derived-layer build ran 4.4h unbounded.
+#
+# vibe-ic#925 — the BUDGET was right and the TIER was not. This block used to
+# assert the kill returned `SKIPPED-CONDITION`, i.e. it pinned the defect: that
+# word is EXCUSED, so the step left the denominator, and it is foreign to this
+# runner's vocabulary, so `_aggregate_verdict` let it fall through its catch-all
+# to a green `"PASS"`. The claim is corrected here; the behaviour it now pins is
+# proven two-armed in `test_issue925_drc_timeout_is_not_excused.py`.
 # --------------------------------------------------------------------------
 def test_drc_wall_budget_default_and_env(monkeypatch):
     monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
@@ -196,9 +202,13 @@ def test_drc_wall_budget_default_and_env(monkeypatch):
     assert R._drc_wall_budget_s() == 7200.0          # non-positive -> default
 
 
-def test_try_svrf_native_drc_timeout_is_skipped_condition(tmp_path, monkeypatch):
-    # rc 124 (wall-clock ceiling) -> SKIPPED-CONDITION + SVRFDRC_PERF_CEILING,
-    # and the DRC step passes a BOUNDED hard_ceiling_s (not the 24h default).
+def test_try_svrf_native_drc_timeout_is_blocked_not_excused(tmp_path,
+                                                            monkeypatch):
+    # rc 124 (wall-clock ceiling) -> BLOCKED + SVRFDRC_PERF_CEILING, and the DRC
+    # step passes a BOUNDED hard_ceiling_s (not the 24h default). BLOCKED is
+    # this runner's own word for "the check could not be completed, so NOTHING
+    # is known about the design", and `_aggregate_verdict` names it explicitly
+    # in the non-green bucket.
     monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: "svrfdrc")
     monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
     monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
@@ -217,7 +227,7 @@ def test_try_svrf_native_drc_timeout_is_skipped_condition(tmp_path, monkeypatch)
                     cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                     calibre_drc="/x/DRC.rule"),
         "vibeic-eda")
-    assert res.status == "SKIPPED-CONDITION"
+    assert res.status == "BLOCKED"
     assert res.extras.get("finding") == "SVRFDRC_PERF_CEILING"
     assert seen["hard_ceiling_s"] == 7200.0          # bounded, not the 24h ceiling
 
@@ -294,11 +304,56 @@ def test_streamout_warn_silent_when_map_present():
         "/pdk/calibre/KF_DRC.rule", "/pdk/lef/KF_layermap_SOC.txt") is None
 
 
-def test_streamout_warn_silent_when_no_deck():
-    # No sign-off deck → legacy numbering is irrelevant (OSS PDK path); no warning
-    # even if the map is also absent.
+def test_streamout_warn_silent_when_no_deck_AT_ALL():
+    # NO sign-off deck of any kind will run — `_signoff_drc_deck` returned None
+    # because the PDK ships neither a Calibre `.rule` nor a KLayout deck. There
+    # is then no verdict for the numbering to corrupt, so no warning.
+    #
+    # vibe-ic#789: the comment here used to read "OSS PDK path", which was
+    # FALSE and is the reason this argument stayed Calibre-scoped for so long.
+    # `None` does NOT mean "an OSS PDK": an OSS PDK such as nangate45 or asap7
+    # ships a real KLayout `.lydrc` whose rules select layers BY NUMBER, so it
+    # is a deck-PRESENT case (pinned in the test below), not this one. `None`
+    # means one thing only — this run runs no sign-off DRC at all.
     assert R._streamout_layermap_warning(None, None) is None
     assert R._streamout_layermap_warning(None, "/pdk/lef/map.txt") is None
+
+
+def test_streamout_warn_fires_for_a_KLAYOUT_deck_too(tmp_path):
+    """vibe-ic#789 — the guard is keyed on DECK-PRESENT, not on the deck being
+    a commercial Calibre deck.
+
+    GDSII stores no layer names, so a KLayout `.lydrc` binds its rules to layer
+    NUMBERS exactly as an SVRF deck does (`input(19, 0)`, `polygons(1, 0)`).
+    A KLayout-deck PDK with no streamout map therefore has the SAME defect —
+    and used to get NO warning, because the argument was `calibre_drc`."""
+    w = R._streamout_layermap_warning("/pdk/klayout/drc/FreePDK45.lydrc", None)
+    assert w is not None
+    assert "FreePDK45.lydrc" in w
+    assert "LEGACY" in w and "ARTEFACTS" in w
+    # and a KLayout deck WITH a map stays silent, as the Calibre one does
+    assert R._streamout_layermap_warning(
+        "/pdk/klayout/drc/asap7.lydrc", "/pdk/tech/asap7.map") is None
+
+
+def test_signoff_drc_deck_is_deck_presence_not_vendor():
+    """`_signoff_drc_deck` names the deck the run will EXECUTE, from the same
+    two fields `step_drc` dispatches on — and returns None only when there is
+    no deck at all."""
+    # Calibre-only PDK
+    assert R._signoff_drc_deck("/pdk/calibre/KF_DRC.rule", None) == \
+        "/pdk/calibre/KF_DRC.rule"
+    # KLayout-only PDK (the case that used to read as "no deck")
+    assert R._signoff_drc_deck(None, "/pdk/klayout/drc/asap7.lydrc") == \
+        "/pdk/klayout/drc/asap7.lydrc"
+    # both present → the KLayout deck, mirroring step_drc's own dispatch
+    # (`if not pdk.drc_deck:` takes the Calibre route, so a KLayout deck wins)
+    assert R._signoff_drc_deck("/pdk/calibre/KF_DRC.rule",
+                               "/pdk/klayout/drc/x.lydrc") == \
+        "/pdk/klayout/drc/x.lydrc"
+    # genuinely deckless
+    assert R._signoff_drc_deck(None, None) is None
+    assert R._signoff_drc_deck("", "") is None
 
 
 # --------------------------------------------------------------------------

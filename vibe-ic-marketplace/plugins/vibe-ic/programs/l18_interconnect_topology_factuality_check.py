@@ -46,6 +46,11 @@ E2 DEFAULT_VALUE_IS_A_HARVEST_ARTIFACT
 E3 STATUS_CONTRADICTS_PAYLOAD
     extraction_status claims success while every payload field is empty (or
     every fact-bearing field failed E1/E2). The status field lies.
+W4 STATUS_PARTIALLY_EARNED
+    The weaker, correctly-scoped sibling of E3: the status claims success, some
+    fact-bearing field failed E1/E2, but others did NOT. The failures are real
+    (E1/E2 still fire on their own), yet "the success status is not earned" is
+    false — so this reports the exact failed/surviving split instead.
 W1 NARRATIVE_UNCORROBORATED
     A narrative sub-document (`id_routing`, `multi_copy_atomicity`,
     `typical_topologies`, `axprot_polarity`) names identifier-shaped entities
@@ -59,6 +64,30 @@ W2 CANONICAL_FILENAME_CONTRACT_SPLIT
     L18 through the schema map reads nothing.
 W3 NO_EXTRACTION_EVIDENCE.
 I  HONEST_EMPTY — nothing extracted and the status says so. PASSES.
+
+HOW THE PAYLOAD IS IDENTIFIED, AND WHY IT IS BY SUBTRACTION
+-----------------------------------------------------------
+E3 and W4 both hinge on the question "which fields did this document actually
+populate?", so getting that set wrong makes the verdict overreach even when
+each individual sub-finding is sound.
+
+This gate originally answered it with an ALLOW-LIST of payload container names.
+That list matched exactly the fixed key schema of ONE producer — the generic
+extractor — while the per-protocol synthesizers write a far richer and
+open-ended set. Measured over the tracked corpus, documents carry 92 distinct
+payload container names; the allow-list enumerated 7. So the gate assessed
+"every fact-bearing field failed" through a window that could not see most of
+the payload, and asserted a scope it had never examined.
+
+An allow-list cannot be repaired by lengthening it: the payload vocabulary is
+OPEN — a synthesizer names a container after whatever the source document calls
+that concept, and a new one appears with every new source. What IS closed, small
+and stable is the schema/provenance ENVELOPE (document identity, producer
+identity, extraction status, evidence). So the payload is identified by
+SUBTRACTING the closed envelope from the producer's own payload container,
+never by enumerating the open payload. A container the gate has never heard of
+now counts as payload by default, which is the fail-safe direction: an
+unrecognised container makes the gate claim LESS, not more.
 
 GENERALITY / NO-CHEATING STATEMENT
 ----------------------------------
@@ -101,6 +130,23 @@ _STATUS_SUCCESS = {
 
 _NARRATIVE_KEYS = ("id_routing", "multi_copy_atomicity", "typical_topologies",
                    "axprot_polarity", "topology_notes")
+
+# The CLOSED half of the document. Everything here is schema bookkeeping —
+# which layer this is, which producer wrote it, whether extraction succeeded,
+# what it was traced to. None of it is ever a claim ABOUT the design, so none
+# of it can make a success status earned. Keys beginning with an underscore are
+# private producer bookkeeping by convention and are excluded by SHAPE, not by
+# name, so new ones need no maintenance here.
+#
+# This set is the gate's only enumeration of container names, and it is
+# deliberately the one that is enumerable: it is fixed by the emitter, whereas
+# the payload names are chosen per source document.
+_ENVELOPE_KEYS = {
+    "fields", "doc_class", "doc_id", "doc_name", "ic_name", "ic_class",
+    "schema_version", "emitted_by", "generated_at", "replaces",
+    "extraction_status", "status", "extraction_evidence", "evidence",
+    "extraction_source",
+}
 
 _ENTITY_NAME_KEYS = {
     "name", "signal", "signal_name", "pin", "pin_name", "port", "port_name",
@@ -151,6 +197,43 @@ def _unwrap(d: Optional[dict]) -> dict:
 
 def _as_dict(v: Any) -> dict:
     return v if isinstance(v, dict) else {}
+
+
+def _is_envelope(key: Any) -> bool:
+    """True for schema/provenance bookkeeping, false for anything claim-like."""
+    k = str(key)
+    return k in _ENVELOPE_KEYS or k.startswith("_")
+
+
+def _is_populated(v: Any) -> bool:
+    if isinstance(v, (list, dict)):
+        return bool(v)
+    if isinstance(v, str):
+        return bool(v.strip())
+    return False
+
+
+def populated_payload_fields(unwrapped: dict) -> List[str]:
+    """Every container this document populated, by subtracting the envelope.
+
+    `unwrapped` is the producer's payload container merged over the top level,
+    so this works on both the nested and the flat document shape without
+    knowing which one it was handed. Sorted, so the report is stable across
+    key-insertion order.
+    """
+    return sorted(k for k, v in unwrapped.items()
+                  if not _is_envelope(k) and _is_populated(v))
+
+
+def fact_bearing_fields(populated: List[str]) -> List[str]:
+    """The subset a success status can actually be earned by.
+
+    Narrative sub-documents are excluded on the same ground W1 states: they are
+    prose, identifying entities inside prose is approximate, and approximate
+    evidence must not carry a verdict — in EITHER direction. A narrative may not
+    convict the layer, so it may not acquit it either.
+    """
+    return [k for k in populated if k not in _NARRATIVE_KEYS]
 
 
 def _norm(tok: str) -> str:
@@ -271,16 +354,13 @@ def audit(project: Path,
     info["entity_universe_size"] = len(universe)
 
     dsv = _as_dict(l18.get("default_signal_values"))
-    payload_nonempty: List[str] = []
-    for k in ("interconnect_rules", "default_signal_values",
-              "typical_topologies", "multi_copy_atomicity", "id_routing",
-              "axprot_polarity", "ordering_rules"):
-        v = l18.get(k)
-        if isinstance(v, (list, dict)) and v:
-            payload_nonempty.append(k)
-        elif isinstance(v, str) and v.strip():
-            payload_nonempty.append(k)
+    payload_nonempty = populated_payload_fields(l18)
     info["payload_fields_populated"] = payload_nonempty
+
+    # Which populated field each ERROR below implicates. E3/W4 compare this
+    # against the fact-bearing set; a finding that implicates no field leaves
+    # the set alone, which keeps the scope claim conservative by construction.
+    failed_fields: Set[str] = set()
 
     # -- E1 default_signal_values keys must be design entities ---------------
     unresolved: List[str] = []
@@ -290,6 +370,7 @@ def audit(project: Path,
     info["default_signal_values_total"] = len(dsv)
     info["default_signal_values_resolved"] = len(resolved)
     if dsv and not resolved:
+        failed_fields.add("default_signal_values")
         findings.append(Finding(
             "ERROR", "DEFAULT_VALUE_KEY_IS_NOT_A_DESIGN_ENTITY",
             f"all {len(dsv)} default_signal_values key(s) resolve to NOTHING "
@@ -311,6 +392,7 @@ def audit(project: Path,
     artifacts = {k: v for k, v in dsv.items()
                  if isinstance(v, str) and _HARVEST_ARTIFACT.search(v)}
     if artifacts:
+        failed_fields.add("default_signal_values")
         findings.append(Finding(
             "ERROR", "DEFAULT_VALUE_IS_A_HARVEST_ARTIFACT",
             f"{len(artifacts)} default value(s) still carry rendered-table "
@@ -351,7 +433,17 @@ def audit(project: Path,
                  "value_sample": json.dumps(v, default=str)[:240]}))
 
     # -- E3 status vs payload ------------------------------------------------
+    # The claim "EVERY fact-bearing field failed" is universal, so it is tested
+    # universally: the fact-bearing set must be fully covered by the set of
+    # fields the findings above actually implicate. The earlier form fired on
+    # the mere EXISTENCE of one error, which asserted a scope it had not
+    # measured — an overreaching verdict on top of genuine sub-findings.
     hard_errors = [f for f in findings if f.severity == "ERROR"]
+    fact_bearing = fact_bearing_fields(payload_nonempty)
+    surviving = [k for k in fact_bearing if k not in failed_fields]
+    info["payload_fields_fact_bearing"] = fact_bearing
+    info["payload_fields_failed"] = sorted(failed_fields & set(fact_bearing))
+    info["payload_fields_surviving"] = surviving
     if status in _STATUS_SUCCESS and not payload_nonempty:
         findings.append(Finding(
             "ERROR", "STATUS_CONTRADICTS_PAYLOAD",
@@ -359,14 +451,31 @@ def audit(project: Path,
             f"payload field empty. Completeness accounting that trusts the "
             f"status will record this layer as CAPTURED while it holds "
             f"nothing.", {"status": status}))
-    elif status in _STATUS_SUCCESS and payload_nonempty and hard_errors:
+    elif (status in _STATUS_SUCCESS and payload_nonempty and hard_errors
+          and fact_bearing and not surviving):
         findings.append(Finding(
             "ERROR", "STATUS_CONTRADICTS_PAYLOAD",
             f"{doc_name} reports extraction_status={status!r}, but every "
-            f"fact-bearing field it populated failed the factuality tests "
-            f"above. The success status is not earned.",
+            f"fact-bearing field it populated ({fact_bearing}) failed the "
+            f"factuality tests above. The success status is not earned.",
             {"status": status, "populated": payload_nonempty,
+             "fact_bearing": fact_bearing,
              "failed_categories": sorted({f.category for f in hard_errors})}))
+    elif (status in _STATUS_SUCCESS and hard_errors and surviving
+          and failed_fields & set(fact_bearing)):
+        findings.append(Finding(
+            "WARNING", "STATUS_PARTIALLY_EARNED",
+            f"{doc_name} reports extraction_status={status!r} and "
+            f"{sorted(failed_fields & set(fact_bearing))} failed the "
+            f"factuality tests above — but {len(surviving)} other fact-bearing "
+            f"field(s) did not, so the status is partly earned and the "
+            f"failures are scoped to the field(s) named. Reported rather than "
+            f"blocked: the failures already carry their own ERROR, and "
+            f"restating them as a verdict over the whole layer would condemn "
+            f"content that was never tested.",
+            {"status": status,
+             "failed": sorted(failed_fields & set(fact_bearing)),
+             "surviving": surviving}))
     elif status in _STATUS_FOUND_NOTHING and not payload_nonempty:
         findings.append(Finding(
             "INFO", "HONEST_EMPTY",

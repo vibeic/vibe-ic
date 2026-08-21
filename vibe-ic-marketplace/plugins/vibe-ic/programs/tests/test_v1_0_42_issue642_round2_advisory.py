@@ -19,7 +19,7 @@ and must NOT hard-block on name-conformance — it surfaces an advisory WARN and
 ALWAYS emits; the scorer is the sole arbiter.
 
 ACCEPTANCE (the field-agent's exact reproduction): a prompt that says
-`Modify the existing \`bar_core\`` + saves to `rtl/foo_top.sv`, completion
+`Modify the existing `bar_core`` + saves to `rtl/foo_top.sv`, completion
 `module bar_core` → emitted=1 (was BLOCKED/emitted=0), verdict PASS + advisory
 WARN.
 
@@ -37,6 +37,7 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN / "benchmark"))
 import cvdp_gate as G  # noqa: E402
+from _sim_tools import NEEDS_SIM  # noqa: E402
 importlib.reload(G)
 
 _V = "```verilog\n"
@@ -63,6 +64,7 @@ def _prompts(tmp_path, mapping):
 
 
 # ── ACCEPTANCE: filename-stem != module name → emitted (advisory) ───────────
+@NEEDS_SIM
 def test_filename_vs_module_name_emits_with_warn(tmp_path):
     """The field-agent's exact repro: save-file `rtl/foo_top.sv`, module
     `bar_core`. v1.0.40 BLOCKED (emitted=0); round-2 → PASS + WARN, emitted."""
@@ -84,6 +86,7 @@ def test_filename_vs_module_name_emits_with_warn(tmp_path):
 
 
 # ── the 7-case pattern: module name == harness top, filename differs ────────
+@NEEDS_SIM
 def test_correct_module_name_with_different_filename_emits(tmp_path):
     """cont_adder_0006 class: file `rtl/cont_adder_top.sv`, the harness top is
     the module `continuous_adder` (which the completion declares). It must be
@@ -101,6 +104,7 @@ def test_correct_module_name_with_different_filename_emits(tmp_path):
 
 
 # ── NO-LEAK: a genuine mismatch is still surfaced (advisory) + emitted ──────
+@NEEDS_SIM
 def test_noleak_genuine_mismatch_surfaced_and_emitted(tmp_path):
     """A completion whose module disagrees with every prompt name hint is NOT
     silently passed: it carries an advisory WARN (so a reviewer/scorer sees the
@@ -120,6 +124,7 @@ def test_noleak_genuine_mismatch_surfaced_and_emitted(tmp_path):
 
 
 # ── never a hard-block: filename_conformance is never set on a name mismatch ─
+@NEEDS_SIM
 def test_name_conformance_never_hard_blocks(tmp_path):
     recs, _ = _run(tmp_path, [{
         "id": "cvdp_copilot_foo_0099",

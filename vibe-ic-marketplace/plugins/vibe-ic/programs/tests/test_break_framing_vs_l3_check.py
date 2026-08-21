@@ -98,22 +98,22 @@ endmodule
     assert len(errors) >= 1
 
 
-# -- Test: self-skip when no L3 JSON --
+# -- Test: self-skip when no L3 JSON is VACUOUS (rc 2), not a PASS (#515) --
 
 def test_skip_no_l3(tmp_path):
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True, exist_ok=True)
     (rtl / "rx_cmd.v").write_text("module rx_cmd(input clk); endmodule\n")
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
 
 
-# -- Test: PASS when L3 is not a break-delimited protocol --
+# -- Test: an L3 that is not break-delimited is VACUOUS (rc 2), not a PASS --
 
-def test_pass_non_break_protocol(tmp_path):
+def test_vacuous_non_break_protocol(tmp_path):
     _write_l3_no_break(tmp_path)
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True, exist_ok=True)
@@ -126,8 +126,39 @@ module rx_cmd(input clk, output reg cmd_valid, output reg [7:0] cmd_opcode);
 endmodule
 """)
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
     assert rpt["summary"]["reason"] == "not_break_protocol"
+
+
+# -- #515 — the silent branch: no RTL directory at all --
+#
+# This one emitted NO finding and NO skip word, so the gate's entire output
+# was `0 error(s); verdict: PASS` — the most common outcome in the tracked
+# corpus (288 of 327 project roots) and the least visible.
+
+def test_vacuous_when_no_rtl_dir(tmp_path):
+    _write_l3_break(tmp_path)
+    r = _run(tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    rpt = _load_report(tmp_path)
+    assert rpt["summary"] == {"skipped": True, "reason": "no_rtl_dir"}
+    assert any(f["rule"] == "SKIP" for f in rpt["findings"]), (
+        "the no-RTL branch must SAY it skipped, not stay silent")
+
+
+# -- #515 — the skip findings' (rule, severity) were transposed --
+
+def test_skip_findings_use_rule_severity_order(tmp_path):
+    _write_l3_no_break(tmp_path)
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True, exist_ok=True)
+    (rtl / "rx_cmd.v").write_text("module rx_cmd(input clk); endmodule\n")
+    _run(tmp_path)
+    rpt = _load_report(tmp_path)
+    skips = [f for f in rpt["findings"] if f["rule"] == "SKIP"]
+    assert skips, rpt["findings"]
+    assert all(f["severity"] == "INFO" for f in skips), (
+        "severity must be the severity, not the rule name")

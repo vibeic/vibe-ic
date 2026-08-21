@@ -22,8 +22,27 @@ Scope:
     and has no two-file ordering constraint, so such files PASS the
     ordering rule (reported INFO).
 
-Self-skips (exit 0 + INFO) when:
-  * no .sp files under the project's analog dir.
+NO PASS WITHOUT A DENOMINATOR (#511)
+------------------------------------
+MEASURED, both cases, same build: on a structurally empty project (only
+`input/docs/` and `reports/`, nothing in them) this gate printed
+
+    [PASS] analog_netlist_include_order_check
+
+as its ENTIRE output — one line, rc 0, and no report file written. On a real
+corpus project carrying two SPICE decks it printed the SAME line, byte for
+byte. Zero decks examined and two decks examined were indistinguishable to
+anything reading either the exit code or the text, so a consumer could not
+tell "the include order is correct" from "there was no netlist".
+
+The gate now states what it examined, in `_gate_denominator`'s fixed shape,
+on stdout AND in `summary.denominator`, and an examination of nothing is a
+DISCLOSED SKIP (verdict `VACUOUS_PASS`, rc 2 = NOT CHECKED, plus a
+`VACUOUS_PASS:` token on stderr) rather than a PASS. This is the idiom
+`si_mcf_sta_check` and `l6_fsm_scaffold_actionable_check` already use; no
+third one is invented here. The ordering rule ITSELF is untouched: a GF180
+deck with `.lib` before `.include design.ngspice` is still rc 1, with the
+same LIB_BEFORE_DESIGN_INCLUDE finding.
 
 Honest-FAIL guarantees:
   * absent / non-directory project  -> exit 2
@@ -32,16 +51,18 @@ Honest-FAIL guarantees:
     reported NO_INCLUDE (does NOT vacuously pass the ordering rule; it is a
     distinct INFO finding and the gate stays PASS only because ordering is
     inapplicable — the model-include PRESENCE rule is owned by
-    analog_netlist_pdk_check.py, not here).
+    analog_netlist_pdk_check.py, not here). Such a file still COUNTS in the
+    denominator: it was read and put through the rule.
 
 Usage:
     python3 analog_netlist_include_order_check.py <project_dir>
     python3 analog_netlist_include_order_check.py <project_dir> --json out.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS (decks examined, ordering honest)
     1 = FAIL (ordering violation)
-    2 = IO / parse error
+    2 = VACUOUS_PASS (nothing to examine — disclosed, NOT a sign-off)
+        or IO / parse error
 
 chip-AGNOSTIC.
 """
@@ -55,6 +76,9 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 
+import _gate_denominator as _gd
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+
 try:
     import _path_layout as _pl
     _HAVE_PL = True
@@ -62,6 +86,16 @@ except Exception:  # pragma: no cover - import shim
     _HAVE_PL = False
 
 GATE = "analog_netlist_include_order_check"
+
+#: What ONE unit is, in this gate's own terms. A bare integer would not say
+#: whether the count is of decks, of directives or of blocks — the exact
+#: ambiguity `_gate_denominator` exists to remove.
+DENOMINATOR_UNIT = ("SPICE netlist deck(s) (*.sp) read and put through the "
+                    "model-include ordering rule")
+
+#: rc 2 is this repo's NOT-CHECKED tier: `flow_compliance_check` promotes it
+#: to the VACUOUS_PASS verdict tier rather than a bare PASS.
+RC_PASS, RC_FAIL, RC_VACUOUS = 0, 1, 2
 
 # Directive matcher: capture (include|lib) keyword + the path token.
 INCLUDE_RE = re.compile(r"^\s*\.(include|lib)\b\s+(\S+)", re.IGNORECASE)
@@ -84,6 +118,10 @@ class AuditResult:
     program: str = GATE
     version: str = "1.0.0"
     passed: bool = True
+    #: PASS / VACUOUS_PASS / FAIL. `passed` keeps its literal meaning for every
+    #: existing consumer (a vacuous run has signed nothing off, so it is not a
+    #: FAIL); `verdict` is where the three-way answer lives.
+    verdict: str = "PASS"
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
 
@@ -183,31 +221,69 @@ def _check_file(text: str, rel: str, findings: List[Finding]) -> bool:
     return True
 
 
+def _vacuous(result: AuditResult, rule: str, reason: str,
+             summary_reason: str, considered: int = 0,
+             details: Optional[dict] = None) -> AuditResult:
+    """Record a run that put ZERO decks through the ordering rule.
+
+    Constructing the denominator with ``examined == 0`` and no reason raises,
+    so this gate cannot regress into a silent zero by omission — only by
+    writing a reason down, which is reviewable.
+    """
+    result.findings.append(Finding(rule=rule, severity="INFO", message=reason))
+    result.verdict = "VACUOUS_PASS"
+    # `passed` keeps its LITERAL meaning — the ordering rule was applied and
+    # found nothing wrong — so a consumer reading only that field can no longer
+    # be handed a vacuous run as a clean one. It is not a FAIL either: no ERROR
+    # finding is emitted and rc is the skip tier. The three-way answer is in
+    # `verdict`, the same split `si_mcf_sta_check` makes.
+    result.passed = False
+    result.summary = {"skipped": True, "reason": summary_reason,
+                      "files_checked": 0, "files_pass": 0, "files_fail": 0,
+                      "gf180_two_file_decks": 0, "pass": False}
+    _gd.attach(result.summary, _gd.Denominator(
+        unit=DENOMINATOR_UNIT, examined=0, considered=considered,
+        not_applicable_reason=reason, details=details or {}))
+    return result
+
+
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
     analog_dir = _analog_dir(project)
     if analog_dir is None:
-        result.findings.append(Finding(
-            rule="SKIP_NO_ANALOG_DIR", severity="INFO",
-            message="No analog directory; skipping include-order check"))
-        result.summary = {"skipped": True, "reason": "no_analog_dir"}
-        return result
+        return _vacuous(
+            result, "SKIP_NO_ANALOG_DIR",
+            ("no analog directory: none of phase3/analog/, phase2/analog/ or "
+             "analog/ exists under the project and the project path itself is "
+             "not a directory, so no SPICE deck could be reached. NOT a "
+             "sign-off: the model-include ordering of this project has NOT "
+             "been checked."),
+            "no_analog_dir")
 
     sp_files = sorted(analog_dir.rglob("*.sp"))
+    try:
+        _adir = str(analog_dir.relative_to(project))
+    except ValueError:
+        _adir = str(analog_dir)
     if not sp_files:
-        result.findings.append(Finding(
-            rule="SKIP_NO_SP_FILES", severity="INFO",
-            message="No .sp files; skipping include-order check"))
-        result.summary = {"skipped": True, "reason": "no_sp_files"}
-        return result
+        return _vacuous(
+            result, "SKIP_NO_SP_FILES",
+            (f"no SPICE deck (*.sp) anywhere under {_adir or '.'}, so no "
+             f"file carries an .include/.lib pair to order. NOT a sign-off: "
+             f"the model-include ordering of this project has NOT been "
+             f"checked."),
+            "no_sp_files", details={"analog_dir": _adir})
 
     checked = 0
     passed = 0
     gf180_decks = 0
+    unreadable = 0
     for sp in sp_files:
         try:
             text = sp.read_text(errors="replace")
         except OSError:
+            # Considered but never examined: it never reached the rule body.
+            unreadable += 1
             continue
         try:
             rel = str(sp.relative_to(project))
@@ -219,7 +295,19 @@ def run_audit(project: Path) -> AuditResult:
         if _check_file(text, rel, result.findings):
             passed += 1
 
+    if checked == 0:
+        # Decks were FOUND and none could be read — `considered > 0` with
+        # `examined == 0`, the exact shape #496 exists to make visible.
+        return _vacuous(
+            result, "SKIP_NO_READABLE_SP_FILES",
+            (f"{len(sp_files)} SPICE deck(s) were found under "
+             f"{_adir or '.'} and NONE could be read (OSError on every one), "
+             f"so the ordering rule was applied to nothing. NOT a sign-off."),
+            "no_readable_sp_files", considered=len(sp_files),
+            details={"analog_dir": _adir, "unreadable": unreadable})
+
     result.passed = (checked == passed)
+    result.verdict = "PASS" if result.passed else "FAIL"
     result.summary = {
         "skipped": False,
         "files_checked": checked,
@@ -228,6 +316,11 @@ def run_audit(project: Path) -> AuditResult:
         "gf180_two_file_decks": gf180_decks,
         "pass": result.passed,
     }
+    _gd.attach(result.summary, _gd.Denominator(
+        unit=DENOMINATOR_UNIT, examined=checked, considered=len(sp_files),
+        details={"analog_dir": _adir,
+                 "gf180_two_file_decks": gf180_decks,
+                 "unreadable": unreadable}))
     return result
 
 
@@ -241,20 +334,34 @@ def main(argv: Optional[list] = None) -> int:
 
     if not args.project_dir.is_dir():
         print(f"ERROR: {args.project_dir} is not a directory", file=sys.stderr)
-        return 2
+        return RC_VACUOUS
 
     result = run_audit(args.project_dir)
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
-    else:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] {GATE}")
+        atomic_write_text(Path(args.json), out)
+
+    denom = result.summary.get(_gd.DENOMINATOR_KEY) or {}
+    reason = str(denom.get("not_applicable_reason") or "")
+
+    if not args.json:
+        # The verdict line carries the denominator ON ITSELF. Pointing at a
+        # report nobody opens is what let the one-line `[PASS] <gate>` stand
+        # for both a clean two-deck run and a run over nothing (#511).
+        print(f"[{result.verdict}] {GATE}: {_gd.line_of(result.summary)}")
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
-    return 0 if result.passed else 1
+
+    if result.verdict == "VACUOUS_PASS":
+        # Second, rc-independent channel — emitted even under --json, where
+        # stdout is deliberately empty, so a text consumer is never handed
+        # silence. `flow_compliance_check._stdout_signals_vacuous` matches this
+        # token at line start.
+        print(f"VACUOUS_PASS: {reason}", file=sys.stderr)
+        return RC_VACUOUS
+    return RC_PASS if result.passed else RC_FAIL
 
 
 if __name__ == "__main__":

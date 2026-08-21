@@ -404,7 +404,7 @@ def test_host_score_zero_mismatch(prob, tmp_path):
         ["iverilog", "-g2012", "-o", str(vvp), str(dut), str(ref), str(tb)],
         capture_output=True, text=True)
     assert comp.returncode == 0, f"{prob} compile failed:\n{comp.stderr}"
-    run = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True, timeout=120)
+    run = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True, timeout=60)
     out = run.stdout + run.stderr
     m = re.search(r"Mismatches:\s*(\d+)\b", out)
     assert m is not None, f"no Mismatches line in vvp output:\n{out}"

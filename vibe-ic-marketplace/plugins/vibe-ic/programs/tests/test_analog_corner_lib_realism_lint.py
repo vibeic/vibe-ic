@@ -94,8 +94,86 @@ def test_disclosure_via_sibling_corner_results(tmp_path: Path):
     assert rpt["verdict"] == "WARN"
 
 
-def test_skip_no_decks(tmp_path: Path):
+def test_no_decks_is_vacuous_not_a_pass(tmp_path: Path):
+    """#521 — this assertion used to read `returncode == 0`.
+
+    A scan that read no deck examined nothing, and rc 0 puts it in the plain
+    PASS tier beside a project whose every deck was read and cleared. The
+    tier is decided PURELY by the exit code (`flow_compliance_check`
+    `_check_program_exit_zero`), so the `[SKIP]` word printed alongside it
+    changed nothing that any consumer reads.
+    """
     (tmp_path / "phase3" / "analog").mkdir(parents=True)
     r, rpt = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     assert rpt["verdict"] == "SKIP"
+    assert "VACUOUS_PASS" in (r.stdout + r.stderr)
+
+
+# ── REGRESSIONS: five wrong answers measured the first time this lint was
+#    handed trees that tried to abuse its disclosure path. Three of them
+#    turn the FAIL branch off; two of them mean it never reads the decks.
+
+
+def test_an_ordinary_english_word_does_not_disclose(tmp_path: Path):
+    """`_DISCLOSURE_TOKENS` carried the bare word `modeled`, so this comment
+    — which discloses nothing — downgraded a SILENT substitution to WARN."""
+    deck = _LEVEL1_NO_DISCLOSURE.replace(
+        "* toy deck",
+        "* toy deck\n* channel-length modulation is modeled with LAMBDA below")
+    _mk_deck(tmp_path, "amp0", deck)
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert rpt["verdict"] == "FAIL"
+
+
+def test_incidental_word_in_sibling_json_does_not_disclose(tmp_path: Path):
+    """The sibling channel scanned the WHOLE artefact, so a disclosure word
+    anywhere in `corner_results.json` — here in an unrelated note — silenced
+    the finding. Disclosure is what a document files under a disclosure key."""
+    _mk_deck(tmp_path, "amp0", _LEVEL1_NO_DISCLOSURE)
+    (tmp_path / "phase3" / "analog" / "amp0" / "corner_results.json").write_text(
+        json.dumps({"block": "amp0", "total_corners": 9,
+                    "note": "SC integrator settle modelled at 27C"}))
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert rpt["verdict"] == "FAIL"
+
+
+def test_a_denied_waiver_silences_nothing(tmp_path: Path):
+    """`_project_waiver` substring-matched the raw text of waivers.json and
+    never read a waiver's STATUS, so the RECORD OF A REFUSAL disabled the
+    check project-wide."""
+    _mk_deck(tmp_path, "amp0", _LEVEL1_NO_DISCLOSURE)
+    (tmp_path / "waivers.json").write_text(json.dumps(
+        {"waivers": [{"id": "W-1", "rule": "level1", "status": "DENIED",
+                      "note": "LEVEL=1 standin waiver requested; REJECTED"}]}))
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert rpt["verdict"] == "FAIL"
+
+
+def test_a_live_waiver_still_downgrades(tmp_path: Path):
+    """The other direction of the same repair: an approved waiver must keep
+    working, or the fix would just be a stricter gate with no seam."""
+    _mk_deck(tmp_path, "amp0", _LEVEL1_NO_DISCLOSURE)
+    (tmp_path / "waivers.json").write_text(json.dumps(
+        {"waivers": [{"id": "W-1", "rule": "corner_lib_level1",
+                      "status": "APPROVED",
+                      "note": "documented standin approved by the owner"}]}))
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    assert rpt["verdict"] == "WARN"
+
+
+def test_phase2_analog_layout_is_read(tmp_path: Path):
+    """The scan read only `phase3/analog/`, while A4's own `required_outputs`
+    accepts `phase2/analog/*/corner_results.json`. A byte-identical project
+    laid out there had its decks read by nobody and was credited a PASS."""
+    d = tmp_path / "phase2" / "analog" / "amp0"
+    d.mkdir(parents=True)
+    (d / "amp0.sp").write_text(_LEVEL1_NO_DISCLOSURE)
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert rpt["verdict"] == "FAIL"
+    assert "phase2/analog" in rpt["roots_scanned"], rpt

@@ -85,6 +85,78 @@ _LOG_CANDIDATES = (
     "reports/phase3/pnr.log",
 )
 
+# SDC DISCOVERY. `clock_nets()` used to probe three hardcoded FILENAMES —
+# `phase3/stage3/pnr/constraints.sdc`, `phase3/stage3/sdc/design.sdc`,
+# `reports/phase3/constraints.sdc`. The phase-3 runner writes
+# `phase3/stage3/pnr/constraint.sdc` (SINGULAR — `_ATPG_SDC_REL`, and the
+# `read_sdc {pnr}/constraint.sdc` in every OpenROAD script it emits), so not one
+# of the three ever matched a real run. Measured on the real completed run
+# `campaign_pr427/spm/converge_ihp-sg13g2`, whose constraint.sdc contains
+# `create_clock -name clk -period 10.0 [get_ports clk]`::
+#
+#     origin/main   clock_evidence_available = false   clock_nets = []
+#
+# i.e. the clock-vs-signal classification this disclosure exists to make could
+# never be made on real data, for the sole reason that the consumer guessed a
+# filename the producer does not use.
+#
+# Discovery is now by DIRECTORY + `*.sdc`, matching `clock_plan_check`'s
+# `_SDC_DIR_CANDIDATES` (the plugin's existing convention for the same
+# question) so a filename change on either side cannot silently break it again.
+#
+# WHAT THE WIDENING DRAGS IN, disclosed rather than silently accepted. Measured
+# over every tracked project snapshot (`git ls-files benchmark-data`, first dir
+# holding a tracked file under reports|phase1|phase2|phase3|steps -> 119
+# snapshots), `clock_nets()` goes from `set()` to a non-empty set on 25 of
+# them — every one of those was previously UNCLASSIFIABLE, which is the defect
+# being fixed. But 22 of the 25 draw part of their answer from
+# `phase2/stage1/fpga/*.sdc`, the FPGA-prototype constraint file, whose
+# template clock is `clk_main`. So a PHASE-3 routing question now harvests a
+# clock name from the FPGA flow:
+#
+#   clk_main   22 of 25   (from phase2/stage1/fpga, in every one of the 22)
+#   clk        21 of 25
+#   …including `benchmark-data/ic/ibex`, whose real clock is `clk_i`, and
+#   `benchmark-data/ic/subservient`, whose real clock is `i_clk` — both get
+#   `clk_main` added alongside the right answer.
+#
+# DIRECTION OF THE ERROR, and why the entry stays: `clock_nets()` returns a
+# NAME SET used only to classify nets that global routing already reported a
+# trade on (`clock_hits = [n for n in nets if n in clks]`). An extra name can
+# therefore only over-report — a net actually named `clk_main` in an ASIC
+# design would be labelled a clock trade. It cannot hide a clock trade, and it
+# cannot change any verdict tier: this whole program is §4.05 DISCLOSURE, rc is
+# unchanged either way. Dropping `phase2/stage1/fpga` would also break the
+# stated parity with `clock_plan_check._SDC_DIR_CANDIDATES`, which is what
+# stops the two from drifting apart again. Narrowing it is a separate decision
+# that belongs with a change to the shared convention, not to this consumer.
+_SDC_DIR_CANDIDATES = (
+    # clock_plan_check._SDC_DIR_CANDIDATES, in its order …
+    "phase3/stage3/constraints",
+    "phase3/stage3/cts/constraints",
+    "phase3/stage3/pnr",
+    "phase2/stage2/constraints",
+    "phase2/stage1/fpga",
+    "constraints",
+    # … plus the two directories the old hardcoded filenames reached into, so
+    # nothing that was reachable before becomes unreachable now.
+    "phase3/stage3/sdc",
+    "reports/phase3",
+)
+
+
+def find_sdc_files(project: Path) -> List[Path]:
+    """Every `*.sdc` under the known constraint directories, in a stable order."""
+    seen: List[Path] = []
+    for rel in _SDC_DIR_CANDIDATES:
+        d = project / rel
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.sdc")):
+            if f not in seen:
+                seen.append(f)
+    return seen
+
 
 def find_pnr_log(project: Path) -> Optional[Path]:
     for rel in _LOG_CANDIDATES:
@@ -100,11 +172,7 @@ def clock_nets(project: Path) -> Set[str]:
     Returns an empty set when there is no evidence — callers must then treat
     classification as UNKNOWN rather than guessing from the name."""
     out: Set[str] = set()
-    for rel in ("phase3/stage3/pnr/constraints.sdc", "phase3/stage3/sdc/design.sdc",
-                "reports/phase3/constraints.sdc"):
-        p = project / rel
-        if not p.is_file():
-            continue
+    for p in find_sdc_files(project):
         txt = p.read_text(errors="replace")
         # create_clock binds a PORT; create_generated_clock binds a derived
         # clock (divided / gated), which is exactly where a net like

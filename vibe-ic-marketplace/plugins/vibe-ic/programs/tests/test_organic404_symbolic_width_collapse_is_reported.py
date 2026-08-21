@@ -49,21 +49,24 @@ def _run(project: Path):
 
 
 def test_a_symbolic_width_port_is_reported(tmp_path):
+    """Round 3 changed the ARM, never the verdict. The consumer no longer
+    coerces to 1, so the outcome branch is the refusal one — still ERROR,
+    still rc 1, still naming the port."""
     rc, out = _run(_project(tmp_path, [
         {"name": "acc_o", "direction": "output",
          "width": "ACC_W-1:0", "width_symbolic": "ACC_W-1:0"}]))
     assert rc == 1
-    assert "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" in out
+    assert "PORT_WIDTH_UNRESOLVED_BY_CONSUMER" in out
     assert "acc_o" in out
 
 
 def test_a_non_numeric_width_string_is_reported(tmp_path):
     """The other carrier: L1 sometimes lands a whole prose sentence in
-    `width`. That coerces to 1 exactly the same way."""
+    `width`. It reaches the same rail."""
     rc, out = _run(_project(tmp_path, [
         {"name": "d_o", "direction": "output",
          "width": "the accumulator is 48 bits in this configuration"}]))
-    assert rc == 1 and "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" in out
+    assert rc == 1 and "PORT_WIDTH_UNRESOLVED_BY_CONSUMER" in out
 
 
 def test_a_genuine_one_bit_port_is_not_reported(tmp_path):
@@ -110,6 +113,175 @@ def test_the_finding_comes_from_the_consumers_own_derivation():
     assert 'for _key in ("top_ports", "ports")' in src
     consumer = (_PROGRAMS / "phase2_scaffold_gen.py").read_text()
     assert 'for src_key in ("top_ports", "ports")' in consumer
+
+
+# ---------------------------------------------------------------------------
+# ROUND 2 — the rail must survive the repair #404 itself proposed next.
+#
+# #404's Increment 2 was "resolve the width in the CONSUMER, scoped to the
+# SAME L9 document", justified on the ground that then "no gate's input is
+# rewritten by its own repair". MEASURED on the real published cell that fires
+# this rail, that ground is false — this gate's input IS the consumer's
+# output:
+#     stock derive_signals        -> PORT_WIDTH_COLLAPSED_TO_ONE_BIT, rc 1
+#     increment-2 derive_signals  -> finding absent, rail silent
+# and it was equally silent when the same-document parameter default was
+# mutated to contradict the port's own stated width (resolved 4 on a port
+# documented and shipped as 32). These tests pin the rail against that.
+# ---------------------------------------------------------------------------
+import importlib  # noqa: E402
+
+_GATE_MOD = importlib.import_module(
+    "l17_channel_catalog_consumer_contract_check")
+
+
+def _increment2(l9_unused=None):
+    """The exact shape #404 §Increment-2 specifies: resolve `width_symbolic`
+    against a `parameters[]` entry declared in the SAME L9 document, nowhere
+    else. Wrapped around the REAL consumer so only the resolution is new."""
+    import re as _re
+    consumer = _GATE_MOD._consumer
+    original = consumer.derive_signals
+    sym_re = _re.compile(r"^\s*([A-Za-z_]\w*)\s*-\s*1\s*:\s*0\s*$")
+
+    def resolving(l17, l9):
+        signals = original(l17, l9)
+        params = {}
+        for entry in (l9.get("parameters") or []):
+            if isinstance(entry, dict) and entry.get("name") is not None:
+                try:
+                    params[str(entry["name"])] = int(
+                        str(entry.get("default")).strip())
+                except (TypeError, ValueError):
+                    pass
+        by_name = {}
+        for key in ("top_ports", "ports"):
+            for entry in (l9.get(key) or []):
+                if isinstance(entry, dict) and entry.get("name"):
+                    by_name.setdefault(
+                        consumer._sanitize_id(str(entry["name"])), entry)
+        for sig in signals:
+            # A resolver acts wherever the consumer has NO resolved width.
+            # Round 3 gave that state a second spelling: `width is None`, the
+            # honest refusal, alongside the 1-bit coercion it replaced. If
+            # this guard still read `!= 1` the simulated resolver would
+            # quietly stop resolving anything and the discriminator below
+            # would pass for the wrong reason.
+            if sig.get("width") not in (None, 1):
+                continue
+            src = by_name.get(sig.get("name"))
+            if not isinstance(src, dict):
+                continue
+            hit = sym_re.match(str(src.get("width_symbolic") or ""))
+            if hit and hit.group(1) in params:
+                sig["width"] = params[hit.group(1)]
+        return signals
+
+    return resolving
+
+
+def _symbolic_project(tmp_path, default, prose):
+    """One port whose width is symbolic, plus the same-document parameter an
+    Increment-2 resolver would join against."""
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L17_CHANNEL_SIGNAL_CATALOG.json").write_text(
+        json.dumps({"fields": {"channels": []}}))
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"fields": {
+        "top_ports": [{"name": "acc_o", "direction": "output",
+                       "width": prose, "width_symbolic": "ACC_W-1:0"}],
+        "parameters": [{"name": "ACC_W", "default": default}],
+    }}))
+    return tmp_path
+
+
+def _categories(project):
+    findings, _info = _GATE_MOD.audit(project)
+    return [f.category for f in findings]
+
+
+def test_a_consumer_that_resolves_the_symbol_cannot_turn_this_gate_green(
+        tmp_path, monkeypatch):
+    """THE discriminator. With #404's own proposed Increment 2 live in the
+    consumer, the rail must still report. Before this change the rail was
+    guarded by `width == 1`, so a resolver removed the finding entirely and
+    the gate went green — the failure mode the issue was filed about, one
+    layer down from where it was first found."""
+    project = _symbolic_project(tmp_path, default="16",
+                                prose="the accumulator is 16 bits")
+    monkeypatch.setattr(_GATE_MOD._consumer, "derive_signals", _increment2())
+    cats = _categories(project)
+    assert "PORT_WIDTH_SYMBOL_UNCORROBORATED" in cats, cats
+    # and it is still a BLOCKING finding, not a downgrade to advisory
+    findings, _ = _GATE_MOD.audit(project)
+    row = [f for f in findings
+           if f.category == "PORT_WIDTH_SYMBOL_UNCORROBORATED"][0]
+    assert row.severity == "ERROR"
+    assert row.evidence["ports"][0]["consumer_width"] == 16
+
+
+def test_a_contradicted_resolution_is_reported_not_trusted(
+        tmp_path, monkeypatch):
+    """§2a of #404, reproduced at the CONSUMER layer: the same-document
+    parameter default disagrees with the number the port's own width prose
+    states. The resolver cannot see the disagreement — nothing declares 48
+    twice — so it writes 4. The rail must not accept that silently just
+    because a number came out."""
+    project = _symbolic_project(
+        tmp_path, default="4",
+        prose="the accumulator is 48 bits in this configuration")
+    monkeypatch.setattr(_GATE_MOD._consumer, "derive_signals", _increment2())
+    findings, _ = _GATE_MOD.audit(project)
+    rows = [f for f in findings
+            if f.category == "PORT_WIDTH_SYMBOL_UNCORROBORATED"]
+    assert rows, [f.category for f in findings]
+    assert rows[0].evidence["ports"][0]["consumer_width"] == 4
+
+
+def test_the_unresolved_rail_is_the_one_that_fires_when_nothing_resolves(
+        tmp_path):
+    """No weakening. With the real (unpatched) consumer the same fixture must
+    report EXACTLY ONE of the three arms — they are branches of one condition,
+    never two at once."""
+    project = _symbolic_project(tmp_path, default="16",
+                                prose="the accumulator is 16 bits")
+    cats = _categories(project)
+    assert "PORT_WIDTH_UNRESOLVED_BY_CONSUMER" in cats, cats
+    assert "PORT_WIDTH_SYMBOL_UNCORROBORATED" not in cats, cats
+    assert "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" not in cats, cats
+
+
+def test_a_declared_integer_width_never_reaches_the_new_rail(
+        tmp_path, monkeypatch):
+    """The paired negative half. A port the layer declares as a plain integer
+    is not symbolic, so neither rail may fire — even with the resolver live.
+    Without this, "the consumer emitted a number" would report every wide
+    port in every design."""
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L17_CHANNEL_SIGNAL_CATALOG.json").write_text(
+        json.dumps({"fields": {"channels": []}}))
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"fields": {
+        "top_ports": [{"name": "bus_o", "direction": "output", "width": 32},
+                      {"name": "en", "direction": "input", "width": 1}],
+        "parameters": [{"name": "ACC_W", "default": "16"}],
+    }}))
+    monkeypatch.setattr(_GATE_MOD._consumer, "derive_signals", _increment2())
+    cats = _categories(tmp_path)
+    assert "PORT_WIDTH_SYMBOL_UNCORROBORATED" not in cats, cats
+    assert "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" not in cats, cats
+
+
+def test_the_rail_is_keyed_on_the_layer_not_on_the_number():
+    """Source-level pin on the shape, because the shape is the whole point.
+    `width == 1` must be a BRANCH inside the symbolic condition, never the
+    guard in front of it — a guard is what a repair walks through."""
+    src = GATE.read_text()
+    block = src.split("collapsed_widths = []")[1].split(
+        "if collapsed_widths:")[0]
+    assert "_s.get(\"width\") != 1" not in block, (
+        "the numeric outcome is back in front of the layer condition")
+    assert "uncorroborated_widths.append" in block
 
 
 def test_the_l1_gate_no_longer_misdirects_the_next_author():

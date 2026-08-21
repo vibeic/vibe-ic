@@ -29,13 +29,39 @@ Heuristic exit:
 Generality: any synchronous RTL design. No chip / tester / PDK names.
 
 Usage:
-    python3 transient_signal_latch_check.py --rtl-dir ./rtl/ --out-dir /tmp
+    python3 transient_signal_latch_check.py --rtl-dir ./rtl/
+
+`--out-dir` is OPTIONAL and has no default: omit it and the gate writes no
+file at all (verdict on stdout). Pass a project-relative directory —
+e.g. `--out-dir ./reports/` — when you want the JSON report on disk.
+
+#496 — DENOMINATOR DISCLOSURE
+----------------------------
+This gate printed exactly one line — ``PASS — 0 errors, 0 warns`` — and nothing
+else. Its coverage was therefore not zero, it was UNKNOWABLE: the line is
+identical whether the gate evaluated a thousand producer/consumer pairs and
+cleared them all, or evaluated none.
+
+Measured over the 107 tracked ``rtl`` directories under ``benchmark-data``:
+303 RTL files read, 18 handshake-gated transient producers found in 2 of the
+107 directories, and **0 cross-file consumer reads on all 107** — which is the
+number that matters, because the rule only evaluates a pair whose producer and
+consumer are in DIFFERENT files (``if cf == prod_file: continue``). So the
+answer is the same as for the six gates #496 lists explicitly: a zero
+denominator, everywhere. It just could not be seen from the output.
+
+All three counts are now disclosed, on stdout as well as in the JSON, because
+the one-line verdict is what a human actually reads. ``files_scanned`` is
+deliberately NOT presented as the denominator: it is non-zero on 107/107 and
+would read as full coverage of a rule that ran on nothing.
 """
 from __future__ import annotations
 import argparse, json, re, sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List, Tuple, Dict
+
+import _gate_denominator as GD
 
 # Producer: signal driven by `<= ack && expr` or `<= valid && expr`.
 # This is a conservative match — we look for the pattern rather than full data-flow.
@@ -70,6 +96,50 @@ class Result:
     status: str
     findings: List[RaceFinding] = field(default_factory=list)
     files_scanned: int = 0
+    # #496 — what the rule was actually applied to. `files_scanned` is the
+    # glob size, not the denominator.
+    transient_signals: int = 0
+    consumer_reads: int = 0
+    denominator: Dict = field(default_factory=dict)
+
+
+# #496 — one unit of this gate's denominator, in the gate's own terms.
+_DENOM_UNIT = ("cross-file (transient producer, consumer read) pairs")
+
+
+def _denominator(files: int, signals: int, reads: int,
+                 adjudicated: int) -> GD.Denominator:
+    """`adjudicated` = cross-file reads that reached the latch/no-latch
+    decision; `reads` = cross-file reads found before the multi-cycle
+    precondition filtered them."""
+    details = {"files_scanned": files, "transient_signals": signals,
+               "cross_file_consumer_reads": reads}
+    if adjudicated:
+        return GD.Denominator(unit=_DENOM_UNIT, examined=adjudicated,
+                              considered=reads, details=details)
+    if files == 0:
+        reason = "no readable .v/.sv/.vh/.svh file in this directory."
+    elif signals == 0:
+        reason = (
+            f"{files} RTL file(s) read, but none drives a signal from a "
+            "handshake token — searched for `<sig> <= ... <name>_"
+            "(ack|valid|strobe|done|tick|stb|en|fire) (&|?)`. With no "
+            "transient producer there is no pulse whose lifetime could race "
+            "a multi-cycle consumer.")
+    elif reads == 0:
+        reason = (
+            f"{signals} transient producer(s) found across {files} RTL "
+            "file(s), but none is read from a DIFFERENT file. This rule only "
+            "evaluates cross-file pairs, so a design whose producers and "
+            "consumers share a file yields no pair to check.")
+    else:
+        reason = (
+            f"{reads} cross-file consumer read(s) of {signals} transient "
+            "producer(s), but none is in a file showing multi-cycle evidence "
+            "(a `<name>_(cnt|bit|idx|step) <= <same> + 1` counter). Without a "
+            "multi-cycle consumer the pulse cannot expire before it is read.")
+    return GD.Denominator(unit=_DENOM_UNIT, examined=0, considered=reads,
+                          not_applicable_reason=reason, details=details)
 
 
 def collect_signals_in_file(p: Path) -> Dict[str, List[Tuple[int, str]]]:
@@ -123,14 +193,23 @@ def scan_consumers(p: Path, signal: str) -> List[Tuple[int, str, bool, str]]:
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
     ap.add_argument("--rtl-dir", required=True, type=Path)
-    ap.add_argument("--out-dir", type=Path, default=Path("/tmp/transient_signal_latch_check"))
+    # #494 — a read-only validator writes NOTHING unless a caller asks for it.
+    # See the sibling note in `sustained_vs_edge_check.py`: a hardcoded
+    # `/tmp/<gatename>` default made every invocation deposit a report at a
+    # fixed shared path, which concurrent runs overwrite without a trace and
+    # which is a standing symlink-hijack target on a multi-user host.
+    ap.add_argument("--out-dir", type=Path, default=None,
+                    help="Directory to write the JSON report into. Omitted "
+                         "(the default) = write no file at all; the verdict "
+                         "goes to stdout only.")
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args(argv)
 
     if not args.rtl_dir.is_dir():
         print(f"ERROR: rtl-dir not found: {args.rtl_dir}", file=sys.stderr)
         return 2
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.out_dir is not None:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
 
     rtl_files = sorted([p for p in args.rtl_dir.rglob("*") if p.suffix.lower() in {".v", ".sv", ".vh", ".svh"}])
     # Step 1: collect transient signals (handshake-gated drivers)
@@ -142,13 +221,20 @@ def main(argv: List[str] | None = None) -> int:
 
     # Step 2: for each transient signal, look for cross-file consumers
     findings: List[RaceFinding] = []
+    # #496 — count the two stages separately. `cross_file_reads` is what the
+    # rule CONSIDERED; `adjudicated` is what it actually decided on. Conflating
+    # them is how "0 errors, 0 warns" came to read as coverage.
+    cross_file_reads = 0
+    adjudicated = 0
     for sig, (prod_file, prod_line, prod_raw) in transient_signals.items():
         for cf in rtl_files:
             if cf == prod_file:
                 continue
             for c_line, c_raw, has_latch, mc_ev in scan_consumers(cf, sig):
+                cross_file_reads += 1
                 if not mc_ev:
                     continue  # no evidence of multi-cycle FSM
+                adjudicated += 1
                 severity = "WARN" if has_latch else "ERROR"
                 if has_latch:
                     continue  # mitigated
@@ -164,15 +250,28 @@ def main(argv: List[str] | None = None) -> int:
     errors = [f for f in findings if f.severity == "ERROR"]
     warns = [f for f in findings if f.severity == "WARN"]
     status = "PASS" if not errors and (not args.strict or not warns) else "FAIL"
-    res = Result(status=status, findings=findings, files_scanned=len(rtl_files))
-    out_json = args.out_dir / "transient_signal_latch_check.json"
-    out_json.write_text(json.dumps(asdict(res), indent=2, default=str))
-    print(f"transient_signal_latch_check: {status} — {len(errors)} errors, {len(warns)} warns")
+    denom = _denominator(len(rtl_files), len(transient_signals),
+                         cross_file_reads, adjudicated)
+    res = Result(status=status, findings=findings, files_scanned=len(rtl_files),
+                 transient_signals=len(transient_signals),
+                 consumer_reads=cross_file_reads,
+                 denominator=denom.as_dict())
+    # #494 — write only when asked; position preserved so stdout is
+    # byte-identical when --out-dir IS supplied.
+    out_json = None
+    if args.out_dir is not None:
+        out_json = args.out_dir / "transient_signal_latch_check.json"
+        out_json.write_text(json.dumps(asdict(res), indent=2, default=str))
+    # #496 — the verdict line now carries the denominator. Without it, this
+    # line is identical for "cleared every pair" and "evaluated no pair".
+    print(f"transient_signal_latch_check: {status} — {len(errors)} errors, "
+          f"{len(warns)} warns; {denom.line()}")
     for f in findings[:20]:
         print(f"  [{f.severity}] signal={f.signal}")
         print(f"    producer {f.producer_file}:{f.producer_line}")
         print(f"    consumer {f.consumer_file}:{f.consumer_line} ({f.multi_cycle_evidence})")
-    print(f"json: {out_json}")
+    if out_json is not None:
+        print(f"json: {out_json}")
     return 0 if status == "PASS" else 1
 
 

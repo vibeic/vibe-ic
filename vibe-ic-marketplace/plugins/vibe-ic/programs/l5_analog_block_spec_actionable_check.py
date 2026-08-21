@@ -141,12 +141,26 @@ def _load_consumer() -> Tuple[Any, Optional[str]]:
 
 
 def _consumer_known_types(ars: Any) -> set:
-    """The block types the consumer actually has a deck / target row for."""
+    """The block types the consumer actually has a deck / target row for.
+
+    R6-FIX-3: also admits a type SPELLING the consumer resolves to one of its
+    own decks (`BLOCK_TYPE_ALIASES`, e.g. `dac` -> `trim`, whose TARGETS label
+    is literally "DAC out (V)"). The gate's contract is "can the consumer build
+    a testbench for this type", and an alias the consumer really resolves is
+    really known — reading only the raw table KEYS reported a deck-backed type
+    as deckless. Union, never a replacement: a type in neither the tables nor
+    the alias map still fails."""
     known: set = set()
     for attr in ("TARGETS", "T", "DECKS", "TEMPLATES"):
         tbl = getattr(ars, attr, None)
         if isinstance(tbl, dict):
             known.update(str(k).lower() for k in tbl.keys())
+    aliases = getattr(ars, "BLOCK_TYPE_ALIASES", None)
+    if isinstance(aliases, dict) and known:
+        # Only admit an alias whose TARGET is a genuinely decked type, so a
+        # stale alias entry cannot smuggle in a type with no deck behind it.
+        known.update(str(k).lower() for k, v in aliases.items()
+                     if str(v).lower() in known)
     return known
 
 
