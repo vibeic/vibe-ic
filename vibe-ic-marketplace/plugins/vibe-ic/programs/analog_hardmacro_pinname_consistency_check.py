@@ -24,17 +24,22 @@ Honesty rules (NO vacuous PASS):
     missing or carry zero pins/ports, that is an honest FAIL (the
     hardmacro fails to expose the spec'd interface).
   * Garbage / unparseable input -> FAIL (not silently skipped).
-  * No analog blocks at all -> SKIP (exit 0, INFO) — the design has no
-    analog hardmacros to check.
+  * No analog blocks at all -> VACUOUS (rc 2) — the design has no analog
+    hardmacros to check.
 
 Usage:
     python3 analog_hardmacro_pinname_consistency_check.py <project_dir>
     python3 analog_hardmacro_pinname_consistency_check.py <project_dir> --json out.json
 
 Exit codes:
-    0 = PASS (all blocks consistent) or SKIP (no analog blocks)
+    0 = PASS: at least one analog block was compared and every one is
+        consistent across LEF / Verilog / spec
     1 = FAIL (>=1 block has a pin-name mismatch / missing interface exposure)
-    2 = IO / argument error
+    2 = VACUOUS: nothing was examined — this project declares no analog block,
+        so there is no pin set to compare. #521: the module header already
+        said "Honesty rules (NO vacuous PASS)" and this branch was exactly
+        that, exiting 0 on 197 of the 200 tracked project roots. Also rc 2 for
+        an IO / argument error.
 """
 from __future__ import annotations
 
@@ -50,6 +55,9 @@ try:
     import _path_layout as _pl
 except ImportError:  # pragma: no cover - allow standalone import
     _pl = None
+
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # ---------------------------------------------------------------------------
@@ -332,17 +340,23 @@ def main(argv: List[str] = None) -> int:
     res = run_audit(args.project_dir)
     out = json.dumps(asdict(res), indent=2, ensure_ascii=False)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(res.summary)
+    reason = _vx.skip_reason(res.summary)
+
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
     else:
-        status = "PASS" if res.passed else "FAIL"
-        print(f"[{status}] analog_hardmacro_pinname_consistency_check")
+        print(_vx.verdict_line("analog_hardmacro_pinname_consistency_check",
+                               res.passed, skipped, reason))
         for f in res.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if res.passed else 1
+    if res.passed and skipped:
+        _vx.announce_vacuous(res.program, reason)
+    return _vx.exit_code(res.passed, skipped)
 
 
 if __name__ == "__main__":

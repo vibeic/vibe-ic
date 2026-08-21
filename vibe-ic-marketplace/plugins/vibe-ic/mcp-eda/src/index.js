@@ -62,6 +62,13 @@ import {
 import {
   classifyNetgenVerdict, stdcellSpicePath, buildNetgenLvsTcl, resolveLayoutTop,
 } from "./lib/netgen_verdict.mjs";
+// v1.3.53 R9 — MCP-side port of phase3_one_shot_runner.py `_antenna_repair_tcl`
+// (the v1.3.46 incremental antenna repair->reroute loop). The MCP `eda_pnr`
+// SECONDARY PnR path emits its own OpenROAD Tcl and previously lacked this loop;
+// this closes that parity gap so both PnR paths behave identically.
+import { antennaRepairTcl } from "./lib/pnr_antenna.mjs";
+import { threadCountTcl } from "./lib/pnr_threads.mjs";
+import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -80,9 +87,31 @@ function _shellSingleQuotedHeredoc(content, sentinel) {
     .replace(/`/g, "\\`");
 }
 
-const CONTAINER = process.env.EDA_CONTAINER || "iic-eda";
+const CONTAINER = process.env.EDA_CONTAINER || "vibeic-eda";
 const PDK_ROOT = "/foss/pdks";
 const TOOLS = "/foss/tools";
+
+// ─── Parallel-by-default thread policy ───────────────────────────────────────
+// Every EDA tool below supports multithreading, and each of those threadings is
+// RESULT-INVARIANT (deterministic): enabling them only speeds the run up, it can
+// never change an output. So we wire the parallel flags ON by default. The tool
+// runs inside the container (dockerExec → `bash -c`), so the robust default is a
+// shell `$(nproc)` expanded IN the container (all cores). A single generic env
+// `VIBEIC_EDA_THREADS`, read here on the host at command-build time, is the
+// global override — set it to a positive integer to cap/pin the thread count.
+// No fixed number is hardcoded.
+function _edaThreadsToken() {
+  const v = (process.env.VIBEIC_EDA_THREADS || "").trim();
+  if (/^[0-9]+$/.test(v) && Number(v) > 0) return v;   // explicit override
+  return "$(nproc)";                                    // default: all cores
+}
+// OpenROAD's `-threads` accepts the literal `max` (== all cores) as well as an
+// integer; prefer `max` unless VIBEIC_EDA_THREADS pins a specific count.
+function _edaOpenroadThreadsToken() {
+  const v = (process.env.VIBEIC_EDA_THREADS || "").trim();
+  if (/^[0-9]+$/.test(v) && Number(v) > 0) return v;
+  return "max";
+}
 
 // Helper: write result manifest (P0 improvement)
 // After each PASS, records the latest result so reviewers never pick up stale logs
@@ -136,15 +165,31 @@ function _run(file, args, opts = {}) {
 }
 
 // v2.5.2: derive plugin programs dir from this file's location instead of
-// hardcoding /home/user/. Order: $VIBE_IC_PROGRAMS_DIR -> sibling
-// vibe-ic-marketplace/plugins/vibe-ic-d/programs/ -> legacy hardcode.
+// hardcoding a personal home directory. Order: $VIBE_IC_PROGRAMS_DIR -> first
+// existing of a candidate list -> the plugin-relative path (NO invented
+// fallback).
+// v2.5.3: this file lives at <plugin>/mcp-eda/src/index.js, so the plugin's own
+// programs/ is two levels up (../../programs). Prior logic only probed a nested
+// vibe-ic-marketplace/plugins/vibe-ic-d/programs sibling, which does not exist
+// on installs where the plugin is named `vibe-ic` (programs/ lives directly
+// under the plugin root) — that made eda_doctor's plugin_programs_dir FAIL and
+// silently fell back to the /home/user hardcode.
 const __dirname_eda = dirname(fileURLToPath(import.meta.url));
-const _autoProgramsDir = resolve(
-  __dirname_eda, "..", "..",
-  "vibe-ic-marketplace", "plugins", "vibe-ic-d", "programs",
-);
+const _programsCandidates = [
+  // plugin's own programs/ (plugin root = ../.. from mcp-eda/src)
+  resolve(__dirname_eda, "..", "..", "programs"),
+  // legacy sibling layout: marketplace/plugins/vibe-ic-d/programs
+  resolve(__dirname_eda, "..", "..", "..", "vibe-ic-d", "programs"),
+  resolve(__dirname_eda, "..", "..", "vibe-ic-marketplace", "plugins", "vibe-ic-d", "programs"),
+];
+// PORTABILITY: the last resort is the plugin's OWN programs/ path derived from
+// this file's location — never a personal absolute path. A prior release fell
+// back to one developer's home directory (and to `vibe-ic-d`, a plugin that no
+// longer exists), so on any other machine the resolved dir silently pointed at
+// nothing and every program-backed tool failed with a confusing error.
 const VIBE_IC_PROGRAMS_DIR = process.env.VIBE_IC_PROGRAMS_DIR
-  || (existsSync(_autoProgramsDir) ? _autoProgramsDir : "/home/user/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic-d/programs");
+  || _programsCandidates.find(existsSync)
+  || _programsCandidates[0];
 
 // v0.99.1: load embedded Python helpers once at startup. Inlining them via
 // shell heredoc hit escape-hell at v0.99.0 (sh: 66: Syntax error: "("
@@ -251,6 +296,22 @@ function dockerExecLogged({ cmd, timeoutMs = 300000, projectDir, tool,
 let _dockerProbeAt = 0;
 let _dockerReachable = null;
 const _PROBE_TTL_MS = 30_000;
+// How much longer the host-side backstop waits than the in-container timeout.
+// Only has to cover `timeout`'s own -k grace plus docker's round trip.
+const _INNER_TIMEOUT_GRACE_MS = 20_000;
+// Cached answer to "does this container have coreutils `timeout`?". Every
+// image we ship does, but the container name is user-overridable
+// (EDA_CONTAINER), so an image without it must degrade to the old behaviour
+// rather than fail every single command with `timeout: not found`.
+let _containerTimeoutOk = null;
+function _containerHasTimeout() {
+  if (_containerTimeoutOk !== null) return _containerTimeoutOk;
+  const r = _spawnSync(
+    "docker", ["exec", CONTAINER, "sh", "-c", "command -v timeout"],
+    { timeout: 10_000, encoding: "utf-8" });
+  _containerTimeoutOk = r.status === 0 && !!(r.stdout || "").trim();
+  return _containerTimeoutOk;
+}
 const _UNREACHABLE_HINTS = [
   "permission denied",
   "Cannot connect",
@@ -264,7 +325,7 @@ function _classifyDockerErr(stderr) {
   } else if (stderr.includes("Cannot connect")) {
     return "Docker daemon not running. Fix: `sudo systemctl start docker`.";
   } else if (stderr.includes("No such container") || stderr.includes("is not running")) {
-    return `Container '${CONTAINER}' not running. Fix: see INSTALL_GUIDE.md to start IIC-OSIC-TOOLS.`;
+    return `Container '${CONTAINER}' not running. Fix: see INSTALL_GUIDE.md to start the vibeic-eda EDA container.`;
   } else if (stderr.includes("command not found")) {
     return "`docker` not installed or not in PATH. Fix: install Docker Desktop / Docker Engine.";
   } else {
@@ -300,7 +361,7 @@ function _probeDocker(force = false) {
           _dockerReachable = {
             ok: false,
             stderr: `no container named ${CONTAINER}`,
-            hint: `Container '${CONTAINER}' does not exist. Fix: see INSTALL_GUIDE.md to create IIC-OSIC-TOOLS.`,
+            hint: `Container '${CONTAINER}' does not exist. Fix: see INSTALL_GUIDE.md to create the vibeic-eda EDA container.`,
           };
         }
       } catch (startErr) {
@@ -322,6 +383,8 @@ function _probeDocker(force = false) {
 function _invalidateDockerProbe() {
   _dockerProbeAt = 0;
   _dockerReachable = null;
+  // The container may be recreated on a different image; re-ask.
+  _containerTimeoutOk = null;
 }
 // v0.1.11: container-visibility pre-flight. Files staged onto the host bind
 // mount via a restricted/sandboxed shell do not always propagate into the
@@ -350,7 +413,7 @@ function missingInContainer(files) {
 function stagingHint(missing) {
   return `[files not visible in container '${CONTAINER}'] ${missing.join(", ")}. `
     + `The EDA tools run inside the '${CONTAINER}' Docker container, which bind-mounts only `
-    + `the designs root (host AI_IC_design -> /foss/designs). Stage your RTL UNDER that mount `
+    + `the designs root (your chosen host designs directory -> /foss/designs). Stage your RTL UNDER that mount `
     + `and pass the in-container path (e.g. /foss/designs/<proj>/top.sv). NOTE: a host file copy `
     + `made under a restricted/sandboxed shell may not propagate into the mount — re-copy with `
     + `the sandbox disabled, then retry.`;
@@ -368,11 +431,55 @@ function dockerExec(cmd, timeoutMs = 300000) {
   // via an argv array. The previous form ran `docker exec C bash -c "..."`
   // through /bin/sh first (and only escaped `"`), so shell metacharacters in
   // tool arguments could break out of the command context.
-  const r = _spawnSync("docker", ["exec", CONTAINER, "bash", "-c", cmd], {
-    timeout: timeoutMs,
+  //
+  // The timeout is enforced INSIDE the container, not by killing the client.
+  // This is the same defect, and the same fix, that
+  // `programs/_container_exec.py` already carries for the PYTHON runners
+  // (ORGANIC #570, measured 2026-07-22: a yosys still running eighteen minutes
+  // after its step was recorded as timed out). Every Python `_docker_exec_raw`
+  // was routed through that helper; this server is a separate implementation in
+  // a different language and was never given the same treatment, so it kept
+  // orphaning tools for another month.
+  // MEASURED 2026-08-19: `timeout 4 docker exec C bash -c 'sleep 90 & wait'`
+  // returns 124 to the caller and leaves TWO processes running in the
+  // container -- a killed `docker exec` client does not stop the process it
+  // started. So every `timeoutMs` we have ever reported was a client-side
+  // give-up: the tool kept running unattended, and nothing in the stack would
+  // ever stop it. That is how a yosys reached 113 GB on a 125 GB host after
+  // the caller had already been told the command timed out, and the machine's
+  // desktop session was OOM-killed. Same command with the timeout moved inside
+  // -- `docker exec C timeout -k 10 4 bash -c ...` -- also returns 124 and
+  // leaves ZERO processes behind.
+  const innerSec = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const useInner = _containerHasTimeout();
+  const argv = useInner
+    ? ["exec", CONTAINER, "timeout", "-k", "10", String(innerSec), "bash", "-c", cmd]
+    : ["exec", CONTAINER, "bash", "-c", cmd];
+  // The host-side timeout stays, demoted to a backstop, and is deliberately
+  // LONGER than the inner one so the inner kill lands first and we return the
+  // tool's own partial output instead of an orphan plus an empty string.
+  const startedAt = Date.now();
+  const r = _spawnSync("docker", argv, {
+    timeout: useInner ? timeoutMs + _INNER_TIMEOUT_GRACE_MS : timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
     encoding: "utf-8",
   });
+  // `timeout` reports 124 on expiry and 137 when it had to escalate to KILL.
+  // A tool is free to exit 124 for its own reasons, so the elapsed clock is
+  // what distinguishes the two -- an exit code alone would mislabel it.
+  if (useInner && (r.status === 124 || r.status === 137)
+      && (Date.now() - startedAt) >= innerSec * 1000) {
+    const stdoutSoFar = r.stdout || "";
+    const msg = `command timed out after ${timeoutMs}ms `
+      + `(killed inside container '${CONTAINER}'`
+      + `${r.status === 137 ? " with SIGKILL after the 10s grace" : ""})`;
+    return {
+      success: false,
+      output: stdoutSoFar + (stdoutSoFar ? "\n" : "") + msg,
+      error: msg,
+      exitCode: r.status,
+    };
+  }
   const stdout = r.stdout || "";
   const stderr = (r.stderr || "") || (r.error ? (r.error.message || String(r.error)) : "");
   if (r.error || r.status === null) {
@@ -410,6 +517,10 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "Metal",
       vdd_pin: "VDD",
       vss_pin: "VSS",
+      // v1.3.53 R9 — antenna diode master from the PDK's own std-cell library
+      // (data, NOT logic): consumed by antennaRepairTcl for the incremental
+      // repair->reroute loop. Chip-AGNOSTIC — the Tcl-gen never hardcodes it.
+      antenna_diode_cell: "gf180mcu_fd_sc_mcu7t5v0__antenna",
     },
     sky130: {
       pdk_path: `${PDK_ROOT}/sky130A`,
@@ -420,12 +531,33 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "met",
       vdd_pin: "VPWR",
       vss_pin: "VGND",
+      // v1.3.53 R9 — same sky130 diode master the phase3 runner uses
+      // (phase3_one_shot_runner.py PdkConfig.antenna_diode_cell), so both PnR
+      // paths repair antennas identically.
+      antenna_diode_cell: "sky130_fd_sc_hd__diode_2",
+    },
+    nangate45: {
+      // NanGate / FreePDK45 Open Cell Library (Si2, Apache-2.0) — a GENERIC,
+      // non-foundry 45nm std-cell lib. synth/PnR/CTS/STA/area run; the KLayout
+      // FreePDK45 decks are EDUCATIONAL, not a manufacturable sign-off (see
+      // programs/pdk_registry.json nangate45: tapeout_capable=false). Assets are
+      // the OpenROAD-flow-scripts nangate45 platform re-staged into the
+      // open_pdks libs.ref/<scl>/ layout by the vibeic-eda Dockerfile.
+      pdk_path: `${PDK_ROOT}/nangate45`,
+      scl: "NangateOpenCellLibrary",
+      lib_suffix: "_typical.lib",
+      techlef_suffix: ".tech.lef",
+      site: "FreePDK45_38x28_10R_NP_162NW_34O",
+      metal_prefix: "metal",
+      vdd_pin: "VDD",
+      vss_pin: "VSS",
+      antenna_diode_cell: "ANTENNA_X1",
     },
   };
   if (pdk === "custom" && customOpts) {
     // v0.63: metal_prefix used to be hardcoded to "met" here, which silently
     // broke any custom PDK whose layers don't follow SKY130's naming
-    // (e.g. KeyFoundry m18e80pm180su uses uppercase MET1-6). eda_pnr would
+    // (e.g. a commercial 180nm PDK uses uppercase MET1-6). eda_pnr would
     // produce empty `define_metal_layers` and OpenROAD would later fail
     // with no useful error. Now read it from customOpts.
     return {
@@ -437,6 +569,10 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: customOpts.custom_metal_prefix || "met",
       vdd_pin: customOpts.custom_vdd || "VDD",
       vss_pin: customOpts.custom_vss || "VSS",
+      // v1.3.53 R9 — a custom PDK has no known diode master; the caller may
+      // supply one (custom_antenna_diode). Absent -> null -> antennaRepairTcl
+      // SKIPS the repair loop (manual diode ECO) rather than inventing a cell.
+      antenna_diode_cell: customOpts.custom_antenna_diode || null,
       // Direct paths for custom PDK
       custom_lib: customOpts.custom_lib,
       custom_techlef: customOpts.custom_techlef,
@@ -746,7 +882,32 @@ const _ERR_PATTERNS = [
   /^(?:bash|sh): /m,
   /Permission denied/,
 ];
+// v2.6.5: the version cache is process-lived and was NEVER invalidated, so once a
+// tool was probed getToolVersion() returned that string forever. But the image
+// bumps often (any fork upgrade → a new vibeic-eda tag → `docker rm/run` the
+// container under the SAME name), and after such a swap eda_doctor — whose whole
+// job is a FRESH preflight — kept reporting the PRE-swap toolchain (observed:
+// yosys still shown at the old fork commit after the container was recreated on a
+// new image). Key the cache on the container's current image id: before serving a
+// cached version, cheaply confirm the image is unchanged; if it moved, drop the
+// cache so every tool re-probes. The `docker inspect` is throttled (2s) so a
+// 14-tool doctor burst costs at most one inspect.
+let _versionCacheImageId = null;
+let _versionCacheCheckedAt = 0;
+function _ensureVersionCacheFresh() {
+  const now = Date.now();
+  if (_versionCacheImageId !== null && now - _versionCacheCheckedAt < 2000) return;
+  _versionCacheCheckedAt = now;
+  const r = _spawnSync("docker", ["inspect", CONTAINER, "--format", "{{.Image}}"],
+    { encoding: "utf-8", timeout: 3000 });
+  const img = (r && r.status === 0 && r.stdout) ? r.stdout.trim() : null;
+  if (img && img !== _versionCacheImageId) {
+    _versionCache.clear();          // container was recreated on a new image → re-probe all
+    _versionCacheImageId = img;
+  }
+}
 function getToolVersion(name) {
+  _ensureVersionCacheFresh();
   if (_versionCache.has(name)) return _versionCache.get(name);
   const probes = {
     yosys: `${TOOLS}/yosys/bin/yosys -V 2>&1 | head -1`,
@@ -754,13 +915,22 @@ function getToolVersion(name) {
     klayout: `${TOOLS}/klayout/klayout -v 2>&1 | head -1`,
     iverilog: `${TOOLS}/iverilog/bin/iverilog -V 2>&1 | head -1`,
     verilator: `${TOOLS}/bin/verilator --version 2>&1 | head -1`,
-    // magic: must run headless; -dnull -noconsole works without $DISPLAY.
-    // -version flag prints to stderr then exits with non-zero on some builds,
-    // so use `tcl -e "puts $magic_version"` via a tiny tcl probe.
-    magic: `${TOOLS}/bin/magic -dnull -noconsole -T /dev/null 2>&1 <<< 'puts $::magic_version; quit -noprompt' | grep -E '^[0-9]+\\.' | head -1`,
+    // magic: `--version` prints the bare `<maj>.<min>.<rev>` string (e.g. 8.3.671)
+    // to stdout and exits 0 on the vibeic/magic build. The older `-dnull -noconsole
+    // <<< 'puts $::magic_version'` tcl probe returned EMPTY (the global isn't set at
+    // that point), false-FAILing an otherwise healthy magic — see 2026-07-11 fix.
+    magic: `${TOOLS}/bin/magic --version 2>&1 | grep -E '^[0-9]+\\.' | head -1`,
     netgen: `${TOOLS}/bin/netgen -batch source /dev/null 2>&1 | head -2 | tail -1`,
     ngspice: `${TOOLS}/bin/ngspice --version 2>&1 | head -1`,
-    fault: `${TOOLS}/bin/fault --version 2>&1`,
+    // fault (AUCOHL DFT toolchain): the vibeic-eda image is self-contained — every
+    // tool resolves at a deterministic /foss/tools/bin path, never via ambient PATH
+    // (a docker-exec PATH we don't control). The base ships fault at
+    // /usr/local/bin/fault; the Dockerfile symlinks it into ${TOOLS}/bin/fault so
+    // the probe (and any caller) hits the same deterministic path as every other
+    // tool. `--version` emits env warnings on stderr then the bare version, so grep
+    // the version line. (2026-07-11: was hardcoded-but-wrong, then briefly PATH,
+    // now deterministic path backed by the Dockerfile symlink.)
+    fault: `${TOOLS}/bin/fault --version 2>&1 | grep -E '^[0-9]+\\.' | head -1`,
   };
   const probe = probes[name];
   if (!probe) { _versionCache.set(name, "unknown"); return "unknown"; }
@@ -799,7 +969,7 @@ server.tool(
     verilog_files: z.array(z.string()).describe("Paths to Verilog/SV source files (inside container)"),
     top_module: z.string().describe("Top module name"),
     output_netlist: z.string().describe("Output netlist path (inside container)"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180").describe("Target PDK"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180").describe("Target PDK"),
     sv_mode: z.boolean().default(true).describe("Use -sv flag for SystemVerilog"),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
     custom_techlef: z.string().optional().describe("Path to tech LEF file (custom PDK)"),
@@ -808,7 +978,7 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
   },
   async ({ verilog_files, top_module, output_netlist, pdk, sv_mode, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
     try {
@@ -1118,14 +1288,30 @@ server.tool(
     top_module: z.string().describe("Top module name"),
     work_dir: z.string().describe("Working directory"),
     depth: z.number().default(20).describe("Proof depth"),
+    inductive_project: z.string().optional().describe("Opt-in datapath UNBOUNDED proof via a strengthened INDUCTIVE INVARIANT: pass a PROJECT dir to run programs/formal_property_run.py --invariant-harness (abc pdr proves an internal-state invariant unbounded where the output-stream property alone is not inductive). Writes a SEPARATE formal_<top>_inductive_results.json (never clobbers the canonical results.json); an honesty guard forbids a BMC dressed as unbounded, and a wide datapath that does not converge is reported PARTIAL/bounded with the depth DISCLOSED. When set, this runs instead of the inline SymbiYosys prove."),
+    inductive_harness: z.string().optional().describe("Explicit inductive harness .sv (with @invariant-harness/@connect pragmas). Auto-detected as formal_<top>_inductive.sv when omitted. Only used with inductive_project."),
   },
-  async ({ design_files, assertion_file, top_module, work_dir, depth }) => {
+  async ({ design_files, assertion_file, top_module, work_dir, depth, inductive_project, inductive_harness }) => {
     try {
-      assertSafePaths(design_files, "design_files");
-      assertSafePath(assertion_file, "assertion_file");
-      assertSafeIdent(top_module, "top_module");
+      if (inductive_project === undefined) { assertSafePaths(design_files, "design_files"); assertSafePath(assertion_file, "assertion_file"); assertSafeIdent(top_module, "top_module"); }
       optPath(work_dir, "work_dir");
+      optPath(inductive_project, "inductive_project"); optPath(inductive_harness, "inductive_harness");
     } catch (e) { return guardError(e); }
+    // Opt-in inductive-invariant unbounded datapath proof (shells to program).
+    if (inductive_project !== undefined) {
+      const t0s = Date.now();
+      const args = [`${VIBE_IC_PROGRAMS_DIR}/formal_property_run.py`, inductive_project];
+      if (inductive_harness !== undefined) args.push("--invariant-harness", inductive_harness);
+      const o = _spawnSync("python3", args, { timeout: 1800000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (o.stdout || "") + (o.stderr || "");
+      return wrapResult({
+        success: !o.error && o.status === 0,
+        t0: t0s,
+        toolVersion: `formal_property_run @ mcp-eda@${SERVER_VERSION}`,
+        error: o.error ? (o.error.message || String(o.error)) : (o.status === 0 ? undefined : `exited ${o.status}`),
+        output: merged,
+      });
+    }
     const reads = design_files.map((f) => `read -formal ${f}`).join("\\n");
     const sbyContent = `[tasks]\\nprove\\n[options]\\nprove: mode prove\\nprove: depth ${depth}\\n[engines]\\nsmtbmc yices\\n[script]\\n${reads}\\nread -sv ${assertion_file}\\nhierarchy -top ${top_module}\\nprep -top ${top_module}\\n[files]\\n${[...design_files, assertion_file].join("\\n")}`;
 
@@ -1171,7 +1357,7 @@ server.tool(
     netlist: z.string().describe("Synthesized Verilog netlist path"),
     top_module: z.string().describe("Top module name"),
     output_def: z.string().describe("Output DEF file path"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     clock_port: z.string().default("clk"),
     clock_period_ns: z.number().default(200),
     utilization: z.number().default(40),
@@ -1192,9 +1378,10 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
+    custom_antenna_diode: z.string().optional().describe("Antenna diode master cell for a custom PDK (v1.3.53). Enables the incremental antenna repair->reroute loop (enable_detailed_route only). gf180/sky130 supply their own; absent for a custom PDK -> antenna repair is SKIPPED (manual diode ECO)."),
   },
-  async ({ netlist, top_module, output_def, pdk, clock_port, clock_period_ns, utilization, density, enable_cts, enable_detailed_route, cts_buf_list, cts_root_buf, min_routing_layer, max_routing_layer, sdc_file, output_routed_v, pdn_stripe_layer, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+  async ({ netlist, top_module, output_def, pdk, clock_port, clock_period_ns, utilization, density, enable_cts, enable_detailed_route, cts_buf_list, cts_root_buf, min_routing_layer, max_routing_layer, sdc_file, output_routed_v, pdn_stripe_layer, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, custom_antenna_diode }) => {
     try {
       assertSafePath(netlist, "netlist"); assertSafePath(output_def, "output_def");
       assertSafeIdent(top_module, "top_module"); optIdent(clock_port, "clock_port");
@@ -1206,8 +1393,9 @@ server.tool(
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+      optToken(custom_antenna_diode, "custom_antenna_diode");
     } catch (e) { return guardError(e); }
-    const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
+    const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, custom_antenna_diode });
     const mp = cfg.metal_prefix;
 
     // v0.76: build optional snippets
@@ -1228,14 +1416,20 @@ estimate_parasitics -placement
 repair_design
 detailed_placement`
       : "";
+    // v1.3.53 R9 — after the main detailed_route, run the SAME incremental
+    // antenna repair->reroute->repair loop the phase3 runner ships (v1.3.46),
+    // BEFORE write_def so the routed DEF/netlist include the inserted diodes +
+    // dirty-net reroute. Diode master comes from the PDK config (cfg); a PDK
+    // with none SKIPS the loop (antennaRepairTcl emits ANTENNA_REPAIR_SKIPPED).
     const drSnippet = enable_detailed_route
       ? `detailed_route -output_drc ${output_def.replace(/\.def$/, "_drc.rpt")} -min_access_points 1 -droute_end_iter 5 -verbose 1
+${antennaRepairTcl(cfg.antenna_diode_cell)}
 write_def ${output_def.replace(/\.def$/, ".routed.def")}
 ${output_routed_v ? `write_verilog ${output_routed_v}` : ""}`
       : "";
 
     const tclScript = `
-read_lef ${techlefPath(cfg)}
+${threadCountTcl()}read_lef ${techlefPath(cfg)}
 read_lef ${celllefPath(cfg)}
 read_liberty ${libPath(cfg)}
 read_verilog ${netlist}
@@ -1265,7 +1459,7 @@ ${drSnippet}
 puts "=== PNR_COMPLETE ==="
 exit`;
 
-    const pnrCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | openroad -exit 2>&1`;
+    const pnrCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | openroad -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`;
     const t0pnr = Date.now();
     let result = dockerExec(pnrCmd, 600000);
     let durationPnrMs = Date.now() - t0pnr;
@@ -1274,7 +1468,7 @@ exit`;
 
     // v2.6.0 M4: detailed_route auto-retry with set_routing_layers MET2-MAX
     // when DR fails due to MET1 pin access points. Common on legacy PDKs
-    // (e.g. KeyFoundry 180nm) whose narrow MET1 pins on CTS-inserted
+    // (e.g. a commercial 180nm PDK) whose narrow MET1 pins on CTS-inserted
     // clkbuf/clkinv cells lack any reachable access point. Caller didn't
     // pre-set min_routing_layer? We try once with MET2 → top.
     const drFailedDRT0073 = enable_detailed_route &&
@@ -1288,7 +1482,7 @@ exit`;
       dr_retry_reason = `DRT-0073 access-point failure on ${mp}1 pins; auto-retry with set_routing_layers ${minMet}-${topMet}`;
       const retryRoutingLayers = `set_routing_layers -signal ${minMet}-${topMet} -clock ${minMet}-${topMet}`;
       const retryTcl = tclScript.replace(routingLayersSnippet || `make_tracks`, `make_tracks\n${retryRoutingLayers}`);
-      const retryCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${retryTcl.replace(/'/g, "'\\''")}' | openroad -exit 2>&1`;
+      const retryCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${retryTcl.replace(/'/g, "'\\''")}' | openroad -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`;
       const t0retry = Date.now();
       result = dockerExec(retryCmd, 900000);
       durationPnrMs = Date.now() - t0retry;
@@ -1364,7 +1558,7 @@ server.tool(
   {
     def_file: z.string().describe("Input routed DEF file path"),
     output_gds: z.string().describe("Output merged GDS file path"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     cell_gds_override: z.string().optional().describe("Override cell GDS path (default: auto-resolved from PDK)"),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
     custom_techlef: z.string().optional().describe("Path to tech LEF file (custom PDK)"),
@@ -1373,7 +1567,7 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
   },
   async ({ def_file, output_gds, pdk, cell_gds_override, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
     try {
@@ -1483,7 +1677,7 @@ server.tool(
   {
     netlist: z.string().describe("Gate-level netlist"),
     top_module: z.string().describe("Top module"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     clock_port: z.string().default("clk"),
     clock_period_ns: z.number().default(200),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
@@ -1493,17 +1687,34 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
+    si_mcf_project: z.string().optional().describe("Opt-in SI-aware crosstalk-DELAY STA (Miller Coupling Factor bound): pass a routed PROJECT dir (with a coupling-aware SPEF + SDC) to re-run OpenSTA on an MCF-bounded SPEF (Cc*MCF folded per aggressor/victim timing-window overlap; setup MCF=2 / hold MCF=0) via programs/si_mcf_sta.py, writing reports/phase3/si_mcf_sta.json. A conservative BOUND (advisory), not PrimeTime-SI's iterative coupled-waveform calc. When set, this runs instead of the single-netlist STA."),
+    container: z.string().default("vibeic-eda").describe("Docker container for OpenSTA (si_mcf_project mode)"),
   },
-  async ({ netlist, top_module, pdk, clock_port, clock_period_ns, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+  async ({ netlist, top_module, pdk, clock_port, clock_period_ns, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, si_mcf_project, container }) => {
     try {
-      assertSafePath(netlist, "netlist"); assertSafeIdent(top_module, "top_module");
+      if (si_mcf_project === undefined) { assertSafePath(netlist, "netlist"); assertSafeIdent(top_module, "top_module"); }
       optIdent(clock_port, "clock_port");
       optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+      optPath(si_mcf_project, "si_mcf_project"); assertSafeIdent(container, "container");
     } catch (e) { return guardError(e); }
+    // Opt-in MCF SI-aware crosstalk-delay STA (project-level; shells to program).
+    if (si_mcf_project !== undefined) {
+      const t0s = Date.now();
+      const args = [`${VIBE_IC_PROGRAMS_DIR}/si_mcf_sta.py`, "run", si_mcf_project, "--container", container];
+      const o = _spawnSync("python3", args, { timeout: 1800000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (o.stdout || "") + (o.stderr || "");
+      return wrapResult({
+        success: !o.error && o.status === 0,
+        t0: t0s,
+        toolVersion: `si_mcf_sta @ mcp-eda@${SERVER_VERSION}`,
+        error: o.error ? (o.error.message || String(o.error)) : (o.status === 0 ? undefined : `exited ${o.status}`),
+        output: merged,
+      });
+    }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
 
     // v0.100 H1: auto-flatten Yosys $paramod references that OpenSTA cannot resolve
@@ -1518,7 +1729,7 @@ server.tool(
       if (flatResult.success) { canonicalizeNetlistSrcCoords(flatNetlist); effectiveNetlist = flatNetlist; }
     }
 
-    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -exit << 'EOF'
+    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -threads ${_edaOpenroadThreadsToken()} -exit << 'EOF'
 read_liberty ${libPath(cfg)}
 read_verilog ${effectiveNetlist}
 link_design ${top_module}
@@ -1590,7 +1801,7 @@ server.tool(
     layout_netlist: z.string().describe("Layout netlist. mode=netgen: SPICE; mode=yosys_equiv: Verilog (e.g. routed .v)"),
     schematic_netlist: z.string().describe("Schematic/synthesis netlist. SPICE for netgen, Verilog for yosys_equiv"),
     top_module: z.string().describe("Top module name"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     custom_lib: z.string().optional().describe("Liberty .lib path for cell semantics (yosys_equiv mode)"),
     setup_supplement: z.string().optional().describe("Optional path to a supplementary Netgen TCL (e.g. from programs/lvs_netgen_setup_emit.py). Concatenated AFTER the foundry setup. netgen mode only; ignored on yosys_equiv."),
     load_stdcell_lib: z.boolean().default(false).describe("netgen mode: load the PDK std-cell SPICE library (e.g. sky130_fd_sc_hd.spice) INTO the schematic circuit before lvs, so a post-PnR GATE netlist's empty cell placeholders expand to transistors for a true device-level compare. Default false (the schematic side is already transistor-level)."),
@@ -1662,9 +1873,19 @@ design -copy-from gate -as gate ${top_module}
 equiv_make gold gate equiv
 hierarchy -top equiv
 equiv_simple
-equiv_induct
+equiv_induct -seq 4
+equiv_induct -seq 16
+equiv_induct -seq 64
 equiv_status
 `;
+      // since v1.3.41: escalate equiv_induct -seq (4->16->64) instead of the
+      // yosys default -seq 4. Sequential equivalence between a design and a
+      // RETIMED / pipeline-rebalanced version needs induction depth >= the
+      // pipeline latency; at the shallow default those output $equiv cells stay
+      // UNPROVEN and the compare falsely FAILs. Escalation is sound (deeper
+      // k-induction proves only more genuinely-equivalent cells, never an
+      // inequivalent pair) and cheap (each pass only re-works still-unproven
+      // cells, so a shallow-closing compare pays ~nothing for the deeper passes).
       const ysFile = `/tmp/lvs_equiv_${Date.now()}.ys`;
       const writeR = dockerExec(`cat > ${ysFile} <<'__YS_EOF__'\n${ys}\n__YS_EOF__\n`, 10000);
       if (!writeR.success) {
@@ -2027,7 +2248,7 @@ server.tool(
   {
     gds_file: z.string().describe("Input GDS file path"),
     top_cell: z.string().describe("Top cell name in GDS"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     custom_techlef: z.string().optional().describe("Path to tech LEF (custom PDK; rules auto-derived from WIDTH/SPACING)"),
     custom_drc_script: z.string().optional().describe("Path to a hand-written KLayout .drc script (custom PDK; bypasses LEF auto-derivation)"),
     custom_layermap: z.string().optional().describe("Path to layer map file mapping LEF layer names to GDS (layer,datatype). Format per line: 'LAYER NET <gds_layer> <gds_datatype>'. Default: detect from techlef directory."),
@@ -2045,7 +2266,7 @@ server.tool(
     if (pdk === "custom") {
       if (custom_drc_script) {
         // Use user-supplied .drc deck
-        const drcCmdC = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${custom_drc_script} -rd input=${gds_file} -rd report=${rdbPath} 2>&1`;
+        const drcCmdC = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${custom_drc_script} -rd input=${gds_file} -rd report=${rdbPath} -rd threads=${_edaThreadsToken()} 2>&1`;
         const t0drcC = Date.now();
         const resultC = dockerExec(drcCmdC, 600000);
         const durationDrcMsC = Date.now() - t0drcC;
@@ -2121,7 +2342,7 @@ server.tool(
         if (rulesN === 0) {
           // v0.112 (BACKLOG-v6 T2 closure): structural-only fallback
           // instead of hard error. Closes the layermap-missing case for
-          // custom PDKs (KeyFoundry m18e80pm180su, etc.) by emitting a
+          // custom PDKs (a commercial 180nm PDK, etc.) by emitting a
           // KLayout deck that verifies GDS parses + top cell exists, but
           // does NOT enforce dimensional rules. Returns success=true
           // with deck_mode='structural_only' + advisory so the caller
@@ -2175,7 +2396,7 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
             output_summary: genRes.output.slice(-500),
           }) }] };
         }
-        const drcCmdAuto = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${autoScript} 2>&1`;
+        const drcCmdAuto = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${autoScript} -rd threads=${_edaThreadsToken()} 2>&1`;
         const tA = Date.now();
         const rA = dockerExec(drcCmdAuto, 600000);
         const durA = Date.now() - tA;
@@ -2199,37 +2420,86 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
       return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "pdk=custom requires custom_drc_script or custom_techlef" }) }] };
     }
 
-    // gf180 / sky130 path (legacy)
-    const drcScript = `
-import pya
-ly = pya.Layout()
-ly.read('${gds_file}')
-top = ly.cell('${top_cell}')
-if top is None:
-    tops = ly.top_cells()
-    top = tops[0] if tops else None
-print('TOP_CELL=' + (top.name if top else 'NONE'))
-print('CELL_COUNT=' + str(ly.cells()))
-if top is None:
-    print('DRC_ABORT: no top cell match')
-else:
-    # Basic geometric DRC checks
-    print('DRC_COMPLETE=YES')
-`;
-
-    const drcCmd = `echo '${drcScript.replace(/'/g, "'\\''")}' > /tmp/drc_kl.py && QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -z -r /tmp/drc_kl.py 2>&1`;
-    const t0drc = Date.now();
-    const result = dockerExec(drcCmd);
-    const durationDrcMs = Date.now() - t0drc;
-
-    if (result.output.includes("DRC_COMPLETE=YES")) {
-      const dir = gds_file.substring(0, gds_file.lastIndexOf("/"));
-      writeManifest(dir || "/tmp", {
-        step: "drc",
-        status: "PASS",
-        tool: "KLayout",
-      });
+    // gf180 / sky130 path — REAL PDK sign-off DRC.
+    //
+    // v1.2.75 (TAPEOUT-SIGNOFF P0#1): this branch WAS a vacuous no-op — it read
+    // the GDS, checked a top cell exists, printed `DRC_COMPLETE=YES`, ran ZERO
+    // rules, and returned success. Any caller running `eda_drc_klayout` on a
+    // foundry PDK got a FALSE DRC-clean (the highest-integrity bug found in the
+    // tapeout-signoff survey). It now runs the PDK's OWN KLayout sign-off deck
+    // (`sky130A.lydrc` / `gf180mcuD.lydrc`) — the SAME deck the phase3 runner's
+    // `step_drc` uses — and counts real `<item>` violations. If no deck is found,
+    // or KLayout produces no report, it returns an HONEST FAILURE. It NEVER emits
+    // a vacuous PASS again.
+    // Pre-flight: the GDS must be visible INSIDE the container, else KLayout's
+    // `source` emits an opaque `errno=2 Unable to open file` (and, worse, a
+    // partially-run deck can look like a clean pass). Fail fast with the
+    // actionable staging hint (which names the bind-mount) instead.
+    const drcMissing = missingInContainer([gds_file]);
+    if (drcMissing.length) {
+      return { content: [{ type: "text", text: JSON.stringify({
+        success: false, report_written: false, violations: 0,
+        error: stagingHint(drcMissing), gds_file,
+      }) }] };
     }
+    const pdkPathDrc = pdk === "sky130" ? `${PDK_ROOT}/sky130A`
+                                        : `${PDK_ROOT}/gf180mcuD`;
+    const deckDir = `${pdkPathDrc}/libs.tech/klayout/drc`;
+    // Select the FULL sign-off deck for this PDK. The canonical leaf is
+    // sky130A.lydrc / gf180mcuD.lydrc. A naive `ls *.lydrc | head -1` is WRONG:
+    // the PDK dir also ships auxiliary single-purpose decks (e.g.
+    // `gf180mcu_density.lydrc`, `met_min_ca_density.lydrc`) that sort BEFORE the
+    // real deck alphabetically — so `head -1` picks `gf180mcu_density.lydrc`
+    // under sky130A and runs a gf180 density deck against a sky130 GDS. Prefer
+    // the canonical named deck; fall back to the first *.lydrc that is NOT an
+    // auxiliary density/min deck, so a PDK whose leaf-name differs still resolves.
+    const deckLeafPref = pdk === "sky130" ? "sky130A.lydrc" : "gf180mcuD.lydrc";
+    const deckDiscover = dockerExec(
+      `if [ -f ${deckDir}/${deckLeafPref} ]; then echo ${deckDir}/${deckLeafPref}; ` +
+      `else ls ${deckDir}/*.lydrc 2>/dev/null | grep -viE 'density|_min_|_min\\.' | head -1; fi ` +
+      `|| echo NODECK`, 8000);
+    const deckPath = ((deckDiscover.output || "").trim().split("\n").pop() || "").trim();
+    if (!deckPath || deckPath === "NODECK" || !deckPath.endsWith(".lydrc")) {
+      // §4.05: no deck ⇒ HONEST FAIL, never a vacuous PASS.
+      return { content: [{ type: "text", text: JSON.stringify({
+        success: false,
+        error: `no KLayout sign-off DRC deck (*.lydrc) found under ${deckDir}; ` +
+               `eda_drc_klayout will NOT emit a vacuous PASS. Stage the PDK DRC ` +
+               `deck, or run the phase3 runner step_drc (real sky130A.lydrc path).`,
+        deck_searched: deckDir,
+      }) }] };
+    }
+    // -rd threads=<n> is passed for parallel tiled DRC. The auto-generated deck
+    // (auto_drc_deck.py) reads it via `threads(...)`; the foundry sign-off deck
+    // (*.lydrc) is NOT under our control, so it may or may not honor $threads —
+    // harmless if unread. Getting the SVRF/foundry engine to thread is a separate
+    // item, tracked outside this change.
+    const drcCmd = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${deckPath} ` +
+                   `-rd input=${gds_file} -rd report=${rdbPath} -rd top_cell=${top_cell} -rd threads=${_edaThreadsToken()} 2>&1`;
+    const t0drc = Date.now();
+    const result = dockerExec(drcCmd, 900000);
+    const durationDrcMs = Date.now() - t0drc;
+    // Report-existence is checked SEPARATELY from the count: a crashed KLayout
+    // writes no report, and `grep -c` on a missing file would echo 0 — which must
+    // NOT be read as a clean pass. So: PASS requires klayout ran AND the report
+    // was written AND zero <item> violations.
+    const reportExists = ((dockerExec(`[ -f ${rdbPath} ] && echo YES || echo NO`, 5000)
+      .output || "").trim().includes("YES"));
+    const cntRes = dockerExec(`grep -c '<item>' ${rdbPath} 2>/dev/null || echo 0`, 8000);
+    const viol = parseInt((cntRes.output || "0").trim()) || 0;
+    const passReal = result.success && reportExists && viol === 0;
+    const deckLeaf = deckPath.split("/").pop();
+
+    const dir = gds_file.substring(0, gds_file.lastIndexOf("/"));
+    writeManifest(dir || "/tmp", {
+      step: "drc",
+      status: passReal ? "PASS" : "FAIL",
+      tool: `KLayout sign-off deck (${deckLeaf})`,
+      violations: viol,
+      report_written: reportExists,
+      rdb: rdbPath,
+      deck: deckPath,
+    });
 
     // v0.47.5 auto-provenance
     const projDrc = process.env.EDA_PROJECT_DIR ||
@@ -2237,13 +2507,13 @@ else:
     logProvenance({
       projectDir: projDrc,
       tool: "klayout",
-      version: `klayout DRC (mcp-eda) pdk=${pdk}`,
-      argv: ["klayout", "-z", "-r", "drc_kl.py"],
+      version: `klayout sign-off DRC (mcp-eda) pdk=${pdk} deck=${deckLeaf}`,
+      argv: ["klayout", "-b", "-r", deckPath, "input=" + gds_file],
       inputs: { [gds_file]: sha256File(gds_file.replace("/work/", projDrc + "/")) },
-      outputs: {},
-      exitCode: result.output.includes("DRC_COMPLETE=YES") ? 0 : 1,
+      outputs: reportExists ? { [rdbPath]: sha256File(rdbPath.replace("/work/", projDrc + "/")) } : {},
+      exitCode: passReal ? 0 : 1,
       durationMs: durationDrcMs,
-      stdoutTail: result.output || "",
+      stdoutTail: (result.output || "").slice(-1500),
       stderrTail: result.error || "",
     });
 
@@ -2251,8 +2521,12 @@ else:
       content: [{
         type: "text",
         text: JSON.stringify({
-          success: result.output.includes("DRC_COMPLETE=YES"),
-          output: result.output.slice(-2000),
+          success: passReal,
+          violations: viol,
+          report_written: reportExists,
+          rdb: rdbPath,
+          deck: deckPath,
+          output: (result.output || "").slice(-2000),
         }),
       }],
     };
@@ -2265,7 +2539,7 @@ server.tool(
   "Analyze IR drop on power grid using OpenROAD PSM (Power Grid Analysis). v0.76 adds custom PDK support and via-resistance fallback.",
   {
     def_file: z.string().describe("DEF file with placed design"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     voltage: z.number().default(1.8).describe("VDD voltage in volts"),
     custom_lib: z.string().optional(),
     custom_techlef: z.string().optional(),
@@ -2274,7 +2548,7 @@ server.tool(
     custom_vdd: z.string().optional(),
     custom_vss: z.string().optional(),
     custom_metal_prefix: z.string().optional(),
-    via_resistance_ohm: z.number().default(5.5).describe("Fallback per-via resistance when tech LEF lacks RESISTANCE PER CUT (e.g. KeyFoundry 180nm)"),
+    via_resistance_ohm: z.number().default(5.5).describe("Fallback per-via resistance when tech LEF lacks RESISTANCE PER CUT (e.g. a commercial 180nm PDK)"),
   },
   async ({ def_file, pdk, voltage, custom_lib, custom_techlef, custom_celllef, custom_site, custom_vdd, custom_vss, custom_metal_prefix, via_resistance_ohm }) => {
     try {
@@ -2303,7 +2577,7 @@ catch {
 }`;
 
     const result = dockerExec(
-      `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -exit << 'TCEOF'
+      `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -threads ${_edaOpenroadThreadsToken()} -exit << 'TCEOF'
 read_lef ${techlefPath(cfg)}
 read_lef ${celllefPath(cfg)}
 read_liberty ${libPath(cfg)}
@@ -2440,7 +2714,7 @@ server.tool(
       assertSafePath(output_file, "output_file");
     } catch (e) { return guardError(e); }
     const result = dockerExec(
-      `export PATH=${TOOLS}/ngspice/bin:${TOOLS}/bin:$PATH && ngspice -b ${spice_file} -o ${output_file} 2>&1 && echo 'SPICE_COMPLETE' && tail -20 ${output_file} 2>/dev/null`,
+      `export PATH=${TOOLS}/ngspice/bin:${TOOLS}/bin:$PATH && OMP_NUM_THREADS=${_edaThreadsToken()} ngspice -b ${spice_file} -o ${output_file} 2>&1 && echo 'SPICE_COMPLETE' && tail -20 ${output_file} 2>/dev/null`,
       300000
     );
 
@@ -2495,7 +2769,7 @@ server.tool(
   {
     schematic: z.string().describe("Path to .sch schematic file inside Docker container"),
     output_dir: z.string().default("./analog/xschem_out").describe("Output directory for generated netlist. v0.123: default changed from /tmp/xschem_out so artifacts land in the project tree."),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     custom_xschemrc: z.string().optional().describe("Path to custom xschemrc file (custom PDK only)"),
   },
   async ({ schematic, output_dir, pdk, custom_xschemrc }) => {
@@ -2560,7 +2834,7 @@ server.tool(
   "Run multi-corner PVT SPICE sweep with automated .meas extraction and yield table. v0.108: analog design pipeline. Runs one ngspice invocation per corner×temp combination, aggregates results into a JSON yield matrix.",
   {
     spice_file: z.string().describe("Base SPICE netlist file (.sp) — must NOT contain .lib/.temp directives (they are injected per corner)"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     corners: z.array(z.string()).default(["typical", "ss", "ff"]).describe("Process corner names. For gf180/sky130 they are mapped to the foundry deck's section names; for pdk=custom each entry is used verbatim as the .lib section name in custom_corner_lib."),
     temperatures: z.array(z.number()).default([-40, 25, 125]).describe("Temperature sweep points in °C"),
     supplies: z.array(z.number()).optional().describe("Supply voltages to sweep (if omitted: uses nominal only)"),
@@ -2668,7 +2942,7 @@ server.tool(
 
       const escaped = wrapperLines.join("\n").replace(/'/g, "'\\''");
       scriptLines.push(`printf '%s\\n' '${escaped}' > ${wrapperFile}`);
-      scriptLines.push(`ngspice -b ${wrapperFile} -o ${outFile} 2>&1 || true`);
+      scriptLines.push(`OMP_NUM_THREADS=${_edaThreadsToken()} ngspice -b ${wrapperFile} -o ${outFile} 2>&1 || true`);
     }
 
     scriptLines.push(`echo "===CORNER_SWEEP_COMPLETE==="`);
@@ -2817,7 +3091,7 @@ server.tool(
     clock: z.string().default("clk").describe("Clock signal name"),
     reset: z.string().default("rst_n").describe("Reset signal name"),
     reset_active_low: z.boolean().default(true),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     tv_count: z.number().default(200).describe("Number of test vectors to generate"),
     add_jtag: z.boolean().default(false).describe("Also insert JTAG TAP controller"),
     output_dir: z.string().describe("Output directory for DFT files"),
@@ -2825,16 +3099,33 @@ server.tool(
     custom_dff_names: z.string().optional().describe("Comma-separated DFF cell names for scan chain (custom PDK; e.g. 'DFFRQD1,DFFSQD1')"),
     custom_cell_verilog: z.string().optional().describe("Path to behavioral .v library file (custom PDK; concat'd into cell-model)"),
     custom_primitives_verilog: z.string().optional().describe("Path to primitives .v file (custom PDK)"),
+    sdd_project: z.string().optional().describe("Opt-in Small-Delay-Defect (SDD) at-speed grade: pass a routed PROJECT dir (with DT1 transition + DT2 path-delay coverage) to fuse OpenSTA per-path slack with the LOC-SAT sensitisation via programs/sdd_atpg_run.py, writing reports/phase2/dft/sdd_coverage.json (DESCRIPTIVE, no floor — a slack-rich design honestly scores low). When set, this runs instead of the Fault scan/ATPG flow."),
   },
-  async ({ netlist, clock, reset, reset_active_low, pdk, tv_count, add_jtag, output_dir, custom_lib, custom_dff_names, custom_cell_verilog, custom_primitives_verilog }) => {
+  async ({ netlist, clock, reset, reset_active_low, pdk, tv_count, add_jtag, output_dir, custom_lib, custom_dff_names, custom_cell_verilog, custom_primitives_verilog, sdd_project }) => {
     try {
-      assertSafePath(netlist, "netlist");
+      if (sdd_project === undefined) assertSafePath(netlist, "netlist");
       assertSafeIdent(clock, "clock"); assertSafeIdent(reset, "reset");
       optPath(output_dir, "output_dir"); optPath(custom_lib, "custom_lib");
       optNoShellMeta(custom_dff_names, "custom_dff_names");
       optPath(custom_cell_verilog, "custom_cell_verilog");
       optPath(custom_primitives_verilog, "custom_primitives_verilog");
+      optPath(sdd_project, "sdd_project");
     } catch (e) { return guardError(e); }
+    // Opt-in SDD grade (project-level; shells to the plugin program).
+    if (sdd_project !== undefined) {
+      const t0s = Date.now();
+      const args = [`${VIBE_IC_PROGRAMS_DIR}/sdd_atpg_run.py`, sdd_project,
+        "--clock", clock];
+      const o = _spawnSync("python3", args, { timeout: 1800000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (o.stdout || "") + (o.stderr || "");
+      return wrapResult({
+        success: !o.error && o.status === 0,
+        t0: t0s,
+        toolVersion: `sdd_atpg_run @ mcp-eda@${SERVER_VERSION}`,
+        error: o.error ? (o.error.message || String(o.error)) : (o.status === 0 ? undefined : `exited ${o.status}`),
+        output: merged,
+      });
+    }
     const cfg = pdkConfig(pdk, { custom_lib });
     const lib = pdk === "custom" ? (custom_lib || "") : libPath(cfg);
     if (pdk === "custom" && (!lib || !custom_dff_names)) {
@@ -2864,16 +3155,18 @@ export LD_LIBRARY_PATH=${TOOLS}/iverilog/lib:$LD_LIBRARY_PATH
 mkdir -p ${output_dir}
 
 # Scan chain
-fault chain --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/scanchained.v ${netlist} 2>&1
+# Every tool is called by its deterministic /foss/tools/bin path — the image is
+# self-contained; we never lean on ambient PATH resolution.
+${TOOLS}/bin/fault chain --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/scanchained.v ${netlist} 2>&1
 echo CHAIN_DONE
 
 # Cut + ATPG
-fault cut --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/cut.v ${netlist} 2>&1
+${TOOLS}/bin/fault cut --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/cut.v ${netlist} 2>&1
 cat ${primsFile} ${cellFile} > /tmp/combined_cells.v 2>/dev/null
-fault atpg --cell-model /tmp/combined_cells.v --clock ${clock} --reset ${reset} ${resetFlag} --tv-count ${tv_count} --output ${output_dir}/atpg.tv.json --output-coverage-metadata ${output_dir}/coverage.yml ${output_dir}/cut.v 2>&1
+${TOOLS}/bin/fault atpg --cell-model /tmp/combined_cells.v --clock ${clock} --reset ${reset} ${resetFlag} --tv-count ${tv_count} --output ${output_dir}/atpg.tv.json --output-coverage-metadata ${output_dir}/coverage.yml ${output_dir}/cut.v 2>&1
 echo ATPG_DONE
 
-${add_jtag ? `fault tap --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --output ${output_dir}/jtag.v ${output_dir}/scanchained.v 2>&1
+${add_jtag ? `${TOOLS}/bin/fault tap --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --output ${output_dir}/jtag.v ${output_dir}/scanchained.v 2>&1
 echo JTAG_DONE` : "echo JTAG_SKIPPED"}
 `;
 
@@ -3089,6 +3382,12 @@ server.tool(
     const results = {};
     let overall_pass = true;
 
+    // NOTE (parallel-by-default): each corner gets intra-corner parallelism via
+    // `sta -threads` below. The per-corner LOOP is intentionally LEFT SEQUENTIAL:
+    // dockerExec is a synchronous spawnSync wrapper, so `await Promise.all(...)`
+    // would NOT actually overlap the corners (each spawnSync blocks the event
+    // loop until it returns) — true corner-level concurrency would need a full
+    // async-spawn rewrite, which is out of scope here. Correctness first.
     for (const corner of corners) {
       const tclScript = `
 read_liberty ${corner.lib}
@@ -3102,7 +3401,7 @@ puts "=== MCORNER_${corner.name}_DONE ==="
 exit
 `;
       const result = dockerExec(
-        `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | sta -exit 2>&1`,
+        `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | sta -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`,
         120000
       );
 
@@ -3169,7 +3468,7 @@ server.tool(
       "output_latency_advisor",        // registered-output / sampling latency (advisory)
       "spec_rtl_port_fidelity_check",  // L9↔RTL port match + garbled-index detection
     ])).describe("List of audit programs to run"),
-    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing audit program scripts. v2.5.2: auto-detected from this file's location (sibling vibe-ic-marketplace/plugins/vibe-ic-d/programs/) — overridable via $VIBE_IC_PROGRAMS_DIR. v2.4.1 hardcoded /home/user/ was wrong on most installs."),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing audit program scripts. v2.5.2: auto-detected from this file's location (the plugin's own programs/ dir) — overridable via $VIBE_IC_PROGRAMS_DIR. Earlier releases hardcoded a personal home directory, which was wrong on every other install."),
   },
   async ({ rtl_dir, programs, programs_dir }) => {
     try {
@@ -3622,6 +3921,45 @@ server.tool(
   }
 );
 
+// ─── Tool: eda_professional_tb ───
+// Deterministic PROFESSIONAL testbench generation from the Phase-1 L-docs.
+// Combines cocotb + cocotb-coverage + Verilator/Icarus + an SVA bind; derives a
+// reference model (closed-form for arithmetic; a bounded-latency + bit-order
+// STREAMING scoreboard that closes the serial-datapath DEFER — e.g. the spm
+// bit-serial multiplier, 208/208 vs (x*y) mod 2^N), functional coverage (L28
+// covergroups) and SVA (L29). Emits under phase2/stage1/sim_professional/<top>/.
+server.tool(
+  "eda_professional_tb",
+  "Generate a PROFESSIONAL, high-coverage cocotb testbench deterministically from a project's Phase-1 L-docs: interface (L1/L9), clock/reset (L8/L9), a reference model (closed-form for arithmetic primitives; a bounded-latency + bit-order STREAMING scoreboard that closes the serial-datapath functional-verification gap), functional coverage (covergroups) + SVA assertions. Emits tb_<top>.py + coverage model + assertions + Makefile + verification plan.",
+  {
+    project: z.string().describe("Project dir (contains phase1/generated_docs/L*.json + phase2/stage1/rtl/)"),
+    out_dir: z.string().optional().describe("Output dir (default phase2/stage1/sim_professional/<top>/)"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing professional_tb_gen.py (auto-detected)"),
+  },
+  async ({ project, out_dir, programs_dir }) => {
+    try {
+      assertSafePath(project, "project");
+      if (out_dir) assertSafePath(out_dir, "out_dir");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+    const scriptPath = `${programs_dir}professional_tb_gen.py`;
+    const argv = [scriptPath, project];
+    if (out_dir) argv.push("--out-dir", out_dir);
+    let output = "", status = "ERROR", result = {};
+    try {
+      const _r = _spawnSync("python3", argv, { timeout: 120000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8" });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+      const m = (_r.stdout || "").match(/\{[\s\S]*\}\s*$/);
+      if (m) { try { result = JSON.parse(m[0]); } catch { /* keep raw */ } }
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-4000); status = "ERROR";
+    }
+    return { content: [{ type: "text", text: JSON.stringify({ success: status === "PASS", status, ...result, log: output.slice(-2000) }) }] };
+  }
+);
+
 // ─── Tool: eda_cocotb ───
 server.tool(
   "eda_cocotb",
@@ -3668,7 +4006,7 @@ cd ${work_dir} && \\
 export PYTHONPATH="$(pwd):$PYTHONPATH" && \\
 export PATH=${TOOLS}/verilator/bin:${TOOLS}/iverilog/bin:${TOOLS}/bin:$PATH && \\
 export LD_LIBRARY_PATH=${TOOLS}/iverilog/lib:$LD_LIBRARY_PATH && \\
-make SIM=${sim} 2>&1
+make -j${_edaThreadsToken()} SIM=${sim} 2>&1
 `;
 
     const result = dockerExec(script, 300000);
@@ -4217,7 +4555,7 @@ server.tool(
     def_file: z.string().optional().describe("Input DEF file path (provide either def_file or gds_file)"),
     gds_file: z.string().optional().describe("Input GDS file path (provide either def_file or gds_file)"),
     top_cell: z.string().describe("Top cell name"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     output_format: z.enum(["spef", "spice"]).default("spef").describe("Output format: spef or spice"),
     output_dir: z.string().default("./extracted").describe("Output directory. v0.123: default changed from /tmp/extraction so artifacts land in the project tree."),
     promote_ports: z.boolean().default(false).describe("Inject `port makeall` into the extraction TCL so the emitted `.subckt <top>_flat` carries top-level ports (needed for device-level netgen LVS top-level pin matching). Only useful for output_format=spice. Default false (preserves the legacy portless extraction)."),
@@ -4228,9 +4566,11 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
+    field_solve_spef: z.string().optional().describe("Opt-in FIELD-SOLVED coupling upgrade: pass an existing grounded/analytical SPEF to UPGRADE it with real 3D BEM coupling. Inverts the PDK's own area+fringe cap to a fitted dielectric stack (programs/pdk_dielectric_fit.py) then runs the OSS solver FasterCap on the routed geometry (programs/fastercap_extract.py) — lateral + inter-layer crossover the analytical parallel-plate model misses. Requires def_file + custom_techlef. Self-reports NOT_APPLICABLE if FasterCap is absent (never a fabricated matrix). DISCLOSED: fitted stack, generic dielectric — NOT foundry rules.C, NOT crosstalk-SI sign-off. When set, this runs instead of Magic extraction."),
+    field_solve_container: z.string().default("vibeic-eda").describe("Docker container for FasterCap (field_solve_spef mode)"),
   },
-  async ({ def_file, gds_file, top_cell, pdk, output_format, output_dir, promote_ports, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+  async ({ def_file, gds_file, top_cell, pdk, output_format, output_dir, promote_ports, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, field_solve_spef, field_solve_container }) => {
     try {
       optPath(def_file, "def_file"); optPath(gds_file, "gds_file");
       assertSafeIdent(top_cell, "top_cell"); optPath(output_dir, "output_dir");
@@ -4238,7 +4578,27 @@ server.tool(
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+      optPath(field_solve_spef, "field_solve_spef"); assertSafeIdent(field_solve_container, "field_solve_container");
     } catch (e) { return guardError(e); }
+    // Opt-in field-solved coupling upgrade (shells to the plugin program).
+    if (field_solve_spef !== undefined) {
+      if (!def_file || !custom_techlef) {
+        return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "field_solve_spef requires def_file + custom_techlef" }) }] };
+      }
+      const t0s = Date.now();
+      const args = [`${VIBE_IC_PROGRAMS_DIR}/fastercap_extract.py`,
+        "--def", def_file, "--lef", custom_techlef, "--spef", field_solve_spef,
+        "--container", field_solve_container];
+      const o = _spawnSync("python3", args, { timeout: 1800000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (o.stdout || "") + (o.stderr || "");
+      return wrapResult({
+        success: !o.error && o.status === 0,
+        t0: t0s,
+        toolVersion: `fastercap_extract @ mcp-eda@${SERVER_VERSION}`,
+        error: o.error ? (o.error.message || String(o.error)) : (o.status === 0 ? undefined : `exited ${o.status}`),
+        output: merged,
+      });
+    }
     if (!def_file && !gds_file) {
       return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "Either def_file or gds_file is required" }) }] };
     }
@@ -4377,7 +4737,7 @@ quit
 // ─── Tool: eda_doc_extract (v2.6.0) ───
 server.tool(
   "eda_doc_extract",
-  "Extract plain text + structured JSON from vendor docs (.doc / .docx / .pdf / .ppt / .pptx / .xls / .xlsx / .txt / .html) for downstream Phase 1 / spec-derivation skills. v2.6.4: doc_extract.py now emits per-file coverage_score (text_chars / file_size_bytes) into INDEX.json, so the plugin gate binary_doc_low_extraction_warn (LL-36) can flag figure-heavy PDFs whose pdftotext output is essentially empty (<2%) and recommend installing pdfplumber/PyMuPDF for fallback extraction. v2.6.3: tighten success gate (re-add execSync r.success guard so a crashed run can't be misreported as success based on stale stdout) + align stdio capture style with eda_doctor doc-probes. v2.6.2: runs on HOST (not docker) since pdftotext / libreoffice / openpyxl are typically host-side tools and the iic-eda container omits them. Same execution-on-host pattern as eda_fpga_compile / eda_fpga_program.",
+  "Extract plain text + structured JSON from vendor docs (.doc / .docx / .pdf / .ppt / .pptx / .xls / .xlsx / .txt / .html) for downstream Phase 1 / spec-derivation skills. v2.6.4: doc_extract.py now emits per-file coverage_score (text_chars / file_size_bytes) into INDEX.json, so the plugin gate binary_doc_low_extraction_warn (LL-36) can flag figure-heavy PDFs whose pdftotext output is essentially empty (<2%) and recommend installing pdfplumber/PyMuPDF for fallback extraction. v2.6.3: tighten success gate (re-add execSync r.success guard so a crashed run can't be misreported as success based on stale stdout) + align stdio capture style with eda_doctor doc-probes. v2.6.2: runs on HOST (not docker) since pdftotext / libreoffice / openpyxl are typically host-side tools and the vibeic-eda container omits them. Same execution-on-host pattern as eda_fpga_compile / eda_fpga_program.",
   {
     in_dir: z.string().optional().describe("Directory of input docs (recurses)"),
     in_file: z.string().optional().describe("Single input file (alternative to in_dir)"),
@@ -4506,7 +4866,7 @@ server.tool(
 
     // 5. v2.6.2: doc-extraction toolchain probed on HOST (where pdftotext /
     //    libreoffice / openpyxl typically live). v2.6.0 probed in container
-    //    and always reported FAIL because the iic-eda image doesn't ship
+    //    and always reported FAIL because the vibeic-eda image doesn't ship
     //    these — but eda_doc_extract now runs on host (v2.6.2), so the
     //    probes must align with where the work actually happens.
     if (!skip_versions) {
@@ -4555,7 +4915,7 @@ server.tool(
     script_file: z.string().optional().describe("Path to script file (alternative to inline script)"),
     extra_args: z.array(z.string()).default([]).describe("Extra CLI args appended after the script"),
     timeout_sec: z.number().default(900).describe("Timeout in seconds (default 15 min)"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).optional().describe("engine=magic: which PDK to export (PDK/PDK_ROOT) and whose foundry .magicrc to load via -rcfile. REQUIRED for magic GDS/extraction scripts — without it magic aborts on env(PDK) and never reads the script. Ignored by other engines."),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).optional().describe("engine=magic: which PDK to export (PDK/PDK_ROOT) and whose foundry .magicrc to load via -rcfile. REQUIRED for magic GDS/extraction scripts — without it magic aborts on env(PDK) and never reads the script. Ignored by other engines."),
     custom_magicrc: z.string().optional().describe("engine=magic, pdk=custom: explicit path to the foundry .magicrc to pass via -rcfile."),
     pdk_root: z.string().optional().describe("engine=magic: PDK_ROOT to export (default /foss/pdks)."),
   },
@@ -5485,14 +5845,17 @@ ${signals.map((s, i) => `set_property port_width 1 [get_debug_ports u_ila_0/prob
 // ─── eda_analog_layout ───
 server.tool(
   "eda_analog_layout",
-  "Run Magic analog layout with matching/guard-ring constraints. Reads a SPICE netlist, "
-  + "places transistors with common-centroid / interdigitated matching directives, adds "
-  + "guard rings for substrate isolation, and exports GDS + LEF + extracted netlist. "
-  + "Supports GF180 and SKY130 analog devices (nfet/pfet). v0.108: analog hardmacro pipeline.",
+  "Run Magic on a sized SPICE netlist and stream GDS + LEF + extracted netlist. "
+  + "The matching / common-centroid / guard-ring directives are recorded but NOT yet "
+  + "auto-placed (that needs a real PCell/paint/place+route pass). ORGANIC #144: the tool "
+  + "inspects the streamed geometry and returns status DONE only when real placed geometry "
+  + "exists; if the netlist merely loaded and nothing was placed it returns status SCAFFOLD "
+  + "(never a fake success). Supports GF180 / SKY130 / IHP-SG13G2 analog devices. "
+  + "v0.108: analog hardmacro pipeline.",
   {
     spice_netlist: z.string().describe("Path to SPICE netlist (.sp) with sized transistors"),
     block_name: z.string().describe("Analog block name (e.g. 'bandgap', 'ldo')"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180").describe("Target PDK"),
+    pdk: z.enum(["gf180", "sky130", "sg13g2", "ihp", "custom"]).default("gf180").describe("Target PDK (native tech resolved family-agnostically)"),
     output_dir: z.string().describe("Output directory for GDS, LEF, extracted netlist"),
     matching_pairs: z.array(z.array(z.string()).min(2).max(2)).default([]).describe(
       "Pairs of instance names that must be matched (common-centroid), e.g. [['M1','M2'],['M3','M4']]"
@@ -5518,9 +5881,16 @@ server.tool(
     }
     fs.mkdirSync(output_dir, { recursive: true });
 
+    // Native tech resolution is family-agnostic: each installed PDK exposes
+    // its magicrc at `<PDK_ROOT>/<tech>/libs.tech/magic/<tech>.magicrc` and its
+    // netgen setup at `<tech>_setup.tcl`. ORGANIC-headline: IHP SG13G2 ships
+    // in the container (libs.tech/{magic,klayout,netgen}), so A5/A6 tech files
+    // resolve natively — no substitution.
     const pdkMap = {
       gf180: { tech: "gf180mcuD", magicrc: `${PDK_ROOT}/gf180mcuD/libs.tech/magic/gf180mcuD.magicrc` },
       sky130: { tech: "sky130A", magicrc: `${PDK_ROOT}/sky130A/libs.tech/magic/sky130A.magicrc` },
+      sg13g2: { tech: "ihp-sg13g2", magicrc: `${PDK_ROOT}/ihp-sg13g2/libs.tech/magic/ihp-sg13g2.magicrc` },
+      ihp: { tech: "ihp-sg13g2", magicrc: `${PDK_ROOT}/ihp-sg13g2/libs.tech/magic/ihp-sg13g2.magicrc` },
       custom: { tech: "custom", magicrc: custom_pdk_path || "" },
     };
     const pdkInfo = pdkMap[pdk];
@@ -5571,12 +5941,14 @@ puts "DONE: analog layout complete for ${block_name}"
     let stderr = mres.success ? "" : (mres.error || "");
     let exitCode = mres.success ? 0 : (mres.exitCode || 1);
 
+    const gdsOut = path.join(output_dir, `${block_name}.gds`);
+    const magOut = path.join(output_dir, `${block_name}.mag`);
     const result = {
       block_name,
       pdk,
       tcl_script: tclPath,
       outputs: {
-        gds: path.join(output_dir, `${block_name}.gds`),
+        gds: gdsOut,
         lef: path.join(output_dir, `${block_name}.lef`),
         extracted_netlist: path.join(output_dir, `${block_name}_extracted.sp`),
       },
@@ -5587,7 +5959,27 @@ puts "DONE: analog layout complete for ${block_name}"
       stderr_tail: stderr.slice(-2000),
     };
 
-    if (drc_check && exitCode === 0) {
+    // ORGANIC #144 — geometry-emptiness honesty. The TCL above is
+    // `readspice`+`gds write` with the matching / guard-ring directives
+    // emitted only as `puts INFO` comments — it loads the device hierarchy
+    // but PLACES nothing. Inspect the streamed GDS/.mag: if it carries no
+    // real placed geometry, this is a SCAFFOLD, not a placed layout — never
+    // report a fake DONE/success. `readspice` alone does not constitute
+    // placement, so the empty stream must not be treated as a real layout.
+    const geom = layoutHasGeometry({ gdsPath: gdsOut, magPath: magOut });
+    result.placement = {
+      status: geom.status,               // "DONE" (real geometry) | "SCAFFOLD"
+      has_geometry: geom.hasGeometry,
+      gds_geometry_records: geom.gdsRecords,
+      mag_geometry_lines: geom.magLines,
+      detail: geom.detail,
+    };
+    // DRC/LVS may only claim a verdict when magic ran AND real geometry
+    // exists — running DRC/LVS against an empty cell would falsely report
+    // "0 errors" / "match" on nothing placed.
+    const layoutOk = exitCode === 0 && geom.hasGeometry;
+
+    if (drc_check && layoutOk) {
       const drcCmd = `cd ${output_dir} && magic -dnull -noconsole -T ${pdkInfo.magicrc} -c 'load ${block_name}; drc check; drc count; quit'`;
       const drcRes = dockerExec(drcCmd, 120000);
       if (drcRes.success) {
@@ -5599,7 +5991,7 @@ puts "DONE: analog layout complete for ${block_name}"
       }
     }
 
-    if (lvs_check && exitCode === 0) {
+    if (lvs_check && layoutOk) {
       const lvsCmd = `cd ${output_dir} && netgen -batch lvs '${block_name}_extracted.sp ${block_name}' '${spice_netlist} ${block_name}' ${pdkInfo.tech}_setup.tcl ${block_name}_lvs.log`;
       const lvsRes = dockerExec(lvsCmd, 120000);
       if (lvsRes.success) {
@@ -5620,8 +6012,28 @@ puts "DONE: analog layout complete for ${block_name}"
       }
     }
 
-    result.success = exitCode === 0;
-    writeManifest(output_dir, { step: "eda_analog_layout", status: exitCode === 0 ? "PASS" : "FAIL", block: block_name, pdk });
+    // ORGANIC #144 — the tool succeeds ONLY when magic ran AND real geometry
+    // was placed. An empty stream (netlist loaded, nothing placed) is a
+    // SCAFFOLD, reported honestly — never a fake DONE. The manifest records
+    // SCAFFOLD (not PASS) so downstream gates and human review see the truth.
+    if (exitCode !== 0) {
+      result.status = "FAIL";
+      result.success = false;
+      result.message = `magic exited ${exitCode} — layout did not run.`;
+    } else if (!geom.hasGeometry) {
+      result.status = "SCAFFOLD";
+      result.success = false;
+      result.message =
+        `SCAFFOLD: ${geom.detail} The generated Magic TCL is ` +
+        `readspice + gds write with matching/guard-ring emitted only as ` +
+        `INFO comments; it does not place devices. Use a real auto-layout ` +
+        `pass (PCell/paint/place + guard-ring + route) before A5 sign-off.`;
+    } else {
+      result.status = "DONE";
+      result.success = true;
+      result.message = `DONE: analog layout complete for ${block_name} — ${geom.detail}`;
+    }
+    writeManifest(output_dir, { step: "eda_analog_layout", status: result.status, block: block_name, pdk });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
@@ -6162,7 +6574,7 @@ server.tool(
 // ~/.ivy2 / coursier. Everything runs in-container; no host FS writes.
 server.tool(
   "eda_spinalhdl_gen",
-  "Elaborate a SpinalHDL/sbt project to Verilog by running `sbt runMain <main_class>` inside the iic-eda container (OpenJDK 17 + sbt present; SpinalHDL pulled from Maven Central, cached). Unblocks Scala-source-only cores like VexRiscv/Murax. Returns success, generated .v files (sha256 + line counts) and a log tail.",
+  "Elaborate a SpinalHDL/sbt project to Verilog by running `sbt runMain <main_class>` inside the vibeic-eda container (OpenJDK 17 + sbt present; SpinalHDL pulled from Maven Central, cached). Unblocks Scala-source-only cores like VexRiscv/Murax. Returns success, generated .v files (sha256 + line counts) and a log tail.",
   {
     project_dir: z.string().describe("sbt project root INSIDE the container (contains build.sbt), e.g. /foss/designs/_vexriscv_gen"),
     main_class: z.string().describe("Fully-qualified runMain target, e.g. vexriscv.demo.GenSmallest"),

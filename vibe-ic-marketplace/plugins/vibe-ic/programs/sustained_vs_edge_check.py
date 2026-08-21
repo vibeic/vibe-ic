@@ -31,8 +31,11 @@ protocol. No chip / tester / PDK identifiers in this code.
 Usage:
     python3 sustained_vs_edge_check.py \\
         --rtl-dir ./rtl/ \\
-        --spec-text ./generated_docs/spec_text.txt \\
-        --out-dir /tmp/check
+        --spec-text ./generated_docs/spec_text.txt
+
+`--out-dir` is OPTIONAL and has no default: omit it and the gate writes no
+file at all (verdict on stdout). Pass a project-relative directory —
+e.g. `--out-dir ./reports/` — when you want the JSON report on disk.
 
 The `--spec-text` is any concatenation of input docs (post-pdftotext,
 libreoffice convert) — it just needs to be searchable text.
@@ -84,7 +87,8 @@ class SignalFinding:
 class Result:
     status: str
     findings: List[SignalFinding] = field(default_factory=list)
-    files_scanned: int = 0
+    files_scanned: int = 0          # files actually OPENED, not files globbed
+    files_unreadable: int = 0       # #492 — globbed but could not be read
     spec_signals: List[str] = field(default_factory=list)
 
 
@@ -101,6 +105,21 @@ def extract_sustain_clauses(spec_text: str) -> List[str]:
             continue
         out.append(s)
     return out
+
+
+def _is_readable(p: Path) -> bool:
+    """True when `p` can actually be opened.
+
+    #492 — separates "the glob yielded this path" from "this file exists and can
+    be read". A dangling symlink satisfies the former and not the latter, and
+    conflating them is how a denominator ends up counting a file that is not
+    there. Opens and closes without reading, so it stays cheap.
+    """
+    try:
+        with p.open("rb"):
+            return True
+    except OSError:
+        return False
 
 
 def scan_rtl_file(p: Path) -> List[tuple]:
@@ -141,14 +160,29 @@ def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
     ap.add_argument("--rtl-dir", required=True, type=Path)
     ap.add_argument("--spec-text", type=Path, help="Concatenated spec text (optional; gates more strictly when provided)")
-    ap.add_argument("--out-dir", type=Path, default=Path("/tmp/sustained_vs_edge"))
+    # #494 — a read-only validator writes NOTHING unless a caller asks for it.
+    # This used to default to a hardcoded `/tmp/sustained_vs_edge`, so every
+    # invocation — including the P0 umbrella's, which passes only --rtl-dir —
+    # deposited a JSON report at a fixed shared path nobody requested. Two
+    # concurrent umbrella runs (two projects, or CI alongside a local run)
+    # silently overwrote each other's report, so the file a human later read
+    # while diagnosing could belong to a different design with nothing marking
+    # it as such. A fixed name under a world-writable directory is also the
+    # textbook symlink-hijack target, and this repo's own
+    # `project_outputs_in_tree_check` FAILs a project for citing exactly such a
+    # /tmp artifact. Omitted now means stdout only; pass --out-dir to opt in.
+    ap.add_argument("--out-dir", type=Path, default=None,
+                    help="Directory to write the JSON report into. Omitted "
+                         "(the default) = write no file at all; the verdict "
+                         "goes to stdout only.")
     ap.add_argument("--strict", action="store_true", help="Treat warns as errors (exit 1)")
     args = ap.parse_args(argv)
 
     if not args.rtl_dir.is_dir():
         print(f"ERROR: rtl-dir not found: {args.rtl_dir}", file=sys.stderr)
         return 2
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.out_dir is not None:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
 
     sustain_clauses = []
     spec_signals: List[str] = []
@@ -162,7 +196,31 @@ def main(argv: List[str] | None = None) -> int:
                 spec_signals.append(tok.lower())
         spec_signals = list(set(spec_signals))
 
-    rtl_files = sorted([p for p in args.rtl_dir.rglob("*") if p.suffix.lower() in {".v", ".sv", ".vh", ".svh"}])
+    # #492 — a path the glob yields is not necessarily a path that can be READ.
+    # A dangling symlink matches `*.v` and `scan_rtl_file` swallows the resulting
+    # OSError and returns no findings, so the file was counted as scanned while
+    # contributing nothing. The count is now what was actually opened, and files
+    # that could not be are disclosed separately instead of padding the number.
+    _globbed = sorted([p for p in args.rtl_dir.rglob("*")
+                       if p.suffix.lower() in {".v", ".sv", ".vh", ".svh"}])
+    rtl_files = [p for p in _globbed if _is_readable(p)]
+    unreadable = [p for p in _globbed if p not in rtl_files]
+
+    # #492 — NOT CHECKED is not PASS. With nothing readable there is no evidence
+    # for any verdict, and rc 0 would certify a check that examined nothing.
+    # rc 2 is this repo's "NOT CHECKED / VACUOUS" code and is what the sibling
+    # `phase1_k5_quality_check` returns in the same situation.
+    # #492 — NOT CHECKED is not PASS. With nothing readable there is no evidence
+    # for any verdict, and rc 0 would certify a check that examined nothing.
+    # rc 2 is this repo's "NOT CHECKED / VACUOUS" code and is what the sibling
+    # `phase1_k5_quality_check` returns in the same situation.
+    if not rtl_files:
+        print(f"SKIP: sustained_vs_edge_check — no readable RTL under "
+              f"{args.rtl_dir} ({len(unreadable)} unreadable of "
+              f"{len(_globbed)} globbed); nothing examined, no verdict",
+              file=sys.stderr)
+        return 2
+
     findings: List[SignalFinding] = []
     for rf in rtl_files:
         for line_no, sig, raw, has_sus in scan_rtl_file(rf):
@@ -188,16 +246,25 @@ def main(argv: List[str] | None = None) -> int:
     warns = [f for f in findings if f.severity == "WARN"]
     status = "PASS" if not errors and (not args.strict or not warns) else "FAIL"
 
-    res = Result(status=status, findings=findings, files_scanned=len(rtl_files), spec_signals=spec_signals[:30])
-    out_json = args.out_dir / "sustained_vs_edge_check.json"
-    out_json.write_text(json.dumps(asdict(res), indent=2, default=str))
+    res = Result(status=status, findings=findings, files_scanned=len(rtl_files),
+                 files_unreadable=len(unreadable), spec_signals=spec_signals[:30])
+    # #494 — write only when asked. Kept at the original position (before the
+    # summary print) so the stdout the umbrella reads is byte-identical when
+    # --out-dir IS supplied; `out_json` stays None otherwise and the trailing
+    # `json:` line — which would name a path that does not exist — is dropped
+    # with it.
+    out_json = None
+    if args.out_dir is not None:
+        out_json = args.out_dir / "sustained_vs_edge_check.json"
+        out_json.write_text(json.dumps(asdict(res), indent=2, default=str))
     print(f"sustained_vs_edge_check: {status} — {len(errors)} errors, {len(warns)} warns, {len(rtl_files)} files scanned")
     print(f"findings: {len(findings)}")
     for f in findings[:20]:
         print(f"  [{f.severity}] {f.file}:{f.line} signal={f.signal}  sustain_counter={f.has_sustain_counter}")
         if f.spec_match:
             print(f"    spec: {f.spec_match}")
-    print(f"json: {out_json}")
+    if out_json is not None:
+        print(f"json: {out_json}")
     return 0 if status == "PASS" else 1
 
 
