@@ -329,3 +329,54 @@ def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
 def test_it_is_no_longer_in_the_audits_test_only_population():
     rep = _wiring_audit_report()
     assert "slot_pad_budget_check.py" not in (rep.get("test_only") or [])
+
+
+# --------------------------------------------------------------------------- #
+# the runner step's failure path, and where it writes
+# --------------------------------------------------------------------------- #
+# Round-4 mutation found three of these unguarded. Two are about a report
+# landing where its reader looks; the first is the doctrine one.
+
+def test_a_gate_that_COULD_NOT_RUN_is_FAIL_never_PASS(monkeypatch):
+    """"I could not look" and "I looked and it was fine" must never produce
+    the same verdict. Mutating this arm to PASS left every test green, which
+    means the runner could have lost the ability to run this gate at all and
+    reported a clean step forever."""
+    R = _runner()
+
+    def _boom(*a, **kw):
+        raise OSError("no such executable")
+
+    monkeypatch.setattr(R.subprocess, "run", _boom)
+    sr = R.step_slot_pad_budget(_project(_HOPELESS, with_slots=True), "chip_top")
+    assert sr.status == "FAIL", (
+        f"a gate that could not run reported {sr.status!r} — a check that "
+        f"could not look is not a clean check")
+    assert "could not run" in sr.detail
+
+
+def test_the_runner_writes_its_report_INSIDE_THE_PROJECT():
+    """Without `cwd=project` the relative `--json` path resolves against the
+    caller's working directory, so the record lands outside the project and
+    the reader finds nothing. Measured during the mutation run: it wrote into
+    the repository root, where only this repo's own suite_write_guard noticed."""
+    R = _runner()
+    p = _project(_HOPELESS, with_slots=True)
+    before = {q for q in Path.cwd().glob("reports")}
+    sr = R.step_slot_pad_budget(p, "chip_top")
+    assert (p / "reports" / "phase2" / "gates" / "slot_pad_budget.json").is_file(), \
+        "the step's record is not inside the project it judged"
+    assert {q for q in Path.cwd().glob("reports")} == before, \
+        "the step wrote a report outside the project"
+    assert sr.output_files and sr.output_files[0].startswith("reports/")
+
+
+def test_the_runner_and_the_flow_clause_declare_THE_SAME_report_path():
+    """Two producers, one path. If they drift, the flow's re-check writes
+    somewhere the runner's reader never looks, and both look fine alone."""
+    src = (PROG / "design_one_shot_runner.py").read_text(encoding="utf-8")
+    import re
+    m = re.search(r'out_rel = "([^"]+slot_pad_budget[^"]*)"', src)
+    assert m, "the runner declares no report path for this step"
+    assert m.group(1) in _clause(), (
+        f"runner writes {m.group(1)!r}, flow clause says {_clause()!r}")
