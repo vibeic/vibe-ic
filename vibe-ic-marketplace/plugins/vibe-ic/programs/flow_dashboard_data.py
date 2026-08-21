@@ -468,6 +468,59 @@ def _lightweight_status(
     return "pending", ""
 
 
+# Statuses a given mode's classifier CANNOT emit, so their count is structurally
+# 0 and must never be rendered as if it were a measurement. `_lightweight_status`
+# decides purely on output-file presence and has no branch returning "fail" or
+# "missing"; printing "fail 0" from it states a verdict the mode never computed.
+_UNEXPRESSIBLE = {
+    "lightweight": frozenset({"fail", "missing"}),
+    "full": frozenset(),
+}
+
+
+def _orchestrator_failures(project: Path) -> List[dict]:
+    """Failing step records quoted VERBATIM from reports/orchestrator/*.json.
+
+    These are the runner's OWN authoritative per-step verdicts. They are
+    reported as a flat list and are deliberately NOT joined onto dashboard step
+    rows: the orchestrator keys steps by runner-internal name ("pnr",
+    "yosys_synth") while the flow keys them by id ("21", "9"), and no mapping
+    between those vocabularies exists in this repo. Inventing one would let a
+    FAIL be painted onto the wrong row, which is worse than leaving it
+    unattributed -- it sends the reader somewhere specific and wrong.
+
+    `status` is preserved exactly as written (FAIL, FAIL_ECO_INERT, ...); it is
+    matched case-insensitively but never normalised, because the distinct tiers
+    carry distinct remediation.
+    """
+    out: List[dict] = []
+    odir = project / "reports" / "orchestrator"
+    try:
+        files = sorted(p for p in odir.glob("*.json") if p.is_file())
+    except OSError:
+        return out
+    for jf in files:
+        try:
+            doc = json.loads(jf.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for st in doc.get("steps") or []:
+            if not isinstance(st, dict):
+                continue
+            raw = str(st.get("status") or "")
+            if "FAIL" not in raw.upper():
+                continue
+            out.append({
+                "source": jf.name,
+                "name": str(st.get("name") or ""),
+                "status": raw,
+                "detail": str(st.get("detail") or ""),
+            })
+    return out
+
+
 def _map_compliance_status(raw_status: str) -> str:
     """Map a flow_compliance_check verdict to a dashboard status."""
     raw = str(raw_status or "").upper().replace("_", "-")
@@ -761,6 +814,8 @@ def collect(project, full: bool = False) -> dict:
         "plugin_version": _plugin_version(),
         "note": note,
         "summary": summary,
+        "summary_unavailable": sorted(_UNEXPRESSIBLE.get(mode, frozenset())),
+        "orchestrator_failures": _orchestrator_failures(project_path),
         "phases": phases_out,
     }
 

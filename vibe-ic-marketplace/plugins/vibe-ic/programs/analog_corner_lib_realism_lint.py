@@ -19,6 +19,9 @@ waiver), the finding is downgraded to an advisory WARNING (non-failing). A
 LEVEL=1 / ideal model used with NO disclosure is a hard FAIL — that is the
 silent substitution this lint exists to catch.
 
+...and the disclosure is now CHECKED AGAINST THE HOST, not merely counted.
+See DEFECT 5.
+
 Scans: `phase3/analog/**` AND `phase2/analog/**` for `*.{sp,cir,spice,spi,net}`
 
 Detection (chip-AGNOSTIC — structural SPICE tokens, no chip/SKU literal):
@@ -35,7 +38,16 @@ Verdict:
 Exit codes: 0 = PASS / WARN, 1 = FAIL, 2 = VACUOUS (nothing examined) or
 IO error.
 
-FOUR MEASURED DEFECTS THIS FILE REPAIRS
+Verdict inputs beyond the decks:
+  * `--container` / `--pdks-root` let the lint PROBE whether the L19-declared
+    target PDK is natively resolvable. The flow invokes this gate with a bare
+    `<project_dir>` and no flags, so both also read the environment —
+    $EDA_CONTAINER / $VIBEIC_EDA_CONTAINER (the names the rest of the plugin
+    already uses) and $VIBEIC_PDKS_ROOT. Only a POSITIVE resolution changes
+    anything; an unset or unreachable probe leaves every verdict exactly as it
+    was.
+
+FIVE MEASURED DEFECTS THIS FILE REPAIRS
 ---------------------------------------
 Nothing but this lint's own unit test had ever run it, so every widening in
 its disclosure path was untested against a tree that tried to abuse it. Ten
@@ -69,15 +81,48 @@ synthetic trees, five wrong answers:
      and was credited a plain PASS. Both halves are fixed: the scan covers
      both analog roots, and a genuinely empty scan routes through
      `_vacuous_exit` to rc 2.
+
+  5. THE DISCLOSURE WAS NEVER CHECKED AGAINST THE WORLD (vibe-ic#904). The
+     downgrade branch asked only "is a disclosure PRESENT". The disclosure it
+     accepts makes a FALSIFIABLE CLAIM about the host — that the declared
+     target process ships no public ngspice corner library — and the lint had
+     no way to tell a true one from a false one. Measured on the published
+     tree: a deck asserting `has NO public ngspice corner library` bought
+     `[WARN] … rc 0` for four LEVEL=1 model cards, while the very PDK it named
+     was installed and shipping SECTIONED corner libs for every device class
+     (mos hv/lv, res, cap, dio, hbt) in the pinned EDA image. A gate any deck
+     disarms with one sentence, on a premise the host refutes, is a check that
+     lies — and rewording the sentence would not have helped, because the
+     substantive wrong is the standin itself once the real libs are there.
+
+     So the disclosure is now REFUTABLE. When the L19-declared target PDK
+     resolves NATIVELY (`analog_pdk_availability.resolve_pdk` rung 1 staged /
+     rung 2 installed) AND that resolution enumerates real ngspice model libs,
+     no disclosure excuses a LEVEL=1 standin: the finding stays an ERROR and
+     the report carries the refuting evidence (rung, source, lib paths).
+
+     The asymmetry is the point, and it is borrowed from
+     `flow_compliance_check._refuse_stale_waivers`: ONLY POSITIVE evidence
+     refutes. No declaration, no probe, an unreachable container, a target
+     that resolves nowhere, or a native hit with no model libs — every one of
+     those leaves the disclosure standing and the verdict byte-identical to
+     before. This can only take an excuse away from a deck whose excuse the
+     host disproves; it can never invent a finding.
+
+     A LIVE project waiver is deliberately NOT refuted. A waiver is an
+     attributable human decision to accept a known gap; a prose disclosure is
+     a claim about the world. Only the claim is checkable, so only the claim
+     is checked.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import re
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import _path_layout as _pl
 import _vacuous_exit as _vx
@@ -259,6 +304,91 @@ def _project_waiver(project: Path) -> bool:
     return False
 
 
+# ── defect 5: is the disclosure's premise true on THIS host? ───────────────
+
+def _default_container() -> Optional[str]:
+    """The EDA container name from the environment, or None.
+
+    Reads the SAME two variables the rest of the plugin reads
+    (`phase3_one_shot_runner` uses EDA_CONTAINER, `sdf_gate_sim` /
+    `fastercap_extract` use VIBEIC_EDA_CONTAINER). No default name is
+    invented: absent both, there is no probe and nothing changes."""
+    for var in ("EDA_CONTAINER", "VIBEIC_EDA_CONTAINER"):
+        v = (os.environ.get(var) or "").strip()
+        if v:
+            return v
+    return None
+
+
+def _default_pdks_root() -> Optional[str]:
+    """PDK install root from the environment, or None (→ the resolver's own
+    default). The flow calls this gate with no flags, so the environment is
+    the only channel it has."""
+    v = (os.environ.get("VIBEIC_PDKS_ROOT") or "").strip()
+    return v or None
+
+
+def native_pdk_evidence(project: Path, container: Optional[str] = None,
+                        pdks_root: Optional[str] = None,
+                        lister: Optional[Callable[[str], List[str]]] = None,
+                        ) -> Optional[Dict[str, Any]]:
+    """POSITIVE evidence that the L19-declared target PDK natively supplies
+    ngspice model libraries on this host — or None.
+
+    Delegates BOTH halves to the modules that own them, so this lint cannot
+    drift from the flow's own answer:
+      * the declared target  → `analog_netlist_pdk_check._declared_pdk_target`
+      * the resolution       → `analog_pdk_availability.resolve_pdk`
+
+    Returns None — meaning "nothing affirmed, honour the disclosure" — for
+    every non-positive outcome: module unavailable, no L19 declaration, probe
+    unreachable, target resolved nowhere, or resolved with an EMPTY model-lib
+    list (a PDK dir with no ngspice libs affirms nothing). Never raises.
+    Reports PATHS ONLY, never PDK content (NDA hygiene)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import analog_netlist_pdk_check as _npc
+        import analog_pdk_availability as _apa
+    except Exception:
+        return None
+    try:
+        declared = _npc._declared_pdk_target(project)
+    except Exception:
+        return None
+    if not declared:
+        return None
+
+    root = pdks_root or _apa.DEFAULT_PDKS_ROOT
+    if lister is None and not container:
+        # The default `/foss/pdks` is a CONTAINER path — `resolve_pdk` refuses
+        # to probe the host FS for it (CI-nondeterministic). But when that path
+        # IS a real directory here, we are running inside the container (or the
+        # PDKs are host-mounted) and the local listing is the honest answer.
+        if Path(root).is_dir():
+            lister = _apa._local_lister
+    try:
+        res = _apa.resolve_pdk(declared, project=str(project), pdks_root=root,
+                               container=container, lister=lister)
+    except Exception:
+        return None
+    if not (isinstance(res, dict) and res.get("available")
+            and res.get("probe_ok")):
+        return None
+    libs = [str(p) for p in (res.get("spice_libs") or [])]
+    if not libs:
+        return None          # resolved, but nothing to actually simulate with
+    return {
+        "target": declared,
+        "rung": res.get("rung"),
+        "source": res.get("source"),
+        "matched_dir": res.get("matched_dir"),
+        "ngspice_dir": res.get("ngspice_dir"),
+        "model_lib_count": len(libs),
+        "model_libs": libs,
+        "resolver_reason": res.get("reason"),
+    }
+
+
 def _analog_roots(project: Path) -> List[Path]:
     """Every analog root that exists. `_pl.analog_dir` first so the canonical
     layout is unchanged; `phase2/analog` because A4 accepts it (defect 4)."""
@@ -273,11 +403,14 @@ def _analog_roots(project: Path) -> List[Path]:
     return roots
 
 
-def run_audit(project: Path) -> dict:
+def run_audit(project: Path, container: Optional[str] = None,
+              pdks_root: Optional[str] = None,
+              lister: Optional[Callable[[str], List[str]]] = None) -> dict:
     roots = _analog_roots(project)
     if not roots:
         return {"gate": GATE, "verdict": "SKIP", "reason": "no_analog_dir",
-                "decks_scanned": 0, "roots_scanned": [], "findings": []}
+                "decks_scanned": 0, "roots_scanned": [], "findings": [],
+                "native_pdk_evidence": None}
 
     decks: List[Path] = []
     for root in roots:
@@ -287,9 +420,13 @@ def run_audit(project: Path) -> dict:
     rel_roots = [str(r.relative_to(project)) for r in roots]
     if not decks:
         return {"gate": GATE, "verdict": "SKIP", "reason": "no_analog_decks",
-                "decks_scanned": 0, "roots_scanned": rel_roots, "findings": []}
+                "decks_scanned": 0, "roots_scanned": rel_roots,
+                "findings": [], "native_pdk_evidence": None}
 
     waived = _project_waiver(project)
+    # defect 5 — probed ONCE per audit, never per deck.
+    native = native_pdk_evidence(project, container=container,
+                                 pdks_root=pdks_root, lister=lister)
     findings: List[dict] = []
     any_fail = False
     any_warn = False
@@ -302,30 +439,55 @@ def run_audit(project: Path) -> dict:
         hits = _deck_has_ideal_model(text)
         if not hits:
             continue
-        disclosed = (waived or _text_discloses(text)
-                     or _sibling_disclosure(deck.parent))
+        claimed = _text_discloses(text) or _sibling_disclosure(deck.parent)
+        # defect 5 — a DISCLOSURE is a claim about the host and is refuted by
+        # a host that supplies the models natively. A WAIVER is an
+        # attributable human acceptance and is not refuted.
+        refuted = bool(claimed and native)
+        disclosed = bool(waived or (claimed and not native))
         rel = str(deck.relative_to(project))
         for line_no, name, reason in hits:
             sev = "WARNING" if disclosed else "ERROR"
+            if disclosed:
+                rule = "CORNER_LIB_STANDIN_DISCLOSED"
+                tail = (" — DISCLOSED standin, advisory only "
+                        "(MODELED, not silicon sign-off)")
+                if refuted:
+                    # Say which of the two things actually held this at
+                    # advisory, or the record reads as if the disclosure did.
+                    tail += (
+                        ". NOTE: the deck's disclosure is REFUTED by this host "
+                        f"(target '{native['target']}' resolves natively, rung "
+                        f"{native['rung']}) — it is the LIVE PROJECT WAIVER, "
+                        "not the disclosure, holding this below ERROR")
+            elif refuted:
+                rule = "CORNER_LIB_STANDIN_DISCLOSURE_REFUTED"
+                tail = (
+                    " whose standin DISCLOSURE is REFUTED by this host: the "
+                    f"L19-declared target '{native['target']}' resolves "
+                    f"natively (rung {native['rung']}, {native['source']}) "
+                    f"with {native['model_lib_count']} ngspice model lib(s), "
+                    f"e.g. {native['model_libs'][0]}. The real corner library "
+                    "is available, so the standin is not disclosed — it is "
+                    "unjustified. Bind the native corner lib, or record an "
+                    "explicit project waiver."
+                )
+            else:
+                rule = "CORNER_LIB_IDEAL_MODEL"
+                tail = (" used with NO disclosure; corner numbers do not "
+                        "reflect the foundry corner library. Use the real "
+                        "foundry corner lib, or add a documented standin "
+                        "disclosure / waiver.")
             findings.append({
                 "file": rel,
                 "line": line_no,
                 "model": name,
                 "reason": reason,
                 "severity": sev,
-                "rule": ("CORNER_LIB_STANDIN_DISCLOSED" if disclosed
-                         else "CORNER_LIB_IDEAL_MODEL"),
-                "message": (
-                    f"{rel}:{line_no} model '{name}' is a {reason} device "
-                    f"model" + (
-                        " — DISCLOSED standin, advisory only "
-                        "(MODELED, not silicon sign-off)" if disclosed else
-                        " used with NO disclosure; corner numbers do not "
-                        "reflect the foundry corner library. Use the real "
-                        "foundry corner lib, or add a documented standin "
-                        "disclosure / waiver."
-                    )
-                ),
+                "rule": rule,
+                "disclosure_refuted": refuted,
+                "message": (f"{rel}:{line_no} model '{name}' is a {reason} "
+                            f"device model" + tail),
             })
         if disclosed:
             any_warn = True
@@ -339,6 +501,9 @@ def run_audit(project: Path) -> dict:
         "decks_scanned": len(decks),
         "roots_scanned": rel_roots,
         "findings": findings,
+        # The measurement the refutation rests on — present (or explicitly
+        # null) on every non-SKIP report, so a reader can audit the verdict.
+        "native_pdk_evidence": native,
     }
 
 
@@ -349,13 +514,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("--json", default=None, help="JSON report output path")
+    ap.add_argument("--container", default=None,
+                    help="EDA container to probe for the L19-declared target "
+                         "PDK (default: $EDA_CONTAINER / "
+                         "$VIBEIC_EDA_CONTAINER; absent both, no probe)")
+    ap.add_argument("--pdks-root", default=None,
+                    help="PDK install root to probe (default: "
+                         "$VIBEIC_PDKS_ROOT, else the resolver's)")
     args = ap.parse_args(argv)
 
     if not args.project_dir.is_dir():
         print(f"ERROR: {args.project_dir} is not a directory", file=sys.stderr)
         return 2
 
-    report = run_audit(args.project_dir.resolve())
+    report = run_audit(args.project_dir.resolve(),
+                       container=args.container or _default_container(),
+                       pdks_root=args.pdks_root or _default_pdks_root())
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
@@ -373,6 +547,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(_vx.verdict_line(GATE, passed, skipped, reason,
                            pass_token=("WARN" if verdict == "WARN"
                                        else "PASS")))
+    ev = report.get("native_pdk_evidence")
+    if ev:
+        print(f"  [EVIDENCE] native PDK for L19 target '{ev['target']}': "
+              f"rung {ev['rung']} ({ev['source']}), "
+              f"{ev['model_lib_count']} ngspice model lib(s) under "
+              f"{ev.get('ngspice_dir') or ev.get('matched_dir') or 'input/pdk/'}")
     for f in report["findings"]:
         print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
     if passed and skipped:
