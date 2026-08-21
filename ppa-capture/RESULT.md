@@ -377,11 +377,33 @@ measurement:
 The magnitude error (1.873x low, clock group at exactly 0.0%) was the weaker
 finding — it took a controlled re-measurement to establish. The invariance is
 available inside the flow, from the manifest the sweep already writes.
+**Corpus-swept on a real 21-arm published sweep, and NARROWED BY IT.** The
+invariance test alone is unusable:
+
+    axes with >=2 arms                                     54
+    invariant across arms whose implementations differ     24   <-- unusable
+      + a SIBLING of the same quantity varies               8
+        + the frozen value is a numeric sentinel            4
+
+Most of the 24 are a clean design being clean on every arm — a DRC count of zero
+on all 21 arms is correct, and flagging it is noise. The discriminator is the
+sibling: when one reading of a quantity moves across the arms and another reading
+of the SAME quantity does not, the frozen one is not describing the arms. It
+needs no reference measurement and no knowledge of the right value, which is what
+lets it run inside the flow.
+
+**The top hit is a live defect, and another lane found it by a completely
+different route.** A timing summary sits at the sentinel `0.0` on all 21 arms
+while its sibling reading of the same quantity spreads over 20 distinct values —
+from a multi-corner report whose corner key the comparison gate separately
+refuses as null (the cross-layer lane's `SCOPE_SENTINEL`). Two methods with
+nothing in common converging on one record is the strongest evidence either can
+give, and this one adds what the scope check cannot: **the number itself does not
+move when the thing it measures does.**
+
 **(o)** yes, and it would have fired on arm 2 rather than on arm 60.
-**(d)** yes — it is a distinct-value count against a distinct-identity count, so
-it fires on any axis whose session reads upstream of the lever. Two arms make it
-non-vacuous, so it must not be gated behind a minimum sweep size; the record
-says a one-arm sweep is skipped and SAYS it was skipped.
+**(d)** yes — demonstrated: run on a sweep it was not written against, it named
+eight candidates and four strong ones without being told what to look for.
 
 ### A-9 · a writer enforces the field shapes its declared consumer requires · `benchmark.verify_claim_done`
 
