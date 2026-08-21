@@ -1,13 +1,34 @@
-# Checking the check — seven ways a verification step lied tonight
+# Checking the check — nine ways a verification step lied tonight
 
 Companion to `HARVEST_RULE.md`. That file says how to judge a worktree. This one is about
 the step *after* judging: the check that says the judgement is sound. Between `jharv2` and
-`jharv3`, seven separate checks reported success while doing nothing, or the wrong thing.
+`jharv3`, nine separate checks reported success while doing nothing, or the wrong thing.
 **Every one was silent, and every one looked exactly like a pass.**
 
 Written from shard C (`jharv3`, .108) with shard B's findings (`jharv2`, .105) folded in.
-Neither of us found all seven alone; each found the other's by re-running our own audit
+Neither of us found all nine alone; each found the other's by re-running our own audit
 against the other's description.
+
+---
+
+## The one that produced all the others
+
+Both of us wrote the correct guard, and both of us wrote it somewhere that could not enforce it.
+
+- `jharv3` wrote *"a tool that warns and answers anyway is a tool that lied"* **into this
+  document** — then wrote a new script calling that tool with its stderr discarded. It
+  returned an empty set, which read as "no differing files", for a commit that has 14.
+- `jharv2` wrote `[ -s "$LIVE" ] || exit 1` **into `resolve_origin.sh`** — then wrote an
+  ad-hoc coverage check without it, which grepped an empty authority and called 21 covered
+  commits uncovered.
+
+> **A guard in a document, or in a sibling script, is not a guard. It is a note about a
+> guard.** The only version that works is the one the calling path cannot skip: in the
+> function that does the comparison, in the tool that writes the annotation, asserted before
+> the result is allowed to be reported.
+
+Every mode below is downstream of this. Each was a place where the right check existed
+somewhere and the executing path did not run it.
 
 ---
 
@@ -89,9 +110,37 @@ already been cured of.
 
 ---
 
+## 8. A resolver that inherits the claim it was meant to check
+
+When origin could not confirm a head, one resolver passed the **host's** label straight
+through — so a row the host called `ON_REMOTE` stayed `ON_REMOTE` with `-` where the ref name
+belongs. 16 rows read "safe to delete, it is on the remote" with nothing on the remote behind
+them.
+
+> A resolver that cannot confirm must say **NOT CONFIRMED**, never fall back to the claim it
+> was called to adjudicate.
+
+## 9. An empty authority that greps clean
+
+A coverage check read a live-refs file built by an `ls-remote` that had failed after a
+directory change. The file was **empty**; the check grepped it and reported all 21 heads
+uncovered — including an old `main` commit, which cannot be. It failed *loudly* (21 false
+findings) and was caught only because one finding was absurd.
+
+> Assert the authority is **non-empty** before consulting it, and **name** which authority
+> was used in the output. When nothing in the result looks absurd, nobody catches it.
+
+## An authority neither of us was consulting
+
+GitHub's **`refs/pull/*/head`** keeps a commit alive when no branch does. Ignoring it does not
+lose work — it produces the opposite error, a row that says "on nothing, I rescued it" when
+the truth is "GitHub held it all along". Measured: **27 of 76** orphaned prior heads (jharv2)
+and **23 of 86** rescue rows (jharv3) were already held by a PR ref. Harmless refs, but a
+false sentence in a file people act on.
+
 ## The shape they share
 
-In all seven the failing check **printed the same thing as a passing one**. None threw, none
+In all nine the failing check **printed the same thing as a passing one**. None threw, none
 exited non-zero, none looked wrong in a log.
 
 - A check that examined nothing and a check that found nothing are indistinguishable
