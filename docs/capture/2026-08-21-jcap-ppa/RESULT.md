@@ -17,8 +17,15 @@ DECLARED, and theirs is declared. Both are flagged in the table and folded into
 **A-3**.
 
 Tree distilled against: `origin/main` @ `a00f53f20`, plugin **v1.11.66**; then
-merged up to `81cd5321b`, plugin **v1.11.68**, which is what every figure below was
-last re-measured on. Main moved 30 commits under this branch while it was open,
+merged up to `81cd5321b`, plugin **v1.11.68**. What that re-pin does and does not
+claim, precisely: the live gate figures, both quoted pytest figures and every
+record/table tally WERE re-run on the merged tree, and one of each was wrong
+(619 gates, `18 passed`, two `26`s). The **corpus-sweep figures in the table
+below are dated to the base** and were not re-derived, because each needs the
+exact screen that produced it and a guessed screen returns a confident wrong
+number — which is the failure `A-27` records. The drift is bounded instead: of
+1238 plugin `.py` files, main changed **12** (six new programs, six tests) and
+none is in the PPA layer, so no swept population moved by more than six. Main moved 30 commits under this branch while it was open,
 and one of them (`506ff68c1`) landed this bundle's own earlier snapshot at the
 canonical path — so this branch UPDATES that bundle rather than adding a second
 copy, and the fourteen records it carried are a subset of the thirty here.
@@ -144,7 +151,7 @@ also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 |---|---|
 | a PASS must say how much it looked at | `programs/gate_discloses_denominator_check.py` — a shipped gate over a 493-program population, with four measured walking bugs in its own header |
 | a gate that read NOTHING must not exit 0 | `programs/gate_zero_denominator_refuses_check.py` — and its header states exactly why the first gate does not imply it, which is the distinction I would otherwise have re-derived |
-| a bad invocation is 3, and asking for `--help` is not a bad invocation | `programs/_ppa/cli_exit.py` reads the exit code rather than catching the type; `test_ppa_layer_exit_contract.py` carries BOTH arms — the two are one defect from opposite sides, so a suite testing one manufactures the other |
+| a bad invocation is 3, and asking for `--help` is not a bad invocation | `programs/_ppa/cli_exit.py` reads the exit code rather than catching the type; `test_ppa_layer_exit_contract.py` carries BOTH arms — the two are one defect from opposite sides, so a suite testing one manufactures the other. **The repo-wide form of this landed while this branch was open** and is worth the lander's attention: `programs/_gate_usage_exit.py` gives new gates an rc 3 because rc 2 already means VACUOUS, and `programs/_gate_invocation.py` recovers the distinction for the 1232 programs that predate it by reading the callee's error protocol out of its stderr. Their own measurement is the population: of 241 registered structural gates, **39 never got past argument parsing and every one was recorded as a benign input-missing skip**. I hit this live in this lane — the backlog sanitiser answered rc 2 to a missing `--file` and I read it as a content verdict before checking. `classify_not_invocable` was run on that exact invocation and named it, with a genuine content FAIL and a clean PASS as controls returning None |
 | a present-but-empty population is never a pass | `tests/test_ppa_layer_vacuous_population.py` — the right question, on 8 of 19 programs; the coverage gap is recorded under **A-3**, not as a class of its own |
 
 Three more are fixed on this tree but their guard is the fix itself, and the
