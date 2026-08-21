@@ -235,6 +235,26 @@ _NOT_PROSE: Dict[str, str] = {
         "SAME entry split as the shared `parse_def_pins` reader so the two "
         "cannot disagree about what an entry is, and a pin carrying no USE "
         "records the empty string rather than guessing a class. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "crosslayer_rewrite_equivalence::module_ports":
+        "A Verilog-2005 / SystemVerilog MODULE HEADER. The matched text is "
+        "`module <name> #(...) (...) ;` and, inside it, the port declaration "
+        "form `input|output|inout [wire|reg|logic] [signed] [<range>] <name>` "
+        "-- productions of the HDL grammar, in which there is no form that "
+        "DENIES a port: Verilog gives no way to write 'this module does NOT "
+        "have an input named clk'. What the function returns is not a claim "
+        "about the design read out of a sentence; it IS the module's "
+        "interface, the same text the frontend elaborates, and the frontend "
+        "-- not a neighbouring comment -- is what decides whether the port "
+        "exists. A comment reading `// b is not used` leaves `b` in the "
+        "elaborated interface, so honouring it would make this reader "
+        "disagree with the compiler that consumes the wrapper it builds. A "
+        "module that is not found returns [] and the caller turns that into "
+        "NOT_MEASURED rather than an empty-but-fine wrapper, so absence is "
+        "refused rather than read as a value. The two defects this gate was "
+        "built from (#706 pdk_target, #711 die_area_budget_um) both read "
+        "English design documents, where denial is spellable and was spelled; "
+        "the direct precedents here are `digital_hardmacro_gen::read_interface` "
+        "(DEF PINS) and `digital_hardmacro_check::parse_lef` above.",
 }
 
 
