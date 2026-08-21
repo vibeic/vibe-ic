@@ -83,6 +83,7 @@ import step_metrics as _sm  # vibe-ic#1080 — the ONE per-step metrics mechanis
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
 import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
+import emitted_script_portability_check as _esp  # the ONE host-path predicate
 import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
 
@@ -328,6 +329,75 @@ def _to_container_path(host_path: str, container: str) -> str:
         if p.startswith(src + "/"):
             return dst + p[len(src):]
     return p
+
+
+def _emitted_script_root_tcl(script_path: Path, project: Path) -> str:
+    """Tcl prologue defining `$RUN_ROOT` from the script's OWN location.
+
+    MEASURED DEFECT: an emitted analysis script is emitted so a reviewer can
+    RE-RUN the measurement, and 26 of 34 emitted scripts on one real run tree
+    hard-coded an absolute path back into the directory they were written for.
+    Such a script re-runs nowhere else, and any hash-based identity over it is
+    defeated by the run directory — two runs of a byte-identical measurement
+    configuration hash differently because they ran in different places.
+
+    `info script` is set by every Tcl `source`, including the one that
+    `sta -no_init -exit <file>` performs (verified in the pinned image: it
+    returns the script's own path). So this resolves correctly whether the
+    project is bind-mounted at its host path or at a canonical one, which is
+    exactly the case a hard-coded path cannot survive.
+
+    The number of `..` levels is computed from where the script is being
+    written, never assumed."""
+    if not _path_is_under(script_path, project):
+        # The deck is being written OUTSIDE the run tree, so it has no fixed
+        # relationship to the run root and `$RUN_ROOT` cannot be resolved from
+        # its own location. Emit no prologue; `_run_root_tcl_path` sees the
+        # same condition and falls back to absolute container paths, which is
+        # the pre-fix behaviour and is correct for a deck that is not part of
+        # the tree it measures.
+        return ""
+    rel = os.path.relpath(_norm_abs(project), _norm_abs(script_path.parent))
+    parts = [q for q in rel.split(os.sep) if q not in ("", ".")]
+    expr = ("[file join [file dirname [info script]] %s]" % " ".join(parts)
+            if parts else "[file dirname [info script]]")
+    return (
+        "# PORTABLE PATHS — every path under the run root below is resolved\n"
+        "# against THIS script's own location, so the script re-runs from a\n"
+        "# copy of the run tree, on another host, and inside a container that\n"
+        "# mounts the project somewhere else. Paths OUTSIDE the run root (the\n"
+        "# PDK, the tool install) are the environment's and are left alone.\n"
+        f"set RUN_ROOT [file normalize {expr}]\n"
+    )
+
+
+def _norm_abs(p) -> str:
+    return os.path.normpath(os.path.abspath(str(p)))
+
+
+def _path_is_under(path, root) -> bool:
+    """True when `path` is `root` or lies inside it. One definition, because
+    the prologue and the path speller must agree: a `$RUN_ROOT/...` path in a
+    deck that never defines `$RUN_ROOT` reads the empty string as a directory
+    and the tool measures the wrong thing without saying so."""
+    p, r = _norm_abs(path), _norm_abs(root)
+    return p == r or p.startswith(r.rstrip("/") + "/")
+
+
+def _run_root_tcl_path(host_path, project: Path, container: str,
+                       script_path: Path) -> str:
+    """A path as the emitted script at `script_path` should spell it.
+
+    `$RUN_ROOT/<relative>` when BOTH the deck and the target sit inside the
+    run root — portable, and the deck can resolve the variable. Otherwise the
+    container path, unchanged: a PDK or tool path is not this run's to
+    relativise, and rewriting it would break the script rather than port it."""
+    if (_path_is_under(script_path, project)
+            and _path_is_under(host_path, project)):
+        rel = os.path.relpath(_norm_abs(host_path),
+                              _norm_abs(project)).replace(os.sep, "/")
+        return "$RUN_ROOT/" + rel
+    return _to_container_path(str(host_path), container)
 
 
 def _container_path_covered(host_path: str, container: str) -> bool:
@@ -36481,11 +36551,17 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     sdc_path = pnr_out / "constraint.sdc"
     if not (netlist.is_file() and sdc_path.is_file()):
         return False
-    netlist_c = _to_container_path(str(netlist), container)
-    sdc_c = _to_container_path(str(sdc_path), container)
+    # PORTABLE PATHS (see `_run_root_tcl_path`): the netlist / SDC / SPEF / VCD
+    # live INSIDE the run root, so this deck reaches them through `$RUN_ROOT`
+    # and re-runs from a copy of the tree. The liberty does not — it is the
+    # environment's path and stays as the container spells it. `rpt_c` is used
+    # in the SHELL redirect, not inside the deck, so it stays a real path.
+    tcl_path = power_rpt.parent / f"power_{top}.tcl"
+    netlist_c = _run_root_tcl_path(netlist, project, container, tcl_path)
+    sdc_c = _run_root_tcl_path(sdc_path, project, container, tcl_path)
     lib_c = _to_container_path(str(pdk.liberty), container)
     rpt_c = _to_container_path(str(power_rpt), container)
-    spef_c = (_to_container_path(str(spef_path), container)
+    spef_c = (_run_root_tcl_path(spef_path, project, container, tcl_path)
               if spef_path else None)
     spef_disc = spef_path.name if spef_path else "none (netlist-only)"
     macro_libs_tcl = "\n".join(
@@ -36503,7 +36579,7 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     analysis_mode = "vector_vcd" if vcd else "vectorless_sdc"
     vcd_tcl = ""
     if vcd:
-        vcd_c = _to_container_path(str(vcd), container)
+        vcd_c = _run_root_tcl_path(vcd, project, container, tcl_path)
         vcd_tcl = (f"if {{[catch {{read_power_activities -vcd {vcd_c}}} "
                    f"_vcd_err]}} {{\n"
                    f"  puts \"READ_VCD_FAIL: $_vcd_err\"\n}}\n")
@@ -36512,8 +36588,7 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     # SPEF for THIS run exists — a `read_spef` of a file that is not there is
     # how a session ends up quietly measuring something else.
     spef_tcl = f"read_spef {spef_c}\n" if spef_c else ""
-    tcl_path = power_rpt.parent / f"power_{top}.tcl"
-    tcl_path.write_text(f"""
+    tcl_path.write_text(f"""{_emitted_script_root_tcl(tcl_path, project)}
 read_liberty {lib_c}
 {macro_libs_tcl}
 read_verilog {netlist_c}
@@ -36540,6 +36615,19 @@ exit
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
     )
+    # GUARD, at the point of emission. `_esp.host_paths_in` is the ONE
+    # definition of "an absolute path pointing back into the run root"; the
+    # standalone `emitted_script_portability_check` CLI reads the same
+    # predicate over a whole tree. If this deck ever regains a hard-coded run
+    # path it says so here, in the run's own notes, rather than being found
+    # later by an identity hash that silently will not match.
+    _leaked = _esp.host_paths_in(tcl_path.read_text(errors="replace"), project)
+    if _leaked:
+        notes.append(
+            f"power analysis deck {tcl_path.name} carries {len(_leaked)} "
+            f"absolute path(s) INTO the run root (first: line {_leaked[0][0]}, "
+            f"{_leaked[0][1]}) — it will not re-run from a copy of this tree "
+            f"and any hash over it is defeated by the run directory")
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
     # If OpenSTA ran successfully but the file is small (just the
     # categorical breakdown), prepend an envelope so the report carries
