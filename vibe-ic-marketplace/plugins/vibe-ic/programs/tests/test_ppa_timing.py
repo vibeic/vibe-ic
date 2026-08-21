@@ -44,6 +44,33 @@ worst slack min 0.54
 tns min 0.00
 """
 
+#: F-10b, as a specimen: the emitter dumps the worst FEW paths of a group, so
+#: THREE path blocks land in ONE (clock, check) view with three different
+#: slacks. Two name their endpoints; the third prints a Startpoint and NO
+#: Endpoint, which is the case the ordinal exists for. Every other field is
+#: identical across the three, so the only thing that can tell these rows apart
+#: is the path identity.
+MULTIPATH = """\
+=== SETUP (max-RC corner, SPEF=max, liberty=/pdks/x_fd_sc_hd__ss_100C_1v60.lib) ===
+worst slack max 5.20
+tns max 0.00
+Startpoint: u_p/q (rising edge-triggered flip-flop clocked by clk)
+Endpoint: u_q/d (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+  5.20   slack (MET)
+Startpoint: u_r/q (rising edge-triggered flip-flop clocked by clk)
+Endpoint: u_s/d (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+  5.32   slack (MET)
+Startpoint: u_t/q (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+  5.36   slack (MET)
+SIGNOFF_WORST_PATHS_REPORTED path_delay=max group_path_count=3
+"""
+
 #: The exact shape of the three published reports that founded this defect:
 #: nothing was analysed, and the summary lines read 0.00 BECAUSE of that.
 NO_PATHS = """\
@@ -164,17 +191,71 @@ def test_every_row_carries_all_eight_scope_keys(tmp_path):
 
     All eight keys are always present: an omitted key and a null key are
     different claims to a reader, and only one of them is true.
+
+    A row MAY carry more than the eight, and the set of extras is CLOSED: only
+    `timing.*.worst_path_slack_ns` may add one, and only from
+    `_PATH_SCOPE_KEYS`. That metric is emitted once per reported path, so
+    without a key naming the path several rows collide as one identity holding
+    three different slacks. An undeclared extra is refused here rather than
+    allowed as a superset: a scope key nobody declared makes a record
+    incomparable to every other record, which is the failure the eight exist to
+    prevent.
     """
     proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER,
                                "sta_spef_based.rpt": SINGLE_CORNER_STAMPED})
     rows, _ = timing.timing_rows(proj)
     assert rows
     for r in rows:
-        assert set(r["scope"]) == set(timing._SCOPE_KEYS), r
+        keys = set(r["scope"])
+        assert keys >= set(timing._SCOPE_KEYS), r
+        extras = keys - set(timing._SCOPE_KEYS)
+        assert extras <= set(timing._PATH_SCOPE_KEYS), r
+        if extras:
+            assert r["metric"].endswith(timing._PATH_METRIC_SUFFIX), r
         assert r["schema"] == "vibeic.ppa.metric.v1"
         assert r["status"] in (timing.MEASURED, timing.NOT_MEASURED,
                                timing.INVALID)
         assert "source" in r and r["source"]["tool"] == "opensta"
+
+
+def test_every_reported_path_row_says_WHICH_path(tmp_path):
+    """The F-10b defect: `worst_path_slack_ns` is emitted once per reported
+    path, and until v1.11.33 every one of them carried the same scope -- so one
+    view held three different slacks under one identity and every consumer
+    refused the set.
+
+    Each such row must name its path: the endpoints when the artefact gives
+    them, an ordinal only when it does not. And no two rows of that metric may
+    share a scope, which is the property that was actually broken.
+    """
+    proj = _project(tmp_path, {"sta_multipath.rpt": MULTIPATH,
+                               "sta_spef_multicorner.rpt": MULTICORNER,
+                               "sta_spef_based.rpt": SINGLE_CORNER_STAMPED})
+    rows, _ = timing.timing_rows(proj)
+    path_rows = [r for r in rows
+                 if r["metric"].endswith(timing._PATH_METRIC_SUFFIX)]
+    # NOT VACUOUS: the specimen puts three paths in one view on purpose, and a
+    # run that produced one row would satisfy "no two rows collide" by having
+    # nothing to collide with.
+    assert len(path_rows) >= 4, path_rows
+    assert sorted(r["value"] for r in path_rows) == [-1.71, 5.20, 5.32, 5.36]
+    seen = {}
+    for r in path_rows:
+        sc = r["scope"]
+        named = sc.get("path_startpoint") and sc.get("path_endpoint")
+        assert named or sc.get("path_ordinal"), r
+        # Never both: a volatile key next to a stable one makes the stable one
+        # useless for a cross-arm comparison.
+        assert not (named and sc.get("path_ordinal")), r
+        # Per ARTEFACT. Two reports may legitimately describe one path in one
+        # view; whether that is corroboration or a conflict is the index's
+        # question (§2.1), not this one. What must never happen is one report
+        # emitting several rows that claim one identity.
+        key = (r["source"]["path"], cj.digest_of(sc))
+        assert key not in seen, (
+            "two %s rows from %s share one scope: %r and %r"
+            % (r["metric"], r["source"]["path"], seen.get(key), r))
+        seen[key] = r
 
 
 def test_the_per_view_metric_set_is_complete_not_absent(tmp_path):
@@ -568,12 +649,15 @@ def test_the_domain_schema_exists_and_is_draft7():
 def test_every_emitted_document_validates_against_that_schema(tmp_path):
     """A schema nobody validates against is decoration.
 
-    Skipped rather than silently passed where `jsonschema` is absent: a skip is
-    visible in the summary line and a silent pass is not. The shape itself is
-    ALSO asserted without the dependency, by the scope/value tests above, so
-    this is reinforcement and not the only guard.
+    The engine is RESOLVED (`_ppa/schema_validation.py`), not imported: this
+    used to `importorskip("jsonschema")` and therefore ran only where somebody
+    happened to have the library. With the validator bundled it runs on a bare
+    install too, and the skip arm survives for the case where no engine can
+    apply the schema at all -- a skip is visible in the summary line and a
+    silent pass is not. The shape itself is ALSO asserted without any engine,
+    by the scope/value tests above, so this is reinforcement not the only guard.
     """
-    jsonschema = pytest.importorskip("jsonschema")
+    from _ppa import schema_validation as _SV
     schema = json.loads(_SCHEMA_PATH.read_text())
     proj = _project(
         tmp_path,
@@ -586,7 +670,7 @@ def test_every_emitted_document_validates_against_that_schema(tmp_path):
     out = tmp_path / "rows.json"
     assert _cli(proj, "--json", out).returncode == 0
     doc = json.loads(out.read_text())
-    jsonschema.Draft7Validator(schema).validate(doc)
+    assert _SV.engine_or_skip(schema).errors(doc) == []
     # the document must be worth validating: all three statuses present
     assert {r["status"] for r in doc["rows"]} >= {"MEASURED", "NOT_MEASURED"}
 
@@ -598,7 +682,7 @@ def test_the_schema_rejects_a_not_measured_row_that_carries_a_value():
     schema: it is a green check over the exact defect. So this feeds it the
     forbidden shape and requires a rejection.
     """
-    jsonschema = pytest.importorskip("jsonschema")
+    from _ppa import schema_validation as _SV
     schema = json.loads(_SCHEMA_PATH.read_text())
     bad = {
         "schema": "vibeic.ppa.metric.v1",
@@ -611,16 +695,18 @@ def test_the_schema_rejects_a_not_measured_row_that_carries_a_value():
         "source": {"path": None, "sha256": None, "tool": "opensta",
                    "tool_commit": None, "parser": "x", "parser_sha256": None},
     }
-    validator = jsonschema.Draft7Validator(
-        schema["definitions"]["metric_row"],
-        resolver=jsonschema.RefResolver.from_schema(schema))
-    with pytest.raises(jsonschema.ValidationError):
-        validator.validate(bad)
+    # The row schema plus the pocket its `$ref`s point into, so the subschema
+    # is self-contained and no engine needs a resolver bolted on.
+    validator = _SV.engine_or_skip(
+        {**schema["definitions"]["metric_row"],
+         "definitions": schema["definitions"]})
+    assert validator.errors(bad), (
+        "the schema accepted the sentinel it exists to forbid")
     # positive control: the same row without the value must be ACCEPTED, or
     # this test would pass against a schema that rejects everything.
     ok = dict(bad)
     del ok["value"]
-    validator.validate(ok)
+    assert validator.errors(ok) == []
 
 
 # ── fixtures captured from the REAL tool, not reconstructed ────────────────
@@ -740,3 +826,91 @@ def test_an_empty_hold_view_does_not_suppress_a_real_setup_measurement(tmp_path)
     # and hold is still honestly unmeasured
     assert _by_metric(rows, "timing.hold.worst_slack_ns")[0]["status"] \
         == timing.NOT_MEASURED
+
+
+# ── F-10: one artefact published into two directories ───────────────────────
+
+def _publish_twice(tmp_path, name, body):
+    """What the runner really does: write one report into `phase3/stage3/sta`
+    AND into `reports/phase3`, as two files with identical bytes."""
+    a = tmp_path / "phase3" / "stage3" / "sta"
+    b = tmp_path / "reports" / "phase3"
+    a.mkdir(parents=True, exist_ok=True)
+    b.mkdir(parents=True, exist_ok=True)
+    (a / name).write_text(body)
+    (b / name).write_text(body)
+    return a / name, b / name
+
+
+def test_a_report_published_into_two_directories_is_read_ONCE(tmp_path):
+    """THE F-10 GUARD, and the producer is what closes it.
+
+    `_STA_DIRS` names three directories and the runner publishes into two, so
+    every row was emitted twice and all 20 (metric, scope) groups in the
+    document collided.
+
+    WHAT CHANGED AND WHY (v1.11.57). This guard originally de-duplicated by
+    CONTENT HASH. A second lane then shipped
+    `test_two_identical_artefacts_that_are_not_declared_mirrors_both_count`,
+    whose rule a content hash cannot satisfy: two DIFFERENT sign-off reports
+    whose bytes happen to agree are two measurements, and collapsing them by
+    digest deletes evidence. Nothing in the bytes tells the two situations
+    apart.
+
+    So byte equality now DETECTS and the producer's declaration DECIDES. The
+    runner writes `reports/phase3/artefact_mirrors.json`
+    (`_publish_artefact_mirror`), this reads it, and the mirror collapses with
+    a reason attached. Undeclared byte-identical artefacts are reported as a
+    finding and BOTH are counted -- deleting a real second measurement is worse
+    than double-counting one, because a double count is visible in the document
+    and a deletion is not.
+    """
+    first, second = _publish_twice(tmp_path, "sta_spef_based.rpt",
+                                   SINGLE_CORNER_STAMPED)
+    assert first.read_bytes() == second.read_bytes()
+    assert first.resolve() != second.resolve(), "not the same path: the point"
+
+    # WITHOUT the declaration: both are read, and the finding is emitted.
+    collapsed = []
+    found = timing.discover_reports(tmp_path, collapsed)
+    assert len(found) == 2, found
+    assert len(collapsed) == 1, collapsed
+    _, notes = timing.timing_rows(tmp_path)
+    assert any("undeclared byte-identical artefacts" in n for n in notes), notes
+
+    # WITH the declaration the runner now writes: one reading, one row per key.
+    mirror = timing._MIRROR_MANIFEST
+    (tmp_path / mirror).parent.mkdir(parents=True, exist_ok=True)
+    # `collapse_declared_mirrors` keys by `_rel(project, f)`, the same relative
+    # form the runner writes -- not by an absolute or resolved path.
+    rel_first = timing._rel(tmp_path, first)
+    rel_second = timing._rel(tmp_path, second)
+    # the digest form the READER compares against, not a bare hexdigest
+    sha = opensta.file_digest(first)
+    (tmp_path / mirror).write_text(json.dumps(
+        {"schema": "vibeic.artefact_mirrors.v1",
+         "mirrors": [{"mirror": rel_second, "of": rel_first, "sha256": sha,
+                      "reason": "published into a second directory by the runner"}]},
+        indent=2) + "\n", encoding="utf-8")
+
+    rows, notes = timing.timing_rows(tmp_path)
+    keys = [(r["metric"], cj.digest_of(r["scope"])) for r in rows]
+    assert len(keys) == len(set(keys)), "a row was emitted twice"
+
+
+def test_two_DIFFERENT_reports_of_one_name_are_both_read(tmp_path):
+    """The discriminator. Same file name, different bytes, is NOT one artefact
+    published twice -- it is two readings, and collapsing them would delete the
+    evidence that they disagree."""
+    a = tmp_path / "phase3" / "stage3" / "sta"
+    b = tmp_path / "reports" / "phase3"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    (a / "sta_spef_based.rpt").write_text(SINGLE_CORNER_STAMPED)
+    (b / "sta_spef_based.rpt").write_text(
+        SINGLE_CORNER_STAMPED.replace("worst slack max 5.24",
+                                      "worst slack max 4.11"))
+    collapsed = []
+    found = timing.discover_reports(tmp_path, collapsed)
+    assert len(found) == 2, found
+    assert collapsed == []

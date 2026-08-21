@@ -148,6 +148,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import area as _ppa_area  # noqa: E402  (PPA-009 taxonomy labels)
 
 # ─── WHAT CLASS OF NUMBER THIS GATE PRODUCES (PPA-009, spec §7.3) ────────────
@@ -1425,30 +1426,31 @@ def main(argv=None) -> int:
     ap.add_argument("--container", default="vibeic-eda",
                     help="docker container with yosys (default vibeic-eda)")
     ap.add_argument("--json", default=None, help="optional JSON report path")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     original = Path(args.original)
     optimized = Path(args.optimized)
     reference = Path(args.reference) if args.reference else None
     if not original.is_file():
-        print(f"ERROR: --original not found: {original}", file=sys.stderr)
-        return 2
+        print(f"{cli_exit.MARK_CANNOT_CHECK} --original not found: {original}. Nothing was opened, so no area was compared. rc=2 — this is NOT a pass.", file=sys.stderr)
+        return cli_exit.RC_UNDETERMINED
     if not optimized.is_file():
-        print(f"ERROR: --optimized not found: {optimized}", file=sys.stderr)
-        return 2
+        print(f"{cli_exit.MARK_CANNOT_CHECK} --optimized not found: {optimized}. Nothing was opened, so no area was compared. rc=2 — this is NOT a pass.", file=sys.stderr)
+        return cli_exit.RC_UNDETERMINED
     if reference is not None and not reference.is_file():
-        print(f"ERROR: --reference not found: {reference}", file=sys.stderr)
-        return 2
+        print(f"{cli_exit.MARK_CANNOT_CHECK} --reference not found: {reference}. Nothing was opened, so no area was compared. rc=2 — this is NOT a pass.", file=sys.stderr)
+        return cli_exit.RC_UNDETERMINED
     if args.threshold_pct is None and args.prompt is None:
-        print("ERROR: provide --threshold-pct or --prompt", file=sys.stderr)
-        return 2
+        return cli_exit.refuse(ap.prog, "provide --threshold-pct or --prompt; without one there is no declared threshold to adjudicate against")
 
     prompt_text = None
     if args.prompt is not None:
         pp = Path(args.prompt)
         if not pp.is_file():
-            print(f"ERROR: --prompt not found: {pp}", file=sys.stderr)
-            return 2
+            print(f"{cli_exit.MARK_CANNOT_CHECK} --prompt not found: {pp}. The threshold could not be read, so nothing was adjudicated. rc=2.", file=sys.stderr)
+            return cli_exit.RC_UNDETERMINED
         prompt_text = pp.read_text(errors="replace")
 
     rc, report = run_ppa_area_threshold(

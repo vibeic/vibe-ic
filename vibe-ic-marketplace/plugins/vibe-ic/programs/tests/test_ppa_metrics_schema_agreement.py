@@ -17,11 +17,22 @@ Two artefacts describing one shape is exactly how a shape drifts. The fixture
 corpus below is run through BOTH and the verdicts must match, so neither can
 move without the other going red.
 
-IF `jsonschema` IS NOT INSTALLED this file SKIPS WITH A NAMED REASON. It does
-not pass quietly: "I could not check it" and "I checked it and it was clean"
-must never produce the same verdict (rule 9), and a schema-agreement test that
-silently passes when it cannot load a validator is that defect wearing a green
-tick.
+WHICH ENGINE APPLIES THE SCHEMA (R11)
+=====================================
+`_ppa/schema_validation.engine_or_skip` resolves it: the `jsonschema` library
+when a usable one is present, otherwise the validator bundled with this plugin.
+This file used to open with `pytest.importorskip("jsonschema")`, which asks the
+wrong question twice over. On a host with `jsonschema` 3.2.0 -- a current
+distribution's system package -- the import SUCCEEDS and
+`Draft202012Validator` does not exist, so every test below died with an
+AttributeError instead of skipping. And on a host with nothing installed it
+skipped, which meant the schema this repository ships was checked only where
+somebody happened to have the right library.
+
+The skip arm is kept, and it is now unreachable for this schema. That is what
+it should be: "I could not check it" and "I checked it and it was clean" must
+never produce the same verdict, and a schema-agreement test that quietly passes
+when it could not load a validator is that defect wearing a green tick.
 """
 import json
 import pathlib
@@ -32,11 +43,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from _ppa import metrics as M  # noqa: E402
 
-jsonschema = pytest.importorskip(
-    "jsonschema",
-    reason="jsonschema is not installed, so the published schema was NOT "
-           "checked against the enforcer in this session. This is a SKIP and "
-           "not a pass: nothing here looked.")
+from _ppa import schema_validation as _SV  # noqa: E402
 
 SCHEMA_PATH = (pathlib.Path(__file__).resolve().parents[2]
                / "schemas" / "ppa" / "metric_record.v1.schema.json")
@@ -51,7 +58,7 @@ def _schema():
 
 def test_the_schema_file_is_shipped_and_is_a_valid_schema():
     assert SCHEMA_PATH.exists(), f"{SCHEMA_PATH} missing"
-    jsonschema.Draft202012Validator.check_schema(_schema())
+    assert _SV.check_schema(_schema()) == []
 
 
 def test_the_schema_declares_the_frozen_id():
@@ -154,7 +161,7 @@ CORPUS = [
                          CORPUS, ids=[c[0] for c in CORPUS])
 def test_the_schema_and_the_enforcer_return_the_same_verdict(name, valid, rec):
     code_ok = (M.validate(rec) == [])
-    schema_ok = jsonschema.Draft202012Validator(_schema()).is_valid(rec)
+    schema_ok = _SV.engine_or_skip(_schema()).is_valid(rec)
     assert code_ok is valid, (
         f"_ppa.metrics.validate says {code_ok} for {name!r}; expected {valid}. "
         f"problems={M.validate(rec)}")
@@ -176,10 +183,10 @@ def test_the_enforcer_catches_two_things_the_schema_cannot():
            "status": "MEASURED", "value": float("nan"), "unit": "ns",
            "scope": dict(SCOPE), "source": dict(SRC)}
     assert "VALUE_NOT_FINITE" in [c for c, _ in M.validate(nan)]
-    assert jsonschema.Draft202012Validator(_schema()).is_valid(nan)
+    assert _SV.engine_or_skip(_schema()).is_valid(nan)
 
     wrong_unit = {"schema": M.SCHEMA_ID, "metric": "area.die_um2",
                   "status": "MEASURED", "value": 12000.0, "unit": "mm^2",
                   "scope": dict(SCOPE), "source": dict(SRC)}
     assert "UNIT_CONTRADICTS_NAME" in [c for c, _ in M.validate(wrong_unit)]
-    assert jsonschema.Draft202012Validator(_schema()).is_valid(wrong_unit)
+    assert _SV.engine_or_skip(_schema()).is_valid(wrong_unit)

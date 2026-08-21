@@ -16,6 +16,7 @@ import pytest
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import ppa_search_run as R  # noqa: E402
+from _ppa import schema_validation as _SV  # noqa: E402
 from _ppa import search as S  # noqa: E402
 
 SCHEMA_PATH = (_PROGRAMS.parent / "schemas" / "ppa"
@@ -236,44 +237,39 @@ def test_a_manifest_this_program_built_verifies_clean(ran):
 
 
 def test_the_built_manifest_validates_against_its_own_schema(ran):
-    jsonschema = pytest.importorskip("jsonschema")
     _, man, _ = ran
     schema = json.loads(SCHEMA_PATH.read_text())
-    jsonschema.Draft7Validator(schema).validate(man)
+    assert _SV.engine_or_skip(schema).errors(man) == []
 
 
-def test_the_schema_itself_is_a_valid_draft7_schema():
-    jsonschema = pytest.importorskip("jsonschema")
-    jsonschema.Draft7Validator.check_schema(json.loads(SCHEMA_PATH.read_text()))
+def test_the_schema_itself_is_a_schema_some_engine_can_apply():
+    assert _SV.check_schema(json.loads(SCHEMA_PATH.read_text())) == []
 
 
 def test_the_schema_refuses_an_integer_completed_stage(ran):
     """The ORFS `step` trap, enforced at the document layer as well as the
     code layer — a manifest written by some other producer is still refused."""
-    jsonschema = pytest.importorskip("jsonschema")
     _, man, _ = ran
+    engine = _SV.engine_or_skip(json.loads(SCHEMA_PATH.read_text()))
     man["candidates"][0]["completed_stage"] = 7
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.Draft7Validator(
-            json.loads(SCHEMA_PATH.read_text())).validate(man)
+    assert engine.errors(man), (
+        "the schema accepted the shape it exists to forbid")
 
 
 def test_the_schema_refuses_a_non_terminal_state(ran):
-    jsonschema = pytest.importorskip("jsonschema")
     _, man, _ = ran
+    engine = _SV.engine_or_skip(json.loads(SCHEMA_PATH.read_text()))
     man["candidates"][0]["state"] = "RUNNING"
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.Draft7Validator(
-            json.loads(SCHEMA_PATH.read_text())).validate(man)
+    assert engine.errors(man), (
+        "the schema accepted the shape it exists to forbid")
 
 
 def test_the_schema_refuses_a_budget_missing_a_dimension(ran):
-    jsonschema = pytest.importorskip("jsonschema")
     _, man, _ = ran
+    engine = _SV.engine_or_skip(json.loads(SCHEMA_PATH.read_text()))
     del man["budget"]["cache_policy"]
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.Draft7Validator(
-            json.loads(SCHEMA_PATH.read_text())).validate(man)
+    assert engine.errors(man), (
+        "the schema accepted the shape it exists to forbid")
 
 
 # ---------------------------------------------------------------------------

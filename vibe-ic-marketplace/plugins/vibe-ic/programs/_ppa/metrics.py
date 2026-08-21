@@ -83,7 +83,10 @@ __all__ = [
     "derived",
     "validate", "validate_or_raise", "is_comparable",
     "scope_digest", "record_key", "metric_domain", "unit_suffix_of",
+    "VERDICT_UNIT", "is_verdict_metric", "verdict",
     "MetricIndex", "Coverage", "CoverageRow", "coverage", "format_coverage",
+    "BUNDLE_SCHEMA_ID", "RECORD_CARRIERS", "bundle", "validate_bundle",
+    "records_from_document",
 ]
 
 #: The one shape. Written as the FIRST key of every instance document; see
@@ -343,7 +346,35 @@ def validate(rec: Any) -> List[Tuple[str, str]]:
     has_value = "value" in rec
     numeric_status = status in COMPARABLE_STATUSES or status == ESTIMATED
 
-    if numeric_status:
+    is_verdict = is_verdict_metric(metric)
+
+    if numeric_status and is_verdict:
+        # A VERDICT is value-bearing and is not a number. It is held to the same
+        # everything-else: a value is required, the empty string is not one, and
+        # the unit is stated rather than left blank. What it is exempt from is
+        # arithmetic — and `compare()` refuses to do any on it, so the exemption
+        # cannot leak into a delta.
+        if not has_value:
+            bad("NO_VALUE", f"status {status} requires a `value`")
+        else:
+            value = rec["value"]
+            if isinstance(value, bool) or not isinstance(value, str):
+                bad("VERDICT_NOT_A_STRING",
+                    f"metric {metric!r} is a verdict, so `value` is one of the "
+                    f"literals the axis accepts; got {value!r}. A verdict "
+                    "encoded as a number is a number downstream.")
+            elif not value.strip():
+                bad("VERDICT_SENTINEL",
+                    "`value` is empty. The empty string is not a verdict — two "
+                    "of them compare EQUAL, so two circuits nobody compared "
+                    "would read as agreeing.")
+        unit = rec.get("unit")
+        if unit != VERDICT_UNIT:
+            bad("VERDICT_UNIT_WRONG",
+                f"metric {metric!r} is a verdict, so `unit` is "
+                f"{VERDICT_UNIT!r}; got {unit!r}. Naming a physical unit on a "
+                "verdict is what makes a consumer try to scale it.")
+    elif numeric_status:
         if not has_value:
             bad("NO_VALUE", f"status {status} requires a `value`")
         else:
@@ -362,6 +393,11 @@ def validate(rec: Any) -> List[Tuple[str, str]]:
                 f"status {status} requires a non-empty `unit`. The empty "
                 "string is not a unit — it compares equal to another empty "
                 "unit, so two numbers in different units pass a unit check.")
+        elif unit == VERDICT_UNIT:
+            bad("VERDICT_UNIT_ON_A_NUMBER",
+                f"metric {metric!r} is not a verdict metric but the record "
+                f"declares unit {VERDICT_UNIT!r}. A number whose unit is "
+                "'verdict' is a number with no unit at all.")
         elif isinstance(metric, str):
             suffix_unit = unit_suffix_of(metric)
             if suffix_unit is not None and suffix_unit.lower() != unit.lower():
@@ -465,6 +501,34 @@ def unit_suffix_of(metric: str) -> Optional[str]:
     return _UNIT_SUFFIXES.get(last.rsplit("_", 1)[1])
 
 
+#: The unit a VERDICT carries. Not a physical unit and deliberately not the
+#: empty string: `""` compares equal to `""`, so two records in unknown units
+#: would pass a unit check, which is the sentinel §6.1 names.
+VERDICT_UNIT = "verdict"
+
+
+def is_verdict_metric(metric: Any) -> bool:
+    """True when the metric's last segment is `verdict`.
+
+    WHY THE SHAPE HAS TO ADMIT THESE AT ALL. `_ppa/feasibility.py` proves two of
+    its nine axes — `physical.lvs.verdict` and `equivalence.verdict` — with the
+    `verdict_in` kind, against an accepted set of literals. LVS does not produce
+    a violation count; it produces a match/no-match about a NAMED top-level
+    circuit, and encoding "matched" as the integer 0 puts a number where a
+    verdict belongs and invites arithmetic on it downstream. Before this
+    predicate existed, `validate` refused every such record with
+    VALUE_NOT_A_NUMBER, so two of the nine axes the gate proves could not be
+    expressed in the canonical shape the gate reads. That is not a rule about
+    LVS: it is the record shape and the gate disagreeing about what a metric is.
+
+    Derived from the NAME, in the same style as `metric_domain`, so a new
+    verdict metric needs no edit here.
+    """
+    if not isinstance(metric, str) or "." not in metric:
+        return False
+    return metric.rsplit(".", 1)[1] == "verdict"
+
+
 def scope_digest(scope: Mapping[str, Any]) -> str:
     """`sha256:<hex>` identity of a scope, via the one serializer.
 
@@ -489,6 +553,65 @@ def record_key(rec: Mapping[str, Any]) -> Tuple[str, str]:
 # Index
 # --------------------------------------------------------------------------
 
+def _source_path(rec: Mapping[str, Any]) -> str:
+    src = rec.get("source") or {}
+    return str(src.get("path") or "<no source.path>")
+
+
+def _source_sha(rec: Mapping[str, Any]) -> str:
+    src = rec.get("source") or {}
+    return str(src.get("sha256") or "<no source.sha256>")
+
+
+def _same_artefact(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    """Whether both records were read from the SAME BYTES.
+
+    `source.sha256`, never `source.path`. The runner publishes one STA report
+    into two directories, so two paths routinely name one artefact: measured on
+    a real run, all three sign-off reports are byte-identical across
+    `phase3/stage3/sta/` and `reports/phase3/`, and every timing row was
+    therefore emitted twice and every one refused. Comparing paths would call
+    that two artefacts; comparing bytes calls it what it is.
+    """
+    sa = (a.get("source") or {}).get("sha256")
+    sb = (b.get("source") or {}).get("sha256")
+    return bool(sa) and sa == sb
+
+
+def _states_the_same_fact(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    """Whether two records under one identity assert the same thing.
+
+    AGREEMENT IS NOT A CONFLICT, and until v1.11.33 this index called it one:
+    any second record for an identity was refused as CONFLICTING_RECORD with the
+    message "two numbers claiming to be the same fact", even when the two
+    numbers were EQUAL. Measured on a real run tree, `route.drc.violation.count`
+    came back 0 from `openroad.log` and 0 from `openroad.metrics.json` and was
+    refused as a conflict -- so two artefacts CORROBORATING a fact took down the
+    whole record set, and no report could be generated from a default run at
+    all.
+
+    Two records agree when they carry the same `status`, the same `unit` and,
+    where a value is present, the same value. Everything else about them --
+    which file they were read from, its hash, the parser, the reason text on a
+    non-measurement -- is provenance, and provenance differing is exactly what a
+    second artefact IS.
+    """
+    if a.get("status") != b.get("status"):
+        return False
+    ua, ub = a.get("unit"), b.get("unit")
+    if (ua or "").lower() != (ub or "").lower():
+        return False
+    has_a, has_b = "value" in a, "value" in b
+    if has_a != has_b:
+        return False
+    if has_a:
+        # `==` on purpose: 12704 and 12704.0 are one measurement written two
+        # ways, and refusing that pair would resurrect the defect above for
+        # every producer that writes an integral float.
+        return a["value"] == b["value"]
+    return True
+
+
 class MetricIndex:
     """A set of records keyed by `(metric, scope_digest)`.
 
@@ -502,6 +625,7 @@ class MetricIndex:
     def __init__(self) -> None:
         self._by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._order: List[Tuple[str, str]] = []
+        self._corroborations: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
 
     def __len__(self) -> int:
         return len(self._by_key)
@@ -521,17 +645,54 @@ class MetricIndex:
                     f"{key[0]!r} under this scope was recorded twice, "
                     "identically. Deduplicating silently would make a record "
                     "set's size depend on how many times a producer ran.")
-            raise MetricError(
-                "CONFLICTING_RECORD",
-                f"{key[0]!r} under this scope already carries "
-                f"{prior.get('status')}/{prior.get('value', '-')!r}; the new "
-                f"record carries {rec.get('status')}/"
-                f"{rec.get('value', '-')!r}. Two numbers claiming to be the "
-                "same fact is a conflict, and keeping the last one picks a "
-                "winner on insertion order.")
+            same_artefact = _same_artefact(prior, rec)
+            if not _states_the_same_fact(prior, rec):
+                if same_artefact:
+                    # The SAME BYTES produced two different numbers. That is not
+                    # two artefacts disagreeing -- it is this parser being
+                    # non-deterministic, and it is an internal defect rather
+                    # than a fact about the run.
+                    raise MetricError(
+                        "SAME_ARTEFACT_TWO_VALUES",
+                        f"{key[0]!r} under this scope was read twice from ONE "
+                        f"artefact ({_source_sha(rec)}) and gave "
+                        f"{prior.get('status')}/{prior.get('value', '-')!r} "
+                        f"then {rec.get('status')}/{rec.get('value', '-')!r}. "
+                        "Identical bytes cannot support two numbers; this is a "
+                        "parser defect, not a disagreement between artefacts.")
+                raise MetricError(
+                    "CONFLICTING_RECORD",
+                    f"{key[0]!r} under this scope already carries "
+                    f"{prior.get('status')}/{prior.get('value', '-')!r} from "
+                    f"{_source_path(prior)}; the new record carries "
+                    f"{rec.get('status')}/{rec.get('value', '-')!r} from "
+                    f"{_source_path(rec)}. Two artefacts stating DIFFERENT "
+                    "facts under one identity is a conflict: a claim citing it "
+                    "binds to neither number, and keeping the last one picks a "
+                    "winner on insertion order. Settling it is a declared "
+                    "authority decision (`_ppa/contract.py`), never an index's.")
+            # CORROBORATION, not conflict. The two records agree on status,
+            # unit and value and differ only in where they were read from.
+            # Calling this a conflict is what made a two-artefact run
+            # unreportable: see the note above `_states_the_same_fact`.
+            self._corroborations.setdefault(key, []).append({
+                "basis": "SAME_ARTEFACT" if same_artefact else "SECOND_ARTEFACT",
+                "source": dict(rec.get("source") or {}),
+                "record_digest": cj.digest_of(dict(rec)),
+            })
+            return key
         self._by_key[key] = dict(rec)
         self._order.append(key)
         return key
+
+    def corroborations(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Every identity that more than one artefact stated, and who stated it.
+
+        Keyed by `"<metric>@<scope_digest>"` so the document is JSON-able. An
+        empty mapping means every fact in this index was stated once.
+        """
+        return {f"{m}@{d}": [dict(e) for e in entries]
+                for (m, d), entries in sorted(self._corroborations.items())}
 
     def extend(self, recs: Iterable[Mapping[str, Any]]) -> None:
         for rec in recs:
@@ -772,6 +933,46 @@ def format_coverage(cov: Coverage) -> str:
 BUNDLE_SCHEMA_ID = "vibeic.ppa.metric_bundle.v1"
 
 
+#: Every envelope in this tree that CARRIES canonical metric records, mapped to
+#: the key its record list lives under.
+#:
+#: WHY THIS EXISTS. `records_from_document` accepted exactly three shapes until
+#: v1.11.33 -- one record, a bare list, and the bundle above -- and not one of
+#: the shipped producers writes any of them. Measured on a real run tree: the
+#: OpenROAD backend writes `backend_records.v1` with `records`, `_ppa/timing.py`
+#: writes `timing_rows.v1` with `rows`, and `_ppa/power.py` writes `power.v1`
+#: with `metrics`. All three carry genuine `vibeic.ppa.metric.v1` records and
+#: all three were refused UNRECOGNISED_DOCUMENT, so `ppa_metric_extract.py`
+#: indexed ZERO records from every extractor the repository ships.
+#:
+#: THE CONSUMER MOVED, NOT THE PRODUCERS, and the reason is structural: a
+#: producer envelope carries what the bundle cannot. `bundle()` is built from a
+#: MetricIndex, and the index REFUSES a conflicting pair -- so a producer that
+#: found two artefacts disagreeing could not express that at all if it were made
+#: to write a bundle. Reporting the disagreement is the backend's job
+#: (`_ppa/backends/__init__.py`) and detecting it is the index's; forcing the
+#: producers onto the bundle would have deleted the evidence between them.
+#:
+#: A NEW ENVELOPE MUST BE ADDED HERE. An unregistered `vibeic.ppa.*` document is
+#: still refused, never read as empty -- that is rule 9 and it does not bend.
+#: `tests/test_ppa_producer_consumer_agreement.py` enumerates every envelope in
+#: `_ppa/` and fails if one is neither registered here nor declared a
+#: non-carrier, so the omission is loud instead of silent.
+RECORD_CARRIERS: Dict[str, str] = {
+    BUNDLE_SCHEMA_ID: "records",
+    "vibeic.ppa.backend_records.v1": "records",
+    "vibeic.ppa.timing_rows.v1": "rows",
+    "vibeic.ppa.power.v1": "metrics",
+    # The sign-off producer for the physical / reliability / equivalence axes
+    # (`_ppa/signoff.py`, `SCHEMA_BUNDLE`). Registered because it genuinely
+    # carries `vibeic.ppa.metric.v1` records under `records` — leaving it out
+    # is not neutral: every record it holds is refused UNRECOGNISED_DOCUMENT
+    # and the extractor reports zero over a bundle full of readings, which is
+    # F-4 exactly, one producer later.
+    "vibeic.ppa.signoff_records.v1": "records",
+}
+
+
 def bundle(index: "MetricIndex",
            expected: Optional[Sequence[Mapping[str, Any]]] = None,
            **extra: Any) -> Dict[str, Any]:
@@ -804,6 +1005,14 @@ def bundle(index: "MetricIndex",
     }
     if expected is not None:
         doc["expected"] = [dict(e) for e in expected]
+    # Every identity that MORE THAN ONE artefact stated. Present only when it is
+    # non-empty, so a set where every fact was stated once is byte-identical to
+    # what this function produced before corroboration existed. A reader that
+    # wants to know whether a number was confirmed twice must be able to see it
+    # in the document, not have to re-run the assembler to find out.
+    corroborations = index.corroborations()
+    if corroborations:
+        doc["corroborations"] = corroborations
     for key, val in extra.items():
         if val is not None:
             doc[key] = val
@@ -846,22 +1055,26 @@ def records_from_document(doc: Any) -> List[Dict[str, Any]]:
     if isinstance(doc, list):
         return [d for d in doc]
     if isinstance(doc, dict):
-        if doc.get("schema") == BUNDLE_SCHEMA_ID:
-            recs = doc.get("records")
+        schema = doc.get("schema")
+        if schema in RECORD_CARRIERS:
+            key = RECORD_CARRIERS[schema]
+            recs = doc.get(key)
             if not isinstance(recs, list):
                 raise MetricError(
                     "NO_RECORDS",
-                    "bundle has no `records` list; that is a malformed "
-                    "document, not a bundle of zero records")
+                    f"{schema} carries its records under `{key}`, and this "
+                    f"document has no `{key}` list. That is a malformed "
+                    "document, not a carrier of zero records.")
             return list(recs)
-        if doc.get("schema") == SCHEMA_ID:
+        if schema == SCHEMA_ID:
             return [doc]
     raise MetricError(
         "UNRECOGNISED_DOCUMENT",
-        "not a metric record, a list of records, or a "
-        f"{BUNDLE_SCHEMA_ID} bundle. Refused rather than read as empty: an "
-        "unreadable document and an empty one must not reach a caller as the "
-        "same answer.")
+        "not a metric record, a list of records, or any registered record "
+        f"carrier ({', '.join(sorted(RECORD_CARRIERS))}). Refused rather than "
+        "read as empty: an unreadable document and an empty one must not reach "
+        "a caller as the same answer. A new producer envelope is registered in "
+        "`_ppa/metrics.RECORD_CARRIERS`.")
 
 
 # --------------------------------------------------------------------------
@@ -876,6 +1089,10 @@ CMP_NOT_MEASURED = "NOT_MEASURED"
 CMP_UNIT_MISMATCH = "UNIT_MISMATCH"
 CMP_INVALID = "INVALID_RECORD"
 CMP_DIFFERENT_METRIC = "DIFFERENT_METRIC"
+#: Two verdicts. Comparable in the sense that they are the same fact
+#: under the same scope, and NOT subtractable. Distinct from
+#: CMP_OK so a caller cannot read a missing `delta_b_minus_a` as zero.
+CMP_NOT_NUMERIC = "NOT_NUMERIC"
 
 
 def compare(a: Mapping[str, Any], b: Mapping[str, Any],
@@ -961,6 +1178,24 @@ def compare(a: Mapping[str, Any], b: Mapping[str, Any],
         out["detail"] = (f"same metric and same scope, but unit {a.get('unit')!r} "
                          f"vs {b.get('unit')!r}. One of these two records is "
                          "wrong; comparing the numbers would hide which.")
+        return out
+
+    if is_verdict_metric(a.get("metric")):
+        # Same metric, same scope, both measured, same unit — and still not a
+        # subtraction. "MATCH" minus "MATCH" is not 0, and a delta of 0 printed
+        # for two verdicts would read as "no regression" on a pair that were
+        # never numbers. The axis that proves a verdict does so by membership in
+        # an accepted set; `_ppa/feasibility.py` owns that set and this does not
+        # duplicate it.
+        out["verdict"] = CMP_NOT_NUMERIC
+        out["a"]["value"] = a["value"]
+        out["b"]["value"] = b["value"]
+        out["equal"] = a["value"] == b["value"]
+        out["detail"] = (
+            f"{a.get('metric')!r} is a verdict, not a magnitude: "
+            f"{a['value']!r} vs {b['value']!r}. There is no delta and no "
+            "winner; whether a verdict is acceptable is decided by the "
+            "feasibility axis that names the literals it accepts.")
         return out
 
     va, vb = float(a["value"]), float(b["value"])

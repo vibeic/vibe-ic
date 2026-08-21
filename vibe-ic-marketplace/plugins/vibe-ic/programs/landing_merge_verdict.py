@@ -199,6 +199,28 @@ to detect.
                           PERFORMED — nothing is left to disagree with it. The
                           forge's `refs/pull/<n>/merge` still cross-checks it
                           whenever the forge merged this same base.
+    TIER `direct-push`    the DIRECT-PUSH path (`git push origin main`), driven
+                          by `tools/gatekeeper-land-differential.sh`. There is
+                          no PR, no forge merge and no squash: the commit being
+                          pushed IS the commit that lands and its tree IS the
+                          tree that lands, so squash-vs-rebase is NOT
+                          APPLICABLE rather than not performed — there are not
+                          two computations of one tree for one to disagree
+                          with. THAT DISTINCTION IS THE WHOLE POINT OF THE
+                          SEPARATE CODE: `NOT_PERFORMED` names evidence that
+                          was lost, `NOT_APPLICABLE` names evidence that never
+                          existed, and a reader who cannot tell them apart
+                          cannot tell a degraded run from a complete one.
+                          The caller must therefore pass the SAME oid as
+                          `--expected-tree` and `--verified-tree` (the pushed
+                          commit's tree) and leave `--replayed-tree` and
+                          `--github-tree` empty; the cross-tree refusals above
+                          stay armed and fire if it does not.
+                          THE FAST-FORWARD ASSERTION IS NOT WAIVED, it is
+                          simply owned elsewhere: `gatekeeper-land.sh` runs
+                          `gatekeeper_stale_branch_check` over the real range
+                          on the candidate arm, where an empty base range makes
+                          it range-scoped and therefore ABSOLUTE.
 
 Everything else is identical: same squash commit built from the tree under test,
 same `gatekeeper-land.sh`, same test and gate differentials, same fail-closed
@@ -224,7 +246,8 @@ Usage
         --base-junit <path> --candidate-junit <path>
         [--base-hygiene <path> --candidate-hygiene <path>
          --base-hygiene-host <name> --candidate-hygiene-host <name>]
-        [--verification-tier merge-tree|rebase-replay] [--git-version <v>]
+        [--verification-tier merge-tree|rebase-replay|direct-push]
+        [--git-version <v>]
         [--merge-tree-min-version <v>] [--tier-reason <text>]
         [--gate-edited <path>...] [--maxfail N] [--json <out>]
 
@@ -246,7 +269,7 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 RC_OK = 0
 RC_REFUSE = 1
@@ -494,7 +517,15 @@ def read_protected_transition_receipt(
 # program knows how to reason about, and it FAILS CLOSED on one — see `decide`.
 TIER_MERGE_TREE = "merge-tree"
 TIER_REBASE_REPLAY = "rebase-replay"
-TIERS = (TIER_MERGE_TREE, TIER_REBASE_REPLAY)
+#: The DIRECT-PUSH path. Not a degradation of the merge path — a different
+#: question with a different answer set. Nothing is squashed, so there is no
+#: second computation of the landing tree to cross-check the first against, and
+#: the honest disclosure is NOT_APPLICABLE rather than NOT_PERFORMED. Every
+#: OTHER refusal in `decide` is computed exactly as the merge path computes it,
+#: including the cross-tree checks, which the caller keeps armed by passing the
+#: pushed commit's tree as BOTH `expected_tree` and `verified_tree`.
+TIER_DIRECT_PUSH = "direct-push"
+TIERS = (TIER_MERGE_TREE, TIER_REBASE_REPLAY, TIER_DIRECT_PUSH)
 MERGE_TREE_MIN_VERSION = "2.38"
 
 
@@ -908,6 +939,22 @@ def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
 # EVERYTHING ABOVE MEASURES. THIS DECIDES. One function, one call site.
 
 
+def _load_red_since():
+    """`gate_red_since_check`, loaded by path at the moment it is needed.
+
+    It owns the acknowledgement vocabulary and the deadline; this file owns the
+    decision to consume it. Loading it lazily keeps this module's import graph
+    exactly what it was.
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parent / "gate_red_since_check.py"
+    spec = importlib.util.spec_from_file_location(
+        "_lmv_gate_red_since_check", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            github_tree: Optional[str], land: LandLog, delta: Delta,
            verified_sha: str, truncated: bool, dropped_files: Sequence[str],
@@ -916,6 +963,8 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            base_selection_supplied: bool = True,
            base_land: Optional[LandLog] = None,
            hygiene: Optional[dict] = None,
+           red_since_ledger: Optional[Sequence[dict]] = None,
+           commit_age: Optional[Callable[[str], Optional[int]]] = None,
            verification_tier: str = TIER_MERGE_TREE,
            git_version: str = "", tier_reason: str = "",
            missing_process_files: Sequence[str] = (),
@@ -955,7 +1004,26 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             f"nothing was."], notes, unmeasurable=True,
             disclosures=["VERIFICATION_TIER_UNKNOWN"])
 
-    if verification_tier == TIER_REBASE_REPLAY:
+    if verification_tier == TIER_DIRECT_PUSH:
+        # NOT a third degradation of the merge path. On `git push origin main`
+        # the commit under gate IS the commit that lands, so there is no second
+        # computation of one tree for a cross-check to compare — the check is
+        # NOT APPLICABLE, and the code says so in its own word rather than
+        # borrowing the fallback's, because borrowing it would tell a reader
+        # that something was lost here.
+        disclosures += ["VERIFICATION_TIER_DIRECT_PUSH",
+                        "SQUASH_VS_REBASE_CROSS_CHECK_NOT_APPLICABLE"]
+        notes.append(
+            "DIRECT-PUSH TIER: nothing is squashed and no forge merge exists, "
+            "so the tree measured is the tree that lands and the "
+            "squash-vs-rebase cross-check is NOT APPLICABLE (not 'not "
+            "performed' — there is no second tree it could disagree with). "
+            "Every other refusal reason was computed exactly as the merge path "
+            "computes it, including the cross-tree checks, which the caller "
+            "keeps armed by passing the pushed commit's tree as both "
+            "--expected-tree and --verified-tree."
+            + (f" ({tier_reason})" if tier_reason else ""))
+    elif verification_tier == TIER_REBASE_REPLAY:
         disclosures += ["VERIFICATION_TIER_REBASE_REPLAY",
                         "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED"]
         notes.append(
@@ -1257,6 +1325,26 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
                 "THE HYGIENE SUITE FAILED HERE AND NOT ON THE BASE, YET THE "
                 "FINDING DIFFERENTIAL NAMES NOTHING — the two disagree, so the "
                 "finding list is incomplete and cannot account for the failure.")
+    # ---- AN INHERITED RED IS NOT THIS BRANCH'S, AND IT IS STILL SOMEBODY'S ----
+    #
+    # The two tiers above both end the same way: a failure present on BOTH arms
+    # is `notes` (`gate fails on the base too…`) or `carried (which do NOT
+    # block)`. That subtraction is correct — an absolute "any FAIL refuses"
+    # would refuse every landing, which is measured in the comment above the
+    # gate differential — and it has no floor. MEASURED: `flow-gate enforcement
+    # audit`, dispatched with a plain blocking `run`, was red on the base at
+    # e4880703b on 2026-08-12 and still red at 752a8baa nine days, 704 commits
+    # and 96 version-bearing landings later, and every one of those landings
+    # was correct to allow it.
+    #
+    # The deadline that would end that already exists — `max_commits` in
+    # `tools/ci/gate_red_since.json`, read by `gate_red_since_check` — and
+    # nothing ever opens it, because a row is voluntary and pure cost so no row
+    # is ever written. This is the forcing function, and it has to be HERE:
+    # a refusal wired inside the hygiene suite would be a gate in the suite, red
+    # on both arms from its first landing, and subtracted by this very rule.
+    #
+    # STRICTLY ADDITIVE, like the tier above it: it only ever appends reasons.
     else:
         # A status this program does not know is not a pass. Reached only if the
         # helper grows a fourth answer without this branch being taught it.
@@ -1265,6 +1353,29 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         reasons.append(
             f"THE HYGIENE FINDING DIFFERENTIAL RETURNED {hyg_status!r}, which "
             f"this program does not know how to read, so it read nothing.")
+
+    # The rule itself runs AFTER the whole chain above, never inside it: it must
+    # apply whatever status the differential returned, and it must not change
+    # which branch of that chain is taken.
+    if red_since_ledger is None or commit_age is None:
+        # A RULE THAT DID NOT RUN MUST SAY SO. Without the ledger or without a
+        # way to age a commit this cannot answer, and silence here would be
+        # indistinguishable from "every inherited red is owned".
+        disclosures.append("INHERITED_RED_DEADLINE_NOT_EVALUATED")
+        notes.append(
+            "the inherited-red deadline was NOT evaluated — no acknowledgement "
+            "ledger and/or no commit-age function was supplied, so whether a "
+            "gate red on both arms is owned by a live deadline is UNKNOWN here")
+    else:
+        # IMPORTED HERE, NOT AT MODULE SCOPE. This file is executed by the
+        # isolated trusted entry and its import graph is part of what the
+        # protected runtime pins; a top-level `sys.path` insertion in an
+        # authority file changes what every later import resolves to, and it
+        # measurably broke two end-to-end cases when it was one.
+        for reason in _load_red_since().inherited_red_reasons(
+                list((hygiene or {}).get("carried") or []),
+                list(red_since_ledger), commit_age):
+            reasons.append(reason)
 
     if any("assigned at merge" in l for l in land.passed):
         # A DEFERRAL IS AN ACTION ITEM, NOT A CLEAN SHEET. Measured 2026-08-12:
@@ -1485,8 +1596,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          f"the 3-way merge, cross-checked by the replay) or "
                          f"{TIER_REBASE_REPLAY} (the fallback: the replay IS "
                          f"the tree under test and the squash-vs-rebase "
-                         f"cross-check is not performed). Any other value "
-                         f"refuses as unmeasurable")
+                         f"cross-check is not performed) or "
+                         f"{TIER_DIRECT_PUSH} (the direct-push path: no PR, no "
+                         f"squash, no forge merge — the commit under gate IS "
+                         f"the commit that lands, so the cross-check is NOT "
+                         f"APPLICABLE rather than not performed). Any other "
+                         f"value refuses as unmeasurable")
     ap.add_argument("--git-version", default="",
                     help="the git version measured on this host, named in the "
                          "tier disclosure so the refusal is actionable")
@@ -1497,6 +1612,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "strong one")
     ap.add_argument("--candidate-gate-rc", type=int, default=0,
                     help="OS exit status of the candidate non-target gate arm")
+    ap.add_argument("--red-since-ledger", default="",
+                    help="tools/ci/gate_red_since.json as the BASE commit "
+                         "carries it. The acknowledgement policy is BASE-owned, "
+                         "like the protected transition manifest: a candidate "
+                         "must not be able to grant itself an amnesty. Absent "
+                         "means the inherited-red deadline is NOT evaluated, "
+                         "and that is DISCLOSED rather than assumed clean")
+    ap.add_argument("--red-since-repo", default="",
+                    help="a repository containing the commits the ledger's "
+                         "`since` fields cite, used only to count commits "
+                         "behind HEAD. Absent means the same disclosure")
     ap.add_argument("--require-composite-gate-record", action="store_true",
                     help="require the B2 rc and matching terminal sentinel; "
                          "used when targeted evidence comes from parallel B1")
@@ -1636,6 +1762,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                base_selection_supplied=bool(base_selection),
                replayed_tree=a.replayed_tree, base_land=base_land,
                hygiene=hygiene,
+               red_since_ledger=(
+                   _load_red_since().load_ledger(Path(a.red_since_ledger))
+                   if a.red_since_ledger else None),
+               commit_age=(
+                   _load_red_since().git_age(Path(a.red_since_repo))
+                   if a.red_since_repo else None),
                verification_tier=a.verification_tier,
                git_version=a.git_version, tier_reason=a.tier_reason,
                missing_process_files=missing_process_files,
@@ -1747,8 +1879,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # `disclosures` is the stable code list to key on.
             "verification_tier": a.verification_tier,
             "tier_degraded": a.verification_tier != TIER_MERGE_TREE,
+            # THREE VALUES, NOT TWO. `NOT_APPLICABLE` is the direct-push
+            # answer and it is NOT a synonym for `NOT_PERFORMED`: one says the
+            # cross-check was skipped, the other says there was never a second
+            # tree to cross-check. Collapsing them would make a complete
+            # direct-push verdict indistinguishable from a degraded merge one.
             "squash_vs_rebase_cross_check": (
                 "PERFORMED" if a.verification_tier == TIER_MERGE_TREE
+                else "NOT_APPLICABLE"
+                if a.verification_tier == TIER_DIRECT_PUSH
                 else "NOT_PERFORMED"),
             "tier_reason": a.tier_reason,
             "disclosures": v.disclosures,
