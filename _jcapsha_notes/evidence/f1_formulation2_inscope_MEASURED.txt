@@ -1,0 +1,29 @@
+IN SCOPE  — refusal follows a lookup into a distribution VIEW : 10
+    _pad_ring.py
+    _tapeout_declaration.py
+    analog_real_corner_sweep.py
+    die_finishing_gen.py
+    fault_atpg_run.py
+    not_verified_tier.py
+    pad_ring_gen.py
+    phase1_doc_one_shot_runner.py
+    phase3_one_shot_runner.py
+    signoff_ladder_run.py
+
+OUT OF SCOPE — refusal is about a project artefact, one location: 4
+    benchmark_evidence_publish.py
+    input_doc_pdk_claim_vs_installed_pdk_check.py
+    pad_ring_check.py
+    vibe_ic_one_shot_runner.py
+
+--- for the in-scope ones: which view dirs does each name? ---
+    _pad_ring.py                       names ['libs.ref']
+    _tapeout_declaration.py            names ['libs.tech']
+    analog_real_corner_sweep.py        names ['libs.tech']
+    die_finishing_gen.py               names ['libs.tech']
+    fault_atpg_run.py                  names ['libs.ref']
+    not_verified_tier.py               names ['libs.tech']
+    pad_ring_gen.py                    names ['libs.ref']
+    phase1_doc_one_shot_runner.py      names (none literally)
+    phase3_one_shot_runner.py          names ['libs.ref', 'libs.tech']
+    signoff_ladder_run.py              names (none literally)

@@ -324,28 +324,43 @@ distribution that any step touching pads inherits implicitly, so a set
 difference over *this step's declared inputs* cannot contain it under any
 reading of that phrase.
 
-### What survives, and it is a strengthening rather than a retreat
+### What survives — after a second formulation that I adopted and then had to drop
 
-> **A refusal on absence must have read every view the distribution ships for
-> that class of thing.**
+The rule below is the **third** formulation. The second one is worth recording
+because I adopted it *before* sweeping it, which is the exact mistake this
+section exists to document.
 
-Not *"say which views you read"* — measured earlier in this document, the
-pre-fix refusal already said that. The missing thing was never the disclosure;
-it was the comparison between the views that exist and the views that were
-opened. A distribution's view directories are a fixed, small, **on-disk** set,
-and a step that refuses on absence already records which files it opened, so the
-check is a set difference over directories that exist. It only asks the question
-on a refusal-on-absence, so a run that finds what it was looking for can never
-trip it — which is where its narrowness comes from, rather than from tuning.
+> ~~A refusal on absence must have **read every view** the distribution ships.~~
+> **DROPPED.** It fires on the defect and both fixture arms looked clean — but
+> sweeping it afterwards: population 14, of which 10 refuse after a lookup into
+> a distribution view, and **8 of those 10 read exactly one view, for good
+> reasons**. A rule that fires on 8 of 10 correct programs is formulation 1's
+> bug arrived at from the other side.
 
-Measured, both arms (`evidence/f1_view_coverage_probe.py`):
+> **A refusal that a declared name is ABSENT must be FALSIFIED against the
+> views that were not read.**
+
+It fires only when the refused **name** is actually findable in a view the step
+did not open — a grep over directories that exist, for a string the step itself
+chose. There is no judgement in it, and it **cannot** fire on a step that read
+one view and was right, because the name is not there. It refuses the
+*refusal*, never the design.
+
+Measured, both arms, **with the negative control formulation 2 never had**
+(`evidence/f1_final_probe.py`):
 
 ```
-PRE-FIX   FAIL, refuses on absence   ships [libs.ref, libs.tech]
-                                     read  [libs.ref]        -> FIRES
-POST-FIX  PASS                       ships [libs.ref, libs.tech]
-                                     read  [libs.ref, libs.tech] -> silent
+PDK declares the name in the other view   refused 'io_site'
+                                          unread   [libs.tech]
+                                          findable libs.tech/.../config.tcl  -> FIRES
+
+PDK declares it NOWHERE  (the control)    refused 'io_site'
+                                          unread   []
+                                          findable none                     -> silent
 ```
+
+The second arm is the one that matters: a genuine absence stays a genuine
+absence, and the guard never converts a correct refusal into a finding.
 
 `recoveries.json`'s F1 record now carries this rule and a `supersedes` field
 naming what it replaced. F2's record is untouched: its pin is a taint walk with
@@ -402,6 +417,32 @@ repo has found this class four times and absorbed it zero times.
 
 `recoveries.json`'s F3b record now carries the population, the failure
 signature, and this landing status.
+
+---
+
+## What this whole exercise actually taught, stated once
+
+Three of the rules I proposed in the first pass did not survive contact with
+their own populations, and every one of them was refuted by the same cheap move:
+**run the rule over its population before proposing it.**
+
+| claim I published | how it died |
+|---|---|
+| F1: pin the input SET against upstream | over-fires 4/5; narrowed, stops catching the defect |
+| F1 again: a refusal must have READ every view | over-fires 8/10 — adopted before it was swept |
+| F3b: the unhonoured-knob rule has no population | it has four instances, in four subsystems |
+
+None of the three was visible from the one case that motivated it. All three
+took a single sweep to expose. That is the durable lesson of this capture, and
+it is worth more than any of the five rules in it:
+
+> **A rule is not a rule until it has been run over its own population.**
+> A rule measured only on the case that produced it has been measured on the
+> one input it cannot fail.
+
+It applies to this document too — which is why the F1 record carries a
+`formulation_history` field naming both rules it replaced, rather than
+presenting the surviving one as if it had been the idea all along.
 
 ---
 

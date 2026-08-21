@@ -6,10 +6,10 @@
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.
 
-def rule_refusal_on_absence_read_every_view(sample_text, ports):
-    """A refusal on absence must have read every view the distribution ships for that class of thing. A distribution's view directories are a fixed, small, on-disk set, and a step that refuses on absence already records which files it opened, so the check is a set difference over directories that exist. It asks the question ONLY when the verdict is a refusal on absence, so a run that finds what it was looking for can never trip it."""
+def rule_refusal_on_absence_falsified_against_unread_views(sample_text, ports):
+    """A refusal that a declared name is ABSENT must be falsified against the views the step did not read. It fires only when the refused NAME is findable in a view that was not opened -- a grep over directories that exist, for a string the step itself chose. It cannot fire on a step that read one view and was right, because the name is not there, and it refuses the REFUSAL rather than the design."""
     # Expected signal: ERROR
-    # Suggested fix action: On any verdict that asserts a declared name is absent, enumerate the view directories of the resolved distribution tree, project the artefact's own list of opened paths onto those directories, and refuse the REFUSAL when the two differ -- naming the unread views. The step is then required to look, or to say why that view does not apply, before it may report the absence.
+    # Suggested fix action: On any verdict asserting a declared name is absent, take the name from the step's own artefact, enumerate the view directories of the resolved distribution tree, subtract the ones the artefact says were read, and search the remainder for that name. A hit means the refusal is false and the step must look there before it may refuse. No hit means the refusal stands, and the check is silent.
     return []  # list of findings — TODO implement
 
 # Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
