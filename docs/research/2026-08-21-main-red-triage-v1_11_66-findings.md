@@ -637,10 +637,11 @@ def save_container(doc, create=False):
 
 with `create=True` at the single `container create` site.
 
-**A/B, same tree, only `save_container` differing** (both lanes carry the M15
-`rw_bind` test, so both are 17 tests):
+**A/B, same tree, only `save_container` differing** (both arms carry the M15
+`rw_bind` test, so both are 17 tests). **These are HOST-lane numbers** — see M23,
+where the image lane turns out not to reproduce the race at all:
 
-| lane | full-file runs with >=1 failure |
+| arm (host lane) | full-file runs with >=1 failure |
 |---|--:|
 | before the harness fix | **4 / 10** |
 | after the harness fix | **0 / 12** |
@@ -1547,6 +1548,45 @@ lane where the guard can actually run. I would take it.
 Note the shape of why it is invisible, because it is the whole document in one
 line: the test is already unmeasurable in CI, so making it *more honest* cannot
 make CI redder. A cell with no colour absorbs any change you make to it.
+
+
+## M23 — the container-resurrection race is HOST-ONLY, and M16 needed rescoping
+
+The last unmeasured cell. M16's `4/10 -> 0/12` was the host lane; M21 showed the
+image clean WITH my fix but never ran the image WITHOUT it. So "does this race
+happen in CI" was unanswered.
+
+| `test_hermetic_candidate_runner.py` | pristine | with my changes |
+|---|---|---|
+| host 8hd-3 (python 3.10) | **4/10 runs failing** | 0/12 |
+| pinned image (python 3.12) | **0/8 runs failing** | 0/6 |
+
+**The race does not reproduce in CI.** Eight consecutive clean runs on the
+pristine file in the image, against 4-in-10 failing on the host with the same
+file.
+
+Two consequences, and the first is a correction to my own writing:
+
+1. **M16's headline number is a HOST number and I had not said so.** Worse, I
+   wrote it under a column headed "lane", in a document where "lane" means
+   host-versus-image on every other page. Read quickly, `4/10` looked like a
+   statement about the landing lane. It is not. Column renamed to "arm" and the
+   scope stated inline.
+2. **The fix is a no-op in CI and still worth taking.** 15 passed pristine ->
+   16 passed with mine is exactly the one added `rw_bind` test; no flake either
+   way. What it buys is a developer host that stops accusing
+   `hermetic_candidate_runner.py` of leaking containers — which is where a human
+   actually reads that message and forms a belief about the runner.
+
+The likely reason for the split is the interpreter: 3.10 on the host, 3.12 in
+the image, and this is a race between a process being killed and a file being
+truncated-then-written. A different runtime can simply land on the other side of
+it. **I am not claiming that as the cause** — I did not isolate it, and the honest
+statement is that the race reproduces on one interpreter and not the other.
+
+**This is the fourth time tonight a number needed a lane attached to it.** "28 of
+28 vanish on the host", "9 unrunnable here", "no test runs in the image", and now
+`4/10`. A count without the lane it was taken in is not yet a finding.
 
 
 # ===== REQUESTS TO THE LANDER =====
