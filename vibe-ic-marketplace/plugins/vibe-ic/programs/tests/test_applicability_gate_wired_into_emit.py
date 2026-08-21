@@ -14,6 +14,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 RUNNER = PROGRAMS / "phase1_doc_one_shot_runner.py"
@@ -71,12 +72,25 @@ def test_write_l_doc_imports_applicability_gate():
 
 
 def test_gate_fires_BEFORE_disk_write():
-    """The gate must replace `content` BEFORE out.write_text(...) so the
-    on-disk JSON reflects the na_stub, not the over-filled template."""
+    """The gate must replace `content` BEFORE the document is serialised,
+    so the on-disk JSON reflects the na_stub, not the over-filled template.
+
+    The write is `_stamp.dump(out, content)` since vibe-ic#522 routed every
+    L-document write through the shared chokepoint that records the
+    producing release; before that it was an inline
+    `out.write_text(json.dumps(content …))`. Both spellings are accepted so
+    this ordering assertion survives the next time the write is factored,
+    which is the whole reason it broke: it named an implementation detail
+    rather than the event it cares about."""
     src = RUNNER.read_text()
     gate_pos = src.find("ic_class_applicability_gate_v0_1_62")
-    write_pos = src.find("out.write_text(json.dumps(content")
-    assert gate_pos > 0 and write_pos > 0
+    write_pos = max(src.find("_stamp.dump(out, content)"),
+                    src.find("out.write_text(json.dumps(content"))
+    assert gate_pos > 0, "the applicability gate is no longer in _write_l_doc"
+    assert write_pos > 0, (
+        "no recognised serialisation of `content` found in _write_l_doc — "
+        "if the write was renamed again, teach this test the new spelling "
+        "rather than deleting the ordering assertion")
     assert gate_pos < write_pos
 
 
@@ -106,7 +120,7 @@ def test_end_to_end_bus_protocol_l4_becomes_na_stub(tmp_path):
     subsequent L4_REGMAP emission must be replaced with na_stub."""
     tax = _load_taxonomy()
     # Use the real AMBA AXI L1+L2 (the canonical evidence project)
-    arm = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
+    arm = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
     if not (arm / "L1_DATASHEET.json").is_file():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")

@@ -1,0 +1,98 @@
+type: bug
+severity: P1
+component: program:reset_clock_variant_alias
+
+title: >-
+  The reset_clock_variant_aliases transform hides ALL internal signals inside
+  `<top>__rcvar_inner`, breaking any whitebox harness that reads internals
+  hierarchically (dut.<internal>) — 14 CVDP hard-94 fails implicated; 3 problems
+  recovered by MECHANICAL wrapper-flattening alone
+
+plugin_version: "1.3.3"
+
+pattern: |
+  The runner renames the authored module to `<top>__rcvar_inner` and emits a thin
+  `<top>` alias wrapper. Blackbox harnesses are unaffected, but CVDP-class hidden
+  cocotb harnesses commonly WHITEBOX internal state (e.g. `dut.parity_out`,
+  `dut.pwm_counter`): with the wrapper, those signals live one level down and the
+  harness aborts (AttributeError) or reads X. MEASURED on the hard-94 converge
+  round (v1.3.2): 20 failing drafts carried the wrapper; 14 triage records
+  explicitly implicated it; flattening the wrapper MECHANICALLY (no logic change)
+  flipped 3 problems to PASS at the official scorer (axi_stream_upscale_0001,
+  cache_lru_0001, cont_adder_0042). A 4th mechanism also observed
+  (axi_stream_downscale_0001): the wrapper's extra reset-variant pin is unknown to
+  the harness, floats/held at 0, freezing the whole design.
+
+suggested_fix: |
+  Options in preference order (chip-AGNOSTIC):
+  1. In the CVDP/benchmark emit path, FLATTEN before emit: the completion handed
+     to the gate must be the original flat module under its real name (the rcvar
+     alias is a runner-internal artifact for its own TB, never a deliverable).
+  2. Or make the transform opt-out for flows whose verification track declares
+     whitebox visibility (CVDP-class harnesses), keeping it for the runner's own
+     blackbox full-stack TB only.
+  3. At minimum, cvdp_gate should detect `__rcvar_inner` in a completion and
+     un-wrap it (rename inner back to top, drop the wrapper) — mirroring the
+     mechanical recovery that already proved +3 at the oracle.
+  Regression fixtures: Serial_Line_Converter_0011 (AttributeError on
+  dut.parity_out), axi_stream_downscale_0001 (extra reset pin freezes design).
+
+evidence:
+  run: benchmark_external/cvdp/run_hard94_unified_20260703 (converge2a/, drafts_converge2/)
+  mechanical_recovery: 3 problems flipped PASS with zero logic changes
+  filed_by: benchmark-agent (hard-94 converge round 2 on v1.3.2/v1.3.3)
+
+progress:
+  status: partial-2026-07-06
+  by: repo-gatekeeper triage sweep
+  note: >-
+    Authoring-side mitigation SHIPPED: expert-DB lesson `whitebox-harness-delivery` (deliver ONE FLAT module, keep internal signal names, never nest in an inner submodule the harness can't see) added v1.3.30. REMAINING (kept OPEN): the runner-side flatten of `<top>__rcvar_inner`. emit_variant_alias_wrapper is a polarity-safety-critical program (RAISES on cross-polarity; #689/#618/#792 guards) — a flat-emitter rewrite is a scoped higher-risk follow-up that must be proven not to regress those guards before landing; not rushed into this sweep.
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper
+  note: >-
+    Runner-side FLAT transform landed v1.3.32 (suggested_fix option 2 —
+    opt-out/in for whitebox flows). New emit_variant_alias_flat renames the
+    reset/clock port to canonical IN the module's OWN ANSI header + adds a 1-bit
+    internal `wire <orig> = <canon>;` alias, producing ONE flat module under the
+    real top name — NO `<top>__rcvar_inner` submodule — so a hidden cocotb harness
+    that binds internals hierarchically (dut.<internal>) still sees them. This is
+    the mechanism behind all 3 proven mechanical recoveries (axi_stream_upscale_0001,
+    cache_lru_0001, cont_adder_0042 — pure reset/clock rename). Wired into the CVDP
+    whitebox entry (cvdp_phase1_entry.py sets VIBE_IC_RCVAR_WHITEBOX_FLAT=1). SAFE
+    by construction — flat is used ONLY for the same-polarity rename case with no
+    additive dual-spelling and no internal caller; it RAISES on cross-polarity
+    exactly like the wrapper, and falls back to the untouched wrapper otherwise, so
+    the #518/#689/#792 guard tests are unchanged (93 green) and the transform is
+    iverilog compile-checked before it is written. Default OFF → zero change to the
+    general silicon flow.
+  residual: >-
+    The 4th observed mechanism (axi_stream_downscale_0001 — an ADDITIVE #792
+    dual-spelling extra reset pin the harness leaves undriven) still takes the
+    wrapper path (flat does not handle additive), relying on the wrapper's
+    polarity-safe tri0/tri1 inactive-default pull. Narrower, rarer sub-case;
+    tracked as a note here, not a blocker.
+
+resolution_addendum:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper (benchmark-agent found + authored; gatekeeper verified + landed)
+  note: >-
+    The "4th mechanism" additive residual noted above was NOT benign — the
+    benchmark-agent's v1.3.32 delta campaign PROVED (controlled experiment on
+    cvdp_copilot_axi_stream_upscale_0001 at the official Icarus-13 scorer: flat
+    PASS / additive-wrapper FAIL / synonym-removed PASS) that under the whitebox
+    opt-in the additive dual-spelling wrapper REGRESSES the design: the AND-combined
+    canonical synonym's tri1/tri0 inactive-pull is not honored by Icarus-13, so the
+    hidden harness (driving the design's own reset) leaves the synonym undriven → x
+    → design frozen. Fixed v1.3.33: under the whitebox opt-in, suppress
+    additive_reset_map (pure-additive → deliver flat original; mixed → flat
+    rename-only). Opt-in gated, default OFF → general silicon flow + #518/#689/#792
+    additive guards unchanged (rcvar suite 98 green). Also corrected the campaign's
+    honest finding: the "+3 rcvar" recovery does NOT reproduce clean-blind (axi &
+    cont_adder pass the blind-author flow directly; cache_lru fails on authoring
+    logic) — net rcvar delta on the comparable baseline = +0, projected full-302
+    v1.3.32 ~= 243/302. The v1.3.33 fix's value is PROTECTING the 243 baseline
+    against the canonical-entry additive regression, not adding passes.

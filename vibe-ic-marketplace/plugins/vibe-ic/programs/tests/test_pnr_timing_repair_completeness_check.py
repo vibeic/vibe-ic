@@ -200,3 +200,63 @@ def test_non_tcl_garbage_is_error_not_pass(tmp_path, capsys):
     rc = mod.main([str(p)])
     assert rc == 2
     assert "no OpenROAD" in capsys.readouterr().err
+
+
+# ---- DIRECTORY MODE (added when the gate was wired into Step 17) ----
+#
+# The gate is wired UNCONDITIONALLY on the P&R DIRECTORY, not on a literal
+# `pnr.tcl`. Both halves are load-bearing and both are pinned here.
+
+def test_directory_finds_a_differently_named_pnr_script(tmp_path):
+    """The published run whose defect this gate exists for names its script
+    `pnr_fixed.tcl`. A literal `pnr.tcl` wire would have missed exactly it."""
+    d = tmp_path / "pnr"
+    d.mkdir()
+    (d / "pnr_fixed.tcl").write_text(HOLD_ONLY_FLOW)
+    out = tmp_path / "rep.json"
+    rc = mod.main([str(d), "--json", str(out)])
+    assert rc == 1
+    rep = json.loads(out.read_text())
+    assert rep["summary"]["hold_only_antipattern"] is True
+    assert rep["script"].endswith("pnr_fixed.tcl")
+
+
+def test_directory_takes_the_worst_verdict(tmp_path):
+    d = tmp_path / "pnr"
+    d.mkdir()
+    (d / "pnr.tcl").write_text(GOOD_FLOW)
+    (d / "pnr_eco.tcl").write_text(HOLD_ONLY_FLOW)
+    out = tmp_path / "rep.json"
+    rc = mod.main([str(d), "--json", str(out)])
+    assert rc == 1
+    rep = json.loads(out.read_text())
+    assert len(rep["audited"]) == 2
+    assert rep["verdict"] == "FAIL"
+
+
+def test_directory_ignores_non_pnr_tcl_siblings(tmp_path):
+    """`sta_one.tcl` / `magic_stream_out.tcl` live in the same directory and
+    are not P&R flows; auditing them would be a FAIL for the wrong reason."""
+    d = tmp_path / "pnr"
+    d.mkdir()
+    (d / "pnr.tcl").write_text(GOOD_FLOW)
+    (d / "magic_stream_out.tcl").write_text("gds write out.gds\n")
+    out = tmp_path / "rep.json"
+    rc = mod.main([str(d), "--json", str(out)])
+    assert rc == 0
+    assert len(json.loads(out.read_text())["audited"]) == 1
+
+
+def test_directory_with_no_pnr_script_is_the_disclosed_skip_tier(tmp_path):
+    """rc=2 is the flow's disclosed-skip tier. It is what lets this gate be
+    wired UNCONDITIONALLY instead of behind a `condition_files_exist` on the
+    very script whose absence would be interesting."""
+    d = tmp_path / "pnr"
+    d.mkdir()
+    rc = mod.main([str(d)])
+    assert rc == 2
+
+
+def test_missing_directory_is_also_the_skip_tier(tmp_path):
+    rc = mod.main([str(tmp_path / "no_such_dir")])
+    assert rc == 2
