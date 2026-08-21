@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 24 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 25 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 21 | deterministic rules — the default, and every one names its predicate |
+| **A** | 22 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -874,6 +874,34 @@ packages and reports 216 — the eighth over-match in this lane.
 **(o)** yes. **(d)** yes — it is per test module per import, so it covers the
 next optional dependency the suite adopts.
 
+### A-23 · a distilled rule must be routed into a program some verdict consults · `capture.emit`
+
+A lane's note about unwired gates raised a question about **this deliverable**:
+routing picks the program that *owns* the subject, which is the right criterion
+for correctness and says nothing about whether anything **runs** it. A rule in a
+program no verdict consults is silent forever — and worse than an unwritten one,
+because the record asserts the class is now covered.
+
+The tree already maintains the other half of the join:
+
+    gates 619   unwired 61 (baseline 59)   newly unwired 3
+
+and one of the three newly unwired is a program of **this very layer**, so the
+bad pairing was reachable rather than hypothetical.
+
+Checked, and the batch passes:
+
+    Bucket-A records            22
+    distinct target programs    15
+    targets that are unwired     0
+
+**That is the result to want and not the one to assume** — I had not verified it
+until writing this rule, having routed twenty-odd records on ownership alone.
+The check belongs at emit time, refusing the pairing and saying which half must
+change: wire the program, or route the rule somewhere that runs.
+**(o)** yes. **(d)** yes — it is per record per emit, so every future batch is
+covered without anyone remembering.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1062,6 +1090,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
 | A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
 | A-22 | 216 imports | 51 | narrowed to true third-party; one package, proven fatal |
+| A-23 | — | 0 of 21 | **this batch passes its own new check** |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
