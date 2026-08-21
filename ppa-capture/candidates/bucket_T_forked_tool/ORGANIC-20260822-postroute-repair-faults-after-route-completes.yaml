@@ -23,6 +23,6 @@ suggested_fix: |
   See the tool enhancement field: the faulting stage must degrade to a named diagnostic. The correlated netlist property in the samples is the reproduction path.
 
 id: "ORGANIC-20260822-postroute-repair-faults-after-route-completes"
-submitted_at: "2026-08-22T00:25:09+08:00"
+submitted_at: "2026-08-22T00:28:50+08:00"
 session_context: >-
   Ten of ten reproductions in one seventy-arm cross-layer sweep, all in the same design family, none in the fifty-two arms of the other family. Samples are committed in the sweep's own record tree.

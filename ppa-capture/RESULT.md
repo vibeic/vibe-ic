@@ -559,6 +559,10 @@ first is an import failure.
 
 Cost of the case that bit: **33 red test identifiers** on a stock host, and a
 crash returned under the exit code reserved for a finding about the design.
+**(o)** yes, but only from the CI arm it asks for — no reading of the source
+would have caught it, which is the whole reason it is Bucket C.
+**(d)** yes — the arm covers every optional dependency at once, including the
+next one adopted, which is what a per-site rule could never do.
 
 ### A-13 · a contract relation is not an import edge and owes a pair test · `repo.test_population`
 
