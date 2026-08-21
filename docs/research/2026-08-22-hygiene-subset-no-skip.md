@@ -165,5 +165,17 @@ in §6.
 
 ## 6. The full-budget run
 
-_Filled in below from the 1800 s run against the fix tree with the published
-corpus bound._
+Same chain, same tree, 1800 s budget, `VIBE_IC_BENCHMARK_DATA` bound to the
+published-corpus checkout. Recorded as it stands rather than predicted:
+
+**At 721 s the review had not yet returned.** That is the whole of the budget
+argument, measured rather than argued: the 240 s the flag existed to fit is a
+deadline this review passes without deciding, and a landing wired that way
+refuses every time and names the wrong cause. The load it drives is its own —
+the hygiene set's parallel pytest population — not another tenant's, so this
+is the shape a real landing has.
+
+The final verdict and elapsed time are appended below when the run returns. If
+this section still ends here, the run had not returned by the end of the
+session and the number above is a LOWER BOUND, which is the only claim it was
+ever making.
