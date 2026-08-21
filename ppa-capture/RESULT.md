@@ -1222,6 +1222,32 @@ rather than assuming it — the working tree and `HEAD` agree at 54 steps. The
 third gate then needed a longer budget than the first attempt allowed; its
 result here is a completed run, not an inference from a partial one.
 
+## Buildability — the deliverable's stated purpose, checked
+
+The brief's reason for these records is that a separate lane implements them and
+*"needs your `pattern` and `fix_action` to be precise enough to build from."* I
+had never checked that systematically. The rubric: a buildable `fix_action` names
+a **predicate** (what to compute), a **population** (what to compute it over) and
+a **refusal** (what to do on a hit).
+
+    Bucket-A records                          26
+    shortest fix_action                       > 300 characters
+    genuinely missing a rubric element         0
+
+**And the check itself is A-27's worked example, twice over.** The first run
+reported **14 of 26 missing a refusal** — because the pattern `\brefus\b`
+cannot match the word *refuse*, the `\b` falling between `s` and `e`. A-27 says
+to validate a screen against a known instance before quoting its number; doing
+that failed the control immediately and the real figure was **2, not 14** — a
+sevenfold inflation, in the direction that would have sent me rewriting a dozen
+sound records.
+
+Reading the surviving 2 cleared both: *"apply them to every field the validator
+constrains"* and *"collect the document-type identifiers producers stamp"* are a
+predicate and a population, in words my list did not happen to contain. So the
+answer is **zero**, and it took a control plus a read to get there rather than
+one regex.
+
 ---
 
 ## Summary
