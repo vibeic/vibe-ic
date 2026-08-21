@@ -5,23 +5,25 @@ Everything here is recomputed from
 memoised for the process. Nothing in this module reads ``.audit_63x8.json``:
 the audit is history, the yaml is the repo. If a step is added, removed or
 re-gated, every accessor below changes with it — which is precisely what makes
-the 504<!--figure:ledger_cells-->-cell ledger self-invalidating.
+the 621<!--figure:ledger_cells-->-cell ledger self-invalidating.
 
 ====================================================================
 THE GRAMMAR, AS MEASURED (not as remembered)
 ====================================================================
 Every claim below was checked against the yaml at
-``flow/phase1_phase2_phase3.yaml`` (63<!--figure:flow_steps--> steps) and,
+``flow/phase1_phase2_phase3.yaml`` (69<!--figure:flow_steps--> steps) and,
 where the semantics live in
 a consumer rather than in the data, against that consumer's source.
 
 --------------------------------------------------------------------
 1. Steps
 --------------------------------------------------------------------
-``yaml.safe_load(...)["steps"]`` is a list of 63<!--figure:flow_steps--> dicts.
+``yaml.safe_load(...)["steps"]`` is a list of 69<!--figure:flow_steps--> dicts.
 **Step ids are mixed types**: 44<!--figure:flow_steps_int--> ``int`` (1..44)
-and 19<!--figure:flow_steps_str--> ``str`` (``D1``, ``P0``, ``FS1``, ``DT1``
-``DT2`` ``DT3``, ``A1``-``A9`` minus ``A0``, ``M1``-``M4``). Never assume int;
+and 25<!--figure:flow_steps_str--> ``str`` (``D1``, ``P0``, ``FS1``, ``DT1``
+``DT2`` ``DT3``, ``A1``-``A9`` minus ``A0``, ``M1``-``M4``, and the five
+path-specific ids ``0.5ic`` ``15.5ic`` ``26.5ic`` ``37.5ip`` ``37.5ic``, whose
+``ip`` / ``ic`` suffix is part of the id and not a version). Never assume int;
 never sort them naively. Use :func:`normalize_id` (``str()``) for dict keys and
 :func:`step_ids` for the raw, declaration-ordered tuple.
 
@@ -31,18 +33,18 @@ anchor beside it names the binding that produced it. Do not hand-edit them:
 run ``--fix-figures``, and ``--check`` fails on drift (vibe-ic#961).
 
     gate
-        present on 62<!--figure:gate_declared--> steps,
-        non-empty on 62<!--figure:gated_steps--> (absent on P0 only)
+        present on 68<!--figure:gate_declared--> steps,
+        non-empty on 68<!--figure:gated_steps--> (absent on P0 only)
     required_outputs
-        present on 61<!--figure:required_output_declared--> steps,
-        non-empty on 61<!--figure:required_output_steps--> (absent on FS1 and P0)
+        present on 67<!--figure:required_output_declared--> steps,
+        non-empty on 67<!--figure:required_output_steps--> (absent on FS1 and P0)
     blocks_on
-        present on 63<!--figure:blocks_on_declared--> steps,
-        non-empty on 62<!--figure:blocks_on_nonempty--> (declared on every step;
+        present on 69<!--figure:blocks_on_declared--> steps,
+        non-empty on 67<!--figure:blocks_on_nonempty--> (declared on every step;
         PRESENT-BUT-EMPTY on D1 and A1, the two genuine graph roots)
 
 The ``present`` column is a PRESENCE count. ``blocks_on`` is non-empty on only
-62<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
+67<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
 be wrong about D1 and A1.
 
 Top-level ``total_steps: 44`` counts the numeric steps ONLY. It is NOT
@@ -67,15 +69,15 @@ OR a sim ``*.log`` OR a ``pass.flag``; a ``drc_clean.flag`` OR a ``.lyrdb``).
 The consumer splits on the literal ``" OR "`` (spaces included) and strips each
 alternative — :func:`split_any_of` reproduces exactly that.
 
-Live entry census — 140<!--figure:required_output_entries--> entries over
-61<!--figure:required_output_steps--> steps, classified by
+Live entry census — 164<!--figure:required_output_entries--> entries over
+67<!--figure:required_output_steps--> steps, classified by
 :func:`classify_output` (digits derived; see the anchor note in §1):
 
-    FILE          106<!--figure:required_outputs_file-->
+    FILE          122<!--figure:required_outputs_file-->
         plain relative path, no wildcard, no " OR "
-    GLOB          12<!--figure:required_outputs_glob-->
+    GLOB          18<!--figure:required_outputs_glob-->
         wildcard, no " OR " (e.g. ``phase1/generated_docs/L13_*.json``)
-    ANY_OF        22<!--figure:required_outputs_any_of-->
+    ANY_OF        24<!--figure:required_outputs_any_of-->
         contains " OR " (each alternative may itself be a glob; one entry —
         step 4 — uses a recursive ``**`` alternative)
     PROGRAM_EXIT   0<!--figure:required_outputs_program_exit-->
@@ -83,7 +85,7 @@ Live entry census — 140<!--figure:required_output_entries--> entries over
 
 **Contradiction with the brief, reported deliberately**: there is NO
 ``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All
-140<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
+164<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
 That form exists only inside ``gate`` clauses (§3). :data:`PROGRAM_EXIT` is
 still returned by :func:`classify_output` for forward compatibility, but on the
 current yaml it never fires — a sibling that branches on it is writing dead
@@ -104,11 +106,11 @@ either call the real helper or document that it is using the strict form.
 --------------------------------------------------------------------
 3. ``gate`` grammar
 --------------------------------------------------------------------
-Top-level shapes over 62<!--figure:gated_steps--> gates — how many gates carry
+Top-level shapes over 68<!--figure:gated_steps--> gates — how many gates carry
 each key (a gate may carry more than one, so these do not partition):
 
-    {'all_of': [...]}                 48<!--figure:gate_shape_all_of-->
-    {'program_exit_zero': <str|dict>} 13<!--figure:gate_shape_program_exit_zero-->
+    {'all_of': [...]}                 51<!--figure:gate_shape_all_of-->
+    {'program_exit_zero': <str|dict>} 16<!--figure:gate_shape_program_exit_zero-->
                                       (dict form once, on step 16:
                                        {'command': '...'} )
     {'files_exist': [...]}             1<!--figure:gate_shape_files_exist-->
@@ -119,14 +121,14 @@ replaces a hand-counted table of raw ``all_of`` members: the raw table counted
 a different population from the accessor this module tells you to use, so the
 two could not be reconciled by a reader and only one of them was derived.
 
-    program_exit_zero          104<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
+    program_exit_zero          115<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
     advisory_program_exit_zero 37<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
     files_exist                32<!--figure:gate_clauses_files_exist-->
-    optional_program_exit_zero 28<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
+    optional_program_exit_zero 29<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
-    total                     202<!--figure:gate_clauses_total-->, of which
-                              165<!--figure:blocking_clauses--> block
+    total                     214<!--figure:gate_clauses_total-->, of which
+                              177<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
@@ -140,26 +142,33 @@ Use :func:`gate_clauses` (typed) rather than re-walking the dict.
 --------------------------------------------------------------------
 4. Program resolution
 --------------------------------------------------------------------
-A gate command's FIRST whitespace token is the program basename. All
-160<!--figure:gate_program_tokens_distinct--> distinct tokens across the
-169<!--figure:gate_commands_total--> gate commands resolve to
-``programs/<token>.py`` — there are 0<!--figure:gate_programs_unresolved-->
-unresolvable tokens and zero commands
-that shell out via ``python3 <file>``. :func:`gate_programs` returns only
+A gate command's FIRST whitespace token is the program basename. Of the
+172<!--figure:gate_program_tokens_distinct--> distinct tokens across the
+181<!--figure:gate_commands_total--> gate commands, all but
+0<!--figure:gate_programs_unresolved--> resolve to ``programs/<token>.py``, and
+zero commands shell out via ``python3 <file>``. This figure is the live count
+of gates naming a program that does not exist. It went 0 -> 3 when the
+path-specific steps 15.5ic, 26.5ic and 37.5ip were DECLARED AHEAD OF THEIR
+PROGRAMS, and it is back at 0 because all three of ``pad_ring_check``,
+``die_finishing_check`` and ``digital_hardmacro_check`` have since been
+written — which is exactly the return-to-zero this anchor was put here to
+watch. :func:`gate_programs` returns only
 tokens that resolve to a file that actually exists, so it is a live statement
 about the source tree, not about the yaml's spelling. Use
 :func:`gate_program_tokens` when you need the declared-but-possibly-missing
 form (that difference IS the dimension-1 wiring question).
 
-61<!--figure:steps_naming_a_program--> of the
-62<!--figure:gated_steps--> gated steps name at least one program. Step 1 has a
-file-existence-only gate and legitimately names none.
+67<!--figure:steps_naming_a_program--> of the
+68<!--figure:gated_steps--> gated steps name at least one program THAT RESOLVES.
+The single exception is step 1, which has a file-existence-only gate and
+legitimately names none. It was four until 15.5ic, 26.5ic and 37.5ip got their
+programs — see section 4.
 
 --------------------------------------------------------------------
 5. ``blocks_on``
 --------------------------------------------------------------------
-97<!--figure:blocks_on_edges--> edges, mixed types
-(80<!--figure:blocks_on_edges_int--> int, 17<!--figure:blocks_on_edges_str--> str),
+106<!--figure:blocks_on_edges--> edges, mixed types
+(85<!--figure:blocks_on_edges_int--> int, 21<!--figure:blocks_on_edges_str--> str),
 every target resolving to a declared step id — no dangling references at time of writing. Compare with
 :func:`normalize_id` on both sides; the real consumers stringify
 (``{str(id): [str(e) for e in blocks_on]}``).
