@@ -2310,7 +2310,16 @@ Six rows, six corrections. Not one survived audit as written.
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
 proposal (`2026-08-22-refounding-the-hermetic-era-landing-guards.md`), two test
-files, and one evidence fixture (`matrix_d3_output_manifest.json`). **No program, no gate, no flow, no version, no baseline was touched.**
+files, and one evidence fixture (`matrix_d3_output_manifest.json`).
+
+**No program, gate, flow, version or baseline was touched — VERIFIED against the
+manifest, not asserted.** Every touched path was checked against the 47 entries in
+`tools/ci/protected_landing_transition.json`; none appears. Note the near-misses,
+because they are the reason this was worth checking rather than stating:
+`tools/ci/hermetic_candidate_runner.py` IS protected and I changed only its TEST
+file, which is not listed; `test_matrix_63x8_coverage.py` IS protected and I only
+RAN it. A pattern-match over path shapes flagged a false positive here; the
+manifest itself did not.
 
 **Measured effect, both lanes** (`test_landing_merge_verdict.py`):
 
