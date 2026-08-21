@@ -241,6 +241,32 @@ _CW90 = {"N": "E", "E": "S", "S": "W", "W": "N",
 #: Orientations whose footprint is the master's SIZE with the axes swapped.
 _ROTATED = ("E", "W", "FE", "FW")
 
+#: What the placer ACTUALLY orients a vertical-side pad to, in DEF spelling.
+#:
+#: MEASURED 2026-08-22, four SEPARATE OpenROAD processes (26Q3-1165), one per
+#: `PAD_ROTATION_VERTICAL` value so no row from an earlier pass could be reused
+#: by a later one:
+#:
+#:     ROTV = R0 / R90 / R180 / MX   ->   WEST orient=MXR90, EAST orient=R90
+#:                                        75 um along the row, 350 um into the
+#:                                        die, IDENTICAL in all four
+#:
+#: The vertical-side orientation is a CONSTANT of the placer, not a function of
+#: the declared rotation. Written here in the placer's own spelling
+#: (`MXR90` -> `FW`, `R90` -> `W`) so the DEF this step emits says what the tool
+#: would have said. Emitting the DECLARED orientation instead produced an
+#: artefact that contradicted its own geometry.
+VERTICAL_SIDE_ORIENT: Dict[str, str] = {
+    "W": ORIENT_ALIASES["MXR90"],
+    "E": ORIENT_ALIASES["R90"],
+}
+
+#: librelane's declared default for all three pad rotations
+#: (`librelane/config/flow.py`, `default="R0"` on each). A run whose config
+#: carries this value is indistinguishable from a run that set nothing, which
+#: is exactly how it should be treated.
+ROTATION_DEFAULT = "R0"
+
 
 def normalise_orient(token: object) -> Optional[str]:
     """A DEF orientation, from either spelling, or None if unrecognised."""

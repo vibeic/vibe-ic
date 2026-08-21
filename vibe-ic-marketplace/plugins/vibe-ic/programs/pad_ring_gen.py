@@ -170,6 +170,29 @@ UPSTREAM_REFUSALS_MADE_MACHINE_READABLE: Tuple[Tuple[str, str], ...] = (
 )
 
 
+#: `PAD_ROTATION_VERTICAL` is INERT, and this is the evidence, carried in the
+#: report so a reader is told rather than left to find out.
+ROTATION_VERTICAL_INERT: Dict[str, Any] = {
+    "variable": "PAD_ROTATION_VERTICAL",
+    "honoured": False,
+    "reason": (
+        "the placer does not read it. MEASURED in four SEPARATE OpenROAD "
+        "processes, one per value so no row from an earlier pass could be "
+        "reused by a later one: PAD_ROTATION_VERTICAL = R0 / R90 / R180 / MX "
+        "all produced WEST orient=MXR90 and EAST orient=R90, 75 um along the "
+        "row and 350 um into the die, IDENTICAL in all four. The vertical-side "
+        "orientation is a constant of the placer, not a function of this "
+        "variable."),
+    "measured_orientation": {"W": "MXR90", "E": "R90"},
+    "librelane_default": PR.ROTATION_DEFAULT,
+    "what_this_step_does": (
+        "emits the orientation the placer produces, so the DEF does not "
+        "contradict its own geometry. A run that DECLARES a non-default value "
+        "is refused NOT_DETERMINED rather than silently ignored — an author "
+        "who sets a knob is entitled to be told the knob does nothing."),
+}
+
+
 #: What this step declares it does NOT do. In the artefact rather than left
 #: for a reader to notice, and `fillers_placed` stays null rather than 0.
 UNPERFORMED: Dict[str, str] = {
@@ -210,6 +233,7 @@ def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
         "fillers_placed": None,
         "spacing": None,
         "unperformed": dict(UNPERFORMED),
+        "rotation_vertical_inert": dict(ROTATION_VERTICAL_INERT),
         "bterms": None,
         "findings": [],
     }
@@ -274,11 +298,16 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
             "width_dbu": dx, "height_dbu": dy,
         })
 
+    # The vertical sides take the orientation the placer ACTUALLY produces,
+    # measured, not the declared one — see `_pad_ring.VERTICAL_SIDE_ORIENT`.
+    # `PAD_ROTATION_VERTICAL` does not reach this dict because it does not
+    # reach the tool either; `main` refuses before here if a run DECLARED a
+    # non-default value, so nobody is silently ignored.
     side_orient = {
         "S": cfg["rotation"]["PAD_ROTATION_HORIZONTAL"],
         "N": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_HORIZONTAL"], 2),
-        "W": cfg["rotation"]["PAD_ROTATION_VERTICAL"],
-        "E": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_VERTICAL"], 2),
+        "W": PR.VERTICAL_SIDE_ORIENT["W"],
+        "E": PR.VERTICAL_SIDE_ORIENT["E"],
     }
     side_width = {
         "S": (urx - llx) - 2 * edge - 2 * corner_sw,
@@ -293,12 +322,26 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
         insts = cfg["sides"][side]
         orient = side_orient[side]
         axis = "x" if side in PR.HORIZONTAL_SIDES else "y"
-        # 1. sum the pad widths for the side. Upstream sums the MASTER width
-        #    on every side: the rotation puts a cell's width along the row.
-        boxes = [PR.footprint(lib.masters[die.components[i].master],
-                              orient, units) for i in insts]
-        along = [b[0] if axis == "x" else b[1] for b in boxes]
-        into = [b[1] if axis == "x" else b[0] for b in boxes]
+        # 1. sum the pad widths for the side. THE MASTER'S WIDTH, ON EVERY
+        #    SIDE — never the oriented footprint's extent.
+        #
+        #    Upstream measures a cell in exactly two places and both are
+        #    `[[$inst getMaster] getWidth]`, for all four sides including the
+        #    vertical ones: the fit sum, and the along-the-row step
+        #    `cur_pos + space_between_pads_min_filler + $width`. There is no
+        #    `getHeight` anywhere in its side arithmetic. The tool agrees when
+        #    asked: a vertical-side pad is placed 75 um along the row and
+        #    350 um into the die for EVERY value of PAD_ROTATION_VERTICAL.
+        #
+        #    Taking the ORIENTED extent here summed the master's HEIGHT on a
+        #    vertical side whose declared rotation did not swap the axes — a
+        #    4.4x error on a real ring (19 x 350 = 6650 against a 1500 um
+        #    side), refusing a ring upstream places. This is a correction to
+        #    match the tool and upstream, and it is right whichever way it
+        #    moves a verdict.
+        sizes = [lib.masters[die.components[i].master] for i in insts]
+        along = [int(round(w * units)) for w, _h in sizes]
+        into = [int(round(h * units)) for _w, h in sizes]
         total = sum(along)
         avail = side_width[side]
         # 2. if that value is larger than the side, throw an error
@@ -556,6 +599,45 @@ def main(argv: Optional[List[str]] = None) -> int:
     except (ValueError, OSError) as exc:
         return _fail("PAD_CONFIG_MALFORMED",
                      f"{PR.ASSIGNMENT_REL}: {exc}", die=die_rec)
+
+    # ── the declared rotation this step CANNOT honour ─────────────────────
+    # rc 2, NOT rc 0 and NOT rc 1. "I cannot honour what you asked" is not a
+    # pass and it is not a finding about the design — it is the flow's
+    # could-not-measure tier, which is exactly what this is. A run that leaves
+    # the variable at librelane's default is indistinguishable from a run that
+    # never set it, so it proceeds and is TOLD, in `rotation_vertical_inert`.
+    declared_rotv = PR.normalise_orient(
+        cfg["rotation"]["PAD_ROTATION_VERTICAL"])
+    if declared_rotv != PR.normalise_orient(PR.ROTATION_DEFAULT):
+        raw = json.loads(asg_path.read_text(errors="replace")).get(
+            "PAD_ROTATION_VERTICAL")
+        reason = (
+            f"NOT DETERMINED: this run DECLARES PAD_ROTATION_VERTICAL={raw!r}, "
+            f"a value other than librelane's default "
+            f"{PR.ROTATION_DEFAULT!r}, and the placer does not read it. "
+            f"{ROTATION_VERTICAL_INERT['reason']} Placing the ring anyway "
+            f"would silently give you the orientation you did not ask for, "
+            f"and reporting PASS would say the declaration was honoured. "
+            f"Neither is true, so no ring is placed and no verdict is claimed. "
+            f"Remove the declaration, or set it to {PR.ROTATION_DEFAULT!r}, to "
+            f"proceed on the placer's own measured orientation "
+            f"({ROTATION_VERTICAL_INERT['measured_orientation']}).")
+        rep = _report("SKIP", reason, inputs=inputs,
+                      io_cell_library=lib.as_dict(), die=die_rec,
+                      missing_inputs=[{
+                          "input": "a pad rotation the placer can honour",
+                          "path": PR.ASSIGNMENT_REL,
+                          "variables_absent": ["PAD_ROTATION_VERTICAL"]}],
+                      findings=[_finding(
+                          "INFO", "PAD_ROTATION_VERTICAL_NOT_HONOURED",
+                          reason)])
+        _write(project, args.json, rep)
+        _skip_marker(project, reason)
+        print(f"=== {PROGRAM} ({project.name}) ===")
+        print("  verdict: SKIP (NOT DETERMINED)")
+        print(f"  PAD_ROTATION_VERTICAL_NOT_HONOURED: declared {raw!r}, "
+              f"placer ignores it")
+        return 2
 
     cfg_rec = {
         "PAD_SITE_NAME": cfg["site"],

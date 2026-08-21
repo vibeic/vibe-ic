@@ -137,7 +137,10 @@ def _config(**over) -> dict:
         "PAD_CORNER_SITE_NAME": "io_corner_site",
         "PAD_EDGE_SPACING": 10,
         "PAD_ROTATION_HORIZONTAL": "R0",
-        "PAD_ROTATION_VERTICAL": "R90",
+        # librelane's default, and the ONLY value this step proceeds on: the
+        # placer does not read this variable (measured), so a declared
+        # non-default is refused NOT_DETERMINED rather than silently ignored.
+        "PAD_ROTATION_VERTICAL": "R0",
         "PAD_ROTATION_CORNER": "R0",
         "PAD_CORNER": "pad_corner",
         "PAD_FILLERS": ["pad_fill1"],
@@ -1129,6 +1132,105 @@ def test_the_declaration_parser_reads_upstreams_form_verbatim():
     assert PR.parse_pad_site_declarations("set ::env(PAD_SITE_NAME) \"x\"\n") \
         == {}
     assert PR.parse_pad_site_declarations("") == {}
+
+
+# --------------------------------------------------------------------------- #
+# THE ALONG-THE-ROW EXTENT, AND THE ROTATION THAT IS NOT READ
+#
+# Upstream measures a cell in exactly two places and both are the master's
+# WIDTH, on all four sides. The tool agrees: a vertical-side pad is placed
+# 75-along / 350-into for EVERY value of PAD_ROTATION_VERTICAL, measured in
+# four separate OpenROAD processes. Taking the ORIENTED extent instead summed
+# the master's HEIGHT on a vertical side and refused a ring upstream places.
+#
+# The fixture's pad is 75 x 350, so a side that sums heights is 4.67x a side
+# that sums widths — the same shape as the real 19 x 350-vs-1500 error.
+# --------------------------------------------------------------------------- #
+def test_a_vertical_side_sums_the_master_width_not_its_height(tmp_path):
+    """THE DEFECT. Four pads a side, 75 um wide and 350 um tall, on a die whose
+    sides are 1280 um. Summing widths gives 300 and fits; summing heights gives
+    1400 and does not. Upstream sums widths on every side."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0, _report(root)["reason"]
+    rep, _ = CHK._unwrap(_report(root))
+    for side in ("PAD_EAST", "PAD_WEST"):
+        assert rep["spacing"][side[4]]["space_for_fill"] == 1280_000 - 4 * 75_000
+    # every side sums the same, because every side sums the same thing
+    fills = {s: rep["spacing"][s]["space_for_fill"] for s in PR.SIDES}
+    assert len(set(fills.values())) == 1, fills
+
+
+def test_the_vertical_sides_carry_the_orientation_the_placer_produces(tmp_path):
+    """THE DEF MUST NOT CONTRADICT ITSELF. The orientation written is the one
+    the tool actually produces — measured MXR90 west, R90 east — so the
+    footprint a DEF reader derives matches the geometry this step recorded."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    got = {p["side"]: p["orient"] for p in rep["pads"]}
+    assert got["W"] == PR.VERTICAL_SIDE_ORIENT["W"] == PR.ORIENT_ALIASES["MXR90"]
+    assert got["E"] == PR.VERTICAL_SIDE_ORIENT["E"] == PR.ORIENT_ALIASES["R90"]
+    # and the DEF says the same thing the report does
+    for pad in rep["pads"]:
+        assert f"( {pad['x']} {pad['y']} ) {pad['orient']} ;" in \
+            _ring_def(root).read_text()
+    # the recorded extents are the oriented footprint of that orientation
+    for pad in (p for p in rep["pads"] if p["side"] in PR.VERTICAL_SIDES):
+        w, h = PR.footprint(( 75.0, 350.0), pad["orient"], UNITS)
+        assert (pad["width_dbu"], pad["height_dbu"]) == (w, h)
+
+
+def test_a_declared_non_default_vertical_rotation_is_not_determined(tmp_path):
+    """DEGRADE LOUDLY. The placer does not read this variable. Honouring it
+    silently is a lie and ignoring it silently is the defect. An author who
+    sets a knob is entitled to be told the knob does nothing — and being told
+    is rc 2, not rc 0 and not rc 1: it is `I cannot honour what you asked`,
+    which is neither a pass nor a finding about the design."""
+    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R90"))
+    assert _gen(root) == 2
+    rep, _ = CHK._unwrap(_report(root))
+    assert rep["verdict"] == "SKIP"
+    assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
+    assert "PAD_ROTATION_VERTICAL" in rep["reason"]
+    assert "R90" in rep["reason"]
+    # no ring was placed and none was claimed
+    assert not _ring_def(root).is_file()
+    assert rep["pads"] == [] and rep["verdict"] != "PASS"
+    assert (root / PR.PADRING_SKIPPED_REL).is_file()
+
+
+@pytest.mark.parametrize("value", ["R90", "R180", "R270", "MX", "MXR90"])
+def test_every_non_default_vertical_rotation_is_refused(tmp_path, value):
+    """Not just the one the fixture used to carry."""
+    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL=value))
+    assert _gen(root) == 2
+    assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
+
+
+def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_inert(
+        tmp_path):
+    """The other half of the rule, and the half that keeps it honest. A run at
+    librelane's default is indistinguishable from a run that set nothing, so it
+    proceeds — and the report SAYS the variable is inert, with the measurement,
+    rather than leaving a reader to find out."""
+    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R0"))
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    inert = rep["rotation_vertical_inert"]
+    assert inert["variable"] == "PAD_ROTATION_VERTICAL"
+    assert inert["honoured"] is False
+    assert inert["measured_orientation"] == {"W": "MXR90", "E": "R90"}
+    assert "four SEPARATE OpenROAD processes" in inert["reason"]
+    assert inert["librelane_default"] == PR.ROTATION_DEFAULT
+
+
+def test_the_inert_disclosure_is_in_every_report_including_the_skip(tmp_path):
+    """A disclosure only present on the happy path is not a disclosure."""
+    for cfg in (None, _config(), _config(PAD_ROTATION_VERTICAL="R90")):
+        root = _project(tmp_path / f"p{id(cfg)}", config=cfg)
+        _gen(root)
+        rep, _ = CHK._unwrap(_report(root))
+        assert rep["rotation_vertical_inert"]["honoured"] is False
 
 
 # --------------------------------------------------------------------------- #
