@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/phase3_one_shot_runner.py
 # Corpus-sweep REQUIRED before merging into programs/phase3_one_shot_runner.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.10.39
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.33
 # Pattern: A module spawns a checking program and discards the outcome: the result is unbound, the raise-on-failure flag is off, and the call sits inside a catch-everything block. The mirror shape is a gate whose declared subject is whether something RAN, implemented with no way to start a process or read a status at all. Both publish a verdict about something they never observed, and in both the prose around the code asserts the opposite.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

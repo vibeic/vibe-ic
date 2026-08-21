@@ -13,6 +13,6 @@ suggested_fix: |
   Have the landing tool write its verdict as a commit trailer naming the gate set and the outcome, then add a check that every version-bearing commit carries one. Decide and record a single disposition for the commits that predate the trailer rather than exempting them silently. Two supporting items measured alongside it and cheap: the pre-push hook directory holds only sample files while a hook script ships in the tree, which reads as protection that is not installed — install it or delete it, since either state is honest and the current one is not; and the cheap half of a removed freshness gate re-derives its anchored figures in about one second and would have refused the commit that caused a whole family of failures, at the moment it was made.
 
 id: "ORGANIC-20260821-landing-verdict-not-auditable-from-the-repository"
-submitted_at: "2026-08-21T22:11:56+08:00"
+submitted_at: "2026-08-21T22:15:17+08:00"
 session_context: >-
   Captured from a cluster of finished lanes covering the flow matrix, the gate wiring and the landing machinery. One lane measured 16 of 16 commits in a batch carrying a skip statement in the commit body, including one whose body also records that an earlier round had been refused for three new reds; the same lane measured that the local marker the landing tool writes does not exist in the clone and never enters a commit, so the question cannot be answered from the repository at all.

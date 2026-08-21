@@ -33,7 +33,16 @@ on `e36d81c0a` (v1.11.33)**, in a detached worktree, because that is the tree th
 lanes describe. The emitter stamps `plugin_version` from the manifest of the
 plugin *doing the emitting*, so left alone it would have written `1.10.39` onto a
 record whose evidence is a different tree. Each record therefore carries an
-explicit `plugin_version: 1.11.33` and a `measured_on_commit` field. That is the
+explicit `plugin_version: 1.11.33` and a `measured_on_commit` field.
+
+The same field bit the SKETCHES, and it is recorded rather than quietly
+corrected: the header line each sketch carries is stamped from the manifest of
+the tree the emitter runs in, and it takes no author override. The first push
+carried sketches stamped with the emitting checkout while the records beside
+them named the measured tree — one artefact, two provenances, and the sketch
+half is the one no reader would think to check. They were re-emitted from
+inside the measured tree; the only byte that changed in any sketch is that
+version. That is the
 field working as documented — the author-supplied value wins — and it is worth
 saying out loud, because a provenance field that silently names the emitter's
 tree instead of the measured one is unreadable as wrong.
