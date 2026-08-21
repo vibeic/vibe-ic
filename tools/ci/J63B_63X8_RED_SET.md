@@ -342,9 +342,36 @@ semantic and happens INSIDE items (bisection); its gap is 10-15 s on an idle box
 (bisection); the production window is 60 s, giving 4-6x margin; and red 13's
 stall requires that gap to stretch ~5x under three-way concurrency.
 
-**The single remaining unknown is what stretched it**, and this report stops
-there rather than inventing a fifth mechanism. Every previous attempt to reason
-past a measurement in this section was wrong, twice provably so.
+**AND THE LAST UNKNOWN IS NOW REPRODUCED, not inferred.** Three concurrent
+nested d6 runs, at the PRODUCTION `60 s` window, nothing monkeypatched:
+
+```
+[c1] window 60s -> KILLED  77.5s
+[c2] window 60s -> KILLED  79.0s
+[c3] window 60s -> KILLED  78.5s
+```
+
+**3 of 3 killed.** Three-way concurrency stretches the 10-15 s renewal gap past
+60 s — a 4-6x stretch — and it does so reliably. That is red 13's mechanism, and
+it is now a repeatable experiment rather than a single observation nobody could
+re-fire: eight earlier attempts to reproduce a stall by LOAD alone all failed
+(up to load 48.5 with 80 spinners), because load was never the variable.
+**Concurrent nested runs of the same driver are.**
+
+The chain is complete and every link measured:
+
+```
+output is not progress                     code: output_progress=False
+renewal is semantic, and INSIDE items      bisection: survives at 15s
+its gap is 10-15 s on an idle box          bisection: killed at 10s
+production window is 60 s                  4-6x margin
+3 concurrent nested runs                   3/3 KILLED at 60s
+```
+
+Red 13 is therefore neither "the host" nor "one long item". It is a driver whose
+renewal cadence has 4-6x margin alone and none at all when three of its own
+nested runs share a machine — which is exactly the configuration
+`test_the_census_block_is_fresh` creates.
 
 ## 13 — not "the host". One item, 18.95 s, against a 60 s window
 
