@@ -706,8 +706,26 @@ def test_output_entries_classify_into_the_four_kinds():
     # Both entries are plain FILE — no glob, no OR — so GLOB and ANY_OF are
     # untouched, which is what makes the attribution checkable rather than
     # asserted.
-    assert sum(seen.values()) == 163, seen
-    assert seen[F.FILE] == 121
+    #
+    # 2026-08-21, RE-DERIVED ON THE MERGED TREE: 163 -> 164, FILE 121 -> 122.
+    # The 163 above was correct when it was written at v1.11.38 and was already
+    # stale when it landed. A THIRD entry arrived in between and no pin moved:
+    #
+    #   +1  step 31's `reports/phase3/drc_signoff.json`, added to the flow yaml
+    #       by `d976999c4` [v1.11.45] ("the DRC sign-off JSON is read by three
+    #       programs and declared by none"). That commit declared the output —
+    #       which is the fix — and did not restate this census, which is the
+    #       defect this pin exists to make loud. Plain FILE, so GLOB (18) and
+    #       ANY_OF (24) are untouched for the third time running.
+    #
+    # This number is MEASURED against the live yaml on the merged tree, not
+    # summed from the three notes above: 161 + 3 would also read 164 and would
+    # have read 164 even if one of the three had never landed. `origin/main` at
+    # `752a8baaf` [v1.11.47] fails this assertion — 1 failed, 50 passed — and it
+    # fails there for the same reason it would fail here, so the re-derivation
+    # belongs to this lane and not to the commit that tripped it.
+    assert sum(seen.values()) == 164, seen
+    assert seen[F.FILE] == 122
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
