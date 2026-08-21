@@ -60,7 +60,9 @@ Public API (stable — an enforcement gate builds against it):
   supervise(proc, progress_probe, kill_fn, *, poll_s, stall_grace_s,
             hard_ceiling_s, wait_fn=None, clock=time.monotonic,
             abort_probe=None) -> (outcome, rc)
-  run_supervised(cmd, *, log_path=None, stall_grace_s=1800, poll_s=30,
+  run_supervised(cmd, *, log_path=None, output_progress=True,
+                 domain_progress_probe=None,
+                 stall_grace_s=1800, poll_s=30,
                  hard_ceiling_s=86400, cpu_probe=None, kill=None,
                  popen_factory=None, env=None, abort_probe=None)
                  -> SupervisedResult
@@ -76,7 +78,7 @@ import os
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional, Tuple
 
 # Distinct return codes: STALLED (no forward progress) is NOT the natural rc and
@@ -108,6 +110,10 @@ class SupervisedResult:
     elapsed_s: float = 0.0
     # The `abort_probe` reason, present ONLY on outcome == 'aborted'.
     abort_reason: str = ""
+    # §4.05 input-scope record (vibe-ic#1079): what was imposed on the child,
+    # or why nothing was. Always present, so "was it enforced?" is answerable
+    # from the result rather than from the absence of a complaint.
+    scope: dict = field(default_factory=dict)
 
     @property
     def stalled(self) -> bool:
@@ -264,7 +270,8 @@ def _as_text(v) -> str:
     return v
 
 
-def run_supervised(cmd, *, log_path=None,
+def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
+                   domain_progress_probe: Optional[Callable[[], object]] = None,
                    stall_grace_s: float = DEFAULT_STALL_GRACE_S,
                    poll_s: float = DEFAULT_POLL_S,
                    hard_ceiling_s: float = DEFAULT_HARD_CEILING_S,
@@ -272,15 +279,21 @@ def run_supervised(cmd, *, log_path=None,
                    kill: Optional[Callable[[object, str], None]] = None,
                    popen_factory: Optional[Callable[..., object]] = None,
                    env=None,
+                   scope_project=None,
+                   scope_step=None,
+                   scope_guard_dir=None,
                    wait_fn=None,
                    clock: Callable[[], float] = time.monotonic,
                    abort_probe: Optional[Callable[[], Optional[str]]] = None
                    ) -> SupervisedResult:
     """Launch `cmd` and supervise it by FORWARD PROGRESS (see module docstring).
 
-    Captures stdout/stderr to OS temp files (universal output-growth signal, no
-    pipe-buffer deadlock, decoded to str on return). Progress = output grew OR
-    `log_path` grew OR `cpu_probe(proc)` advanced. A still-progressing job is
+    Captures stdout/stderr to OS temp files (no pipe-buffer deadlock, decoded to
+    str on return). Progress = output grew (unless ``output_progress=False``)
+    OR `log_path` grew OR `domain_progress_probe()` changed OR
+    `cpu_probe(proc)` advanced. A caller with a structured domain event channel
+    can disable output progress so a chatty subject cannot impersonate domain
+    progress. A still-progressing job is
     NEVER killed; a job idle+silent for `stall_grace_s` is killed via
     `kill(proc, 'stalled')` → rc=RC_STALLED; the `hard_ceiling_s` backstop kills
     → rc=RC_CEILING. `cpu_probe`/`kill`/`popen_factory` inject the transport
@@ -292,6 +305,28 @@ def run_supervised(cmd, *, log_path=None,
     popen_factory = popen_factory or (
         lambda c, **kw: subprocess.Popen(c, **kw))
     kill = kill or _default_kill
+
+    # §4.05 AS A MECHANISM (vibe-ic#1079). This is the one place a supervised
+    # step becomes a process, so it is the one place its input scope can be
+    # imposed rather than reviewed. OFF unless `VIBEIC_STEP_SCOPE` is set: with
+    # the switch unset `child_env` returns `env` unchanged — including `None`,
+    # so a caller that passed nothing still INHERITS, byte-for-byte as before
+    # this existed. `scope_step` is the flow step id; the permitted paths are
+    # read from that step's `required_inputs` in the flow YAML, never from a
+    # second declaration.
+    scope_meta = {"enforced": False}
+    if scope_step is not None:
+        try:
+            import step_input_scope as _sis  # noqa: PLC0415
+            env, scope_meta = _sis.child_env(
+                env, project=scope_project, step_id=scope_step,
+                guard_dir=scope_guard_dir)
+        except Exception as _exc:  # noqa: BLE001
+            # A guard that cannot be built must SAY so. Silently continuing
+            # unenforced is the vacuous pass this repo removes from gates one
+            # at a time; the run continues (this is not a gate) but the record
+            # says the scope was not imposed.
+            scope_meta = {"enforced": False, "error": repr(_exc)}
 
     out_f = tempfile.TemporaryFile()
     err_f = tempfile.TemporaryFile()
@@ -319,11 +354,20 @@ def run_supervised(cmd, *, log_path=None,
         out_f.close()
         err_f.close()
         return SupervisedResult(127, "", f"COMMAND_NOT_FOUND: {e}",
-                                "launch_error", 0.0)
+                                "launch_error", 0.0, scope=scope_meta)
+
+    def _domain_or_log():
+        domain = (domain_progress_probe()
+                  if domain_progress_probe is not None else None)
+        log = _log() if log_path is not None else None
+        if domain_progress_probe is not None and log_path is not None:
+            return (domain, log)
+        return domain if domain_progress_probe is not None else log
 
     meter = ProgressMeter(
-        size_fn=_size,
-        log_fn=(_log if log_path is not None else None),
+        size_fn=(_size if output_progress else None),
+        log_fn=(_domain_or_log if (domain_progress_probe is not None
+                                   or log_path is not None) else None),
         cpu_fn=((lambda: cpu_probe(proc)) if cpu_probe is not None else None))
 
     # The abort REASON belongs to the caller's predicate, so capture it as the
@@ -363,25 +407,42 @@ def run_supervised(cmd, *, log_path=None,
     err_f.close()
     elapsed = time.monotonic() - t0
 
+    # §4.05 LIVENESS (vibe-ic#1079). The child has exited, so this is the only
+    # moment the parent can learn whether the in-child guard actually LOADED.
+    # A `sitecustomize` can silently fail to install for reasons invisible from
+    # here (`-S`, `-E`, a child that rewrote PYTHONPATH, a non-CPython
+    # interpreter), and `enforced: True` must not stand on having merely SET
+    # the variables. `liveness()` downgrades the record when the marker is
+    # absent, so a reader cannot mistake "we asked for it" for "it happened".
+    if scope_meta.get("enforced"):
+        try:
+            import step_input_scope as _sis  # noqa: PLC0415
+            scope_meta = _sis.liveness(scope_meta)
+        except Exception as _exc:  # noqa: BLE001
+            scope_meta = dict(scope_meta)
+            scope_meta["enforced"] = False
+            scope_meta["liveness"] = f"could not confirm: {_exc!r}"
+
     if outcome == "stalled":
         return SupervisedResult(
             RC_STALLED, out,
-            err + (f"\nWATCHDOG_STALLED: no forward progress (output+CPU idle) "
-                   f"for > {stall_grace_s:g}s — killed as hung, not slow."),
-            "stalled", elapsed)
+            err + (f"\nWATCHDOG_STALLED: configured forward-progress signals "
+                   f"did not advance for > {stall_grace_s:g}s — killed as "
+                   "hung, not slow."),
+            "stalled", elapsed, scope=scope_meta)
     if outcome == "ceiling":
         return SupervisedResult(
             RC_CEILING, out,
             err + (f"\nWATCHDOG_CEILING: hard backstop {hard_ceiling_s:g}s "
                    f"exceeded (pathological non-idle loop) — killed."),
-            "ceiling", elapsed)
+            "ceiling", elapsed, scope=scope_meta)
     if outcome == "aborted":
         return SupervisedResult(
             RC_ABORTED, out,
             err + (f"\nWATCHDOG_ABORTED: {_abort_reason}"),
-            "aborted", elapsed, _abort_reason)
+            "aborted", elapsed, _abort_reason, scope=scope_meta)
     return SupervisedResult(rc if rc is not None else 0, out, err,
-                            "natural", elapsed)
+                            "natural", elapsed, scope=scope_meta)
 
 
 # ===========================================================================

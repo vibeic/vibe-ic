@@ -52,6 +52,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import gate_host_independence_check as G  # noqa: E402
+import gate_process_attestation as A  # noqa: E402
 
 _REPO = _PROGRAMS.parents[3]
 
@@ -296,25 +297,79 @@ def test_the_cwd_token_is_preserved(tmp_path):
     assert all(g.cmd and not g.cmd.lstrip().startswith("#") for g in gates)
 
 
-def test_539_a_gate_that_needs_the_network_is_EXCLUDED_in_the_real_script():
-    """#539. The rule, asserted over the REAL script rather than a fixture: a
-    gate that requires a REMOTE cannot be inside a two-invocation determinism
-    comparison, because its two answers can differ for a reason that is not in
-    the commit. v1.7.92 went red exactly that way.
+def test_pytest_wall_clock_is_not_mistaken_for_a_different_verdict():
+    """Both arms passed the same 108 tests; 15.44s vs 16.26s is not RED."""
+    a = G._verdict_line("108 passed in 15.44s\n")
+    b = G._verdict_line("108 passed in 16.26s\n")
+    assert a == b == "108 passed in <TIME>s"
+    assert G._verdict_line("107 passed, 1 failed in 15.44s") != a
 
-    Stated as a PROPERTY of the command, not as an expected list of labels — a
-    hand-maintained roster here would be the second list this repo keeps
-    removing, and it would not notice a NEW remote-reaching gate. This is what
-    makes the exclusion by rule rather than by luck.
 
-    A first version only checked "every exclusion states a reason", which
-    passes over a script with no exclusions at all — the vacuous shape this
-    module exists to refuse.
+def test_pytest_parenthesized_minute_clock_is_not_semantic_output():
+    """pytest adds this second duration spelling once the suite exceeds 60s."""
+    a = G._verdict_line("108 passed in 64.11s (0:01:04)\n")
+    b = G._verdict_line("108 passed in 66.28s (0:01:06)\n")
+    assert a == b == "108 passed in <TIME>s"
+    assert G._verdict_line("107 passed, 1 failed in 66.28s (0:01:06)") != a
+
+
+def _script_with(tmp_path, body: str):
+    p = tmp_path / "gates.sh"
+    p.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+    return p
+
+
+def test_539_the_exclusion_rule_BITES_on_a_remote_reaching_gate(tmp_path):
+    """#539's rule, proved on a fixture that CONTAINS the thing it is about.
+
+    A gate that requires a REMOTE cannot sit inside a two-invocation determinism
+    comparison: its two answers can differ for a reason that is not in the
+    commit, which is how v1.7.92 went red on a gate whose code is perfectly
+    host-independent and green on the identical commit when re-run.
+
+    This half is the NON-VACUITY PROOF for the half below, and it is why the two
+    are separate now. They used to be one test that asserted the real script
+    still CONTAINED a `--require-remote` gate, so the rule was only ever
+    exercised while such a gate happened to exist. When the last one was deleted
+    — `sync_image_version --report-upstream --require-remote` went with the image
+    anchor it reported on — that test failed for the one reason a rule-checker
+    must not: its subject was gone, not broken. A rule whose only exerciser is
+    the tree it polices is a rule that stops being checked the moment the tree
+    gets cleaner.
+    """
+    undeclared = _script_with(tmp_path, (
+        'run "reaches a registry" "$ROOT" python3 x.py --require-remote\n'))
+    gates = G.corpus_gates(undeclared)
+    assert [g for g in gates if "--require-remote" in g.cmd], gates
+    assert all(g.excluded is None for g in gates), (
+        "the parser reported an exclusion nobody declared, so the real-script "
+        "assertion below could pass on an unexcluded remote gate")
+
+    declared = _script_with(tmp_path, (
+        "# host-independence: EXCLUDE — resolves a tag on a remote registry, so "
+        "two invocations can differ for a reason that is not in the commit\n"
+        'run "reaches a registry" "$ROOT" python3 x.py --require-remote\n'))
+    gates = G.corpus_gates(declared)
+    assert gates and gates[0].excluded, gates
+    assert len(gates[0].excluded) > 20, gates[0]
+
+
+def test_539_every_remote_reaching_gate_in_the_real_script_is_EXCLUDED():
+    """The same rule over the REAL script. Stated as a PROPERTY of the command,
+    never as an expected list of labels — a hand-maintained roster here would be
+    the second list this repo keeps removing, and it would not notice a NEW
+    remote-reaching gate.
+
+    ZERO is currently the true count, and it is PRINTED rather than passed over:
+    "there are none" and "I did not look" must not read the same. The rule itself
+    is proved to bite by the fixture test above, so an empty set here is a fact
+    about the script and not a hole in the check.
     """
     gates = G.corpus_gates(_REPO / "tools" / "ci" / "repo_hygiene_gates.sh")
+    assert gates, "the real script parsed to no gates at all — nothing was read"
     remote = [g for g in gates if "--require-remote" in g.cmd]
-    assert remote, ("no remote-reaching gate found in the real script — this "
-                    "assertion would otherwise pass over nothing")
+    print(f"host-independence: {len(remote)} remote-reaching gate(s) of "
+          f"{len(gates)} in repo_hygiene_gates.sh")
     for g in remote:
         assert g.excluded is not None, (
             f"{g.label} reaches a remote and is still probed twice", g)
@@ -486,6 +541,36 @@ def test_a_real_difference_still_survives_normalisation(tmp_path):
     assert res.findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"
 
 
+def test_different_finding_identities_cannot_cancel_behind_the_same_count(
+        tmp_path):
+    """The two arms can fail equally while disagreeing about WHAT is wrong.
+
+    Comparing only the final ``1 finding`` line and process rc turns that real
+    host-dependent disagreement into PASS.  The finding identity set is part
+    of the verdict, not diagnostic decoration.
+    """
+    r = _repo_with(
+        tmp_path,
+        'run "identity" "$ROOT" python3 identity.py\n',
+        untracked=True)
+    (r / "identity.py").write_text(
+        "from pathlib import Path\n"
+        "if Path('stray.txt').exists():\n"
+        "    print('[FAIL] LOCAL_LEFTOVER')\n"
+        "else:\n"
+        "    print('[FAIL] PUBLISHED_TREE_ONLY')\n"
+        "print('[FAIL] 1 finding')\n"
+        "raise SystemExit(1)\n")
+    subprocess.run(["git", "-C", str(r), "add", "identity.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "identity"],
+                   check=True)
+
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "FAIL", res
+    assert any(f["kind"] == "HOST_DEPENDENT_VERDICT"
+               for f in res.findings), res.findings
+
+
 # ==========================================================================
 # 2026-08-04 — THE SCRATCH WORKTREE MUST NOT OUTLIVE THE PROBE
 # ==========================================================================
@@ -493,17 +578,51 @@ def test_a_real_difference_still_survives_normalisation(tmp_path):
 # still registered as a worktree of the repository every agent shares. The
 # `finally` that removes them is correct and does not run on `SIGKILL`.
 
+def _scratch_added_by(root: Path, run) -> set:
+    """The `hostindep-*` directories `run` ADDS to `root`.
+
+    A difference of two globs is only a measurement of `run` when `run` is the
+    only writer of the namespace being globbed. Against the real `/tmp` it is
+    not: a peer's directory created between the two globs lands in the
+    difference and is attributed to `run`.
+    """
+    before = set(root.glob(G._SCRATCH_PREFIX + "*"))
+    run()
+    return set(root.glob(G._SCRATCH_PREFIX + "*")) - before
+
+
 def test_a_clean_run_leaves_no_scratch_behind(tmp_path):
     """The easy half, and the one a `finally` already satisfied. Kept as the
     control: without it, a reaper that removes everything unconditionally
-    would pass the kill test below and destroy live peers in production."""
-    import tempfile
+    would pass the kill test below and destroy live peers in production.
+
+    OBSERVED IN A PRIVATE ROOT, for the reason `_legacy_leftover` gives below
+    about planting: the real `/tmp` is shared with every other agent's probe,
+    so `after - before` there counts a PEER's directory as this run's leak.
+    Measured 2026-08-13 — with a sibling process creating and removing
+    `hostindep-*` in the observed root, this test failed while the other 24
+    passed; with no peer, 25 passed. The assertion is unchanged in strength: a
+    leak by `audit` still lands in this root, which the guard below drives.
+    It fired for real before that: it reddened two tests of an unrelated
+    PR's verification and then did not reproduce, which is what a shared
+    namespace does to a difference-of-two-globs measurement.
+    """
+    priv = tmp_path / "tmproot"
+    priv.mkdir()
     r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
-    before = set(Path(tempfile.gettempdir()).glob(G._SCRATCH_PREFIX + "*"))
-    G.audit(r, timeout=_T)
-    after = set(Path(tempfile.gettempdir()).glob(G._SCRATCH_PREFIX + "*"))
-    assert after - before == set(), (
-        "a clean run left scratch behind: %s" % (after - before))
+
+    leaked = _scratch_added_by(priv, lambda: G.audit(r, timeout=_T,
+                                                     tmp_root=priv))
+    assert leaked == set(), "a clean run left scratch behind: %s" % (leaked,)
+
+    # PAIRED GUARD. An observation scoped to a root nothing writes to passes by
+    # being blind, which is the same green as a clean run. Plant one and the
+    # SAME expression must see it.
+    planted = _scratch_added_by(
+        priv, lambda: (priv / (G._SCRATCH_PREFIX + "planted")).mkdir())
+    assert len(planted) == 1, (
+        "the scoped observation cannot see a leak planted in the very root it "
+        "watches, so the assertion above proves nothing: %s" % (planted,))
 
 
 def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
@@ -515,24 +634,60 @@ def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
     call to the sweeper must remove the directory AND drop the registration,
     or the repo keeps the entry forever (`git worktree prune` cannot clear one
     whose directory still exists).
+
+    PLANTED AND OBSERVED IN A PRIVATE ROOT (#1263), for the reason
+    `_legacy_leftover` below already gives: the real `/tmp` is shared with
+    every other agent's probe, and `reap` sweeps a WHOLE NAMESPACE, not one
+    path. A DEAD owner's directory is therefore reapable by anybody, so a
+    concurrent copy of this very test removes THIS copy's plant, and the two
+    assertions below stop agreeing — `leaked.exists()` is false because a peer
+    removed it, while `rep["reaped"]` is empty because the peer, not this
+    sweep, did the removing.
+
+    Measured 2026-08-15 on clean main (1adbf3444), four concurrent copies of
+    this one test, 3 of 4 failed, in the two distinct shapes the shared
+    namespace produces:
+
+        copy 2  plant fo4896uu   assert 'fo4896uu' in []   <- copy 1 took it
+        copy 3  plant hf0yimb2   assert 'hf0yimb2' in []   <- copy 1 took it
+        copy 1  plant nnx7zy2c   reaped ['fo4896uu', 'hf0yimb2'] -- it had
+                reaped the other two copies' plants, and lost its own a
+                different way: a peer's `rmtree` had already unlinked the
+                `.owner.lock`, so this sweep saw a sidecar-less directory,
+                and with peers alive (`reap_unlocked=False`) KEPT it as
+                unattributable while the peer finished deleting it
+        copy 4  passed
+
+    The assertion is unchanged in strength. In a root only this test writes to,
+    nobody else CAN reap the plant, so "the directory is gone" and "this sweep
+    reaped it" are once again the same fact — which is the fact the test claims
+    to measure. Two things are deliberately NOT changed: `peers` is left to the
+    real `peer_probes_running()`, so on a busy host this still runs with
+    `reap_unlocked=False` and proves a LOCKED directory whose owner is dead is
+    reaped even while the unattributable ones are deferred; and
+    `test_a_LIVE_peers_scratch_is_never_reaped` below keeps using the real
+    `/tmp`, because its plant is HELD — a locked directory is precisely the one
+    no peer may touch, so a shared namespace cannot alter its verdict.
     """
     import os
     import signal
     import time
 
+    priv = tmp_path / "tmproot"
+    priv.mkdir()
     r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
     child = subprocess.Popen(
         [sys.executable, "-c",
          "import subprocess, sys, time\n"
          "sys.path.insert(0, %r)\n"
          "import _crash_safe_scratch as S\n"
-         "res, _ = S.reserve(%r)\n"
+         "res, _ = S.reserve(%r, root=%r)\n"
          "wt = res.path / 'wt'\n"
          "subprocess.run(['git','-C',%r,'worktree','add','-q','--detach',"
          "str(wt),'HEAD'], check=True)\n"
          "print(res.path, flush=True)\n"
          "time.sleep(600)\n"
-         % (str(_PROGRAMS), G._SCRATCH_PREFIX, str(r))],
+         % (str(_PROGRAMS), G._SCRATCH_PREFIX, str(priv), str(r))],
         stdout=subprocess.PIPE, text=True, start_new_session=True)
     leaked = Path(child.stdout.readline().strip())
     assert (leaked / "wt").is_dir(), "the fixture never created the worktree"
@@ -549,10 +704,13 @@ def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
         "the kill itself removed the tree — then the leak this test is about "
         "cannot be reproduced and nothing below is being measured")
 
-    rep = G.sweep_abandoned_scratch(r)
+    rep = G.sweep_abandoned_scratch(r, tmp_root=priv)
     assert not leaked.exists(), (
         "a killed probe's scratch survived the next run: %s" % (rep,))
-    assert str(leaked) in rep["reaped"], rep
+    assert str(leaked) in rep["reaped"], (
+        "the directory is gone but THIS sweep does not claim to have removed "
+        "it — in a private root nothing else can have, so the sweeper is not "
+        "reporting the work it did: %s" % (rep,))
     listed = subprocess.run(["git", "-C", str(r), "worktree", "list"],
                             capture_output=True, text=True, timeout=_T).stdout
     assert str(leaked) not in listed, (
@@ -677,3 +835,238 @@ def test_the_peer_detector_sees_a_real_process():
         time.sleep(0.05)
     pytest.fail("a DEAD process is still reported as a live peer, which would "
                 "disable the legacy sweep permanently")
+
+
+# --------------------------------------------------------------------------
+# A DIFFERENCE THAT DOES NOT REPRODUCE IS NOT EVIDENCE (vibe-ic#1029 class)
+#
+# Measured on `3febf537`: this probe reported
+#
+#   [HOST_DEPENDENT_VERDICT] 63x8 census freshness
+#       checkout: rc=1 AssertionError: the outcome run for
+#                 test_matrix_d7_outputs_list_complete.py did not finish within 60s
+#       worktree: rc=0 [PASS] 63x8 census fresh: 504 cells over 8 dimensions
+#
+# The two arms did not disagree about the SUBJECT. One arm ran out of wall
+# clock. `_OUTCOME_TIMEOUT_S = 60` in `test_matrix_63x8_coverage` is a bound on
+# an inner pytest, and this probe drives 66 gates twice, so the checkout arm is
+# the one under load. Whether it fires depends on the machine, which is why the
+# same tool reported 6/6 clean on one run and 5/6 on the next.
+#
+# `TimeoutExpired` raised at THIS level is already handled — it becomes
+# GATE_UNRUNNABLE. The gap is a gate that enforces its own deadline and
+# therefore RETURNS rc=1 with a message: indistinguishable, to a single
+# comparison, from a real verdict.
+#
+# The discriminator is not the text of the message — this file's own header
+# rejects deciding a tier by grepping prose. It is REPRODUCIBILITY: a gate that
+# reads local state disagrees every time; a gate that ran out of clock does not.
+# --------------------------------------------------------------------------
+
+def _flapping_repo(tmp_path: Path, marker: Path, *, name: str = "r") -> Path:
+    """A gate whose FIRST invocation misses a deadline and whose later ones do not.
+
+    The marker lives OUTSIDE the repo on purpose: a counter file inside it
+    would be a leftover of the fixture and would change what the probe is
+    being shown.
+    """
+    r = _repo_with(tmp_path, 'run "flaky" "$ROOT" python3 flaky.py\n',
+                   untracked=True, name=name)
+    (r / "flaky.py").write_text(
+        "import pathlib, sys\n"
+        f"m = pathlib.Path({str(marker)!r})\n"
+        "n = int(m.read_text()) if m.is_file() else 0\n"
+        "m.write_text(str(n + 1))\n"
+        "if n == 0:\n"
+        "    print('AssertionError: the outcome run did not finish within 60s')\n"
+        "    sys.exit(1)\n"
+        "print('PASS (1 item examined)')\n")
+    subprocess.run(["git", "-C", str(r), "add", "flaky.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "flaky"], check=True)
+    return r
+
+
+def test_a_ONE_OFF_disagreement_is_not_reported_as_host_dependence(tmp_path):
+    """THE DEFECT. A gate that misses its own deadline once is not reading
+    local state, and must not be reported as if it were."""
+    marker = tmp_path / "counter.txt"
+    r = _flapping_repo(tmp_path, marker)
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "HOST_DEPENDENT_VERDICT" not in kinds, (
+        "a one-off disagreement was reported as host dependence: "
+        f"{res.findings}")
+
+
+def test_a_ONE_OFF_disagreement_is_NAMED_rather_than_silently_dropped(tmp_path):
+    """...and it is not swallowed either. A gate that cannot reproduce its own
+    verdict is not usable evidence; it is a different defect, not no defect."""
+    marker = tmp_path / "counter.txt"
+    r = _flapping_repo(tmp_path, marker)
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "NON_DETERMINISTIC_VERDICT" in kinds, res.findings
+    assert res.verdict == "FAIL", (
+        "an unreproducible verdict must not be folded into a pass — that is "
+        "weakening the assertion to get green")
+    f = [x for x in res.findings if x["kind"] == "NON_DETERMINISTIC_VERDICT"][0]
+    assert "flaky" == f["gate"], f
+    # both observations are carried, so a reader can see WHICH way it flapped
+    assert "did not finish within 60s" in (f["checkout"] + f["worktree"]), f
+    assert "second" in json.dumps(f).lower() or "reran" in json.dumps(f).lower()
+
+
+def test_a_STABLE_disagreement_is_still_host_dependence(tmp_path):
+    """THE PAIRED GUARD. The fix must not buy its green by making the probe
+    unable to fire: a gate that really does read local state disagrees on
+    EVERY round, and must still be caught."""
+    r = _counter_repo(tmp_path, ignore_dat=True)
+    (r / "leftover.dat").write_text("x\n")          # ignored: invisible stimulus
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "HOST_DEPENDENT_VERDICT" in kinds, res.findings
+    assert res.verdict == "FAIL", res
+
+
+def test_the_reproduce_step_costs_nothing_when_the_arms_AGREE(tmp_path):
+    """A gate that agrees is driven exactly twice, not four times.
+
+    The probe already takes ~44 min over 66 gates; paying the re-drive on the
+    agreeing majority would be a real cost for no information.
+    """
+    marker = tmp_path / "calls.txt"
+    r = _repo_with(tmp_path, 'run "agreeable" "$ROOT" python3 agreeable.py\n',
+                   untracked=True)
+    (r / "agreeable.py").write_text(
+        "import pathlib\n"
+        f"m = pathlib.Path({str(marker)!r})\n"
+        "n = int(m.read_text()) if m.is_file() else 0\n"
+        "m.write_text(str(n + 1))\n"
+        "print('PASS (1 item examined)')\n")
+    subprocess.run(["git", "-C", str(r), "add", "agreeable.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "a"], check=True)
+
+    G.audit(r, timeout=_T)
+    assert marker.read_text() == "2", (
+        f"an agreeing gate was driven {marker.read_text()} times, not 2")
+
+
+def test_the_outer_checkout_attestation_replaces_the_duplicate_arm_A(tmp_path):
+    """Outer hygiene already ran A; host comparison launches only fresh B."""
+    calls = tmp_path / "calls.txt"
+    r = _repo_with(tmp_path, 'run "agreeable" "$ROOT" python3 agreeable.py\n',
+                   untracked=True)
+    (r / "agreeable.py").write_text(
+        "from pathlib import Path\n"
+        f"p=Path({str(calls)!r})\n"
+        "p.write_text(str(int(p.read_text()) + 1) if p.exists() else '1')\n"
+        "print('[PASS] 1 item examined')\n")
+    subprocess.run(["git", "-C", str(r), "add", "agreeable.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "agreeable"],
+                   check=True)
+    argv = G._expand('python3 agreeable.py', r)
+    record = A.process_attestation(
+        "agreeable", "[PASS] 1 item examined\n", 0, argv, roots=(r,))
+    attestations = tmp_path / "outer.jsonl"
+    A.append_private_jsonl(attestations, record)
+
+    res = G.audit(r, timeout=_T, checkout_attestations=attestations)
+    assert res.verdict == "PASS", res
+    assert calls.read_text() == "1", (
+        "the host probe reran checkout Arm A instead of consuming the exact "
+        "outer process attestation")
+
+
+def test_main_reads_the_dispatchers_attestation_channel(tmp_path, monkeypatch):
+    """The shell declaration need not expose a run-specific variable.
+
+    ``GATE_DISPATCH_ATTESTATION_FILE`` is a dispatcher-owned environment
+    channel, not a loop binding.  Reading it at the program boundary prevents
+    declaration readers from classifying this repo-wide gate as per-corpus.
+    """
+    inherited = tmp_path / "outer.jsonl"
+    inherited.write_text("", encoding="utf-8")
+    seen = {}
+
+    def fake_parallel(root, jobs, checkout_attestations):
+        seen.update(root=root, jobs=jobs,
+                    checkout_attestations=checkout_attestations)
+        return G.Audit("PASS", [], G.Dirt([], ["stimulus"], [], True),
+                       1, 1, [])
+
+    monkeypatch.setenv("GATE_DISPATCH_ATTESTATION_FILE", str(inherited))
+    monkeypatch.setattr(G, "parallel_audit", fake_parallel)
+
+    assert G.main([str(tmp_path), "--jobs", "2"]) == 0
+    assert seen["checkout_attestations"] == inherited
+    assert seen["jobs"] == 2
+
+
+def test_explicit_attestation_path_overrides_the_dispatcher_channel(
+        tmp_path, monkeypatch):
+    inherited = tmp_path / "inherited.jsonl"
+    explicit = tmp_path / "explicit.jsonl"
+    inherited.write_text("", encoding="utf-8")
+    explicit.write_text("", encoding="utf-8")
+    seen = {}
+
+    def fake_parallel(root, jobs, checkout_attestations):
+        seen["checkout_attestations"] = checkout_attestations
+        return G.Audit("PASS", [], G.Dirt([], ["stimulus"], [], True),
+                       1, 1, [])
+
+    monkeypatch.setenv("GATE_DISPATCH_ATTESTATION_FILE", str(inherited))
+    monkeypatch.setattr(G, "parallel_audit", fake_parallel)
+
+    assert G.main([str(tmp_path), "--jobs", "2",
+                   "--checkout-attestations", str(explicit)]) == 0
+    assert seen["checkout_attestations"] == explicit
+
+
+def test_a_missing_checkout_attestation_is_a_named_refusal(tmp_path):
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 x.py\n',
+                   untracked=True)
+    (r / "x.py").write_text("print('[PASS] 1 item examined')\n")
+    subprocess.run(["git", "-C", str(r), "add", "x.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "x"], check=True)
+    att = tmp_path / "outer.jsonl"
+    A.append_private_jsonl(att, A.process_attestation(
+        "some other gate", "[PASS] 1 item examined\n", 0,
+        ["python3", "other.py"], roots=(r,)))
+
+    res = G.audit(r, timeout=_T, checkout_attestations=att)
+    assert res.verdict == "FAIL", res
+    assert any(f["kind"] == "CHECKOUT_ATTESTATION_MISSING"
+               for f in res.findings), res.findings
+
+
+def test_reused_and_fresh_arms_preserve_the_same_stdout_stderr_order(tmp_path):
+    """The outer ``2>&1 | tee`` stream and fresh arm are one instrument.
+
+    With piped Python output, stderr is unbuffered while stdout flushes at
+    exit.  Capturing them separately and concatenating stdout first reverses
+    the observed order and manufactures a one-round disagreement.
+    """
+    r = _repo_with(tmp_path, 'run "mixed" "$ROOT" python3 mixed.py\n',
+                   untracked=True)
+    (r / "mixed.py").write_text(
+        "import sys\n"
+        "print('[PASS] 1 item examined')\n"
+        "print('diagnostic on stderr', file=sys.stderr)\n")
+    subprocess.run(["git", "-C", str(r), "add", "mixed.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "mixed"],
+                   check=True)
+    argv = G._expand("python3 mixed.py", r)
+    proc = subprocess.run(
+        argv, cwd=r, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, check=False)
+    att = tmp_path / "outer.jsonl"
+    A.append_private_jsonl(att, A.process_attestation(
+        "mixed", proc.stdout, proc.returncode, argv, roots=(r,)))
+
+    res = G.audit(r, timeout=_T, checkout_attestations=att)
+    assert res.verdict == "PASS", res
+    assert not res.findings, res.findings

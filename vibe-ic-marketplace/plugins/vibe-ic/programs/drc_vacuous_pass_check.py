@@ -72,6 +72,9 @@ No external tool dependencies -- pure Python.
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import gzip
+import io
 import json
 import re
 import struct
@@ -79,6 +82,27 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+import _routed_checker_progress as _routed_progress
+import _semantic_child_progress as _semantic_progress
+
+
+PROGRESS_SCOPE = "routed-def:drc-vacuous-pass"
+_ACTIVE_INPUT_PLAN: Optional[_routed_progress.FiniteInputPlan] = None
+
+
+def _read_input_text(path: Path, *, encoding: str | None = None,
+                     errors: str = "strict") -> str:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.text_for(
+            path, encoding=encoding, errors=errors)
+    return Path(path).read_text(encoding=encoding, errors=errors)
+
+
+def _read_input_bytes(path: Path) -> bytes:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.bytes_for(path)
+    return Path(path).read_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +185,53 @@ _LAYOUT_GLOBS = ["*.gds", "*.gds.gz", "*.gdsii", "*.GDS",
                  "*.oas", "*.oasis", "*.def", "*.DEF"]
 
 
+def _matches_name(relative: str, patterns: List[str]) -> bool:
+    return any(fnmatch.fnmatchcase(Path(relative).name, pattern)
+               for pattern in patterns)
+
+
+def _default_disk_population(project: Path,
+                             patterns: List[str]) -> List[Path]:
+    """Historical project-dir discovery order, independent of active cache."""
+    out: List[Path] = []
+    seen = set()
+    for pattern in patterns:
+        for path in sorted(Path(project).rglob(pattern)):
+            try:
+                identity = path.resolve()
+            except OSError:
+                identity = path.absolute()
+            if identity in seen or not path.is_file():
+                continue
+            seen.add(identity)
+            out.append(path)
+    return out
+
+
+def _input_plan(project: Path) -> _routed_progress.FiniteInputPlan:
+    project = Path(project)
+    index = _routed_progress.IndexSnapshot(project)
+    reports = index.select(
+        lambda relative: _matches_name(relative, _DRC_GLOBS),
+        _default_disk_population(project, _DRC_GLOBS),
+        population="vacuous DRC report population")
+    layouts = index.select(
+        lambda relative: _matches_name(relative, _LAYOUT_GLOBS),
+        _default_disk_population(project, _LAYOUT_GLOBS),
+        population="vacuous DRC layout population")
+    reads = [
+        *_routed_progress.planned_reads("drc-report", reports),
+        *_routed_progress.planned_reads("layout", layouts),
+    ]
+    return _routed_progress.FiniteInputPlan(
+        [index.population_unit("drc-vacuous-pass:git-index")], reads)
+
+
+def semantic_progress_units(cell: Path) -> List[str]:
+    """Trusted parent's exact finite manifest for the default cell argv."""
+    return _input_plan(Path(cell)).units
+
+
 # ---------------------------------------------------------------------------
 # (A) MEASURED geometry — read the layout the DRC ran on and count its shapes.
 #     This is the observable the verdict rests on. Pure Python: a GDSII record
@@ -200,21 +271,44 @@ def count_gds_geometry(path: Path) -> LayoutMeasure:
     shapes = 0
     cells = 0
     try:
-        with _open_maybe_gz(path) as fh:
+        if _ACTIVE_INPUT_PLAN is not None:
+            payload = _read_input_bytes(path)
+            raw = io.BytesIO(payload)
+            fh = (gzip.GzipFile(fileobj=raw, mode="rb")
+                  if path.suffix.lower() == ".gz"
+                  or path.name.lower().endswith(".gds.gz") else raw)
+        else:
+            fh = _open_maybe_gz(path)
+        expanded = 0
+        with fh:
             while True:
                 head = fh.read(4)
+                expanded += len(head)
+                if (expanded > _semantic_progress.MAX_WORK_FILE_BYTES
+                        and _ACTIVE_INPUT_PLAN is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "compressed GDS expansion exceeds the routed checker "
+                        "resource bound")
                 if len(head) < 4:
                     break
                 length, rtype = struct.unpack(">H", head[:2])[0], head[2]
                 if length < 4:
                     break                      # malformed record — stop honestly
                 body = fh.read(length - 4)
+                expanded += len(body)
+                if (expanded > _semantic_progress.MAX_WORK_FILE_BYTES
+                        and _ACTIVE_INPUT_PLAN is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "compressed GDS expansion exceeds the routed checker "
+                        "resource bound")
                 if len(body) < length - 4:
                     break
                 if rtype in _GDS_SHAPE_RECS:
                     shapes += 1
                 elif rtype == _GDS_REC_BGNSTR:
                     cells += 1
+    except _semantic_progress.ProgressProtocolError:
+        raise
     except Exception as e:                      # unreadable/corrupt -> unmeasured
         m.error = f"{type(e).__name__}: {e}"
         return m
@@ -231,7 +325,9 @@ def count_def_geometry(path: Path) -> LayoutMeasure:
     `COMPONENTS <N> ;` / `NETS <N> ;` section headers — numeric fields, not prose."""
     m = LayoutMeasure(file=str(path), fmt="def", method="def_section_header")
     try:
-        text = path.read_text(errors="replace")
+        text = _read_input_text(path, errors="replace")
+    except _semantic_progress.ProgressProtocolError:
+        raise
     except Exception as e:
         m.error = f"{type(e).__name__}: {e}"
         return m
@@ -275,11 +371,20 @@ def measure_layout(path: Path) -> LayoutMeasure:
     if name.endswith((".gds", ".gds.gz", ".gdsii")):
         m = count_gds_geometry(path)
         if m.shapes is None:
+            if _ACTIVE_INPUT_PLAN is not None:
+                raise _semantic_progress.ProgressProtocolError(
+                    "semantic routed receipt cannot bind a fallback GDS "
+                    "parser that reopens the pathname outside the verified "
+                    "input descriptor")
             return _count_via_klayout(path) or m
         return m
     if name.endswith((".def",)):
         return count_def_geometry(path)
     if name.endswith((".oas", ".oasis")):
+        if _ACTIVE_INPUT_PLAN is not None:
+            raise _semantic_progress.ProgressProtocolError(
+                "semantic routed receipt cannot bind an OASIS parser that "
+                "reopens the pathname outside the verified input descriptor")
         return (_count_via_klayout(path)
                 or LayoutMeasure(file=str(path), fmt="oasis",
                                  method="none",
@@ -291,6 +396,8 @@ def measure_layout(path: Path) -> LayoutMeasure:
 def _discover_layouts(path: Path) -> List[Path]:
     """Layout artifacts near the DRC report: under the project dir, or beside a
     single log file (its own directory, then its parent)."""
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.paths("layout")
     roots: List[Path] = []
     if path.is_dir():
         roots = [path]
@@ -378,6 +485,11 @@ def _discover(path: Path, under: Optional[List[str]] = None) -> List[Path]:
     project-wide rglob produced a 3x miscount in a sibling gate, and that
     `--under` exists to stop step 21's evidence reaching step 31.
     """
+    if _ACTIVE_INPUT_PLAN is not None:
+        if under:
+            raise _semantic_progress.ProgressProtocolError(
+                "routed parent progress does not cover --under discovery")
+        return _ACTIVE_INPUT_PLAN.paths("drc-report")
     if path.is_file():
         return [path]
     if not path.is_dir():
@@ -1046,6 +1158,9 @@ def _scan_report_file(fp: Path,
     decoded stream — and therefore every regex result — is identical to the
     whole-file path, without ever holding the file in memory. OSError propagates
     to the caller, which treats it exactly as the old read failure did."""
+    if _ACTIVE_INPUT_PLAN is not None:
+        text = _read_input_text(fp, errors="replace")
+        return _scan_chunks(io.StringIO(text).read, layout_cands)
     with open(fp, "r", errors="replace") as fh:
         return _scan_chunks(fh.read, layout_cands)
 
@@ -1178,10 +1293,43 @@ def audit(path: Path, layout: Optional[Path] = None,
                     file=str(fp)))
             else:
                 any_real_check = True
+                # SAY WHAT THIS GATE ESTABLISHED, AND NOTHING MORE.
+                #
+                # This gate answers exactly one question: is the 0 vacuous
+                # because the layout is empty? Here it is not — there IS
+                # geometry. That is the whole of the finding.
+                #
+                # The phrase it used to carry, "earned DRC-clean", claims a
+                # different and much larger thing: that a DRC adequate to the
+                # design ran and found nothing. This gate never looks at WHICH
+                # deck produced the 0 and cannot tell a foundry sign-off deck
+                # from the router's own in-loop pass.
+                #
+                # OBSERVED on a full run: the sign-off DRC was killed at its
+                # wall-clock cap and wrote no report; the surviving
+                # `drc_signoff.rpt` was the ROUTER's in-loop projection
+                # (antenna + via only, no spacing, no width, no min-area); and
+                # this line then stamped PASS / "earned DRC-clean" over a
+                # layout independently measured to carry ~1,968 unpatchable
+                # min-area shapes. `drc_signoff.json` correctly recorded
+                # `passed=false, is_signoff_deck=false` and even warned that
+                # the spacing and width categories were absent — so the truth
+                # was on disk, and this sentence contradicted it.
+                #
+                # The verdict is unchanged (still INFO, still not vacuous). The
+                # CLAIM is narrowed to what was measured, and the reader is
+                # pointed at the artefact that owns deck adequacy.
                 result.findings.append(Finding(
                     rule="DRC_CLEAN_EARNED", severity="INFO",
                     message=f"0-violation verdict on a layout proven to contain "
-                            f"geometry ({evidence}) — earned DRC-clean.{hint}",
+                            f"geometry ({evidence}) — the zero is NOT vacuous. "
+                            f"This gate does NOT establish that the deck behind "
+                            f"that zero is adequate for sign-off: it never reads "
+                            f"which deck produced it, so a router in-loop pass "
+                            f"and a foundry sign-off deck are indistinguishable "
+                            f"here. For deck adequacy read "
+                            f"`drc_signoff.json` (`is_signoff_deck`, `passed`) — "
+                            f"do not quote this line as a clean DRC.{hint}",
                     file=str(fp)))
         elif geometry_ok:
             # No verdict token parsed, but the run demonstrably examined
@@ -1254,6 +1402,29 @@ def main(argv: Optional[list] = None) -> int:
                              "declares, so another step's DRC report cannot "
                              "carry — or condemn — this one.")
     args = parser.parse_args(argv)
+
+    global _ACTIVE_INPUT_PLAN
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        try:
+            if progress.enabled:
+                path = Path(args.path)
+                if (not path.is_dir() or args.json is not None
+                        or args.layout is not None or args.under is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "routed parent progress covers the default project-dir "
+                        "DRC invocation only")
+                _ACTIVE_INPUT_PLAN = _input_plan(path)
+                _ACTIVE_INPUT_PLAN.materialize(progress)
+            rc = _main_parsed(args)
+            if _ACTIVE_INPUT_PLAN is not None:
+                _ACTIVE_INPUT_PLAN.checkpoint_decision(
+                    fresh_plan=_input_plan(Path(args.path)))
+            return rc
+        finally:
+            _ACTIVE_INPUT_PLAN = None
+
+
+def _main_parsed(args) -> int:
 
     result = audit(Path(args.path),
                    Path(args.layout) if args.layout else None,
