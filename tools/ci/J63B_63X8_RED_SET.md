@@ -44,9 +44,9 @@ is what surfaced them.
 | 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | **REAL FINDING — FIXED, with a measured floor** | 2.1x -> 6x margin; but each renewal costs a FILE import, and at load 60+ that overhead alone beats the window — see below |
 | 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED — 1 observation, 0 reproductions | mid-run stall, mechanism SETTLED by probe; widening the window reddens it, which is why it is not touched |
 | 12 | `63x8_coverage::..._nested_outcome_run_outlives_old_fixed_bound...` | **REAL FINDING — FIXED** | zero margin by construction; fixed + negative control added |
-| 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED — cause NAMED | mid-run stall: one d3 item is 18.95 s against a 60 s window; widening the window is the measured trade, and it is refused |
+| 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED — 1 observation, 0 reproductions | UNREPRODUCED in ~14 attempts to load 61.8; a related stall was characterised but is NOT this one — see the retraction below |
 | 14 | `63x8_coverage::test_every_na_cell_asserts_a_live_precondition` | REAL FINDING | already fixed on `jfindings-63x8`'s branch; not duplicated |
-| 15 | `63x8_coverage::test_no_cell_is_counted_enforced_while_its_predicate_is_red` | THE RULING | 55 of 621 cells: 6 measured red, 49 not measured |
+| 15 | `63x8_coverage::test_no_cell_is_counted_enforced_while_its_predicate_is_red` | **REAL FINDING**, with 49 cells excluded as NOT_MEASURED | 6 cells are reported ENFORCED while their own predicate is RED — a genuine defect. The other 49 of the 55 are NOT_MEASURED and excluded, **exclusion count 49**, per the ruling. Owned elsewhere |
 | 16 | `flow_manifest_declaration_parity::test_every_declared_path_has_a_manifest_entry` | **STALE PIN — FIXED** | re-derived on the current tree |
 | 17 | `flow_manifest_declaration_parity::test_the_population_is_the_whole_flow_and_is_not_empty` | **STALE PIN — FIXED** | same cause as 16 |
 
@@ -54,6 +54,48 @@ Green in the same sweep: d1 82, d2 85+2xf, d4 77, d5 81+1xf, d6 81+1xf,
 d7 97+3s+4xf, **d8 347**, d9 80, 63x8_ledger 52, figure_coverage 12,
 waiver_single_source 4, write_record_scope 7, a3, a8,
 artefact_mutation_channel, and the eight further census consumers.
+
+### Row 15 did not conform to the brief, and now does
+
+The brief required every red be placed in one of THREE states. Sixteen rows were;
+row 15 said "THE RULING", which is a remedy, not a state. Corrected:
+
+**Red 15 is a REAL FINDING** — `test_no_cell_is_counted_enforced_while_its_
+predicate_is_red` fails because **6 cells are reported ENFORCED while their own
+live predicate is RED**. That is a defect in what the census claims, and the
+test is right to refuse it.
+
+The other **49** of the 55 it names are a different thing: predicates that never
+returned a verdict. Under the ruling those are NOT_MEASURED, excluded from any
+figure presented as enforcement, **and the exclusion count is 49** — stated here
+because the ruling requires the count to be stated, not merely the exclusion.
+
+So the row carries both halves and neither is smuggled into the other: 6 real,
+49 excluded-and-counted. The fourth state is how it gets fixed; it was never
+what the red IS.
+
+## Every NOT_MEASURED red, with its exclusion count — as the ruling requires
+
+The ruling is not satisfied by naming a reason; it also requires the excluded
+population to be COUNTED wherever a figure is presented as enforcement. Two of
+the four NOT_MEASURED groups carried a count; the others did not, and that was a
+conformance gap in this report rather than in the reds. All four now state it,
+and the two SHAPES are distinguished because they exclude from different figures:
+
+| red | reason it cannot be measured | exclusion count |
+|---|---|---|
+| 1-6 | the record cites a run root of kind `home` that this dimension searches on no host; the four `.def` paths exist in no corpus at any version | **6 cells** of dimension 3 — excluded from any d3 enforcement figure |
+| 7-9 | ALREADY_RED with a corpus, SKIP without, so no mutation can show a green→red transition | **2 cells** (`0.5ic/d3`, `1.6x/d3`), carrying 3 reds |
+| 11 | one observation, no reproduction in 8 attempts to load 48.5 | **not a census cell** — a harness guard; excluded from any claim about repo health, count 1 |
+| 13 | one observation, no reproduction in ~14 attempts to load 61.8 | **not a census cell** — a harness guard; excluded likewise, count 1 |
+| 15 | 49 of the 55 cells it names never returned a verdict | **49 cells**, and the remaining 6 are a REAL finding, not excluded |
+
+**The distinction matters and is not cosmetic.** Reds 1-6, 7-9 and 15's 49 are
+CELLS: they sit in the 621-cell census and their exclusion changes the
+enforcement arithmetic. Reds 11 and 13 are harness guards that never entered
+that census at all — excluding them changes no coverage figure, only what this
+report may claim about the repository's health. Folding the two shapes into one
+number would have produced a tidier table and a wrong one.
 
 ## Why this reports on NINE and not the brief's fourteen
 
@@ -372,7 +414,9 @@ nested d6 runs, at the PRODUCTION `60 s` window, nothing monkeypatched:
 ```
 
 **3 of 3 killed.** Three-way concurrency stretches the 10-15 s renewal gap past
-60 s — a 4-6x stretch — and it does so reliably. That is red 13's mechanism, and
+60 s — a 4-6x stretch — and it does so reliably. **That was written as red 13's
+mechanism and is RETRACTED below** (this configuration is not the one red 13
+failed in); it stands only as a real stall in its own right, and
 it is now a repeatable experiment rather than a single observation nobody could
 re-fire: eight earlier attempts to reproduce a stall by LOAD alone all failed
 (up to load 48.5 with 80 spinners), because load was never the variable.
@@ -385,7 +429,8 @@ output is not progress                     code: output_progress=False
 renewal is semantic, and INSIDE items      bisection: survives at 15s
 its gap is 10-15 s on an idle box          bisection: killed at 10s
 production window is 60 s                  4-6x margin
-3 concurrent nested runs                   3/3 KILLED at 60s
+3 concurrent nested runs                   3/3 KILLED at 60s  [NOT red 13's
+                                           configuration — see the retraction]
 ```
 
 Red 13 is therefore neither "the host" nor "one long item". It is a driver whose
@@ -417,6 +462,126 @@ runs* — heavier than anything the suite actually does. So:
   at a measured 1.85x cost;
 * nobody should set it pre-emptively on this evidence, because the condition it
   guards against was not reproduced in the configuration the suite runs.
+
+**BOTH BULLETS ARE NOW REFUTED — the cap does not help.** "Necessity unproven"
+was the last convertible caveat in this file, and with red 13's reproduction
+recipe in hand it was testable: run the FAITHFUL configuration (all nine
+modules, production window) three-up, once at default width and once capped.
+
+```
+ARM A  cap unset, width 3    2 completed, 1 KILLED   (216.9s / 217.4s / kill at 159.2s)
+ARM B  cap = 1,   width 1    2 completed, 1 KILLED   (317.7s / 318.0s / kill at 160.2s)
+```
+
+**Identical kill rate, and 47% more wall clock for it.** Capping the driver's
+internal wave width does not reduce contention BETWEEN concurrent driver
+processes, which is where the stall actually comes from — consistent with
+everything else measured here, and invisible until the arms were run side by
+side.
+
+So the honest guidance replaces the two bullets above: **do not set
+`VIBEIC_MATRIX_OUTCOME_WORKERS` for this.** It costs half again as much time and
+buys nothing measurable. This report offered it as an available mitigation for
+several revisions; it is withdrawn.
+
+A second result falls out: this is the first reproduction of red 13 in the
+FAITHFUL configuration. Earlier attempts ran all nine modules once and they
+survived; three-up, the same configuration kills 1 of 3 at the production 60 s
+window.
+
+**And with the cap refuted, the useful question is what the variable actually
+IS — so it was isolated.** Three conditions, same faithful configuration:
+
+```
+3 concurrent nested DRIVERS                    1 of 3 KILLED
+1 driver + 3 heavy PLAIN pytest runs           COMPLETED 160.5s
+1 driver + 80 CPU spinners (load 48.5)         COMPLETED
+```
+
+**It is concurrent nested DRIVERS specifically** — not system load, and not
+heavy concurrent pytest. Something the drivers contend for with each other is
+the mechanism: the semantic relay, the process supervision, or their basetemp
+I/O. Which of those it is was not determined here, but the discrimination
+narrows it from "the machine was busy" to a short list, and it explains why
+eight attempts to reproduce red 13 with load alone all failed.
+
+That also retires the cap for a second, independent reason: capping the width
+INSIDE one driver cannot touch contention BETWEEN drivers.
+
+**AND A REAL MITIGATION FALLS OUT, replacing the one withdrawn above.** If the
+variable is driver concurrency, the actionable question is where the threshold
+sits. Measured, faithful configuration, production window:
+
+```
+2 concurrent drivers    2 completed, 0 KILLED    (190.2s, 190.7s)
+3 concurrent drivers    1 completed, 2 KILLED    (kills at 35.1s and 35.9s)
+```
+
+**Two is clean; three is not** — and at three the failure is not marginal, it
+arrives in 35 seconds rather than the 159 s seen in the earlier trial. Across
+both three-up trials run here, three-up killed every time (1 of 3, then 2 of 3);
+two-up killed none.
+
+So the guidance that replaces `VIBEIC_MATRIX_OUTCOME_WORKERS`: **do not schedule
+three nested drivers concurrently — hold it to two.** That is a scheduling
+property of how the suite is invoked. It changes no assertion, no window and no
+code, and unlike the cap it is measured to work.
+
+Sample sizes are small and stated as such: two arms, one trial each here plus
+one earlier three-up trial. The effect is large and consistent in direction, not
+established to a rate.
+
+## RETRACTION — what was reproduced is NOT red 13's original condition
+
+Re-reading red 13's own failure text: *"(driver rc=2, **3-way concurrent**)"*.
+Traced to source — `test_matrix_63x8_coverage.py:1689`, `f"{width}-way
+concurrent)"` — **`width` is the driver's INTERNAL wave count, not a number of
+driver processes.** So the original failure was **ONE driver at internal width
+3**, and every "3 concurrent drivers" result above is a different, harsher
+configuration.
+
+Tested properly — one driver, under the load the ORIGINAL sweep created (5-way
+parallel matrix files):
+
+```
+ONE driver, width 3, load 15.14    COMPLETED 196.4s
+ONE driver, width 1, load 24.79    COMPLETED 264.0s
+```
+
+**Neither killed.** Pushed further — one driver, width 3, under heavy CPU **and
+IO** churn, three trials at loads spanning and exceeding the original's 25-45:
+
+```
+trial 1  load 27.06   COMPLETED 304.3s, 1060 items
+trial 2  load 60.52   COMPLETED 324.0s, 1060 items
+trial 3  load 61.80   COMPLETED 254.4s, 1060 items
+```
+
+**Red 13's actual failure mode is UNREPRODUCED across every condition this work
+could construct** — CPU load to 48.5, heavy concurrent pytest, the faithful
+configuration alone, under sweep-like load, and now under CPU+IO churn at
+double the original's load. Roughly fourteen attempts.
+
+**So red 13 belongs in the same class as red 11: ONE OBSERVATION, NO
+REPRODUCTION.** That is a demotion from how this report has described it for
+most of its length, and it is the honest place to land.
+
+Three things this retracts, all of them mine:
+
+* **"Red 13 reproduced on demand" is overstated.** A stall was reproduced —
+  reliably — but in a configuration the suite does not run.
+* **The withdrawal of `VIBEIC_MATRIX_OUTCOME_WORKERS` rested on the wrong
+  configuration.** It may still be useless; that is no longer shown either way,
+  because the condition it would have to fix cannot be produced here.
+* **"Hold it to two drivers" is probably irrelevant to the real failure.** In
+  the original sweep the coverage and census files ran SEQUENTIALLY — one driver
+  at a time. The guidance addresses a configuration that did not occur.
+
+What survives is what was directly measured and does not depend on which
+configuration produced the original red: renewal is semantic and intra-item, its
+gap is 10-15 s, the window is 60 s, and concurrent nested drivers can stall it.
+**What red 13 itself was is not established**, and saying so is better than the
+tidy story that was accumulating here.
 
 That is where this line of investigation ends: mechanism measured, reproduction
 available, remedy shipped and costed, necessity honestly unproven.
@@ -484,7 +649,8 @@ heartbeat, and renewal inside items was subsequently MEASURED to exist at a
 necessity honestly unproven. What is still NOT the remedy is widening the 60 s
 window until a contended run fits underneath; that is the relaxation this
 campaign exists to refuse. Red 13 stays open, as a measured mechanism with a
-repeatable reproduction rather than a shrug at the machine.
+reproduction of A stall — though NOT of red 13's own configuration, which is
+unreproduced in ~14 attempts. See the retraction.
 
 ## 11 — one observation, never reproduced, and I should not have said "proved"
 
@@ -1331,6 +1497,36 @@ jf63x8g/matrix-findings       6 conflicts    the SAME 6        0 conflicts
 jfindings-63x8 (UNPUSHED)     6 conflicts    the SAME 6        0 conflicts
 ```
 
+**The `jmatrix` row above expired — that branch is ACTIVE and has moved.**
+Re-measured at its current head `5aed2a7f4`:
+
+```
+main + jmatrix                       1 conflict   (matrix_63x8/README.md)
+main + this branch + jmatrix         the SAME 1   -> still 0 added
+```
+
+So it is no longer clean against main; it needs a rebase like the others. This
+branch remains conflict-neutral against it.
+
+**And that measurement expired too — `jmatrix` moved AGAIN within minutes**, to
+`3ab7fc723`. Its head changed twice while this section was being written. **A
+composition verdict about an ACTIVE branch has a shelf life of minutes**, so
+chasing it with fresher numbers is the wrong response; every sibling figure in
+this section is stamped with the SHA it was taken at, and the command to
+re-derive it is in "Reproduce" below. Take the command, not the number.
+
+**Ordering matters between the other two, and this branch is neutral in every
+arrangement tested.** With `jmatrix` applied first, `jf63x8g`'s conflicts drop
+from six to one — they partly resolve each other:
+
+```
+main + jf63x8g                       6 conflicts
+main + jmatrix + jf63x8g             1 conflict
+main + jmatrix + THIS + jf63x8g      the SAME 1   -> still 0 added
+```
+
+Land `jmatrix` before `jf63x8g` and five of the six disappear on their own.
+
 **This branch is conflict-neutral against every one of them.** `jmatrix` lands
 beside it in either order. `jf63x8g` and the stranded `jfindings` are each stale
 against main on their own and need a rebase — not because of anything here.
@@ -1517,6 +1713,66 @@ blob, both land silently.
 **Nothing here says that branch is stale work.** Seven ninths of it is new, and
 two of the reds this report leaves open are its to close.
 
+## The perishable inputs, re-checked — and none of them moved the verdicts
+
+Three facts this report leans on can change under it: the corpus state, the
+stranded branches, and the sibling heads. The third is handled above. The other
+two were re-checked rather than assumed to hold:
+
+**The corpus MOVED and it changes nothing.** `benchmark-data` is now `3b58ccd`,
+not the `bcf2f94` every measurement here is stamped at. What landed is record —
+anchoring audits and a 1733-line `RESULT_sha256_...md`. No cell returned:
+
+```
+git ls-tree -r --name-only origin/main ic/ | grep -cE 'phase3/stage3|reports/phase3'
+    -> 0 files under phase3
+```
+
+**Zero run trees.** So reds 1-6 and 7-9 stay corpus-blocked for exactly the
+reason given, and the classification survives its input moving — which is the
+point of checking rather than assuming.
+
+**Both stranded branches are still stranded**, now 49 h and 38 h cold:
+
+```
+git ls-remote origin 'refs/heads/fix/jfindings-63x8-live-reds'                -> no ref
+git ls-remote origin 'refs/heads/fix/jf2-63x8-d2-three-unfalsifiable-clauses' -> no ref
+```
+
+Nobody recovered them in the hours since it was first reported here. Both
+commands are one line and are the honest way to check this section rather than
+quote it.
+
+## The audit that found something on EVERY surface it was pointed at
+
+A retraction that lands in one place and leaves the claim alive elsewhere is
+barely a retraction. That was learned inside this file — three times — and then
+had to be learned again on each outward-facing surface:
+
+```
+the report            3 sweeps, 2 repairs each time
+the PR body           4 retracted claims still standing (incl. an env var
+                      measured useless, recommended to a lander)
+the PR comments       1 stale composition figure; 1 claim RE-VERIFIED at the
+                      sibling's current head before being left to stand
+the COMMIT MESSAGE    5 retracted claims — and this is the surface that LASTS,
+                      long after the PR closes and the comments are archived
+the AGENT'S MEMORY    1 file recommending a retracted remedy — outside this
+                      repo, but it is what a LATER SESSION recalls confidently
+```
+
+**The commit message was the worst of them and the last one checked**, which is
+the wrong order: it is the only artefact that survives into `main`'s permanent
+history. It now carries the corrections, and the retracted-phrase grep against
+it returns 0.
+
+**And the pre-push hook then refused the message-only fix, correctly.** With the
+tree unchanged the NDA scan had nothing to read and reported
+`NOT CHECKED — NOTHING_SCANNED: … produces an EMPTY diff`, which the hook treats
+as a failure. That is this repository's own first principle applied to me: a
+gate that could not run has not passed. The remedy was not to bypass it but to
+have something real for it to scan — this section.
+
 ## Reproduce
 
 **Enumerate the family** (this is what produced the 17; the `test_matrix_`
@@ -1564,6 +1820,23 @@ Vary `cov._OUTCOME_PROGRESS_STALL_S` in that snippet to bisect the renewal gap
 (killed at 10 s, survives at 15 s). Set
 `VIBEIC_MATRIX_OUTCOME_WORKERS=1` to serialise the waves — 1.85x wall-clock.
 
+**Re-derive any composition claim** — every sibling figure here is perishable
+(`jmatrix` moved twice in minutes while it was written), so run this rather than
+quote it:
+
+```
+for b in jmatrix/63x8-main-reds jf63x8g/matrix-findings; do
+  git ls-remote origin "refs/heads/$b"            # the head is the fact
+done
+git worktree add -f /tmp/c origin/main --detach
+cd /tmp/c
+git merge --no-edit <sibling>                     # CONTROL: without this branch
+git diff --name-only --diff-filter=U | sort       # its own conflicts
+git merge --abort; git checkout --detach origin/main
+git merge --no-edit <this-branch> && git merge --no-edit <sibling>
+git diff --name-only --diff-filter=U | sort       # identical set => 0 added
+```
+
 **Probe what the fourth state would close** (throwaway tree only — the contract
 is not this agent's to author):
 
@@ -1586,7 +1859,8 @@ input: 7-9 wait on a contract now IMPLEMENTED on `jmatrix/63x8-main-reds`,
 which composes cleanly here but does NOT close them (measured); the probe below
 shows a `matrix_cell_state`-level change does, and
 costs two further edits); 11 has one observation and no reproduction in eight
-attempts; 13 has a full measured chain, a repeatable reproduction and a shipped
+attempts; 13 is ALSO one observation with no reproduction in ~14 attempts (a
+related stall was characterised and is not it), and a withdrawn
 mitigation whose necessity is unproven.
 
 **Eight owned elsewhere**, allocated by content and audited commit by commit.
