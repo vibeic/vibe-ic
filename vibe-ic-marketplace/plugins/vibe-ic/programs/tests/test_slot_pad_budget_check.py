@@ -246,3 +246,327 @@ def test_cli_without_ingested_slots_is_UNDECIDED(tmp_path):
     rtl.write_text(_RTL_FITS)
     rc = S.main([str(tmp_path), "--rtl", str(rtl), "--top", "chip_top"])
     assert rc == 2
+
+
+# --------------------------------------------------------------------------- #
+# comments must never mint or destroy a port  (vibe-ic#731)
+# --------------------------------------------------------------------------- #
+# `parse_top_ports` stripped comments with TWO independent substitutions --
+# `//` first, then `/* */`. Verilog has one rule instead: whichever introducer
+# opens FIRST owns what follows. The `//` pass runs blind to an open block
+# comment, so a `*/` sitting behind a `//` is deleted with its line, and the
+# block comment it terminated survives into the text `_DIR_RE` scans.
+#
+# Both directions below are the SAME orphaned block; which one fires depends
+# only on where the commas fall. The dropping direction is the dangerous one:
+# a smaller interface is how a design that cannot be bonded out reads as FITS.
+
+# Real ports are exactly clk and done. `phantom` is inside the block comment.
+_RTL_COMMENT_MINTS = """
+module chip_top (
+    input wire clk,   /* disabled,
+    output wire phantom,
+    // end of the disabled block */
+    output wire done
+);
+endmodule
+"""
+
+# Real ports are clk, done and io -- the block comment holds no port at all.
+_RTL_COMMENT_DROPS = """
+module chip_top (
+    input wire clk,
+    /* legacy block
+    // was here */
+    output wire done,
+    inout wire [7:0] io
+);
+endmodule
+"""
+
+
+def test_a_comment_does_not_mint_a_port_that_does_not_exist():
+    ports = S.parse_top_ports(_RTL_COMMENT_MINTS, "chip_top")
+    assert [p["name"] for p in ports] == ["clk", "done"]
+
+
+def test_a_comment_does_not_swallow_the_real_port_that_follows_it():
+    ports = S.parse_top_ports(_RTL_COMMENT_DROPS, "chip_top")
+    assert [p["name"] for p in ports] == ["clk", "done", "io"]
+
+
+def test_the_founding_case_a_comment_sentence_naming_a_direction():
+    """The shape the gate exists for: prose that matches the declaration
+    pattern. Neither commented port is real."""
+    rtl = ("module chip_top (\n"
+           "    input  wire clk,     // output wire commented_out,\n"
+           "    output wire done     /* inout wire also_not_real, */\n"
+           ");\nendmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["clk", "done"]
+
+
+def test_stripping_preserves_line_geometry_so_ifdef_nesting_still_counts():
+    """A block comment is replaced by the newlines it spanned. The
+    conditional-compilation scan is line-oriented and counts `ifdef`/`endif`
+    nesting by line, so collapsing those lines would mis-attribute which
+    ports were conditional."""
+    rtl = ("module chip_top (\n"
+           "`ifdef USE_PWR\n"
+           "    /* a power-only pad,\n"
+           "       spanning lines */\n"
+           "    inout wire vdda1,\n"
+           "`endif\n"
+           "    input wire clk,\n"
+           "    output wire done\n"
+           ");\nendmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["vdda1", "clk", "done"]
+    assert [p["name"] for p in ports if p["conditional"]] == ["vdda1"]
+
+
+def test_a_phantom_port_does_not_reach_the_budget_verdict():
+    """The defect is only interesting because it lands on the number the
+    verdict is computed from. `_RTL_FITS` plus a commented-out 256-bit bus
+    must still be the same interface it was without the comment."""
+    clean = S.evaluate({"slot_1x1": _slot_ingested()},
+                       S.parse_top_ports(_RTL_FITS, "chip_top"))
+    commented = _RTL_FITS.replace(
+        "    output wire [7:0] status, output wire error\n",
+        "    output wire [7:0] status, output wire error\n"
+        "    /* removed for this tape-out,\n"
+        "    , input wire [255:0] wide_key\n"
+        "    // end */\n")
+    rep = S.evaluate({"slot_1x1": _slot_ingested()},
+                     S.parse_top_ports(commented, "chip_top"))
+    assert rep["declared_signal_bits"] == clean["declared_signal_bits"]
+    assert (rep["verdict"], rep["rc"]) == ("FITS", 0)
+
+
+# --------------------------------------------------------------------------- #
+# an ATTRIBUTE is not a comment, and it dropped a real port
+# --------------------------------------------------------------------------- #
+# PRE-EXISTING, and measured identical on the commit before the comment repair.
+# `(* keep = "true" *)` is live source a synthesiser reads, but it is not part
+# of a port declaration and `_DIR_RE` anchors with `^`. A port carrying one
+# reached the scan as a chunk beginning `(*`, matched no direction keyword, and
+# was discarded as an unparsable continuation.
+#
+# Same failure direction as the orphaned block comment above: a real port
+# DROPPED, a smaller interface than the design has, and a false FITS.
+
+def test_an_attribute_on_a_port_does_not_drop_it():
+    rtl = ('module chip_top (\n'
+           '    (* keep = "true" *) input wire clk,\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
+
+
+def test_an_attribute_spanning_lines_keeps_the_conditional_attribution():
+    """Attributes are replaced by the newlines they spanned, for the same
+    reason comments are: the conditional scan counts `ifdef` nesting by line."""
+    rtl = ('module chip_top (\n'
+           '`ifdef USE_PWR\n'
+           '    (* mark_debug = "true",\n'
+           '       keep = "true" *) inout wire vdda1,\n'
+           '`endif\n'
+           '    input wire clk\n'
+           ');\nendmodule\n')
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["vdda1", "clk"]
+    assert [p["name"] for p in ports if p["conditional"]] == ["vdda1"]
+
+
+def test_a_comment_that_contains_an_attribute_opener_is_still_a_comment():
+    """Order matters: comments are stripped first, so `(*` inside a block
+    comment never reaches the attribute pass. Real ports are clk and done."""
+    rtl = ('module chip_top (\n'
+           '    input wire clk,   /* (* not really an attribute *)\n'
+           '    output wire phantom,\n'
+           '    // end */\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
+
+
+def test_multiplication_inside_parentheses_is_not_an_attribute():
+    """`(*` begins an attribute; `( 2 * 4 )` does not. A stripper that ate the
+    latter would silently rewrite a parameter expression."""
+    rtl = ('module chip_top #(parameter W = (2 * 4)) (\n'
+           '    input wire [W-1:0] bus,\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["bus", "done"]
+
+
+def test_the_founding_shape_a_comment_naming_the_top_module():
+    """The defect the GATE was written for -- `\\bmodule\\s+(\\w+)` matching a
+    comment -- reaching this program's own inline module search. That regex is
+    written inline rather than as a module-level `re.compile`, so the gate's
+    detector cannot see it and never named it; it is covered here because the
+    defect class is what matters, not the finding string."""
+    rtl = ('// This module chip_top is described in section 4.\n'
+           '/* module chip_top (input wire decoy_a, output wire decoy_b); */\n'
+           'module chip_top (\n'
+           '    input wire clk,\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
+
+
+def test_a_block_comment_is_not_nested_and_ends_at_the_first_terminator():
+    """Verilog block comments do not nest. `/* outer /* inner */` ends at the
+    FIRST `*/`, so `done` is a real port."""
+    rtl = ('module chip_top (\n'
+           '    input wire clk,\n'
+           '    /* outer /* inner */\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
+
+
+# --------------------------------------------------------------------------- #
+# driven by a REAL checked-in artefact, not a fixture authored alongside it
+# --------------------------------------------------------------------------- #
+# vibe-ic#400: "a change whose tests are all fixtures authored alongside it
+# cannot distinguish itself from its own absence". Every test above this line
+# is synthetic. These two read RTL that was in the repository before this
+# change existed.
+
+import _hostpaths  # noqa: E402
+
+
+def _real_rtl_files():
+    root = _hostpaths.repo_path(".")
+    files = sorted(p for p in root.rglob("*.v") if ".git" not in p.parts)
+    files += sorted(p for p in root.rglob("*.sv") if ".git" not in p.parts)
+    if not files:
+        pytest.skip("no checked-in RTL in this tree")
+    return files
+
+
+def test_real_in_repo_rtl_still_parses_to_a_port_list():
+    """The stripper runs over real RTL, not only over pathological fixtures.
+    At least one checked-in module header must yield ports — a rewrite that
+    silently returned None everywhere would pass every synthetic test above
+    that asserts a specific list, but not this."""
+    import re
+    mod = re.compile(r"^\s*module\s+([A-Za-z_]\w*)", re.M)
+    parsed = 0
+    for f in _real_rtl_files():
+        txt = f.read_text(errors="replace")
+        for top in sorted(set(mod.findall(txt))):
+            ports = S.parse_top_ports(txt, top)
+            if ports:
+                parsed += 1
+                assert all(p["dir"] in ("input", "output", "inout")
+                           for p in ports)
+                assert all(p["name"] and not p["name"].startswith(("/", "("))
+                           for p in ports), (
+                    f"{f.name}::{top} minted a port out of comment or "
+                    f"attribute text: {[p['name'] for p in ports]}")
+    assert parsed > 0, "no checked-in module header parsed to any port"
+
+
+def test_no_real_in_repo_module_gains_or_loses_a_port_from_the_comment_fix():
+    """A stripper is only safe if it is inert on text that has nothing to
+    strip. Re-parsing each real module with its comments ALREADY removed must
+    give the identical port list — if the two disagree, the stripper is
+    changing something other than comments."""
+    import re
+    mod = re.compile(r"^\s*module\s+([A-Za-z_]\w*)", re.M)
+    checked = 0
+    for f in _real_rtl_files():
+        txt = f.read_text(errors="replace")
+        pre = S._strip_hdl_attributes(S._strip_hdl_comments(txt))
+        for top in sorted(set(mod.findall(txt))):
+            a = S.parse_top_ports(txt, top)
+            b = S.parse_top_ports(pre, top)
+            ka = [(p["dir"], p["name"], p["width"]) for p in (a or [])]
+            kb = [(p["dir"], p["name"], p["width"]) for p in (b or [])]
+            assert ka == kb, f"{f.name}::{top}: {ka} != {kb}"
+            checked += 1
+    assert checked > 0
+
+
+# --------------------------------------------------------------------------- #
+# the site-level strip is a DATAFLOW guarantee, and it needs its own test
+# --------------------------------------------------------------------------- #
+# Found by a mutation run, and it is the honest reason this test exists:
+# deleting either site-level `_strip_hdl_comments(...)` call changed NO
+# observable behaviour and every test above still passed. The whole-text pass
+# had already cleared the text, so the local calls were doing nothing a fixture
+# could see — a guarantee no test defended.
+#
+# They are not decoration. `decl` and `s` are `for`-loop targets, so no
+# assignment carries the whole-text strip to them, and a later change to where
+# `rest` or `raw_no_comment` comes from would re-open the hole silently. That
+# is a property of the DATAFLOW, not of any input, so it is pinned with the
+# repo gate's own scanner rather than with another Verilog fixture — this is
+# `hdl_declaration_scan_strips_comments_check`'s question, asked locally
+# instead of only in a 300-second suite.
+
+def test_no_declaration_regex_in_this_file_scans_unstripped_text():
+    import hdl_declaration_scan_strips_comments_check as H
+    src = Path(S.__file__).read_text(encoding="utf-8")
+    findings = H.scan_source(src, "slot_pad_budget_check")
+    assert findings == [], (
+        "a declaration regex here scans a local no stripper touched: "
+        f"{findings}. Strip on the value that REACHES the scan — stripping a "
+        "sibling does not make this one safe.")
+
+
+# --------------------------------------------------------------------------- #
+# line geometry is load-bearing, and a mutation run is what proved it
+# --------------------------------------------------------------------------- #
+# Both strippers replace a multi-line region with the NEWLINES IT SPANNED. The
+# two tests further up assert conditional attribution survives, and a mutation
+# run showed neither of them dies when the newlines are dropped — their
+# comments and attributes sit on their own lines, so fusing changes nothing.
+#
+# The case that bites is a region spanning FROM the `ifdef line INTO the port
+# line. Collapse its newlines and the two fuse; the fused line now begins with
+# `ifdef, which is exactly what the directive-removal regex is anchored to
+# (`^[ \t]*`(?:ifdef|...)\b[^\n]*$`), so the whole line is deleted — REAL PORT
+# INCLUDED. Measured: `vdda1` disappears from the port list entirely, not
+# merely from the conditional set. A dropped port is a smaller interface, and a
+# smaller interface is a false FITS.
+
+def test_a_comment_spanning_from_the_ifdef_line_into_a_port_line_keeps_the_port():
+    rtl = ("module chip_top (\n"
+           "`ifdef USE_PWR /* a note that\n"
+           "   spans lines */ inout wire vdda1,\n"
+           "`endif\n"
+           "    input wire clk\n"
+           ");\nendmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["vdda1", "clk"]
+    assert [p["name"] for p in ports if p["conditional"]] == ["vdda1"]
+
+
+def test_an_attribute_spanning_from_the_ifdef_line_into_a_port_line_keeps_the_port():
+    """Same geometry rule, the attribute stripper's copy of it."""
+    rtl = ("module chip_top (\n"
+           "`ifdef USE_PWR (* mark_debug = \"true\",\n"
+           "   keep = \"true\" *) inout wire vdda1,\n"
+           "`endif\n"
+           "    input wire clk\n"
+           ");\nendmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["vdda1", "clk"]
+    assert [p["name"] for p in ports if p["conditional"]] == ["vdda1"]
+
+
+def test_an_unterminated_block_comment_keeps_the_lines_it_swallowed():
+    """The unterminated branch preserves geometry too. Everything after the
+    opener is comment body, so no port survives it — but the lines it spanned
+    must still be there, or a directive on a LATER line fuses with the text
+    before it."""
+    for text in ("a\n/* x\ny\nz\n",            # unterminated block comment
+                 "a\n/* x\ny */\nz\n",         # terminated, multi-line
+                 "a\n(* x\ny *)\nb\n",         # attribute, multi-line
+                 "a\n// x\nb\n"):               # line comment keeps its own
+        for strip in (S._strip_hdl_comments, S._strip_hdl_attributes):
+            assert strip(text).count("\n") == text.count("\n"), (
+                f"{strip.__name__} changed the line count of {text!r}")
