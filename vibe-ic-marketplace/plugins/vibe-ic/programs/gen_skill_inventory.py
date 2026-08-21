@@ -2,7 +2,7 @@
 """
 gen_skill_inventory.py — single source of truth for the AI-skill count.
 
-Same pattern as mcp-eda-server/tools/gen_mcp_tool_inventory.py, for the skills
+Same pattern as mcp-eda/tools/gen_mcp_tool_inventory.py, for the skills
 shown on vibeic.ai/#skills. The site hand-maintained "55 AI Skills"; that number
 drifts whenever a skill is added/removed (it is now 57 after benchmark-verify +
 design-for-eco landed). This derives the count DIRECTLY from the skill folders so

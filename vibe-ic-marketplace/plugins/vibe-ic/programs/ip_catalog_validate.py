@@ -80,7 +80,7 @@ def validate_manifest(m: Dict[str, Any]) -> Tuple[bool, List[str]]:
 
 def main(argv: List[str]) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="Validate ip_catalog manifests")
+    ap = argparse.ArgumentParser(description="Validate ip-catalog manifests")
     ap.add_argument("--catalog-dir", default=None)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--strict-license-only", action="store_true",
@@ -91,7 +91,7 @@ def main(argv: List[str]) -> int:
 
     catalog_dir = Path(args.catalog_dir) if args.catalog_dir else find_catalog_dir()
     if catalog_dir is None:
-        print("ERROR: ip_catalog/ not found", file=sys.stderr)
+        print("ERROR: ip-catalog/ not found", file=sys.stderr)
         return 2
 
     manifests = load_manifests(catalog_dir)
@@ -117,7 +117,7 @@ def main(argv: List[str]) -> int:
             "results": results,
         }, indent=2))
     else:
-        print(f"=== ip_catalog validate — {len(manifests)} manifests ===")
+        print(f"=== ip-catalog validate — {len(manifests)} manifests ===")
         for r in results:
             mark = "PASS" if r["ok"] else "FAIL"
             print(f"  [{mark}] {r['ip_name']} ({r['license']})  {r['manifest_path']}")

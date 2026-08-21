@@ -63,7 +63,37 @@ altera_adc_control u_adc (
 
 - Do not generate testbenches that require commercial FPGA IP (use only free Quartus Lite primitives)
 - Do not assume specific breadboard wiring — always generate a wiring guide
-- Do not exceed DE10-Lite GPIO count (36 GPIO + 10 Arduino header)
+- Pin double-assignment (board short) and a missing pin map are **enforced by
+  `programs/analog_hw_tb_de10lite_budget_check.py`** — run it on the emitted
+  `.qsf` (flow step A9 also runs it over `phase3/analog/`):
+
+  ```bash
+  python3 programs/analog_hw_tb_de10lite_budget_check.py \
+      analog/<block>/hw_test/pin_assignments.qsf --json report.json
+  ```
+  Exit 0 = PASS, 1 = FAIL (a pin shorted to two signals, or no
+  `set_location_assignment` anywhere in the target), 2 = QSF missing or not a
+  DE10-Lite (MAX10 10M50DAF484C7G) board (out of scope — cannot judge). The
+  check only fires on DE10-Lite QSFs.
+
+- **The external-I/O budget is now YOUR judgment again, and here is why.** The
+  program used to FAIL a QSF assigning more than 46 pins ("36 GPIO + 10
+  Arduino") to the two user headers. That ceiling contradicts the board: the
+  DE10-Lite offers **36 GPIO_0 + 16 Arduino digital I/O + ARDUINO_RESET_N =
+  53** external-I/O pins, all enumerated in the program's own manual-sourced
+  tables. Measured, a physically valid map using 36 GPIO + 11 Arduino pins
+  (47 real pins, none doubled) came back `FAIL external-io-budget`. And the
+  rule could never catch the defect it was named for: it counted only pins
+  inside that 53-pin catalogue, so a design that genuinely needs more external
+  I/O than the board has would put the surplus on pins the rule does not
+  count. It only had false positives available to it, so it was withdrawn. The
+  program still MEASURES and REPORTS the header-pin count
+  (`external_io_pins_used` / `external_io_pins_available`); it just does not
+  judge it. Keep the design inside 36 GPIO_0 + 16 Arduino I/O yourself.
+
+  (Full-board physical-pin-map validation — HEX/VGA/SDRAM/G-sensor pins — is
+  also still your judgment: the program intentionally does not flag "unknown"
+  pins to avoid false-firing on legitimate peripheral assignments.)
 
 ## Handoff
 
@@ -71,14 +101,13 @@ altera_adc_control u_adc (
 - After programming → `analog-hw-measure` for scope + ADC data collection
 - Wiring guide → user builds/adjusts breadboard circuit
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/analog-hw-testbench-gen/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/analog-hw-testbench-gen/compliance.yaml \
     <your_output_file>
 ```
 

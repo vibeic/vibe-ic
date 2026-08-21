@@ -18,7 +18,7 @@ facts:
     - {path: electrical_characteristics,    type: dict, required: true, min_keys: 1}
     - {path: absolute_max_ratings,          type: dict, required: false}
     - {path: reliability,                   type: dict, required: false}
-    # D3 rubric / Phase-2b prevention of the "16% catastrophe" prose-vs-list gap:
+    # D3 rubric / Phase 2 prevention of the "16% catastrophe" prose-vs-list gap:
     # every IC must publish a structured supported_interfaces array (one entry
     # per external bus). Auto-derived by tools/phase1_engine/interfaces_floor.py
     # when the IC docs don't already declare it.

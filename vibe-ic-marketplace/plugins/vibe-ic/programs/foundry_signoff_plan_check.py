@@ -95,13 +95,13 @@ def _root_waiver_ids(waivers_doc: Dict[str, Any]) -> List[Any]:
     return out
 
 
-def main():
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=(
         "Verify foundry_signoff_plan.yaml provides closure plan for every waiver."
     ))
     ap.add_argument("project_dir")
     ap.add_argument("--json", nargs="?", const="-", default=None)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
     if not project.is_dir():
@@ -168,7 +168,7 @@ def main():
                 "Schema: foundry_signoff_plan: { foundry, contact, "
                 "expected_review_date, closures: [{waiver_id, tool, input, "
                 "proof_artefact, acceptance_criterion}, ...] }. See "
-                "vibe-ic-d/programs/foundry_signoff_plan_check.py docstring."
+                "vibe-ic/programs/foundry_signoff_plan_check.py docstring."
             ),
         ))
     else:

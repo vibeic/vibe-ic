@@ -146,3 +146,49 @@ wire extra2;
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+# --- the exit code, and the argv that made it undrivable
+
+def test_main_takes_argv_at_all():
+    """`gate_cli_mutation_probe` reported this gate SILENT, and the cause was
+    that no test COULD drive it: `def main():` read `sys.argv` unconditionally.
+
+    Third instance today, after `dispatcher_awake_gate_check` and
+    `foundry_signoff_plan_check`, out of the 48 gates here declaring main that
+    way.
+    """
+    import inspect
+    import synth_wrapper_check as S
+    assert "argv" in inspect.signature(S.main).parameters
+
+
+def test_main_exits_non_zero_on_a_failing_audit(tmp_path, monkeypatch):
+    """`main()` calls `sys.exit()` rather than returning, so the exit code is
+    raised — and a test that ignores SystemExit measures nothing."""
+    import pytest
+    import synth_wrapper_check as S
+
+    class _R:
+        passed = False
+        findings = []
+        summary = "wrapper missing"
+    monkeypatch.setattr(S, "audit", lambda d: _R())
+    with pytest.raises(SystemExit) as e:
+        S.main([str(tmp_path)])
+    assert e.value.code == 1
+
+
+def test_main_exits_zero_when_the_audit_passes(tmp_path, monkeypatch):
+    """The other direction, or the test above is met by always failing."""
+    import pytest
+    import synth_wrapper_check as S
+
+    class _R:
+        passed = True
+        findings = []
+        summary = "ok"
+    monkeypatch.setattr(S, "audit", lambda d: _R())
+    with pytest.raises(SystemExit) as e:
+        S.main([str(tmp_path)])
+    assert e.value.code == 0

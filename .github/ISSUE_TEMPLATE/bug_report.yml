@@ -21,8 +21,8 @@ body:
   - type: input
     id: server_version
     attributes:
-      label: mcp-eda-server version
-      description: From `mcp-eda-server/package.json`
+      label: MCP server version
+      description: From the bundled MCP server (vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/package.json)
       placeholder: "0.1.0"
     validations:
       required: true

@@ -2,7 +2,7 @@
 """programs/regression_issue_intake_check.py — v1.6.63
 
 Issue-#5 lesson-learned enforcement: before a debug agent attempts a
-fix on a Phase-2a regression issue, this program verifies the issue
+fix on a Phase 1 regression issue, this program verifies the issue
 body carries every mandatory field — verbatim input snippet, expected
 output, actual output, plugin version observed — AND auto-emits the
 drop-in fixture under `tests/phase1_fixtures/<project>/`.
@@ -33,7 +33,7 @@ confirm the fixture FAILS on current code.
 Usage:
   python3 regression_issue_intake_check.py \\
       --issue-number 5 \\
-      [--repo reyerchu/AI_IC_design] \\
+      [--repo vibeic/vibe-ic] \\
       [--token-file ~/.config/github/token] \\
       [--repo-root <path>] \\
       [--no-emit-fixture]   # validate only, don't write files
@@ -220,7 +220,7 @@ def _emit_fixture(repo_root: Path, parsed: Dict[str, str],
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--issue-number", type=int, required=True)
-    ap.add_argument("--repo", default="reyerchu/AI_IC_design")
+    ap.add_argument("--repo", default="vibeic/vibe-ic")
     ap.add_argument("--token-file", default=None)
     ap.add_argument("--repo-root", default=None)
     ap.add_argument("--no-emit-fixture", action="store_true")
@@ -261,6 +261,28 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    # flow #485 — filing-side acceptance convention check (non-fatal):
+    # an issue whose '## 驗收' section carries NO fenced executable
+    # command leaves the deterministic acceptance-evidence gate unable
+    # to bite (named ACCEPTANCE_NARRATIVE_ONLY there). Warn at filing
+    # time so the author adds >=1 concrete command.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import acceptance_evidence_in_fix_comment_check as _acc
+        _sec = _acc.extract_acceptance_section(body)
+        if _sec is not None:
+            _cmds, _ = _acc.extract_commands(_sec)
+            if not _cmds:
+                print(
+                    "WARNING: ACCEPTANCE_NARRATIVE_ONLY — the issue's "
+                    "'## 驗收' section carries no fenced executable "
+                    "command; filing convention requires >=1 so the "
+                    "acceptance-evidence gate can bite (flow #485).",
+                    file=sys.stderr,
+                )
+    except Exception:  # noqa: BLE001 — advisory only, never blocks intake
+        pass
 
     print(f"PASS: issue #{args.issue_number} meets intake template.")
     print(f"  project          = {parsed['project']}")

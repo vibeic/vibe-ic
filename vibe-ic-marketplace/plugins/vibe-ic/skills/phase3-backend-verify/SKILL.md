@@ -29,15 +29,22 @@ without DRC=0 AND WNS≥0 AND all backing checks PASS.**
 ## Verification checklist
 
 1. **Synth quality**:
-   - Read `phase3/synth/synth.log` — count cells, area, gate types
-   - Detect inferred latches (FATAL — fix RTL)
-   - Detect implicit width truncation warnings
-   - Compare cell count to L8 typical_gate_count if defined
+   - Inferred-latch (FATAL) + implicit-width-truncation detection is **enforced by
+     `programs/synth_doctor.py`** (LATCH_INFERENCE + WIDTH_MISMATCH classifiers).
+     Run `python3 programs/synth_doctor.py phase3/synth/synth.log --json` and treat any
+     `LATCH_INFERENCE` finding as FATAL (fix RTL). Do NOT re-derive these by eye.
+   - AI residual only: read cells/area/gate-types and compare cell count to L8
+     typical_gate_count if defined (judgment, no fixed threshold in spec).
 
 2. **Floorplan / utilization**:
-   - Read `phase3/pnr/area.rpt` — confirm utilization between 50%-75%. <40% wastes silicon, >85% causes routing congestion
-   - Confirm core_area covers all macro instances + std cells
-   - Confirm IO ring + power straps not overlapping core
+   - Utilization band is **enforced by `programs/utilization_band_check.py`** (advisory
+     50-75% band; hard FAIL only on the universal impossible range — utilization ≤0 or
+     >100%). Run `python3 programs/utilization_band_check.py <project_dir> --json /tmp/util.json`.
+     The 40/50/75/85 numbers are a free-die rule-of-thumb, **advisory WARN only** — fixed-die /
+     harness-bounded designs legitimately sit well below 50% (corpus 13-85%), so do NOT treat
+     low utilization as a failure.
+   - AI residual only: confirm core_area covers all macro instances + std cells, and that the
+     IO ring + power straps are not overlapping the core (structural judgment).
 
 3. **STA — multi-corner**:
    - Read `phase3/reports/sta.rpt` — ALL slacks must be ≥0
@@ -57,9 +64,14 @@ without DRC=0 AND WNS≥0 AND all backing checks PASS.**
    - Device count mismatches indicate wrong macro picked
 
 6. **GDS sanity**:
-   - file size sane (~3-5 MB for ~1700 cell design)
-   - top cell name matches `--top-name` argument
-   - includes merged macro PA-GDS (file size jumps when macro merged)
+   - File existence / non-empty / valid GDSII header / minimum size is **enforced by
+     `programs/gds_size_check.py`** (`--gds-file phase3/final.gds [--min-size-kb N]`).
+   - Top-cell-name equality (top cell matches the `--top-name` argument) is **enforced by
+     `programs/gds_topcell_name_check.py`** (`--gds-file phase3/final.gds --top-name <top>` —
+     parses STRNAME/SNAME records, FAILs if the named cell is absent, WARNs if it is a
+     referenced sub-cell rather than the hierarchy root). Do NOT eyeball the cell name.
+   - AI residual only: sanity-check that the file size is consistent with a merged macro
+     PA-GDS (size jumps when a hard macro is merged) — judgment, no fixed threshold.
 
 7. **Power / EM / IR estimates**:
    - if available, read `phase3/reports/power.rpt`

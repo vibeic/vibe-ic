@@ -98,7 +98,7 @@ from gate_utils import read_text as _read
 # Trigger detection: is this a protocol-IP-class design?
 # ---------------------------------------------------------------------------
 
-# Tokens that, when present in any L1-L9 doc, suggest byte-level protocol IP.
+# Tokens that, when present in any L1-L23 doc, suggest byte-level protocol IP.
 # Patterns match against `text.lower()` so they are case-insensitive.
 _PROTOCOL_TOKEN_PATTERNS: tuple[str, ...] = (
     # inter-byte time / IBT in any spelling — IBT_MIN, ibt_us, ibt_ticks…
@@ -172,7 +172,7 @@ def _is_protocol_ip(project: Path) -> tuple[bool, list[str]]:
     """Return (is_protocol, evidence_strings)."""
     evidence: list[str] = []
 
-    # Walk L1-L9 doc-style files (L*.json, L*.md, generated_docs/L*.*).
+    # Walk L1-L23 doc-style files (L*.json, L*.md, generated_docs/L*.*).
     candidate_globs = (
         "phase1/generated_docs/L*.json",
         "phase1/generated_docs/L*.md",
@@ -311,7 +311,7 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
     summary["protocol_ip_evidence"] = evidence
     if not is_protocol:
         summary["skipped_reason"] = (
-            "L1-L9 docs do not declare any byte-level-protocol timing "
+            "L1-L23 docs do not declare any byte-level-protocol timing "
             "constants or opcode table — gate not applicable"
         )
         return findings, summary
@@ -381,7 +381,7 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
                 f"pulse output(s). Each pulse → consumer-module boundary "
                 f"is a missed-handshake risk if the consumer is not in "
                 f"the same cycle. Recommend fsm_topology=single_fsm — "
-                f"see vibe-ic-core/skills/spec-to-rtl/templates/"
+                f"see vibe-ic/skills/spec-to-rtl/templates/"
                 f"protocol_single_fsm.sv.j2 (BACKLOG-v11 P0.1)."
             ),
         ))
