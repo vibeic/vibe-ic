@@ -1574,6 +1574,13 @@ GK_REVIEW_BUDGET_S="${GATEKEEPER_REVIEW_BUDGET_S:-1800}"
 # Its own path, never `$GK_HYG_RECORD`: that one is the differential's baseline
 # and a second writer would silently replace what `hygiene_finding_delta` came
 # to read.
+#
+# `review()` would keep this record in a temporary directory of its own and
+# adjudicate `gate_red_since` from it in-process, so naming a path changes no
+# verdict. What it buys is the case where the record is worth the most: the
+# `gk_cleanup` trap runs on a normal exit and does NOT run on a SIGKILL, so a
+# landing killed part-way leaves this file behind for a human to read, while
+# the review's own tempdir would have gone with it.
 GK_REVIEW_RECORD="$LANE_DIR/gatekeeper-review-hygiene.json"
 run_gatekeeper_review() {
   local out rc

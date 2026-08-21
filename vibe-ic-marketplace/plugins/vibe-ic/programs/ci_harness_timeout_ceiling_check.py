@@ -381,7 +381,7 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "aa2b468d6d608921757e46e7038de6125d1ee3fdc9efaf6d3a1f390c42b4bff3"
+    "e9d42ab4bdb44d26db7aef8052b159f945fb82c0f455cb03f6c949b8cd1219bb"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
