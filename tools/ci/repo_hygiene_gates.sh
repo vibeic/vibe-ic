@@ -281,23 +281,28 @@ run_tolerating_uncheckable "PPA promotion feasibility (cross-layer campaign)" "$
 uncheckable_until 2027-02-28 "TWO MISSING ARTEFACTS, NAMED: (1) an \`objectives\` list [{key, metric, sense, scope}] — no contract, candidates document or any other file in this repository carries that key, measured; (2) a PUBLISHED frontier.json to be the thing under test. (1) alone is derivable from each trial's objective.json + summary.json, but deriving BOTH would have this gate recompute a frontier and check it against itself, which is a manufactured pass. PRODUCER: the search runner — ppa-crosslayer/tools/summarize.py already computes the ranking RESULT.md publishes as a Pareto set and emits it as prose and tables, never as a frontier.json. Making it write one, beside the objectives it is already optimising against, takes this gate live"
 run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pareto_check.py" --candidates "$ROOT/ppa-crosslayer/records/trials/z23/candidates.json"
 
-# MEASURED 2026-08-22 over the pair each campaign PUBLISHED as its headline:
-# cross-layer `b000` (shipped default) vs `z23` (the ECO-preserving winner), and
-# end-to-end `baseline` vs `t028` (the place-and-route-only winner). Both PASS.
-# The full sweep — b000 against all 20 other cross-layer trials and the e2e
-# baseline against all 60 trials, 80 pairs — is 80/80 PASS and is recorded in
-# ppa-gate-audit/RESULT.md; the two rows here are the two comparisons the
-# published claims actually rest on.
-uncheckable_until 2027-02-28 "PASSES today; rc 2 means one of the two contracts could not be read, and a comparison that was never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+# EVERY PUBLISHED PAIR, NOT THE HEADLINE PAIR. This row first re-aimed at the
+# one comparison each campaign quotes — cross-layer `b000` vs `z23`, end-to-end
+# `baseline` vs `t028`. That decided something, and it decided about TWO pairs
+# while EIGHTY sit committed here. A gate examining 2 of 80 available
+# comparisons is under-aimed by exactly the argument that re-aimed it: a
+# contract that drifts in trial 37 is a comparison nobody may quote, and nothing
+# would have said so. `--corpus` compares the campaign baseline against every
+# other contract in its tree.
+#
+# MEASURED 2026-08-22:
+#   cross-layer  b000     vs 20 trials  ->  20 comparable, rc 0
+#   end-to-end   baseline vs 60 trials  ->  60 comparable, rc 0
+uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
     --baseline "$ROOT/ppa-crosslayer/records/trials/b000/contract.json" \
-    --candidate "$ROOT/ppa-crosslayer/records/trials/z23/contract.json"
-uncheckable_until 2027-02-28 "PASSES today; rc 2 means one of the two contracts could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+    --corpus "$ROOT/ppa-crosslayer"
+uncheckable_until 2027-02-28 "PASSES today over 60 pairs; rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
     --baseline "$ROOT/ppa-e2e/records/baseline/contract.json" \
-    --candidate "$ROOT/ppa-e2e/records/trials/t028/contract.json"
+    --corpus "$ROOT/ppa-e2e"
 
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool

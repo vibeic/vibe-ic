@@ -63,6 +63,7 @@ from typing import Any, Dict, List, Mapping
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
+import _corpus_location as _corpus  # noqa: E402  one seam for every corpus
 from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import contract as C, identity as ident  # noqa: E402
 
@@ -210,10 +211,97 @@ def _short(digest: Any) -> str:
     return digest[:14] + "…" if len(digest) > 14 else digest
 
 
+#: --corpus, and why one pair was not enough (vibe-ic#1241, 2026-08-22).
+#:
+#: This gate was wired at a single EXACT pair under `benchmark-data/ppa/`, a
+#: directory that left this repository in v1.10.56, so it compared nothing. When
+#: it was re-aimed at the two pairs each campaign PUBLISHES as its headline it
+#: began deciding — and then decided about TWO pairs while EIGHTY sit committed
+#: in this tree (20 cross-layer trials against `b000`, 60 end-to-end trials
+#: against `baseline`). A gate that examines 2 of 80 available comparisons is
+#: under-aimed by exactly the argument that re-aimed it: a contract that drifts
+#: in trial 37 is a comparison nobody may quote, and nothing would say so.
+#:
+#: `--corpus DIR` compares `--baseline` against EVERY OTHER contract under DIR.
+#: The corpus is identified by DECLARATION and never by filename, the same rule
+#: the contract, candidates and head-to-head corpora use, and for the same
+#: measured reason: a name glob in this family missed 15 real records in this
+#: tree and refused two of a checker's own reports as if they were records.
+_CONTRACT_SCHEMA = C.CONTRACT_SCHEMA
+_NAME_GLOB = "**/*contract*.json"
+_SCANNED = "PPA contract pair(s)"
+_GATE = "PPA arms solved one problem"
+
+
+def corpus_candidates(corpus: Path, baseline: Path) -> List[Path]:
+    """Every contract under `corpus` that is not the baseline itself."""
+    named = {x for x in corpus.glob(_NAME_GLOB) if x.is_file()}
+    base = baseline.resolve()
+    out: List[Path] = []
+    for path in sorted(x for x in corpus.glob("**/*.json") if x.is_file()):
+        if path.resolve() == base:
+            continue
+        doc, reason = C.load_json(path)
+        if reason is not None:
+            # UNREADABLE IS NOT ABSENT. A file that claims by its NAME to be a
+            # contract and cannot be parsed stays in the population, so the
+            # pair it would have formed is reported rc 2 rather than dropped.
+            if path in named:
+                out.append(path)
+            continue
+        if isinstance(doc, dict) and doc.get("schema") == _CONTRACT_SCHEMA:
+            out.append(path)
+    return out
+
+
+def check_corpus(named: Path, baseline: str, require_differs: bool) -> int:
+    corpus, origin = _corpus.resolve(named, gate=_GATE, announce=True)
+    if not corpus.is_dir():
+        return _corpus.refuse(_GATE, named, corpus, origin, False, _SCANNED,
+                              opt_in_flag=None)  # this gate offers no opt-in
+    base = Path(baseline)
+    if not base.is_file():
+        print(f"[CANNOT CHECK] ppa_problem_integrity_check: baseline "
+              f"{baseline}: absent. No comparison was attempted.",
+              file=sys.stderr)
+        return 2
+    cands = corpus_candidates(corpus, base)
+    scanned = sum(1 for x in corpus.glob("**/*.json") if x.is_file())
+    print(f"ppa_problem_integrity_check --corpus {corpus}: {len(cands)} "
+          f"pair(s) against {base.name} in {scanned} JSON document(s) scanned")
+    if not cands:
+        print(f"[CANNOT CHECK] VACUOUS: {corpus} carries no contract to pair "
+              f"the baseline with, so no comparison was made. This is NOT a "
+              f"pass. rc=2.", file=sys.stderr)
+        return 2
+    rcs = [main(["--baseline", baseline, "--candidate", str(q)]
+                + (["--require-implementation-differs"] if require_differs
+                   else []))
+           for q in cands]
+    # A REFUSAL OUTRANKS AN UNDETERMINED OUTRANKS A PASS. `max()` would make 2
+    # the winning verdict, so one unreadable contract could promote a real
+    # refusal to "could not check" — adding a pair must never SUBTRACT one.
+    refused = sum(1 for rc in rcs if rc == 1)
+    undet = sum(1 for rc in rcs if rc == 2)
+    worst = 1 if refused else (2 if undet else 0)
+    print(f"ppa_problem_integrity_check --corpus {corpus}: {len(cands)} "
+          f"pair(s), {refused} refused, {undet} undetermined, "
+          f"{len(cands) - refused - undet} comparable -> rc={worst}")
+    if refused:
+        print(f"REFUSED: {refused} of {len(cands)} pair(s) were not solving "
+              f"the same problem, so those comparisons may not be quoted.",
+              file=sys.stderr)
+    return worst
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--baseline", required=True)
-    ap.add_argument("--candidate", required=True)
+    ap.add_argument("--candidate")
+    ap.add_argument("--corpus", metavar="DIR",
+                    help="compare --baseline against EVERY other document "
+                         f"declaring {_CONTRACT_SCHEMA} under DIR; exits 2 "
+                         "when the corpus is absent or carries none (#1241)")
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--require-implementation-differs", action="store_true",
                     help="promote an identical implementation from "
@@ -221,6 +309,13 @@ def main(argv=None) -> int:
     args, _rc = cli_exit.parse_or_refuse(ap, argv)
     if args is None:
         return _rc
+    if bool(args.corpus) == bool(args.candidate):
+        print("[CANNOT CHECK] ppa_problem_integrity_check: give exactly one "
+              "of --candidate or --corpus", file=sys.stderr)
+        return 2
+    if args.corpus:
+        return check_corpus(Path(args.corpus), args.baseline,
+                            args.require_implementation_differs)
 
     docs = {}
     for label, path in (("baseline", args.baseline), ("candidate", args.candidate)):
@@ -264,4 +359,22 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # §1: 3 is INTERNAL ERROR. Letting this propagate exits 1, which is
+        # reserved for a finding about the design — so a malformed contract
+        # that crashes the comparator would reach the roll-up as "these two
+        # runs were not solving the same problem", a verdict nothing reached.
+        #
+        # NEWLY REACHABLE (vibe-ic#1241). While this gate compared ONE pair of
+        # hand-named files a crash was a local accident. `--corpus` sweeps every
+        # contract in a campaign, so a single document whose `identities` are
+        # shaped wrong now decides the whole corpus row. `ppa_contract_check`
+        # has carried this guard from the start; this is the same one.
+        print(f"{cli_exit.MARK_REFUSE} ppa_problem_integrity_check: internal "
+              f"error {type(exc).__name__}: {exc}. Nothing was compared. rc=3 "
+              f"(NOT a finding about any contract).", file=sys.stderr)
+        raise SystemExit(cli_exit.RC_BAD_INVOCATION)

@@ -64,7 +64,7 @@ PPA_RECORD_CHECKERS = {
     "ppa_measurement_check.py": ("--coverage",),
     "ppa_feasibility_check.py": ("--candidates", "--corpus"),
     "ppa_pareto_check.py": ("--candidates", "--frontier"),
-    "ppa_problem_integrity_check.py": ("--baseline", "--candidate"),
+    "ppa_problem_integrity_check.py": ("--baseline", "--candidate", "--corpus"),
 }
 
 #: A path under here is the published corpus in the other repository. Finding
@@ -130,6 +130,12 @@ def _population(checker: str, flag: str, path: Path) -> int:
         return len(_load("_cc", checker).corpus_contracts(path))
     if checker == "ppa_feasibility_check.py":
         return len(_load("_fc", checker).corpus_candidate_sets(path))
+    if checker == "ppa_problem_integrity_check.py":
+        # A PAIR needs the baseline too, and the baseline is the OTHER flag on
+        # the same invocation — so the count here is of candidates available to
+        # pair with, which is what an empty corpus would make zero.
+        mod = _load("_pi", checker)
+        return len(mod.corpus_candidates(path, path / "__no_such_baseline__"))
     raise AssertionError(f"no population counter for {checker} --corpus")
 
 
