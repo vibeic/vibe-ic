@@ -96,6 +96,63 @@ _SCRIBE_PENDING_NOTE = (
 _SCRIBE_PENDING_FIELD = 'PENDING_FOUNDRY_scribe_line_layout'
 _WAIVER_RATIONALE = 'Foundry-handoff kit assembler not shipped.'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THE OPERATOR'S OWN REFUSAL, AND WHY THIS GATE HAS TO READ IT
+#
+# Step 37.5ic runs the shuttle operator's own container and writes its verdict
+# to `reports/phase3/shuttle_precheck.json`. It is the ONE judgement in this
+# flow that we do not write, and therefore the one that cannot be made to pass
+# by editing a file in this repository.
+#
+# Step 38 did not know it existed. The flow declares `blocks_on: [37]` for this
+# step — NOT 37.5ic — so a hand-off kit can be assembled, gated and reported
+# COMPLETE while the operator's own tool has already refused the layout it
+# describes. A kit whose central deliverable the counterparty has rejected is
+# not a deliverable, and a gate that says "all required artefacts present" over
+# that refusal is this repository's recurring shape once more: an empty or
+# negative result made indistinguishable from a clean one.
+#
+# BLOCKING, deliberately, and scoped so it cannot fire spuriously:
+#   * it fires ONLY when the precheck report EXISTS. No report -> the design is
+#     not on a declared shuttle path and nothing here fires. Absence is never
+#     read as a refusal, and never as an acceptance either.
+#   * NOT_DETERMINED blocks as well as FAIL. `tapeout_readiness_check` returns
+#     rc 1 for both, by its own docstring, "because a silence credited as a pass
+#     is the defect this gate exists for". Accepting NOT_DETERMINED here would
+#     re-open exactly that door one step downstream.
+#
+# The generator RECORDS the mode; this gate RE-DERIVES it from the same file on
+# disk and compares. A kit that mis-states its own mode is caught, because the
+# member is a generated artefact and the report is the evidence — checking the
+# artefact against the evidence rather than trusting the artefact is the whole
+# reason the generator and the checker are separate programs.
+# ─────────────────────────────────────────────────────────────────────────────
+_SHUTTLE_PRECHECK_REPORT = 'reports/phase3/shuttle_precheck.json'
+_MODE_SHUTTLE = 'shuttle'
+_MODE_UNDECLARED = 'undeclared'
+#: `tapeout_readiness_check` emits exactly three; only one of them is an accept.
+_PRECHECK_ACCEPTS = ('PASS',)
+
+
+def _read_shuttle_precheck(project):
+    """(exists, verdict, operator) read straight off 37.5ic's own report.
+
+    `verdict` is None when the file is present but unparseable — which is NOT
+    an accept: an unreadable verdict is reported as NOT_DETERMINED so that a
+    corrupt report cannot become a quiet pass."""
+    p = project / _SHUTTLE_PRECHECK_REPORT
+    if not p.is_file():
+        return False, None, None
+    try:
+        data = json.loads(p.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return True, "NOT_DETERMINED", None
+    if not isinstance(data, dict):
+        return True, "NOT_DETERMINED", None
+    return (True,
+            data.get("verdict") or "NOT_DETERMINED",
+            data.get("shuttle") or data.get("shuttle_id"))
+
 
 def _member_alternatives(entry):
     """Normalise a _REQUIRED_FILES entry to its tuple of accepted spellings."""
@@ -439,6 +496,8 @@ def main(argv=None):
     # generator's own legit output must pass its own gate.
     substance_findings = []
     pending_foundry_fields = []
+    handoff_open_items = []          # the OWNED open items, per member
+    declared_modes = set()           # what the kit says its mode is
     for hf in sorted(project.glob("phase3/stage4/foundry_handoff/**/*")):
         if not hf.is_file() or hf.stat().st_size == 0:
             continue
@@ -473,6 +532,71 @@ def main(argv=None):
                 for k in jd:
                     if str(k).startswith("PENDING_FOUNDRY_"):
                         pending_foundry_fields.append(f"{rel}:{k}")
+                # ───────────────────────────────────────────────────────────
+                # AN OPEN ITEM THAT NAMES NOBODY IS A SHRUG, NOT A DISCLOSURE.
+                #
+                # The nine PENDING_FOUNDRY_* fields were an undifferentiated
+                # pile: they shared a prefix, they shared a silence about who
+                # would close them, and three of them were not the foundry's at
+                # all. The prefix was doing the work of an answer.
+                #
+                # Each member the generator writes now carries an `open_items`
+                # list pairing every PENDING field with the party that closes
+                # it, the artefact that would close it, and whether the item
+                # exists in this hand-off mode at all. This rule is what stops
+                # that from decaying: a PENDING field with no owner named FAILs.
+                #
+                # SCOPE, so the corpus does not go red for history it cannot
+                # change: the rule applies only to members that declare
+                # `handoff_mode` — i.e. members this generation wrote. A kit
+                # from an older generator carries neither key and is untouched.
+                # Dropping `open_items` to escape the rule does not work: a
+                # member that declares `handoff_mode` and omits `open_items` is
+                # itself the finding.
+                # ───────────────────────────────────────────────────────────
+                if "handoff_mode" in jd:
+                    owned = {}
+                    items = jd.get("open_items")
+                    if not isinstance(items, list):
+                        substance_findings.append({
+                            "severity": "ERROR",
+                            "rule": "FOUNDRY_HANDOFF_UNOWNED_PENDING",
+                            "message": (
+                                f"{rel}: declares handoff_mode but carries no "
+                                f"open_items list — every PENDING_FOUNDRY_* "
+                                f"field must name the party that closes it."),
+                        })
+                        items = []
+                    for it in items:
+                        if isinstance(it, dict) and it.get("owner"):
+                            owned[str(it.get("field"))] = it["owner"]
+                    unowned = sorted(k for k in jd
+                                     if str(k).startswith("PENDING_FOUNDRY_")
+                                     and str(k) not in owned)
+                    if unowned:
+                        substance_findings.append({
+                            "severity": "ERROR",
+                            "rule": "FOUNDRY_HANDOFF_UNOWNED_PENDING",
+                            "message": (
+                                f"{rel}: {len(unowned)} PENDING_FOUNDRY_* "
+                                f"field(s) with no owner named in open_items: "
+                                f"{unowned}. An open item that does not say "
+                                f"who closes it is a shrug, not a "
+                                f"disclosure."),
+                        })
+                    for it in items:
+                        if isinstance(it, dict):
+                            handoff_open_items.append({
+                                "member": rel,
+                                "field": it.get("field"),
+                                "owner": it.get("owner"),
+                                "owner_name": it.get("owner_name"),
+                                "closed_by": it.get("closed_by"),
+                                "status": it.get("status"),
+                            })
+                    hm = jd.get("handoff_mode")
+                    if isinstance(hm, dict) and hm.get("mode"):
+                        declared_modes.add(str(hm["mode"]))
                 cc = jd.get("cell_count")
                 if isinstance(cc, (int, float)) and cc < 0:
                     substance_findings.append({
@@ -499,6 +623,46 @@ def main(argv=None):
     if scribe_satisfied_by_note:
         pending_foundry_fields.insert(
             0, f"{_SCRIBE_PENDING_NOTE}:{_SCRIBE_PENDING_FIELD}")
+
+    # THE OPERATOR'S REFUSAL. See the block comment at _SHUTTLE_PRECHECK_REPORT.
+    # Re-derived from the report on disk, never taken from the kit.
+    precheck_present, precheck_verdict, precheck_operator = \
+        _read_shuttle_precheck(project)
+    evidence_mode = _MODE_SHUTTLE if precheck_present else _MODE_UNDECLARED
+
+    if precheck_present and precheck_verdict not in _PRECHECK_ACCEPTS:
+        substance_findings.append({
+            "severity": "ERROR",
+            "rule": "FOUNDRY_HANDOFF_SHUTTLE_PRECHECK_REFUSED",
+            "message": (
+                f"the shuttle operator "
+                f"{precheck_operator or '(unnamed in the report)'} returned "
+                f"{precheck_verdict!r} in {_SHUTTLE_PRECHECK_REPORT} (step "
+                f"37.5ic). On the shuttle path the operator's own acceptance "
+                f"is part of this hand-off, and it is the one verdict in this "
+                f"flow we do not write. A kit assembled over a refusal — or "
+                f"over a NOT_DETERMINED, which `tapeout_readiness_check` "
+                f"treats as a non-pass for the same reason — is not a "
+                f"deliverable."),
+        })
+
+    # A KIT THAT MIS-STATES ITS OWN MODE. The generator records the mode it
+    # resolved; this gate resolved it independently from the same evidence. A
+    # disagreement means the kit and the run describe different situations, and
+    # the reader of the kit is the one who would be misled.
+    if declared_modes and evidence_mode not in declared_modes:
+        _basis = ("a shuttle precheck report is present" if precheck_present
+                  else "no shuttle precheck report is present")
+        substance_findings.append({
+            "severity": "ERROR",
+            "rule": "FOUNDRY_HANDOFF_MODE_MISDECLARED",
+            "message": (
+                f"kit members declare handoff_mode "
+                f"{sorted(declared_modes)} but the evidence on disk says "
+                f"{evidence_mode!r} ({_basis}). The mode decides who owns the "
+                f"scribe line, the reticle and the mask layer table, so a "
+                f"wrong one reassigns every open item in this kit."),
+        })
 
     waiver = _step_waived(project, args.step_label)
     if substance_findings and not waiver:
@@ -585,6 +749,17 @@ def main(argv=None):
         "waiver": waiver,
         "rationale_when_skipped": _WAIVER_RATIONALE,
         "pending_foundry_fields": pending_foundry_fields,  # #449 open items
+        # The same open items, DIFFERENTIATED: each one paired with the party
+        # that closes it and the artefact that would. `pending_foundry_fields`
+        # is kept unchanged beside it because `tapeout_checklist_gen` reads
+        # exactly that key, and a consumer contract is not something to break
+        # in passing.
+        "handoff_open_items": handoff_open_items,
+        "handoff_mode_declared": sorted(declared_modes),
+        "handoff_mode_from_evidence": evidence_mode,
+        "shuttle_precheck_present": precheck_present,
+        "shuttle_precheck_verdict": precheck_verdict,
+        "shuttle_operator": precheck_operator,
         "findings": findings,
     }
     if args.json:

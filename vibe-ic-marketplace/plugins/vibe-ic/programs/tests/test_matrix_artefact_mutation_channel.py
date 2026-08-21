@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
@@ -85,6 +86,13 @@ from typing import Dict, List, Tuple
 import pytest
 
 import matrix_mutation_ledger as L
+
+
+def _domain_progress(scope: str, completed: int, total: int) -> None:
+    plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(plugin, "domain_progress", None)
+    if callable(progress):
+        progress(scope, completed, total)
 from matrix_63x8 import flowref as F
 
 #: WHERE THE EVIDENCE WENT. Every entry in ``L.ARTEFACT_MUTATIONS`` names ONE
@@ -138,7 +146,36 @@ def replay_results() -> Dict[str, L.ReplayResult]:
     plan = [(m.name, m.witness) for m in L.ARTEFACT_MUTATIONS]
     return {r.mutation: r
             for r in L.replay_many(plan, jobs=8,
-                                   timeout=_ARTEFACT_REPLAY_TIMEOUT_S)}
+                                   timeout=_ARTEFACT_REPLAY_TIMEOUT_S,
+                                   progress_callback=lambda completed, total:
+                                   _domain_progress(
+                                       "matrix-artefact-replays",
+                                       completed, total))}
+
+
+def test_artefact_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
+    replay_results.cache_clear()
+    seen = []
+
+    def fake_many(plan, **kwargs):
+        frozen = tuple(plan)
+        callback = kwargs["progress_callback"]
+        for completed in range(1, len(frozen) + 1):
+            callback(completed, len(frozen))
+        return ()
+
+    monkeypatch.setattr(L, "replay_many", fake_many)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_domain_progress",
+        lambda scope, completed, total:
+        seen.append((scope, completed, total)))
+    assert replay_results() == {}
+    assert len(L.ARTEFACT_MUTATIONS) == 8
+    assert seen == [
+        ("matrix-artefact-replays", completed, 8)
+        for completed in range(1, 9)
+    ]
+    replay_results.cache_clear()
 
 
 # ══════════════════════════════════════════════════════════════════════

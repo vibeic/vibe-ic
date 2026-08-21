@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "package": "tools/phase1_engine",
+  "role": "The Phase-1 ingestion / gap-detection / render engine that turns natural language and documents into the L1-L27 layer JSON.",
+  "invariants": [
+    {
+      "id": "phase1engine.no-absolute-host-path",
+      "statement": "No module may hardcode an absolute /home/<user> path.",
+      "why": "This engine runs in the container, in CI, and on contributor machines. A path baked to one author's home directory works exactly where it was written and reports a confusing not-found everywhere else. Placeholder prose of the form /home/<your-user> is not a path and stays legal.",
+      "rule": {
+        "kind": "forbid_regex",
+        "include": ["*.py", "**/*.py"],
+        "regex": "/home/(?!<)"
+      },
+      "counterexample": {
+        "path": "retrieve.py",
+        "content": "CORPUS = \"/home/someuser/corpus\"\n"
+      }
+    },
+    {
+      "id": "phase1engine.modules-opt-into-postponed-annotations",
+      "statement": "Every module except the package marker begins by importing annotations from __future__.",
+      "why": "The engine annotates with builtin generics (list[str], dict[str, Any]) throughout. Without postponed evaluation those annotations are evaluated at import time, and the module that forgets the import fails at import on the oldest interpreter the plugin still supports rather than at the call that uses it.",
+      "rule": {
+        "kind": "require_regex",
+        "include": ["*.py"],
+        "exclude": ["__init__.py"],
+        "regex": "^from __future__ import annotations$",
+        "flags": ["MULTILINE"]
+      },
+      "counterexample": {
+        "path": "ingest.py",
+        "content": "import json\n\n\ndef load(paths: list[str]) -> dict[str, int]:\n    return {}\n"
+      }
+    }
+  ]
+}

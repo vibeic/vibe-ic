@@ -130,6 +130,7 @@ from pathlib import Path
 from typing import Dict, List, Set
 
 import _corpus_location as _corpus         # sibling program, one seam for all
+import _semantic_child_progress as _semantic_progress
 
 # `fields.get("name")` / `f.get("name")` — the shape every L-doc checker uses
 # to pull a structured value out of a layer document.
@@ -153,17 +154,51 @@ _CORPUS_SUBDIR = "ic"
 #: over a NAMED population or it is a silence.
 _SCANNED = "published L-doc(s)"
 
+PROGRESS_SCOPE = "issue1710:l-doc-field-producer"
+_ACTIVE_PROGRESS = None
+
+
+def _reader_files(programs: Path) -> List[Path]:
+    return sorted(programs.glob("*_check.py"))
+
+
+def _document_files(corpus: Path) -> List[Path]:
+    return sorted(corpus.rglob("L*_*.json"))
+
+
+def semantic_progress_units(programs: Path, corpus: Path) -> List[str]:
+    """Exact finite work manifest for a trusted parent invoking this gate."""
+    units: List[str] = []
+    for path in _reader_files(programs):
+        units.extend(_semantic_progress.file_progress_units(
+            path, f"reader:{path.relative_to(programs).as_posix()}"))
+    for path in _document_files(corpus):
+        units.extend(_semantic_progress.file_progress_units(
+            path, f"document:{path.relative_to(corpus).as_posix()}"))
+    return units
+
+
+def _checkpoint(unit: str) -> None:
+    if _ACTIVE_PROGRESS is not None:
+        _ACTIVE_PROGRESS.checkpoint(unit)
+
 
 def readers(programs: Path) -> Dict[str, int]:
     """{field: number of checker files that read it}."""
     out: Dict[str, int] = {}
-    for p in sorted(programs.glob("*_check.py")):
+    for p in _reader_files(programs):
+        identity = f"reader:{p.relative_to(programs).as_posix()}"
         try:
-            text = p.read_text(errors="replace")
+            text = _semantic_progress.read_text_chunks(
+                p, identity, _ACTIVE_PROGRESS)
         except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
             continue
         for name in set(_READ_RE.findall(text)):
             out[name] = out.get(name, 0) + 1
+        _checkpoint(_semantic_progress.file_judged_unit(p, identity))
     return out
 
 
@@ -172,24 +207,33 @@ def corpus_counts(corpus: Path, names: Set[str]):
     present: Dict[str, int] = {n: 0 for n in names}
     populated: Dict[str, int] = {n: 0 for n in names}
     docs = 0
-    for p in sorted(corpus.rglob("L*_*.json")):
+    for p in _document_files(corpus):
+        identity = f"document:{p.relative_to(corpus).as_posix()}"
         try:
-            data = json.loads(p.read_text(errors="replace"))
-        except (OSError, ValueError):
+            text = _semantic_progress.read_text_chunks(
+                p, identity, _ACTIVE_PROGRESS)
+        except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
             continue
-        if not isinstance(data, dict):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            _checkpoint(_semantic_progress.file_judged_unit(p, identity))
             continue
-        fields = data.get("fields")
-        if not isinstance(fields, dict):
-            continue
-        docs += 1
-        for n in names:
-            if n not in fields:
-                continue
-            present[n] += 1
-            v = fields[n]
-            if v not in (None, "", [], {}):
-                populated[n] += 1
+        if isinstance(data, dict):
+            fields = data.get("fields")
+            if isinstance(fields, dict):
+                docs += 1
+                for n in names:
+                    if n not in fields:
+                        continue
+                    present[n] += 1
+                    v = fields[n]
+                    if v not in (None, "", [], {}):
+                        populated[n] += 1
+        _checkpoint(_semantic_progress.file_judged_unit(p, identity))
     return docs, present, populated
 
 
@@ -361,5 +405,15 @@ def main(argv=None) -> int:
     return 0
 
 
+def _entrypoint() -> int:
+    global _ACTIVE_PROGRESS
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        _ACTIVE_PROGRESS = progress
+        try:
+            return main()
+        finally:
+            _ACTIVE_PROGRESS = None
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_entrypoint())

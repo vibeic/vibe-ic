@@ -392,8 +392,16 @@ def test_bubble_up_the_same_tree_committed_is_swept(tmp_path):
     (d / "planted_gate.json").write_text(json.dumps({"verdict": "FAIL"}))
     _commit(tmp_path)
     base = tmp_path / "baseline.json"
+    # `previous_*: null` is what `--write-baseline` records on a FIRST write:
+    # the register states that it moved from nothing. The keys being ABSENT is a
+    # different fact — a register no writer that records provenance ever touched
+    # — and the gate answers NOT DETERMINED to it (vibe-ic#1704). These fixtures
+    # are about where the corpus is found, so they declare the honest first-write
+    # form. Same in every hand-built register below.
     base.write_text(json.dumps({
         "findings_total": 0, "corpus_population": "benchmark-data/ic",
+        "previous_findings_total": None, "previous_runs_swept": None,
+        "previous_runs_with_reports": None,
         "runs_swept": 1, "runs_with_reports": 1,
         "per_run": {}, "withdrawn_unexamined": {}}))
     rc, out = _run(BUBBLE, "--corpus", _GONE, "--corpus-may-be-absent",
@@ -474,6 +482,8 @@ def test_bubble_up_still_fails_on_growth_in_a_supplied_corpus(bubble_clone,
     base = tmp_path / "baseline.json"
     base.write_text(json.dumps({
         "findings_total": 0, "corpus_population": "benchmark-data/ic",
+        "previous_findings_total": None, "previous_runs_swept": None,
+        "previous_runs_with_reports": None,
         "runs_swept": 1, "runs_with_reports": 1,
         "per_run": {}, "withdrawn_unexamined": {}}))
     rc, out = _run(BUBBLE, "--corpus", _GONE, "--corpus-may-be-absent",
@@ -491,6 +501,8 @@ def test_bubble_up_population_key_survives_the_move(bubble_clone, tmp_path):
     base = tmp_path / "baseline.json"
     base.write_text(json.dumps({
         "findings_total": 1, "corpus_population": "benchmark-data/ic",
+        "previous_findings_total": None, "previous_runs_swept": None,
+        "previous_runs_with_reports": None,
         "runs_swept": 1, "runs_with_reports": 1,
         "per_run": {"designA/v1_0_0_pdkX": 1}, "withdrawn_unexamined": {}}))
     rc, out = _run(BUBBLE, "--corpus", _GONE, "--corpus-may-be-absent",
@@ -624,6 +636,8 @@ def test_bubble_up_no_corpus_still_checks_the_registers_own_arithmetic(
     base = tmp_path / "baseline.json"
     base.write_text(json.dumps({
         "findings_total": 3, "corpus_population": "benchmark-data/ic",
+        "previous_findings_total": None, "previous_runs_swept": None,
+        "previous_runs_with_reports": None,
         "runs_swept": 1, "runs_with_reports": 1,
         "per_run": {"designA": 1, "designB": 2}, "withdrawn_unexamined": {}}))
     rc, out = _run(BUBBLE, "--corpus", _GONE, "--corpus-may-be-absent",
@@ -640,6 +654,8 @@ def test_bubble_up_no_corpus_fails_on_a_ceiling_raised_by_hand(tmp_path):
     base = tmp_path / "baseline.json"
     base.write_text(json.dumps({
         "findings_total": 300, "corpus_population": "benchmark-data/ic",
+        "previous_findings_total": None, "previous_runs_swept": None,
+        "previous_runs_with_reports": None,
         "runs_swept": 1, "runs_with_reports": 1,
         "per_run": {"designA": 1, "designB": 2}, "withdrawn_unexamined": {}}))
     rc, out = _run(BUBBLE, "--corpus", _GONE, "--corpus-may-be-absent",
@@ -659,6 +675,8 @@ def test_bubble_up_write_baseline_with_no_corpus_is_refused(tmp_path):
     base = tmp_path / "baseline.json"
     base.write_text(json.dumps({
         "findings_total": 3, "corpus_population": "benchmark-data/ic",
+        "previous_findings_total": None, "previous_runs_swept": None,
+        "previous_runs_with_reports": None,
         "runs_swept": 1, "runs_with_reports": 1,
         "per_run": {"designA": 3}, "withdrawn_unexamined": {}}))
     before = base.read_text()

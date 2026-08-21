@@ -113,9 +113,14 @@ from matrix_63x8.cells import DIMENSIONS, DIMENSION_NAMES
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = F.PLUGIN_ROOT
 
-#: The eight dimension modules, DISCOVERED not listed. A ninth appearing, or
-#: one going missing, changes this set and reddens the census below.
-DIMENSION_MODULE_GLOB = "test_matrix_d[1-8]_*.py"
+#: The dimension modules, DISCOVERED not listed. A tenth appearing, or one
+#: going missing, changes this set and reddens the census below.
+#:
+#: The range moved 1-8 -> 1-9 when dimension 9 (`verdict_consumed`) was added.
+#: It is a CHARACTER CLASS, not a count: `d10` would not match it, so the day a
+#: tenth dimension lands this glob must be widened deliberately rather than
+#: silently admitting a two-digit spelling.
+DIMENSION_MODULE_GLOB = "test_matrix_d[1-9]_*.py"
 
 #: A cell test's parametrize id is exactly ``step<flow step id>``. Anything with
 #: a suffix (dimension 8's ``step8-out0`` per-entry sweep) is a finer-grained
@@ -137,12 +142,19 @@ VALID_STATES = ("ENFORCED", "WAIVED", "NA")
 #:     census table in ``matrix_63x8/README.md`` must be regenerated in the same
 #:     change rather than left asserting a number that no longer reproduces.
 #:
-#: Seven dimensions are deliberately NOT here. The question is open for them and
+#: Dimension 9 joined on 2026-08-21: its L3 leg holds 68 of 69 steps' gates at a
+#: known tier with a `files_exist` stand-in and measures the consumption path
+#: rather than the step's own gate, so those cells are SUBSTITUTED. The one
+#: gate-less step (P0) is driven through its own structural umbrella and reads
+#: OWN. Declaring is what keeps that 68/1 split in the published table instead of
+#: dying inside a single "ENFORCED 69".
+#:
+#: The remaining dimensions are deliberately NOT here. The question is open for them and
 #: is not answerable from outside the module that built the predicate — see
 #: ``matrix_63x8/substitution.py``, "WHY UNDECLARED IS A STATE AND NOT A
 #: DEFAULT". Their cells are published as UNDECLARED, never folded into either
 #: answer.
-DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8,)
+DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8, 9)
 
 #: ``(steps, dimensions, cells)`` as MEASURED on 2026-07-27.
 #:
@@ -154,7 +166,25 @@ DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8,)
 #: the silent shape to refuse. A new step means eight new cells whose predicates
 #: nobody has looked at, so the count change must redden HERE, by name, and be
 #: acknowledged in the same commit that adds the step.
-GRID_AS_MEASURED: Tuple[int, int, int] = (63, 8, 504)
+#: MOVED BY HAND 2026-08-21, (67, 8, 536) -> (69, 9, 621). The derivation, so a
+#: reviewer can re-run it rather than trust it:
+#:
+#:   * DIMENSIONS 8 -> 9: `verdict_consumed` added
+#:     (`programs/tests/test_matrix_d9_verdict_consumed.py`).
+#:   * STEPS: the pin said 67 while `STEP_IDS_AS_MEASURED` beside it listed 68
+#:     ids — the pair is meant to move together and had been moved half-way, so
+#:     the count was already wrong before this change. Measured live:
+#:       `python3 -c "from matrix_63x8 import flowref as F; print(len(F.step_ids()))"`
+#:       -> 69, ids delta against the old list: +'0.5ic', +'1.6x', -'37.5self'
+#:     (68 + 2 - 1 = 69). '1.6x' landed in v1.11.15, '37.5self' was retired in
+#:     v1.11.18; '0.5ic' predates both.
+#:   * CELLS: 69 * 9 = 621, recomputed here and by `expected_cells()`.
+#:
+#: This number is DELIBERATELY not derived from the yaml. Deriving a tripwire
+#: from the same source the assertion reads makes the assertion tautological —
+#: see `matrix_63x8/README.md`. It is moved by hand, once, with the measurement
+#: above recorded beside it.
+GRID_AS_MEASURED: Tuple[int, int, int] = (69, 9, 621)
 
 #: The flow's step ids, in declaration order, as measured 2026-07-28. Pinned
 #: alongside the count so a rename or an add-plus-remove — which leaves the
@@ -172,12 +202,19 @@ GRID_AS_MEASURED: Tuple[int, int, int] = (63, 8, 504)
 #: Both are verified by `test_matrix_d5_deps_correct.py`'s D5-FORWARD-EDGE and
 #: D5-MISSING-EDGE clauses, and the graph is still acyclic (D5-CYCLE, plus
 #: `test_d5_runtime_ordering_guard_loads_the_same_edges`).
+#: `37.5self` (General Precheck) joined after 37.5ic and before 38: the chip
+#: path with NO operator. 37.5ic's condition wants the shuttle's slot template
+#: and 37.5ip is the IP/hardmacro terminal, so a design taping ITSELF out
+#: matched neither and reached tape-out having passed no submission check.
+#: Declared where it runs — after step 37 writes the chip GDS, beside the two
+#: routes it is mutually exclusive with.
 STEP_IDS_AS_MEASURED: Tuple[str, ...] = (
-    'D1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', 'FS1',
-    'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8',
-    'A9', '14', '15', '16', '17', '18', '19', '20', '21', '22', 'DT2',
-    'DT3', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32',
-    '33', '34', '35', '36', '37', '38', '39', 'M1', 'M2', 'M3', 'M4',
+    'D1', '0.5ic', '1', '1.6x', '2', '3', '4', '5', '6', '7', '8', '9',
+    '10', '11', 'FS1', 'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5',
+    'A6', 'A7', 'A8', 'A9', '14', '15', '15.5ic', '16', '17', '18',
+    '19', '20', '21', '22', 'DT2', 'DT3', '23', '24', '25', '26',
+    '26.5ic', '27', '28', '29', '30', '31', '32', '33', '34', '35',
+    '36', '37', '37.5ip', '37.5ic', '38', '39', 'M1', 'M2', 'M3', 'M4',
     '40', '41', '42', '43', '44', 'P0',
 )
 
@@ -187,10 +224,12 @@ _COLLECTOR_PLUGIN = '''
 import json
 import os
 
+_ROWS = []
 
-def pytest_collection_modifyitems(session, config, items):
+def pytest_collection_finish(session):
+    global _ROWS
     rows = []
-    for it in items:
+    for it in session.items:
         name = it.name
         param = name.split("[", 1)[1][:-1] if "[" in name else None
         marks = []
@@ -207,9 +246,24 @@ def pytest_collection_modifyitems(session, config, items):
             "param": param,
             "marks": marks,
         })
+    _ROWS = rows
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if int(exitstatus) != 0:
+        return
     out = os.environ["MATRIX_CELL_COLLECT_OUT"]
-    with open(out, "w", encoding="utf-8") as fh:
-        json.dump(rows, fh)
+    temporary = out + ".tmp." + str(os.getpid())
+    with open(temporary, "w", encoding="utf-8") as fh:
+        json.dump({
+            "schema": 1,
+            "complete": True,
+            "selected_items": len(session.items),
+            "rows": _ROWS,
+        }, fh, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(temporary, out)
 '''
 
 #: The OUTCOME collector. Same discipline as the plugin above and for the same
@@ -283,42 +337,258 @@ def dimension_modules() -> Dict[int, object]:
 # ══════════════════════════════════════════════════════════════════════
 # Live collection through pytest's own machinery
 # ══════════════════════════════════════════════════════════════════════
-@lru_cache(maxsize=1)
-def collect_items() -> Tuple[Dict, ...]:
-    """Every item pytest really collects from the eight dimension modules."""
-    paths = dimension_module_paths()
-    assert paths, f"no dimension module matched {DIMENSION_MODULE_GLOB!r}"
+_COLLECTION_PROGRESS_STALL_S = 60
+_COLLECTION_PROGRESS_POLL_S = 0.1
+_collection_invocation = 0
+
+
+def _collect_items_from_paths(paths: Tuple[Path, ...],
+                              cwd: Path) -> Tuple[Dict, ...]:
+    """Collect paths through the nonce/FSM supervisor and complete manifest."""
+    global _collection_invocation
+    assert paths, "the collection question has an empty path selection"
+    _collection_invocation += 1
+    progress_scope = f"matrix-live-collection-{_collection_invocation}"
     scratch = Path(tempfile.mkdtemp(prefix="matrix_cov_collect_"))
     try:
         plugin = scratch / "matrix_cell_collector.py"
         plugin.write_text(_COLLECTOR_PLUGIN, encoding="utf-8")
         out = scratch / "collected.json"
+        meta = scratch / "collect-supervisor.json"
+        spec = scratch / "collect-spec.json"
+        relay = scratch / "semantic-progress.relay"
+        relay.touch(mode=0o600)
         env = dict(os.environ)
         env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["MATRIX_CELL_COLLECT_OUT"] = str(out)
         env["PYTHONPATH"] = os.pathsep.join(
             [str(scratch)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", *[str(p) for p in paths],
-             "--collect-only", "-q", "-p", "no:randomly",
-             "-p", "matrix_cell_collector"],
-            cwd=str(PLUGIN_ROOT), capture_output=True, text=True, timeout=60,
-            env=env,
-        )
+        spec.write_text(json.dumps({
+            "schema": 1,
+            "test_files": [str(path) for path in paths],
+            "meta": str(meta),
+            "stall_after": _COLLECTION_PROGRESS_STALL_S,
+            "poll_s": min(
+                _COLLECTION_PROGRESS_POLL_S,
+                _COLLECTION_PROGRESS_STALL_S / 4),
+            "cwd": str(cwd),
+            "progress_relay": str(relay),
+            "pytest_argv": [
+                sys.executable, "-m", "pytest", "-q", "--tb=no",
+                "-p", "no:randomly", "-p", "no:cacheprovider",
+                "-p", "matrix_cell_collector",
+                "--basetemp", str(scratch / "pytest_tmp"),
+            ],
+        }, sort_keys=True) + "\n", encoding="utf-8")
+        driver = TESTS_DIR.parent / "pytest_per_file_junit.py"
+        log = scratch / "collect-supervisor.log"
+        relay_offset = 0
+        relay_tail = b""
+        last_score = 0
+        relay_error = ""
+
+        def publish_relay(*, final: bool = False) -> None:
+            nonlocal relay_offset, relay_tail, last_score, relay_error
+            if relay_error:
+                return
+            try:
+                size = relay.stat().st_size
+                if size < relay_offset:
+                    relay_error = "relay truncated"
+                    return
+                with relay.open("rb") as relay_file:
+                    relay_file.seek(relay_offset)
+                    chunk = relay_file.read()
+            except OSError as exc:
+                relay_error = f"relay unreadable: {exc}"
+                return
+            relay_offset += len(chunk)
+            records = (relay_tail + chunk).split(b"\n")
+            relay_tail = records.pop()
+            for payload in records:
+                if not payload:
+                    relay_error = "empty relay score"
+                    return
+                try:
+                    score = int(payload.decode("ascii"))
+                except (UnicodeDecodeError, ValueError):
+                    relay_error = f"malformed relay score {payload!r}"
+                    return
+                if not last_score < score <= _NESTED_PROGRESS_RELAY_TOTAL:
+                    relay_error = (
+                        f"non-monotonic relay {last_score} -> {score}")
+                    return
+                last_score = score
+                _domain_progress(
+                    progress_scope, score, _NESTED_PROGRESS_RELAY_TOTAL)
+            if final and relay_tail:
+                relay_error = "truncated final relay score"
+
+        with log.open("w+", encoding="utf-8") as log_file:
+            proc = subprocess.Popen(
+                [sys.executable, str(driver), "--_collect-worker-spec",
+                 str(spec)],
+                cwd=str(cwd), stdout=log_file, stderr=subprocess.STDOUT,
+                text=True, env=env)
+            while proc.poll() is None:
+                publish_relay()
+                time.sleep(0.1)
+            publish_relay(final=True)
+            log_file.flush()
+            log_file.seek(0)
+            diagnostic = log_file.read()
+        assert not relay_error, (
+            f"collection semantic relay is invalid: {relay_error}\n"
+            f"{diagnostic[-5000:]}")
+        try:
+            worker = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AssertionError(
+                "collection supervisor published no usable terminal metadata "
+                f"(worker rc={proc.returncode}): {exc}\n"
+                f"{diagnostic[-5000:]}") from exc
+        assert (isinstance(worker, dict)
+                and set(worker) == {
+                    "schema", "complete", "pytest_rc",
+                    "semantic_record_complete", "norecord_reason",
+                }
+                and worker.get("schema") == 1
+                and worker.get("complete") is True
+                and isinstance(worker.get("semantic_record_complete"), bool)
+                and isinstance(worker.get("norecord_reason"), str)), (
+            f"collection supervisor metadata has the wrong shape: {worker!r}")
+        assert proc.returncode == 0 and worker["pytest_rc"] == 0 \
+            and worker["semantic_record_complete"], (
+                "pytest collection produced no complete nonce-bound lifecycle "
+                f"record (worker rc={proc.returncode}, pytest "
+                f"rc={worker['pytest_rc']}): "
+                f"{worker['norecord_reason']}\n{diagnostic[-5000:]}")
         assert out.is_file(), (
-            f"pytest collection produced no manifest (rc={proc.returncode}).\n"
+            f"pytest collection produced no complete manifest (worker "
+            f"rc={proc.returncode}).\n"
             f"A dimension module that fails to IMPORT contributes zero cells "
             f"and would otherwise look like a tidy green.\n"
-            f"stdout tail:\n{proc.stdout[-3000:]}\n"
-            f"stderr tail:\n{proc.stderr[-2000:]}"
+            f"diagnostic tail:\n{diagnostic[-5000:]}"
         )
-        assert proc.returncode == 0, (
-            f"collection exited {proc.returncode}; a collection ERROR silently "
-            f"removes every cell in the failing module.\n{proc.stdout[-3000:]}"
-        )
-        return tuple(json.loads(out.read_text(encoding="utf-8")))
+        try:
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AssertionError(
+                f"collection manifest is unreadable/truncated: {exc}") from exc
+        assert (isinstance(manifest, dict)
+                and set(manifest) == {
+                    "schema", "complete", "selected_items", "rows"}
+                and manifest.get("schema") == 1
+                and manifest.get("complete") is True
+                and isinstance(manifest.get("selected_items"), int)
+                and isinstance(manifest.get("rows"), list)
+                and manifest["selected_items"] == len(manifest["rows"])), (
+            f"collection manifest has no exact completion/count proof: "
+            f"{manifest!r}")
+        assert manifest["rows"], (
+            "pytest collected zero items; an empty live census is not proof "
+            "that every matrix cell exists")
+        # This checkpoint is emitted only after the nonce-bound nested pytest
+        # lifecycle and its complete row/count manifest both validated.  The
+        # BASE-owned outer schedule permits it only for the exact census item;
+        # stdout, CPU use, and partial collection cannot renew that lease.
+        _domain_progress("matrix-collection-runs", 1, 1)
+        return tuple(manifest["rows"])
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+@lru_cache(maxsize=1)
+def collect_items() -> Tuple[Dict, ...]:
+    """Every item pytest really collects from the eight dimension modules."""
+    paths = dimension_module_paths()
+    assert paths, f"no dimension module matched {DIMENSION_MODULE_GLOB!r}"
+    return _collect_items_from_paths(paths, PLUGIN_ROOT)
+
+
+def test_live_collection_relays_finite_semantic_progress_past_old_bound(
+        monkeypatch, tmp_path):
+    """Several completed collections may outlive a former total deadline."""
+    old_fixed_bound = 0.3
+    seen = []
+    # RECORD AND FORWARD, never replace. This test's subject is that a live
+    # collection RELAYS finite semantic progress; a spy that swallows the call
+    # makes the collection silent, which is the opposite of its subject. It
+    # matters outside this file: the enclosing driver test
+    # `test_pytest_per_file_junit.py::
+    #  test_nested_collect_progress_is_relayed_to_the_outer_session`
+    # runs THIS node under a 0.8 s forward-progress lease, and with the emitter
+    # swallowed the seven 0.14 s collections relayed nothing at all, so the
+    # outer session killed a perfectly healthy child as hung --
+    # `WATCHDOG_STALLED … PROGRESS_PROTOCOL_INCOMPLETE: terminal event missing
+    # (stage=running)`. Instrumentation that removes the behaviour it measures
+    # can only ever certify itself.
+    _forward = _domain_progress
+
+    def _record_and_forward(scope, completed, total):
+        seen.append((scope, completed, total))
+        _forward(scope, completed, total)
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_domain_progress", _record_and_forward)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S",
+        old_fixed_bound)
+    paths = []
+    for index in range(7):
+        path = tmp_path / f"test_collect_progress_{index}.py"
+        path.write_text(
+            "import time\ntime.sleep(.14)\n\n"
+            f"def test_{index}(): assert True\n", encoding="utf-8")
+        paths.append(path)
+
+    started = time.monotonic()
+    rows = _collect_items_from_paths(tuple(paths), tmp_path)
+    elapsed = time.monotonic() - started
+
+    assert elapsed > 0.8, elapsed
+    assert {row["file"] for row in rows} == {path.name for path in paths}
+    assert seen[-1] == ("matrix-collection-runs", 1, 1)
+    assert seen.count(("matrix-collection-runs", 1, 1)) == 1
+
+
+def test_live_collection_chatty_import_without_events_fails_closed(
+        monkeypatch, tmp_path):
+    """Collection stdout cannot impersonate a nonce-bound FSM transition."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S", 0.25)
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-s")
+    path = tmp_path / "test_chatty_collect.py"
+    path.write_text(
+        "import time\n"
+        "deadline=time.monotonic()+3\n"
+        "while time.monotonic() < deadline:\n"
+        "    print('COLLECT_CHATTER', flush=True)\n"
+        "    time.sleep(.02)\n"
+        "def test_never(): assert True\n", encoding="utf-8")
+
+    started = time.monotonic()
+    with pytest.raises(AssertionError) as caught:
+        _collect_items_from_paths((path,), tmp_path)
+    elapsed = time.monotonic() - started
+    message = str(caught.value)
+    assert elapsed < 3, elapsed
+    assert "WATCHDOG_STALLED:" in message
+    assert "COLLECT_CHATTER" in message
+
+
+def test_live_collection_refuses_missing_complete_manifest(
+        monkeypatch, tmp_path):
+    """A complete lifecycle cannot substitute for the collector's record."""
+    path = tmp_path / "test_green_collect.py"
+    path.write_text("def test_green(): assert True\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sys.modules[__name__], "_COLLECTOR_PLUGIN",
+        "def pytest_collection_modifyitems(session, config, items): pass\n")
+
+    with pytest.raises(AssertionError, match="no complete manifest"):
+        _collect_items_from_paths((path,), tmp_path)
 
 
 @lru_cache(maxsize=1)
@@ -422,10 +692,10 @@ def test_the_grid_size_is_computed_from_the_live_flow_yaml():
         f"the flow yaml declares duplicate step ids: "
         f"{[s for s in steps if [F.normalize_id(x) for x in steps].count(F.normalize_id(s)) > 1]}"
     )
-    assert len(DIMENSIONS) == 8, f"DIMENSIONS is {DIMENSIONS!r}, expected 8"
-    assert sorted(DIMENSIONS) == list(range(1, 9))
+    assert len(DIMENSIONS) == 9, f"DIMENSIONS is {DIMENSIONS!r}, expected 9"
+    assert sorted(DIMENSIONS) == list(range(1, 10))
     expected = len(steps) * len(DIMENSIONS)
-    assert expected == len(steps) * 8
+    assert expected == len(steps) * 9
     # And the value is the one every other test in this file uses.
     assert expected_cells() == expected
 
@@ -465,13 +735,13 @@ def expected_cells() -> int:
     return len(F.step_ids()) * len(DIMENSIONS)
 
 
-def test_eight_dimension_modules_own_the_eight_dimensions():
+def test_every_dimension_module_owns_exactly_one_dimension():
     """One module per dimension, no gaps, no two modules owning one dimension."""
     mods = dimension_modules()
-    assert sorted(mods) == list(range(1, 9)), (
+    assert sorted(mods) == list(range(1, 10)), (
         f"dimension modules found: "
         f"{ {d: Path(m.__file__).name for d, m in mods.items()} }; "
-        f"dimensions with no module: {sorted(set(range(1, 9)) - set(mods))}. "
+        f"dimensions with no module: {sorted(set(range(1, 10)) - set(mods))}. "
         f"A dimension with no module contributes 63 UNCOVERED cells."
     )
     for dim, mod in mods.items():
@@ -650,7 +920,7 @@ def test_a_substituted_cell_is_never_counted_as_enforcing_its_own_mechanism():
 
 
 def test_every_cell_resolves_to_exactly_one_state():
-    """ENFORCED + WAIVED + NA == 504, decided by the module that owns the cell."""
+    """ENFORCED + WAIVED + NA == 536, decided by the module that owns the cell."""
     census = state_census()
     assert len(census) == expected_cells()
     counts = {s: sum(1 for v in census.values() if v == s) for s in VALID_STATES}
