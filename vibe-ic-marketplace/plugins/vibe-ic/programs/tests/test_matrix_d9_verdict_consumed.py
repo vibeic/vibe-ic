@@ -644,38 +644,173 @@ def test_d9_structural_only_scoping_is_still_the_documented_two_member_set():
         f"them in. Either is a flow-policy change and must be stated.")
 
 
-def test_d9_every_one_shot_runner_reads_the_checkers_returncode():
-    """KNOWN GAP 3's partial cover: the runners must READ the checker's rc.
+#: How each runner that really invokes the checker CONSUMES its verdict, as
+#: MEASURED 2026-08-21. Pinned in both directions: a runner that stops consuming
+#: reddens, and a runner that starts invoking the checker reddens until someone
+#: says which channel it uses.
+#:
+#:   RETURNCODE  the exit code is bound and read. `design_one_shot_runner`
+#:               does `rc, out, err = _run(...)` and maps rc onto a StepResult.
+#:   REPORT      the exit code is DISCARDED and the verdict is taken from the
+#:               json the checker writes. `phase3_one_shot_runner` calls
+#:               `_sp_fc.run(..., check=False)` without binding the result, in a
+#:               `try/except Exception: pass`, and then reads the refreshed
+#:               `phase23_completion_audit.json` in `_derive_headline_verdict`.
+#:
+#: REPORT is a real channel and is not scored as a defect — but it is WEAKER
+#: than RETURNCODE in a way this dimension exists to name, and the weakness is
+#: recorded here rather than in a commit message nobody re-reads. `check=False`
+#: plus a bare `except Exception: pass` means a checker that CRASHES or is KILLED
+#: leaves the previous run's `phase23_completion_audit.json` in place, and
+#: `_derive_headline_verdict` has an absent/unreadable branch but no STALE
+#: branch — so a stale verdict is read as a fresh one. The call site's own
+#: comment claims the refresh is what stops the headline "lagging its own
+#: sign-off"; on the crash path it lags exactly, and silently. Reported, not
+#: fixed here: changing a runner's verdict plumbing is a flow-level change and
+#: belongs in a change that carries its own acceptance evidence.
+RUNNER_CONSUMPTION_AS_MEASURED = {
+    "design_one_shot_runner.py": "RETURNCODE",
+    "phase3_one_shot_runner.py": "REPORT",
+}
 
-    AST, not grep — this tree dispatches dynamically and PR #460 is the standing
-    lesson. What is proved is that each runner that invokes
-    ``flow_compliance_check`` binds or tests the result of that invocation. What
-    is NOT proved is that the branch taken on it aborts; that needs a live
-    runner run per runner and is stated as open in KNOWN GAP 3.
+#: The exact string constant a runner builds the checker's argv from. Matched by
+#: EQUALITY, not containment: five runners mention `flow_compliance_check` only
+#: in prose, and an earlier version of this test read the raw file text and
+#: counted those docstrings as call sites — it passed on three runners that never
+#: invoke the checker at all. That is the PR #460 trap, reproduced inside the
+#: module written to warn about it, and it is why this walks the AST.
+_CHECKER_ARGV_CONSTANT = "flow_compliance_check.py"
+
+
+def _runner_invocations() -> Dict[str, ast.FunctionDef]:
+    """``{runner filename: the function that builds the checker's argv}``.
+
+    Docstrings are excluded by construction: only a string constant EQUAL to
+    `_CHECKER_ARGV_CONSTANT` counts, and a docstring is never that.
     """
-    runners = sorted(PROGRAMS_DIR.glob("*_one_shot_runner.py"))
-    assert runners, "no *_one_shot_runner.py found; this test measures nothing"
-    checked: List[str] = []
-    unchecked: List[str] = []
-    for path in runners:
+    out: Dict[str, ast.FunctionDef] = {}
+    for path in sorted(PROGRAMS_DIR.glob("*_one_shot_runner.py")):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:  # pragma: no cover - defensive
             continue
-        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-        attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-        mentions = "flow_compliance_check" in path.read_text(encoding="utf-8")
-        if not mentions:
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Constant)
+                        and sub.value == _CHECKER_ARGV_CONSTANT):
+                    out[path.name] = node
+                    break
+            if path.name in out:
+                break
+    return out
+
+
+#: Call names that launch a subprocess. `_run` is this tree's own thin wrapper.
+_SUBPROCESS_CALLS = ("run", "call", "Popen", "check_output", "check_call", "_run")
+
+
+def _consumption_channel(fn: ast.FunctionDef) -> str:
+    """RETURNCODE when the exit code is bound and read; REPORT when discarded.
+
+    SCOPED TO THE CALL, not to the function. An earlier version asked whether
+    `.returncode` appeared anywhere in the enclosing function and graded
+    `phase3_one_shot_runner` RETURNCODE on a `.returncode` belonging to a
+    DIFFERENT subprocess in the same 200-line function. Measuring an adjacent
+    call and reporting it as this one is the disease in `README.md`'s "one
+    rule", and it got into this module twice before the scan was tight enough.
+    """
+    parent: Dict[int, ast.AST] = {}
+    for node in ast.walk(fn):
+        for child in ast.iter_child_nodes(node):
+            parent[id(child)] = node
+
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call):
             continue
-        if "returncode" in attrs or "check_call" in names or "check_output" in names:
-            checked.append(path.name)
-        else:
-            unchecked.append(path.name)
-    assert not unchecked, (
-        f"{len(unchecked)} runner(s) invoke flow_compliance_check without ever "
-        f"reading a return code: {unchecked}. A gate whose verdict no caller "
-        f"reads is advisory in practice, which is this dimension's whole "
-        f"subject. (Runners that do read it: {checked})")
+        func = node.func
+        name = (func.attr if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name) else None)
+        if name not in _SUBPROCESS_CALLS:
+            continue
+        argv_names_the_checker = any(
+            isinstance(sub, ast.Constant) and sub.value == _CHECKER_ARGV_CONSTANT
+            for arg in node.args for sub in ast.walk(arg))
+        if not argv_names_the_checker:
+            continue
+        # The call launches the checker. Is its RESULT kept?
+        if isinstance(parent.get(id(node)), ast.Expr):
+            # A bare expression statement: the CompletedProcess is dropped on
+            # the floor. With `check=False` that discards the exit code too.
+            return "REPORT"
+        return "RETURNCODE"
+
+    # The checker's path is built here but launched through a helper. Fall back
+    # to whether this function binds an exit code at all.
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Attribute) and sub.attr == "returncode":
+            return "RETURNCODE"
+        if isinstance(sub, ast.Assign):
+            for tgt in sub.targets:
+                names = ([e.id for e in tgt.elts if isinstance(e, ast.Name)]
+                         if isinstance(tgt, ast.Tuple) else
+                         [tgt.id] if isinstance(tgt, ast.Name) else [])
+                if any(n in ("rc", "returncode", "exit_code") for n in names):
+                    return "RETURNCODE"
+    return "REPORT"
+
+
+def test_d9_every_runner_that_invokes_the_checker_consumes_its_verdict():
+    """KNOWN GAP 3's partial cover — and it is PARTIAL, stated precisely.
+
+    What this proves: every runner that really builds the checker's argv
+    consumes the result through the channel recorded for it, and no runner
+    invokes it through a channel nobody has classified.
+
+    What it does NOT prove: that the branch taken on a non-zero verdict aborts
+    anything. That needs a live runner invocation per runner — a phase-scale
+    job — and is open.
+    """
+    found = _runner_invocations()
+    assert found, (
+        f"no *_one_shot_runner.py builds an argv from {_CHECKER_ARGV_CONSTANT!r}; "
+        f"either the runners stopped invoking the checker or this scan broke, "
+        f"and in both cases the test below would pass vacuously")
+
+    measured = {name: _consumption_channel(fn) for name, fn in found.items()}
+    assert measured == RUNNER_CONSUMPTION_AS_MEASURED, (
+        f"the runners' verdict-consumption changed.\n"
+        f"  measured: {measured}\n"
+        f"  pinned  : {RUNNER_CONSUMPTION_AS_MEASURED}\n"
+        f"Newly invoking: "
+        f"{sorted(set(measured) - set(RUNNER_CONSUMPTION_AS_MEASURED))}; "
+        f"stopped invoking: "
+        f"{sorted(set(RUNNER_CONSUMPTION_AS_MEASURED) - set(measured))}; "
+        f"changed channel: "
+        f"{ {k: (RUNNER_CONSUMPTION_AS_MEASURED.get(k), v) for k, v in measured.items() if RUNNER_CONSUMPTION_AS_MEASURED.get(k) not in (None, v)} }.\n"
+        f"A runner moving RETURNCODE -> REPORT is this dimension's subject at "
+        f"the flow's outer edge and must be a decision, not a diff nobody read.")
+
+
+def test_d9_the_invocation_scan_ignores_prose(tmp_path):
+    """The scan must not count a docstring mention as a call site.
+
+    This is the exact defect the first version of this test shipped with, so it
+    is pinned rather than trusted: five runners name `flow_compliance_check` in
+    prose only, and a text scan graded three of them as consumers.
+    """
+    prose_only = [p.name for p in sorted(PROGRAMS_DIR.glob("*_one_shot_runner.py"))
+                  if "flow_compliance_check" in p.read_text(encoding="utf-8")
+                  and p.name not in _runner_invocations()]
+    assert prose_only, (
+        "no runner mentions flow_compliance_check in prose without invoking it; "
+        "this guard has nothing to discriminate and cannot detect a regression "
+        "to text scanning")
+    for name in prose_only:
+        assert name not in RUNNER_CONSUMPTION_AS_MEASURED, (
+            f"{name} names the checker only in prose, yet is recorded as a "
+            f"consumer of its verdict")
 
 
 def test_d9_every_cell_lands_in_exactly_one_state():
