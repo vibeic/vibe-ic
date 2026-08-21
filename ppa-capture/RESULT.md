@@ -1632,6 +1632,18 @@ The practical consequence, stated because it will surprise someone: **re-emittin
 dirties three files in `git status`** without changing a word of content. The
 committed timestamps are the record of when this batch was emitted; a re-run
 should be reverted rather than committed.
+
+**And adding this very section broke the build.** Writing it introduced a
+twenty-second heading without updating the contents map, and check 32 failed
+exactly as intended — the map is a second copy of the section list, and I had
+edited one copy. I compounded it by running the verifier *after* the commit in
+the same command chain, so a failing state reached the branch for one commit.
+
+Both are recorded rather than tidied away. **Verify before you push, not beside
+it**: a check whose result arrives after the push is a check that did not run in
+time. And a map maintained by hand will drift again, so it is now *regenerated*
+from the headings rather than edited — the same promote-the-habit-to-a-program
+move this whole batch is about, applied to the document's own furniture.
 ---
 
 ## Summary
