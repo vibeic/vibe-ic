@@ -417,3 +417,49 @@ merge-path verification that returns 0 where 2 is expected) and
 — are red on clean main and are nobody's regression in this batch. They are
 named so that a re-measurement finding twelve does not read the ten as
 collateral from this fix, and finding ten does not read them as fixed by it.
+
+## 8. The other door: can a landing take a ROUTE that misses the review?
+
+Closing the CLI door answers "can the review be handed a substitute". It does
+not answer "can a landing avoid reaching the review at all", and the ruling
+this branch implements rests on a claim about routes — *the lander is the ONE
+path every landing takes*. That claim was checked rather than repeated.
+
+**There are three landing-shaped scripts, and two of them are the third.**
+`tools/gatekeeper-verify-merge.sh` and `tools/gatekeeper-land-differential.sh`
+both invoke `tools/gatekeeper-land.sh` (12 and 13 references; the differential
+runs `bash tools/gatekeeper-land.sh` for each arm, the verifier runs
+`/subject/tools/gatekeeper-land.sh` in its container). Neither reimplements the
+tier, and neither passes a flag that stops before it. So the review fires on
+all three routes.
+
+**Every early exit that precedes the review was read, and none of them lands.**
+The review sits at `gatekeeper-land.sh:1607`, inside the full tier. Three
+things can end the run before it:
+
+| exit | what it does | can it land? |
+| --- | --- | --- |
+| `--cheap-only` (`:609`) | prints "full tier SKIPPED — no stamp will be written", `exit "$FAILED"` | **No.** It returns before every stamp write. |
+| `GATEKEEPER_FAIL_FAST_NORECORD` + a targeted NORECORD (`:1514`) | `exit 2` | **No.** Non-zero and no stamp. |
+| `GATEKEEPER_NO_STAMP=1` (`:1635`) | `rm -f` the stamp deliberately | **No.** Strictly stricter. |
+
+The stamp is written at `:1654` and ONLY there, only when `FAILED -eq 0`, and
+only after the review has contributed to `FAILED`. `tools/git-hooks/pre-push`
+refuses any push to `main` whose HEAD is not the stamp's first line, so a run
+that skipped the tier cannot authorise one.
+
+`--cheap-only` does not delete an existing stamp, which was checked because it
+is the obvious way for the flag to become a bypass. It is not one: a stamp
+names a COMMIT, so the only stamp it can leave standing is one a FULL tier
+already earned for that same commit — a run in which the review did fire.
+Amend or add a commit and the hook's own comparison rejects it.
+
+**What this does NOT close, said plainly.** `git push --no-verify` still steps
+around the hook, and an operator who never runs the lander never reaches the
+review. Wiring into the lander is strictly stronger than wiring into the hook —
+it sits on the path an operator actually uses to land, and the hook's stamp is
+minted by it — but neither defends against someone who runs neither. Nothing
+in this repository can; that is a rule about people, and it is already written
+as one ("never `--no-verify`"). It is recorded here so the ruling's phrase "the
+one path every landing takes" is read as what it is: true of the three shipped
+landing routes, not a claim that the tool cannot be walked past.
