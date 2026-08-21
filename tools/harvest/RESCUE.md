@@ -404,11 +404,19 @@ moves and expiring at the reflog default. Swept per **clone**, never per worktre
 | .105 | 23 | 181 |
 | .114 | 3 | 265 |
 | .121 | 6 | 240 |
+| .112 | 3 | 213 |
 | .102 | 81 | 370 |
-| **total (distinct)** | **113** | **547** |
+| **total (distinct)** | **116** | **760** |
 
-**547 of 547 covered**, verified by walking refs from origin against a non-empty authority.
-13 anchors; 4 were hook-blocked on their host and routed through a clone whose hook passes.
+**760 of 760 covered**, verified by walking refs from origin against a non-empty authority.
+15 anchors; 6 were hook-blocked on their host and routed through a clone whose hook passes.
+
+`.112` took three attempts and each failure was silent in a different way: the first detached
+runner used a relative `cd` and wrote nothing; the second died mid-loop leaving `push.log` with
+two lines and no anchors; only building the anchor as one explicit command worked. Each time the
+*absence of output* looked identical to "this host had none" — and `.112` had 213, the second
+largest count on the fleet. What separated them was checking for the **file** rather than the
+count.
 
 jharv3's framing is kept because it is the honest one: **most of these are almost certainly
 intermediate states of work that later landed** — a branch rebased twenty times leaves twenty old
