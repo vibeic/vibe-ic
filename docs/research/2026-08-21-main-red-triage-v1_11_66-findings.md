@@ -2386,6 +2386,54 @@ a lookup and still did not look — the reduction felt like progress and substit
 for the work.
 
 
+## M38 — M37 CONFLATED TWO WAIVER MECHANISMS. The coverage-bridge half is withdrawn.
+
+I went to apply M37's result and stopped one step short of acting on it. **The
+conclusion it drew about the coverage bridge is wrong**, and the error is a
+conflation I should have tested before publishing.
+
+`test_v0_2_96_issue460_coverage_bridge` **references `matrix_63x8.waivers` zero
+times.** Its `WAIVED-DEFERRED` is not a registry entry at all:
+
+```python
+#: `verilator_coverage_measure check` reads this env var to decide
+#: whether an absent coverage measurement is a disclosed capability gap
+#: (rc=3 -> WAIVED-DEFERRED) or a defect (rc=1 -> FAIL).
+_NO_VERILATOR = "__vibeic_no_such_verilator__"
+```
+
+**Two different mechanisms share one word:**
+
+| | `matrix_63x8.waivers.WAIVERS` | the flow's `WAIVED-DEFERRED` bucket |
+|---|---|---|
+| governs | one cell of the 504-cell matrix | one STEP's verdict in `flow_compliance_check` |
+| granted by | a dated registry entry with reason + evidence | a checker returning **rc=3** |
+| for the coverage bridge | irrelevant | **this is the one that applies** |
+
+**So M37's finding stands for what it actually measured** — no registry waiver
+exists for `0.5ic` or the six `d3` cells, which is real and strengthens M34/M35.
+**Its extension to the coverage bridge is WITHDRAWN.**
+
+**And the properly posed question is neither of my two framings.** Not "which
+verdict vocabulary" (M33), and not "is there a registry waiver" (M37). It is:
+
+> When Verilator is absent, should `verilator_coverage_measure check` return
+> **rc=3** — an absent coverage measurement is a disclosed CAPABILITY GAP — or
+> should the step report VACUOUS-PASS?
+
+The test pins `_NO_VERILATOR` deliberately so its assertions are *"a property of
+the FLOW, not of whatever the CI host happens to have installed"* — which is the
+same discipline this document applies everywhere else, and an argument that the
+test's intent is considered rather than stale.
+
+**This is the third framing I have given these two reds, and the first that is
+grounded in the mechanism that actually produces the verdict.** Each earlier one
+sounded more precise than the last while resting on an unchecked premise. The
+lesson is narrow and unwelcome: **reducing a question is not the same as
+answering it, and a reduction built on the wrong mechanism is worse than the
+vague question it replaced** — it invites action.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2471,7 +2519,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | ~~is there a waiver?~~ **LOOKED UP (M37): there is NONE.** `WAIVED-DEFERRED` is therefore unavailable and the verdict is the vacuous one. No decision needed — the registry already decided by not granting one. | **answered** |
+| **Coverage bridge** (2 reds) | ~~vocabulary choice (M33)~~ ~~registry waiver lookup (M37)~~ — **both withdrawn, see M38.** The real question: should `verilator_coverage_measure check` return **rc=3** (absent Verilator = a disclosed CAPABILITY GAP → `WAIVED-DEFERRED`) or should the step report VACUOUS-PASS? Nothing to do with the matrix registry. | **policy, precisely posed** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
