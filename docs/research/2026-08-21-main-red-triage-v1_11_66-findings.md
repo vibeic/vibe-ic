@@ -3092,11 +3092,36 @@ declared == 181`. **The gate fails because a pinned count of 179 is stale**, not
 because anything is uncovered. The property the test is named for is verified
 HOLDING, by the same output that reds it.
 
-**That is the same shape as the `1.6x` finding** from early in this engagement:
-the flow grew (68 → 69 steps) and a pin was not regenerated. Here the flow grew
-to 181 declared clauses against a pin of 179. **Plausibly the same root cause —
-flow growth outrunning pin regeneration — though I have not confirmed the two
-share a mechanism** and will not assert it on shape alone.
+**I guessed this was the same shape as the `1.6x` finding — flow growth
+outrunning pin regeneration — and flagged it unconfirmed. CHECKED, and it is
+WRONG.** `1.6x` fails for an unrelated reason:
+
+> `1.6x/d3:outputs_produced` is ENFORCED and **NO mutation** in
+> `matrix_mutation_ledger.MUTATIONS` was measured to redden it.
+
+A missing MUTATION, not a stale COUNT. The two failures share a step-growth
+backstory and nothing else. **Ninth hypothesis of mine to die on inspection**,
+and the fourth time "these look alike" turned out to mean only that.
+
+**But the gate's own words are the best sentence in this document, and they are
+not mine:**
+
+> **A green cell with no reachable red is a certificate, not a measurement.**
+
+That is the whole engagement in eleven words — the vacuous greens, the six knobs
+that never arrive, the guards whose attacks cannot land, the test name promising
+ordering it never checked. And its remedy paragraph is the doctrine I have been
+applying all night, already written down:
+
+> If no mutation can redden the cell, **that is the FINDING**: record it in
+> `NOT_FALSIFIABLE` with what was tried. **Never weaken the predicate, widen a
+> waiver, or edit a fixture to suit.**
+
+Which is precisely why M46 refused to flip an assertion, M50 refused
+`--write-baseline` when the gate asked nicely, and M32 measured a real artefact
+instead of writing an entry. **The repository already knew. I spent fifty
+sections re-deriving it, and the sentence was sitting in a red I had recorded as
+`[step1.6x]`.**
 
 ### All six blocking FAILs, now measured
 
