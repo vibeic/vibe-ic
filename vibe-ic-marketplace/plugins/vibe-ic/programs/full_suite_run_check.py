@@ -92,6 +92,22 @@ def _norm_path(tok: str) -> str:
     return tok.rstrip("/")
 
 
+def _integration_tree_has_tests(root: Optional[Path] = None) -> bool:
+    """Does the legacy integration tree still contain any test files?
+
+    Checked live rather than hardcoded, so this gate self-corrects in both
+    directions: today the tree is empty (v0.2.19 merged it into
+    programs/tests) and an explicit programs/tests run is the full suite;
+    the day someone adds a test back under tests/, this returns True and the
+    two-tree requirement is enforced again automatically.
+    """
+    base = root if root is not None else Path(__file__).resolve().parents[1]
+    tree = base / _TREE_INTEGRATION
+    if not tree.is_dir():
+        return False
+    return any(tree.glob("test_*.py")) or any(tree.glob("**/test_*.py"))
+
+
 def _pytest_verb_index(tokens: List[str]) -> int:
     """Index of the `pytest` verb token. For `python -m pytest`, this is the
     `pytest` token AFTER the `-m`, so the module-flag `-m` is never confused
@@ -157,6 +173,17 @@ def _classify_pytest(tokens: List[str]) -> (bool, str):
 
     if covers_programs and covers_integration:
         return True, f"both trees covered explicitly: {sorted(norm)}"
+    # v0.2.19 merged the two test trees: conftest.py records "the two former
+    # test trees were merged" and pytest.ini's testpaths is programs/tests
+    # alone. When the integration tree holds NO test files, an explicit
+    # `programs/tests` path IS the full suite — measured on this tree:
+    # `pytest -q --collect-only` and `pytest programs/tests -q --collect-only`
+    # both collect 19504. This is detected DYNAMICALLY, not assumed: if the
+    # integration tree ever grows test files again, the two-tree requirement
+    # reinstates itself without anyone editing this gate.
+    if covers_programs and not covers_integration             and not _integration_tree_has_tests():
+        return True, ("programs/tests covers the full suite — the integration "
+                      "tree holds no test files (merged in v0.2.19)")
     missing = []
     if not covers_programs:
         missing.append(_TREE_PROGRAMS)
