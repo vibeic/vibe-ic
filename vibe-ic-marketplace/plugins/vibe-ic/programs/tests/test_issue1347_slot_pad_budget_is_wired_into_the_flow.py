@@ -213,3 +213,55 @@ def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
     assert mine[0]["enforcement"] == "ENFORCED", mine[0]
     assert mine[0]["wiring"] == "INLINE_BLOCKING", mine[0]
     assert mine[0]["declared"] == "blocking", mine[0]
+
+
+# --------------------------------------------------------------------------- #
+# the last link: the CLAUSE becomes a STEP VERDICT
+# --------------------------------------------------------------------------- #
+# The tests above prove the clause runner returns False and the runner step
+# returns FAIL. Neither of those is the same statement as "step 2 goes red",
+# and the gap between "the check said no" and "the step said no" is precisely
+# where #306 lived. So this drives `flow_compliance_check.check_step` itself.
+#
+# The step is ISOLATED to this one clause on purpose: step 2 carries thirteen
+# other clauses, and a FAIL from any of them would make this test pass while
+# proving nothing about the gate it claims to be about.
+
+def _isolated_step2() -> dict:
+    doc = yaml.safe_load(_FLOW.read_text(encoding="utf-8"))
+    step = [s for s in doc["steps"] if str(s["id"]) == "2"][0]
+    mine = [c for c in step["gate"]["all_of"]
+            if isinstance(c, dict) and "slot_pad_budget_check" in str(c)]
+    assert len(mine) == 1, f"expected exactly one clause, got {mine}"
+    out = dict(step)
+    out["gate"] = {"all_of": mine}
+    out["required_outputs"] = []          # not what is under test here
+    return out
+
+
+def _step_status(rtl, with_slots: bool) -> str:
+    return F.check_step(_project(rtl, with_slots), _isolated_step2(), {}).status
+
+
+def test_an_unbondable_interface_makes_step_2_itself_go_FAIL():
+    assert _step_status(_HOPELESS, True) == "FAIL"
+
+
+def test_a_fitting_interface_leaves_step_2_PASS():
+    assert _step_status(T._RTL_FITS, True) == "PASS"
+
+
+def test_the_cell_path_lands_in_VACUOUS_PASS_not_plain_PASS():
+    """The disclosed tier is a DIFFERENT verdict from a clean one, which is
+    what keeps 'there was nothing to ask' readable as itself rather than as
+    'asked and fine'."""
+    assert _step_status(T._RTL_FITS, False) == "VACUOUS_PASS"
+
+
+def test_the_three_step_verdicts_are_three_distinct_values():
+    """The property the whole wiring rests on: a refusal, a clean pass and a
+    disclosed skip must never collapse into one another."""
+    seen = {_step_status(_HOPELESS, True),
+            _step_status(T._RTL_FITS, True),
+            _step_status(T._RTL_FITS, False)}
+    assert len(seen) == 3, seen
