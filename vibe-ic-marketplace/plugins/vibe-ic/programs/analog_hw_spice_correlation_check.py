@@ -14,17 +14,22 @@ measurement in corner_results.json:
 The IDEAL tier is INFO-only granularity: <10 % was already acceptable, so
 adding it does NOT change the PASS/FAIL verdict.
 
-Self-skips (exit 0 + INFO) when:
-  - No analog/*/hw_measurements.json files found
+Self-skips when:
+  - No analog/ directory, or no analog/*/hw_measurements.json files found
 
 Usage:
     python3 analog_hw_spice_correlation_check.py <project_dir>
     python3 analog_hw_spice_correlation_check.py <project_dir> --json reports/gates/hw_spice_corr.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: bench data was read and every measurement correlates with its
+        SPICE prediction inside tolerance
     1 = FAIL (critical discrepancy)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no analog/ directory, or no bench
+        measurement at all, so no hardware number was correlated against any
+        model. #521: both used to be rc 0, which is the shape that makes a
+        simulation-only close read as a bench-verified one. Also rc 2 for an
+        IO / parse error.
 """
 from __future__ import annotations
 
@@ -35,6 +40,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -253,16 +260,22 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
+
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
 
     if not args.json:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] analog_hw_spice_correlation_check")
+        print(_vx.verdict_line("analog_hw_spice_correlation_check",
+                               result.passed, skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

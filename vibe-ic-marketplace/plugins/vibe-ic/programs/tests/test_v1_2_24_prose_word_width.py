@@ -1,7 +1,7 @@
 """CVDP §3.9 triage round-2: a spelled-out bit count is a STATED width.
 
 `_prose_width` resolved `8-bit` (digits) but not `one-bit` (word), so a port whose
-width is NARRATED — `- \`hour\`: Represents a one-bit signal …` — was mislabeled
+width is NARRATED — `- `hour`: Represents a one-bit signal …` — was mislabeled
 SPEC_ABSENT. Spelled-out small numbers (one/single/two/…) are now recognised, a
 GENERAL design-doc form that also serves RTLLM/VerilogEval/Phase-1 prose.
 

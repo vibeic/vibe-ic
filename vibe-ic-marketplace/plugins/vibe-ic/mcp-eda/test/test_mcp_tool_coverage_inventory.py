@@ -95,7 +95,11 @@ DEFERRED_TOOLS = {
     "eda_gate_netlist_gen": "wrapped Python program; covered by plugin tests test_gate_netlist_rtl_gen.py",
     "eda_vector_op_gen": "wrapped Python program; covered by plugin tests test_vector_op_rtl_gen.py",
     "eda_rtl_dispatch": "wrapped Python program; covered by plugin tests test_deterministic_rtl_dispatcher.py",
-    "eda_rtl_name_semantic_check": "wrapped Python program; covered by plugin tests test_rtl_name_semantic_check.py",
+    # The tool name and the program it spawns differ (`rtl_signal_name_...`),
+    # and the deferral rationale had drifted to the TOOL name — citing
+    # `test_rtl_name_semantic_check.py`, which exists nowhere. The coverage
+    # itself was real; the sentence pointing at it was not.
+    "eda_rtl_name_semantic_check": "wrapped Python program (rtl_signal_name_semantic_check); covered by plugin tests test_rtl_signal_name_semantic_check.py",
     "eda_chip_top_gate_wrapper_gen": "wrapped Python program (chip_top_gate_wrapper_gen); covered by plugin tests",
     "eda_fpga_gate_attestation_check": "requires Quartus gate-level compile artifacts (FPGA lab)",
     "eda_fpga_gds_reverify": "requires the FPGA gate-level reverify chain (Quartus + scope/UDP shim)",

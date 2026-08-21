@@ -16,6 +16,8 @@ below.
 """
 from __future__ import annotations
 
+import ast
+import re
 import sys
 from pathlib import Path
 
@@ -83,3 +85,26 @@ def load_real_fixture(name: str) -> str:
     Chip-AGNOSTIC: fixtures carry no chip-class literal.
     """
     return (_REAL_BENCHMARK_DIR / name).read_text(encoding="utf-8")
+
+
+# func_src now lives in _source_pin.py — see that module for WHY.
+from _source_pin import func_src  # noqa: E402,F401
+
+
+# vibe-ic#1037 — a test that claims to examine REAL data must say WHICH file it
+# examined, in the suite's own output, so the next reader sees the premise
+# rather than trusting the test's name. `_real_data.select` records every
+# selection and every refusal; this prints them on EVERY run, pass or fail,
+# with no flag. A `real-data provenance` section that is missing a test you
+# expected to see is itself the finding.
+def pytest_terminal_summary(terminalreporter, exitstatus, config):  # noqa: ARG001
+    try:
+        from _real_data import ledger_lines
+    except Exception:  # pragma: no cover - the suite must not die on disclosure
+        return
+    lines = ledger_lines()
+    if not lines:
+        return
+    terminalreporter.write_sep("-", "real-data provenance")
+    for line in lines:
+        terminalreporter.write_line(line)

@@ -16,11 +16,36 @@ v1.2.x wired those into the SPEF STA TCL:
 This gate verifies a sign-off STA report actually CARRIES that rigor, so a run
 cannot claim "timing signed off" on the pre-fix optimistic basis.
 
+ORGANIC #540 added a FOURTH dimension: WORST-PATH EVIDENCE. This gate used to
+ask only whether the report carried a derate and the check types — never whether
+it carried the PATH behind its own governing slack. It therefore PASSed reports
+whose `report_checks` had silently errored inside a `catch`, which over the
+tracked corpus was every single multi-corner OCV report (0 of 9 carried a path
+dump, against 51 of 106 for the other STA reports). A slack with no path is a
+verdict that reads the same whether or not the thing behind it was examined,
+which is precisely what this gate exists to stop.
+
+COVERAGE vs CONTENT (v1.10.3) added a FIFTH dimension: earlier versions only
+checked that the recovery/removal/min-pulse-width ANALYSIS ran (the marker
+line), never whether it actually PASSED. A real violation sitting in
+report_check_types' own output — e.g. a genuine min-pulse-width table row
+`<pin>  <required>  <actual>  <slack> (VIOLATED)`, or a recovery/removal path
+ending `slack (VIOLATED)` on an endpoint marked "(recovery check against ...)"
+/ "(removal check against ...)" — is real evidence the design FAILS this
+dimension, and a gate that only checks coverage would print PASS over it.
+That is exactly the "checks that lie" shape §4.05 forbids: measuring that the
+tool ran, not what it found.
+
 Verdict:
-  PASS  — the report shows OCV derating was applied AND carries recovery/removal
-          AND min-pulse-width evidence (a full-rigor sign-off basis).
-  FAIL  — the report exists but is MISSING one or more (the finding lists which):
-          an optimistic sign-off, not a foundry-grade one.
+  PASS  — the report shows OCV derating was applied, carries recovery/removal
+          AND min-pulse-width evidence (coverage), accounts for its own worst
+          slack with a path (ORGANIC #540), AND none of the recovery/removal/
+          min-pulse-width sections contains an actual (VIOLATED) row/path
+          (v1.10.3 content) — a full-rigor sign-off basis.
+  FAIL  — the report exists but either (a) is MISSING one or more of the
+          coverage/path dimensions, or (b) HAS a real (VIOLATED) recovery/
+          removal/min-pulse-width finding (the finding lists which either
+          way): an optimistic sign-off, not a foundry-grade one.
   rc=2  — the report path is absent/unreadable (missing-evidence IO error).
 
 AOCV/POCV vs flat-OCV (P1, implemented):
@@ -92,6 +117,97 @@ _MPW_RE = re.compile(r"min[_ ]pulse[_ ]width", re.IGNORECASE)
 _CHECK_TYPES_MARKER_RE = re.compile(
     r"SIGNOFF_CHECK_TYPES_REPORTED\s+(?P<types>.+)", re.IGNORECASE)
 
+# ORGANIC #540 — WORST-PATH EVIDENCE. `report_worst_slack` prints a NUMBER;
+# only `report_checks` prints the startpoint/endpoint/arrival breakdown that
+# says WHAT produced it. This gate could not tell those apart: it asked whether
+# the report carried a DERATE and the CHECK TYPES, never whether it carried the
+# path behind its own governing slack. So a report whose `report_checks` had
+# silently errored — which, measured over the tracked corpus, was 9 of 9
+# `sta_mcorner_ocv*.rpt` — was byte-indistinguishable to this gate from one that
+# dumped its full critical path, and PASSED. The gate enforcing sign-off rigour
+# was blind to the one thing that would make its input auditable.
+#
+# Evidence, most authoritative first:
+#   1. the emitter marker (tool-version-independent, and the ONLY signal that
+#      distinguishes "queried and this design has no such path" from "never
+#      queried" — an empty path table and an errored one look identical),
+#   2. an explicit FAILED marker naming the tool's own reason — that is
+#      NEGATIVE evidence and must never be read as absence of a problem,
+#   3. fallback: a literal path dump in the body, which is how a report from a
+#      pre-marker emitter or another tool still counts (`_emit_spef_sta` calls a
+#      bare `report_checks` and has always produced one).
+_WORST_PATHS_MARKER_RE = re.compile(
+    r"SIGNOFF_WORST_PATHS_REPORTED\s+path_delay=(\S+)", re.IGNORECASE)
+_WORST_PATHS_FAILED_RE = re.compile(
+    r"SIGNOFF_WORST_PATHS_FAILED\s+path_delay=(\S+)\s+reason=(.*)",
+    re.IGNORECASE)
+# A real OpenSTA/OpenROAD path dump. chip-AGNOSTIC: universal report structure.
+_PATH_DUMP_RE = re.compile(
+    r"^\s*(?:Startpoint|Endpoint)\s*:|data arrival time", re.IGNORECASE | re.M)
+
+# CONTENT (not just coverage) — a genuine violation inside report_check_types'
+# own output, distinct from an ordinary setup/hold PATH violation (which also
+# prints "slack (VIOLATED)" but is a different gate's concern entirely) AND
+# distinct from max_slew / max_capacitance / max_fanout table violations
+# (real findings too, but OUT OF SCOPE for this gate's declared dimensions —
+# they are DRV limits covered elsewhere; folding them in here would silently
+# widen this gate's contract and retroactively flip unrelated runs' verdicts,
+# exactly the kind of scope-creep a repo-gatekeeper should not slip in
+# unannounced). Scoped strictly to this gate's own 3 declared dimensions:
+# recovery, removal, min_pulse_width.
+#
+# min_pulse_width prints a flat pin-based TABLE, uniquely identified by its
+# two-Width header (LIVE-VALIDATED against real OpenSTA 3.1.0 output; distinct
+# from max_slew's "Limit Slew Slack" and max_capacitance's "Limit Cap Slack"
+# headers, which do NOT say "Width"):
+#     Required  Actual
+#Pin                                    Width   Width   Slack
+#------------------------------------------------------------
+#u_otp.u_otp/PRD (high)                200.00  100.01  -99.99 (VIOLATED)
+_MPW_TABLE_HEADER_RE = re.compile(r"Pin\s+Width\s+Width\s+Slack", re.IGNORECASE)
+
+# recovery / removal instead print a full PATH report (Startpoint/Endpoint/...
+# slack (MET|VIOLATED)), same shape as an ordinary setup/hold path, but the
+# Endpoint line names the check: "(recovery check against ...)" / "(removal
+# check against ...)". A violation is real when that marker is followed,
+# within the same path block, by "slack (VIOLATED)".
+_RECOVERY_REMOVAL_ENDPOINT_RE = re.compile(
+    r"\((?:recovery|removal) check against[^)\n]*\)", re.IGNORECASE)
+_SLACK_VIOLATED_RE = re.compile(r"slack\s*\(VIOLATED\)", re.IGNORECASE)
+
+
+def _check_types_violations(report_text: str) -> List[str]:
+    """Real (VIOLATED) findings inside report_check_types' own output,
+    scoped to this gate's 3 declared dimensions (recovery / removal /
+    min_pulse_width — NOT max_slew / max_capacitance / max_fanout).
+
+    Chip-AGNOSTIC: no design/pin names are assumed — the exact violating pin
+    or endpoint description is read straight out of the report and quoted
+    back verbatim (truncated) so the finding is self-evidencing.
+    """
+    found: List[str] = []
+    for hm in _MPW_TABLE_HEADER_RE.finditer(report_text):
+        after = report_text[hm.end():]
+        nl = after.find("\n")  # skip the "----" separator line under the header
+        block_start = after[nl + 1:] if nl != -1 else after
+        end = len(block_start)
+        for stopper in ("\n\n", "SIGNOFF_CHECK_TYPES_REPORTED"):
+            idx = block_start.find(stopper)
+            if idx != -1:
+                end = min(end, idx)
+        for line in block_start[:end].splitlines():
+            if "(VIOLATED)" in line.upper():
+                found.append(line.strip()[:160])
+    for m in _RECOVERY_REMOVAL_ENDPOINT_RE.finditer(report_text):
+        # bounded look-ahead: the path's own slack line follows shortly after
+        # its Endpoint line, well before the NEXT "Startpoint:" block begins.
+        window = report_text[m.end():m.end() + 2000]
+        next_start = window.find("Startpoint:")
+        scope = window if next_start == -1 else window[:next_start]
+        if _SLACK_VIOLATED_RE.search(scope):
+            found.append(m.group(0).strip()[:160])
+    return found
+
 
 def _find_report(target: Path) -> Optional[Path]:
     """Resolve the sign-off STA report. Accepts a file or a directory.
@@ -132,7 +248,31 @@ def evaluate(report_text: str) -> Dict[str, object]:
     removal = "removal" in marker_types or bool(_REMOVAL_RE.search(report_text))
     mpw = ("min_pulse_width" in marker_types or "min pulse width" in marker_types
            or bool(_MPW_RE.search(report_text)))
+    # ORGANIC #540 — worst-path evidence behind the report's own slack.
+    path_failures = [f"path_delay={m.group(1)}: {m.group(2).strip()}"
+                     for m in _WORST_PATHS_FAILED_RE.finditer(report_text)]
+    if _WORST_PATHS_MARKER_RE.search(report_text):
+        path_source = "marker"
+    elif _PATH_DUMP_RE.search(report_text):
+        path_source = "path-dump"
+    else:
+        path_source = None
+    # A pass that ERRORED is negative evidence, and it outranks a sibling pass
+    # that succeeded: a report whose hold path dump died still cannot account
+    # for its hold slack, so a partial report is not an evidenced one.
+    worst_path_evidence = bool(path_source) and not path_failures
+
     missing: List[str] = []
+    if not worst_path_evidence:
+        if path_failures:
+            missing.append(
+                "worst-path evidence — the report's own path query FAILED and "
+                "said so: " + "; ".join(path_failures))
+        else:
+            missing.append(
+                "worst-path evidence (report_checks startpoint/endpoint/data "
+                "arrival time, or the SIGNOFF_WORST_PATHS_REPORTED marker) — "
+                "the report records a slack with nothing behind it")
     if not ocv:
         missing.append("OCV derating (set_timing_derate / OCV_DERATE_APPLIED / "
                        "read_aocv / AOCV_TABLE_APPLIED)")
@@ -143,6 +283,9 @@ def evaluate(report_text: str) -> Dict[str, object]:
     if not mpw:
         missing.append("min-pulse-width check "
                        "(report_check_types -min_pulse_width)")
+    violations = _check_types_violations(report_text)
+    for v in violations:
+        missing.append(f"real (VIOLATED) finding in report_check_types: {v}")
     passed = not missing
     if aocv:
         ocv_mode = "aocv"
@@ -165,6 +308,11 @@ def evaluate(report_text: str) -> Dict[str, object]:
         "recovery_checked": recovery,
         "removal_checked": removal,
         "min_pulse_width_checked": mpw,
+        # ORGANIC #540 — is the slack in this report accountable to a path?
+        "worst_path_evidence": worst_path_evidence,
+        "worst_path_evidence_source": path_source,   # "marker"|"path-dump"|None
+        "worst_path_query_failures": path_failures,
+        "check_types_violations": violations,
         "missing": missing,
         "ocv_scope": ocv_scope,
     }

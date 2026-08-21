@@ -145,9 +145,81 @@ def _normalize_pdk(pdk: str) -> str:
     return ""
 
 
-def power_model_for(pdk: str) -> Optional[PdkPowerModel]:
-    """Return the PdkPowerModel for `pdk`, or None when unrecognised."""
-    return _PDK_POWER_MODELS.get(_normalize_pdk(pdk))
+def model_from_cell_lef(cell_lef: "Path | str",
+                        key: Optional[str] = None) -> Optional[PdkPowerModel]:
+    """Derive a PdkPowerModel from a std-cell LEF's OWN declarations.
+
+    WHY THIS EXISTS. `_PDK_POWER_MODELS` is a hardcoded table of three
+    OPEN-SOURCE PDKs. A project-staged (i.e. every commercial) PDK resolves to
+    the synthetic name `custom:pdk`, so `_normalize_pdk` returns "",
+    `power_model_for` returns None, and the emitter SKIPS — leaving the gate
+    netlist power-blind while the extracted layout is not. netgen then reports
+    every std cell as `is a placeholder, treated as a black box` with the
+    supply pins `(no matching pin)`, i.e. a whole-design LVS mismatch. So the
+    documented LVS root fix was unavailable to exactly the PDKs that need it.
+
+    A LEF already carries everything the model needs, declared by the PDK
+    itself:
+      * `PIN <name> ... USE POWER|GROUND` on each MACRO  -> `pg_pins`
+      * the MACRO names themselves                       -> `cell_prefix_re`
+
+    Pure LEF grammar, so no PDK/vendor/cell name is hardcoded and no naming
+    convention is assumed — a library whose cells share no common prefix
+    (typical of a commercial std-cell library) is matched by an alternation of
+    its own MACRO names, longest-first so a shorter name can never shadow a
+    longer one. Returns None when the LEF declares no supply pins or no
+    macros, which the caller reports as a SKIP rather than guessing."""
+    p = Path(cell_lef)
+    try:
+        text = p.read_text(errors="ignore")
+    except OSError:
+        return None
+
+    macros: List[str] = []
+    pg: List[str] = []          # insertion-ordered, de-duplicated
+    cur_pin: Optional[str] = None
+    for raw in text.splitlines():
+        s = raw.strip()
+        m = re.match(r"^MACRO\s+([A-Za-z_][\w$]*)", s)
+        if m:
+            macros.append(m.group(1))
+            cur_pin = None
+            continue
+        m = re.match(r"^PIN\s+([A-Za-z_][\w$]*)", s)
+        if m:
+            cur_pin = m.group(1)
+            continue
+        if cur_pin and re.match(r"^USE\s+(POWER|GROUND)\b", s, re.IGNORECASE):
+            if cur_pin not in pg:
+                pg.append(cur_pin)
+            cur_pin = None
+    if not macros or not pg:
+        return None
+
+    # Longest-first: `INVD1` must not shadow `INVD12` in the alternation.
+    alt = "|".join(re.escape(c)
+                   for c in sorted(set(macros), key=lambda c: (-len(c), c)))
+    return PdkPowerModel(key=key or f"lef:{p.name}",
+                         pg_pins=tuple(pg),
+                         cell_prefix_re=r"(?:" + alt + r")")
+
+
+def power_model_for(pdk: str,
+                    cell_lef: Optional["Path | str"] = None
+                    ) -> Optional[PdkPowerModel]:
+    """Return the PdkPowerModel for `pdk`, or None when unrecognised.
+
+    `cell_lef` (optional) is the PDK's own std-cell LEF. It is consulted ONLY
+    when the NAME does not resolve to a table entry, so every named-PDK lane
+    (sky130A / gf180mcu* / ihp-sg13g2) is byte-for-byte unchanged and only the
+    lane that previously returned None — the project-staged / commercial one —
+    now gets a model, derived from that PDK's own declarations."""
+    named = _PDK_POWER_MODELS.get(_normalize_pdk(pdk))
+    if named is not None:
+        return named
+    if cell_lef:
+        return model_from_cell_lef(cell_lef, key=(pdk or "").strip() or None)
+    return None
 
 
 @dataclass
@@ -346,7 +418,8 @@ def _patch_module(head: str, name: str, portlist: Optional[str], body: str,
 
 def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
                              rails_as_ports: bool = False,
-                             tie_wells_to_rails: bool = False
+                             tie_wells_to_rails: bool = False,
+                             cell_lef: Optional["Path | str"] = None
                              ) -> Tuple[str, Dict[str, object]]:
     """Transform a gate netlist into a POWER-AWARE netlist.
 
@@ -368,10 +441,17 @@ def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
     Returns (new_text, stats_dict). Idempotent: a netlist that already carries
     the PG pins is returned with instances_patched=0. chip-AGNOSTIC."""
     stats = EmitStats(pdk=_normalize_pdk(pdk))
-    model = power_model_for(pdk)
+    model = power_model_for(pdk, cell_lef=cell_lef)
     if model is None:
-        stats.skipped_reason = f"unrecognised PDK '{pdk}' — no power model"
+        stats.skipped_reason = (
+            f"unrecognised PDK '{pdk}' — no power model"
+            + ("" if cell_lef else
+               " and no cell LEF supplied to derive one from"))
         return text, stats.as_dict()
+    if not stats.pdk:
+        # A project-staged PDK has no canonical table key; record the model
+        # that was actually used so the artifact never reads as "no PDK".
+        stats.pdk = model.key
     stats.rails = list(model.pg_pins)
 
     pieces: List[str] = []
@@ -405,12 +485,13 @@ def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
 def emit_to_file(netlist: Path, pdk: str, out: Path,
                  top: Optional[str] = None,
                  rails_as_ports: bool = False,
-                 tie_wells_to_rails: bool = False) -> Dict[str, object]:
+                 tie_wells_to_rails: bool = False,
+                 cell_lef: Optional["Path | str"] = None) -> Dict[str, object]:
     """Read `netlist`, emit the power-aware version to `out`, return stats."""
     text = netlist.read_text(errors="replace")
     new_text, stats = emit_power_aware_netlist(
         text, pdk, top=top, rails_as_ports=rails_as_ports,
-        tie_wells_to_rails=tie_wells_to_rails)
+        tie_wells_to_rails=tie_wells_to_rails, cell_lef=cell_lef)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(new_text)
     stats["output"] = str(out)

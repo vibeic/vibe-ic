@@ -125,7 +125,7 @@ def test_e2e_real_spm_artifact_fails_with_json(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / "lvs_report_check.py"),
          str(real), "--mode", "lvs", "--json", str(out)],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode != 0, r.stdout[-500:]
     assert json.loads(out.read_text())["passed"] is False
 
