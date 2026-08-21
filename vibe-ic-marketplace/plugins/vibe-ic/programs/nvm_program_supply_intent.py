@@ -275,13 +275,33 @@ def recovered_supply_pins(untyped: Dict[str, List[str]],
 
 def input_rtl_files(project: Path) -> List[Path]:
     """Every Verilog/SystemVerilog source under `<project>/input/`, excluding
-    testbenches and anything under an oracle/harness segment (§4.05).
+    testbenches, anything under an oracle/harness segment (§4.05), and a
+    macro's OWN vendor-supplied view.
 
     Deliberately broader than the Phase-2 build-source resolver: this module
     only needs to know what the design DECLARES, and reading one extra
     non-oracle source can only make the boundary inventory larger — which makes
     a finding LESS likely, never more. Erring toward silence is the right
     direction for a gate that blocks.
+
+    THE MACRO-STUB EXCLUSION IS NOT OPTIONAL (vibe-ic, this module's own
+    circularity). `input/pdk_local/<vendor>/...` is the SAME handoff tree
+    `load_macro_lefs` reads a macro's LEF from — it is the macro's own
+    behavioural/stub Verilog view, shipped for simulation, not the chip's own
+    top-level RTL. A vendor's behavioural model routinely types its own supply
+    pins as ordinary `input`/`inout` ports (needed for testbench-style
+    behavioural modelling of the supply-dependent logic, e.g. a pass-gate
+    modelling the programming path) — the SAME pins this module exists to ask
+    "does the TOP LEVEL expose a path for". Scanning that file for port names
+    answers the question with the question: the macro's own declaration of
+    its own pin was being read as proof the CHIP boundary carries it, which
+    made `boundary_is_usable` self-corroborate on every macro whose vendor
+    stub types its PG pins, and made `classify_pin` report `external_pin` for
+    a supply the design's real top level never wires anywhere (MEASURED: a
+    programmable-NVM macro whose digital top explicitly declines to connect
+    its programming-supply pin, by design, still classified `external_pin`
+    with zero gaps, because that pin's OWN name appeared in the macro's own
+    ``module NAME(...)`` port list one directory below).
     """
     root = project / "input"
     if not root.is_dir():
@@ -295,6 +315,8 @@ def input_rtl_files(project: Path) -> List[Path]:
         except ValueError:
             continue
         if _is_oracle_parts(rel.parts) or _is_tb_file(p):
+            continue
+        if rel.parts and rel.parts[0] == "pdk_local":
             continue
         out.append(p)
     return out

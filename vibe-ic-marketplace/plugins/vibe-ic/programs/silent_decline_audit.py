@@ -53,12 +53,37 @@ FAILS above it. The 15 existing sites stay visible and are not blessed; a
 SIXTEENTH cannot land quietly. Blocking on `--strict` becomes correct once the
 15 are triaged.
 
+AND THE RATCHET IS THE DEFAULT, NOT AN OPT-IN (vibe-ic#1705)
+------------------------------------------------------------
+`--ratchet` used to select whether the recorded baseline was consulted AT ALL.
+Without it this program printed every finding it had just measured and then
+returned 0 without opening the baseline — so rc 0 meant either "compared, and
+at or below the record" or "never compared", and nothing in the exit status
+told the two apart. Probed on `main` at ee849c19e that read as a clean sweep
+over 15 live findings, with the baseline present AND with it moved aside.
+
+The comparison is now unconditional, which makes rc 0 mean one thing:
+
+  * a baseline this program could READ, and a count at or below it -> 0;
+  * a count ABOVE that record -> 1, as before;
+  * a baseline that is absent, unreadable or truncated -> 2, NOT CHECKED,
+    with the path named. An absent artefact is not a measurement of zero.
+
+An explicitly recorded count IS a measurement — including a recorded 0, which
+asserts a clean tree and against which the FIRST silent decline is still NEW
+and still exits 1. Only the absence of a readable record declines to attribute.
+
+`--ratchet` is retained and accepted so the wired invocation
+(`tools/ci/repo_hygiene_gates.sh`) and #693's tests keep working verbatim; it
+now selects nothing, because the behaviour it selected is the only behaviour.
+
 chip-AGNOSTIC: pure Python AST. No design, PDK or vendor literals.
 
 Exit codes:
     0  audit completed at or below the recorded baseline
     1  --strict with any finding, or the count GREW past the baseline
-    2  I/O error, or a baseline was demanded and none exists (NOT CHECKED)
+    2  I/O error, an empty scan, or NO READABLE BASELINE to compare against
+       (NOT CHECKED — never a quiet pass)
 """
 from __future__ import annotations
 
@@ -216,14 +241,32 @@ BASELINE_NAME = "silent_decline_baseline.json"
 
 
 def _load_baseline(p: Path) -> Optional[int]:
+    """The recorded count, or ``None`` when NO count could be read.
+
+    ``None`` and ``0`` are deliberately different values and must never be
+    collapsed (vibe-ic#1705). ``0`` is a measurement — of a tree with no silent
+    decline in it — and the first decline against it is NEW. ``None`` says the
+    record could not be read at all, so nothing here can be called new or old.
+
+    Every way of failing to read one lands on ``None``: a missing path, a
+    directory, unreadable or truncated bytes, a document that is not an object,
+    a ``count`` that is absent or not a number. ``bool`` is excluded because
+    ``True`` is an ``int`` in Python and ``{"count": true}`` would otherwise
+    ratchet against 1; a negative count is excluded because no scan can produce
+    one, so it is a corrupt record rather than a measurement.
+    """
     if not p.is_file():
         return None
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not isinstance(d, dict):
         return None
     n = d.get("count")
-    return n if isinstance(n, int) else None
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        return None
+    return n
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -287,27 +330,37 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if a.strict and rep["count"]:
         return 1
-    if a.ratchet:
-        if rep["scanned"] == 0:
-            print("VACUOUS_PASS: 0 files scanned — the audit examined nothing.")
-            return 2
-        base = _load_baseline(bl)
-        if base is None:
-            print(f"[NOT CHECKED] no baseline at {bl} — record one with "
-                  f"--write-baseline before this can ratchet.")
-            return 2
-        if rep["count"] > base:
-            print(f"[FAIL] silent remedy declines GREW {base} -> "
-                  f"{rep['count']}: a new remedy can now refuse with nobody "
-                  f"told. Disclose the decline path, or triage the existing "
-                  f"backlog and lower the baseline.")
-            return 1
-        if rep["count"] < base:
-            print(f"[PASS] {base} -> {rep['count']}; lower the baseline so the "
-                  f"recorded number stops claiming debt that is paid.")
-            return 0
-        print(f"[PASS] no NEW silent remedy decline ({rep['count']} recorded "
-              f"over {rep['scanned']} file(s))")
+    # UNCONDITIONAL, not gated on `--ratchet` (vibe-ic#1705). While the
+    # comparison was opt-in, the DEFAULT run printed every finding it had just
+    # measured and returned 0 without ever opening the baseline — so rc 0 said
+    # both "compared, and at or below the record" and "never compared", and no
+    # caller could tell which it had been handed. `--ratchet` is still accepted
+    # so the wired invocation and #693's tests read the same; it now selects
+    # nothing, because the behaviour it selected is the only behaviour.
+    if rep["scanned"] == 0:
+        print("VACUOUS_PASS: 0 files scanned — the audit examined nothing.")
+        return 2
+    base = _load_baseline(bl)
+    if base is None:
+        print(f"[NOT CHECKED] no silent-decline baseline states a readable "
+              f"measurement at {bl} — absent, unreadable or truncated is not a "
+              f"measurement of zero, so the {rep['count']} finding(s) above "
+              f"can be called neither new nor recorded. Measure this tree and "
+              f"record it with --write-baseline before asking this audit to "
+              f"attribute anything. See vibe-ic#1705.")
+        return 2
+    if rep["count"] > base:
+        print(f"[FAIL] silent remedy declines GREW {base} -> "
+              f"{rep['count']}: a new remedy can now refuse with nobody "
+              f"told. Disclose the decline path, or triage the existing "
+              f"backlog and lower the baseline.")
+        return 1
+    if rep["count"] < base:
+        print(f"[PASS] {base} -> {rep['count']}; lower the baseline so the "
+              f"recorded number stops claiming debt that is paid.")
+        return 0
+    print(f"[PASS] no NEW silent remedy decline ({rep['count']} recorded "
+          f"over {rep['scanned']} file(s))")
     return 0
 
 

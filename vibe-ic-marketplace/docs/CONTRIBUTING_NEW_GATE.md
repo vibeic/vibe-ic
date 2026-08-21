@@ -35,4 +35,4 @@ If your gate is non-fatal in some legitimate cases, define a waiver key (`<gate>
 
 ## Tests
 
-Ship pytest cases for both PASS and FAIL paths under `tests/`. Reference: `plugins/vibe-ic/tests/test_*.py`.
+Ship pytest cases for both PASS and FAIL paths under `plugins/vibe-ic/programs/tests/`. Reference: `plugins/vibe-ic/programs/tests/test_*.py`.
