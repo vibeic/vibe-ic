@@ -1,9 +1,0 @@
-{
-  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
-  "coresight_spec.txt": [
-    {
-      "literal": "12. V",
-      "label": "auto-discovered (numeric_unit)"
-    }
-  ]
-}

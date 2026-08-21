@@ -1,7 +1,0 @@
-{
-  "ic_name": "CAN-FD (Bosch M_CAN Controller v3.3.1, ISO 11898-1:2015)",
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "The M_CAN module + the ISO 11898-1:2015 CAN FD protocol provide no confidentiality, integrity (against tampering), or authentication features. CAN is broadcast — every node sees every frame; the M_CAN's acceptance filter is a content-routing mechanism, not a security boundary. Built-in protocol primitives that provide error-detection (anti-corruption, not anti-tampering) are: 15-bit BCH CRC (Classical), 17-bit / 21-bit CRC (CAN FD), bit-stuffing, fixed-form field checks, bit-error monitoring, ISO mode stuff-count + parity protection. Modern automotive security layers ON TOP of CAN FD: AUTOSAR SecOC (Secure Onboard Communication) profile uses CMAC over CAN FD payload; ISO/SAE 21434 governs vehicle cybersecurity; CAN-XL adds further enhancements. None of these are part of the M_CAN spec — they are application-layer protocols carried in the CAN FD DATA FIELD. The M_CAN's Protected-Write semantics on configuration registers (CCCR.CCE + CCCR.INIT) prevent accidental misconfiguration during operation but is not a security mechanism — it is a clock-domain-crossing safety mechanism. The Customer Register at 0x008 is reserved for customer-specific configuration / control / status bits (functionality outside this spec) — implementers may use this for OEM-specific lock bits."
-  }
-}

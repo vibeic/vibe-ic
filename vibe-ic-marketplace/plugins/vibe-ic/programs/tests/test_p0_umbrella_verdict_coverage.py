@@ -64,8 +64,10 @@ import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _flow_verdict_tiers as _T  # noqa: E402
+import _p0_umbrella_probe_flow as _probe  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
 
 
@@ -113,11 +115,22 @@ def _run_main(tmp_path, monkeypatch, records, extra_args=("--phase", "2",
     instead of a statement. One test below deliberately does NOT do this — that
     is the case where the subtraction `registered - invoked` is wrong, which is
     why `not_invocable_gate_count` is its own field.
+
+    THE FLOW IS THE FIXTURE'S TOO, carrying the shipped P0 verbatim over a
+    SATISFIED `blocks_on` chain — see `_p0_umbrella_probe_flow`. On the shipped
+    63-step flow a `tmp_path` project leaves P0's ancestry MISSING, and the
+    step-execution ordering rule rewrites `PASS` to `PASS_VOIDED_BY_DEPENDENCY`
+    and reds the run — deciding this file's verdicts before the umbrella's own
+    word could be read, which is a statement about the empty project and not
+    about the composer this file is for.
     """
     proj = tmp_path / "proj"
     (proj / "rtl").mkdir(parents=True)
     (proj / "rtl" / "top.v").write_text(
         "module top(input a, output b); assign b = a; endmodule\n")
+    _probe.write_seed(proj)
+    flow_def = tmp_path / "p0_probe_flow.yaml"
+    _probe.write_flow(flow_def)
 
     def _stub(_project, **kw):
         out = kw.get("records_out")
@@ -128,7 +141,8 @@ def _run_main(tmp_path, monkeypatch, records, extra_args=("--phase", "2",
 
     monkeypatch.setattr(F, "_run_structural_rtl_gates", _stub)
     report = tmp_path / "report.json"
-    rc = F.main([str(proj), "--json", str(report), *extra_args])
+    rc = F.main([str(proj), "--json", str(report),
+                 "--flow-def", str(flow_def), *extra_args])
     audit = json.loads(
         (proj / "reports" / "audit" /
          "phase23_completion_audit.json").read_text())
@@ -403,7 +417,14 @@ def test_real_gates_a_fully_invoked_clean_registry_is_PASS(
     (None, [_not_invocable("g")], "SKIPPED-CONDITION"),
     (False, [_fail("g")], "FAIL"),
     (False, [_fail("g"), _not_invocable("h")], "FAIL"),
-    (True, [], "PASS"),
+    # `len(fails) == 0` over a population of ZERO. Not reachable from the one
+    # production call site today — `_run_structural_rtl_gates` appends one
+    # record per registered gate, so `executed is not None` implies a full
+    # records list — but this row is the PIN, and a pinned PASS outlives the
+    # invariant that makes it unreachable. Pinned as INCOMPLETE so a future
+    # caller that holds its own records list cannot inherit a certification
+    # over nothing.
+    (True, [], "INCOMPLETE"),
     (True, [_pass("g")], "PASS"),
     (True, [_pass("g"), _skip("h")], "PASS"),
     (True, [_not_invocable("g")], "INCOMPLETE"),
