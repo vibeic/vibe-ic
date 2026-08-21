@@ -26,21 +26,32 @@ the digest the guard compares. The guard's decision point was never entered
 once. The sweep's output, its exit code and its summary were identical to those
 of a sweep that ran the guard 756 times and found nothing wrong.
 
-MEASURED, ON THIS TREE, BEFORE WRITING ANY OF THIS
-==================================================
-52 programs under ``programs/`` are sweep-shaped (a CLI taking a set of targets,
-one rule applied to each, one aggregate verdict). 34 of them could be driven to
-a genuine zero-reach run by a generic corpus of three valid, readable, trivial
+MEASURED, ON THIS TREE, BY ``sweep_reach_survey.py``
+====================================================
+Every number below is what the shipped instrument prints on this tree today.
+Re-derive it rather than trust it; that is why the instrument ships.
+
+    python3 sweep_reach_survey.py                      -> 8 / 35   (this branch)
+    python3 sweep_reach_survey.py --empty-corpus dirs  -> 25 / 29
+    python3 sweep_reach_survey.py --empty-corpus none  -> 16 / 18
+
+58 programs under ``programs/`` are sweep-shaped (a CLI taking a set of targets,
+one rule applied to each, one aggregate verdict). 35 of them can be driven to a
+genuine zero-reach run by a generic corpus of three valid, readable, trivial
 Verilog modules — a corpus each sweep READS in full and whose contents its rule
-never applies to. Of those 34:
+never applies to. On pristine main the populated-corpus ratio is 7/35; this
+module moves ``perc_corpus_sweep`` and makes it 8/35.
 
-    6 / 34   disclose the zero reach (rc 2 and/or the VACUOUS_PASS sentinel)
-   28 / 34   exit 0 with a clean-looking summary
+Empty the corpus and the ratio inverts — 25/29, or 16/18 with no targets at
+all. NOTE that the DENOMINATOR moves too, and it has to: a sweep handed nothing
+often cannot parse its own argv, so it leaves the drivable set. The two numbers
+are answers to different questions and the report labels which corpus produced
+it (``corpus: populated`` / ``corpus: empty:dirs``) so they cannot be quoted
+against each other as if the denominator had held still.
 
-The same corpus emptied out — no files at all — flips the ratio to 28/35. So
-the existing disclosure covers "I was given nothing" and stops there. It is the
-POPULATED-corpus zero-reach case, the one where the sweep really did read every
-target and really did judge none of them, that is silent.
+So the existing disclosure covers "I was given nothing" and stops there. It is
+the POPULATED-corpus zero-reach case, the one where the sweep really did read
+every target and really did judge none of them, that is silent.
 
 ``clock_domain_reg_crossing_check`` is the measurement in one line. On the empty
 corpus it exits 2. On the populated one it prints

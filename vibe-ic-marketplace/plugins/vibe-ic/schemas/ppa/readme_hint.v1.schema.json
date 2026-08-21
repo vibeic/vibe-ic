@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vibeic.ppa.readme_hint.v1",
+  "title": "PPA hints read out of a README, and their reconciliation against authority",
+  "description": "The document `programs/readme_ppa_extractor.py` emits. Every value in it is a HINT: it was read out of a project's own prose, it carries the source span it was read from, and it NEVER overrides an L-doc or an SDC. The document says so in its own body (`authority: HINT`, `authoritative: false`) so that a consumer which read no docstring still cannot mistake it for a measurement. Derived from the documents the program actually emits -- the success path (verdict OK / CONFLICT) and the unreadable-input path (verdict CANNOT_CHECK). See docs/PPA_INTERFACES.md sections 1, 2, 3 and 5.",
+  "type": "object",
+  "required": ["schema", "authority", "authoritative", "read", "source",
+               "hints", "conflicts", "agreements", "undetermined", "verdict"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "vibeic.ppa.readme_hint.v1"},
+    "authority": {
+      "description": "This document's own authority level, and it is a constant. A consumer that finds anything else here is not reading this program's output.",
+      "const": "HINT"
+    },
+    "authoritative": {
+      "description": "Always false, in the body, by construction. The guarantee is structural rather than a rule somebody has to remember.",
+      "const": false
+    },
+    "read": {"type": "boolean"},
+    "verdict": {"enum": ["OK", "CONFLICT", "CANNOT_CHECK"]},
+    "reason": {"type": "string", "minLength": 1},
+    "source": {"$ref": "#/$defs/source"},
+    "hints": {"type": "array", "items": {"$ref": "#/$defs/hint"}},
+    "conflicts": {
+      "description": "A hint contradicts an authoritative value at a MATCHED scope. rc=1 -- a finding about the design's own documents.",
+      "type": "array",
+      "items": {
+        "allOf": [
+          {"$ref": "#/$defs/comparison"},
+          {"properties": {"resolution": {"const": "AUTHORITY_WINS"},
+                          "reason": {"const": "VALUE_MISMATCH"}}}
+        ]
+      }
+    },
+    "agreements": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {"$ref": "#/$defs/comparison"},
+          {"properties": {"resolution": {"const": "AGREE"},
+                          "reason": {"const": "VALUE_MATCH"}}}
+        ]
+      }
+    },
+    "undetermined": {
+      "description": "The two values were not shown to be comparable. Per PPA_INTERFACES.md section 2 that is UNDETERMINED and never a winner -- and never a conflict.",
+      "type": "array",
+      "items": {
+        "allOf": [
+          {"$ref": "#/$defs/comparison"},
+          {"properties": {
+            "resolution": {"const": "UNDETERMINED"},
+            "reason": {"enum": ["SCOPE_NOT_SHOWN_TO_MATCH",
+                                "VALUE_KINDS_NOT_COMPARABLE"]}}}
+        ]
+      }
+    },
+    "inputs": {"$ref": "#/$defs/inputs"},
+    "authority_records": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/authority_record"}
+    },
+    "document_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "allOf": [
+    {
+      "description": "CANNOT_CHECK is the load-bearing verdict: 'I could not read it' and 'I read it and it was empty' must never produce the same document. It carries a reason, states that it read nothing, and carries no hints -- an empty hint list under an OK verdict is a different fact and stays a different document.",
+      "if": {"properties": {"verdict": {"const": "CANNOT_CHECK"}},
+             "required": ["verdict"]},
+      "then": {"required": ["reason"],
+               "properties": {"read": {"const": false},
+                              "hints": {"maxItems": 0}}}
+    },
+    {
+      "description": "A document that states a verdict ABOUT a README carries the inputs it was run with, the authority it compared against, and its own identity. Without those three a reader cannot tell a run that compared nothing from a run that compared everything and agreed.",
+      "if": {"properties": {"verdict": {"enum": ["OK", "CONFLICT"]}},
+             "required": ["verdict"]},
+      "then": {"required": ["inputs", "authority_records",
+                            "document_sha256"]}
+    },
+    {
+      "description": "CONFLICT is exactly 'at least one conflict', in both directions. A CONFLICT document with an empty conflicts list, or an OK document carrying one, is a document whose summary and whose body disagree.",
+      "if": {"properties": {"verdict": {"const": "CONFLICT"}},
+             "required": ["verdict"]},
+      "then": {"properties": {"conflicts": {"minItems": 1}}},
+      "else": {"properties": {"conflicts": {"maxItems": 0}}}
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source": {
+      "description": "The README this document was built from. `sha256` is of the ARTEFACT BYTES, so an auditor reproduces it with `sha256sum`.",
+      "type": "object",
+      "required": ["path", "sha256", "parser"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": ["string", "null"]},
+        "sha256": {"oneOf": [{"$ref": "#/$defs/digest"},
+                             {"type": "null"}]},
+        "parser": {"const": "readme_ppa_extractor.py"}
+      }
+    },
+    "span": {
+      "description": "The characters the parser read, and where. Half-open and 0-indexed, so `line[col_start:col_end] == text` always holds and a reader can open the file and see the same characters. A provenance field that cannot be checked is decoration.",
+      "type": "object",
+      "required": ["line", "col_start", "col_end", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "line": {"type": "integer", "minimum": 1},
+        "col_start": {"type": "integer", "minimum": 0},
+        "col_end": {"type": "integer", "minimum": 0},
+        "text": {"type": "string"}
+      }
+    },
+    "hint": {
+      "description": "One (platform, metric) pair and the span it came from.",
+      "type": "object",
+      "required": ["metric", "value", "platform", "platform_key", "authority",
+                   "authoritative", "source_form", "span", "span_sha256",
+                   "span_status"],
+      "additionalProperties": false,
+      "properties": {
+        "metric": {"type": "string", "minLength": 1},
+        "value": {
+          "description": "Numeric for a counted metric, a string for an identifier-shaped one (a device code, a `WxH` die size), null for a sub-block entry whose count lives under its own key. Never a sentinel: 0 means zero.",
+          "type": ["string", "number", "null"]
+        },
+        "platform": {"type": ["string", "null"]},
+        "platform_key": {
+          "description": "`platform` folded for comparison -- case, whitespace runs and surrounding punctuation are presentation. It is a comparison key, not a normaliser that gets to decide two platforms are the same.",
+          "type": ["string", "null"]
+        },
+        "authority": {"const": "HINT"},
+        "authoritative": {"const": false},
+        "source_form": {"enum": ["markdown_table", "inline_kv"]},
+        "vendor": {"type": "string", "minLength": 1},
+        "extraction_strategy": {"type": "string", "minLength": 1},
+        "sub_block": {"type": "string", "minLength": 1},
+        "span": {"oneOf": [{"$ref": "#/$defs/span"}, {"type": "null"}]},
+        "span_sha256": {"oneOf": [{"$ref": "#/$defs/digest"},
+                                  {"type": "null"}]},
+        "span_status": {"enum": ["RECORDED", "NO_SPAN_RECORDED"]}
+      },
+      "allOf": [
+        {
+          "description": "RECORDED means both the span and its digest are there. A hint that claims a recorded span and carries none is the provenance gap this status exists to make visible.",
+          "if": {"properties": {"span_status": {"const": "RECORDED"}},
+                 "required": ["span_status"]},
+          "then": {"properties": {"span": {"$ref": "#/$defs/span"},
+                                  "span_sha256": {"$ref": "#/$defs/digest"}}}
+        },
+        {
+          "description": "NO_SPAN_RECORDED never invents one. The hint is still emitted -- dropping it would turn a provenance gap into a silently smaller result set.",
+          "if": {"properties": {"span_status": {"const": "NO_SPAN_RECORDED"}},
+                 "required": ["span_status"]},
+          "then": {"properties": {"span": {"type": "null"},
+                                  "span_sha256": {"type": "null"}}}
+        }
+      ]
+    },
+    "comparison": {
+      "description": "One hint measured against one authoritative value. `hint_ignored` is a constant and `resolution` is never a decision this program makes: the authority wins by construction.",
+      "type": "object",
+      "required": ["metric", "hint_value", "hint_platform", "hint_span",
+                   "hint_span_sha256", "authority_kind", "authority_value",
+                   "authority_platform", "authority_source", "resolution",
+                   "hint_ignored", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "metric": {"type": "string", "minLength": 1},
+        "hint_value": {"type": ["string", "number"]},
+        "hint_platform": {"type": ["string", "null"]},
+        "hint_span": {"oneOf": [{"$ref": "#/$defs/span"}, {"type": "null"}]},
+        "hint_span_sha256": {"oneOf": [{"$ref": "#/$defs/digest"},
+                                       {"type": "null"}]},
+        "authority_kind": {"enum": ["SDC", "L_DOC"]},
+        "authority_value": {"type": ["string", "number"]},
+        "authority_platform": {"type": ["string", "null"]},
+        "authority_source": {"$ref": "#/$defs/authority_source"},
+        "authority_derived": {"$ref": "#/$defs/derived"},
+        "resolution": {"enum": ["AUTHORITY_WINS", "AGREE", "UNDETERMINED"]},
+        "hint_ignored": {"const": true},
+        "reason": {"enum": ["VALUE_MISMATCH", "VALUE_MATCH",
+                            "SCOPE_NOT_SHOWN_TO_MATCH",
+                            "VALUE_KINDS_NOT_COMPARABLE"]}
+      }
+    },
+    "authority_source": {
+      "type": "object",
+      "required": ["path", "pointer"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string"},
+        "pointer": {
+          "description": "Where in that file the value is: a JSON pointer for an L-doc, the matched construct for an SDC.",
+          "type": "string"
+        }
+      }
+    },
+    "derived": {
+      "description": "A value this program computed rather than read. It carries its formula -- PPA_INTERFACES.md section 3: hash the value you PARSED, and a number you computed is DERIVED and states how.",
+      "type": "object",
+      "required": ["formula"],
+      "properties": {"formula": {"type": "string", "minLength": 1}}
+    },
+    "authority_record": {
+      "description": "One authoritative value harvested from an L-doc or an SDC. A hint is not in this list and can never be added to it.",
+      "type": "object",
+      "required": ["metric", "value", "kind", "platform", "platform_key",
+                   "source"],
+      "additionalProperties": false,
+      "properties": {
+        "metric": {"type": "string", "minLength": 1},
+        "value": {"type": ["string", "number"]},
+        "kind": {"enum": ["SDC", "L_DOC"]},
+        "platform": {"type": ["string", "null"]},
+        "platform_key": {"type": ["string", "null"]},
+        "clock": {"type": ["string", "null"]},
+        "derived": {"$ref": "#/$defs/derived"},
+        "source": {"$ref": "#/$defs/authority_source"}
+      }
+    },
+    "inputs": {
+      "description": "What the run was asked to do. `rtl_read` is a constant false: this program reads no RTL and says so in the output rather than implying it looked.",
+      "type": "object",
+      "required": ["rtl_dir", "rtl_read", "l_docs", "sdcs", "tolerance_pct",
+                   "assume_scope_match", "sdc_time_unit"],
+      "additionalProperties": false,
+      "properties": {
+        "rtl_dir": {"type": ["string", "null"]},
+        "rtl_read": {"const": false},
+        "l_docs": {"type": "array", "items": {"type": "string"}},
+        "sdcs": {"type": "array", "items": {"type": "string"}},
+        "tolerance_pct": {"type": "number", "minimum": 0},
+        "assume_scope_match": {"type": "boolean"},
+        "sdc_time_unit": {"enum": ["ns", "ps", "us", "s"]}
+      }
+    }
+  }
+}

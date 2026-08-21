@@ -89,8 +89,12 @@ def _dead_dir(root: Path, name: str) -> Path:
 
 
 def _run(args, cwd=PROGRAMS):
+    # 60s is the per-call ceiling `ci_harness_timeout_ceiling_check` derives
+    # from the 180s CI harness bound. A child allowed to outlive the harness
+    # kills the SESSION instead of the test, and every child driven here is a
+    # sub-second CLI over a three-module corpus.
     return subprocess.run([sys.executable] + [str(a) for a in args],
-                          cwd=str(cwd), capture_output=True, text=True, timeout=120)
+                          cwd=str(cwd), capture_output=True, text=True, timeout=60)
 
 
 def _sentinel_lines(proc) -> int:

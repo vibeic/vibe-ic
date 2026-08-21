@@ -59,6 +59,16 @@ Usage:
     python3 sweep_reach_survey.py --json report.json    # + machine-readable
     python3 sweep_reach_survey.py --only perc_corpus_sweep.py --only rom_init_lint.py
     python3 sweep_reach_survey.py --max-silent 28       # ratchet
+    python3 sweep_reach_survey.py --empty-corpus dirs   # the CONTRAST number
+    python3 sweep_reach_survey.py --empty-corpus none   # "I was given nothing"
+
+THE AGGREGATION RULE IS THE MEASUREMENT
+=======================================
+The per-program verdict is decided by the LEAST flattering invocation, and on
+this tree that rule is the difference between 8/35 and 14/35 — it changes 6 real
+programs. It is a rule inside the instrument that moves the published number, so
+it is controlled in ``tests/test_sweep_reach_aggregation_control.py`` against
+both fixtures AND the real corpus, rather than only described here.
 """
 from __future__ import annotations
 
@@ -164,16 +174,35 @@ def discover(programs_dir: Path, only: Optional[List[str]] = None) -> Dict[str, 
 
 
 # -------------------------------------------------------------------- driving
-def make_corpus(root: Path) -> Tuple[List[str], List[str]]:
-    """Write the zero-reach probe corpus; return (file targets, dir targets)."""
+#: The corpora this survey can be pointed at.
+#:   ``populated``   three readable trivial modules — "I read every target and
+#:                   judged none of them", the shape this work is about.
+#:   ``empty:dirs``  three readable directories containing nothing — "I was
+#:                   handed targets and there was nothing in them".
+#:   ``empty:none``  no targets at all — "I was given nothing".
+#: The last two are the CONTRAST the populated number is quoted against, so they
+#: are produced by this instrument rather than described in a commit message.
+CORPORA = ("populated", "dirs", "none")
+
+
+def make_corpus(root: Path, empty: Optional[str] = None) -> Tuple[List[str], List[str]]:
+    """Write the zero-reach probe corpus; return (file targets, dir targets).
+
+    ``empty="dirs"`` writes the same three directories with no file in them;
+    ``empty="none"`` writes nothing and returns no targets at all.
+    """
+    if empty == "none":
+        return [], []
     files, dirs = [], []
     for i, (name, body) in enumerate(sorted(_PROBES.items())):
-        (root / name).write_text(body)
-        files.append(str(root / name))
         d = root / f"p{i}"
         d.mkdir(exist_ok=True)
-        (d / name).write_text(body)
         dirs.append(str(d))
+        if empty == "dirs":
+            continue
+        (root / name).write_text(body)
+        files.append(str(root / name))
+        (d / name).write_text(body)
     return files, dirs
 
 
@@ -181,12 +210,18 @@ def _invocations(program: Path, shape: Dict[str, Any],
                  files: List[str], dirs: List[str]) -> Dict[str, List[str]]:
     cmds: Dict[str, List[str]] = {}
     if shape["positionals"]:
-        cmds["positional/files"] = [str(program)] + files
-        cmds["positional/dirs"] = [str(program)] + dirs
+        built = {"positional/files": [str(program)] + files,
+                 "positional/dirs": [str(program)] + dirs}
     else:
         opt = shape["options"][0]
-        cmds[f"{opt}/files"] = [str(program)] + sum(([opt, t] for t in files), [])
-        cmds[f"{opt}/dirs"] = [str(program)] + sum(([opt, t] for t in dirs), [])
+        built = {f"{opt}/files": [str(program)] + sum(([opt, t] for t in files), []),
+                 f"{opt}/dirs": [str(program)] + sum(([opt, t] for t in dirs), [])}
+    # An arg shape with no targets left in it is not that shape any more, it is
+    # the no-targets shape wearing its label. Drop it UNLESS both are empty,
+    # which is the deliberate `empty:none` corpus and must still be driven once.
+    for label, cmd in built.items():
+        if len(cmd) > 1 or not (files or dirs):
+            cmds[label] = cmd
     return cmds
 
 
@@ -215,7 +250,7 @@ def classify_run(rc: Any, out: str, err: str) -> Tuple[str, str]:
 
 
 def survey(programs_dir: Path, only: Optional[List[str]] = None,
-           timeout: int = 90) -> Dict[str, Any]:
+           timeout: int = 90, empty_corpus: Optional[str] = None) -> Dict[str, Any]:
     """Discover, drive and classify. Returns the report document."""
     found = discover(programs_dir, only=only)
     reach = _sr.SweepReach(unit="sweep-shaped program",
@@ -223,7 +258,7 @@ def survey(programs_dir: Path, only: Optional[List[str]] = None,
     rows: List[Dict[str, Any]] = []
 
     with tempfile.TemporaryDirectory(prefix="sweep_reach_survey_") as tmp:
-        files, dirs = make_corpus(Path(tmp))
+        files, dirs = make_corpus(Path(tmp), empty=empty_corpus)
         for name, shape in found.items():
             attempts = []
             verdicts = set()
@@ -279,6 +314,10 @@ def survey(programs_dir: Path, only: Optional[List[str]] = None,
     doc: Dict[str, Any] = {
         "survey": GATE,
         "programs_dir": str(programs_dir),
+        # Which corpus produced this ratio. A populated-corpus number and an
+        # empty-corpus number are answers to different questions and must never
+        # be read off the same unlabelled field.
+        "corpus": f"empty:{empty_corpus}" if empty_corpus else "populated",
         "discovered": len(found),
         "driven": len(driven),
         "discloses": len(discloses),
@@ -306,10 +345,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--max-silent", type=int, default=None, metavar="N",
                     help="ratchet: FAIL when more than N driven sweeps are "
                          "SILENT (default: advisory, never fails on this)")
+    ap.add_argument("--empty-corpus", choices=("dirs", "none"), default=None,
+                    help="drive the sweeps against an EMPTY corpus instead of "
+                         "the populated probe corpus: 'dirs' = three readable "
+                         "but empty directories, 'none' = no targets at all. "
+                         "This is the contrast the populated ratio is quoted "
+                         "against; it is a switch so the counter-number is "
+                         "re-derivable rather than asserted.")
     args = ap.parse_args(argv)
 
     doc = survey(Path(args.programs_dir), only=args.only or None,
-                 timeout=args.timeout)
+                 timeout=args.timeout, empty_corpus=args.empty_corpus)
     reach: _sr.SweepReach = doc.pop("_reach")
 
     passed = True
@@ -326,6 +372,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json != "-":
         print(reach.verdict_line(GATE, passed))
         print(f"  {reach.line()}")
+        print(f"  corpus: {doc['corpus']}")
         print(f"  discovered {doc['discovered']} sweep-shaped program(s); "
               f"drove {doc['driven']} to a zero-reach run "
               f"({doc['not_drivable']} not drivable by the probe corpus)")
