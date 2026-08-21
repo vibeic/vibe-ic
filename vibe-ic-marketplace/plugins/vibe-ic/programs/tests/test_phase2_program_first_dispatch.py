@@ -1,5 +1,5 @@
 """Tests for the v0.1.10 program-first wiring of the deterministic RTL dispatcher
-into phase2_one_shot_runner.step_rtl_gen.
+into design_one_shot_runner.step_rtl_gen.
 
 Contract: if the project ships a structured RTL spec at a conventional location,
 step_rtl_gen emits RTL DETERMINISTICALLY (no LLM) and returns PASS before any
@@ -13,7 +13,7 @@ from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
 FSM_SPEC = {

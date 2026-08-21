@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import flow_compliance_check as F  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
-_SRC = (PROGRAMS / "phase2_one_shot_runner.py").read_text()
+_SRC = (PROGRAMS / "design_one_shot_runner.py").read_text()
 
 
 def test_no_sim_to_all_proved_derivation_in_runner():
@@ -46,7 +46,12 @@ def test_no_placeholder_sby():
 
 
 def test_formal_not_run_manifest_carries_fallback_direction():
-    i = _SRC.index("formal_not_run.json")
+    # v1.5.58 — the Step-5 formal engine is now WIRED (formal_harness_gen +
+    # abc pdr), so the runner mentions formal_not_run.json first in the block
+    # comment and only WRITES it in the FAIL-SAFE tail. Locate the WRITE site
+    # (rindex = the `.write_text` call), not the first textual mention, then
+    # assert the SKIP manifest STILL carries the same fallback direction.
+    i = _SRC.rindex("formal_not_run.json")
     window = _SRC[i - 1800:i + 1400]
     assert '"fallback_skill": "assertion-gen"' in window
     assert "SKIPPED-CONDITION" in window
@@ -60,8 +65,13 @@ def test_existing_real_results_not_clobbered():
     assert 'if not (formal_dir / "results.json").is_file():' in window
 
 
-def test_step5_is_named_capability_gap():
-    assert F._PLATFORM_CAPABILITY_GAPS[5] == "cap:formal_property_proof"
+def test_step5_no_longer_a_capability_gap():
+    # v1.3.99 — formal_property_run (real SymbiYosys, built-in ABC engines)
+    # closed the LAST cap-gap: step 5 left the table and gates normally; an
+    # absent proof is an honest MISSING unless the runner's formal_not_run.json
+    # sentinel self-skips it (#608).
+    assert 5 not in F._PLATFORM_CAPABILITY_GAPS
+    assert F._PLATFORM_CAPABILITY_GAPS == {}
 
 
 def test_registry_has_assertion_fallback():

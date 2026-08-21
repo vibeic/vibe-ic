@@ -59,7 +59,7 @@ def test_571a_named_def_present_is_trusted_not_skipped(tmp_path, monkeypatch):
     pdk = R.PdkConfig(name="sky130A", liberty="/foss/x.lib",
                       tech_lef="/t.tlef", cell_lef="/c.lef", cell_gds=None,
                       site="s", drc_deck=None)
-    monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0: (0, "", ""))
+    monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0, **_: (0, "", ""))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
     monkeypatch.setattr(R, "_container_mounts", lambda c: [])
     r = R.step_lvs(tmp_path, "chip_top", pdk, "x")
@@ -81,7 +81,7 @@ def test_571a_fallback_floorplan_def_is_skipped(tmp_path, monkeypatch):
     pdk = R.PdkConfig(name="sky130A", liberty="/foss/x.lib",
                       tech_lef="/t.tlef", cell_lef="/c.lef", cell_gds=None,
                       site="s", drc_deck=None)
-    monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0: (0, "", ""))
+    monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0, **_: (0, "", ""))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
     monkeypatch.setattr(R, "_container_mounts", lambda c: [])
     r = R.step_lvs(tmp_path, "chip_top", pdk, "x")
