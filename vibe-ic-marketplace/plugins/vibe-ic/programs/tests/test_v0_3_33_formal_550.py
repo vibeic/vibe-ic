@@ -35,14 +35,16 @@ def test_550a_staged_src_basename_resolves(tmp_path):
     staged = fdir / "aes_proof" / "src"
     staged.mkdir(parents=True)
     (staged / "aes.sv").write_text("module aes; endmodule\n")
-    r = F._resolve(fdir, tmp_path, "rtl/aes.sv")
+    # #418 signature: the .sby's OWN directory is the primary base. For a
+    # top-level .sby that IS fdir, so #550(a) is unchanged by that change.
+    r = F._resolve(fdir, fdir, tmp_path, "rtl/aes.sv")
     assert r is not None and r.name == "aes.sv"
 
 
 def test_550a_genuinely_missing_still_none(tmp_path):
     fdir = _formal(tmp_path)
     # NEGATIVE: a ref with no source anywhere (neither original nor staged)
-    assert F._resolve(fdir, tmp_path, "rtl/ghost.sv") is None
+    assert F._resolve(fdir, fdir, tmp_path, "rtl/ghost.sv") is None
 
 
 # ── end-to-end: a real staged+multi-flag proof PASSes; a bare claim FAILs ──

@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+
 
 # Field-name catalog — same as protocol_turnaround_audit
 DELIMITER_TYP_KEYS = ("delimiter.typical_ns", "delimiter_typical_ns",
@@ -104,7 +106,7 @@ def extract_params(
 
 COCOTB_TEMPLATE = '''\
 """Auto-generated turnaround timeline assertion.
-Emitted by `protocol_timeline_assert_gen.py` (Vibe-IC plugin v0.1.50).
+Emitted by `protocol_timeline_assert_gen.py` (Vibe-IC plugin v__PLUGIN_VERSION__).
 Do not edit; regenerate from L2 timing JSON.
 """
 import cocotb
@@ -168,6 +170,7 @@ async def test_rx_tx_turnaround(dut):
 
 def emit_tb(params: TurnaroundParams) -> str:
     return (COCOTB_TEMPLATE
+            .replace("__PLUGIN_VERSION__", _pmd.running_plugin_version())
             .replace("__CLOCK_PERIOD_NS__", str(int(params.clock_period_ns)))
             .replace("__DELIM_TYP_NS__", str(int(params.delimiter_typical_ns)))
             .replace("__TURN_MIN_NS__", str(int(params.t_turnaround_min_ns)))
