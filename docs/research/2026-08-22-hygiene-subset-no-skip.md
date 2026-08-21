@@ -1475,3 +1475,54 @@ because the alternative was to let a result stand whose subject had moved
 underneath it — and every time this document did that, it was wrong: the
 "eleven commits", the "cheap" remedy, the "~550 s" cost, and the pinned pair.
 Four for four is enough of a pattern to stop assuming and re-run.
+
+## 25. What is at stake in the batch-67 decision, and one decision of my own
+
+**If batch 67 is abandoned, nothing is lost from `main`'s point of view.**
+Measured on `81cd5321b`:
+
+```
+run_gatekeeper_review in tools/gatekeeper-land.sh   : 0 occurrences
+--hygiene-record-in in gatekeeper_review.py         : 0 occurrences
+```
+
+Neither half of `4232a7301` is on `main`. So the skip button never arrives —
+and neither does the wiring the 2026-08-21 ruling asked for. **This branch has
+no value except as part of batch 67**: on `main` the two target tests already
+pass, because there is nothing there to fix.
+
+That is the shape of the decision for whoever holds the batch. It is not "land
+this or main stays broken". It is "land batch 67 and the ruling is carried out
+with its guarantee intact, or do not, and the ruling waits for another
+assembly". Both are defensible; the one thing that must not happen is batch 67
+landing WITHOUT this branch, because that is the only combination in which the
+skip button reaches `main`.
+
+### A decision I am making rather than deferring
+
+The 300 s watchdog (§18) is a real defect with a proven mechanism and a 70 s
+reproduction, and it has no owner. **I am not fixing it, and the reason is not
+that it is out of scope — it is that the fix is a safety trade I am not
+positioned to make.**
+
+`DEFAULT_STALL_GRACE_S` exists so that a HUNG run is not read as a slow one.
+Raising it makes every real hang take longer to detect, on the landing path,
+for every future run. Choosing the new value requires knowing what a legitimate
+slow shard costs on the largest corpus anyone will bind — which is precisely
+the number neither `jmeas3` nor I could measure, because this host's corpus
+holds one routed DEF and its 114-cell clone never finishes under the current
+grace. Picking a number without that input would be the same class of act as
+the "~550 s" figure I had to correct in §3: an assertion wearing a measurement's
+clothes.
+
+What is prepared for whoever does take it, all of it in §18 and §16:
+the mechanism, the reproduction (`--stall-grace 5`, ~70 s, any tree), the
+constant and the file, the fact that `gatekeeper_review` never forwards its own
+value, the six-row duration table, and the three outcomes of the one experiment
+that would settle the corpus-size question. What is missing is the bidirectional
+control the flow-change standard requires — a case proving the new value still
+catches a genuine hang — and that control cannot be written honestly until the
+legitimate-slow-shard cost is known.
+
+That is an honest UNDETERMINED with the missing input named, which this repo
+prefers to a manufactured answer, and it is the last thing this document says.
