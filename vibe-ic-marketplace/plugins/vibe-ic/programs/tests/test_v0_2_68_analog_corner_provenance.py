@@ -77,6 +77,13 @@ def _block(tmp_path, corners, spec_status="PASS"):
     bdir.mkdir(parents=True, exist_ok=True)
     (bdir / "corner_results.json").write_text(json.dumps({
         "_provenance": "real_ngspice",
+        # `_provenance` and the executed/derived split are both about HOW the
+        # corners were obtained. `design_content` is the separate answer to
+        # WHAT circuit they were obtained from, and these fixtures assert a
+        # certified sweep — so without it each of them would also be asserting
+        # that a sweep which will not name its subject can be certified.
+        # Executed-vs-derived accounting stays the property under test.
+        "design_content": "structure_and_geometry",
         "total_corners": len(corners),
         "results_found": len(corners),
         "corners": corners,
@@ -149,7 +156,7 @@ def _pdk_project(tmp_path, declared):
 
 
 def test_pdk_mismatch_named_finding(tmp_path):
-    _pdk_project(tmp_path, "HP18E80 180nm BCD")
+    _pdk_project(tmp_path, "commercial 180nm BCD")
     r = NPC.run_audit(tmp_path)
     assert r.passed is False
     assert any(f.rule == "PDK_MISMATCH" for f in r.findings)
@@ -169,11 +176,11 @@ def test_pdk_na_target_skips_comparison(tmp_path):
 
 
 def test_pdk_mismatch_waivable_with_rationale(tmp_path):
-    _pdk_project(tmp_path, "HP18E80 180nm BCD")
+    _pdk_project(tmp_path, "commercial 180nm BCD")
     (tmp_path / "waivers.json").write_text(json.dumps({
         "waived_steps": [{
             "id": "A4", "ticket": "VIBE-PDK_MISMATCH-1",
-            "rationale": "Native HP18E80 ngspice models unavailable; "
+            "rationale": "native commercial-PDK ngspice models unavailable; "
                          "sky130 proxy decks document the env gap.",
             "approver": "user", "review_required": True,
         }]
@@ -212,6 +219,15 @@ def test_pre_vs_post_zero_compared_fails(tmp_path):
 def test_pre_vs_post_with_items_still_passes(tmp_path):
     a = tmp_path / "phase3" / "analog" / "blk"
     a.mkdir(parents=True)
+    # The pre-layout baseline this comparison is measured AGAINST, carrying
+    # the record of what circuit it is. Added when this gate — the one the
+    # FLOW declares for the post-layout step — stopped certifying a
+    # comparison whose subject nothing on the tree names. This test is about
+    # the ZERO-COMPARED rule, so its fixture has to clear every other one.
+    (a / "corner_results.json").write_text(json.dumps(
+        {"block": "blk", "_provenance": "real_ngspice",
+         "corners": [{"name": "tt_27c_1v8", "simulator_run": True}],
+         "design_content": "structure_and_geometry"}))
     (a / "pre_vs_post.json").write_text(json.dumps(
         {"comparisons": {"vout": {"pre_layout": 1.80, "post_layout": 1.79}}}))
     r = PVP.run_audit(tmp_path)

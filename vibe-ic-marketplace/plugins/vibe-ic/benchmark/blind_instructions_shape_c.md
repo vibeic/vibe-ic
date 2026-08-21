@@ -91,6 +91,21 @@ preserves blindness while preventing already-captured recoveries from
 recurring. It is run-dir material, NOT a dataset file — the cross-problem
 prohibition above does not apply to it.
 
+**MANDATORY PRE-AUTHORING CONSUMPTION (ORGANIC #733 - staged != consumed).**
+Staging the digest is not enough; you MUST CONSUME it per design. BEFORE you
+author EACH design, you MUST: (1) OPEN the staged `<RUNDIR>/lessons.md`; (2)
+KEYWORD-MATCH the design genre against the digest genre-convention sections -
+`barrel shifter`, `frequency divider / odd / dual-edge`, `async FIFO`,
+`serial<->parallel`, `edge/pulse detect`, `FSM Moore`, `gshare`, `serial twos
+complement`, `K-map -> mux`, `IEEE-754 float multiply`, `saturating counter /
+no upper limit / cannot overflow`; (3) APPLY the matched
+section to your RTL. section 4-E NO-LEAK: apply a convention ONLY "unless the
+spec states otherwise" - never override an explicit spec; a spec-ambiguous case
+stays spec-faithful (no oracle answer). The #716 recovered-floor gain is only
+realized when the author reads+applies the matched convention, not merely has
+it staged.
+
+
 ## Per-problem procedure (every `<Prob>` in BATCHFILE)
 
 1. Read ONLY `<DATASET>/<Prob>_prompt.txt`. Extract: module name (typically
@@ -122,7 +137,7 @@ prohibition above does not apply to it.
 
 5. Run the deterministic gate (emits the scoreable sample on hard-PASS):
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/benchmark-harness/gates_atomic.py \\
+   python3 ${CLAUDE_PLUGIN_ROOT}/benchmark/gates_atomic.py \\
        --prob <Prob> \\
        --workdir <RUNDIR>/work \\
        --dataset <DATASET> \\
@@ -155,7 +170,7 @@ prohibition above does not apply to it.
 ## After the batch — DO NOT run the scorer
 
 The host orchestrator scores via the canonical scorer at
-`${CLAUDE_PLUGIN_ROOT}/benchmark-harness/score_iverilog_tb.py` AFTER all batches
+`${CLAUDE_PLUGIN_ROOT}/benchmark/score_iverilog_tb.py` AFTER all batches
 finish. Generation must stay blind; only the scorer touches the hidden TB/ref.
 
 ## Final report (compact table)

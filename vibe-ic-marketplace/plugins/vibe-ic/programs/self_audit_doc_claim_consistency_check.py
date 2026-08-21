@@ -4,13 +4,13 @@
 Sole rule: UNREPRODUCIBLE_BENCHMARK_PATH.
 
 When a fenced code block in CHANGELOG.md / README.md / docs/**/*.md
-quotes a benchmark path of the form `1st_benchmark_sn2025/<dir>/`,
+quotes a benchmark path of the form `1st_benchmark_example/<dir>/`,
 that directory must exist on disk relative to the repo root. Catches
 the v1.6.45 escape where CHANGELOG was rewritten to claim
 `phase2+3_v10634/` was the real benchmark when only
 `phase2+3_v10634-vendor/` existed.
 
-VACUOUS-PASSes when the benchmark tree (`1st_benchmark_sn2025/`) is
+VACUOUS-PASSes when the benchmark tree (`1st_benchmark_example/`) is
 absent — fresh checkouts and CI hosts without private benchmarks see
 the gate as inapplicable.
 
