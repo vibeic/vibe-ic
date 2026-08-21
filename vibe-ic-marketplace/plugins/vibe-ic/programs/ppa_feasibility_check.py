@@ -171,7 +171,8 @@ def check_corpus(named: pathlib.Path, contract: Optional[str],
                  no_waivers: bool) -> int:
     corpus, origin = _corpus.resolve(named, gate=_GATE, announce=True)
     if not corpus.is_dir():
-        return _corpus.refuse(_GATE, named, corpus, origin, False, _SCANNED)
+        return _corpus.refuse(_GATE, named, corpus, origin, False, _SCANNED,
+                              opt_in_flag=None)  # this gate offers no opt-in
     paths = corpus_candidate_sets(corpus)
     scanned = sum(1 for x in corpus.glob("**/*.json") if x.is_file())
     print(f"ppa_feasibility_check --corpus {corpus}: {len(paths)} candidate "
