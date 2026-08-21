@@ -11,6 +11,21 @@
 - **Phase 3** — 實體 → Tapeout：Stage 3（實體+簽核）・Stage 4（輸出+Tapeout）・Stage 5（製造與測試）
 - **並行** — Analog A1–A9・Mixed-signal M1–M4
 
+**兩條出口路徑。** 編號 1→44 的序列是兩條路徑共用的；另有五個路徑專屬步驟不是，
+它們帶 `ip`／`ic` 後綴而非編號，因為不計入循序步驟數。
+
+- **走哪一條** — 由 **0.5ic**（引入送件樣板）決定：拿到投片方的格位樣板就走
+  chip/IC 路徑；具名的 `NO_TEMPLATE.txt` 則走 cell/IP 路徑。
+- **cell/IP 路徑** — 交付物是別人拿去擺放的區塊，終點在 **37.5ip**（Digital
+  Hardmacro Generation：LEF + Liberty + GDS + Verilog），**不會**接到 Step 38，
+  也不進入 Stage 5。
+- **chip/IC 路徑** — 交付物是可投片的裸晶，額外加入 **15.5ic**（pad ring）、
+  **26.5ic**（die finishing：seal ring + 晶粒識別）與 **37.5ic**（shuttle
+  precheck），然後才走 Step 38 與 Stage 5。
+
+只跑 Step 1–38 得到的是**裸晶**：沒有 pad ring、沒有 seal ring、沒有晶粒識別。
+對 IP 交接而言這是正確的，但那不是一顆可投片的晶片。
+
 ---
 
 ## Phase 1 — 規格與文件
@@ -38,6 +53,12 @@
 | D4 | 協定類別合成 | 偵測 IC 屬於哪一種協定類別（86 類）並合成對應協定事實。 | 輸入文件全文 | `ic_class` + 協定事實 | is_<proto> + <proto>_synth | — |
 | D5 | Coverage 報告 | 核對輸入文件的內容是否完整落入 L 文件。 | 輸入文件 + L 文件 | parity / coverage 報告 | parity 報告器 | — |
 
+### 流片路徑選擇（決定走 chip/IC 還是 cell/IP）
+
+| # | 步驟 | 做什麼 | 輸入 | 輸出 | 工具 (EDA) | Programs / Skills |
+|---|---|---|---|---|---|---|
+| 0.5ic | Submission template ingest（路徑選擇） | 取得並存放投片方公開的專案樣板 — 格位尺寸、晶粒識別 cell，以及該格位的 pad 清單。這一步決定走哪條路：有格位樣板就走 chip/IC 路徑（15.5ic・26.5ic・37.5ic）；具名的 `NO_TEMPLATE.txt` 則走 cell/IP 路徑（37.5ip）。宣告為外部輸入且不主動探測，因為它是取得的、不是產生的 — 流程因此仍能誠實說出「從未取得」。 | 投片方公開的專案樣板（外部） | `input/submission_template/slots/*.yaml`（或具名的 `NO_TEMPLATE.txt`）・`submission_template.json` | —（讀檔，不需 EDA 工具） | `submission_template_ingest`・`submission_template_check` |
+
 ### 架構探索前端（選用，匯入 Step 1）
 
 | 前端 | 做什麼 | 輸入 | 輸出 |
@@ -57,6 +78,7 @@
 | # | 步驟 | 做什麼 | 輸入 | 輸出 | 工具 (EDA) | Programs / Skills |
 |---|---|---|---|---|---|---|
 | 1 | Spec-to-RTL | 依 L 系列設計文件撰寫可合成的 RTL（SoC/CPU 類可走 IP-catalog 重用＋膠合層路徑，例如 Caravel 類 harness 平台）。 | L1–L27 文件 | `rtl/*.v(.sv)`・coverage 報告 | —（AI 依 L 文件撰寫；SoC 類走 IP-catalog） | skills：`spec-to-rtl` |
+| 1.6x | 🔁 跨層 PPA 搜尋 — 改寫保真度 | 證明跨層 PPA 搜尋產生的候選 RTL 仍然是規格所描述的那顆晶片。Step 13 做不到這件事：它把每個候選拿去和**自己的** netlist 比對,所以被改寫過的候選必然通過 —— 已在一顆序列乘法器上量到:少掉一項的變體面積小 6.12%,Step 13 仍然回傳 exit 0。本步驟補上另一個關係:候選 RTL ≡ **基準** RTL,並拒絕任何規格沒有明文開放的槓桿。無條件執行:沒有跑搜尋的設計會得到一筆明確的 NOT_APPLICABLE 紀錄,而不是被靜默略過。 | 基準 `rtl/*.v(.sv)` 快照 · 候選 `rtl/*.v(.sv)` | `search_space.json` · `rewrite_equivalence.json` · `rewrite_equivalence_check.json` | Yosys (equiv_make / equiv_induct / bounded sat miter) | `crosslayer_search_space`・`crosslayer_rewrite_equivalence`・`crosslayer_rewrite_equivalence_check` |
 | 2 | 🔁 Lint | 靜態檢查 RTL 風格與常見錯誤，可自動修復的先修。 | RTL | lint 報告（hygiene / ROM-init） | Verilator lint | `rtl_hygiene_lint`・`rom_init_lint`・`rtl_bug_report_schema_check`・`internal_vs_external_timing_check`…<br>skills：`rtl-review` |
 | 3 | 🔁 CDC / RDC check | 檢查跨時脈域 / 跨重置域的訊號交握是否安全。 | RTL | CDC/RDC 報告（crossing / async / reset-dep） | 自研 CDC/RDC 掃描 | `cdc_crossing_check`・`cdc_async_input_check`・`reset_dependency_check`<br>skills：`cdc-check`・`rdc-check` |
 | 4 | 🔁 Simulation | 產生 per-IC oracle testbench 跑功能模擬（golden 比對）並量測覆蓋率；L21 申告 power domain 時，TB 建議涵蓋 power-state 切換情境（開源無 UPF-aware sim，結構驗證歸 M2）。 | RTL・L10 測項 | sim log・results.xml・coverage 報告 | iverilog/vvp・Verilator coverage<br>`eda_simulate` | `testbench_gen`・`coverage_closure`・`l10_tb_conformance_check`・`l12_tb_coverage_check`…<br>skills：`testbench-gen` |
@@ -72,7 +94,7 @@
 | 9 | Synthesis | RTL 合成並做技術映射（dfflibmap + abc -liberty）為標準元件閘級網表。 | RTL・SDC・liberty | `synth/netlist.v`・面積統計 | Yosys + abc<br>`eda_synth` | `synth_wrapper_gen`・`synth_netlist_check`・`provenance_check`<br>skills：`synth-doctor` |
 | 10 | 🔁 Pre-layout STA | 佈局前多角點靜態時序分析（SS/TT/FF）＋合成後功耗預覽（gate-level vectorless、預設 toggle rate，`analysis_mode` 欄揭露；與 Step 33 post-layout 可選 VCD vector 的精度不同）。 | 網表・SDC・liberty | pre-PnR 時序報告 + 摘要・`pre_pnr_power_preview.rpt` | OpenSTA<br>`eda_sta` | `sta_report_check`<br>skills：`sta-review` |
 | 11 | DFT insertion | 插入掃描鏈並產生測試圖樣（開源 Fault：scan + stuck-at ATPG + TAP；MBIST/LBIST/壓縮不在開源範圍）。 | 網表 | scan 網表・ATPG 覆蓋率報告 | Fault (scan+ATPG+TAP)<br>`eda_dft` | `fault_atpg_run`・`dft_atpg_coverage_check`<br>skills：`dft-insert`・`atpg` |
-| 12 | Post-DFT optimization | 插入 DFT 後重新最佳化時序與面積。 | scan 網表 | `post_dft_netlist.v` | Yosys resynth | skills：`synth-doctor` |
+| 12 | Post-DFT optimization | 插入 DFT 後重新最佳化時序與面積；輸出的網表必須真的保留 scan chain，不能只是路徑存在（2026-08-08：修補 matrix_63x8 dimension-2 缺口——舊的 files_exist-only gate 對空檔、把 DFT 前網表冒充貼上、或 scan chain 悄悄消失的網表都會放行；Step 13 的 LEC 抓不到 scan chain 消失，因為 scan insertion 本來就設計成功能上透明）。 | scan 網表 | `post_dft_netlist.v` | Yosys resynth | `dft_post_optimization_scan_survival_check`<br>skills：`synth-doctor` |
 | FS1 | ISO-26262 FMEDA 診斷覆蓋率（僅安全設計） | 對已宣告的安全機制（ECC/parity）做故障注入：在受保護路徑注入 stuck-at 故障，量測診斷覆蓋率對 ASIL 門檻。非安全設計不適用。 | RTL・已宣告安全機制・ASIL | fmeda_coverage 報告（量測 DC） | iverilog 故障注入 | `fmeda_fault_injection_coverage`・`fmeda_coverage_check` |
 | DT1 | 轉態延遲故障（at-speed LOC）ATPG | 在 scan-cut 網表的 2-time-frame launch-on-capture 展開上，為轉態故障產生 launch-capture 雙圖樣，並評定轉態測試覆蓋率。組合／無掃描設計不適用。 | scan-cut 網表・時脈 | 轉態覆蓋率報告 | Yosys SAT（`sat -prove`） | `transition_fault_atpg_run`・`transition_coverage_check` |
 | DT2 | 路徑延遲故障（at-speed 時序評級）ATPG | 以真實佈局後時序從繞線後網表列出最長的 K 條 launch-on-capture 路徑，逐路徑產生並評級 launch-capture 雙圖樣（robust 與 non-robust）；證明無圖樣可產的路徑排除不計。繞線後網表與寄生尚未存在時不適用。 | 繞線後網表・SPEF・SDC・scan cut | 路徑延遲覆蓋率報告 | OpenSTA + Yosys SAT（`sat -prove`） | `path_delay_fault_atpg_run`・`path_delay_coverage_check` |
@@ -89,6 +111,7 @@
 | # | 步驟 | 做什麼 | 輸入 | 輸出 | 工具 (EDA) | Programs / Skills |
 |---|---|---|---|---|---|---|
 | 15 | Floorplan + PDN | 規劃晶片平面配置與電源網路；插入 tapcell（latch-up well-tie，SKY130 14µm 規則）。 | 網表・hardmacro LEF（`pdk_local/` 自動納入，經 IP 整合檢查：LEF/GDS/Liberty 對齊＋corner 覆蓋＋L21 電源域一致；macro LEF 建議含 obstruction 層） | `floorplan.def`・PDN | OpenROAD (init_floorplan+pdngen+tapcell)<br>`eda_pnr` | `phase3_backend_step`・`floorplan_pdn_check`・`ip_integration_check` |
+| 15.5ic | Pad ring（僅 chip/IC 路徑） | 在核心外圍擺放 I/O pad ring，讓晶粒可以打線出腳。cell/IP 路徑不執行。 | `floorplan.def` | `padring.def`・`padring.json` | OpenROAD／PDK I/O 元件庫 | `pad_ring_gen`・`pad_ring_check` |
 | 16 | Clock planning | 規劃時脈樹的分佈策略。 | floorplan | `clock_plan.json` | OpenROAD CTS 規劃 | `clock_plan_check`<br>skills：`cts-plan` |
 | 17 | Placement | 擺放標準元件（全域 + 細部）。 | floorplan・網表 | `placed.def` | OpenROAD (global+detailed place)<br>`eda_pnr` | `placement_legality_check`<br>skills：`placement-optimize` |
 | 18 | Spare-cell + ECO-prep insertion | 預置備用元件與 ECO 預備，讓日後修 bug 只需改金屬層（與 Step 32 ECO 互為前後手：此處預置、Step 32 取用）。 | placed.def | `spare_cells.json`・覆蓋率報告 | OpenROAD<br>`eda_pnr` | `spare_cell_coverage_check`（preservation 改在 Step 34 審核：備用元件必須存活的優化步驟都跑完之後） |
@@ -100,6 +123,7 @@
 | 24 | 🔁 IR drop（靜態 + 動態） | 電源網路壓降分析：靜態，外加 VCD 向量化動態 IR（依真實切換 VCD 加權的壓降）。 | routed.def（PSM）・VCD | 靜態 + 動態 IR 報告 | OpenROAD PSM（`read_vcd`） | `ir_drop_report_check`・`dynamic_ir_drop_check`<br>skills：`ir-drop-triage` |
 | 25 | 🔁 EM check | 檢查電流密度、確保金屬線壽命。 | routed.def（PSM -enable_em） | EM 報告 + 分段電流 | OpenROAD PSM -enable_em | `em_report_check`<br>skills：`em-check` |
 | 26 | 🔁 Antenna check | 檢查並修復製程天線效應。 | routed.def | antenna 報告 | OpenROAD check_antennas/repair | `antenna_report_check` |
+| 26.5ic | Die finishing — seal ring + 晶粒識別（僅 chip/IC 路徑） | 加上 PDK 自帶的 seal ring 與 shuttle 的晶粒識別 cell。位置在天線檢查**之後**、實體驗證**之前**，因此 Step 31 簽核的那顆晶粒就是出貨的那顆。cell/IP 路徑不執行。 | `routed.def` | `die_finished.def`（或具名的 `die_finishing.SKIPPED.txt`）・`die_finishing.json` | PDK 自帶 seal-ring 產生器（KLayout／Magic），只呼叫、不重寫 | `die_finishing_gen`・`die_finishing_check` |
 | 27 | 🔁 Signal integrity | 串擾 / 雜訊影響分析（SPEF 耦合電容篩查，advisory tier 明示）。 | SPEF | SI 報告（含 >0.9 耦合 watch-list） | 自研 SPEF 耦合篩查（OpenSTA 視窗 advisory） | `si_crosstalk_check` |
 | 28 | 🔁 PERC / Reliability sign-off | ESD 焊環＋放電拓樸、latch-up well-tap、跨電壓域保護的強制簽核；對應 PERC 四類——netlist 檢查＋netlist 驅動的 layout 檢查（自動化）、電流密度＋P2P 電阻（具名 manual-review）。manual-review 由資深實體設計／可靠度工程師簽核，準則記入 `perc_equivalent.json`（categories[].status=MANUAL_REVIEW＋`review_criteria`：PDK Jmax 表、ESD 放電路徑 P2P 上限、Vhold>Vdd、L21 跨域契約等具名限值），結果回填 checklist[].confirmed。 | 閘級網表・routed.def・L21 power intent・L3 ESD 規格・24–27 報告 | `perc_equivalent.json`・PERC memo・gate 判定 | 自研 PERC-equivalent（DEF 驅動） | `perc_signoff_check` |
 | 29 | Post-layout gate-level sim | 帶 SDF 延遲的閘級模擬，確認佈局後功能正確（無 SDF 重模擬即誠實 SKIP）。 | 閘級網表・SDF・TB | post-sim 結果 | iverilog + SDF<br>`eda_simulate` | `post_layout_sim_check` |
@@ -116,6 +140,8 @@
 | 35 | DFM screen | 可製造性篩查：redundant-via 比率（single-cut 比例 advisory）＋密度**優化建議**（僅交叉引用 Step 34 閘結果，永不重複 FAIL）；OPC/RET/SRAF/PSM 以 FOUNDRY_SIDE 具名揭露（≤28nm 升級為 DESIGNER_COLLAB_REVIEW 設計者協作項；節點由 `dfm_screen_check` 自 `input/pdk/liberty` 檔名推導，記入同一 `dfm_screen.json` 的 process_nm／advanced_node／foundry_side 欄）。 | routed.def・密度報告 | `dfm_screen.json`（via 統計＋foundry-side 清單） | 自研 DEF via 統計＋密度交叉引用 | `dfm_screen_check` |
 | 36 | Tapeout checklist | 最終簽核清單逐項確認（實質判定：DRC 計數、證據鏈）。 | 全部簽核報告 | `tapeout_checklist.json` | —（清單彙整） | `tapeout_signoff_check`<br>skills：`tapeout-checklist` |
 | 37 | GDSII output | 產出交付晶圓廠的 GDSII（僅當 Step 31 PV 全淨）。 | routed.def・merged GDS | 簽核級 `*.gds` | Magic/KLayout stream-out<br>`eda_gds` | `gds_size_check`・`provenance_check` |
+| 37.5ip | Digital hardmacro generation（cell/IP 路徑終點） | 把簽核完成的區塊打包成可重用 hardmacro。**cell/IP 路徑在此結束** — 沒有 Step 38、沒有 Stage 5。 | 簽核級 `*.gds` | `hardmacro/*.lef`・`*.lib`・`*.gds`・`*.v` | abstract + Liberty + stream-out | `digital_hardmacro_gen`・`digital_hardmacro_check` |
+| 37.5ic | Tape-out precheck — 我們自己的 general ladder，加上該 PDK 若有 shuttle precheck 時投片方自己的拒絕（僅 chip/IC 路徑） | 同一份 GDS，兩隻手臂。凡走到這一步的設計都跑我們的 general ladder；當該 PDK 有 shuttle precheck 且該投片方的樣板確實已取得時，再額外跑投片方自己的容器——那是外部權威，不是我們自訂的標準。PDK 沒有 shuttle precheck 不是另一條路徑，只是同一步少一隻手臂；登錄檔說有、但樣板從未取得，判為 `NOT_DETERMINED`，絕不靜默略過。兩隻手臂意見相左時，這一步拒絕並同時記下兩邊的裁決，而不是偏袒其中一邊。 | 簽核級 `*.gds`・`tapeout_declaration.json` | `tapeout_precheck.json`・`general_precheck.json`・`shuttle_precheck.json`・`SIGNOFF_*.html`・`BRIEF_*.html` | 投片方的 precheck 容器（僅第二隻手臂） | `tapeout_precheck` → `general_precheck` + `tapeout_readiness_check` |
 | 38 | Foundry handoff | foundry 實體 mask kit：mask spec＋WAT 計畫＋scribe PCM＋corner ATE 向量（chip-specific；foundry 待供欄位以 `PENDING_FOUNDRY_*` 具名——由 Step 36 checklist 追蹤、foundry 回覆後回填）。 | GDS・netlist 統計・L10 測項 | `mask_spec.json`・`wat_plan.json`・scribe・`corner_test_vectors.json` | —（pack 產生器） | `foundry_handoff_package_check`<br>skills：`tapeout-checklist` |
 | 39 | FPGA final sign-off | 最終 FPGA 重編譯與板上驗證（板上 attestation，含硬體證據）。 | RTL・板卡 | final `.sof`・`on_board_pass.json` | Quartus + 板上量測 | `bringup_plan_gen`・`fpga_on_board_attestation_check`<br>skills：`fpga-test-harness` |
 
@@ -173,7 +199,8 @@
 
 **44 個循序步驟**（Stage 1：1–6・Stage 2：7–14・Stage 3：15–32・Stage 4：33–39・
 Stage 5：40–44），外加 Phase 1（Agent 路徑與 doc-gen 路徑 D1–D5）與兩條並行支線
-（Analog A1–A9・Mixed-signal M1–M4）。預檢：P0（環境健檢）。條件式字母步驟：FS1（ISO-26262 FMEDA 診斷覆蓋率，僅安全設計）·
+（Analog A1–A9・Mixed-signal M1–M4）。不計入 1→44 的路徑專屬步驟：0.5ic（路徑選擇）・15.5ic・26.5ic・37.5ic（僅 chip/IC 路徑）與 37.5ip（cell/IP 路徑終點）；一個設計只走其中一條，不會兩條都走。
+預檢：P0（環境健檢）。條件式字母步驟：FS1（ISO-26262 FMEDA 診斷覆蓋率，僅安全設計）·
 DT1（轉態延遲故障 ATPG，僅掃描設計）· DT2（路徑延遲故障 at-speed ATPG，掃描設計且繞線完成後）· DT3（小延遲缺陷 at-speed 分級，接 DT2 後）。
 編排器 `vibe_ic_one_shot_runner.py` 依序執行 Phase 1 → Phase 2 → Analog → Phase 3。
 

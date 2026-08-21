@@ -36,6 +36,9 @@ import re
 import sys
 from typing import List, Tuple
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _vacuous_exit as _vx  # noqa: E402
+
 
 def _strip_comments(lines: List[str]) -> List[str]:
     """Remove Yosys-style line comments (#) while keeping original line index.
@@ -417,6 +420,44 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{verdict}: {reason_text}", file=stream)
         for m in report["messages"]:
             print(f"  {m}", file=stream)
+        # ORGANIC #887, THE THIRD CASE — and it is the same defect as the two
+        # step-3 gates arriving from the other direction.
+        #
+        # This branch has ALWAYS printed a recognised line-start disclosure
+        # (`VACUOUS_PASS…:`). The consumer never saw it. `output_snippet` keeps
+        # only the LAST `_OUTPUT_SNIPPET_CHARS` (300) characters of each stream,
+        # the verdict line above is ~249 characters and goes FIRST, and the
+        # ~194-character handoff-netlist note printed after it evicts the token
+        # from the window. MEASURED on this tree against an empty project:
+        #
+        #     len(stdout) = 444
+        #     _stdout_signals_vacuous(FULL stdout)      -> True
+        #     _stdout_signals_vacuous(consumer snippet) -> False
+        #
+        # Path-length INDEPENDENT — lost at every checkout depth, on a short
+        # `tmp_path` as surely as on a deep one. Its sibling on the same step,
+        # `yosys_hilomap_required_check`, prints a comparable sentence with
+        # nothing after it and is read correctly. Two gates, one disclosure,
+        # opposite outcomes, decided by how much text followed.
+        #
+        # The repair is NOT to reorder these lines — that only buys headroom
+        # until the next message is added, which is how this arrived. It is to
+        # put the token on the stream whose CONTENT IS BOUNDED: stderr is empty
+        # on this rc-0 path, and `_vacuous_exit.announce_vacuous` writes one
+        # line built from the gate name and the gate's OWN `reason_class`
+        # token. Nothing caller-supplied reaches it, so the tail cut is a no-op
+        # on that stream at any depth and behind any amount of stdout.
+        #
+        # The exit code is deliberately NOT moved here (unlike the two step-3
+        # gates): `resolve_no_ys_script` owns this branch's rc and uses it to
+        # separate a NON-CONFORMANT inline `yosys -p` command (#649, rc 1) from
+        # a conformant one, and re-routing that is a different question from
+        # the one #887 asks. `verdict` is checked rather than `rc` for the same
+        # reason — when the handoff-netlist arm fails it rewrites `verdict` to
+        # FAIL, and a failing gate has not passed vacuously.
+        if str(verdict).startswith("VACUOUS"):
+            _vx.announce_vacuous("yosys_script_template_check",
+                                 fields["reason_class"], stream=sys.stderr)
         return rc
 
     overall = 0

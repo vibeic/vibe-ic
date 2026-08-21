@@ -79,13 +79,79 @@ ones; it defaults to `not-retained`, which is the honest answer when nobody
 has said otherwise. A cell that records "not-retained" is a better deliverable
 than one that quietly looks whole.
 
-Raw PnR scratch under phase3/stage3 and the per-step scratch (steps/) are
-still not staged: that is a decision about what counts as evidence, which is
-separate from how big a file is. NOTE that the three hand-staged reference
-cells DO carry `phase3/stage3/pnr/routed.def` and `phase3/stage3/extracted/
-*.spef`, so on that subtree this program still publishes less than they do.
-Widening it is an evidence-policy call, not a size call, and is deliberately
-left alone here.
+Raw PnR scratch under phase3/stage3 is still not staged: that is a decision
+about what counts as evidence, which is separate from how big a file is. NOTE
+that the three hand-staged reference cells DO carry `phase3/stage3/pnr/
+routed.def` and `phase3/stage3/extracted/*.spef`, so on that subtree this
+program still publishes less than they do. Widening it is an evidence-policy
+call, not a size call, and is deliberately left alone here.
+
+THE PER-STEP EVIDENCE — RECORDED, NOT MIRRORED (`STEP_ROUTING.txt`, `steps/`)
+============================================================================
+`steps/` used to be excluded here by name, as "per-step scratch". The effect
+was that NO published cell carried anything per-step, so a reader — or a
+per-step dimension of the evaluation matrix — had nothing to read even when
+the run had produced a full steps tree.
+
+But the run's `steps/` tree is a view made of SYMLINKS into that run
+directory, and a symlink is a promise about a filesystem, not evidence. Two
+measurements, both on this repo:
+
+  * `_car15_evidence`, a CONVERGED run whose steps tree was materialized and
+    whose run directory was then renamed: 63 steps, 90 declared outputs,
+    **83 of 83 view symlinks DANGLING**. Copying that tree would have
+    published 83 broken links.
+  * the legacy hand-staged cells that DID commit their steps tree:
+    **142 tracked symlinks, 31 of whose targets the index does not carry** —
+    so a clean clone receives 31 dangling links from a committed cell. The
+    same hole `_published_tree` documents at #404.
+
+So the published form is the RECORD, never the view. Per step folder, mirrored
+into the owner's nested `steps/<phase>/<stage>/<id>_<slug>/` layout,
+`STEP_RECORD.json` states each declared output as a RUN-RELATIVE path with its
+byte size, its sha256, and where a reader of THIS cell can find it. No symlink
+is created and none is copied. That is the same doctrine `GDS_MANIFEST.txt`
+already applies to geometry: the hash is what makes an artefact verifiable
+whether or not it is stored.
+
+Recording it resolves the declaration against the run at PUBLISH time, which
+is the load-bearing part. On the same `_car15_evidence` run, **7 outputs
+declared present by 7 steps whose own status is `pass` no longer exist** —
+`phase3/stage3/pnr/{floorplan,placed,post_cts,post_hold,routed,filled}.def`
+and one `.spef`. Mirroring the view would have shown 83 identical broken
+links and named none of them; the record names the step, the path and the
+size that was claimed.
+
+`STEP_ROUTING.txt` at the cell root is the flat, greppable index of the same
+data, and — like `LAYOUT_ROUTING.txt` — it is emitted even when there is
+nothing to report. A cell whose run produced no steps tree at all says so in
+one line, which is a different fact from a cell published before this
+existed.
+
+THE PDK-REVISION GUARD (anti-irreproducibility) — BLOCKING
+==========================================================
+A cell published here is a sign-off number for one (IC x PDK). The toolchain
+half of that claim has been recorded since `reports/container_image.json`
+existed; the PDK half was never recorded at all. Everything a run said about
+its PDK said the REQUEST — `--pdk <name>` on this program's own command line,
+`env_PDK_ROOT` in a repro bundle, the registry entry, and this cell's own
+`v<version>_<PDK>` directory name — and a name is not a revision. Two cells a
+year apart, against a re-pulled volume, are byte-identical in that record and
+were measured against different process data.
+
+So a run must arrive carrying `reports/pdk_revision.json`, written at run time
+by `pdk_revision_resolve` from the tree the tools ACTUALLY READ (resolved
+through symlinks, revision taken from an artefact the tree itself ships).
+Absent, unreadable, or carrying no declared revision -> REFUSE, nothing is
+staged. There is no flag that turns this into a warning and no spelling of
+"unknown" that satisfies it: a record that says the revision could not be
+determined is the gap restated, not the gap closed.
+
+This is a guard on the RUN, not a retroactive rule about cells already
+published: a cell that predates the record is untouched, and only a NEW
+sign-off has to arrive attributable. That is the same scoping the repo already
+chose for `benchmark_run_manifest` -- "what must not happen again is a NEW
+number arriving without its composition".
 
 THE CONVERGENCE GUARD (anti-fabrication)
 ========================================
@@ -119,6 +185,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -126,7 +193,7 @@ import subprocess
 import _published_tree
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # The layout artefacts. These used to be dropped from every copied subtree by
 # EXTENSION, on the stated grounds that they were "gitignored / too large".
@@ -156,11 +223,34 @@ _CONVERGED = ("PASS", "PASS_WITH_WAIVERS")
 
 # Evidence subtrees copied verbatim (minus excluded extensions). Order = the
 # canonical committed shape of the reference cells; NOT phase3/stage3 (raw PnR),
-# NOT steps/ (per-step scratch), NOT sim/ (empty in the reference).
+# NOT sim/ (empty in the reference).
+#
+# `steps/` is deliberately NOT in this list and never will be: it is a tree of
+# symlinks into the run directory, and `_copy_tree` would either dereference
+# them (duplicating every artefact's bytes into the cell — measured 358 MB
+# twice on edge_llm_accel, see `rtl_scan_scope`) or ship links that dangle for
+# any reader who is not on the authoring host. It is published by
+# `publish_steps` below, as a RECORD.
 _COPY_SUBTREES = (
     "phase1",
     "phase2",
     Path("phase3") / "reports",
+    # The A-track's own evidence. This list was derived from the DIGITAL
+    # reference cells, so it staged `phase3/reports` and nothing else under
+    # phase3 — and an ANALOG cell keeps its substance in `phase3/analog/`:
+    # per-block specs, extracted netlists, and the hardmacro layouts.
+    #
+    # MEASURED (u_hawaii_adc x sky130A, 2026-08-06). The cell published with 31
+    # analog files left behind, so the folder that is supposed to BE the
+    # evidence did not contain the evidence — while `reports/analog/` came
+    # across and made it look complete. Eight tests read
+    # `phase3/analog/hardmacro/` and could only find it in the pre-canonical
+    # run tree at the IC level, which is exactly the sibling directory the
+    # layout contract forbids and which therefore could not be retired.
+    #
+    # Absent on a digital cell, where `_copy_tree` skips a missing source, so
+    # the staged output of every digital cell is byte-identical to before.
+    Path("phase3") / "analog",
     "reports",
 )
 _COPY_FILES = ("provenance.jsonl",)
@@ -173,6 +263,60 @@ class Refuse(Exception):
 # --------------------------------------------------------------------------
 # Verdict helpers.
 # --------------------------------------------------------------------------
+
+def _pdk_revision(run_dir: Path) -> Dict[str, object]:
+    """The run's resolved PDK revision, or REFUSE. **BLOCKING** — a failure
+    here stops the publish and stages nothing.
+
+    The record is READ, never re-derived: at publish time the tree that ran may
+    be on another host, another image, or gone, so anything computed here would
+    describe the PUBLISHER's PDK rather than the run's. That substitution is
+    the whole failure class this guard exists to close, one layer up.
+
+    `record_gaps` is IMPORTED from the program that writes the record, so the
+    writer and this reader cannot drift into two different notions of
+    "recorded" — the same rule the write-ledger guard below follows.
+
+    WHAT IT DOES NOT DEFEND AGAINST, stated so nobody reads more into it: a
+    hand-written record. Anyone can type forty hex characters into the file.
+    This closes the ACCIDENTAL gap — the one where a real run is published and
+    nobody, including its author, can say afterwards which process data it was
+    measured against — and that is the same floor `benchmark_run_manifest`
+    accepts for its own fields. Corroborating the claimed tree against the
+    run's own tool logs would raise it, and is deliberately NOT done here: a
+    published run does not have to keep its logs (measured by
+    `declared_pdk_is_the_pdk_used_check` at 7 of 107 tracked run dirs carrying
+    no `*.log` at all), so requiring it would refuse runs for a property of
+    their archive rather than of their sign-off.
+    """
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    import pdk_revision_resolve as _prr
+
+    rec, err = _prr.load_record(run_dir)
+    if rec is None:
+        raise Refuse(
+            f"the run records no PDK revision ({err} under {run_dir}). A "
+            f"sign-off is a claim about a design measured against a PROCESS, "
+            f"and this run names the process only by the word passed on the "
+            f"command line — so the numbers in it cannot be re-derived later. "
+            f"Produce the record from the tree that ran:\n"
+            f"    python3 {Path(__file__).parent}/pdk_revision_resolve.py "
+            f"--from-run {run_dir} --container <name> "
+            f"--json {run_dir}/{_prr.RECORD_REL}\n"
+            f"  (the one-shot runner writes it automatically at finalize)")
+    gaps = _prr.record_gaps(rec)
+    if gaps:
+        raise Refuse(
+            f"{run_dir}/{_prr.RECORD_REL} does not name a PDK revision:\n  - "
+            + "\n  - ".join(gaps)
+            + "\n  This is NOT waivable by writing 'unknown' into the field: "
+              "an unnamed process revision makes every sign-off number in this "
+              "cell unreproducible, which is the one thing publishing it is "
+              "supposed to prevent.")
+    return rec
+
 
 def _audit_verdict(run_dir: Path, verdict_json: Optional[Path]) -> Tuple[str, Path]:
     """Return (verdict, source_path) from the run's flow-compliance audit JSON."""
@@ -468,6 +612,15 @@ _CITATION_HEADER = (
     "# It does not decide whether the claim is TRUE — the run may well have\n"
     "# closed timing — only whether this cell lets you check it.\n"
     "#\n"
+    "# WHAT OUT_OF_PUBLISHED_SCOPE IS NOT. It is not a name for every path a\n"
+    "# reader cannot reach. The cell is asked whether it carries ANYTHING at\n"
+    "# that location: nothing there means the layout excludes it; a directory\n"
+    "# that ships its neighbours and not this file is a HOLE, and is recorded\n"
+    "# as DANGLING / DANGLING_UNDER_PASS. The distinction is load-bearing\n"
+    "# downstream — evidence_citation_resolves_check honours\n"
+    "# OUT_OF_PUBLISHED_SCOPE and deliberately does not honour DANGLING*, so\n"
+    "# the wrong word here retires a finding instead of reporting one.\n"
+    "#\n"
     "# Emitted even when every citation resolves: a record that only appears\n"
     "# on failure cannot be used to prove there were none.\n")
 
@@ -515,6 +668,122 @@ def _gate_citations(doc: Path) -> set:
         return set()
 
 
+def _git_tracked(dest: Path) -> Optional[set]:
+    """Paths git already TRACKS under `dest`, relative to it — or None when
+    git cannot answer, which is a different fact from "nothing is tracked".
+
+    At publish time `dest` is freshly staged and not yet added, so the honest
+    answer there is the empty set; run as a re-derivation over an already
+    published cell it is the cell's own file list."""
+    try:
+        cp = subprocess.run(["git", "ls-files", "-z", "--", "."],
+                            cwd=str(dest), capture_output=True, text=True,
+                            timeout=55)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if cp.returncode != 0:
+        return None
+    return {p for p in cp.stdout.split("\0") if p}
+
+
+def _clone_visible(dest: Path, rels: set) -> set:
+    """Of `rels` (paths relative to `dest`, all present on disk), the ones a
+    CLONE of this repository actually receives.
+
+    THE DEFECT THIS CLOSES. "It is in `dest`" and "the reader gets it" are two
+    different facts, and a repo-wide `.gitignore` rule is the gap between them.
+    MEASURED on the two published spm cells as committed: 45 CITATION_ROUTING
+    rows said RESOLVES because the cited log WAS sitting in the staged
+    directory when this program ran — and `*.log` at the repo root meant `git
+    add` never carried one of them. The record whose entire job is to tell a
+    reader whether a pointer can be followed asserted the good outcome for 45
+    pointers no reader could follow. Not a stale record: false when written.
+
+    `_prune_provenance` already draws this exact line, on the same publish,
+    for the same class of file — its docstring names `phase2/stage2/synth/
+    synth.log` by path. This function is that definition applied to the other
+    record, so the one publish stops holding two answers to one question.
+
+    CARRIAGE IS `tracked OR not ignored`, never `not ignored` alone: git stops
+    applying ignore rules to a path it already tracks, and this repo force-adds
+    evidence logs for exactly that reason. Asking only about ignore rules would
+    disclose a file the reader demonstrably receives.
+
+    FAIL-OPEN, deliberately. If git cannot answer, every disk-present path is
+    treated as carried — the behaviour that shipped before this. The wrong
+    direction to fail is toward a false disclosure: `evidence_citation_resolves
+    _check` HONOURS OUT_OF_PUBLISHED_SCOPE, so a disclosure invented by a git
+    hiccup would suppress a real finding. A false RESOLVES, by contrast, is
+    caught by `citation_routing_is_true_check`.
+    """
+    if not rels:
+        return set()
+    tracked = _git_tracked(dest)
+    if tracked is None:
+        return set(rels)
+    return (set(rels) - _git_ignored(dest, rels)) | (tracked & set(rels))
+
+
+def _carried_dirs(dest: Path) -> Optional[set]:
+    """The directories a CLONE of this cell RECEIVES, as posix relatives
+    ("" is the cell root). None when git could not be asked.
+
+    WHY THIS REPLACES A STRING PREFIX. `OUT_OF_PUBLISHED_SCOPE` makes one
+    specific promise and its consumer relies on exactly that promise:
+    `evidence_citation_resolves_check` honours it (with
+    `UNFOLLOWABLE_ABSOLUTE`) and NOTHING else, because it names a STRUCTURAL
+    reason — the publisher's layout does not carry this path. Honouring it
+    RETIRES the finding.
+
+    What decided it was the prefix `phase{1,2,3}/stage`. MEASURED on the two
+    published cells this landing repairs, that prefix is TRUE of
+    `phase3/stage3/pnr/` (0 files shipped) and FALSE of
+    `phase2/stage2/synth/` (10 shipped) and
+    `phase2/stage2/dft/tdf/` (5). So `synth.log`, `yosys.log` and
+    `tdf/sat_run.log` were recorded as "the layout excludes them" while the
+    layout demonstrably carries their neighbours; the same path
+    `phase2/stage1/sim_full_stack/oracle_run/oracle.log` RESOLVES in a cell
+    that force-added it. The prefix was standing in for a fact nobody checked.
+
+    THE SAME FACT IN BOTH MODES, which is why it is answered through
+    `_clone_visible` rather than by looking at the disk. At publish time
+    `dest` is staged and nothing is tracked yet, so the ignore rules decide;
+    on a re-derivation over an already published cell the tracked set decides.
+    One definition of carriage, two callers.
+
+    None when git cannot answer — never "nothing is carried", which would
+    declare every citation out of scope and silence the gate wholesale.
+    """
+    if _git_tracked(dest) is None:
+        return None
+    files = {q.relative_to(dest).as_posix()
+             for q in dest.rglob("*") if q.is_file()}
+    if not files:
+        return None
+    return {f.rpartition("/")[0] for f in _clone_visible(dest, files)}
+
+
+def _layout_excludes(cited: str, carried_dirs: Optional[set]) -> bool:
+    """Is `cited` unreachable because the published LAYOUT does not carry it,
+    as opposed to because it is a hole in a subtree the layout does carry?
+
+    The prefix test stays as the outer condition — nothing outside
+    `phase{N}/stage…` was ever judged this way and this is not the change to
+    widen it. What is new is that the prefix no longer DECIDES: the cell is
+    asked whether it carries anything at that location.
+
+    Falls back to the prefix alone when git could not be asked, i.e. to
+    exactly the rule that shipped before this. So the correction can only ever
+    turn OUT_OF_PUBLISHED_SCOPE into DANGLING*, never the reverse: an
+    unreachable git cannot manufacture a hole, and cannot silence one either.
+    """
+    if not any(cited.startswith(f"phase{n}/stage") for n in "123"):
+        return False
+    if carried_dirs is None:
+        return True
+    return cited.rpartition("/")[0] not in carried_dirs
+
+
 def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     """Every evidence path the STAGED tree's own JSONs cite, and whether it
     resolves inside the published cell.
@@ -526,6 +795,8 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     if not dest.is_dir():
         return out
     seen = set()
+    pending: List[Dict[str, object]] = []
+    on_disk: set = set()
     # Walk the PUBLISHED tree, not this machine's disk. At publish time `dest`
     # is a freshly staged directory and the two agree; run as an AUDIT over an
     # already-published cell they do not, and a working checkout carries
@@ -567,16 +838,43 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
                 # is legitimate provenance. Only a path something is expected
                 # to FOLLOW is a defect.
                 decision = "UNFOLLOWABLE_ABSOLUTE"
-            elif (dest / cited).exists():
+            else:
+                # DEFERRED, all of it. Two facts decide every remaining row and
+                # neither is on this machine's disk: does a CLONE carry this
+                # path, and — when it does not — does the clone carry anything
+                # at all at that location? "On disk" is not the same fact as
+                # "the reader gets it", and "absent" is not the same fact as
+                # "the publisher's layout excludes it".
+                decision = None
+                if (dest / cited).exists():
+                    on_disk.add(cited)
+            pending.append({"doc": rel_doc, "cited": cited,
+                            "decision": decision,
+                            "asserted": cited in asserted})
+
+    # SECOND PASS — decided against `git`, not against this machine's disk.
+    # Only the absolute paths were final above.
+    carried = _clone_visible(dest, on_disk)
+    carried_dirs = _carried_dirs(dest)
+    for row in pending:
+        decision = row["decision"]
+        if decision is None:
+            cited = str(row["cited"])
+            if cited in carried:
                 decision = "RESOLVES"
-            elif any(cited.startswith(f"phase{n}/stage") for n in "123"):
+            elif _layout_excludes(cited, carried_dirs):
                 decision = "OUT_OF_PUBLISHED_SCOPE"
-            elif cited in asserted:
+            elif row["asserted"]:
+                # A HOLE, NOT A DISCLOSURE: the reader receives this directory
+                # and not this file. Saying OUT_OF_PUBLISHED_SCOPE here would
+                # retire `evidence_citation_resolves_check`'s finding for a
+                # PASS whose proof still ships nowhere — one line in a routing
+                # file standing in for the missing artefact.
                 decision = "DANGLING_UNDER_PASS"
             else:
                 decision = "DANGLING"
-            out.append({"doc": rel_doc, "cited": cited,
-                        "decision": decision})
+        out.append({"doc": str(row["doc"]), "cited": str(row["cited"]),
+                    "decision": str(decision)})
     return out
 
 
@@ -685,6 +983,318 @@ def write_citation_routing(dest: Path, records: List[Dict[str, str]],
 
 
 # --------------------------------------------------------------------------
+# Per-step evidence — published as a RECORD, never as the symlink view.
+# --------------------------------------------------------------------------
+
+_STEPS_DIRNAME = "steps"
+_STEP_RECORD_FILENAME = "STEP_RECORD.json"
+_STEP_INDEX_FILENAME = "STEP_INDEX.json"
+_STEP_ROUTING_FILENAME = "STEP_ROUTING.txt"
+
+# `step_output_collector` writes exactly these two, and both describe the
+# SYMLINK VIEW: `outputs.json` carries an `abs` field naming a path on the
+# authoring host, and `index.json` is its table of contents. Neither survives
+# leaving that host, so both are REPLACED by a derived, self-contained form
+# rather than copied. Anything else a step folder holds is a record somebody
+# else wrote and is copied verbatim — that is the seam a per-step RECORD
+# written by the runner rides through, with no coupling to its schema.
+_COLLECTOR_MANIFESTS = frozenset({"outputs.json", "index.json"})
+
+# Only RECORDS are copied out of the steps tree. Everything else in there is
+# the view's payload — a link to an artefact whose canonical home is
+# elsewhere in the run — and belongs at that canonical path or nowhere.
+_STEP_RECORD_EXTS = (".json", ".txt", ".md", ".jsonl")
+
+_STEP_ROUTING_HEADER = (
+    "# STEP_ROUTING — every output a flow STEP declared, resolved against the\n"
+    "# source run at publish time, and where a reader of THIS cell can find it.\n"
+    "#\n"
+    "#   <phase>/<stage>/<id>_<slug> :: <run-relative path> <bytes>B\n"
+    "#       sha256:<64hex> <DECISION>\n"
+    "#\n"
+    "#   IN_CELL                 the bytes are in this cell, at that same path.\n"
+    "#   OUT_OF_PUBLISHED_SCOPE  the run has it; this cell's copied subtrees do\n"
+    "#                           not include it (PnR scratch, etc). The sha256\n"
+    "#                           is what makes it recoverable and checkable.\n"
+    "#   ZERO_BYTE               the file exists and is empty. 0 bytes is not\n"
+    "#                           evidence wherever it sits, so it outranks both\n"
+    "#                           of the location decisions above.\n"
+    "#   DANGLING_IN_RUN         the path is a broken symlink in the run. Nothing\n"
+    "#                           was there to publish and nothing was.\n"
+    "#   ABSENT_IN_RUN           the step declared it; it is not in the run. A\n"
+    "#                           step whose own status is a PASS and whose output\n"
+    "#                           is ABSENT is the residual this record exists for.\n"
+    "#\n"
+    "# WHY A RECORD AND NOT THE TREE. `<run>/steps/` is a view built from\n"
+    "# SYMLINKS into that run directory. Measured on a converged run whose\n"
+    "# directory was later renamed: 83 of 83 links dangling. Measured on the\n"
+    "# legacy cells that did commit their steps tree: 142 tracked symlinks, 31\n"
+    "# of whose targets the index does not carry, so a clean clone receives 31\n"
+    "# broken links. Copying the view would publish that; recording it does not.\n"
+    "#\n"
+    "# SCOPE, stated so it is not over-read: these are the outputs the steps\n"
+    "# tree DECLARED, resolved at publish time. It cannot speak for an output no\n"
+    "# step declared, and it is not a verdict on the step — only on whether the\n"
+    "# artefact the step named can be reached from what you received.\n")
+
+
+def _step_folder_rel(steps_root: Path, dirpath: Path) -> str:
+    """Where this step sits in the tree, as the run itself laid it out.
+
+    MIRRORED, not re-derived. Current runs nest `<phase>/<stage>/<id>_<slug>`
+    (the owner's directive); older runs are flat `<id>_<slug>`. Re-deriving a
+    nested path for a flat run would invent a structure that run never had,
+    and the record's whole value is that it reports what is there.
+    """
+    try:
+        return dirpath.relative_to(steps_root).as_posix()
+    except ValueError:
+        return dirpath.name
+
+
+def _declared_output_record(run_dir: Path, rel: str, dest: Path,
+                            sha_memo: Dict[Path, str]) -> Dict[str, object]:
+    """Resolve ONE declared output against the run, and against this cell.
+
+    Resolution is against `run_dir / rel`, never against the `abs` field the
+    collector wrote. `abs` names a path on the authoring host: on the measured
+    `_car15_evidence` run every one of them is gone, while 83 of the 90
+    run-relative paths still resolve. A record keyed on the machine-absolute
+    path would have reported a total loss that did not happen.
+    """
+    src = run_dir / rel
+    is_link = src.is_symlink()
+    # lstat, so a DANGLING link is seen as the broken link it is rather than
+    # skipped. `Path.glob`/`is_file()` answer False for one, which is how a
+    # broken link came to read as a produced artefact elsewhere in this flow.
+    try:
+        src.lstat()
+        present = True
+    except OSError:
+        present = False
+
+    rec: Dict[str, object] = {"rel": rel, "symlink": is_link}
+    if not present:
+        rec.update(bytes=-1, sha256="", decision="ABSENT_IN_RUN", in_cell=False)
+        return rec
+    if is_link and not src.exists():
+        rec.update(bytes=-1, sha256="", decision="DANGLING_IN_RUN", in_cell=False)
+        return rec
+    try:
+        size = src.stat().st_size
+    except OSError:
+        rec.update(bytes=-1, sha256="", decision="ABSENT_IN_RUN", in_cell=False)
+        return rec
+
+    real = src.resolve()
+    if real not in sha_memo:
+        try:
+            sha_memo[real] = _sha256(src)
+        except OSError:
+            sha_memo[real] = ""
+    rec["bytes"] = size
+    rec["sha256"] = sha_memo[real]
+    # Not `is_file()` alone: that follows a link, and "a reader of this cell
+    # receives the bytes" is exactly the question a tracked symlink answers
+    # falsely (#404 — 31 of 142 such links in this repo's published cells
+    # point at something the index does not carry).
+    cand = dest / rel
+    in_cell = cand.is_file() and not cand.is_symlink()
+    rec["in_cell"] = in_cell
+    if size == 0:
+        rec["decision"] = "ZERO_BYTE"
+    else:
+        rec["decision"] = "IN_CELL" if in_cell else "OUT_OF_PUBLISHED_SCOPE"
+    return rec
+
+
+def collect_step_records(run_dir: Path, dest: Path) -> Tuple[List[dict], List[dict]]:
+    """(step records, verbatim record files) for the run's `steps/` tree.
+
+    Read-only. `os.walk(followlinks=False)`, not `rglob`: the tree is made of
+    symlinks and a recursive glob that follows a directory link into an
+    ancestor does not terminate.
+    """
+    steps_root = run_dir / _STEPS_DIRNAME
+    steps: List[dict] = []
+    verbatim: List[dict] = []
+    if not steps_root.is_dir():
+        return steps, verbatim
+
+    sha_memo: Dict[Path, str] = {}
+    for dirpath, _dirnames, filenames in os.walk(steps_root, followlinks=False):
+        d = Path(dirpath)
+        names = set(filenames)
+        extra = sorted(
+            n for n in names
+            if n not in _COLLECTOR_MANIFESTS
+            and n.lower().endswith(_STEP_RECORD_EXTS)
+            and not (d / n).is_symlink()
+            # The same commit ceiling everything else obeys. `_excluded` is
+            # not the predicate here: it only judges the four LAYOUT
+            # extensions, so it would wave through a record too big to commit
+            # and the cell would be unpushable for a reason nothing named.
+            and not over_ceiling(d / n))
+        if "outputs.json" not in names and not extra:
+            continue
+
+        folder = _step_folder_rel(steps_root, d)
+        for n in extra:
+            verbatim.append({"src": str(d / n),
+                             "rel": f"{_STEPS_DIRNAME}/{folder}/{n}"
+                                    if folder != "." else f"{_STEPS_DIRNAME}/{n}"})
+
+        meta: Dict[str, object] = {}
+        declared: List[dict] = []
+        if "outputs.json" in names:
+            try:
+                meta = json.loads((d / "outputs.json").read_text(
+                    encoding="utf-8", errors="replace"))
+            except (OSError, ValueError):
+                meta = {}
+            for o in (meta.get("outputs") or []):
+                rel = str((o or {}).get("rel") or "")
+                if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+                    # A declared path that escapes the run is not a path this
+                    # record can answer for; say so rather than resolve it.
+                    declared.append({"rel": rel, "bytes": -1, "sha256": "",
+                                     "symlink": False, "in_cell": False,
+                                     "decision": "ABSENT_IN_RUN"})
+                    continue
+                declared.append(
+                    _declared_output_record(run_dir, rel, dest, sha_memo))
+
+        steps.append({
+            "id": str(meta.get("id") or ""),
+            "name": str(meta.get("name") or ""),
+            "status": str(meta.get("status") or ""),
+            "phase": str(meta.get("phase") or ""),
+            "stage": str(meta.get("stage") or ""),
+            "folder": folder,
+            "declared_outputs": declared,
+            "records": [Path(v["rel"]).name for v in verbatim
+                        if Path(v["rel"]).parent.as_posix()
+                        == (f"{_STEPS_DIRNAME}/{folder}" if folder != "."
+                            else _STEPS_DIRNAME)],
+        })
+
+    steps.sort(key=lambda s: s["folder"])
+    verbatim.sort(key=lambda v: v["rel"])
+    return steps, verbatim
+
+
+def publish_steps(run_dir: Path, dest: Path, dry: bool) -> Dict[str, object]:
+    """Stage the per-step evidence RECORD into the cell.
+
+    Writes `steps/<folder>/STEP_RECORD.json` (self-contained: no host-absolute
+    path, every declared output carrying its size, sha256 and where a reader
+    can find it), `steps/STEP_INDEX.json`, and the flat `STEP_ROUTING.txt` at
+    the cell root. Copies verbatim any OTHER record file a step folder holds.
+
+    NEVER creates a symlink and never copies one — see the module docstring.
+
+    BEST-EFFORT, and legibly so. A malformed steps tree must not cost the cell
+    its phase evidence; but a failure that leaves no trace is the shape this
+    whole program exists to refuse, so the exception is written into
+    STEP_ROUTING.txt and into the summary rather than swallowed.
+    """
+    result: Dict[str, object] = {
+        "present": (run_dir / _STEPS_DIRNAME).is_dir(),
+        # WHERE a declared output can be read is decided against the STAGED
+        # cell, so on --dry-run there is nothing to decide it against. Say so
+        # rather than report the split every entry would fall into by default
+        # ("out of scope"), which is the answer an empty directory gives to
+        # every question.
+        "location_determined": not dry,
+        "n_steps": 0, "n_declared": 0, "n_in_cell": 0,
+        "n_out_of_scope": 0, "n_zero_byte": 0,
+        "n_dangling": 0, "n_absent": 0, "n_records_copied": 0,
+        "error": None,
+    }
+    steps: List[dict] = []
+    verbatim: List[dict] = []
+    try:
+        steps, verbatim = collect_step_records(run_dir, dest)
+    except Exception as exc:                       # never fatal to a publish
+        result["error"] = f"{type(exc).__name__}: {exc}"
+
+    counts = {"IN_CELL": 0, "OUT_OF_PUBLISHED_SCOPE": 0, "ZERO_BYTE": 0,
+              "DANGLING_IN_RUN": 0, "ABSENT_IN_RUN": 0}
+    for s in steps:
+        for o in s["declared_outputs"]:
+            counts[str(o["decision"])] = counts.get(str(o["decision"]), 0) + 1
+    result.update(
+        n_steps=len(steps),
+        n_declared=sum(counts.values()),
+        n_in_cell=counts["IN_CELL"] if not dry else -1,
+        n_out_of_scope=counts["OUT_OF_PUBLISHED_SCOPE"] if not dry else -1,
+        n_zero_byte=counts["ZERO_BYTE"],
+        n_dangling=counts["DANGLING_IN_RUN"],
+        n_absent=counts["ABSENT_IN_RUN"])
+
+    if dry:
+        result["n_records_copied"] = len(verbatim)
+        return result
+
+    steps_dest = dest / _STEPS_DIRNAME
+    for s in steps:
+        sdir = steps_dest / s["folder"] if s["folder"] != "." else steps_dest
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / _STEP_RECORD_FILENAME).write_text(
+            json.dumps(s, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+    for v in verbatim:
+        target = dest / v["rel"]
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(Path(v["src"]), target)
+            result["n_records_copied"] = int(result["n_records_copied"]) + 1
+        except OSError:
+            continue
+    if steps:
+        steps_dest.mkdir(parents=True, exist_ok=True)
+        (steps_dest / _STEP_INDEX_FILENAME).write_text(
+            json.dumps({"source_run_had_steps_tree": bool(result["present"]),
+                        "steps": [{k: s[k] for k in
+                                   ("id", "name", "status", "phase", "stage",
+                                    "folder")}
+                                  | {"n_declared": len(s["declared_outputs"]),
+                                     "n_in_cell": sum(
+                                         1 for o in s["declared_outputs"]
+                                         if o["decision"] == "IN_CELL")}
+                                  for s in steps]},
+                       indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+
+    _write_step_routing(dest, steps, result)
+    return result
+
+
+def _write_step_routing(dest: Path, steps: List[dict],
+                        result: Dict[str, object]) -> None:
+    """The flat, greppable index. ALWAYS emitted — a cell whose run produced no
+    steps tree says so in one line, which is a different fact from a cell
+    published before this record existed."""
+    lines = []
+    if result.get("error"):
+        lines.append(f"# ERROR building this record: {result['error']}\n"
+                     f"# The rows below are incomplete. Treat the absence of a\n"
+                     f"# step here as unknown, not as absent.\n")
+    if not result.get("present"):
+        lines.append("# steps/ tree: ABSENT in the source run — this run was "
+                     "driven in a\n#   shape that never materialized one, so "
+                     "there is no per-step\n#   evidence to publish. Not the "
+                     "same fact as a step having failed.\n")
+    for s in steps:
+        for o in s["declared_outputs"]:
+            lines.append(f"{s['folder']} :: {o['rel']} {o['bytes']}B "
+                         f"sha256:{o['sha256']} {o['decision']}\n")
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / _STEP_ROUTING_FILENAME).write_text(
+        _STEP_ROUTING_HEADER + "".join(lines), encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
 # Publish.
 # --------------------------------------------------------------------------
 
@@ -710,6 +1320,12 @@ def publish(args: argparse.Namespace) -> dict:
         raise Refuse(
             f"run verdict is {verdict} (from {verdict_src}); only a converged "
             f"run (PASS / PASS_WITH_WAIVERS) may be published as evidence")
+
+    # --- PDK-revision guard (BLOCKING) ---
+    # After convergence, because "this run passed" and "this run can be
+    # re-derived" are separate questions and the reader is better served by
+    # the first refusal naming the first one.
+    pdk_rev = _pdk_revision(run_dir)
 
     # --- RESULT.md (independent audit) required + consistent ---
     result_md = Path(args.result_md).resolve() if args.result_md else (run_dir / "RESULT.md")
@@ -794,6 +1410,18 @@ def publish(args: argparse.Namespace) -> dict:
                                                    dry, route)
     layout_records.extend(input_recs)
 
+    # Per-step evidence. AFTER the subtrees + the GDS, because each declared
+    # output's decision is "can a reader of THIS cell find it", and that is not
+    # answerable until the cell is populated. Publishes records only — no
+    # symlink is created and none is copied.
+    steps_result = publish_steps(run_dir, dest, dry)
+    if steps_result["n_steps"]:
+        staged.append(f"steps/ ({steps_result['n_steps']} "
+                      f"{_STEP_RECORD_FILENAME}"
+                      + (f" + {steps_result['n_records_copied']} record file(s)"
+                         if steps_result["n_records_copied"] else "") + ")")
+    staged.append(_STEP_ROUTING_FILENAME)
+
     # Complete the inventory: layout artefacts the published scope excludes.
     seen = {Path(r["src"]) for r in layout_records}
     layout_records.extend(_inventory_unpublished(run_dir, seen, route))
@@ -810,9 +1438,21 @@ def publish(args: argparse.Namespace) -> dict:
     staged.append(_CITATION_ROUTING_FILENAME)
     excluded_total = sum(1 for r in layout_records if r["decision"] == "ROUTED_AWAY")
 
+    # Rewrite the (already-copied) provenance.jsonl with pruned-at-publish
+    # disclosures for every declared output this program decided not to
+    # stage. Must run AFTER every staging decision above (subtrees, GDS,
+    # shared input, step evidence) so "is it staged?" reflects the real,
+    # final tree.
+    provenance_note = _prune_provenance(run_dir, dest, dry)
+
     summary = {
         "ic": args.ic,
         "pdk": args.pdk,
+        # The NAME above is the request; this is what actually ran. Both are
+        # kept because they answer different questions and a reader who sees
+        # only the first cannot tell that.
+        "pdk_revision": pdk_rev.get("revision"),
+        "pdk_revision_record": pdk_rev,
         "plugin_version": args.plugin_version,
         "verdict": verdict,
         "verdict_source": str(verdict_src),
@@ -825,6 +1465,8 @@ def publish(args: argparse.Namespace) -> dict:
         "layout_routing": layout_records,
         "oversize_route": route,
         "shared_input": input_result,
+        "step_evidence": steps_result,
+        "provenance_pruned": provenance_note,
         "dry_run": dry,
     }
 
@@ -837,7 +1479,145 @@ def publish(args: argparse.Namespace) -> dict:
                 f"post-stage self-check FAILED — the staged folder is NOT "
                 f"conformant:\n{detail}")
 
+    # --- post-stage self-check (the write ledger describes THIS cell) ---
+    # Runs after every staging decision, because the question is about the
+    # FINAL tree: a ledger is only true of a cell once the cell is complete.
+    if not dry:
+        stale = stale_write_ledger(dest)
+        summary["write_ledger_consistency"] = (
+            stale or f"{_LEDGER_REL} agrees with the staged cell "
+                     f"(or the run published none)")
+        if stale:
+            raise Refuse(
+                "post-stage self-check FAILED — the write ledger staged into "
+                "this cell is REFUTED by the cell itself:\n  "
+                + "\n  ".join(stale)
+                + f"\nThe record is a snapshot of the run tree at "
+                  f"{led_captured(dest)!r} and the run wrote more after it. "
+                  f"Re-run `programs/step_write_ledger.py <run-dir>` over the "
+                  f"FINISHED run and publish again — do NOT emit it over the "
+                  f"staged cell, whose mtimes are a copy's and whose "
+                  f"time-derived half is therefore withheld.")
+
     return summary
+
+
+_LEDGER_REL = "reports/write_ledger.json"
+_LEDGER_D3_RULE = "declared_output_not_produced"
+
+
+def stale_write_ledger(cell: Path) -> List[str]:
+    """Every claim the write ledger STAGED INTO *cell* makes that *cell* itself
+    refutes. Empty means the record still describes the tree it ships in.
+
+    WHY A PUBLISHED CELL CAN CARRY A LIE, AND HOW IT DID.
+    ``step_write_ledger`` records a SNAPSHOT: what the run tree held at the
+    moment it walked, plus the mtimes, provenance windows and D3/D5/D7 residual
+    derived from that instant. It is emitted into ``reports/``, and ``reports``
+    is a copied subtree, so whichever snapshot happens to be lying in the run
+    directory at publish time is staged as though it described the tree being
+    staged. Nothing re-checked it, and the record moved into a commit where it
+    keeps being read as current.
+
+    MEASURED 2026-08-13 on ``benchmark-data/ic/spm/v1.9.96_gf180mcuD``. Its
+    ledger was captured 2026-08-06T19:17:51Z over ``/home/<your-user>/spm3_run/
+    gf180mcuD``; the run then wrote ``phase2/stage2/dft/scan_netlist.v`` at
+    2026-08-07 08:39:52 (the file's own Fault header) and the publish staged the
+    finished tree beside the mid-run record. The committed ledger states that
+    four artefacts were never written which the very same commit carries,
+    non-empty and tracked at HEAD:
+
+        phase2/stage2/dft/scan_netlist.v          81570 B
+        phase2/stage2/dft/atpg_coverage.rpt         421 B
+        reports/phase2/dft/coverage.json           3549 B
+        phase2/stage2/synth/post_dft_netlist.v    77802 B
+
+    That is not a cosmetic disagreement. ``test_matrix_d3_outputs_produced``
+    binds a run root's verdict to that root's ledger and the binding may only
+    ever SUBTRACT evidence, so a stale record makes the dimension refuse a real
+    artefact at exactly the declared path and quote itself as the authority.
+
+    THE CHECK IS THE LEDGER'S OWN D3 FINDING PUT BACK TO THE CELL: for every
+    spec the ledger records as never written, ask whether the staged tree
+    carries a usable artefact there, and report every YES. That direction only —
+    a ledger that records a spec as produced when the file is missing makes the
+    cell look WORSE than it is and needs no guard here.
+
+    The resolver and the usability rule are IMPORTED from
+    ``step_write_ledger`` rather than re-implemented, so this guard cannot
+    drift away from the semantics of the record it is checking.
+
+    A cell with no ledger returns ``[]``: not publishing one is fine, and is
+    what a run that never ran the emitter does.
+    """
+    led_path = cell / _LEDGER_REL
+    if not led_path.is_file():
+        return []
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    import step_write_ledger as _swl
+
+    try:
+        led = json.loads(led_path.read_text())
+    except (OSError, ValueError) as exc:
+        return [f"{_LEDGER_REL} is staged but unreadable ({exc}); a record "
+                f"nobody can parse cannot be published as evidence"]
+
+    # The emitter writes `steps` as a LIST of rows. Accept a mapping too and
+    # say so, rather than iterating its keys and quietly finding nothing: a
+    # guard that returns a clean answer because it could not read the record is
+    # the failure mode this whole check exists to end.
+    steps = led.get("steps")
+    if isinstance(steps, dict):
+        rows = list(steps.values())
+    elif isinstance(steps, list):
+        rows = steps
+    elif steps is None:
+        rows = []
+    else:
+        return [f"{_LEDGER_REL} is staged but its `steps` field is "
+                f"{type(steps).__name__}, which this guard cannot read; a "
+                f"record that cannot be checked must not be published"]
+
+    problems: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for finding in (row.get("findings") or ()):
+            if not isinstance(finding, dict):
+                continue
+            if finding.get("dimension") != "D3" \
+                    or finding.get("rule") != _LEDGER_D3_RULE:
+                continue
+            spec = str(finding.get("spec"))
+            for rel in _swl._spec_candidates(cell, spec):
+                p = cell / rel
+                if p.is_symlink() or not p.is_file():
+                    continue
+                try:
+                    size = p.stat().st_size
+                except OSError:
+                    continue
+                if size <= 0:
+                    continue
+                problems.append(
+                    f"step {row.get('id')} spec {spec!r}: the ledger says NOT "
+                    f"WRITTEN ({finding.get('reason')}) but the cell being "
+                    f"staged carries {rel} ({size} B)")
+                break
+    return problems
+
+
+def led_captured(cell: Path) -> str:
+    """``captured_at`` of the ledger staged into *cell*, for the refusal
+    message. Unknown rather than raising: a guard must not fail while
+    explaining a failure."""
+    try:
+        return str(json.loads(
+            (cell / _LEDGER_REL).read_text()).get("captured_at", "unknown"))
+    except (OSError, ValueError):
+        return "unknown"
 
 
 def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
@@ -873,6 +1653,146 @@ def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
         if r["decision"] == "STAGED":
             r["destination"] = "shared-input"
     return f"staged {c} input doc(s) -> {dst}", recs
+
+
+def _git_ignored(dest: Path, rels: set) -> set:
+    """Which of `rels` (paths relative to `dest`) `.gitignore` excludes.
+
+    One batched `git check-ignore --stdin`, not one subprocess per candidate
+    — `rels` is bounded (declared outputs actually present on disk), but a
+    per-file subprocess call does not need to be the default shape here.
+    Fail-open to "nothing is ignored" on any git/subprocess failure: this
+    function only WIDENS what gets pruned, so a failure here means the
+    caller's disk-presence check decides alone — the pre-existing, already-
+    safe behaviour — never a crash and never a false prune.
+    """
+    if not rels:
+        return set()
+    try:
+        cp = subprocess.run(
+            ["git", "check-ignore", "--stdin"], cwd=str(dest),
+            input="\n".join(sorted(rels)), capture_output=True, text=True,
+            timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    # rc 0 = at least one match, 1 = none matched, >1 = a real git error;
+    # stdout is authoritative either way except on a real error.
+    if cp.returncode not in (0, 1):
+        return set()
+    return {ln.strip() for ln in cp.stdout.splitlines() if ln.strip()}
+
+
+_PRUNED_KEY = "outputs_pruned_at_publish"
+_PRUNED_REASON_KEY = "outputs_pruned_reason"
+_PRUNE_REASON = (
+    "declared by the run but outside this cell's published subtrees "
+    "(PnR/synthesis/extraction intermediates — see PUBLISHING.md for what "
+    "this cell ships); the byte-producing invocation is unaffected, this "
+    "output is simply not carried into the published tree")
+
+
+def _prune_provenance(run_dir: Path, dest: Path, dry: bool) -> str:
+    """Annotate `dest/provenance.jsonl` so every declared output NOT staged
+    is DISCLOSED as such, not silently missing.
+
+    THE DEFECT THIS CLOSES: `provenance.jsonl` is copied VERBATIM from the
+    run (`_COPY_FILES`), unchanged by anything this program decides about
+    WHICH subtrees to stage. A step that ran under `phase3/stage3/pnr/` (or
+    `extracted/`, or `sta/`) declares its real, produced outputs there —
+    and this program has never staged that subtree for any cell. The result:
+    `provenance_output_hash_completeness_check` (#434) reads the copied
+    ledger, finds declared outputs neither on disk nor accounted for, and
+    reports PROVENANCE_OUTPUT_FILE_MISSING / _NOT_SHIPPED_UNDISCLOSED — a
+    true finding. MEASURED (spm x sky130A, 2026-08-07): 19 such findings on
+    a cell whose own structure/DRC/LVS/STA self-checks were otherwise clean.
+
+    THE FIX, and why it is safe: for each declared output, check the
+    STAGED tree first (already verified real, never touched) — then the
+    SOURCE run. Only a path that exists in the run but was never staged gets
+    pruned; a path absent from the run too is a different fact (the
+    declaration's own invocation may have failed, or the run genuinely never
+    produced it) and this function leaves it alone rather than guessing.
+    Never touches `inputs`, `exit_code`, or any other field — only ever ADDS
+    the two disclosure keys `provenance_output_hash_completeness_check`
+    already reads (`_publish_disclosures`); it invents no new mechanism.
+
+    "STAGED" MEANS "A CLONE RECEIVES IT", not merely "a file sits at that
+    path on THIS disk" — `dest` is not git-added yet when this runs, and a
+    repo-wide `.gitignore` rule (e.g. `*.log`) can leave a real, byte-correct
+    file copied into `dest` that git will never track. MEASURED: `phase2/
+    stage2/synth/synth.log` copied cleanly (phase2/ IS a staged subtree) and
+    still failed #434's check, because `git ls-files` — what a clone actually
+    receives — never carries it. `git check-ignore` is asked for every
+    disk-present candidate for exactly this reason, batched in one call.
+
+    Fail-safe: any read/parse error leaves the verbatim copy `_COPY_FILES`
+    already wrote untouched and returns a disclosed skip note — never raises,
+    never regresses a publish that would otherwise succeed.
+    """
+    src = run_dir / "provenance.jsonl"
+    dst = dest / "provenance.jsonl"
+    if not src.is_file() or dry:
+        return "no provenance.jsonl to annotate" if not src.is_file() else "dry-run: not annotated"
+    try:
+        lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return f"could not read provenance.jsonl: {exc}"
+    parsed: List[object] = []
+    disk_present_rels: set = set()
+    malformed = False
+    for line in lines:
+        if not line.strip():
+            parsed.append(line)
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            parsed.append(line)         # verbatim — not this function's to fix
+            malformed = True
+            continue
+        parsed.append(entry)
+        outputs = entry.get("outputs") if isinstance(entry, dict) else None
+        if isinstance(outputs, dict):
+            for rel in outputs:
+                if isinstance(rel, str) and rel and (dest / rel).is_file():
+                    disk_present_rels.add(rel)
+    ignored_rels = _git_ignored(dest, disk_present_rels)
+
+    out_lines: List[str] = []
+    pruned_total = 0
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            out_lines.append(entry)     # the verbatim malformed line, as-is
+            continue
+        outputs = entry.get("outputs")
+        if not isinstance(outputs, dict) or not outputs:
+            out_lines.append(json.dumps(entry))
+            continue
+        missing_here: List[str] = []
+        for rel in outputs:
+            if not isinstance(rel, str) or not rel:
+                continue
+            if rel in disk_present_rels and rel not in ignored_rels:
+                continue                # staged AND clone-visible — leave it
+            if (run_dir / rel).is_file():
+                missing_here.append(rel)  # produced, not in the published tree
+            # else: absent even in the source run — a different fact,
+            # left alone; see the docstring.
+        if missing_here:
+            existing = entry.get(_PRUNED_KEY)
+            merged = sorted(set(existing) if isinstance(existing, list) else set()
+                            | set(missing_here))
+            entry[_PRUNED_KEY] = merged
+            entry[_PRUNED_REASON_KEY] = _PRUNE_REASON
+            pruned_total += len(missing_here)
+        out_lines.append(json.dumps(entry))
+    if malformed:
+        return "provenance.jsonl carries malformed line(s); left verbatim"
+    dst.write_text("\n".join(out_lines) + ("\n" if out_lines else ""),
+                   encoding="utf-8")
+    return (f"{pruned_total} declared output(s) across the ledger disclosed "
+            f"as pruned-at-publish (not in this cell's staged subtrees)"
+            if pruned_total else "no declared output needed pruning")
 
 
 def _self_check(dest: Path) -> Tuple[bool, str]:
@@ -931,6 +1851,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     verb = "WOULD STAGE" if summary["dry_run"] else "STAGED"
     print(f"[{verb}] {summary['ic']} × {summary['pdk']}  ->  {summary['dest']}")
     print(f"  verdict     : {summary['verdict']} (source: {summary['verdict_source']})")
+    print(f"  pdk revision: {summary['pdk_revision']} "
+          f"(read from the tree that ran, not from --pdk)")
     print(f"  GDS_MANIFEST: {summary['gds_manifest']}")
     recs = summary["layout_routing"]
     kept = [r for r in recs if r["decision"] == "STAGED"]
@@ -943,6 +1865,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"      ROUTED_AWAY {r['bytes'] / 1e6:.1f} MB  {r['path']} "
               f"-> {r['destination']}  sha256:{r['sha256'][:12]}…")
     print(f"  shared input: {summary['shared_input']}")
+    se = summary["step_evidence"]
+    if not se["present"]:
+        print(f"  step evidence: source run has NO {_STEPS_DIRNAME}/ tree — "
+              f"recorded as absent in {_STEP_ROUTING_FILENAME}")
+    elif not se["location_determined"]:
+        print(f"  step evidence: {se['n_steps']} step(s), {se['n_declared']} "
+              f"declared output(s) — {se['n_zero_byte']} zero-byte, "
+              f"{se['n_dangling']} dangling, {se['n_absent']} absent in run. "
+              f"The in-cell / out-of-scope split is NOT determined on a dry "
+              f"run: nothing was staged for it to be decided against.")
+    else:
+        print(f"  step evidence: {se['n_steps']} step(s), {se['n_declared']} "
+              f"declared output(s) — {se['n_in_cell']} in cell, "
+              f"{se['n_out_of_scope']} out of published scope, "
+              f"{se['n_zero_byte']} zero-byte, {se['n_dangling']} dangling, "
+              f"{se['n_absent']} absent in run "
+              f"(recorded in {_STEP_ROUTING_FILENAME}; the view's symlinks are "
+              f"NOT published)")
+    if se.get("error"):
+        print(f"      ! step record INCOMPLETE: {se['error']}")
     for s in summary["staged"]:
         print(f"    + {s}")
     if not summary["dry_run"]:

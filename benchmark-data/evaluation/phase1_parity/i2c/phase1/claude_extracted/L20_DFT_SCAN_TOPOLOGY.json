@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "dft_present": false,
-    "notes": "UM10204 does not specify DFT / scan / BIST. Concrete I2C controller IPs implement standard scan insertion at SoC integration time."
-  }
-}

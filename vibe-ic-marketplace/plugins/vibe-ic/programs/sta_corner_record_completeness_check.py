@@ -174,6 +174,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
@@ -349,6 +350,34 @@ def _merge_slack(cur: Optional[float], new: Optional[float]) -> Optional[float]:
     if new is None:
         return cur
     return new if cur is None else min(cur, new)
+
+
+# ── report basis ───────────────────────────────────────────────────────────
+#: A report's own `STA_BASIS:` stamp, the same self-disclosure
+#: `eda_report_audit` already reads. PRE-PnR emitters stamp
+#: `PRE_LAYOUT_ESTIMATE`; post-route emitters stamp `POST_ROUTE_SPEF` /
+#: `POST_ROUTE_NO_SPEF` or carry no stamp at all.
+_STA_BASIS_STAMP_RE = re.compile(r"^\s*#?\s*STA_BASIS\s*:\s*([A-Z_]+)",
+                                 re.MULTILINE)
+
+BASIS_PRE_LAYOUT = "PRE_LAYOUT"
+BASIS_SIGNOFF = "SIGNOFF"
+
+
+def report_basis(text: str) -> str:
+    """Which side of place-and-route a report DISCLOSES ITSELF to be from.
+
+    Only an EXPLICIT `PRE_LAYOUT*` stamp is treated as pre-layout. Everything
+    else — a `POST_ROUTE*` stamp, an unrecognised stamp, or no stamp at all —
+    is `SIGNOFF`. That asymmetry is deliberate and is the safe direction: an
+    unstamped report keeps exactly the standing it has today, so this function
+    can only ever DEMOTE a report that went out of its way to say it is not
+    sign-off evidence.
+    """
+    m = _STA_BASIS_STAMP_RE.search(text or "")
+    if m and m.group(1).upper().startswith("PRE_LAYOUT"):
+        return BASIS_PRE_LAYOUT
+    return BASIS_SIGNOFF
 
 
 # ── slack extraction ───────────────────────────────────────────────────────
@@ -542,8 +571,10 @@ def extract_drv(text: str) -> Dict[str, object]:
     # title": `report_check_types` prints SEVERAL tables back to back, so an
     # open-ended table would keep counting rows belonging to the NEXT one (the
     # `Group Slack` / `Required Width` tables OpenSTA emits alongside). A table
-    # ends at the first line carrying no digit, which is where the next title
-    # begins.
+    # ends at the first NON-BLANK line carrying no digit, which is where the
+    # next title begins. Blank lines are interior to a table (OpenSTA separates
+    # `max capacitance` rows with them) and only suspend it — see the
+    # ROWS_BLANK branch below.
     kind: Optional[str] = None
     state = "IDLE"
 
@@ -596,9 +627,32 @@ def extract_drv(text: str) -> Dict[str, object]:
             continue
 
         # state == ROWS: the table ends at the first line with no digit in it.
-        if not line or not any(ch.isdigit() for ch in line):
+        #
+        # ...but a BLANK line is NOT that terminator, and treating it as one
+        # under-counted a whole check kind. MEASURED on caravel_user_project x
+        # sky130A (bit-identical routes on two hosts, plugin v1.10.18): OpenSTA
+        # prints the `max capacitance` table with a blank line BETWEEN EVERY
+        # ROW, while `max slew` and `max fanout` print theirs contiguously. The
+        # walk therefore closed the cap table after its FIRST row in each
+        # corner, and a sign-off report holding 48 VIOLATED capacitance rows
+        # (24 setup + 24 hold) was recorded as `max_capacitance x2`. A 24x
+        # under-count, in the LENIENT direction — the record understated the
+        # design's own sign-off DRV population.
+        #
+        # A blank therefore only SUSPENDS the table; the next line decides.
+        # Every real terminator (a DRV title, a non-DRV title, an
+        # `=== SECTION ===` banner, the check-types markers) is consumed
+        # earlier in this loop, so each still closes or re-opens a table
+        # exactly as it did before — this can only stop the walk from ending
+        # a table early, never keep one open across a title.
+        if not line:
+            state = "ROWS_BLANK"
+            continue
+        if not any(ch.isdigit() for ch in line):
             kind, state = None, "IDLE"
             continue
+        if state == "ROWS_BLANK":
+            state = "ROWS"
         if _VIOLATED_RE.search(line):
             counts[kind] = counts.get(kind, 0) + 1
             rows.setdefault(kind, []).append(_row_instance(line))
@@ -843,15 +897,62 @@ def read_records(project: Path,
     recs: Dict[Tuple[str, str], Dict[str, object]] = {}
 
     def _put(axis: str, corner: str, source: str,
-             vals: Dict[str, Optional[float]]) -> None:
+             vals: Dict[str, Optional[float]],
+             basis: str = BASIS_SIGNOFF) -> None:
+        """Record one report's datapoints for (axis, corner), KEEPING BASIS.
+
+        Datapoints are pooled PER BASIS rather than merged across bases. A
+        pre-layout estimate and a post-route measurement of the SAME corner are
+        two measurements of two different things, and `min()` across them
+        reports the pre-layout number as the corner's sign-off slack — which is
+        wrong by as much as the resizer is effective (measured: 100x on a
+        two-report fixture). Resolution happens once, in `_resolve`, after every
+        source has been read.
+        """
         k = _key(axis, corner)
         rec = recs.setdefault(k, {"corner": corner, "axis": axis,
                                   "setup_wns_ns": None, "hold_wns_ns": None,
-                                  "tns_ns": None, "source": source})
+                                  "tns_ns": None, "source": source,
+                                  "_pool": {}, "_src": {}})
+        pool = rec["_pool"].setdefault(basis, {})           # type: ignore[index]
         for f in ("setup_wns_ns", "hold_wns_ns", "tns_ns"):
-            rec[f] = _merge_slack(rec.get(f), vals.get(f))  # type: ignore[arg-type]
+            pool[f] = _merge_slack(pool.get(f), vals.get(f))
+        srcs = rec["_src"].setdefault(basis, [])            # type: ignore[index]
+        if source not in srcs:
+            srcs.append(source)
         if source not in str(rec["source"]).split(", "):
             rec["source"] = f"{rec['source']}, {source}"
+
+    def _resolve() -> None:
+        """Collapse the per-basis pools onto the row the rules read.
+
+        SIGN-OFF basis wins PER FIELD when it has a value; a field the sign-off
+        reports do not carry falls back to the pre-layout pool UNCHANGED, so a
+        project with only pre-layout evidence keeps exactly today's numbers and
+        today's verdict. Superseded pre-layout values are retained on the row
+        for disclosure, never discarded silently.
+        """
+        for rec in recs.values():
+            pools = rec["_pool"]                             # type: ignore[index]
+            signoff = pools.get(BASIS_SIGNOFF, {})
+            prelay = pools.get(BASIS_PRE_LAYOUT, {})
+            used, superseded = {}, {}
+            for f in ("setup_wns_ns", "hold_wns_ns", "tns_ns"):
+                if signoff.get(f) is not None:
+                    rec[f] = signoff[f]
+                    used[f] = BASIS_SIGNOFF
+                    if prelay.get(f) is not None:
+                        superseded[f] = prelay[f]
+                else:
+                    rec[f] = prelay.get(f)
+                    if rec[f] is not None:
+                        used[f] = BASIS_PRE_LAYOUT
+            rec["basis_used"] = used
+            if superseded:
+                rec["pre_layout_superseded_ns"] = superseded
+                rec["pre_layout_sources"] = list(
+                    rec["_src"].get(BASIS_PRE_LAYOUT, []))   # type: ignore[index]
+            del rec["_pool"], rec["_src"]
 
     declared = decl.get("declared") or []
     rc_role_corner = {d["role"]: d["corner"] for d in declared  # type: ignore[index]
@@ -879,7 +980,7 @@ def read_records(project: Path,
                 "setup_wns_ns": vals["setup_wns_ns"] if role == "setup" else None,
                 "hold_wns_ns": vals["hold_wns_ns"] if role == "hold" else None,
                 "tns_ns": vals["tns_ns"],
-            })
+            }, report_basis(text))
 
     # -- multi-corner OCV report (PROCESS axis): headers name the process corner
     ocv = _first_existing(project, _MCORNER_OCV_CANDIDATES)
@@ -897,7 +998,7 @@ def read_records(project: Path,
                 "setup_wns_ns": vals["setup_wns_ns"] if role == "setup" else None,
                 "hold_wns_ns": vals["hold_wns_ns"] if role == "hold" else None,
                 "tns_ns": vals["tns_ns"],
-            })
+            }, report_basis(text))
 
     # -- per-corner sweep (PROCESS axis): one report per corner, name in filename
     for rel in _PER_CORNER_DIRS:
@@ -913,7 +1014,7 @@ def read_records(project: Path,
             except OSError:
                 body = ""
             _put(AXIS_PROCESS, m.group(1), _rel(project, rpt),
-                 extract_slacks(body))
+                 extract_slacks(body), report_basis(body))
 
     # -- nominal single-corner SPEF report: the typ datapoint. Named from the
     #    flow's own RC availability list (the extracted corner that was NOT
@@ -931,8 +1032,10 @@ def read_records(project: Path,
             body = nom.read_text(errors="replace")
         except OSError:
             body = ""
-        _put(AXIS_RC, name, _rel(project, nom), extract_slacks(body))
+        _put(AXIS_RC, name, _rel(project, nom), extract_slacks(body),
+             report_basis(body))
 
+    _resolve()
     return recs
 
 
@@ -1135,6 +1238,13 @@ def evaluate(project: Path,
             "role_class": role_class,
             "declared": is_declared,
             "reported": rec is not None,
+            # Which side of PnR each number came from, and — when a sign-off
+            # datapoint superseded a pre-layout one for the same corner — what
+            # the pre-layout estimate said. Carried so the correction is
+            # DISCLOSED on the artefact rather than applied silently.
+            "basis_used": (rec.get("basis_used") or None) if rec else None,
+            "pre_layout_superseded_ns": (rec.get("pre_layout_superseded_ns")
+                                         or None) if rec else None,
             "setup_wns_ns": rec.get("setup_wns_ns") if rec else None,
             "hold_wns_ns": rec.get("hold_wns_ns") if rec else None,
             "tns_ns": rec.get("tns_ns") if rec else None,
@@ -1554,7 +1664,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if out_path is not None:
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(json.dumps(res, indent=2) + "\n")
+            atomic_write_text(out_path, json.dumps(res, indent=2) + "\n")
         except OSError as e:
             print(f"{_PROGRAM}: cannot write {out_path}: {e}", file=sys.stderr)
             return 2
@@ -1566,6 +1676,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ok = tag in ("PASS", "NOT_APPLICABLE", "SINGLE_CORNER_ONLY")
     banner = "PASS" if tag in ("PASS", "NOT_APPLICABLE") else tag
     print(f"[{banner}] {_PROGRAM}: {tag}")
+    if tag == "NOT_APPLICABLE":
+        # vibe-ic#1115. This gate already knew -- "no stance file, pvt_matrix or
+        # STA report declares or records any corner -- there is no timing record
+        # to judge". It said so inside a `[PASS]` banner, and the only channel
+        # `flow_compliance_check` reads on the passing path is this prefix, so
+        # the step was recorded as ordinary multi-corner sign-off over zero
+        # corners.
+        print(f"VACUOUS_PASS: {_PROGRAM} judged 0 corner(s) — "
+              + "; ".join(str(r) for r in res.get("reasons", []))[:200])
     print(render_table(res))
     for reason in res.get("reasons", []):  # type: ignore[union-attr]
         print(f"  - {reason}")
