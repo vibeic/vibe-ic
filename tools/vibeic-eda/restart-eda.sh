@@ -16,7 +16,7 @@
 # same-named container automatically.
 #
 # Usage:
-#   ./restart-eda.sh                      # recreate on the PINNED vibeic/vibeic-eda:$(cat VERSION)
+#   ./restart-eda.sh                      # recreate on the newest vibeic-eda image this host holds, BY DIGEST
 #   ./restart-eda.sh 0.2.11               # bare tag  -> vibeic/vibeic-eda:0.2.11
 #   ./restart-eda.sh vibeic/vibeic-eda:latest   # full ref honored as-is (explicit floating opt-in)
 #   FORCE=1 ./restart-eda.sh              # recreate even if an EDA job is running
@@ -41,18 +41,31 @@ EDA_PROCS='openroad|yosys|magic|netgen|klayout|iverilog|verilator|ngspice|fault|
 die() { echo "restart-eda: $*" >&2; exit "${2:-1}"; }
 
 # --- resolve requested image ref -------------------------------------------
-# The no-arg default is the PINNED version from the VERSION file next to this
-# script (the image's single source of truth), never a floating `latest`: a
-# stale local `latest` would silently recreate the container on an outdated
-# toolchain. Floating tags stay available by passing them explicitly.
+# The no-arg default is a DIGEST, asked of `_eda_image.py` — never a floating
+# `latest`, because a stale local `latest` would silently recreate the container
+# on an outdated toolchain. Floating tags stay available by passing them
+# explicitly.
+#
+# It used to be `$(cat VERSION)` — vibeic-eda's version number stored in this
+# repo, which charged a PR here per image release. That file is gone. The helper
+# is SHELLED OUT TO rather than reimplemented here: "which image" is one rule,
+# and a bash second opinion is how the two copies drift.
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
   arg="$1"
 else
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  [[ -f "${SCRIPT_DIR}/VERSION" ]] || die \
-    "no tag argument and no VERSION file at ${SCRIPT_DIR}/VERSION — pass a tag explicitly"
-  arg="$(tr -d '[:space:]' < "${SCRIPT_DIR}/VERSION")"
-  [[ -n "$arg" ]] || die "VERSION file ${SCRIPT_DIR}/VERSION is empty — pass a tag explicitly"
+  RESOLVER=""
+  probe="${SCRIPT_DIR}"
+  while [[ "$probe" != "/" ]]; do
+    cand="${probe}/vibe-ic-marketplace/plugins/vibe-ic/programs/_eda_image.py"
+    [[ -f "$cand" ]] && { RESOLVER="$cand"; break; }
+    probe="$(dirname "$probe")"
+  done
+  [[ -n "$RESOLVER" ]] || die \
+    "no tag argument and no _eda_image.py above ${SCRIPT_DIR} — pass a tag explicitly"
+  arg="$(python3 "$RESOLVER" --judged)" || die \
+    "no tag argument and ${RESOLVER} could not name an image on this host — pass a tag explicitly"
+  [[ -n "$arg" ]] || die "${RESOLVER} --judged printed nothing — pass a tag explicitly"
 fi
 if [[ "$arg" == *:* || "$arg" == */* ]]; then
   IMAGE="$arg"                    # a full ref (repo[:tag] or repo/path) — honor as-is

@@ -692,20 +692,111 @@ def test_re_running_the_gate_does_not_nest_or_change_the_verdict(placed):
 # --------------------------------------------------------------------------- #
 # wiring — these cannot be satisfied by adding a file nobody calls
 # --------------------------------------------------------------------------- #
+def _step_155ic():
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(FLOW.read_text())["steps"]
+    return next(s for s in steps if str(s["id"]) == "15.5ic")
+
+
+def _gate_commands(gate):
+    """Every `program_exit_zero` command in a gate, whatever it is wrapped in.
+
+    Written as a walk rather than as `gate["program_exit_zero"]` because this
+    assertion was RED ON MAIN for a reason of exactly this shape: the test
+    pinned `blocks_on == [15]`, step 15.5ic gained the `0.5ic` edge in
+    vibe-ic#1744, and nothing moved the pin. A structural walk states the
+    property the test is about — this gate runs `pad_ring_check` on this
+    report — and does not go stale when a second, legitimate clause is added
+    beside it.
+    """
+    if isinstance(gate, str):
+        return [gate]
+    if isinstance(gate, list):
+        return [c for g in gate for c in _gate_commands(g)]
+    if isinstance(gate, dict):
+        out = []
+        for key, value in gate.items():
+            if key == "program_exit_zero":
+                out.extend(_gate_commands(value)
+                           if not isinstance(value, str) else [value])
+            elif key in ("all_of", "any_of") and not isinstance(value, bool):
+                out.extend(_gate_commands(value))
+            elif key == "command" and isinstance(value, str):
+                out.append(value)
+        return out
+    return []
+
+
 def test_the_flow_declares_this_step_with_this_producer_and_this_gate():
+    step = _step_155ic()
+    # The RING's producer and the RING's judge, asserted as membership rather
+    # than as an exact list: this step legitimately carries a second producer
+    # (`pad_assignment_gen`, which authors this one's input) and a second gate
+    # clause, and neither of those is what this test is about.
+    assert "pad_ring_gen" in step["programs"], step["programs"]
+    assert ("pad_ring_check . --json reports/phase3/padring.json"
+            in _gate_commands(step["gate"])), step["gate"]
+    assert PR.PADRING_DEF_REL in step["required_outputs"]
+    assert PR.REPORT_REL in step["required_outputs"]
+    # Every predecessor this step names must PRECEDE it, which is the
+    # invariant the exact `== [15]` list was standing in for. 15 is the
+    # floorplan this ring is placed on and dropping it still reddens here.
+    yaml = pytest.importorskip("yaml")
+    ids = [str(s["id"]) for s in yaml.safe_load(FLOW.read_text())["steps"]]
+    blocks = [str(b) for b in step["blocks_on"]]
+    assert "15" in blocks, blocks
+    for b in blocks:
+        assert ids.index(b) < ids.index("15.5ic"), (b, blocks)
+
+
+def test_the_step_runs_on_the_chip_path_and_not_on_the_shuttle_template():
+    """THE DEFECT THIS STEP'S CONDITION WAS CARRYING (vibe-ic#1410/cpath).
+
+    The condition read `files_exist:
+    [input/submission_template/slots/*.yaml]` — the shuttle OPERATOR's
+    template. A chip doing its own tape-out has no operator, so it had no such
+    file, so this step was skipped as "not applicable" and the design SHIPPED
+    WITH NO PAD RING. A chip with no pads cannot be bonded or probed; that is
+    a property of being a DIE, not of being on a shuttle.
+
+    The marker asserted here is step 37.5ic's, and it is read off 37.5ic
+    LIVE rather than restated, so the two cannot drift apart into two
+    different answers to "which designs are on the chip path".
+    """
     yaml = pytest.importorskip("yaml")
     steps = yaml.safe_load(FLOW.read_text())["steps"]
     step = next(s for s in steps if str(s["id"]) == "15.5ic")
-    assert step["programs"] == ["pad_ring_gen"]
-    assert step["gate"]["program_exit_zero"] == (
-        "pad_ring_check . --json reports/phase3/padring.json")
-    assert PR.PADRING_DEF_REL in step["required_outputs"]
-    assert PR.REPORT_REL in step["required_outputs"]
-    assert step["blocks_on"] == [15]
+    terminal = next(s for s in steps if str(s["id"]) == "37.5ic")
+    cond = step["condition"]
+    assert cond.get("any_of") is True, cond
+    assert set(cond["files_exist"]) == set(terminal["condition"]["files_exist"]), (
+        "15.5ic and 37.5ic must agree on what the chip path IS",
+        cond["files_exist"], terminal["condition"]["files_exist"])
+    assert "input/submission_template/SELF_TAPEOUT.txt" in cond["files_exist"]
+    # The d6 reading is unchanged by the widening and must stay stated.
+    assert step["condition_kind"] == "design_dependent"
+
+
+def test_the_declaration_is_a_declared_input_of_this_step():
+    """The geometry's OTHER source, declared as an edge and not merely read.
+
+    0.5ic writes `tapeout_declaration.json` on every route. Its section 2B is
+    `_pad_ring.REQUIRED_VARS` grouped into the 8 things a human decides, and
+    `_tapeout_declaration` names `pad_ring_gen` as the `consumer` of every one.
+    An edge that is real and undeclared is one the dependency guard cannot see.
+    """
+    step = _step_155ic()
+    paths = {i.get("path") for i in step["required_inputs"]}
+    assert "input/submission_template/tapeout_declaration.json" in paths, paths
+    assert "0.5ic" in {str(b) for b in step["blocks_on"]}
 
 
 def test_the_gate_the_flow_names_resolves_to_a_program_that_exists():
     fcc = pytest.importorskip("flow_compliance_check")
+    for cmd in _gate_commands(_step_155ic()["gate"]):
+        argv = fcc._resolve_program_cmd(cmd)
+        assert argv, cmd
+        assert Path(argv[1]).is_file(), cmd
     argv = fcc._resolve_program_cmd(
         "pad_ring_check . --json reports/phase3/padring.json")
     assert argv and Path(argv[1]).name == "pad_ring_check.py"
@@ -728,7 +819,13 @@ def test_the_gate_runs_as_the_flow_spawns_it(placed):
 # chip-agnosticism
 # --------------------------------------------------------------------------- #
 _OURS = ("_pad_ring.py", "pad_ring_gen.py", "pad_ring_check.py",
-         "tests/test_pad_ring.py")
+         # The author of this step's own input (vibe-ic#1410/cpath). It reads
+         # an operator slot file and a tape-out declaration and writes the
+         # config `pad_ring_gen` consumes, so it is subject to exactly the
+         # same rule as the three above.
+         "pad_assignment_gen.py",
+         "tests/test_pad_ring.py",
+         "tests/test_pad_and_seal_ring_on_the_chip_path.py")
 
 
 def test_no_process_node_shaped_literal_in_these_programs():
