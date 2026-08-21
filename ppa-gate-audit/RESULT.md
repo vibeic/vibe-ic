@@ -275,3 +275,106 @@ and nobody re-aimed them.
 
 For gates 3 and 5 the sentence is true, and now it is true *with a named artefact
 and a named producer* instead of a date.
+
+---
+
+# Part 2 — what was changed, and what it measures now
+
+## The wiring, after
+
+`tools/ci/repo_hygiene_gates.sh`, measured on a clean tree at a00f53f20 with the
+changes on this branch:
+
+| Gate row | Subject | Examined | rc |
+|---|---|---|---|
+| PPA head-to-head records | published corpus, other repository | 0 (pointer unset) | 2 |
+| PPA head-to-head records (cross-layer campaign) | `ppa-crosslayer` | 15 records | **1** |
+| PPA head-to-head records (end-to-end campaign) | `ppa-e2e` | 2 records | 2 |
+| PPA measurement contract (cross-layer campaign) | `ppa-crosslayer` | 21 contracts | **0** |
+| PPA measurement contract (end-to-end campaign) | `ppa-e2e` | 61 contracts | **0** |
+| PPA measurement contract | published corpus, other repository | 0 (pointer unset) | 2 |
+| PPA measurement coverage | `trials/b000/records_flat.json`, 148 rows | denominator absent | 2 |
+| PPA promotion feasibility (cross-layer campaign) | `ppa-crosslayer` | 21 candidate sets | 2 |
+| PPA frontier recomputes | `trials/z23/candidates.json` | no objective declared | 2 |
+| PPA arms solved one problem (cross-layer campaign) | `b000` vs `z23` | 1 pair | **0** |
+| PPA arms solved one problem (end-to-end campaign) | `baseline` vs `t028` | 1 pair | **0** |
+
+Six zero-second rows examining nothing became eleven rows examining 15 + 2 + 21 +
+61 + 148 + 21 + 2 real documents, plus three rows that still cannot look and now
+say exactly what they are missing.
+
+## The one red, and why it is not wired around
+
+`PPA head-to-head records (cross-layer campaign)` exits 1. The finding is `h2h_F`,
+described in Part 1. It is acknowledged in `tools/ci/gate_red_since.json` with an
+owner and a 200-commit bound. A row there **grants no leniency** — the file's own
+header says so and the suite still exits 1 — it only starts a clock that fails the
+landing gate if the red outlives it. Acknowledging is taking on a deadline, not
+escaping one.
+
+The alternative was to leave the gate pointed at a directory that does not exist,
+where it would have gone on reporting NOT_CHECKED in zero seconds for another three
+months. That is the trade this lane refuses.
+
+## Two defects found in the gates themselves
+
+**A corpus identified by filename.** `ppa_head_to_head_check.corpus_records` was
+`corpus.glob("**/*head_to_head*.json")`. It missed 15 real records and refused 2 of
+this checker's own report artefacts as if they were records (`TOO_FEW_ARMS ... got
+0`). Records are now identified by a declared `schema` of `vibeic.ppa.comparison.*`,
+with the legacy filename kept only as a fallback for pre-schema records and as the
+way an *unreadable* file stays in the population instead of vanishing.
+
+`record_schema()` is deliberately not used for this: it reads a missing declaration
+as v1, and "declares nothing" is exactly what a neighbouring document that is not a
+record also does.
+
+**Two documents called "contract".** `ppa_feasibility_check` and `ppa_pareto_check`
+want `required_views` / `limits` / `objectives`; `ppa_contract_check` wants
+`vibeic.ppa.contract.v1` (identities, evidence manifest). The shipped wiring handed
+all three the same path. Measured, giving the feasibility gate the contract-v1
+shape overrides the `required_views_by_axis` the candidate sets already declare and
+loses all nine axes to `FEAS_VIEWS_NOT_DECLARED`. The `--contract` argument is gone
+from that row.
+
+## Negative controls
+
+`test_issue1241_corpus_identifies_records_by_declaration.py`, run against the
+**pre-fix** program: **4 failed, 3 passed.**
+
+    test_a_record_under_any_filename_is_in_the_corpus
+    test_this_programs_own_report_is_not_a_subject
+    test_dropping_the_report_never_drops_the_record_it_is_about
+    test_a_record_that_lost_its_arms_is_still_refused_not_mistaken_for_a_report
+
+With the fix: 46 passed (7 new + 39 pre-existing in
+`test_issue1121_ppa_head_to_head.py`).
+
+`test_issue1241_ppa_record_gates_take_a_corpus.py`: 11 passed. Its load-bearing
+assertion is that the corpus roll-up is severity-ordered and not `max()` — under
+`max()`, `[1, 2]` rolls up to 2, and adding one unreadable document to a corpus
+holding one refused document would SUBTRACT the finding. That shape is not
+hypothetical; `ppa_head_to_head_check`'s `_SEVERITY` comment records it happening.
+
+## Honest limits of this lane
+
+- **The full `repo_hygiene_gates.sh` suite was not run to completion here.** The
+  eleven PPA rows were each executed directly, on a clean tree, and their exit codes
+  are the ones tabulated above. The `gate_red_since.json` row is structurally
+  correct but was not adjudicated against a live dispatch record.
+- **A pre-existing red, reproduced on a pristine a00f53f20 and NOT caused by this
+  lane:** `test_issue1241_vendored_attribution_wired.py::test_the_audit_returns_a_clean_verdict`
+  reports 3 checkers that nothing but their own test runs —
+  `closed_loop_edge_check.py`, `ppa_pr_scope_check.py`, `slot_pad_budget_check.py`.
+  One of those is a PPA checker. It is the same class of defect as the six gates
+  above and is not in this lane's scope.
+- **The brief named an `ppa-crosslayer/eco-readjudication/` bundle.** It does not
+  exist on `origin/main` at a00f53f20 and no path in the tree matches
+  `readjudication`. The per-candidate contract and feasibility JSON it describes is
+  what `ppa-crosslayer/records/trials/*/{contract,candidates,feasibility_report}.json`
+  holds, and that is what was used.
+- **Gates 3 and 5 were NOT made to pass.** Both could have been given a document
+  authored here — an `expected` list, an `objectives` list, a `frontier.json` — and
+  both would then have gone green. Neither was, because a denominator written after
+  the run and a frontier checked against its own recomputation are the two shapes
+  those gates exist to refuse.
