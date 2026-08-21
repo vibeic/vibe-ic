@@ -108,12 +108,15 @@ def test_an_undeclared_audit_only_gate_is_reported():
     whether that was intended, is a gate whose enforcement was never decided.
     The shipped audit could not report this shape at all."""
     m = _audit_mod()
+    root = _mk()
     flow, programs = _tree(
-        _mk(), gates={"quiet_check": '"""No declaration anywhere."""\n'})
+        root, gates={"quiet_check": '"""No declaration anywhere."""\n'})
+    baseline = root / "baseline.json"
+    baseline.write_text(json.dumps({"known": [], "undeclared_known": []}))
     rep = m.audit(flow, programs)
     assert [u["gate"] for u in rep["undeclared_audit_only"]] == ["quiet_check.py"], rep
     assert m.main(["--flow", str(flow), "--programs", str(programs),
-                   "--baseline", str(programs / "nonexistent.json")]) == 1
+                   "--baseline", str(baseline)]) == 1
 
 
 def test_an_undeclared_gate_that_a_runner_invokes_is_not_reported():
@@ -122,13 +125,16 @@ def test_an_undeclared_gate_that_a_runner_invokes_is_not_reported():
     not a gate whose enforcement is unknown. Without this half, the test
     above is satisfied by reporting every gate in the flow."""
     m = _audit_mod()
+    root = _mk()
     flow, programs = _tree(
-        _mk(), gates={"quiet_check": '"""No declaration anywhere."""\n'},
+        root, gates={"quiet_check": '"""No declaration anywhere."""\n'},
         enforced=["quiet_check"])
+    baseline = root / "baseline.json"
+    baseline.write_text(json.dumps({"known": [], "undeclared_known": []}))
     rep = m.audit(flow, programs)
     assert rep["undeclared_audit_only"] == [], rep
     assert m.main(["--flow", str(flow), "--programs", str(programs),
-                   "--baseline", str(programs / "nonexistent.json")]) == 0
+                   "--baseline", str(baseline)]) == 0
 
 
 def test_a_declared_advisory_audit_only_gate_is_not_reported():

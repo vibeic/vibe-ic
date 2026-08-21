@@ -24,6 +24,14 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
 _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
 _HYGIENE = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
+#: v1.10.69 (7c376e348) moved the routed-DEF loop's population out of an inline
+#: `git ls-files` and into its own producer, which in turn imports the shared
+#: corpus resolver from the plugin tree. A fixture that ships only the two files
+#: above now makes the producer fail to even start, and a loop whose PRODUCER
+#: failed declares no per-cell gates at all — which this test would otherwise
+#: read as "the fan-out lost its coverage".
+_CORPUS_PRODUCER = _REPO / "tools" / "ci" / "routed_def_corpus.py"
+_CORPUS_LOCATION = _PROGRAMS / "_corpus_location.py"
 
 #: Every fixture gate returns instantly; this only stops a hung one from taking
 #: the pytest session down (#542). It must stay UNDER the 60 s ceiling
@@ -315,8 +323,20 @@ def test_the_tracked_cells_are_still_reached():
         subprocess.run(["git", "init", "-q", str(clone)], check=True)
         shutil.copy2(_LIB, clone / "tools/ci/_gate_dispatch.sh")
         shutil.copy2(_HYGIENE, clone / "tools/ci/repo_hygiene_gates.sh")
+        shutil.copy2(_CORPUS_PRODUCER, clone / "tools/ci/routed_def_corpus.py")
+        resolver = (clone / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+                    / "programs")
+        resolver.mkdir(parents=True)
+        shutil.copy2(_CORPUS_LOCATION, resolver / "_corpus_location.py")
+        # ONE routed-DEF version per DESIGN. The producer refuses a design that
+        # publishes more than one ("a two-phase identity migration is required
+        # before this population can expand without duplicate gate owners"), so
+        # the older `ic/fam/{alpha,beta}` shape — two versions of one design —
+        # is now an illegal corpus and produced an empty population, not two
+        # cells. Two designs keep the planted count at two and stay legal.
         for name in ("alpha", "beta"):
-            cell = clone / f"benchmark-data/ic/fam/{name}/phase3/stage3/pnr"
+            cell = (clone
+                    / f"benchmark-data/ic/fam_{name}/v1/phase3/stage3/pnr")
             cell.mkdir(parents=True)
             (cell / "routed.def").write_text("DESIGN t ;\nEND DESIGN\n")
         for k, v in (("user.email", "t@t"), ("user.name", "t")):

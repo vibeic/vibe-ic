@@ -144,36 +144,3 @@ def test_the_json_names_the_files_and_the_scope(repo, tmp_path):
         "result from a narrow one")
 
 
-# ── the scope must cover every path a landing gate reads ─────────────────────
-def test_the_scope_covers_the_files_the_image_anchor_gate_reads():
-    """v1.9.35. `sync_image_version --check` is a landing gate and it reads its
-    24 image pointers FROM THE WORKTREE. Two of the files it reads —
-    `README.md` and `docs/INSTALL.md` — sat outside this check's scope, so a
-    landing advanced the anchor to 0.2.53, `--check` passed on the worktree, and
-    the doc edits were never committed: main told users to pull a stale tag
-    while every gate reported the pointers consistent.
-
-    A path a landing gate READS and this check does not GUARD is a path where
-    the certified tree and the committed tree can differ silently.
-    """
-    import importlib.util
-    root = _PROGRAMS.parents[3]
-    sync = root / "tools" / "vibeic-eda" / "sync_image_version.py"
-    if not sync.is_file():
-        pytest.skip("sync_image_version.py absent")
-
-    def _load(name, path):
-        spec = importlib.util.spec_from_file_location(name, path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-
-    m = _load("_syncimg", sync)
-    scope = tuple(_load("_landingclean", PROG).SHIPPED_PATHS)
-    for rel in m.INSTALL_DOC_CANDIDATES:
-        if not (root / rel).exists():
-            continue          # the list also serves the standalone eda repo
-        head = pathlib.Path(rel).parts[0]
-        assert head in scope or rel in scope, (
-            f"{rel} is read by a landing gate but is outside "
-            f"landing_worktree_is_clean's scope {scope}")

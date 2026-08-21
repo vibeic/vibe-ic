@@ -195,7 +195,7 @@ Two programs own this; run them, do not reimplement them:
 |---|---|
 | `programs/benchmark_evidence_publish.py` | STAGES a completed run into the canonical layout. **Refuses a non-converged run.** Excludes oversize files, generates `GDS_MANIFEST.txt`. Stages only — never commits. |
 | `programs/benchmark_evidence_structure_check.py` | VALIDATES any published folder. Run it before you commit; CI runs it with `--changed-since`. |
-| `programs/benchmark_evidence_index.py --write` | REGENERATES `<clone>/ic/INDEX.md`. Run it after any publish or delete. |
+| `programs/benchmark_evidence_index.py --write` | REGENERATES `<clone>/ic/INDEX.md`. Run it after any publish or delete. Point `VIBE_IC_BENCHMARK_DATA` at the clone — the corpus is not in this repo, and the program says which tree it walked. Without a corpus it writes NOTHING and reports `NO_CORPUS`; it never emits an index of empty sections that would read as "the corpus published nothing". |
 
 ### The naming rule — VERSION FIRST, THEN PDK
 
@@ -241,8 +241,9 @@ end.
                           --pdk <PDK> --plugin-version <X.Y.Z>
 3  retire the old      git rm -r <clone>/ic/<IC>/v<older>_<PDK>
 4  fix the citations   retention.json / matrix_d3 manifest / any test that read it
-5  regenerate          benchmark_evidence_index.py --write
-6  validate            benchmark_evidence_structure_check.py --tree benchmark-data
+5  regenerate          VIBE_IC_BENCHMARK_DATA=<clone> benchmark_evidence_index.py --write
+6  validate            VIBE_IC_BENCHMARK_DATA=<clone> \
+                          benchmark_evidence_structure_check.py --tree benchmark-data
 7  commit + push
 ```
 

@@ -103,11 +103,13 @@
 #                      touches the battery judging it, because that is worth
 #                      reading and must not be blocking (a PR that improves the
 #                      gate has to be landable).
-#   the VERDICT        THIS repo's copy of `landing_merge_verdict.py`, never the
-#                      candidate's. The judge may not be supplied by the subject
-#                      — the same rule §4.05 states for an oracle. A PR can
-#                      change what its gates check; it cannot change what
-#                      counts as a refusal.
+#   the VERDICT        the exact BASE commit's raw-attested copy of
+#                      `landing_merge_verdict.py`, rematerialized after the
+#                      candidate census is zero; never the candidate's or a
+#                      mutable caller worktree's copy. The judge may not be
+#                      supplied by the subject — the same rule §4.05 states for
+#                      an oracle. A PR can change what its gates check; it
+#                      cannot change what counts as a refusal.
 #
 # WHY ARM A EXISTS: `main` is RED independently of anything in flight
 # (`test_ci_harness_timeout_ceiling_check` 3/40, measured at two different tips).
@@ -189,6 +191,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# A candidate shares this uid and receives paths under RUN.  Until cache
+# bundles are parent-authenticated, reading or writing a mutable baseline cache
+# concurrently with that candidate would let it turn introduced failures into
+# "pre-existing" ones.  Measure the base after candidate zero-census instead.
+if [ -n "$BASE_GATE_CACHE" ]; then
+  echo "--- base-gate cache disabled for adversarial differential ownership; base will be remeasured"
+  BASE_GATE_CACHE=""
+fi
+
 SELF_REPO="$(git -C "$SELF" rev-parse --show-toplevel 2>/dev/null)"
 [ -z "$REPO" ] && REPO="$SELF_REPO"
 [ -n "$REPO" ] || die "no repository (pass --repo)"
@@ -204,7 +215,19 @@ if [ -n "$REASSERT" ]; then
   [ -f "$REASSERT" ] || die "--reassert: no such file: $REASSERT"
   read -r WAS_BASE WAS_HEAD WAS_VERDICT < <(python3 - "$REASSERT" <<'PY'
 import json, sys
-d = json.load(open(sys.argv[1]))
+def pairs(rows):
+    out = {}
+    for key, value in rows:
+        if key in out:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        out[key] = value
+    return out
+def constant(value):
+    raise ValueError(f"non-finite JSON number {value!r}")
+with open(sys.argv[1], encoding="utf-8") as fh:
+    d = json.load(fh, object_pairs_hook=pairs, parse_constant=constant)
+if not isinstance(d, dict):
+    raise SystemExit(2)
 print(d.get("base_sha", ""), d.get("head_sha", ""), d.get("verdict", ""))
 PY
   ) || die "--reassert: $REASSERT is not a verdict JSON"
@@ -219,6 +242,27 @@ PY
     echo "    re-run the full verify; a pass about an older base is not a pass" >&2
     exit 1
   fi
+  REASSERT_VERIFIER_BLOB="$(git -C "$SELF_REPO" hash-object --no-filters \
+    "$SELF/gatekeeper-verify-merge.sh" 2>/dev/null)" \
+    || die "--reassert: cannot hash the running verifier"
+  REASSERT_BASE_VERIFIER_BLOB="$("${G[@]}" rev-parse \
+    "$WAS_BASE:tools/gatekeeper-verify-merge.sh" 2>/dev/null)" \
+    || die "--reassert: recorded base has no verifier"
+  [ "$REASSERT_VERIFIER_BLOB" = "$REASSERT_BASE_VERIFIER_BLOB" ] \
+    || die "--reassert: running verifier is not the recorded BASE authority"
+  REASSERT_VALIDATOR="$SELF_REPO/tools/ci/protected_landing_transition.py"
+  REASSERT_VALIDATOR_BLOB="$(git -C "$SELF_REPO" hash-object --no-filters \
+    "$REASSERT_VALIDATOR" 2>/dev/null)" \
+    || die "--reassert: cannot hash the protected transition validator"
+  REASSERT_BASE_VALIDATOR_BLOB="$("${G[@]}" rev-parse \
+    "$WAS_BASE:tools/ci/protected_landing_transition.py" 2>/dev/null)" \
+    || die "--reassert: recorded base has no protected transition validator"
+  [ "$REASSERT_VALIDATOR_BLOB" = "$REASSERT_BASE_VALIDATOR_BLOB" ] \
+    || die "--reassert: transition validator is not the recorded BASE byte"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B "$REASSERT_VALIDATOR" \
+      validate-verdict --verdict "$REASSERT" \
+      --expected-base "$WAS_BASE" --expected-head "$WAS_HEAD" \
+    || die "--reassert: protected transition receipt is missing or changed"
   echo "REASSERT: OK — $BASE is still ${WAS_BASE:0:12}, head still ${WAS_HEAD:0:12}"
   exit 0
 fi
@@ -234,6 +278,48 @@ WT_CAND="$RUN/candidate"
 WT_CAND_TESTS="$RUN/candidate-tests"
 WT_BASE="$RUN/base"
 WT_BASE_TESTS="$RUN/base-tests"
+WT_TRUSTED="$RUN/trusted-base-tools"
+TRUSTED_REPO=""
+BENCHMARK_MEASUREMENT="$RUN/benchmark-data-measurement.json"
+BENCHMARK_MEASUREMENT_SHA256=""
+BENCHMARK_SOURCE=""
+BENCHMARK_SHA=""
+BENCHMARK_A2="$RUN/benchmark-a2"
+BENCHMARK_B2="$RUN/benchmark-b2"
+BENCHMARK_A2_ADDED=0
+BENCHMARK_B2_ADDED=0
+BENCHMARK_POST_FAILURE=0
+TRUSTED_TRANSITION_EVIDENCE="$RUN/trusted-routed-transition-evidence.json"
+PROTECTED_PRE="$RUN/protected-landing-transition.pre.json"
+PROTECTED_POST="$RUN/protected-landing-transition.post.json"
+PROTECTED_PRE_SHA256=""
+PROTECTED_ARGS=()
+PROTECTED_OPERATION=""
+RUNTIME_AUTHORITY_COMMIT=""
+RUNTIME_SNAPSHOT="$RUN/protected-runtime"
+RUNTIME_RECORD="$RUN/protected-runtime.json"
+CAND_SUBJECT="$RUN/candidate-subject"
+BASE_SUBJECT="$RUN/base-subject"
+CAND_SUBJECT_RECORD="$RUN/candidate-subject.json"
+BASE_SUBJECT_RECORD="$RUN/base-subject.json"
+BENCHMARK_SUBJECT_RECORD="$RUN/benchmark-subject.json"
+SELECTION_MANIFEST="$RUN/test-selection.json"
+A1_PROGRESS_PLAN="$RUN/a1-progress-plan.json"
+B1_PROGRESS_PLAN="$RUN/b1-progress-plan.json"
+A2_PROGRESS_PLAN="$RUN/a2-progress-plan.json"
+B2_PROGRESS_PLAN="$RUN/b2-progress-plan.json"
+A1_OUTPUT="$RUN/a1-evidence"
+B1_OUTPUT="$RUN/b1-evidence"
+A2_OUTPUT="$RUN/a2-evidence"
+B2_OUTPUT="$RUN/b2-evidence"
+A1_RECEIPT="$RUN/a1-hermetic-receipt.json"
+B1_RECEIPT="$RUN/b1-hermetic-receipt.json"
+A2_RECEIPT="$RUN/a2-hermetic-receipt.json"
+B2_RECEIPT="$RUN/b2-hermetic-receipt.json"
+A1_VALIDATION="$RUN/a1-arm-validation.json"
+B1_VALIDATION="$RUN/b1-arm-validation.json"
+A2_VALIDATION="$RUN/a2-arm-validation.json"
+B2_VALIDATION="$RUN/b2-arm-validation.json"
 # PER-RUN ref names. Two verifications of two different PRs may legitimately be
 # in flight at once (the merge queue is serialized; a gatekeeper reading ahead is
 # not), and a fixed `refs/gk-verify/head` would have had each run fetching over
@@ -242,86 +328,519 @@ RUN_ID="$(basename "$RUN")"
 HEAD_REF="refs/gk-verify/$RUN_ID/head"
 MERGE_REF="refs/gk-verify/$RUN_ID/merge"
 
-# Verify the bytes that a test arm actually read, not the worktree's mutable
-# index.  A subject can set assume-unchanged/skip-worktree and then edit a
-# tracked file; HEAD and ordinary `git status` both still look clean.  A fresh
-# index populated from the expected commit carries none of those flags, so
-# diff-files must hash the real worktree bytes against the expected tree.
-attest_test_worktree() {
-  local wt="$1" expected_commit="$2" expected_tree="$3" label="$4"
-  local report="$RUN/${label}.worktree_status"
-  local index="$RUN/.${label}.attestation-index"
-  local tracked="$RUN/.${label}.tracked-diff"
-  local untracked="$RUN/.${label}.untracked"
-  local head rc flags
+benchmark_origin_args() {
+  BENCHMARK_ORIGIN_ARGS=()
+  if [ "${VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE:-0}" = "1" ] \
+     && [ -n "${VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN:-}" ]; then
+    BENCHMARK_ORIGIN_ARGS=(--test-expected-origin \
+      "$VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN")
+  fi
+}
 
-  if ! head="$(git -C "$wt" rev-parse HEAD 2>/dev/null)"; then
-    printf 'inspection failed: cannot read HEAD\n' > "$report"
-    printf 'unknown\n'
-    return
-  fi
-  if [ "$head" != "$expected_commit" ]; then
-    printf 'expected=%s\nactual=%s\n' "$expected_commit" "$head" > "$report"
-    printf 'wrong-head\n'
-    return
-  fi
+validate_benchmark_snapshot() {
+  local checkout="$1"
+  run_owned_operational "$TRUSTED_REPO" \
+    python3 "$TRUSTED_REPO/tools/ci/benchmark_data_landing_checkout.py" validate \
+    --checkout "$checkout" --expected-sha "$BENCHMARK_SHA" \
+    "${BENCHMARK_ORIGIN_ARGS[@]}"
+}
 
-  # Flags alone are residue too.  More importantly, the independent index
-  # below prevents either flag from hiding changed bytes from this decision.
-  if ! flags="$(git -C "$wt" ls-files -v 2>/dev/null)"; then
-    printf 'inspection failed: cannot read subject index flags\n' > "$report"
-    printf 'unknown\n'
-    return
-  fi
-  if printf '%s\n' "$flags" | grep -Eq '^(S|[a-z]) '; then
-    printf 'subject index contains assume-unchanged/skip-worktree entries\n' \
-      > "$report"
-    printf '%s\n' "$flags" | grep -E '^(S|[a-z]) ' >> "$report"
-    printf 'dirty\n'
-    return
-  fi
+run_owned_operational() {
+  local cwd="$1"; shift
+  PYTHONDONTWRITEBYTECODE=1 python3 -B \
+    "$TRUSTED_REPO/tools/ci/owned_command.py" \
+    --repo "$TRUSTED_REPO" --cwd "$cwd" --stall-grace \
+    "${GATEKEEPER_OPERATIONAL_STALL_GRACE:-300}" -- "$@"
+}
 
-  if ! GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$index" \
-       git -C "$wt" read-tree "$expected_tree" \
-       >/dev/null 2>&1; then
-    printf 'inspection failed: cannot materialize expected tree index\n' \
-      > "$report"
-    printf 'unknown\n'
-    return
+validate_protected_landing_transition() {
+  local receipt="$1"
+  run_owned_operational "$TRUSTED_REPO" \
+    python3 "$TRUSTED_REPO/tools/ci/protected_landing_transition.py" verify \
+      --object-repo "$REPO" --base "$BASE_SHA" \
+      --candidate "$VERIFIED_SHA" \
+      --candidate-gates "$WT_CAND" \
+      --candidate-tests "$WT_CAND_TESTS" \
+      --receipt "$receipt"
+}
+
+materialize_protected_runtime() {
+  local selected runtime_root runtime_state
+  selected="$(PYTHONDONTWRITEBYTECODE=1 python3 -B \
+    "$TRUSTED_REPO/tools/ci/protected_landing_transition.py" select-runtime \
+      --receipt "$PROTECTED_PRE" \
+      --expected-base "$BASE_SHA" --expected-candidate "$VERIFIED_SHA" \
+      --expected-base-tree "$BASE_TREE" \
+      --expected-candidate-tree "$VERIFIED_TREE" \
+      --require-semantic-runtime)" \
+    || die "BASE-predeclared semantic landing runtime is not active"
+  IFS=$'\t' read -r runtime_root runtime_state <<< "$selected"
+  case "$runtime_root" in
+    candidate) RUNTIME_AUTHORITY_COMMIT="$VERIFIED_SHA" ;;
+    base) RUNTIME_AUTHORITY_COMMIT="$BASE_SHA" ;;
+    *) die "protected transition selected no executable runtime root" ;;
+  esac
+  echo "--- protected runtime=$runtime_root/$runtime_state"
+  run_owned_operational "$TRUSTED_REPO" \
+    python3 "$TRUSTED_REPO/tools/ci/protected_runtime_snapshot.py" \
+      materialize --object-repo "$REPO" --receipt "$PROTECTED_PRE" \
+      --base-snapshot "$TRUSTED_REPO" --snapshot "$RUNTIME_SNAPSHOT" \
+      --record "$RUNTIME_RECORD" \
+    || die "cannot materialize the one BASE-authorised landing runtime"
+}
+
+materialize_hermetic_git_subject() {
+  local object_repo="$1" commit="$2" output="$3" record="$4"
+  run_owned_operational "$RUNTIME_SNAPSHOT" \
+    python3 -B "$RUNTIME_SNAPSHOT/tools/ci/hermetic_git_subject.py" \
+      --object-repo "$object_repo" --commit "$commit" \
+      --output "$output" --record "$record" \
+    || die "cannot materialize object-exact hermetic Git subject ${commit:0:12}"
+}
+
+build_trusted_test_selection() {
+  run_owned_operational "$RUNTIME_SNAPSHOT" \
+    python3 "$RUNTIME_SNAPSHOT/tools/ci/trusted_test_selection.py" \
+      --object-repo "$REPO" --base "$BASE_SHA" --candidate "$VERIFIED_SHA" \
+      --selector-commit "$RUNTIME_AUTHORITY_COMMIT" \
+      --selector-path "$RUNTIME_SNAPSHOT/$PLUGIN_REL/programs/ci_targeted_test_select.py" \
+      --base-snapshot "$TRUSTED_REPO" \
+      --candidate-snapshot "$WT_CAND" \
+      --manifest "$SELECTION_MANIFEST" \
+      --base-selection "$RUN/selection_base.txt" \
+      --candidate-selection "$RUN/selection.txt" \
+      --base-progress-plan "$A1_PROGRESS_PLAN" \
+      --candidate-progress-plan "$B1_PROGRESS_PLAN" \
+      --stall-grace-seconds "${GATEKEEPER_SEMANTIC_STALL_GRACE:-300}" \
+    || die "BASE-owned targeted selection/finite progress plan is NORECORD"
+  python3 "$RUNTIME_SNAPSHOT/tools/ci/landing_completion_record.py" plan \
+      --scope landing:A2 \
+      --stall-grace-seconds "${GATEKEEPER_SEMANTIC_STALL_GRACE:-300}" \
+      --output "$A2_PROGRESS_PLAN" \
+    || die "cannot build the A2 parent-owned progress plan"
+  python3 "$RUNTIME_SNAPSHOT/tools/ci/landing_completion_record.py" plan \
+      --scope landing:B2 \
+      --stall-grace-seconds "${GATEKEEPER_SEMANTIC_STALL_GRACE:-300}" \
+      --output "$B2_PROGRESS_PLAN" \
+    || die "cannot build the B2 parent-owned progress plan"
+}
+
+new_progress_nonce() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -I -c \
+    'import secrets; print(secrets.token_hex(32))'
+}
+
+validated_arm_exit() {
+  # `-B` IS LOAD-BEARING, and `PYTHONDONTWRITEBYTECODE=1` alone is not: `-I`
+  # implies `-E`, so it IGNORES every PYTHON* variable including that one.  The
+  # helper below imports the arm-receipt module OUT OF `$RUNTIME_SNAPSHOT`, so
+  # without `-B` the first call byte-compiles it and leaves
+  # `tools/ci/__pycache__/` inside the runtime tree.  The runtime tree digest is
+  # exactly what every LATER arm's receipt is re-checked against, so the B1 call
+  # made the very next validation refuse with "receipt runtime digest differs
+  # from the current input" -> "B2 arm receipt is NORECORD", on every run, for
+  # every branch.  Measured: runtime files 57 -> 58 across one B1 validation.
+  PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "$1" "$2" <<'PY'
+import importlib.util, pathlib, sys
+helper_path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("_trusted_arm_record_exit", helper_path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+record = module.strict_load_record(pathlib.Path(sys.argv[2]))
+print(record["payload"]["result_exit_code"])
+PY
+}
+
+# WHY THE VALIDATOR'S OWN LOG IS NOT ENOUGH.
+#
+# When the arm never wrote a receipt, the validator can only report the SYMPTOM
+# -- "cannot resolve runner receipt: [Errno 2] No such file or directory" -- and
+# that one line is what a reader sees for every distinct cause. MEASURED, three
+# different causes reduced to that same sentence in one evening:
+#
+#   * "subject would expose the host HOME to the candidate"  (TMPDIR under $HOME)
+#   * "cannot start Docker CLI: ..."                          (no engine here)
+#   * "candidate ended without the exact semantic terminal record"
+#
+# The runner writes its refusal to `$RUN/<arm>-runner.log` and then exits; that
+# file is deleted with the run directory, so unless it is quoted HERE the cause
+# is gone. "I could not run it" and "I ran it and it failed" must not read the
+# same. The launchers above own that pathname, so it is derived from the arm id
+# rather than threaded through this function's already-long parameter list.
+arm_norecord_diagnosis() {
+  local arm="$1" record_log="$2" runner_log
+  runner_log="$RUN/$(printf '%s' "$arm" | tr 'A-Z' 'a-z')-runner.log"
+  if [ -s "$runner_log" ]; then
+    echo "      --- $arm runner said (this is the CAUSE; the lines below are the symptom):" >&2
+    tail -n 20 -- "$runner_log" | sed 's/^/      /' >&2
+  else
+    echo "      --- $arm runner left no log at $runner_log — the arm did not even start" >&2
   fi
-  # A read-tree index has no worktree stat cache.  Refresh matching entries so
-  # unchanged files do not all appear modified; mismatches legitimately make
-  # refresh return 1 and are decided by diff-files below.
-  GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$index" \
-    git -C "$wt" update-index --really-refresh \
-    >/dev/null 2>&1 || true
-  GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$index" \
-    git -C "$wt" diff-files --name-status \
-    --no-ext-diff --no-textconv --ignore-submodules=none \
-    > "$tracked" 2>/dev/null
-  rc=$?
-  if [ "$rc" -gt 1 ]; then
-    printf 'inspection failed: cannot compare tracked worktree bytes\n' \
-      > "$report"
-    printf 'unknown\n'
-    return
+  sed 's/^/      /' "$record_log" >&2
+}
+
+validate_hermetic_arm_record() {
+  local runner_rc="$1" receipt="$2" output="$3" arm="$4" subject="$5"
+  local corpus="$6" selection="$7" plan="$8" command="$9" record="${10}"
+  local completion="${11:-}" expected_head="${12:-}" receipt_rc
+  local helper="$RUNTIME_SNAPSHOT/tools/ci/hermetic_landing_arm_receipt.py"
+  local args=(validate --runner
+    "$RUNTIME_SNAPSHOT/tools/ci/hermetic_candidate_runner.py"
+    --receipt "$receipt" --output-dir "$output" --arm "$arm"
+    --subject "$subject" --runtime "$RUNTIME_SNAPSHOT" --corpus "$corpus"
+    --selection "$selection" --progress-plan "$plan"
+    --benchmark-sha "$BENCHMARK_SHA" --command "$command" --record "$record")
+  if [ -n "$completion" ]; then
+    args+=(--completion "$completion" --base "$BASE_SHA"
+           --head "$expected_head" --hygiene hygiene.json)
   fi
-  if ! GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$index" \
-       git -C "$wt" ls-files --others \
-       --exclude-standard > "$untracked" 2>/dev/null; then
-    printf 'inspection failed: cannot enumerate untracked files\n' > "$report"
-    printf 'unknown\n'
-    return
+  python3 -B "$helper" "${args[@]}" >"$record.log" 2>&1 \
+    || { arm_norecord_diagnosis "$arm" "$record.log"
+         die "$arm arm receipt is NORECORD"; }
+  receipt_rc="$(validated_arm_exit "$helper" "$record")" \
+    || die "$arm validation record cannot be re-read"
+  case "$runner_rc:$receipt_rc" in
+    0:0|1:1) ;;
+    *) die "$arm runner rc=$runner_rc disagrees with natural subject rc=$receipt_rc" ;;
+  esac
+  LAST_ARM_RC="$receipt_rc"
+}
+
+publish_validated_arm_artifact() {
+  python3 -B "$RUNTIME_SNAPSHOT/tools/ci/hermetic_landing_arm_receipt.py" \
+    publish --record "$1" --output-dir "$2" \
+    --artifact "$3" --destination "$4"
+}
+
+launch_hermetic_test_arm() {
+  local arm="$1" subject="$2" corpus="$3" selection="$4" plan="$5"
+  local output="$6" receipt="$7" log="$8" nonce
+  nonce="$(new_progress_nonce)" || die "cannot create $arm progress nonce"
+  setsid python3 -B "$RUNTIME_SNAPSHOT/tools/ci/hermetic_candidate_runner.py" run \
+    --subject "$subject" --runtime "$RUNTIME_SNAPSHOT" \
+    --overlay tools/ci/hermetic_test_arm_entry.sh \
+    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py \
+    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_census_freshness.py \
+    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_coverage.py \
+    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py \
+    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py \
+    --env "GATEKEEPER_BENCHMARK_DATA_SHA=$BENCHMARK_SHA" \
+    --env "GATEKEEPER_VERIFY_ARM=$arm" \
+    --env VIBEIC_PYTEST_PROGRESS_FILE=/evidence/pytest-progress.jsonl \
+    --env "VIBEIC_PYTEST_PROGRESS_NONCE=$nonce" \
+    --corpus "$corpus" --selection "$selection" --progress-plan "$plan" \
+    --output-dir "$output" --receipt "$receipt" -- \
+    /subject/tools/ci/hermetic_test_arm_entry.sh >"$log" 2>&1 &
+  LAST_ARM_PID=$!
+}
+
+launch_hermetic_land_arm() {
+  local arm="$1" subject="$2" corpus="$3" selection="$4" plan="$5"
+  local output="$6" receipt="$7" log="$8" version_by_gatekeeper="$9" nonce
+  nonce="$(new_progress_nonce)" || die "cannot create $arm progress nonce"
+  setsid python3 -B "$RUNTIME_SNAPSHOT/tools/ci/hermetic_candidate_runner.py" run \
+    --subject "$subject" --runtime "$RUNTIME_SNAPSHOT" \
+    --overlay tools/gatekeeper-land.sh \
+    --env "GATEKEEPER_BASE=$BASE_SHA" \
+    --env "GATEKEEPER_BENCHMARK_DATA_SHA=$BENCHMARK_SHA" \
+    --env GATEKEEPER_HYGIENE_PROGRESS=/evidence/hygiene-progress.jsonl \
+    --env GATEKEEPER_HYGIENE_REPORT=/evidence/hygiene.json \
+    --env "GATEKEEPER_VERIFY_ARM=$arm" \
+    --env "GATEKEEPER_VERSION_BY_GATEKEEPER=$version_by_gatekeeper" \
+    --env "VIBEIC_LANDING_PROGRESS_NONCE=$nonce" \
+    --corpus "$corpus" --selection "$selection" --progress-plan "$plan" \
+    --output-dir "$output" --receipt "$receipt" -- \
+    /subject/tools/gatekeeper-land.sh >"$log" 2>&1 &
+  LAST_ARM_PID=$!
+}
+
+validate_hermetic_arm_result() {
+  local runner_rc="$1" receipt="$2" output="$3" arm="$4" subject="$5"
+  local corpus="$6" selection="$7" plan="$8" command="$9"
+  local receipt_rc
+  receipt_rc="$(hermetic_receipt_exit \
+    "$receipt" "$output" "$arm" "$subject" "$corpus" "$selection" \
+    "$plan" "$BENCHMARK_SHA" "$command")" \
+    || die "$arm did not publish a complete, input-bound hermetic receipt"
+  case "$runner_rc:$receipt_rc" in
+    0:0|1:1) ;;
+    *) die "$arm runner rc=$runner_rc disagrees with natural subject rc=$receipt_rc" ;;
+  esac
+  LAST_ARM_RC="$receipt_rc"
+}
+
+compare_hermetic_shared_inputs() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - \
+      "$RUNTIME_SNAPSHOT" "$@" <<'PY'
+import importlib.util, pathlib, sys
+runtime = pathlib.Path(sys.argv[1])
+path = runtime / "tools" / "ci" / "hermetic_candidate_runner.py"
+spec = importlib.util.spec_from_file_location("_trusted_shared_inputs", path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+records = [module.strict_load_receipt(pathlib.Path(value))
+           for value in sys.argv[2:]]
+for key in ("runtime", "corpus"):
+    values = [record["inputs"][key] for record in records]
+    if not values or any(value != values[0] for value in values[1:]):
+        raise SystemExit(2)
+images = [record["image"] for record in records]
+if any(value != images[0] for value in images[1:]):
+    raise SystemExit(2)
+PY
+}
+
+refresh_and_attest_trusted_tools() {
+  # Untrusted arms know RUN and share this uid.  Natural wrapper exit plus the
+  # owned final census proves they have no surviving writer; only then discard
+  # the old tool worktree, rematerialize BASE, and byte-attest every tracked
+  # blob plus index/untracked/ignored/config state before parent evidence/judge.
+  local bootstrap="$RUN/trusted-worktree-attest.py" bootstrap_part
+  local expected_blob actual_blob
+  bootstrap_part="$bootstrap.part.$$"
+  expected_blob="$("${G[@]}" rev-parse \
+    "$BASE_SHA:tools/ci/trusted_worktree_attest.py" 2>/dev/null)" \
+    || die "base has no trusted snapshot attester"
+  GIT_NO_REPLACE_OBJECTS=1 "${G[@]}" cat-file blob \
+    "$BASE_SHA:tools/ci/trusted_worktree_attest.py" > "$bootstrap_part" \
+    || die "cannot extract the exact base snapshot attester blob"
+  actual_blob="$("${G[@]}" hash-object --no-filters "$bootstrap_part")" \
+    || die "cannot hash the extracted snapshot attester"
+  [ "$actual_blob" = "$expected_blob" ] \
+    || die "extracted snapshot attester differs from its base blob"
+  mv -f -- "$bootstrap_part" "$bootstrap"
+  chmod 0500 "$bootstrap"
+  case "$WT_TRUSTED" in "$RUN"/*) ;; *) die "unsafe trusted snapshot path" ;; esac
+  rm -rf -- "$WT_TRUSTED"
+  mkdir -m 0700 -- "$WT_TRUSTED"
+  # git-archive cannot invoke checkout clean/smudge filters.  export-subst or
+  # any other byte transformation is still caught by the raw blob census below
+  # before one byte from this snapshot executes.
+  GIT_NO_REPLACE_OBJECTS=1 "${G[@]}" archive --format=tar "$BASE_SHA" \
+    | tar -xf - -C "$WT_TRUSTED" \
+    || die "cannot materialize the exact trusted base snapshot"
+  TRUSTED_REPO="$WT_TRUSTED"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B "$bootstrap" \
+      --object-repo "$REPO" --snapshot "$TRUSTED_REPO" \
+      --expected-sha "$BASE_SHA" \
+    || die "trusted base snapshot failed raw-byte attestation"
+}
+
+hygiene_record_binds_benchmark() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - "$TRUSTED_REPO" "$1" "$2" <<'PY'
+import pathlib, re, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "vibe-ic-marketplace" /
+                       "plugins" / "vibe-ic" / "programs"))
+from gate_process_attestation import strict_loads
+try:
+    d = strict_loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+sha = (d.get("corpus_inputs") or {}).get("benchmark_data_sha")
+if sha != sys.argv[3] or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha or ""):
+    raise SystemExit(1)
+PY
+}
+
+prepare_benchmark_snapshots() {
+  local configured
+  if [ -n "${VIBE_IC_BENCHMARK_DATA:-}" ]; then
+    configured="$VIBE_IC_BENCHMARK_DATA"
+  elif [ -n "${VIBEIC_BENCHMARK_DATA_CHECKOUT:-}" ]; then
+    configured="$VIBEIC_BENCHMARK_DATA_CHECKOUT"
+  elif [ -n "${HOME:-}" ]; then
+    configured="$HOME/_matrix_benchmark_data"
+  else
+    die "benchmark-data: no explicit checkout and HOME is unset"
   fi
-  if [ -s "$tracked" ] || [ -s "$untracked" ]; then
-    {
-      [ ! -s "$tracked" ] || { printf 'tracked differences:\n'; cat "$tracked"; }
-      [ ! -s "$untracked" ] || { printf 'untracked files:\n'; cat "$untracked"; }
-    } > "$report"
-    printf 'dirty\n'
-    return
-  fi
-  printf 'clean\n'
+  benchmark_origin_args
+  run_owned_operational "$TRUSTED_REPO" \
+    python3 "$TRUSTED_REPO/tools/ci/benchmark_data_landing_checkout.py" measure \
+    --checkout "$configured" --record "$BENCHMARK_MEASUREMENT" \
+    "${BENCHMARK_ORIGIN_ARGS[@]}" \
+    || die "benchmark-data canonical checkout produced NORECORD"
+  BENCHMARK_SHA="$(PYTHONDONTWRITEBYTECODE=1 python3 -B - \
+      "$TRUSTED_REPO" "$BENCHMARK_MEASUREMENT" "$configured" <<'PY'
+import pathlib, re, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "vibe-ic-marketplace" /
+                       "plugins" / "vibe-ic" / "programs"))
+from gate_process_attestation import strict_loads
+d = strict_loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+if set(d) != {"schema", "complete", "sha", "origin", "path"}:
+    raise SystemExit(2)
+if d["schema"] != 1 or d["complete"] is not True:
+    raise SystemExit(2)
+if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", d.get("sha", "")):
+    raise SystemExit(2)
+if pathlib.Path(d["path"]).resolve() != pathlib.Path(sys.argv[3]).resolve():
+    raise SystemExit(2)
+print(d["sha"])
+PY
+  )" || die "benchmark-data measurement record is incomplete"
+  BENCHMARK_SOURCE="$(PYTHONDONTWRITEBYTECODE=1 python3 -B - \
+      "$TRUSTED_REPO" "$BENCHMARK_MEASUREMENT" <<'PY'
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "vibe-ic-marketplace" /
+                       "plugins" / "vibe-ic" / "programs"))
+from gate_process_attestation import strict_loads
+print(strict_loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))["path"])
+PY
+  )" || die "benchmark-data measurement path is unreadable"
+  BENCHMARK_MEASUREMENT_SHA256="$(sha256sum "$BENCHMARK_MEASUREMENT" \
+    | awk '{print $1}')" \
+    || die "cannot bind the benchmark-data measurement record"
+
+  echo "--- benchmark-data=${BENCHMARK_SHA:0:12} (one remote measurement; hermetic snapshot pending)"
+}
+
+prepare_base_wave() {
+  run_owned_operational "$REPO" \
+    git -C "$REPO" worktree add -q --detach "$WT_BASE_TESTS" "$BASE_SHA" \
+    || die "cannot create the post-candidate base-test worktree"
+  run_owned_operational "$REPO" \
+    git -C "$REPO" worktree add -q --detach "$WT_BASE" "$BASE_SHA" \
+    || die "cannot create the post-candidate base-gate worktree"
+  raw_attest_base_worktree "$WT_BASE_TESTS" \
+    || die "post-candidate base-test worktree failed raw-byte attestation"
+  raw_attest_base_worktree "$WT_BASE" \
+    || die "post-candidate base-gate worktree failed raw-byte attestation"
+}
+
+raw_attest_base_worktree() {
+  local checkout="$1"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B \
+    "$TRUSTED_REPO/tools/ci/trusted_worktree_attest.py" \
+      --object-repo "$REPO" --snapshot "$checkout" \
+      --expected-sha "$BASE_SHA" --allow-git-control-file
+}
+
+clear_base_wave_artifacts() {
+  # These names are discoverable from the measurement-record path handed to
+  # B2.  Once both candidate process groups have a terminal zero census, delete
+  # every A-only artifact (including candidate-planted symlinks/directories)
+  # before a base process or cache reader can treat it as carried evidence.
+  local path
+  for path in \
+      "$BASE_JUNIT" "$BASE_HYG" "$RUN/base_land.log" \
+      "$RUN/base_tests.log" "$RUN/base_hygiene_progress.jsonl" \
+      "$RUN/selection_base.txt" "$RUN/selection_base.after"; do
+    case "$path" in "$RUN"/*) ;; *) die "unsafe base artifact path: $path" ;; esac
+    rm -rf -- "$path"
+  done
+}
+
+seal_bound_file() {
+  # Re-home bytes from a pre-candidate parent artifact onto a fresh private
+  # inode.  A matching symlink/hardlink is not accepted merely because its
+  # target happens to hash correctly at this instant.
+  local path="$1" expected_sha="$2"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - "$path" "$expected_sha" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected = sys.argv[2]
+before = path.lstat()
+if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+    raise SystemExit(2)
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+flags |= getattr(os, "O_NOFOLLOW", 0)
+fd = os.open(path, flags)
+try:
+    chunks = []
+    while True:
+        chunk = os.read(fd, 1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    after_fd = os.fstat(fd)
+finally:
+    os.close(fd)
+identity = lambda st: (st.st_dev, st.st_ino, st.st_size,
+                       st.st_mtime_ns, st.st_ctime_ns)
+if identity(before) != identity(after_fd):
+    raise SystemExit(2)
+data = b"".join(chunks)
+if hashlib.sha256(data).hexdigest() != expected:
+    raise SystemExit(2)
+tmp = path.with_name(f".{path.name}.sealed.{os.getpid()}")
+wflags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+out = os.open(tmp, wflags, 0o600)
+try:
+    view = memoryview(data)
+    while view:
+        written = os.write(out, view)
+        if written <= 0:
+            raise OSError("short selection write")
+        view = view[written:]
+    os.fsync(out)
+finally:
+    os.close(out)
+os.replace(tmp, path)
+sealed = path.lstat()
+if (not stat.S_ISREG(sealed.st_mode) or sealed.st_nlink != 1
+        or stat.S_IMODE(sealed.st_mode) != 0o600):
+    raise SystemExit(2)
+PY
+}
+
+build_trusted_transition_evidence() {
+  rm -f "$TRUSTED_TRANSITION_EVIDENCE"
+  run_owned_operational "$TRUSTED_REPO" \
+    python3 "$TRUSTED_REPO/tools/ci/routed_def_corpus.py" \
+      --repo "$TRUSTED_REPO" \
+      --trusted-manifest "$TRUSTED_TRANSITION_EVIDENCE" \
+      --checkout "$BENCHMARK_B2" --subject-repo "$WT_CAND" \
+      --benchmark-sha "$BENCHMARK_SHA" \
+    || die "trusted parent could not enumerate and execute the routed corpus"
+  [ -s "$TRUSTED_TRANSITION_EVIDENCE" ] \
+    || die "trusted routed transition evidence was not published"
+  # The independent receipts read B2 after its pre-arm validation.  Re-attest
+  # those exact bytes now so a mutation during parent execution cannot be
+  # cleaned up and laundered into the evidence file.
+  validate_benchmark_snapshot "$BENCHMARK_B2" \
+    || die "benchmark-data B2 changed during trusted parent evidence execution"
+}
+
+base_has_exact_legacy_routed_empty() {
+  python3 - "$TRUSTED_REPO" "$1" "$BENCHMARK_SHA" <<'PY'
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "vibe-ic-marketplace" /
+                       "plugins" / "vibe-ic" / "programs"))
+from gate_process_attestation import strict_loads
+
+try:
+    doc = strict_loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+except (OSError, ValueError, TypeError):
+    raise SystemExit(1)
+name = "published cells carrying a routed DEF"
+label = f'corpus "{name}" is EMPTY — nothing was checked over it'
+corpora = [c for c in doc.get("corpora", [])
+           if isinstance(c, dict) and c.get("name") == name]
+gates = [g for g in doc.get("gates", [])
+         if isinstance(g, dict) and g.get("label") == label]
+ok = (
+    len(corpora) == len(gates) == 1
+    and corpora[0] == {"name": name, "items": 0, "gates": 1,
+                       "expansion": "EXPANDED"}
+    and gates[0].get("state") == "NOT_CHECKED"
+    and gates[0].get("corpus") == name
+    and gates[0].get("corpus_item") == 0
+    and gates[0].get("corpus_items") == 0
+    and gates[0].get("exempt_until") is None
+    and gates[0].get("exempt_reason") is None
+    and gates[0].get("scope") is None
+    and not any(a.get("label") == label for a in
+                doc.get("process_attestations", []) if isinstance(a, dict))
+    and (doc.get("corpus_inputs") or {}).get("benchmark_data_sha") == sys.argv[3]
+)
+raise SystemExit(0 if ok else 1)
+PY
 }
 
 cleanup_event() {
@@ -347,22 +866,10 @@ cleanup() {
     [ -n "$pid" ] || continue
     kill -TERM -- "-$pid" >/dev/null 2>&1 || true
   done
-  # TERM is cooperative.  Bound that cooperation so a broken test cannot turn
-  # Ctrl-C into another unbounded wait, then remove every remaining descendant
-  # in the arm's dedicated process group.
-  for _ in {1..20}; do
-    alive=0
-    for pid in "${A1_PID:-}" "${A2_PID:-}" "${B1_PID:-}" "${B2_PID:-}"; do
-      [ -n "$pid" ] || continue
-      if kill -0 -- "-$pid" >/dev/null 2>&1; then alive=1; fi
-    done
-    [ "$alive" = "0" ] && break
-    sleep 0.1
-  done
-  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B1_PID:-}" "${B2_PID:-}"; do
-    [ -n "$pid" ] || continue
-    kill -KILL -- "-$pid" >/dev/null 2>&1 || true
-  done
+  # Every arm's trusted top-level supervisor owns TERM/KILL escalation and a
+  # PID/starttime final-zero census.  Wait for that semantic terminal state;
+  # replacing it with a two-second outer guess killed the wrapper before its
+  # separately-sessioned reaper could finish and left the actual gate alive.
   for pid in "${A1_PID:-}" "${A2_PID:-}" "${B1_PID:-}" "${B2_PID:-}"; do
     [ -n "$pid" ] || continue
     wait "$pid" >/dev/null 2>&1 || true
@@ -373,6 +880,16 @@ cleanup() {
     cleanup_event done
     return
   fi
+  if [ "$BENCHMARK_B2_ADDED" = "1" ] && [ -n "$BENCHMARK_SOURCE" ]; then
+    git -C "$BENCHMARK_SOURCE" worktree remove --force "$BENCHMARK_B2" \
+      >/dev/null 2>&1 || true
+  fi
+  if [ "$BENCHMARK_A2_ADDED" = "1" ] && [ -n "$BENCHMARK_SOURCE" ]; then
+    git -C "$BENCHMARK_SOURCE" worktree remove --force "$BENCHMARK_A2" \
+      >/dev/null 2>&1 || true
+  fi
+  [ -z "$BENCHMARK_SOURCE" ] \
+    || git -C "$BENCHMARK_SOURCE" worktree prune >/dev/null 2>&1 || true
   "${G[@]}" worktree remove --force "$WT_CAND" >/dev/null 2>&1
   "${G[@]}" worktree remove --force "$WT_CAND_TESTS" >/dev/null 2>&1
   "${G[@]}" worktree remove --force "$WT_BASE" >/dev/null 2>&1
@@ -428,10 +945,23 @@ fi
 BASE_SHA="$("${G[@]}" rev-parse "$BASE" 2>/dev/null)" || die "cannot resolve $BASE"
 BASE_TREE="$("${G[@]}" rev-parse "$BASE_SHA^{tree}" 2>/dev/null)" \
   || die "cannot resolve the base tree"
+# The orchestrator itself must be a byte owned by the base it is judging.  A
+# candidate may contain the same path, but it cannot use its edited verifier as
+# landing authority.  Phase 1 is therefore judged by the already-trusted old
+# verifier; after phase 1 lands, phase 2's unchanged verifier matches BASE.
+SELF_VERIFIER_BLOB="$(git -C "$SELF_REPO" hash-object --no-filters \
+  "$SELF/gatekeeper-verify-merge.sh" 2>/dev/null)" \
+  || die "cannot hash the running verifier bytes"
+BASE_VERIFIER_BLOB="$("${G[@]}" rev-parse \
+  "$BASE_SHA:tools/gatekeeper-verify-merge.sh" 2>/dev/null)" \
+  || die "base does not carry the trusted merge verifier"
+[ "$SELF_VERIFIER_BLOB" = "$BASE_VERIFIER_BLOB" ] \
+  || die "running verifier is not the exact base-owned verifier; invoke the copy from current main"
 if [ -n "$("${G[@]}" for-each-ref --format='%(refname)' refs/replace \
      2>/dev/null)" ]; then
   die "repository has active refs/replace; the verified object graph is not canonical"
 fi
+refresh_and_attest_trusted_tools
 # THE FORGE'S ANSWER IS ABOUT THE FORGE'S BASE. `refs/pull/<n>/merge` is the merge
 # of the PR head into the tip of the branch the PR TARGETS; asked about any other
 # base it is not a second opinion, it is a different question. Comparing them
@@ -615,11 +1145,11 @@ fi
 
 PLUGIN_REL="vibe-ic-marketplace/plugins/vibe-ic"
 CAND_PLUGIN="$WT_CAND/$PLUGIN_REL"
-# THE JUDGE COMES FROM THIS REPO, NOT FROM THE SUBJECT (see the header). The
-# candidate's copy is the fallback only when this script was handed a `--repo`
-# that is not its own tree.
-VERDICT_PROG="$SELF_REPO/$PLUGIN_REL/programs/landing_merge_verdict.py"
-[ -f "$VERDICT_PROG" ] || VERDICT_PROG="$CAND_PLUGIN/programs/landing_merge_verdict.py"
+# THE JUDGE COMES FROM THE RAW-ATTESTED BASE SNAPSHOT, NOT FROM THE SUBJECT
+# (see the header).  A foreign `--repo` does not create a subject fallback.
+VERDICT_PROG="$TRUSTED_REPO/$PLUGIN_REL/programs/landing_merge_verdict.py"
+[ -f "$VERDICT_PROG" ] \
+  || die "trusted base does not carry landing_merge_verdict.py"
 : > "$RUN/selection.txt"
 # Created HERE, not only inside the `SHORT_CIRCUIT=0` branch, so the verdict is
 # always handed a file it can read. An absent file and an empty one both mean
@@ -633,12 +1163,30 @@ B2_RC=2
 B1_WORKTREE_STATUS=unknown
 A1_WORKTREE_STATUS=unknown
 BASE_LAND_ARG=()
-# The two arms' hygiene records are retained as audit artifacts.  The verdict
-# currently compares the printed gate labels; these files must not be described
-# as a finding-level decision input until that wiring actually exists.
+# vibe-ic#1498 — the two arms' hygiene RECORDS, so the gate differential can ask
+# the hygiene tier which findings this branch INTRODUCED rather than only
+# whether its one label failed. Both arms already run `gatekeeper-land.sh`; all
+# that is added is that each writes its `--summary-json` record where the
+# verdict can read it.
+#
+# The pair is handed to the verdict once the BASE arm produced a record; without
+# one the verdict discloses the loss and falls back to the coarse per-label
+# comparison, because the branch does not control whether arm A2 ran. A missing
+# CANDIDATE record is NOT the same event and is NOT hidden here — that path is
+# passed either way and the verdict refuses on it, since that is the tree under
+# test failing to measure itself.
 BASE_HYG="$RUN/base_hygiene.json"
 CAND_HYG="$RUN/candidate_hygiene.json"
+HYG_ARGS=()
+TRANSITION_ARGS=()
+# The host is REQUIRED by `hygiene_finding_delta` and never inferred: these
+# findings are host-dependent (`gate_host_independence_check` is one of the
+# gates). Both arms run HERE, so both hosts are this one — except on a
+# `--base-gate-cache` hit, where the base arm did not run at all and the host
+# is whatever measured the cached record. It is stored beside it for that
+# reason rather than assumed.
 THIS_HOST="$(uname -n)"
+BASE_HYG_HOST="$THIS_HOST"
 
 # The PR may change the very gate that judges it — this one does. Disclosed in
 # the verdict, never blocking: a PR that improves the gate must be landable, and
@@ -648,446 +1196,192 @@ while read -r p; do
   [ -n "$p" ] && GATE_ARGS+=(--gate-edited "$p")
 done < <("${G[@]}" diff --name-only "$BASE_SHA" "$REBASED_SHA" -- \
             tools/gatekeeper-land.sh tools/gatekeeper-verify-merge.sh \
-            tools/ci/repo_hygiene_gates.sh tools/git-hooks/pre-push \
+            tools/ci/repo_hygiene_gates.sh tools/ci/_gate_dispatch.sh \
+            tools/ci/benchmark_data_landing_checkout.py \
+            tools/ci/owned_command.py tools/ci/routed_def_corpus.py \
+            tools/ci/hermetic_candidate_runner.py \
+            tools/ci/hermetic_git_subject.py \
+            tools/ci/hermetic_progress_emit.py \
+            tools/ci/hermetic_test_arm_entry.sh \
+            tools/ci/landing_completion_record.py \
+            tools/ci/protected_landing_transition.py \
+            tools/ci/protected_landing_transition.json \
+            tools/ci/protected_runtime_snapshot.py \
+            tools/ci/trusted_test_selection.py \
+            tools/ci/trusted_worktree_attest.py tools/git-hooks/pre-push \
+            "$PLUGIN_REL/programs/_owned_process_supervisor.py" \
+            "$PLUGIN_REL/programs/gate_process_attestation.py" \
             "$PLUGIN_REL/programs/landing_merge_verdict.py" \
+            "$PLUGIN_REL/programs/hygiene_finding_delta.py" \
             "$PLUGIN_REL/programs/ci_targeted_test_select.py" \
-            "$PLUGIN_REL/programs/pytest_per_file_junit.py" 2>/dev/null)
-
-aggregate_cache_valid() {
-  python3 - "$VERDICT_PROG" "$1" "$2" <<'PY'
-import importlib.util
-import pathlib
-import sys
-
-spec = importlib.util.spec_from_file_location("_gk_verdict", sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-selection = [line.strip() for line in pathlib.Path(sys.argv[3]).read_text().splitlines()
-             if line.strip()]
-report = pathlib.Path(sys.argv[2])
-if not selection or not module.junit_has_aggregate_process(report):
-    raise SystemExit(1)
-if module.junit_aggregate_files(report, selection) != set(selection):
-    raise SystemExit(1)
-if module.junit_aggregate_red_count(report) != 0:
-    raise SystemExit(1)
-PY
-}
+            "$PLUGIN_REL/programs/pytest_per_file_junit.py" \
+            "$PLUGIN_REL/programs/repo_hygiene_parallel.py" 2>/dev/null)
 
 if [ "$SHORT_CIRCUIT" = "0" ]; then
-  # ------------------------------------------------ 5a. the selection, ONCE
-  ( cd "$CAND_PLUGIN" && python3 programs/ci_targeted_test_select.py \
-      --base "$BASE_SHA" ) > "$RUN/selection.txt" 2>"$RUN/selection.err"
-  if [ ! -s "$RUN/selection.txt" ]; then
-    echo "--- the targeted selection produced no file; that is not a clean result:"
-    tail -5 "$RUN/selection.err" | sed 's/^/      /'
-  fi
-
-  # ------------------------- 5b. ARM A — the same tests on the UNTOUCHED base
-  # Only files that EXIST at the base: a test the PR adds cannot have an opinion
-  # there, and its absence is a real outcome the verdict reads as ABSENT.
-  # A1 and A2 MUST NOT share a checkout.  Tests in this repository have been
-  # observed writing into their worktree; sharing would make A2 grade A1's
-  # residue.  Separate checkouts let all four expensive arms run concurrently
-  # without changing which tree or selection any arm measures.
-  "${G[@]}" worktree add -q --detach "$WT_BASE_TESTS" "$BASE_SHA" \
-    || die "cannot create the base-test worktree"
-  "${G[@]}" worktree add -q --detach "$WT_BASE" "$BASE_SHA" \
-    || die "cannot create the base-gate worktree"
+  # Phase-A's verifier executes both sides with one BASE-authorised runtime.
+  # Candidate arms run first in a fixed, digest-pinned, least-privilege OCI
+  # profile.  Only after both containers have naturally exited, published
+  # strict receipts, and been removal-proved do we materialize either BASE arm.
+  prepare_benchmark_snapshots
   "${G[@]}" worktree add -q --detach "$WT_CAND_TESTS" "$VERIFIED_SHA" \
     || die "cannot create the candidate-test worktree"
+  validate_protected_landing_transition "$PROTECTED_PRE" \
+    || die "protected landing source tuple is not BASE-authorised"
+  PROTECTED_PRE_SHA256="$(sha256sum "$PROTECTED_PRE" | awk '{print $1}')" \
+    || die "cannot bind the pre-arm protected landing receipt"
+  materialize_protected_runtime
+  build_trusted_test_selection
+  materialize_hermetic_git_subject \
+    "$REPO" "$VERIFIED_SHA" "$CAND_SUBJECT" "$CAND_SUBJECT_RECORD"
+  materialize_hermetic_git_subject \
+    "$BENCHMARK_SOURCE" "$BENCHMARK_SHA" "$BENCHMARK_B2" \
+    "$BENCHMARK_SUBJECT_RECORD"
+  # The container runs as uid 65534; parent-owned inputs are immutable bind
+  # mounts, but must be readable by that uid.
+  chmod 0644 "$RUN/selection.txt" "$RUN/selection_base.txt" \
+    "$A1_PROGRESS_PLAN" "$B1_PROGRESS_PLAN" \
+    "$A2_PROGRESS_PLAN" "$B2_PROGRESS_PLAN" \
+    || die "cannot publish read-only arm inputs"
+
   BASE_PLUGIN="$WT_BASE/$PLUGIN_REL"
   BASE_TEST_PLUGIN="$WT_BASE_TESTS/$PLUGIN_REL"
   CAND_TEST_PLUGIN="$WT_CAND_TESTS/$PLUGIN_REL"
-  : > "$RUN/selection_base.txt"
-  while read -r f; do
-    [ -n "$f" ] && [ -f "$BASE_TEST_PLUGIN/$f" ] && printf '%s\n' "$f" >> "$RUN/selection_base.txt"
-  done < "$RUN/selection.txt"
-  A1_PID=""
-  A1_RC=0
-  A1_ASKED=0
-  A1_FROM_CACHE=0
-  A1_CACHED_XML=""
-  A1_CACHED_LOG=""
-  A1_CACHED_MANIFEST=""
-  A1_CACHE_LOCK_FD=""
-  A1_CACHE_OWNER=0
-  A1_WORKTREE_STATUS=clean
-  if [ -s "$RUN/selection_base.txt" ]; then
-    A1_ASKED=1
-    # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
-    # failed set, and a truncated base makes a new failure look pre-existing.
-    #
-    # THE SAME INSTRUMENT ON BOTH SIDES (vibe-ic#1417). A differential is only
-    # a differential if the two arms were measured the same way. Arm B runs
-    # through `gatekeeper-land.sh:run_pytest`, which pins its session with
-    # `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and names the one plugin the suite
-    # needs, `-p pytest_timeout`. Arm A1 did neither, so the two arms differed
-    # in the one respect #1417 measured as verdict-changing — and the asymmetry
-    # was not merely cosmetic, it was fatal in one direction:
-    #
-    #   same tree, same file, autoload disabled in the caller's environment
-    #     arm A1 as written   ERROR: unrecognized arguments: --timeout=180
-    #                         rc=123, NO junit
-    #     arm B as written    21 passed, junit written
-    #
-    # Arm A1 borrowed `--timeout=180 --timeout-method=thread` from whatever the
-    # host happened to autoload. On the landing host autoload is ALSO the thing
-    # that kills a session at collection (`web3`'s `pytest_ethereum`, measured
-    # in `gatekeeper-land.sh`), so both settings of the ambient switch could
-    # take this arm down while arm B ran. Declared here instead of inherited.
-    # A1, A2 and B are the critical path, so start A1 now and join it only after
-    # B finishes. Both test arms use the candidate's exact aggregate-only
-    # instrument; source-text guessing cannot select a mismatched runner. The
-    # successful path therefore asks each tree's whole-selection question once,
-    # instead of N per-file processes followed by the same aggregate again.
-    A1_DRIVER="$CAND_PLUGIN/programs/pytest_per_file_junit.py"
-    if [ -n "$BASE_GATE_CACHE" ]; then
-      mkdir -p "$BASE_GATE_CACHE"
-      A1_FINGERPRINT="$({
-        printf '%s\n' 'gatekeeper-base-test-cache-schema=4-exact-tree' \
-          "base=$BASE_SHA" "host=$THIS_HOST" \
-          "boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
-          "path=${PATH:-}" "tmpdir=${TMPDIR:-/tmp}" \
-          "stall=${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
-          'contract=aggregate-only;pytest-timeout=180;cacheprovider=off;autoload=off;bytecode=off'
-        env -0 | LC_ALL=C sort -z | sha256sum | awk '{print $1}'
-        sha256sum "$RUN/selection_base.txt" "$A1_DRIVER" \
-          "$CAND_PLUGIN/programs/_watchdog.py" \
-          "$CAND_PLUGIN/programs/_pytest_progress_plugin.py" 2>/dev/null \
-          | awk '{print $1}' || true
-        python3 -VV 2>&1 || true
-      } | sha256sum | awk '{print $1}')"
-      A1_CACHE_PREFIX="$BASE_GATE_CACHE/$BASE_SHA.$A1_FINGERPRINT.base-tests"
-      A1_CACHED_XML="$A1_CACHE_PREFIX.xml"
-      A1_CACHED_LOG="$A1_CACHE_PREFIX.log"
-      A1_CACHED_MANIFEST="$A1_CACHE_PREFIX.manifest"
-      command -v flock >/dev/null 2>&1 || die \
-        "--base-gate-cache requires flock for atomic cache coordination"
-      exec {A1_CACHE_LOCK_FD}> "$A1_CACHE_PREFIX.lock"
-      # Cache coordination must never serialize different candidate arms.  An
-      # exact owner may publish/reuse; a busy or unsupported lock is a safe MISS
-      # and this run measures its own baseline without writing the bundle.
-      if flock -n "$A1_CACHE_LOCK_FD"; then
-        A1_CACHE_OWNER=1
-      else
-        exec {A1_CACHE_LOCK_FD}>&-
-        A1_CACHE_LOCK_FD=""
-      fi
-    fi
-    if [ "$A1_CACHE_OWNER" = "1" ] \
-       && [ -s "$A1_CACHED_XML" ] && [ -s "$A1_CACHED_LOG" ] \
-       && [ -s "$A1_CACHED_MANIFEST" ] \
-       && grep -qx 'schema=4-exact-tree' "$A1_CACHED_MANIFEST" \
-       && grep -qx "base_sha=$BASE_SHA" "$A1_CACHED_MANIFEST" \
-       && grep -qx "host=$THIS_HOST" "$A1_CACHED_MANIFEST" \
-       && grep -qx "fingerprint=$A1_FINGERPRINT" "$A1_CACHED_MANIFEST" \
-       && grep -q '^AGGREGATE_COMPLETE' "$A1_CACHED_LOG" \
-       && aggregate_cache_valid "$A1_CACHED_XML" "$RUN/selection_base.txt"; then
-      cp "$A1_CACHED_XML" "$BASE_JUNIT"
-      cp "$A1_CACHED_LOG" "$RUN/base_tests.log"
-      A1_RC="$(sed -n 's/^rc=//p' "$A1_CACHED_MANIFEST" | tail -1)"
-      case "$A1_RC" in 0|1) A1_FROM_CACHE=1 ;; *) A1_FROM_CACHE=0 ;; esac
-      if [ "$A1_FROM_CACHE" = "1" ]; then
-        echo "--- arm A1: reused aggregate test evidence for base ${BASE_SHA:0:12}"
-      fi
-    fi
-    if [ "$A1_FROM_CACHE" = "0" ]; then
-      setsid bash -c '
-        for lock_fd in "$7" "$8"; do
-          case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
-        done
-        cd "$1" || exit 2
-        if [ ! -f "$4" ]; then
-          printf "%s\n" "NORECORD  <all selected files>  candidate carries no pytest_per_file_junit.py instrument (vibe-ic#1654)"
-          exit 2
-        fi
-        exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
-          GATEKEEPER_VERIFY_ARM=A1 \
-          python3 "$4" --selection "$2" --junit "$3" \
-          --stall-after "$5" --aggregate-check --aggregate-only \
-          --aggregate-stall-after "$6" \
-          -- python3 -m pytest -q -p pytest_timeout \
-          --timeout=180 --timeout-method=thread -p no:cacheprovider
-      ' gkverify-a1 "$BASE_TEST_PLUGIN" "$RUN/selection_base.txt" "$BASE_JUNIT" \
-        "$A1_DRIVER" "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
-        "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
-        "$A1_CACHE_LOCK_FD" "${A2_CACHE_LOCK_FD:-}" \
-        > "$RUN/base_tests.log" 2>&1 &
-      A1_PID=$!
-    fi
-  fi
-
-  # ------------- 5c. ARM A2 — the SAME landing gates on the UNTOUCHED base
-  # Two of the repo-hygiene gates are red on `main` as measured 2026-08-12, so
-  # "any gate FAIL refuses" would be a ban. The gate tier gets the same
-  # differential the test tier gets, which needs the base's own verdicts.
-  # `GATEKEEPER_BASE=$BASE_SHA` in a worktree AT `$BASE_SHA` makes the range
-  # EMPTY on purpose: the range-scoped gates then SKIP (a failure there is always
-  # the PR's, never pre-existing) and the WHOLE-TREE gates — the ones that can be
-  # pre-existing red — still run.
-  A2_PID=""
-  A2_RC=0
-  A2_FROM_CACHE=0
-  A2_CACHE_LOCK_FD=""
-  A2_CACHE_OWNER=0
-  CACHED=""
-  CACHED_MANIFEST=""
-  CACHED_HYG=""
-  if [ -n "$BASE_GATE_CACHE" ]; then
-    mkdir -p "$BASE_GATE_CACHE"
-    # A base commit alone is not the whole question: gate results also depend on
-    # the host runtime and on the exact gate contract.  Bind the reusable record
-    # to the cheaply observable identities as a first filter.  More importantly,
-    # only a green record is reusable: it grants no failure exemption, so an
-    # unobserved tool/image drift can make the current candidate refuse but can
-    # never make a current candidate failure look pre-existing.
-    CACHE_FINGERPRINT="$({
-      printf '%s\n' 'gatekeeper-base-cache-schema=3-green-only' \
-        "base=$BASE_SHA" "host=$THIS_HOST" \
-        "boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
-        "path=${PATH:-}" "tmpdir=${TMPDIR:-/tmp}" \
-        'contract=GATEKEEPER_SKIP_TARGETED_TESTS=1;GATEKEEPER_VERSION_BY_GATEKEEPER=1'
-      env -0 | LC_ALL=C sort -z | sha256sum | awk '{print $1}'
-      python3 -VV 2>&1 || true
-      git --version 2>&1 || true
-      bash --version 2>&1 | head -1 || true
-      sha256sum "$WT_BASE/tools/gatekeeper-land.sh" \
-        "$WT_BASE/tools/ci/repo_hygiene_gates.sh" \
-        "$WT_BASE/$PLUGIN_REL/programs/plugin_full_audit.py" 2>/dev/null \
-        | awk '{print $1}' || true
-    } | sha256sum | awk '{print $1}')"
-    CACHE_PREFIX="$BASE_GATE_CACHE/$BASE_SHA.$CACHE_FINGERPRINT"
-    CACHED="$CACHE_PREFIX.land.log"
-    CACHED_MANIFEST="$CACHE_PREFIX.manifest"
-    CACHED_HYG="$CACHE_PREFIX.hygiene.json"
-    command -v flock >/dev/null 2>&1 || die \
-      "--base-gate-cache requires flock for atomic cache coordination"
-    exec {A2_CACHE_LOCK_FD}> "$CACHE_PREFIX.lock"
-    if flock -n "$A2_CACHE_LOCK_FD"; then
-      A2_CACHE_OWNER=1
-    else
-      exec {A2_CACHE_LOCK_FD}>&-
-      A2_CACHE_LOCK_FD=""
-    fi
-  fi
-  # The manifest is published LAST and names every identity again.  A stray log,
-  # interrupted writer, old schema, different host/runtime, or missing terminal
-  # sentinel is a MISS, never a permissive baseline.
-  if [ "$A2_CACHE_OWNER" = "1" ] \
-     && [ -n "$CACHED" ] && [ -s "$CACHED" ] \
-     && [ -s "$CACHED_MANIFEST" ] \
-     && grep -qx "schema=3-green-only" "$CACHED_MANIFEST" \
-     && grep -qx "base_sha=$BASE_SHA" "$CACHED_MANIFEST" \
-     && grep -qx "host=$THIS_HOST" "$CACHED_MANIFEST" \
-     && grep -qx "fingerprint=$CACHE_FINGERPRINT" "$CACHED_MANIFEST" \
-     && grep -q '^=== ALL GATES PASS' "$CACHED" \
-     && ! grep -q '^  FAIL  ' "$CACHED"; then
-    cp "$CACHED" "$RUN/base_land.log"
-    A2_RC="$(sed -n 's/^rc=//p' "$CACHED_MANIFEST" | tail -1)"
-    case "$A2_RC" in 0|1|2) ;; *) A2_RC=2 ;; esac
-    A2_FROM_CACHE=1
-    echo "--- arm A2: reused the gate log measured for base ${BASE_SHA:0:12}"
-    if [ -s "$CACHED_HYG" ]; then
-      cp "$CACHED_HYG" "$BASE_HYG"
-    fi
-  else
-    setsid bash -c '
-      for lock_fd in "$5" "$6"; do
-        case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
-      done
-      cd "$1" || exit 2
-      exec env GATEKEEPER_VERIFY_ARM=A2 GATEKEEPER_BASE="$2" \
-        GATEKEEPER_VERSION_BY_GATEKEEPER=1 \
-        GATEKEEPER_SKIP_TARGETED_TESTS=1 \
-        GATEKEEPER_HYGIENE_REPORT="$3" GATEKEEPER_HYGIENE_PROGRESS="$4" \
-        bash tools/gatekeeper-land.sh
-    ' gkverify-a2 "$WT_BASE" "$BASE_SHA" "$BASE_HYG" \
-      "$RUN/base_hygiene_progress.jsonl" \
-      "$A1_CACHE_LOCK_FD" "$A2_CACHE_LOCK_FD" \
-      > "$RUN/base_land.log" 2>&1 &
-    A2_PID=$!
-  fi
-
-  # ------------- 5c. ARMS B1/B2 — candidate tests and other gates, in parallel
-  # B1 keeps the authoritative ordered whole-selection pytest session intact;
-  # it is not sharded, so cross-file process state/order semantics stay real.
-  # B2 invokes gatekeeper-land.sh with only that already-independent tier
-  # skipped.  It may report the non-target gates, but it MUST NOT stamp the
-  # commit: only the outer composite verdict can join B1 and B2 into LAND_OK.
-  #
-  # `GATEKEEPER_VERSION_BY_GATEKEEPER` is the documented VERSION-LESS PR path
-  # (the same deferral `pre-push` already applies off-main): the gatekeeper
-  # assigns the version AT MERGE, so demanding it in the PR would refuse every
-  # conformant PR. A BACKWARDS version is still refused.
+  A1_ASKED=1
+  A1_RC=2
+  A2_RC=2
+  B1_RC=2
+  B2_RC=2
   VBG=1
   [ "$REQUIRE_VERSION_BUMP" = "1" ] && VBG=0
 
-  setsid bash -c '
-    for lock_fd in "$7" "$8"; do
-      case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
-    done
-    cd "$1" || exit 2
-    if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ]; then
-      mkdir -p "$GATEKEEPER_CONCURRENCY_PROBE_DIR"
-      : > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/B1.started"
-    fi
-    exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
-      GATEKEEPER_VERIFY_ARM=B1 \
-      python3 "$4" --selection "$2" --junit "$3" \
-      --stall-after "$5" --aggregate-check --aggregate-only \
-      --aggregate-stall-after "$6" --stop-after-failures 0 \
-      -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
-      --timeout=180 --timeout-method=thread
-  ' gkverify-b1 "$CAND_TEST_PLUGIN" "$RUN/selection.txt" "$CAND_JUNIT" \
-    "$CAND_TEST_PLUGIN/programs/pytest_per_file_junit.py" \
-    "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
-    "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
-    "$A1_CACHE_LOCK_FD" "$A2_CACHE_LOCK_FD" \
-    > "$RUN/candidate_tests.log" 2>&1 &
-  B1_PID=$!
+  launch_hermetic_test_arm B1 "$CAND_SUBJECT" "$BENCHMARK_B2" \
+    "$RUN/selection.txt" "$B1_PROGRESS_PLAN" "$B1_OUTPUT" "$B1_RECEIPT" \
+    "$RUN/b1-runner.log"
+  B1_PID=$LAST_ARM_PID
+  launch_hermetic_land_arm B2 "$CAND_SUBJECT" "$BENCHMARK_B2" \
+    "$RUN/selection.txt" "$B2_PROGRESS_PLAN" "$B2_OUTPUT" "$B2_RECEIPT" \
+    "$RUN/b2-runner.log" "$VBG"
+  B2_PID=$LAST_ARM_PID
+  wait "$B1_PID"; B1_RUNNER_RC=$?; B1_PID=""
+  wait "$B2_PID"; B2_RUNNER_RC=$?; B2_PID=""
+  validate_hermetic_arm_record "$B1_RUNNER_RC" "$B1_RECEIPT" "$B1_OUTPUT" \
+    B1 "$CAND_SUBJECT" "$BENCHMARK_B2" "$RUN/selection.txt" \
+    "$B1_PROGRESS_PLAN" /subject/tools/ci/hermetic_test_arm_entry.sh \
+    "$B1_VALIDATION"
+  B1_RC=$LAST_ARM_RC
+  validate_hermetic_arm_record "$B2_RUNNER_RC" "$B2_RECEIPT" "$B2_OUTPUT" \
+    B2 "$CAND_SUBJECT" "$BENCHMARK_B2" "$RUN/selection.txt" \
+    "$B2_PROGRESS_PLAN" /subject/tools/gatekeeper-land.sh \
+    "$B2_VALIDATION" landing-completion.json "$VERIFIED_SHA"
+  B2_RC=$LAST_ARM_RC
 
-  # B2 also owns a process group. In particular, a PID-only SIGTERM to this
-  # verifier interrupts wait, runs cleanup, and terminates every descendant.
-  setsid bash -c '
-    for lock_fd in "$6" "$7"; do
-      case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
-    done
-    cd "$1" || exit 2
-    exec env GATEKEEPER_VERIFY_ARM=B2 \
-      GATEKEEPER_BASE="$2" \
-      GATEKEEPER_SKIP_TARGETED_TESTS=1 \
-      GATEKEEPER_NO_STAMP=1 \
-      GATEKEEPER_VERSION_BY_GATEKEEPER="$3" \
-      GATEKEEPER_HYGIENE_REPORT="$4" \
-      GATEKEEPER_HYGIENE_PROGRESS="$5" \
-      bash tools/gatekeeper-land.sh
-  ' gkverify-b2 "$WT_CAND" "$BASE_SHA" "$VBG" \
-    "$CAND_HYG" "$RUN/candidate_hygiene_progress.jsonl" \
-    "$A1_CACHE_LOCK_FD" "$A2_CACHE_LOCK_FD" \
-    > "$RUN/land.log" 2>&1 &
-  B2_PID=$!
+  # No BASE pathname or result existed while candidate code ran.  Rebuild the
+  # trusted authority and require the protected PRE receipt to reproduce byte
+  # for byte before creating the base wave.
+  refresh_and_attest_trusted_tools
+  validate_protected_landing_transition "$PROTECTED_POST" \
+    || die "protected landing tuple cannot be re-attested after candidate exit"
+  [ "$(sha256sum "$PROTECTED_POST" | awk '{print $1}')" = \
+      "$PROTECTED_PRE_SHA256" ] \
+    || die "protected landing transition receipt changed across candidate arms"
+  cmp -s -- "$PROTECTED_PRE" "$PROTECTED_POST" \
+    || die "protected landing transition PRE/POST records differ"
+  PROTECTED_ARGS=(--protected-transition-receipt "$PROTECTED_POST")
 
-  wait "$B1_PID"
-  B1_RC=$?
-  B1_PID=""
-  B1_WORKTREE_STATUS="$(attest_test_worktree \
-    "$WT_CAND_TESTS" "$VERIFIED_SHA" "$VERIFIED_TREE" candidate_tests)"
-  wait "$B2_PID"
-  B2_RC=$?
-  B2_PID=""
-  echo "--- arm B1 (squash ${VERIFIED_SHA:0:12}): aggregate pytest rc=$B1_RC"
-  echo "--- arm B2 (squash ${VERIFIED_SHA:0:12}): non-target gates rc=$B2_RC"
-  sed -n 's/^  \(PASS\|FAIL\|SKIP\|REPORT\)  /      \1  /p' "$RUN/land.log"
-  if [ -n "$A1_PID" ]; then
-    wait "$A1_PID"
-    A1_RC=$?
-    A1_PID=""
-  fi
-  if [ "$A1_ASKED" = "1" ]; then
-    A1_WORKTREE_STATUS="$(attest_test_worktree \
-      "$WT_BASE_TESTS" "$BASE_SHA" "$BASE_TREE" base_tests)"
-  fi
-  if [ -n "$("${G[@]}" for-each-ref --format='%(refname)' refs/replace \
-       2>/dev/null)" ]; then
-    B1_WORKTREE_STATUS=dirty
-    [ "$A1_ASKED" != "1" ] || A1_WORKTREE_STATUS=dirty
-    printf 'test/gate arms created refs/replace metadata\n' \
-      >> "$RUN/candidate_tests.worktree_status"
-  fi
-  if [ "$A1_ASKED" = "1" ]; then
-    # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
-    # summary is a `rootdir:` line or an empty one, so the arm that COULD NOT
-    # LOOK printed indistinguishably from — and often more quietly than — the
-    # arm that looked and found nothing. The verdict then reads `0 on the base`
-    # and every pre-existing red becomes `NEW FAILURE(S) THIS BRANCH OWNS`.
-    # Strict, so never a false landing; but it refuses a conformant PR for a
-    # failure it does not own, and #1417's whole finding is that merge capacity
-    # — not authoring — is this repo's bottleneck. An unmeasured arm is NAMED.
-    A1_NORECORD="$(grep -ac '^NORECORD\|^NOTRUN' "$RUN/base_tests.log" 2>/dev/null || true)"
-    A1_NORECORD="${A1_NORECORD:-0}"
-    A1_AGG_NORECORD="$(grep -ac '^AGGREGATE_NORECORD' "$RUN/base_tests.log" 2>/dev/null || true)"
-    A1_AGG_NORECORD="${A1_AGG_NORECORD:-0}"
-    A1_SUMMARY="$(sed -n 's/^  aggregate *//p' "$RUN/base_tests.log" | tail -1)"
-    [ -n "$A1_SUMMARY" ] || A1_SUMMARY="$(tail -1 "$RUN/base_tests.log")"
-    if [ -s "$BASE_JUNIT" ] && [ "$A1_NORECORD" = "0" ] \
-       && [ "$A1_AGG_NORECORD" = "0" ]; then
-      echo "--- arm A1 (base ${BASE_SHA:0:12}): rc=$A1_RC, $A1_SUMMARY"
-      if [ "$A1_FROM_CACHE" = "0" ] && [ "$A1_CACHE_OWNER" = "1" ] \
-         && [ -n "$A1_CACHED_XML" ] && [ "$A1_RC" = "0" ] \
-         && [ "$A1_WORKTREE_STATUS" = "clean" ] \
-         && grep -q '^AGGREGATE_COMPLETE' "$RUN/base_tests.log" \
-         && aggregate_cache_valid "$BASE_JUNIT" "$RUN/selection_base.txt"; then
-        A1_CACHE_TMP="$A1_CACHE_PREFIX.tmp.$$"
-        cp "$BASE_JUNIT" "$A1_CACHE_TMP.xml"
-        cp "$RUN/base_tests.log" "$A1_CACHE_TMP.log"
-        {
-          printf 'schema=4-exact-tree\n'
-          printf 'base_sha=%s\n' "$BASE_SHA"
-          printf 'host=%s\n' "$THIS_HOST"
-          printf 'fingerprint=%s\n' "$A1_FINGERPRINT"
-          printf 'rc=%s\n' "$A1_RC"
-        } > "$A1_CACHE_TMP.manifest"
-        mv "$A1_CACHE_TMP.xml" "$A1_CACHED_XML"
-        mv "$A1_CACHE_TMP.log" "$A1_CACHED_LOG"
-        mv "$A1_CACHE_TMP.manifest" "$A1_CACHED_MANIFEST"
-      fi
-    else
-      echo "--- arm A1 INCOMPLETE (base ${BASE_SHA:0:12}): pytest rc=$A1_RC;" \
-           "$A1_NORECORD selected file(s) and $A1_AGG_NORECORD aggregate" \
-           "session(s) produced NO complete record. The verdict refuses an" \
-           "unknown baseline rather than subtracting it. Last lines:"
-      grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' "$RUN/base_tests.log" | sed 's/^/      /'
-      tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
-    fi
-  else
-    echo "--- arm A1: no selected file exists at the base — the differential will demand green"
-  fi
-  if [ -n "$A1_CACHE_LOCK_FD" ]; then
-    flock -u "$A1_CACHE_LOCK_FD"
-    exec {A1_CACHE_LOCK_FD}>&-
-    A1_CACHE_LOCK_FD=""
-  fi
-  if [ -n "${A2_PID:-}" ]; then
-    wait "$A2_PID" 2>/dev/null
-    A2_RC=$?
-    A2_PID=""
-  fi
-  # Publish a cache entry only after a REAL, normally-terminated measurement.
-  # The log moves first and the manifest last, so a concurrent reader can see
-  # either the old complete bundle or a MISS, never a half-written baseline.
-  if [ "$A2_CACHE_OWNER" = "1" ] && [ -n "$CACHED" ] \
-     && [ "$A2_FROM_CACHE" = "0" ] && [ "$A2_RC" = "0" ] \
-     && grep -q '^=== gatekeeper landing gates' "$RUN/base_land.log" \
-     && grep -q '^=== ALL GATES PASS' "$RUN/base_land.log" \
-     && ! grep -q '^  FAIL  ' "$RUN/base_land.log"; then
-    CACHE_TMP="$CACHE_PREFIX.tmp.$$"
-    cp "$RUN/base_land.log" "$CACHE_TMP.land.log"
-    if [ -s "$BASE_HYG" ]; then
-      cp "$BASE_HYG" "$CACHE_TMP.hygiene.json"
-    fi
-    {
-      printf 'schema=3-green-only\n'
-      printf 'base_sha=%s\n' "$BASE_SHA"
-      printf 'host=%s\n' "$THIS_HOST"
-      printf 'fingerprint=%s\n' "$CACHE_FINGERPRINT"
-      printf 'rc=%s\n' "$A2_RC"
-    } > "$CACHE_TMP.manifest"
-    mv "$CACHE_TMP.land.log" "$CACHED"
-    if [ -s "$CACHE_TMP.hygiene.json" ]; then
-      mv "$CACHE_TMP.hygiene.json" "$CACHED_HYG"
-    fi
-    mv "$CACHE_TMP.manifest" "$CACHED_MANIFEST"
-  fi
-  if [ -n "$A2_CACHE_LOCK_FD" ]; then
-    flock -u "$A2_CACHE_LOCK_FD"
-    exec {A2_CACHE_LOCK_FD}>&-
-    A2_CACHE_LOCK_FD=""
-  fi
-  echo "--- arm A2 (base ${BASE_SHA:0:12}): $(grep -c '^  FAIL  ' "$RUN/base_land.log" || true) gate(s) already failing on the base"
-  sed -n 's/^  FAIL  /      base-FAIL  /p' "$RUN/base_land.log"
+  clear_base_wave_artifacts
+  prepare_base_wave
+  materialize_hermetic_git_subject \
+    "$REPO" "$BASE_SHA" "$BASE_SUBJECT" "$BASE_SUBJECT_RECORD"
+  # clear_base_wave_artifacts intentionally removed the base selection path;
+  # regenerate it from the already-bound selection manifest, not from a
+  # candidate-controlled selector or worktree.
+  run_owned_operational "$RUNTIME_SNAPSHOT" \
+    python3 "$RUNTIME_SNAPSHOT/tools/ci/trusted_test_selection.py" \
+      --object-repo "$REPO" --base "$BASE_SHA" --candidate "$VERIFIED_SHA" \
+      --selector-commit "$RUNTIME_AUTHORITY_COMMIT" \
+      --selector-path "$RUNTIME_SNAPSHOT/$PLUGIN_REL/programs/ci_targeted_test_select.py" \
+      --base-snapshot "$TRUSTED_REPO" \
+      --candidate-snapshot "$WT_CAND" \
+      --manifest "$RUN/test-selection.after.json" \
+      --base-selection "$RUN/selection_base.txt" \
+      --candidate-selection "$RUN/selection.after.txt" \
+      --base-progress-plan "$RUN/a1-progress-plan.after.json" \
+      --candidate-progress-plan "$RUN/b1-progress-plan.after.json" \
+      --stall-grace-seconds "${GATEKEEPER_SEMANTIC_STALL_GRACE:-300}" \
+    || die "cannot reproduce the BASE-owned selection after candidate exit"
+  cmp -s -- "$SELECTION_MANIFEST" "$RUN/test-selection.after.json" \
+    || die "BASE-owned selection manifest changed across candidate arms"
+  cmp -s -- "$RUN/selection.txt" "$RUN/selection.after.txt" \
+    || die "candidate selection changed across candidate arms"
+  cmp -s -- "$A1_PROGRESS_PLAN" "$RUN/a1-progress-plan.after.json" \
+    || die "base test progress plan changed across candidate arms"
+  cmp -s -- "$B1_PROGRESS_PLAN" "$RUN/b1-progress-plan.after.json" \
+    || die "candidate test progress plan changed across candidate arms"
+  chmod 0644 "$RUN/selection_base.txt" \
+    || die "cannot publish base selection to the hermetic arm"
+
+  launch_hermetic_test_arm A1 "$BASE_SUBJECT" "$BENCHMARK_B2" \
+    "$RUN/selection_base.txt" "$A1_PROGRESS_PLAN" "$A1_OUTPUT" "$A1_RECEIPT" \
+    "$RUN/a1-runner.log"
+  A1_PID=$LAST_ARM_PID
+  launch_hermetic_land_arm A2 "$BASE_SUBJECT" "$BENCHMARK_B2" \
+    "$RUN/selection_base.txt" "$A2_PROGRESS_PLAN" "$A2_OUTPUT" "$A2_RECEIPT" \
+    "$RUN/a2-runner.log" 1
+  A2_PID=$LAST_ARM_PID
+  wait "$A1_PID"; A1_RUNNER_RC=$?; A1_PID=""
+  wait "$A2_PID"; A2_RUNNER_RC=$?; A2_PID=""
+  validate_hermetic_arm_record "$A1_RUNNER_RC" "$A1_RECEIPT" "$A1_OUTPUT" \
+    A1 "$BASE_SUBJECT" "$BENCHMARK_B2" "$RUN/selection_base.txt" \
+    "$A1_PROGRESS_PLAN" /subject/tools/ci/hermetic_test_arm_entry.sh \
+    "$A1_VALIDATION"
+  A1_RC=$LAST_ARM_RC
+  validate_hermetic_arm_record "$A2_RUNNER_RC" "$A2_RECEIPT" "$A2_OUTPUT" \
+    A2 "$BASE_SUBJECT" "$BENCHMARK_B2" "$RUN/selection_base.txt" \
+    "$A2_PROGRESS_PLAN" /subject/tools/gatekeeper-land.sh \
+    "$A2_VALIDATION" landing-completion.json "$BASE_SHA"
+  A2_RC=$LAST_ARM_RC
+  compare_hermetic_shared_inputs \
+    "$A1_RECEIPT" "$B1_RECEIPT" "$A2_RECEIPT" "$B2_RECEIPT" \
+    || die "A/B arms did not consume one identical runtime/corpus/image"
+
+  # The final judge receives only fresh parent-owned copies of files named and
+  # digested in the stopped-container receipts.
+  rm -f -- "$RUN/land.log"
+  publish_validated_arm_artifact "$B1_VALIDATION" "$B1_OUTPUT" pytest.xml "$CAND_JUNIT" \
+    || die "cannot seal candidate JUnit evidence"
+  publish_validated_arm_artifact "$A1_VALIDATION" "$A1_OUTPUT" pytest.xml "$BASE_JUNIT" \
+    || die "cannot seal base JUnit evidence"
+  publish_validated_arm_artifact "$B2_VALIDATION" "$B2_OUTPUT" hygiene.json "$CAND_HYG" \
+    || die "cannot seal candidate hygiene evidence"
+  publish_validated_arm_artifact "$A2_VALIDATION" "$A2_OUTPUT" hygiene.json "$BASE_HYG" \
+    || die "cannot seal base hygiene evidence"
+  publish_validated_arm_artifact "$B2_VALIDATION" "$B2_OUTPUT" runner-stdout.bin \
+    "$RUN/land.log" || die "cannot seal candidate landing log"
+  publish_validated_arm_artifact "$A2_VALIDATION" "$A2_OUTPUT" runner-stdout.bin \
+    "$RUN/base_land.log" || die "cannot seal base landing log"
+  publish_validated_arm_artifact "$B1_VALIDATION" "$B1_OUTPUT" runner-stdout.bin \
+    "$RUN/candidate_tests.log" || die "cannot seal candidate test log"
+  publish_validated_arm_artifact "$A1_VALIDATION" "$A1_OUTPUT" runner-stdout.bin \
+    "$RUN/base_tests.log" || die "cannot seal base test log"
+
+  B1_WORKTREE_STATUS=clean
+  A1_WORKTREE_STATUS=clean
+  hygiene_record_binds_benchmark "$CAND_HYG" "$BENCHMARK_SHA" \
+    || die "candidate hygiene summary did not bind the measured corpus"
+  hygiene_record_binds_benchmark "$BASE_HYG" "$BENCHMARK_SHA" \
+    || die "base hygiene summary did not bind the measured corpus"
+  HYG_ARGS=(--base-hygiene "$BASE_HYG" --candidate-hygiene "$CAND_HYG"
+            --base-hygiene-host "$THIS_HOST"
+            --candidate-hygiene-host "$THIS_HOST")
   BASE_LAND_ARG=(--base-land-log "$RUN/base_land.log")
+  if base_has_exact_legacy_routed_empty "$BASE_HYG"; then
+    build_trusted_transition_evidence
+    TRANSITION_ARGS=(--trusted-transition-evidence \
+                     "$TRUSTED_TRANSITION_EVIDENCE")
+  fi
+  echo "--- arm A1/B1: base rc=$A1_RC candidate rc=$B1_RC (hermetic aggregate)"
+  echo "--- arm A2/B2: base rc=$A2_RC candidate rc=$B2_RC (hermetic gates)"
+
 else
   echo "--- the tree under test is not the tree that would be merged; the suites were NOT run"
 fi
@@ -1095,7 +1389,7 @@ fi
 # --------------------------------------------------------------- 6. the verdict
 [ -f "$VERDICT_PROG" ] || die "no verdict program at $VERDICT_PROG"
 python3 "$VERDICT_PROG" \
-  --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
+  --base-sha "$BASE_SHA" --base-tree "$BASE_TREE" --head-sha "$HEAD_SHA" \
   --verified-sha "$VERIFIED_SHA" --rebase-status "$REBASE_STATUS" \
   --expected-tree "$EXPECTED_TREE" --verified-tree "$VERIFIED_TREE" \
   --replayed-tree "$REBASED_TREE" --github-tree "$GITHUB_TREE" \
@@ -1103,6 +1397,9 @@ python3 "$VERDICT_PROG" \
   --base-selection "$RUN/selection_base.txt" \
   "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
+  "${HYG_ARGS[@]+"${HYG_ARGS[@]}"}" \
+  "${TRANSITION_ARGS[@]+"${TRANSITION_ARGS[@]}"}" \
+  "${PROTECTED_ARGS[@]+"${PROTECTED_ARGS[@]}"}" \
   --candidate-gate-rc "$B2_RC" --require-composite-gate-record \
   --candidate-test-worktree-status "$B1_WORKTREE_STATUS" \
   --base-test-worktree-status "$A1_WORKTREE_STATUS" \
