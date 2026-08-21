@@ -1532,10 +1532,11 @@ fi
 # doctrine means no workflow runs before main moves. The lander is the one path
 # every landing actually takes.
 #
-# THE BUDGET IS FOUR MINUTES AND A TIMEOUT BLOCKS. `timeout` returns 124, which
-# is not 0 and not 1, so the case statement below maps it — with every other
-# unexpected status — to rc 2 UNDETERMINED. A review that could not decide must
-# never reach the stamp as a review that decided nothing was wrong.
+# THERE IS A BUDGET AND A TIMEOUT BLOCKS. `timeout` returns 124, which is not 0
+# and not 1, so the case statement below maps it — with every other unexpected
+# status — to rc 2 UNDETERMINED. A review that could not decide must never
+# reach the stamp as a review that decided nothing was wrong. The ruling set
+# that budget at four minutes; what it is now, and why it moved, is below.
 #
 # IT RUNS THE HYGIENE SET. IT IS NOT HANDED A RECORD OF ONE.
 #
