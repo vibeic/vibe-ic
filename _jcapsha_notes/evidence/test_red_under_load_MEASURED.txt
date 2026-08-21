@@ -29,3 +29,27 @@ correct. The standing rule for this host is not to begin timeout adjudication
 while load exceeds core count.
 
 STATUS: UNDETERMINED under load, with the named cause. Re-run when load drops.
+
+--- SECOND ADJUDICATION ATTEMPT, and it is STILL not clean ---
+
+Waited for the 1-minute load average to fall below the core count, then ran the
+suite alone:
+
+    LOAD_AT_START = 31.73   (cores 32)   waited 150s
+    result        = 1 failed, 6 passed in 79.39s
+    LOAD_AT_END   = 80.77
+
+The gate on the START load passed and the load then climbed to 2.5x the core
+count DURING the run. So this is a second failure, not a second measurement: a
+wall-clock bound adjudicated under moving load says nothing the first run did
+not already say.
+
+Two data points now agree with the load explanation and neither ESTABLISHES it.
+Wall-clock comparison is the wrong instrument for a contended host. The right
+one is CPU time, which does not move with load: if the program's user+sys time
+is near its documented 18.9-20.3s baseline while its wall time is 4-6x that,
+contention is proven rather than inferred. That measurement is running.
+
+STATUS UNCHANGED: UNDETERMINED, with the named cause. Not green, not a
+regression, and not adjudicated by repeating a run under a load that is still
+climbing.
