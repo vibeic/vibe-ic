@@ -242,22 +242,31 @@ def test_finding_the_route_alone_also_flips_it_without_any_declaration():
     assert F.set_exit_code([routed]) == F.RC_UNDETERMINED
 
 
-def test_finding_the_search_runner_cannot_resolve_the_route_itself():
-    """`ppa_feasibility_check.py` takes `--project` and lets the flow's own
-    router decide. `ppa_search_run.py` does not, so a campaign's only lever is
-    the policy document. Measured against the CLIs' own help text rather than
-    asserted, so it stops being true the moment the flag is added."""
-    feas_help = subprocess.run(
-        [sys.executable, str(CHECK), "--help"],
-        capture_output=True, text=True).stdout
-    search_help = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "ppa_search_run.py"), "--help"],
-        capture_output=True, text=True).stdout
-    assert "--project" in feas_help
-    assert "--project" not in search_help, (
-        "the search runner has grown a --project flag: the route gap this "
-        "file measures may be closed, and the test_finding_* rows above "
-        "should be re-measured rather than trusted")
+def test_all_three_ppa_clis_can_resolve_the_route(tmp_path):
+    """The gap this file was written to measure, closed.
+
+    `ppa_feasibility_check.py` and `ppa_pnr_search_space.py` already took
+    `--project` and let the flow's own router decide. `ppa_search_run.py` did
+    not, so a campaign's only lever was whatever the policy document happened
+    to say -- and the shipped campaign's said nothing. Measured against each
+    CLI's own help text rather than asserted, so it goes red if any of them
+    loses the flag again.
+    """
+    for prog in ("ppa_feasibility_check.py", "ppa_pnr_search_space.py",
+                 "ppa_search_run.py"):
+        out = subprocess.run([sys.executable, str(_PROGRAMS / prog), "--help"],
+                             capture_output=True, text=True,
+                             cwd=str(tmp_path))
+        # The EXIT CODE is deliberately not asserted here.
+        # `ppa_feasibility_check.py --help` exits 3 rather than 0; that is a
+        # separate, already-recorded defect
+        # (`test_bad_invocation_help_is_0_on_the_feasibility_cli_too` is
+        # xfail), and folding it into this row would make this test go green
+        # or red for a reason that has nothing to do with the route.
+        assert "--project" in out.stdout, (
+            f"{prog} cannot be told which design tree its inputs came from, "
+            f"so it cannot resolve a delivery path and an absent "
+            f"design-for-ECO declaration stays a non-finding")
 
 
 def test_finding_the_shipped_campaign_contracts_declare_neither_key():
@@ -378,3 +387,250 @@ def test_negative_control_the_positive_arm_is_unchanged_by_the_break():
     assert loosened.promotion_verdict(
         {"candidate_id": "keeps", "metrics": ten},
         _count_only_policy(loosened)).verdict == loosened.FEASIBLE
+
+
+# ---------------------------------------------------------------------------
+# THE ROUTE, SUPPLIED -- the gap above, closed, and measured end to end
+# ---------------------------------------------------------------------------
+# `--project` changes nothing about what an absent declaration MEANS. It
+# supplies the route, which is the thing the landed gate was already asking
+# for and which this lane alone could not give it.
+import dataclasses                              # noqa: E402
+from _ppa import delivery_path as DP            # noqa: E402
+from test_ppa_eco_delivery_path import chip_tree, ip_tree, unrouted_tree  # noqa: E402
+
+
+def _with_route(pol, project):
+    """What `ppa_search_run.py --project` does to a policy, via the same call."""
+    return dataclasses.replace(pol, delivery_path=DP.resolve(str(project)))
+
+
+def test_route_a_chip_tree_turns_the_silent_pass_into_cannot_check(tmp_path):
+    """The whole point of the flag. Same silent policy, same records; the only
+    new fact is which route the flow put this design on."""
+    project = chip_tree(tmp_path / "chip")
+    silent = silent_policy()
+    routed = _with_route(silent, project)
+
+    before = F.promotion_verdict(cand("deleted", deleted_spares()), silent)
+    after = F.promotion_verdict(cand("deleted", deleted_spares()), routed)
+
+    assert before.verdict == F.FEASIBLE
+    assert F.set_exit_code([before]) == F.RC_PASS
+    assert after.verdict == F.UNDETERMINED, after.codes
+    assert F.set_exit_code([after]) == F.RC_UNDETERMINED
+    assert axis_of(after).applicability["state"] == \
+        F.ECO_NOT_DECLARED_ON_CHIP_PATH
+
+
+def test_route_the_search_bridge_stops_publishing_it_as_eligible(tmp_path):
+    """Through the bridge a campaign really uses, which is where it counts."""
+    routed = _with_route(silent_policy(), chip_tree(tmp_path / "chip"))
+    v = _bridge(routed, deleted_spares(), "deleted")
+    assert v.verdict == S.FEAS_UNDETERMINED
+    assert v.verdict != S.FEAS_ELIGIBLE
+    assert v.terms[F.ECO_AXIS] == "NOT_CHECKED"
+
+
+def test_route_a_proven_ip_delivery_is_still_not_applicable(tmp_path):
+    """The flag must not become "refuse everything". A hardmacro delivery owes
+    no spare population of its own, and the route says so."""
+    routed = _with_route(silent_policy(), ip_tree(tmp_path / "ip"))
+    r = F.promotion_verdict(cand("macro", deleted_spares()), routed)
+    assert r.verdict == F.FEASIBLE, r.codes
+    assert axis_of(r).status == F.AXIS_NOT_APPLICABLE
+    assert axis_of(r).applicability["state"] == F.ECO_NOT_APPLICABLE_ON_IP_PATH
+
+
+def test_route_an_unestablished_route_is_refused_not_read_as_ip(tmp_path):
+    """A tree with no router artefact has NOT been shown to be an IP delivery.
+    Guessing that it is would be the one way this flag could make things worse
+    than the silence it replaces."""
+    routed = _with_route(silent_policy(), unrouted_tree(tmp_path / "nowhere"))
+    r = F.promotion_verdict(cand("unknown", deleted_spares()), routed)
+    assert r.verdict == F.UNDETERMINED, r.codes
+    assert axis_of(r).applicability["state"] == F.ECO_PATH_UNDETERMINED
+
+
+def test_route_a_declaration_still_wins_over_the_route(tmp_path):
+    """The route decides only what an ABSENT declaration means. A design that
+    stated a requirement is held to it on any path -- including the IP one, so
+    the flag cannot be used to declare a requirement away."""
+    declared = F.policy_from_document(
+        {"required_views": [dict(VIEW)], "eco_readiness": dict(DECL)})
+    on_ip = _with_route(declared, ip_tree(tmp_path / "ip"))
+    r = F.promotion_verdict(cand("deleted", deleted_spares()), on_ip)
+    assert r.verdict == F.INFEASIBLE, r.codes
+    assert axis_of(r).status == F.AXIS_VIOLATED
+
+
+# ---------------------------------------------------------------------------
+# THE MANIFEST SAYS WHAT IT WAS IN A POSITION TO DECIDE
+# ---------------------------------------------------------------------------
+def _toolchain(pol, tmp_path):
+    return SF.toolchain_record(tmp_path / "policy.json", {}, pol)
+
+
+def test_manifest_publishes_the_eco_stance_when_nothing_was_declared(tmp_path):
+    """A per-candidate term reading NOT_APPLICABLE was the only thing that said
+    so, and a reader of a published manifest looks at the toolchain block ONCE
+    to find out what the run could decide. The note names the consequence in
+    words rather than leaving it to be inferred from a status."""
+    tc = _toolchain(silent_policy(), tmp_path)
+    assert tc["feasibility_eco_state"] == F.ECO_NOT_DECLARED
+    assert tc["feasibility_eco_declared"] is False
+    assert tc["feasibility_delivery_path"] == "NOT_SUPPLIED"
+    assert "NO ECO-readiness finding" in tc["feasibility_eco_note"]
+    assert "eligible" in tc["feasibility_eco_note"]
+    # and the headline note carries it too, so a reader quoting one line quotes
+    # the caveat with it
+    assert "NO ECO-readiness finding" in tc["feasibility_note"]
+
+
+def test_manifest_stance_changes_with_the_route_and_the_declaration(tmp_path):
+    """Three policies, three stances, three notes. A field that read the same
+    in all three would be decoration."""
+    silent = _toolchain(silent_policy(), tmp_path)
+    routed = _toolchain(_with_route(silent_policy(), chip_tree(tmp_path / "c")),
+                        tmp_path)
+    declared = _toolchain(F.policy_from_document(
+        {"required_views": [dict(VIEW)], "eco_readiness": dict(DECL)}), tmp_path)
+
+    states = [silent["feasibility_eco_state"], routed["feasibility_eco_state"],
+              declared["feasibility_eco_state"]]
+    assert states == [F.ECO_NOT_DECLARED, F.ECO_NOT_DECLARED_ON_CHIP_PATH,
+                      F.ECO_REQUIRED], states
+    assert len({t["feasibility_eco_note"] for t in
+                (silent, routed, declared)}) >= 2
+    assert declared["feasibility_eco_declared"] is True
+    assert routed["feasibility_delivery_path"] == "CHIP"
+
+
+def test_manifest_stance_is_derived_and_cannot_disagree_with_the_verdicts(tmp_path):
+    """Derived from the SAME policy the candidates are adjudicated against, so
+    a manifest cannot state a stance the verdicts contradict."""
+    pol = _with_route(silent_policy(), chip_tree(tmp_path / "c"))
+    tc = _toolchain(pol, tmp_path)
+    r = F.promotion_verdict(cand("deleted", deleted_spares()), pol)
+    assert tc["feasibility_eco_state"] == \
+        axis_of(r).applicability["state"] == F.ECO_NOT_DECLARED_ON_CHIP_PATH
+
+
+# ---------------------------------------------------------------------------
+# NEGATIVE CONTROL for the new wiring
+# ---------------------------------------------------------------------------
+# --- the CLI, RUN, because every route test above calls the library ---------
+import ppa_search_run as R                      # noqa: E402
+from test_ppa_search_feasibility_wiring import (  # noqa: E402
+    SPACE as WIRING_SPACE, VIEW as WIRING_VIEW, _nine_clean, _trial)
+
+
+def _campaign(tmp_path, eco=None):
+    """A minimal but REAL search run: a space, one trial whose records are
+    clean on every axis but ECO, and the shipped campaign's policy shape."""
+    d = tmp_path / "campaign"
+    d.mkdir()
+    records = _nine_clean(1000.0) + [
+        dict(m, scope=dict(WIRING_VIEW)) for m in spares(
+            count=0, by_kind={k: 0 for k in DECL["min_spare_cells_by_kind"]},
+            positions=0, tied=None)]
+    (d / "space.json").write_text(json.dumps(WIRING_SPACE), encoding="utf-8")
+    (d / "trials.json").write_text(
+        json.dumps([_trial("binary", records)]), encoding="utf-8")
+    doc = {"required_views": [WIRING_VIEW]}
+    if eco is not None:
+        doc["eco_readiness"] = eco
+    (d / "policy.json").write_text(json.dumps(doc), encoding="utf-8")
+    return d
+
+
+def _ran(man):
+    """The candidate that actually RAN.
+
+    The space proposes two points and only one trial is supplied, so the other
+    is UNDETERMINED because it was never executed -- which is correct and has
+    nothing to do with ECO readiness. Selecting by knob rather than by verdict
+    keeps this from quietly becoming "whichever one agrees with me".
+    """
+    hits = [c for c in man["candidates"]
+            if c["knobs"]["state_encoding"] == "binary"]
+    assert len(hits) == 1, [c["knobs"] for c in man["candidates"]]
+    return hits[0]
+
+
+def _run_campaign(d, *extra, out="manifest.json"):
+    rc = R.main([str(d / "space.json"), "--trials", str(d / "trials.json"),
+                 "--max-trials", "1", "--max-full-pnr-trials", "1",
+                 "--feasibility-policy", str(d / "policy.json"),
+                 "--json", str(d / out), *extra])
+    man = json.loads((d / out).read_text()) if (d / out).exists() else {}
+    return rc, man
+
+
+def test_cli_a_silent_campaign_says_out_loud_that_it_made_no_eco_finding(
+        tmp_path, capsys):
+    """The published manifest and the human output both disclose it. Before
+    this, the only thing that said so was a per-candidate term."""
+    d = _campaign(tmp_path)
+    _rc, man = _run_campaign(d)
+    tc = man["toolchain"]
+    assert tc["feasibility_eco_state"] == F.ECO_NOT_DECLARED
+    assert tc["feasibility_delivery_path"] == "NOT_SUPPLIED"
+    out = capsys.readouterr()
+    assert "[CANNOT CHECK]" in out.out + out.err
+    assert "--project" in out.out + out.err
+
+
+def test_cli_project_stamps_the_route_into_the_published_manifest(tmp_path):
+    """`--project` end to end: the route reaches the manifest, so a reader can
+    see WHAT this run was in a position to decide, by name."""
+    d = _campaign(tmp_path)
+    _rc, man = _run_campaign(d, "--project", str(chip_tree(tmp_path / "chip")))
+    tc = man["toolchain"]
+    assert tc["feasibility_delivery_path"] == "CHIP"
+    assert tc["feasibility_eco_state"] == F.ECO_NOT_DECLARED_ON_CHIP_PATH
+
+
+def test_cli_negative_control_the_flag_changes_the_published_verdict(tmp_path):
+    """THE control for this fix, run rather than grepped.
+
+    Two invocations of the real CLI over byte-identical inputs; the only
+    difference is `--project`. If the flag parsed and changed nothing -- the
+    worst outcome available, a run that looks guarded and is not -- both
+    manifests would carry the same candidate verdict and this fails.
+    """
+    d = _campaign(tmp_path)
+    _rc_a, without = _run_campaign(d, out="a.json")
+    _rc_b, with_route = _run_campaign(
+        d, "--project", str(chip_tree(tmp_path / "chip")), out="b.json")
+
+    va = _ran(without)["feasibility"]["verdict"]
+    vb = _ran(with_route)["feasibility"]["verdict"]
+    assert va == S.FEAS_ELIGIBLE, va
+    assert vb == S.FEAS_UNDETERMINED, vb
+    assert va != vb
+
+
+def test_cli_a_declared_requirement_needs_no_project_at_all(tmp_path):
+    """The flag is a second route to the gate, not the only one. A campaign
+    that declares its requirement is adjudicated without `--project`, and the
+    spare-deleting candidate is INELIGIBLE."""
+    d = _campaign(tmp_path, eco=dict(DECL))
+    _rc, man = _run_campaign(d)
+    assert man["toolchain"]["feasibility_eco_state"] == F.ECO_REQUIRED
+    ran = _ran(man)
+    assert ran["feasibility"]["verdict"] == S.FEAS_INELIGIBLE
+    assert ran["feasibility"]["terms"][F.ECO_AXIS] == "FAIL"
+
+
+def test_negative_control_the_route_is_what_flips_it_not_the_records(tmp_path):
+    """Both arms use byte-identical records and byte-identical policy documents.
+    The ONLY difference is whether a route was resolved. If this ever passes
+    with the two arms agreeing, the route is not what is doing the work."""
+    records = deleted_spares()
+    without = F.promotion_verdict(cand("d", records), silent_policy())
+    with_route = F.promotion_verdict(
+        cand("d", records), _with_route(silent_policy(), chip_tree(tmp_path / "c")))
+    assert without.verdict != with_route.verdict
+    assert (without.eligible_for_promotion, with_route.eligible_for_promotion) \
+        == (True, False)
