@@ -258,3 +258,40 @@ All 8 re-derived by sha256 on both sides of every owned file, no comm anywhere:
 Fixed at the producer in all four scripts: `awk 'NR==FNR{a[$0]=1;next} ($0 in a)'`, which has no
 collation precondition. Verified equivalent on a real row (89 files both ways). Zero `comm` left in
 the tooling. `bin_jharv2/nocomm_check.sh` is the re-derivation, so anyone can repeat it.
+
+## I scoped a general check to the population the example came from — 579 more commits
+
+jharv3 swept prior heads across their **non**-LANDED rows and found the orphans were mostly there.
+I had run that sweep only over LANDED, because that is where my example (`_landppa`) came from.
+The reasoning never depended on the verdict: **any worktree whose head moved leaves its previous
+head behind, and a RECOVER row displaces work just as readily.** The population was chosen by
+where I happened to be looking rather than by what the check is about.
+
+Swept all 628 non-LANDED rows that have a real HEAD, across five hosts:
+
+| host | displaced heads owning files that differ from main, held by no live origin ref and no PR ref |
+|---|---|
+| .105 | 24 |
+| .102 | 190 |
+| .114 | 219 |
+| .112 | 115 |
+| .121 | 32 |
+| **total** | **579 (566 distinct)** |
+
+**All 579 rescued and verified**, `covered=579 uncovered=0` against a non-empty `ls-remote` +
+`refs/pull/*/head` authority, by walking refs from origin rather than trusting push output.
+
+## Anchor drift, one pass, because the anchors were there
+
+The judged head in every row is what makes this cheap. Re-read all 792 anchors and compared each
+to the worktree's head now: **23 had moved** — 6 on .105, 14 on .114, 1 each on .112/.121/.102 —
+and 9 were the already-recorded deletions, with no new ones. All 23 re-judged against current
+main. Two verdicts changed:
+
+- `_jcpath2/wt_new` **ABANDON → RECOVER**: it had moved *off* its twin's head, so it is no longer
+  a duplicate of `_jcpath2/mut` and the thing that justified abandoning it is gone.
+- `_gk1764`'s new head came back **NOT_ON_ORIGIN** — a moved head nothing was holding. Rescued as
+  `harvest/rescue-8HD-9-gk1764-movedhead`.
+
+That second one is the argument for re-checking rather than trusting a rescue from an hour ago:
+the rescue covered the head the worktree *had*, and the worktree moved to one nothing covered.
