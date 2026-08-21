@@ -1,0 +1,15 @@
+{
+  "trial": "t008",
+  "index": 8,
+  "knobs": {
+    "die_um": "240x240",
+    "placement_density": "0.30",
+    "spare_cell_density": "0.05"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 238.952,
+    "cpu_seconds": 322.131,
+    "peak_rss_mb": 631.2
+  }
+}
