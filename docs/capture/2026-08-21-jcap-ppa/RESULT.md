@@ -2035,7 +2035,17 @@ handed to a lander who will invoke it from wherever they happen to be:
 Cwd-independence comes from resolving every path against the script's own
 location rather than the caller's, and the one temporary file it needs — the
 malformed backlog its sanitiser control requires — is created and removed inside
-a temporary directory. A verifier that fails from the wrong directory, or leaves
+a temporary directory.
+
+*Both lines were re-run after the bundle moved, because the move is exactly what
+breaks this kind of claim, and it did: the script built every plugin path from
+`HERE.parent`, which was the repository root only while the bundle sat at the
+root. Three levels down, every plugin-facing check died on a path with
+`docs/capture/` spliced into the middle of it. It now resolves the root by
+walking up to a marker instead of counting `..`, which is the fix its own A-6
+neighbour describes. The control that should have caught it could not: it
+asserted a deliberately-absent filename was absent, which is true under a wrong
+root too. It now also asserts a known directory resolves.* A verifier that fails from the wrong directory, or leaves
 a file behind, would be an instance of two of the records it is verifying.
 
 ### The work, in order
