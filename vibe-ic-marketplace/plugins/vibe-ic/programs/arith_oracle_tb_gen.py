@@ -914,6 +914,11 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     L.append("  reg [N-1:0] _got;")
     L.append("  reg _b;")
     L.append("  integer _vi, _k, _bi, _io, _oo, _off, _m, _best;")
+    # Winning framing triple. The search below already COMPUTES which
+    # (in_order, out_order, offset) reassembles the DUT stream to the golden;
+    # keeping it lets the run PERSIST the measured framing instead of
+    # discarding it (see ORACLE_TB_FRAMING below).
+    L.append("  integer _bio, _boo, _boff;")
     assert_v, deassert_v = ("0", "1") if ral else ("1", "0")
 
     # ── drive+capture one pass at a given serial-input bit-order ──────────────
@@ -955,7 +960,7 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     L.append("    _drive_capture(0);   // serial input LSB-first")
     L.append("    _drive_capture(1);   // serial input MSB-first")
     # search (in_order, out_order, offset) for the framing matching ALL vectors
-    L.append("    _best = 0;")
+    L.append("    _best = 0; _bio = -1; _boo = -1; _boff = -1;")
     L.append("    for (_io = 0; _io < 2; _io = _io + 1)")
     L.append("     for (_oo = 0; _oo < 2; _oo = _oo + 1)")
     L.append("      for (_off = 0; _off <= MAXOFF; _off = _off + 1) begin")
@@ -969,9 +974,18 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     L.append("          end")
     L.append("          if (_got === _gv[_vi]) _m = _m + 1;")
     L.append("        end")
-    L.append("        if (_m > _best) _best = _m;")
+    L.append("        if (_m > _best) begin")
+    L.append("          _best = _m; _bio = _io; _boo = _oo; _boff = _off;")
+    L.append("        end")
     L.append("      end")
     L.append('    $display("ORACLE_TB_DONE pass=%0d/%0d", _best, NV);')
+    # Persist the MEASURED framing. Emitted ONLY when a single framing
+    # reassembles EVERY vector (_best == NV): a partial match means no
+    # framing was established and publishing one would be a guess.
+    # Encoding is numeric (0 = LSB_first, 1 = MSB_first) so the line carries
+    # no locale/string-literal portability risk across simulators.
+    L.append("    if (_best == NV) $display(\"ORACLE_TB_FRAMING in_order=%0d "
+             "out_order=%0d latency_cycles=%0d\", _bio, _boo, _boff);")
     L.append("    if (_best != NV) $display(\"ORACLE_MISMATCH: no single serial "
              "framing reassembles the DUT stream to the golden for all vectors "
              "(possible functional defect)\");")

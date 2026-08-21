@@ -255,7 +255,7 @@ def test_two_level_chain_resets_under_verilator(tmp_path):
                  f"-Wno-WIDTH -Mdir vobj_{sp} --top-module tb tb_{sp}.v "
                  f"chip_top.v counter.v >vl.log 2>&1 && "
                  f"timeout 60 vobj_{sp}/Vtb 2>&1"],
-                capture_output=True, text=True, timeout=300)
+                capture_output=True, text=True, timeout=60)
             assert "RESET_OK" in r.stdout, (sp, r.stdout[-300:], r.stderr[-200:])
     finally:
         subprocess.run(["docker", "exec", container, "sh", "-c",

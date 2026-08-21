@@ -273,7 +273,7 @@ def test_single_unit_does_not_break_a_macro_redefining_design():
                f"hierarchy -check -top top' 2>&1")
         r = subprocess.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, timeout=60)
         out = r.stdout or ""
         assert "Build succeeded" in out, out[-1500:]
         assert "Top module:  \\top" in out, out[-1500:]
@@ -297,7 +297,7 @@ def test_hub_design_elaborates_after_the_fix(tmp_path):
                f"hierarchy -check -top top' 2>&1")
         r = subprocess.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, timeout=60)
         out = r.stdout or ""
         assert "duplicate definition" not in out, out[-1500:]
         assert "unknown macro" not in out, out[-1500:]

@@ -168,7 +168,17 @@ def main(argv: List[str] | None = None) -> int:
                     help="Name of the top RTL module whose inout ports to lint")
     ap.add_argument("--constraint", required=True, type=Path,
                     help="Path to .qsf (Quartus) or .xdc (Vivado)")
-    ap.add_argument("--out-dir", type=Path, default=Path("/tmp/fpga_pullup_lint"))
+    # #494 — a read-only validator writes NOTHING unless a caller asks for it.
+    # See the sibling note in `sustained_vs_edge_check.py`: a hardcoded
+    # `/tmp/<gatename>` default made every invocation deposit a report at a
+    # fixed shared path, which concurrent runs overwrite without a trace and
+    # which is a standing symlink-hijack target on a multi-user host. This gate
+    # has TWO write sites — the no-inout early return below and the normal
+    # verdict — and both are guarded.
+    ap.add_argument("--out-dir", type=Path, default=None,
+                    help="Directory to write the JSON report into. Omitted "
+                         "(the default) = write no file at all; the verdict "
+                         "goes to stdout only.")
     args = ap.parse_args(argv)
 
     if not args.rtl_dir.is_dir():
@@ -177,7 +187,8 @@ def main(argv: List[str] | None = None) -> int:
     if not args.constraint.is_file():
         print(f"ERROR: constraint not found: {args.constraint}", file=sys.stderr)
         return 2
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.out_dir is not None:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Find every inout port in top module
     inouts = find_inouts_in_top(args.rtl_dir, args.top_module)
@@ -185,8 +196,11 @@ def main(argv: List[str] | None = None) -> int:
         # No inouts → trivially PASS
         res = Result(status="PASS", findings=[], inout_signals=[],
                      constraint_format=args.constraint.suffix.lower().lstrip("."))
-        out_json = args.out_dir / "fpga_pullup_lint.json"
-        out_json.write_text(json.dumps(asdict(res), indent=2))
+        # #494 — write site 1 of 2. This path never printed a `json:` line, so
+        # its stdout is unchanged either way.
+        if args.out_dir is not None:
+            out_json = args.out_dir / "fpga_pullup_lint.json"
+            out_json.write_text(json.dumps(asdict(res), indent=2))
         print("fpga_pullup_lint: PASS — no inout ports in top module")
         return 0
 
@@ -231,13 +245,18 @@ def main(argv: List[str] | None = None) -> int:
         inout_signals=[s for s, _, _ in inouts],
         constraint_format=cfmt,
     )
-    out_json = args.out_dir / "fpga_pullup_lint.json"
-    out_json.write_text(json.dumps(asdict(res), indent=2))
+    # #494 — write site 2 of 2; position preserved so stdout is byte-identical
+    # when --out-dir IS supplied.
+    out_json = None
+    if args.out_dir is not None:
+        out_json = args.out_dir / "fpga_pullup_lint.json"
+        out_json.write_text(json.dumps(asdict(res), indent=2))
     print(f"fpga_pullup_lint: {status} — {len(errors)} errors, {len(findings) - len(errors)} warnings")
     print(f"inout ports in top: {[s for s, _, _ in inouts]}")
     for f in findings:
         print(f"  [{f.severity}] {f.signal} (RTL {f.file}:{f.line}) — pinned={f.has_pin_assignment} pullup={f.has_pullup}")
-    print(f"json: {out_json}")
+    if out_json is not None:
+        print(f"json: {out_json}")
     return 0 if status == "PASS" else 1
 
 

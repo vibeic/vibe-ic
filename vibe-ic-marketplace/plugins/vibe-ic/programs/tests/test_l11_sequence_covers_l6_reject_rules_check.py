@@ -191,3 +191,60 @@ def test_synonym_size_too_large_covers_len_out_of_range(tmp_path):
     proj = _make_proj(tmp_path, l6, l12=l12)
     r = _run(proj)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ===========================================================================
+# layergate-2 — TARGET-NOT-READY vocabulary family.
+#
+# Found by l6_fsm_scaffold_actionable_check, which asserts every L6
+# reject_rule is machine-matchable by THIS gate's own extractor. A rule
+# rejecting a transaction because the target is busy produced ZERO
+# keywords, which sent main() down its `if not kws` branch — so ANY one
+# unrelated silent sequence "covered" the rule and the gate reported
+# PASS. Both directions asserted below.
+# ===========================================================================
+
+def test_target_not_ready_rule_yields_keywords(tmp_path):
+    """NEGATIVE-CONTROL PRECONDITION: the rule must no longer fall into
+    the vacuous `no keywords` branch."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_l11mod", str(PROG))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    kws = mod._rule_keywords(
+        {"name": "write_while_busy",
+         "condition": "host write while core busy => drop frame"})
+    assert kws, "a busy/not-ready rule must yield matchable keywords"
+    assert any("busy" in k for k in kws)
+
+
+def test_target_not_ready_rule_is_covered_by_matching_sequence(tmp_path):
+    l6 = {"reject_rules": [
+        {"name": "write_while_busy",
+         "condition": "host write while core busy => drop frame"},
+    ]}
+    l12 = {"sequences": [
+        {"name": "write_while_busy_dropped",
+         "trigger": "issue write while device_busy asserted",
+         "expected_behavior": "discard"},
+    ]}
+    r = _run(_make_proj(tmp_path, l6, l12=l12))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_target_not_ready_rule_fails_without_covering_sequence(tmp_path):
+    """POSITIVE CONTROL for the negative direction: now that the rule
+    yields keywords, an unrelated silent sequence must NOT cover it —
+    which is exactly what the missing vocabulary used to allow."""
+    l6 = {"reject_rules": [
+        {"name": "write_while_busy",
+         "condition": "host write while core busy => drop frame"},
+    ]}
+    l12 = {"sequences": [
+        {"name": "unrelated_crc_case",
+         "trigger": "crc_mismatch on frame",
+         "expected_behavior": "discard"},
+    ]}
+    r = _run(_make_proj(tmp_path, l6, l12=l12))
+    assert r.returncode == 1, r.stdout + r.stderr

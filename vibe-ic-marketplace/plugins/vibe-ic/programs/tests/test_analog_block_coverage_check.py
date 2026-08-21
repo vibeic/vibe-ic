@@ -29,7 +29,9 @@ def test_pass_no_analog(tmp_path):
     (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
     (tmp_path / "phase2" / "stage1" / "rtl" / "counter.v").write_text("module counter(input clk, output [7:0] q);\nendmodule\n")
     r = _run(tmp_path)
-    assert r.returncode == 0
+    # #521 — a design with no analog block is VACUOUS (rc 2), not a PASS over
+    # analog content that does not exist. The report assertions are unchanged.
+    assert r.returncode == 2
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
@@ -76,7 +78,7 @@ def test_pass_all_covered(tmp_path):
 
 def test_skip_no_rtl(tmp_path):
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS, not a plain PASS
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True

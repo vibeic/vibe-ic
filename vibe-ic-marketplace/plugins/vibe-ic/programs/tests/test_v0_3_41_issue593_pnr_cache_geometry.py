@@ -83,3 +83,14 @@ def test_orchestrator_cache_skip_is_geometry_aware():
     assert "def_existing.is_file() and _cache_ok" in src
     # the GDS skip is invalidated when PnR re-ran
     assert "_pnr_reran" in src
+    # A PERMANENTLY-FALSE `_pnr_reran` satisfies the assertion above, and
+    # that is exactly what happened once a disclosure row was appended
+    # between PnR and the GDS block: `plan[-1].name == "pnr"` was never true
+    # again and a stale GDS shipped under "GDS already present (skipped
+    # re-run)". The BEHAVIOURAL control is
+    # test_phase3_postpnr_disclosure_and_gds_guard.py, which drives main()
+    # and observes whether step_gds was called; this is only the tripwire
+    # for the specific shape that broke.
+    assert 'plan[-1].name == "pnr"' not in src, (
+        "the #593 guard must not be derived from plan[-1] — any row appended "
+        "between PnR and the GDS block silently disables it")

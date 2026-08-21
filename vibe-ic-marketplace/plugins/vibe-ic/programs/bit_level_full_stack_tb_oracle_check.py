@@ -48,9 +48,11 @@ Rules
 5. FAIL if ``rtl_top`` is named but no matching file exists in any
    ``rtl/`` subtree.
 6. WARN if ``vectors_total < 16``.
-7. SKIP (exit 0) when no ``results.json`` is present (this gate is the
-   "raised bar" companion of the legacy gate; legacy gate handles the
-   missing-file case).
+7. VACUOUS (exit 2, #515) when no ``results.json`` is present (this gate is
+   the "raised bar" companion of the legacy gate; legacy gate handles the
+   missing-file case), and likewise when ``results.json`` declares
+   ``command_oracle_applicable: false``. Both are "nothing was examined",
+   and both used to exit 0.
 8. Honors waiver ``bit_level_oracle_skipped`` (>= 40 chars).
 9. (ORGANIC-20260528) FAIL if ANY scored vector lacks a concrete golden
    ``expected_bytes`` — i.e. it is missing / null / empty, or it
@@ -73,9 +75,16 @@ Usage
 
 Exit codes
 ----------
-    0 — PASS / SKIP / PASS_WITH_WAIVER / WARN-only
+    0 — PASS / PASS_WITH_WAIVER / WARN-only — an oracle was examined
     1 — FAIL
-    2 — input-missing
+    2 — VACUOUS: nothing was examined (#515). Three paths reach it: the
+        project directory does not exist; no ``results.json`` was found; or
+        ``results.json`` honestly declares ``command_oracle_applicable:
+        false`` for a non-protocol IC. The last two used to exit 0 — and the
+        third one printed the positive sign-off sentence
+        ``PASS — bit-level oracle structurally valid (None vectors,
+        None/None passed)``, built out of three ``None``s, while ``check()``
+        had already recorded ``skipped: True`` that ``main()`` never read.
 """
 from __future__ import annotations
 
@@ -86,6 +95,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
+import _shape_refusal as _sr    # #991
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 WAIVER_KEY = "bit_level_oracle_skipped"
@@ -471,16 +483,40 @@ def check(project: Path, results_path: Path) -> dict:
             **info,
         }
 
+    # #991 — THIS SITE FAILS CLOSED AND MISNAMES. Rule 1 below already
+    # REFUSES a non-list `per_vector` (rc 1, `pass: false`), so the
+    # `per_vector if isinstance(...) else []` at the `_crc_cross_check` call
+    # is unreachable with a bad shape and this gate does NOT fail open —
+    # measured, absent and malformed both exit 1. What it got wrong is the
+    # SENTENCE: both cases said "results.json lacks `per_vector` array",
+    # which sends the reader to the TB generator to find out why nothing was
+    # emitted, when 16 vectors were emitted in an object instead of an array.
+    per_vector_raw, per_vector_shape = _sr.read_list_from(data, "per_vector")
     per_vector = data.get("per_vector")
     info["per_vector_count"] = (
         len(per_vector) if isinstance(per_vector, list) else None
     )
+    info["per_vector_shape_refusal"] = per_vector_shape
     info["vectors_total"] = data.get("vectors_total")
     info["vectors_passed"] = data.get("vectors_passed")
     info["vectors_failed"] = data.get("vectors_failed")
 
     # Rule 1: per_vector present + size
-    if not isinstance(per_vector, list):
+    if per_vector_shape is not None:
+        # PRESENT, and not an array. Its own rule id because the remedy is
+        # different: nothing is missing from the run, and the fix is in the
+        # emitter's SHAPE, not in its coverage.
+        findings.append({
+            "rule": "PER_VECTOR_SHAPE_UNREADABLE",
+            "severity": "FAIL",
+            "message": (
+                _sr.sentence(per_vector_shape, "results.json") +
+                " Oracle mode requires per-vector expected/actual byte "
+                "comparison, and this gate compared none of them — this is a "
+                "REFUSAL, not a count of zero vectors."
+            ),
+        })
+    elif not isinstance(per_vector, list):
         findings.append({
             "rule": "PER_VECTOR_MISSING",
             "severity": "FAIL",
@@ -598,6 +634,7 @@ def check(project: Path, results_path: Path) -> dict:
     # only be claimed when EVERY scored vector has a concrete golden.
     # ------------------------------------------------------------------
     scored_with_golden = 0
+    self_referential = 0
     placeholder = 0
     placeholder_samples: list[str] = []
     if isinstance(per_vector, list):
@@ -606,7 +643,24 @@ def check(project: Path, results_path: Path) -> dict:
                 placeholder += 1
                 continue
             if classify_expected_bytes(vec.get("expected_bytes")):
-                scored_with_golden += 1
+                # A golden that is the DESIGN'S OWN earlier read looks exactly
+                # as concrete as a document-derived one — it IS a concrete
+                # number, just not an independent one. `classify_expected_bytes`
+                # cannot tell them apart and must not try: the producer knows,
+                # and says so on the vector.
+                #
+                # This counter is what `benchmark_verify_report` reads and what
+                # `bit_level_full_stack_tb_check` documents as "the ONLY honest
+                # measure of functional coverage", so a self-consistency oracle
+                # counted here inflates exactly the number that is supposed to
+                # resist inflation. v1.7.2 split the two in the register-map
+                # producer's own counters and this walker kept counting them
+                # together, leaving one results.json stating both 2 and 3 for
+                # the same name.
+                if vec.get("self_referential_golden") is True:
+                    self_referential += 1
+                else:
+                    scored_with_golden += 1
             else:
                 placeholder += 1
                 if len(placeholder_samples) < 5:
@@ -619,6 +673,9 @@ def check(project: Path, results_path: Path) -> dict:
     # glance whether the green verdict is backed by real goldens.
     info["functional_coverage"] = {
         "scored_with_golden": scored_with_golden,
+        # Always emitted, including at zero. A count that only appears when
+        # non-zero cannot be used to show there were none.
+        "self_referential": self_referential,
         "placeholder": placeholder,
     }
 
@@ -786,28 +843,46 @@ def main():
     project = Path(args.project_dir).resolve()
     if not project.exists():
         print(f"FAIL — project dir not found: {project}", file=sys.stderr)
-        return 2
+        return _vx.RC_VACUOUS
 
     if args.results_json:
         results_path = Path(args.results_json).resolve()
         if not results_path.is_file():
             print(f"FAIL — results.json not found: {results_path}",
                   file=sys.stderr)
-            return 1
+            return _vx.RC_FAIL
     else:
         results_path = _find_results(project)
         if not results_path:
+            # #515 — vacuous, not a pass. The word "PASS" used to lead this
+            # line (`PASS_SKIP`) while the gate had opened nothing.
             print(
-                "PASS_SKIP — no sim/sim_full_stack/results.json found; "
-                "legacy bit_level_full_stack_tb_check covers the "
-                "missing-file case"
+                "SKIP — no sim/sim_full_stack/results.json found; nothing "
+                "was examined (legacy bit_level_full_stack_tb_check covers "
+                "the missing-file case)"
             )
-            return 0
+            _vx.announce_vacuous("bit_level_full_stack_tb_oracle_check",
+                                 "no_results_json")
+            return _vx.RC_VACUOUS
 
     result = check(project, results_path)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(json.dumps(result, indent=2))
+        atomic_write_text(Path(args.json), json.dumps(result, indent=2))
+
+    # #515 — `check()` has always computed `skipped` for the
+    # `command_oracle_applicable: false` N/A escape, and `main()` has never
+    # read it. Read it here, BEFORE the pass branch, so the gate's own
+    # conclusion decides the exit code. Guarded on `result["pass"]` so a
+    # result that somehow carried both flags still reports the violation.
+    if result["pass"] and result.get("skipped"):
+        for f in result.get("findings", []):
+            print(f"SKIP: {f['rule']} — {f['message']}")
+        print("VACUOUS — the bit-level command-byte oracle does not apply to "
+              "this IC; NO vectors were compared")
+        _vx.announce_vacuous("bit_level_full_stack_tb_oracle_check",
+                             "command_oracle_not_applicable")
+        return _vx.RC_VACUOUS
 
     if result["pass"]:
         if result.get("warnings"):
@@ -825,7 +900,7 @@ def main():
                 f"{result.get('vectors_passed')}/{result.get('vectors_total')}"
                 f" passed)"
             )
-        return 0
+        return _vx.RC_PASS
 
     is_waived, why = waived(project)
     if is_waived:
@@ -835,14 +910,14 @@ def main():
         )
         for f in result["findings"]:
             print(f"  • {f['rule']} — {f['message'][:120]}")
-        return 0
+        return _vx.RC_PASS
 
     print(f"FAIL — {len(result['findings'])} bit-level oracle violation(s)")
     for f in result["findings"]:
         print(f"FAIL: {f['rule']} — {f['message']}")
     for w in result.get("warnings", []):
         print(f"WARN: {w['rule']} — {w['message']}")
-    return 1
+    return _vx.RC_FAIL
 
 
 if __name__ == "__main__":

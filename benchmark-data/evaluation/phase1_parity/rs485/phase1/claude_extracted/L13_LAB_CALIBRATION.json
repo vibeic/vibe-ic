@@ -1,5 +1,0 @@
-{
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
-  "lab_calibration_present": false,
-  "notes": "RS-485 transceivers are stateless analog parts; no chip-level calibration / trim loop is defined by the standard. System-level engineering parameters (termination resistor tolerance ≤ 1 %, failsafe resistor selection per eq. 2 of SLLA272D, common-mode envelope, stub length per L_stub ≤ tr × v × c / 10, minimum node spacing per d > C_L / (5.25 × C')) substitute for calibration at the link level. Test equipment of choice is an oscilloscope with differential probe, a TDR for impedance/stub assessment, and a noise generator + GPD source for common-mode robustness."
-}

@@ -12,8 +12,12 @@ performs three doctrine-compliant operations:
           ("SUCH ARM TECHNOLOGY" lifted from
            "USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT
             INFRINGE ...")
-        - L3 opcodes lifted from page-format numbers (e.g. "23 16"
-          and "55 48" in §A3.4.4 narrow-transfer figures of AMBA AXI)
+      A scrub pattern here may only key on a value that is not a
+      legitimate value of the field anywhere. It may NOT key on a list
+      of encodings: an encoding is data, and the same encoding is
+      genuine in the next design. The opcode-from-bit-ruler artefact
+      that used to be listed here is refused at source on the row's
+      shape — see the removal note in HALLUC_PATTERNS below.
 
   (2) APPLICABILITY STUB — for L-docs in
       `l_doc_taxonomy.IC_CLASS_APPLICABILITY[ic_class]["not_applicable"]`,
@@ -40,12 +44,22 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 # Importable as both a script and a module
 try:
     import l_doc_taxonomy as _tx
 except ImportError:  # pragma: no cover
     from . import l_doc_taxonomy as _tx  # type: ignore
+
+# THE L-document write chokepoint — records the producing release on every
+# document this module writes (na_stub overwrite, scrub rewrite, skeleton
+# emit). Without it those three paths produced files whose vintage nothing
+# on disk could state.
+try:
+    import l_doc_generator_stamp as _stamp
+except ImportError:  # pragma: no cover
+    from . import l_doc_generator_stamp as _stamp  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -82,31 +96,34 @@ HALLUC_PATTERNS: List[HallucPattern] = [
         replacement="UNKNOWN_IC",
         why="lifted from 'USE OR IMPLEMENTATION OF ...' license clause",
     ),
-    # opcode hex lifted from byte-position numbers like "23 16" / "55 48"
-    # (AMBA AXI §A3.4.4 narrow-transfer figures), where the value is
-    # really a bit-position label not an opcode encoding.
-    HallucPattern(
-        name="opcode_from_two_digit_decimal_page_number",
-        affected_keys=[r"opcodes\[\d+\]\.hex", "opcode_hex", "hex"],
-        value_pattern=re.compile(
-            r"^0x(?:16|17|23|24|47|48|55|56)$"),
-        replacement="<HALLUCINATION_SCRUBBED>",
-        why="hex value matches a 2-digit decimal page-format number "
-            "commonly lifted from byte-position figures; not a real "
-            "opcode encoding",
-    ),
-    # The same opcode hex appearing in a value string (e.g. L10 test
-    # cases referencing the L3 hallucinated opcode by quoting it as
-    # part of a test description like "opcode_hex": "0x16").
-    HallucPattern(
-        name="opcode_hex_in_test_case_value",
-        affected_keys=[r".*opcode.*"],
-        value_pattern=re.compile(
-            r'.*"opcode_hex"\s*:\s*"0x(?:16|17|23|24|47|48|55|56)".*'),
-        replacement="<HALLUCINATION_SCRUBBED>",
-        why="L10 test case references the L3 hallucinated page-number "
-            "opcode by quoting; clean up downstream contamination",
-    ),
+    # for #454 follow-up — REMOVED: two patterns that keyed on a
+    # hard-coded list of eight literal hex VALUES
+    # (`opcode_from_two_digit_decimal_page_number` and its downstream
+    # companion `opcode_hex_in_test_case_value`). They existed to
+    # suppress opcodes the L3 walker synthesised from a figure's decimal
+    # bit-position axis. A value list is the wrong instrument for a row
+    # shape, in both directions:
+    #
+    #   * it deleted those eight encodings out of ANY design's command
+    #     table — a genuinely declared command carrying one of them was
+    #     indistinguishable from the artefact, and the deletion happened
+    #     after extraction where no source row was left to check;
+    #   * it caught the artefact only where the ruler happened to land on
+    #     one of its eight values. Measured over six ruler offsets of the
+    #     identical shape it stopped four and let two through.
+    #
+    # The artefact is now refused AT SOURCE on the row's shape by
+    # `phase1_doc_one_shot_runner._i454_bit_position_ruler_row`, which
+    # stopped all six, and the refusal is COUNTED into the emitted L3
+    # (`non_command_row_refusal_count`) instead of silently deleted.
+    #
+    # Measured before removal, over the 62 corpus designs that ship their
+    # extracted input document: with the value list ON versus OFF the
+    # emitted opcode set is IDENTICAL (26 either way) — the list was
+    # protecting nothing, and its only live effect was to overwrite the
+    # `hex` field of four Strategy-2 refusal records with the scrub
+    # sentinel, because `affected_keys` matched the bare leaf key `hex`
+    # anywhere in the document, destroying the audit trail it landed on.
 ]
 
 
@@ -206,9 +223,7 @@ def scrub_l_doc(obj: Any, l_doc_name: str,
                 break
     # v0.2.13 — after the in-place scrub, an opcode entry whose `hex`
     # was replaced by the HALLUCINATION_SCRUBBED sentinel is a zombie:
-    # it carries no trustworthy encoding and (for bus-interconnect specs
-    # with no real command protocol, e.g. AMBA AXI) was synthesised from
-    # page-format figures in the first place. Leaving it in `opcodes`
+    # it carries no trustworthy encoding. Leaving it in `opcodes`
     # makes `no_opcodes_in_input` lie (False) and trips
     # l3_opcode_name_coverage_check (every zombie name is
     # OPCODE_NAME_UNKNOWN → 100% placeholder → FAIL → runner exit 1).
@@ -349,8 +364,7 @@ def restamp_l_doc_skeletons(project_dir: Optional[Path]) -> list[str]:
                     and stamped != authoritative):
                 doc["ic_class"] = authoritative
                 try:
-                    f.write_text(
-                        json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+                    _stamp.dump(f, doc)
                     rewritten.append(str(f.relative_to(project)))
                 except OSError:
                     pass
@@ -404,7 +418,8 @@ def emit_l_doc_skeleton(l_doc_code: str,
         "evidence": [],
         "extraction_hints": hints,
         "extraction_status": "NOT_YET_EXTRACTED",
-        "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+        "emitted_by": _pmd.emitted_by(
+            "phase1_post_process.emit_l_doc_skeleton"),
     }
 
 
@@ -589,7 +604,7 @@ class PostProcessResult:
             "skeleton_emitted": self.skeleton_emitted,
             "na_stubs_emitted": self.na_stubs_emitted,
             "verdict": self.verdict,
-            "emitted_by": "phase1_post_process v0.1.51",
+            "emitted_by": _pmd.emitted_by("phase1_post_process"),
         }
 
 
@@ -631,8 +646,7 @@ def post_process(project_dir: Path, ic_class: str) -> PostProcessResult:
         # Case (a): not_applicable — overwrite with na_stub
         if spec.code in not_applicable:
             stub = _tx.na_stub(ic_class, spec.code)
-            target_path.write_text(
-                json.dumps(stub, indent=2), encoding="utf-8")
+            _stamp.dump(target_path, stub)
             na_stubs.append(spec.code)
             continue
 
@@ -645,16 +659,14 @@ def post_process(project_dir: Path, ic_class: str) -> PostProcessResult:
             entries = scrub_l_doc(content, spec.full_name)
             if entries:
                 scrub_log.extend(entries)
-                target_path.write_text(
-                    json.dumps(content, indent=2), encoding="utf-8")
+                _stamp.dump(target_path, content)
             continue
 
         # Case (c): applicable but missing → emit skeleton
         if spec.code in applicable:
             sk = emit_l_doc_skeleton(spec.code, ic_class,
                                      project_dir=project_dir)
-            target_path.write_text(
-                json.dumps(sk, indent=2), encoding="utf-8")
+            _stamp.dump(target_path, sk)
             skeleton.append(spec.code)
 
     verdict = "WARN" if scrub_log else "PASS"

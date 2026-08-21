@@ -148,17 +148,167 @@ def test_prewrite_skipped_when_no_audit_regression(tmp_path):
 # ────────────────────────────────────────────────────────────────────
 
 def test_counts_snapshot_single_definition():
-    """FIXED PATH: executed_pass == PASS + VACUOUS-PASS and
-    executed_total == total − waived − skipped, matching the audit
-    summary line. One snapshot, one definition."""
+    """FIXED PATH: executed_pass == PASS and executed_total ==
+    total − waived − skipped, matching the audit summary line. One
+    snapshot, one definition.
+
+    The numerator used to be ``PASS + VACUOUS-PASS``, mirroring the
+    checker's retired ``pass_count = counts['PASS'] +
+    counts['VACUOUS_PASS']``. VACUOUS-PASS left the numerator by owner
+    ruling — a gate that ran and found nothing to audit did not measure
+    the step, so counting it as executed made the published number claim
+    a measurement that never happened. It did NOT leave the denominator:
+    it is an unmet requirement, unlike SKIPPED-CONDITION (the step's own
+    condition was evaluated and not met), which is subtracted."""
     rollup = {"PASS": 30, "VACUOUS-PASS": 4, "WAIVED-DEFERRED": 2,
               "SKIPPED-CONDITION": 5, "FAIL": 0, "MISSING": 1}
     total = 42
     snap = g._counts_snapshot(rollup, total)
-    assert snap["executed_pass"] == 30 + 4
+    assert snap["executed_pass"] == 30
     assert snap["executed_total"] == 42 - 2 - 5
     assert snap["pass_only"] == 30
+    assert snap["vacuous"] == 4
     assert snap["total_steps"] == 42
+    # The vacuous steps are inside the denominator, so they cost: with
+    # four of them the report can never read Y/Y until they measure.
+    assert snap["executed_pass"] < snap["executed_total"]
+
+
+#: A real gate program that answers rc 2 (`verdict: SKIP`) on a project
+#: containing nothing — which is how `flow_compliance_check` decides
+#: VACUOUS_PASS tier membership. Verified live by the fixture below rather
+#: than assumed, so a program that stops being vacuous is REPORTED instead of
+#: quietly making the guard degenerate.
+_VACUOUS_GATE_PROGRAM = "mixed_signal_merge_check"
+
+
+def _two_step_flow_with_one_vacuous(path: Path) -> None:
+    """A flow of one PASS step, one VACUOUS_PASS step, plus the real P0.
+
+    Built on the LIVE flow's top-level keys so it cannot drift from the schema
+    both programs parse. It exists because the canonical flow on an EMPTY
+    project yields VACUOUS-PASS=0, and a numerator guard measured where the
+    vacuous count is zero agrees no matter which definition either side uses —
+    a green that means nothing.
+
+    P0 is carried over VERBATIM from the live flow because the checker emits a
+    P0 result whether or not the flow declares one, while the report's roll-up
+    walks the flow's declared steps. Dropping it would make the two
+    DENOMINATORS differ for a reason that has nothing to do with this guard.
+    Step ids match ``final_report_generate.STEP_ID_RE`` (short alpha prefix +
+    digits) or the report reads no verdict for them at all."""
+    import yaml
+    doc = yaml.safe_load(g.FLOW_YAML.read_text(encoding="utf-8"))
+    top = {k: v for k, v in doc.items() if k != "steps"}
+    p0 = next(dict(s) for s in doc["steps"] if str(s["id"]) == "P0")
+    top["steps"] = [
+        p0,
+        {"id": "ZP1", "name": "issue461 numerator probe: plain pass",
+         "stage": "stage1", "gate": {"files_exist": ["r461_seed.txt"]}},
+        {"id": "ZV2", "name": "issue461 numerator probe: vacuous",
+         "stage": "stage1",
+         "gate": {"program_exit_zero": f"{_VACUOUS_GATE_PROGRAM} ."}},
+    ]
+    path.write_text(yaml.safe_dump(top, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8")
+
+
+def _checker_wrapper(path: Path, flow: Path) -> Path:
+    """The REAL checker, invoked with `--flow-def <flow>` appended.
+
+    `final_report_generate` has no flow override, so the probe flow is
+    delivered by wrapping the tool it shells out to. Nothing else changes:
+    stdout is inherited, so the report reads the real checker's real output."""
+    path.write_text(
+        "import subprocess, sys\n"
+        f"REAL = {str(g.COMPLIANCE_TOOL)!r}\n"
+        f"FLOW = {str(flow)!r}\n"
+        "sys.exit(subprocess.run([sys.executable, REAL, *sys.argv[1:],\n"
+        "                         '--flow-def', FLOW]).returncode)\n",
+        encoding="utf-8")
+    return path
+
+
+def test_report_executed_pass_equals_the_checkers_own_headline(tmp_path,
+                                                               monkeypatch):
+    """The report's `executed PASS = X/Y` must equal the number
+    `flow_compliance_check` printed, on the SAME audit run, WITH a
+    VACUOUS-PASS present.
+
+    The report quotes the checker's first five stdout lines verbatim in a
+    fenced block — including `Steps: N total (X/Y executed PASS, …)` — and
+    separately renders its own `executed PASS = X/Y` from `_counts_snapshot`.
+    Those are two independent definitions of one number, in two programs.
+    Nothing else compares them: the roll-up reconciliation gate compares
+    PER-TIER counts, so a numerator that moved in one program and not the
+    other would reconcile cleanly and still publish two different X's. This is
+    the guard that makes them move together — and it is pointed at a flow that
+    really produces a VACUOUS_PASS, because that is the only tier on which the
+    two definitions can disagree."""
+    import re
+    flow = tmp_path / "probe_flow.yaml"
+    _two_step_flow_with_one_vacuous(flow)
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "r461_seed.txt").write_text("stub\n", encoding="utf-8")
+    monkeypatch.setattr(g, "FLOW_YAML", flow)
+    monkeypatch.setattr(
+        g, "COMPLIANCE_TOOL",
+        _checker_wrapper(tmp_path / "checker_wrapper.py", flow))
+
+    assert g.main([str(project)]) == 0
+    text = _summary_text(project)
+
+    m_fence = re.search(r"Steps: \d+ total \((\d+)/(-?\d+) executed PASS",
+                        text)
+    m_report = re.search(r"executed PASS = (\d+)/(-?\d+),", text)
+    assert m_fence is not None, (
+        f"the report does not quote the checker's own headline; this guard "
+        f"has nothing to compare against:\n{text[:3000]}")
+    assert m_report is not None, (
+        f"the report renders no `executed PASS = X/Y`:\n{text[:3000]}")
+    # NON-DEGENERACY: with no VACUOUS-PASS in the run the two definitions
+    # agree by construction and this test proves nothing.
+    assert "VACUOUS-PASS=1" in text, (
+        f"the probe flow produced no VACUOUS-PASS, so the two numerator "
+        f"definitions cannot disagree here and this guard is inert. Gate "
+        f"program {_VACUOUS_GATE_PROGRAM!r} may have stopped answering rc 2 "
+        f"on an empty project.\n{text[:3000]}")
+    assert m_fence.groups() == m_report.groups(), (
+        f"flow_compliance_check published {m_fence.group(0)!r} but "
+        f"final_report_generate rendered "
+        f"executed PASS = {m_report.group(1)}/{m_report.group(2)} from the "
+        f"SAME audit run — the two programs disagree about what the "
+        f"numerator counts")
+    # …and the agreed number is the strict-PASS one, not the folded one.
+    assert m_report.group(1) == "1", (
+        f"both programs agree on {m_report.group(1)} executed PASS over a run "
+        f"with 1 PASS and 1 VACUOUS-PASS — they agree on the RETIRED "
+        f"definition\n{text[:3000]}")
+
+    # ── THE THIRD RENDERING ───────────────────────────────────────────
+    # 2026-07-28, adversarial finding (MEDIUM): the numerator is rendered in
+    # THREE places, not two — the checker's headline, `_counts_snapshot`, and
+    # the stage-breakdown table's PASS column (`final_report_generate` ~1675).
+    # Reverting the stage column ALONE, with the other two correct, was caught
+    # by nothing: MEASURED, 120 passed / rc 0 across this module, the d6
+    # dimension and the roll-up reconciliation gate, while the SAME report
+    # published `1 / 3` in the table and `executed PASS = 1/2` above it — and
+    # double-counted the vacuous step, which appears again in the row's own
+    # `other_bits`. `final_summary_rollup_consistency_check` cannot see it: it
+    # reconciles PER-TIER buckets, not derived numerators. The stage PASS
+    # column is per-stage, so its SUM over the table is the same quantity.
+    stage_pass = [int(mm.group(1)) for mm in re.finditer(
+        r"^\|[^|]+\|[^|]+\|\s*(\d+)\s*/\s*\d+\s*\|", text, re.MULTILINE)]
+    assert stage_pass, (
+        f"the stage-breakdown table rendered no `N / M` PASS column, so this "
+        f"half of the guard is inert:\n{text[:3000]}")
+    assert sum(stage_pass) == int(m_report.group(1)), (
+        f"the stage-breakdown table's PASS column sums to {sum(stage_pass)} "
+        f"({stage_pass}) while the same report publishes executed PASS = "
+        f"{m_report.group(1)}. One document, two numerators — and the vacuous "
+        f"step is then counted twice, once in the PASS column and once in the "
+        f"same row's other-verdicts cell.\n{text[:3000]}")
 
 
 def test_report_has_one_executed_pass_value_everywhere(tmp_path):
@@ -259,8 +409,16 @@ def test_a4_presence_matches_compliance_checker_path(tmp_path):
     (analog / "analog_block_list.json").write_text(json.dumps(
         {"blocks": [{"name": "blk0"}]}))
     # A4 artefact at the CHECKER's canonical path.
+    #
+    # `design_content` is written because the grid now draws THREE answers,
+    # not two: a design-bound ✅, a disclosed library default ◐, and a `?` for
+    # an artefact that records nothing about what it contains. This test is
+    # about PRESENCE AT THE RIGHT PATH; without the field its artefact would
+    # render `?` and the assertion below would fail for a content reason,
+    # measuring neither presence nor content.
     (analog / "blk0" / "corner_results.json").write_text(json.dumps(
-        {"corners": [{"name": "tt", "simulator_run": True}]}))
+        {"corners": [{"name": "tt", "simulator_run": True}],
+         "design_content": "structure_and_geometry"}))
     grid = g._gather_analog_block_grid(tmp_path, ["blk0"])
     assert grid["blk0"]["A4"] is True
 

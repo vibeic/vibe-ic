@@ -109,6 +109,37 @@ def _list_rtl_files(rtl_dir: Path) -> List[Path]:
     return out
 
 
+def _read_rtl_files(rtl_dir: Path) -> Tuple[List[Tuple[Path, str]], List[Path]]:
+    """Read every globbed RTL file, partitioned into readable and unreadable.
+
+    #492 — `audit` used to call `read_text` straight off the glob. A path the
+    glob yields is not necessarily a path that can be read: a DANGLING SYMLINK
+    matches `*.v` and then raises `FileNotFoundError`. That escaped as an
+    uncaught traceback, and an uncaught traceback exits 1 — which this repo's
+    convention reads as FAIL. So an unreadable file in a user's RTL directory
+    produced a FAIL that was really a crash, and a crash is not a verdict about
+    the design. That is the same false-certificate family as the rc-2 defect
+    #492 is about, pointed the other way. MEASURED: 6 dangling `.v` symlinks
+    exist in this repo's own tracked tree (generated netlists under
+    `steps/*/netlist.v`), so this is the normal layout of several projects here,
+    not an exotic input.
+
+    Returning the two lists SEPARATELY is what keeps the denominator honest.
+    The report's `files_scanned` is the count of files actually read; files that
+    could not be read are counted under `files_unreadable` instead of silently
+    padding the number. A gate that discloses a denominator must not include
+    files it never opened.
+    """
+    readable: List[Tuple[Path, str]] = []
+    unreadable: List[Path] = []
+    for fpath in _list_rtl_files(rtl_dir):
+        try:
+            readable.append((fpath, fpath.read_text(errors="replace")))
+        except OSError:
+            unreadable.append(fpath)
+    return readable, unreadable
+
+
 def _strip_line_comments(text: str) -> str:
     """Remove `// ...` and `/* ... */` so they don't affect regex matches.
     Preserves newlines so line numbers stay correct."""
@@ -246,10 +277,9 @@ def _line_of_offset(text: str, off: int) -> int:
 # ---------------------------------------------------------------------------
 def audit(rtl_dir: Path) -> List[Finding]:
     findings: List[Finding] = []
-    files = _list_rtl_files(rtl_dir)
+    readable, _unreadable = _read_rtl_files(rtl_dir)
 
-    for fpath in files:
-        raw = fpath.read_text(errors="replace")
+    for fpath, raw in readable:
         # We need the original line numbers for reporting AND we need the
         # whitelist comment intact, so check whitelist on raw text.
         # Comment-strip before regex matching to avoid commented-out code.
@@ -304,12 +334,20 @@ def audit(rtl_dir: Path) -> List[Finding]:
 # CLI
 # ---------------------------------------------------------------------------
 def _build_report(findings: List[Finding], rtl_dir: Path) -> dict:
+    # #492 — `files_scanned` used to be `len(_list_rtl_files(...))`, i.e. the
+    # GLOB count, computed independently of what `audit` managed to read. That
+    # decoupling is what let the disclosed denominator include a file the gate
+    # never opened. It is now the count of files actually read, with the
+    # unreadable ones disclosed separately rather than folded in.
+    readable, unreadable = _read_rtl_files(rtl_dir)
     return {
         "program": "timer_freeze_after_state_check",
         "version": "1.0.0",
         "rtl_dir": str(rtl_dir),
         "summary": {
-            "files_scanned": len(_list_rtl_files(rtl_dir)),
+            "files_scanned": len(readable),
+            "files_unreadable": len(unreadable),
+            "unreadable_files": [str(p) for p in unreadable],
             "findings_count": len(findings),
             "pass": len(findings) == 0,
         },
@@ -341,6 +379,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         Path(args.json).write_text(out)
 
     print(out)
+    # #492 — NOT CHECKED is not PASS. `files_scanned` counts files actually
+    # read, so zero means nothing was examined and there is no evidence for any
+    # verdict. Returning 0 here would certify a check that looked at nothing —
+    # the exact shape this gate's own umbrella exists to make visible, and the
+    # one the conversion in flow_compliance_check would otherwise have created:
+    # a project whose RTL is symlinked in with the target missing still
+    # satisfies the umbrella's `any(d.glob("*.v"))` selection. rc 2 is this
+    # repo's "NOT CHECKED / VACUOUS" code, matching `phase1_k5_quality_check`.
+    # #492 — NOT CHECKED is not PASS. `files_scanned` counts files actually
+    # read, so zero means nothing was examined and there is no evidence for any
+    # verdict. Returning 0 here would certify a check that looked at nothing —
+    # the exact shape this gate's own umbrella exists to make visible, and the
+    # one the conversion in flow_compliance_check would otherwise have created:
+    # a project whose RTL is symlinked in with the target missing still
+    # satisfies the umbrella's `any(d.glob("*.v"))` selection. rc 2 is this
+    # repo's "NOT CHECKED / VACUOUS" code, matching `phase1_k5_quality_check`.
+    if report["summary"]["files_scanned"] == 0:
+        print(f"SKIP: timer_freeze_after_state_check — no readable RTL under "
+              f"{rtl_dir} ({report['summary']['files_unreadable']} unreadable); "
+              f"nothing examined, no verdict", file=sys.stderr)
+        return 2
     return 0 if report["summary"]["pass"] else 1
 
 

@@ -99,7 +99,7 @@ and lets an agent author RTL directly tests only "the LLM under our roof", not "
 > **Enforced by `programs/benchmark_shape_classify.py`** — derives the shape (A/B/C/D/E) for a
 > NEW benchmark from its on-disk layout (module count, PDK/constraints target, prompt line-count,
 > dataset cardinality, cocotb harness, oracle-gated flag). For a benchmark already in
-> `benchmark-harness/BENCHMARK_REGISTRY.json`, `programs/benchmark_dispatch.py` reads the recorded
+> `benchmark/BENCHMARK_REGISTRY.json`, `programs/benchmark_dispatch.py` reads the recorded
 > shape directly. The prose tree below is the human-readable spec the program implements — do not
 > hand-pick a shape by feel; run the classifier.
 
@@ -217,7 +217,7 @@ and is exempt):
    both prove free-text ALWAYS regresses. For a NEWLY-onboarded benchmark
    flow: if no existing gate program consumes that benchmark's IO format
    (e.g. CVDP's id/completion JSONL), **build the bridge first（gate
-   program / format adapter — see `benchmark-harness/cvdp_gate.py`）, then
+   program / format adapter — see `benchmark/cvdp_gate.py`）, then
    dispatch** — "no ready gate" is a harness backlog item, never a reason
    to go agent-first. Before dispatch the orchestrator must self-check:
    is this prompt's emit action program-enforced? If not, the run's number
@@ -598,7 +598,7 @@ This rule overrides any "skip, it's a known FLOOR" or "just re-run the fails" in
 
 ## § 5 — Per-benchmark cheat sheet (current as of v0.1.26)
 
-> **Enforced by `benchmark-harness/BENCHMARK_REGISTRY.json`**, loaded by
+> **Enforced by `benchmark/BENCHMARK_REGISTRY.json`**, loaded by
 > `programs/benchmark_dispatch.py` (`--list` / `--show <bench>`). The table below is a
 > human-readable snapshot — the registry JSON is the source of truth that drives dispatch; if the
 > two ever disagree, the registry wins. Do not hand-edit run plans from this table; consult the
@@ -726,6 +726,22 @@ prompts genuinely name no module → correct `chip_top` degrade).
 > `_watchdog.run_supervised` (returns only on exit/stall), not a detached
 > fire-and-forget. On FAIL the gate emits a capture candidate — feed it to
 > `enhancement_emit.py`.
+>
+> **Why the instruction alone loses to a plausible model (vibe-ic#558).** An
+> agent ended its turn on a still-running Phase-3 flow, saying "I'll yield until
+> the harness re-invokes me when Phase 3 exits". Nothing did. `claude -p` is
+> one-shot, so the three beliefs that justified it are all impossible:
+>
+> * *"the harness will re-invoke me when the background job exits"* — nothing
+>   re-invokes a finished turn. There is no such mechanism.
+> * *"a background waiter is armed to fire"* — a waiter can only wake a turn
+>   that is STILL ALIVE. It cannot start a new one.
+> * *"the monitor will fire"* — a monitor notifies the DISPATCHER, not you. It
+>   cannot resume you.
+>
+> Yielding does not pause your turn; it ENDS it, and your "then write the
+> result" step never runs. The rule above is not a preference about style — it
+> is the only way the deliverable gets written.
 
 > **Section-presence enforced by `programs/benchmark_result_md_lint.py <RESULT.md>`** — fails the
 > run if any of the seven mandatory sections below is missing. (It checks *presence* of each

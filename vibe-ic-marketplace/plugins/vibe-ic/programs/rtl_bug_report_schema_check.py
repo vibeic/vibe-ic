@@ -48,13 +48,38 @@ Usage:
     python3 rtl_bug_report_schema_check.py <project_dir>
         [--bugs <path>]                    (default: <proj>/reports/rtl_bugs.json)
         [--allow-external-docs]            (skip the input/docs/ existence check)
-        [--out <path>]                     (default: <proj>/reports/gates/rtl_bug_schema.json)
+        [--json <path>]                    (default: <proj>/reports/gates/rtl_bug_schema.json)
+        [--out <path>]                     (deprecated alias of --json)
         [--strict]                          (default behaviour; flag is a no-op for now)
 
 Exit codes:
     0 — every bug entry is well-formed, with traceable spec evidence
     1 — one or more entries fail the schema
     2 — input file missing / malformed JSON
+
+WHY `--json` EXISTS ALONGSIDE `--out`
+-------------------------------------
+Step 2 of ``flow/phase1_phase2_phase3.yaml`` declares this gate as::
+
+    rtl_bug_report_schema_check . --json reports/phase2/gates/rtl_bug_schema.json
+
+and 112 of the flow's 114 gate commands spell the audit-trail option
+``--json``. This program declared only ``--out``, so argparse REFUSED the
+flow's own invocation::
+
+    $ rtl_bug_report_schema_check . --json reports/phase2/gates/rtl_bug_schema.json
+    rtl_bug_report_schema_check.py: error: unrecognized arguments: --json ...
+    rc=2
+
+and ``flow_compliance_check._check_program_exit_zero`` credits ``rc == 2`` as
+VACUOUS_PASS — so the clause banked a step PASS while auditing NOTHING and
+never writing the audit trail the yaml names. Same defect class as
+``lvs_report_check`` (#507) and ``power_report_check``: an option the caller
+declares and the callee discards.
+
+``--json`` is now the canonical spelling and ``--out`` is kept as an alias
+(same ``dest``) so every existing caller and test keeps working. Argparse's
+last-wins applies if both are given.
 """
 from __future__ import annotations
 
@@ -257,7 +282,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Skip the spec_evidence.doc existence check "
                         "(use when bug citations point at docs not "
                         "present in the project tree).")
-    p.add_argument("--out", default=None,
+    # `--json` is the flow-wide spelling (112 of 114 gate commands); `--out`
+    # is the historical alias this program shipped with. ONE dest, so the
+    # value lands in `args.out` whichever spelling the caller used.
+    p.add_argument("--json", "--out", dest="out", default=None,
                    help="Output JSON path "
                         "(default: <project>/reports/gates/rtl_bug_schema.json)")
     p.add_argument("--strict", action="store_true",

@@ -39,12 +39,54 @@ verbatim (bist_state / test_index / pass_count / fail_count); these are the
 standard fpga-test-harness BIST engine outputs, not a per-chip name.
 
 HONESTY:
-  - No .stp input, or an unparseable/garbage .stp  -> SKIP (exit 0) when there
-    is genuinely nothing to validate, but FAIL (exit 1) when a .stp was given
-    that contains NO signal_set at all (that is a real, broken artifact).
+  - No .stp input -> SKIP (exit 2) — the disclosed-skip tier, never a pass.
+    A .stp that WAS given but contains NO signal_set at all is FAIL (exit 1):
+    that is a real, broken artifact, not an absent one.
   - No port source (neither --sv nor --ports) -> the port-coverage half is
     SKIPPED honestly (RULE-3 trigger/depth/clock is still enforced). We never
     vacuously PASS the port policy without knowing the ports.
+
+CORRECTIONS (2026-08-03, vibe-ic#693 fpga-signaltap family)
+===========================================================
+  (1) NO_TRIGGER was a FALSE NEGATIVE on the one artefact this gate was aimed
+      at. `_STP_TRIGGER_RE` was a TAG-PRESENCE match, so an EMPTY self-closing
+      `<trigger_set is_expanded="true" name="trigger: trigger_set_1"/>` —
+      exactly what `eda_rtl_signaltap_autogen` emits — satisfied "the .stp
+      defines a trigger". A trigger element that triggers on nothing is the
+      free-running capture this rule exists to reject. `_has_trigger` now
+      requires a trigger element with actual content: a `<basic_trigger>` /
+      `<trigger_input>` / `<trigger_node>`, or a `<trigger_set>` that is not
+      empty.
+
+  (2) The no-input SKIP exited 0, which `flow_compliance_check` credits as a
+      plain PASS. It now exits 2 (VACUOUS_PASS tier) and prints a `[SKIP]`-
+      prefixed line so `gate_skip_routing_check._skip_token`, which matches its
+      vocabulary at LINE START, can see the declaration at all.
+
+WHERE THIS GATE IS DRIVEN
+=========================
+NOWHERE automatically, and that is deliberate: no flow step produces a `.stp`.
+It is registered in `flow/phase1_phase2_phase3.yaml` step 39 (`programs:`) with
+the reason written down; see that entry.
+
+MEASURED STATE OF THE TWO IN-REPO PRODUCERS (2026-08-03)
+========================================================
+  tools/signaltap_gen.py            -> PASSes this gate (ports + BIST group +
+                                       populated trigger + depth + clock).
+  eda_rtl_signaltap_autogen (MCP)   -> FAILs it on its DEFAULT invocation, and
+                                       that tool is the producer this module's
+                                       header and skills/fpga-signaltap/SKILL.md
+                                       both name. Driven at the published
+                                       sha256 RTL dir it emitted ONE signal
+                                       ("state"), no DUT ports, no BIST group
+                                       and an empty trigger: 4 x
+                                       MISSING_BIST_SIGNAL + 8 x MISSING_PORT
+                                       + (after correction 1) NO_TRIGGER.
+                                       Tracked separately — the producer's
+                                       contract is a design question, and this
+                                       gate must not be made a blocking
+                                       post-condition of it until that is
+                                       settled.
 
 Usage:
     python3 signaltap_stp_completeness_check.py <file.stp> --sv <top.sv>
@@ -55,9 +97,9 @@ Usage:
 
 Exit codes:
     0 = PASS (all required signals present + trigger/depth/clock OK)
-        or SKIP (no .stp to validate)
     1 = FAIL (one or more completeness findings)
-    2 = usage / io error
+    2 = SKIP — NOTHING EXAMINED (no .stp given). The disclosed-skip tier,
+        never a pass. Also usage / io errors.
 """
 from __future__ import annotations
 
@@ -192,9 +234,37 @@ def parse_ports_from_str(spec: str) -> List[Port]:
 _STP_SIGNAL_RE = re.compile(r"<signal\b[^>]*\bname\s*=\s*\"([^\"]+)\"",
                             re.IGNORECASE)
 _STP_SIGNAL_SET_RE = re.compile(r"<signal_set\b", re.IGNORECASE)
-# trigger evidence
-_STP_TRIGGER_RE = re.compile(
-    r"<\s*(?:basic_)?trigger(?:_set|_input)?\b", re.IGNORECASE)
+# trigger evidence.
+#
+# A trigger element that CONTAINS a trigger condition. `<basic_trigger>`,
+# `<trigger_input>` and `<trigger_node>` name a signal by construction, so their
+# presence is enough. `<trigger_set>` is a CONTAINER: an empty one triggers on
+# nothing and the analyzer free-runs, which is precisely what NO_TRIGGER exists
+# to reject — see correction (1) in the module header.
+_STP_TRIGGER_ELEM_RE = re.compile(
+    r"<\s*(?:basic_trigger|trigger_input|trigger_node)\b", re.IGNORECASE)
+#: `<trigger_set ...>` / `<trigger ...>` with the tail needed to tell a
+#: self-closing empty container from one with content.
+_STP_TRIGGER_SET_RE = re.compile(
+    r"<\s*(trigger_set|trigger)\b([^>]*)>", re.IGNORECASE)
+
+
+def _has_trigger(stp_text: str) -> bool:
+    """True only when the .stp defines a trigger that can actually fire."""
+    if _STP_TRIGGER_ELEM_RE.search(stp_text):
+        return True
+    for m in _STP_TRIGGER_SET_RE.finditer(stp_text):
+        attrs = m.group(2) or ""
+        if attrs.rstrip().endswith("/"):
+            continue                       # `<trigger_set .../>` — empty
+        tag = m.group(1)
+        close = re.compile(r"<\s*/\s*" + re.escape(tag) + r"\s*>",
+                           re.IGNORECASE).search(stp_text, m.end())
+        body = stp_text[m.end():close.start()] if close else \
+            stp_text[m.end():]
+        if body.strip():
+            return True
+    return False
 # sample depth: sample_depth="1024" OR <buffer depth="1024" />
 _STP_DEPTH_RE = re.compile(
     r"(?:sample_depth|depth)\s*=\s*\"?(\d+)\"?", re.IGNORECASE)
@@ -235,7 +305,7 @@ class StpFacts:
 def parse_stp(stp_text: str) -> StpFacts:
     has_set = bool(_STP_SIGNAL_SET_RE.search(stp_text))
     names = sorted(_stp_signal_basenames(stp_text))
-    has_trig = bool(_STP_TRIGGER_RE.search(stp_text))
+    has_trig = _has_trigger(stp_text)
     depth = None
     dm = _STP_DEPTH_RE.search(stp_text)
     if dm:
@@ -395,9 +465,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.json:
             args.json.write_text(out)
         print(out)
-        print("signaltap_stp_completeness_check: SKIP — no .stp given",
-              file=sys.stderr)
-        return 0
+        print("[SKIP] signaltap_stp_completeness_check: no .stp given — "
+              "NOTHING EXAMINED, this is not a pass", file=sys.stderr)
+        return 2
 
     stp_path = Path(args.stp)
     if not stp_path.is_file():
