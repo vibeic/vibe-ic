@@ -1,8 +1,0 @@
-{
-  "id": "9",
-  "name": "Synthesis (Yosys \u2192 mapped netlist)",
-  "status": "pending",
-  "phase": "phase2",
-  "folder": "9_synthesis_yosys_mapped_netlist",
-  "outputs": []
-}

@@ -121,7 +121,7 @@ every one of them per-step falsifiable:
   D5-EDGE-UNRESOLVED   every ``blocks_on`` entry names a declared step, and does
                        so with the SAME RAW TYPE. ``flow_compliance_check``'s
                        cascade attribution keys ``parents_of`` on the raw id
-                       (flow_compliance_check.py:6567-6575), so
+                       (flow_compliance_check.py:6965-6973), so
                        ``blocks_on: ["9"]`` against ``id: 9`` resolves nowhere
                        and silently drops the edge, while
                        ``flow_step_execution_coverage_check.load_blocks_on``
@@ -130,9 +130,9 @@ every one of them per-step falsifiable:
   D5-DUP-EDGE          no ``blocks_on`` list repeats a parent.
   D5-FORWARD-EDGE      every parent is DECLARED EARLIER in the yaml. The flow is
                        consumed in canonical declaration order
-                       (flow_compliance_check.py:7046-7055) and #503 cascade
+                       (flow_compliance_check.py:7444-7453) and #503 cascade
                        attribution takes the first FAIL per track walking that
-                       same order (flow_compliance_check.py:6672-6690), so a
+                       same order (flow_compliance_check.py:7070-7088), so a
                        parent declared after its child can never cut its child's
                        cascade.
   D5-CYCLE             the step is not reachable from itself over ``blocks_on``.
@@ -210,14 +210,19 @@ from matrix_63x8 import waivers as W
 
 DIM = 5
 
-#: The cells this dimension waives, PINNED as an exact set. EMPTY since
-#: 2026-07-28: all five dimension-5 waivers were closed by declaring the
-#: missing edge (steps 8, DT2), removing a read that was itself the defect
-#: (A5, 18) or reordering the declaration so the flow's only forward edge
-#: disappears (A7). Pinned rather than floored so a waiver-free dimension is a
-#: recorded fact instead of an empty loop reporting green — see
+#: The cells this dimension waives, PINNED as an exact set. Was EMPTY from
+#: 2026-07-28 (all five original dimension-5 waivers were closed by declaring
+#: the missing edge, removing a read that was itself the defect, or
+#: reordering a declaration) until 2026-08-08, when step 12 gained
+#: ``12/d5``: a new content clause (dft_post_optimization_scan_survival_check,
+#: closing a dimension-2 gap) reads an artefact TWO steps declare as their own
+#: required_output (9, the true producer, already in step 12's closure; 14, a
+#: pre-existing duplicate declaration that would be a circular edge) — see the
+#: waiver's own reason/evidence in ``matrix_63x8/waivers.py`` for why the
+#: duplicate was not simply deleted. Pinned rather than floored so a waiver
+#: set is a recorded fact instead of an empty loop reporting green — see
 #: ``test_d5_waivers_meet_the_registry_bar``.
-WAIVED_CELLS_PINNED: frozenset = frozenset()
+WAIVED_CELLS_PINNED: frozenset = frozenset({"12/d5"})
 
 # ══════════════════════════════════════════════════════════════════════
 # Producers — exact, from the yaml
@@ -436,6 +441,109 @@ def derived_dependencies(step_id) -> Tuple[Tuple[str, str, str], ...]:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# LAYER 3 — WHAT THE FLOW ITSELF SAYS, which layers 1 and 2 never asked
+# ══════════════════════════════════════════════════════════════════════
+#: Layers 1 and 2 RECONSTRUCT the consumer relation from evidence: paths the
+#: gate names, string constants the gate program holds. That reconstruction is
+#: careful and it is live, and it finds 16 pairs over 12 steps.
+#:
+#: The flow WRITES THE ANSWER DOWN. `required_inputs: [{from: X, path: …}]` is
+#: the flow stating, in its own grammar, which step this one reads from — 75
+#: intra-flow pairs over 54 of the 63 steps. This dimension asks "is blocks_on
+#: the true upstream set" and, until this layer, checked it against a 16-pair
+#: reconstruction while a 69-pair declaration sat unread in the same file.
+#:
+#: This is not a hypothesis about the field's meaning. `flow_dependency_graph_
+#: check`'s own docstring states it: P0 "gained the ordering edge its own
+#: `required_inputs: [{from: 1}]` had always implied". And the flow says it at
+#: step 1, at the point of the repair: "The dependency was always REAL and
+#: never DECLARED … Declaring the edge arms the guard that already exists."
+#:
+#: THE FAIL-SAFE CLASS, BY STRUCTURE: a `from` value naming no step this flow
+#: declares is an input from OUTSIDE the flow — the user's documents, the PDK,
+#: a board. No `blocks_on` edge to a step that does not exist is possible, so
+#: demanding one would accuse every genuine entry point. Decided with the same
+#: test `flow_dependency_graph_check` uses for a dangling reference, never by
+#: matching the word `external`: a word list with one word in it is still a
+#: word list.
+@functools.lru_cache(maxsize=None)
+def declared_input_dependencies(step_id) -> Tuple[Tuple[str, str], ...]:
+    """``((producer_step, evidence), ...)`` from this step's `required_inputs`.
+
+    Only entries whose ``from`` names a step THIS FLOW DECLARES. Deduped and
+    sorted; ``producer == consumer`` dropped (a step declaring it reads its own
+    output is not an ordering dependency).
+    """
+    consumer = F.normalize_id(step_id)
+    out: Set[Tuple[str, str]] = set()
+    for entry in (F.step_by_id(step_id).get("required_inputs") or []):
+        if not isinstance(entry, dict) or entry.get("from") is None:
+            continue
+        raw = entry["from"]
+        producer = F.normalize_id(raw)
+        if not F.has_step(producer) or producer == consumer:
+            continue
+        what = entry.get("path") or entry.get("outputs") or "outputs"
+        out.add((producer,
+                 f"required_inputs declares `from: {raw}` for {what!r}"))
+    return tuple(sorted(out))
+
+
+@functools.lru_cache(maxsize=None)
+def external_input_declarations(step_id) -> Tuple[str, ...]:
+    """``from`` values that name no declared step — inputs from outside."""
+    out: Set[str] = set()
+    for entry in (F.step_by_id(step_id).get("required_inputs") or []):
+        if isinstance(entry, dict) and entry.get("from") is not None:
+            if not F.has_step(F.normalize_id(entry["from"])):
+                out.add(str(entry["from"]))
+    return tuple(sorted(out))
+
+
+#: SHRINK-ONLY. The steps whose layer-3 edge is a KNOWN, FILED, DEFERRED
+#: defect: vibe-ic#1070. Every one of them is a real unguarded dependency and
+#: the repair is one yaml list each; the owner deferred it on SEQUENCING —
+#: declaring these edges is transitive and would newly put the producer into
+#: the ancestry of 44 / 14 / 4 of the 63 steps, which on an already-red main
+#: destroys the only delta the repair agents have to read.
+#:
+#: This register may only SHRINK. A NEW step in this state fails immediately;
+#: these three are named, evidenced and pointed at the issue rather than
+#: silently forgiven. When #1070 lands, this set empties and
+#: `test_d5_the_deferred_register_only_shrinks` reddens if it does not.
+# 2026-08-14: EMPTIED. vibe-ic#1070 landed for all three edges, so the debt
+# this register recorded no longer exists and the shrink-only doctrine above
+# says the entry goes. Measured live on `ab5a23a28` — each edge is both still
+# READ and now ORDERED, which is exactly the condition
+# `test_d5_the_deferred_register_only_shrinks` was written to detect:
+#
+#     A1 -> D1 : reads_it=True  ORDERED=True    (A1 gained `blocks_on: [D1]`)
+#     25 -> 24 : reads_it=True  ORDERED=True
+#     M1 -> 37 : reads_it=True  ORDERED=True
+#
+# Emptied rather than deleted outright: a NEW step entering this state must
+# still land here and be named, evidenced and pointed at an issue rather than
+# silently forgiven.
+_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {}
+
+#: The edges the register carried until #1070 paid the debt.
+#:
+#: This exists for ONE reason: with the register empty, the paired control
+#: below compares an empty measured set against an empty registered set and
+#: passes while asserting NOTHING. A control that forgives nothing and checks
+#: nothing is worse than no control, because the file still reads as though it
+#: were policing three defects. So the control now also asserts the debt STAYED
+#: paid, which is a live guard rather than a vacuous one: drop any of these
+#: three `blocks_on` declarations again and it reddens.
+_FORMERLY_DEFERRED_LAYER3_EDGES: Tuple[Tuple[str, str], ...] = (
+    ("A1", "D1"),
+    ("25", "24"),
+    ("M1", "37"),
+)
+
+
+
+# ══════════════════════════════════════════════════════════════════════
 # The declared graph
 # ══════════════════════════════════════════════════════════════════════
 @functools.lru_cache(maxsize=1)
@@ -540,7 +648,7 @@ def d5_problems(step_id) -> List[str]:
             hint = (
                 f" — a step {norm!r} exists but is declared as "
                 f"{type(F.step_by_id(norm)['id']).__name__}, not "
-                f"{type(raw).__name__}; flow_compliance_check.py:6567-6575 keys "
+                f"{type(raw).__name__}; flow_compliance_check.py:6965-6973 keys "
                 f"the cascade graph on the RAW id, so this edge resolves to "
                 f"nothing there"
                 if F.has_step(norm)
@@ -572,11 +680,37 @@ def d5_problems(step_id) -> List[str]:
                 f"D5-FORWARD-EDGE: step {sid} (yaml declaration index "
                 f"{order[sid]}) blocks_on {parent!r}, which is declared LATER "
                 f"at index {order[parent]}; the flow is evaluated in canonical "
-                f"declaration order (flow_compliance_check.py:7046-7055) and "
+                f"declaration order (flow_compliance_check.py:7444-7453) and "
                 f"#503 cascade attribution takes the first FAIL per track in "
-                f"that same order (flow_compliance_check.py:6672-6690), so "
+                f"that same order (flow_compliance_check.py:7070-7088), so "
                 f"{parent!r} can never cut {sid}'s cascade"
             )
+
+    # ── CL-* — the closed_loop FALLBACK edge, dimension 5's other edge set
+    # A `closed_loop.fallback_to` IS a dependency edge, and until 2026-08-20
+    # nothing in this repository read one. MEASURED at 46db018669: 19
+    # `closed_loop:` declarations in the flow, ZERO consumers anywhere in the
+    # plugin — and this module's own substrate shipped the accessor
+    # (`flowref.closed_loop`, exported in `__all__`) with no caller. A
+    # `fallback_to` naming a step that does not exist would have passed every
+    # gate here, so the convergence edges the flow's close-loop story rests on
+    # were, as a class, unfalsifiable.
+    #
+    # Dimension 5 owns "is the declared edge set the true one", so it owns this
+    # edge set too. The predicate is NOT restated here: `closed_loop_edge_check`
+    # is the ONE implementation and this module calls it, so the program a
+    # reviewer runs by hand and the cell the matrix reddens cannot drift apart —
+    # the failure mode `_ORFS_PNR_KNOB_PARAMS` names in its own header ("a second
+    # list of names that would drift away from it").
+    #
+    # Steps with no `closed_loop` get an empty list, so this adds no cell and
+    # moves no existing verdict: measured over the shipped flow, `d5_problems`
+    # is unchanged for every step and the 19 declaring steps stay green.
+    import closed_loop_edge_check as _cl
+
+    _cl_raw_ids, _cl_by = _cl.build_index(list(F.steps()))
+    problems.extend(
+        _cl.problems_for_step(F.step_by_id(step_id), _cl_raw_ids, _cl_by))
 
     # ── D5-CYCLE ─────────────────────────────────────────────────────
     if sid in ancestors(sid):
@@ -624,6 +758,26 @@ def d5_problems(step_id) -> List[str]:
             f"required_output of step {producer}, but {producer} is not in "
             f"{sid}'s blocks_on closure (blocks_on={list(parents)}, closure="
             f"{sorted(closure)}). Evidence: {evidence}{consequence}"
+        )
+
+    # ── D5-DECLARED-INPUT-UNORDERED (layer 3) ────────────────────────
+    # The half of "is blocks_on the true upstream set" that reads the flow's
+    # own answer instead of reconstructing one. Deliberately SEPARATE from
+    # D5-MISSING-EDGE: that clause's evidence is an artefact read, this one's
+    # is a DECLARATION, and collapsing them would lose which of the two found
+    # the defect — the distinction that decides whether the repair is an edge
+    # or a corrected `required_inputs` entry.
+    for producer, evidence in declared_input_dependencies(step_id):
+        if producer in closure:
+            continue
+        if producer in _DEFERRED_LAYER3_EDGES.get(sid, ()):
+            continue                      # named in the shrink-only register
+        problems.append(
+            f"D5-DECLARED-INPUT-UNORDERED: step {sid} declares it reads step "
+            f"{producer}'s output, but {producer} is not in {sid}'s blocks_on "
+            f"closure (blocks_on={list(parents)}, closure={sorted(closure)}), "
+            f"so flow_step_execution_coverage_check's ordering guard cannot "
+            f"red {sid} when {producer} FAILs. Evidence: {evidence}"
         )
 
     # ── D5-GRAPH-DISAGREE (cross-check, not delegation) ──────────────
@@ -728,13 +882,28 @@ def _is_na(step_id) -> bool:
     return not F.declares_blocks_on(step_id) and not F.has_gate(step_id)
 
 
-#: The steps recorded as NA when this module landed (v1.7.68). Pinned so the
-#: classification is self-invalidating IN THE CELL, not only in the census: if
-#: P0 ever gains a ``blocks_on`` key or a gate, ``step P0``'s own test goes red
-#: and demands re-evaluation, and if any other step LOSES both it goes red too.
-#: An NA that silently re-classifies itself is the "silent absence wearing a
-#: hat" the campaign forbids.
-_NA_BASELINE = frozenset({"P0"})
+#: The steps recorded as NA for this dimension. Pinned so the classification is
+#: self-invalidating IN THE CELL, not only in the census: a step that gains a
+#: ``blocks_on`` key or a gate reddens its own test and demands re-evaluation,
+#: and a step that LOSES both goes red too. An NA that silently re-classifies
+#: itself is the "silent absence wearing a hat" the campaign forbids.
+#:
+#: EMPTY as re-measured here, and the emptiness is the pin FIRING, not the pin
+#: being removed. It held ``{"P0"}`` from v1.7.68. ``332b9985`` ("flow: stage
+#: membership was declared twice and the copies disagreed") gave P0
+#: ``blocks_on: [1]``, so ``_is_na("P0")`` became False and step P0's own cell
+#: went red with the sentence this comment promised it would print — "the NA has
+#: self-invalidated — dimension 5 must be enforced for it". The demanded
+#: re-evaluation was then DONE rather than waived: ``d5_problems("P0")`` is ``[]``
+#: on the live tree, so P0 now runs the full dimension-5 predicate as an ENFORCED
+#: cell like the other 62, and ``D5-PHANTOM-EDGE`` was replayed against it to
+#: prove the cell can still be reddened.
+#:
+#: An empty set here does NOT disarm the guard. The ENFORCED branch asserts
+#: ``not _is_na(...)`` for every cell, so the day any step drops both its
+#: ``blocks_on`` key and its gate it reddens rather than drifting into a silent
+#: NA — which is the direction this pin was always the weaker half of.
+_NA_BASELINE: frozenset = frozenset()
 
 
 def _params():
@@ -810,7 +979,21 @@ def test_d5_blocks_on_covers_the_real_dependency_graph(cell):
 def test_d5_covers_every_cell_exactly_once():
     """63 cells, each parametrized exactly once, in flow order."""
     ids = [F.normalize_id(p.values[0].step_id) for p in _params()]
-    assert len(ids) == len(F.step_ids()) == 63, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(ids) == len(F.step_ids()) == 69, (
         f"parametrized {len(ids)} cells over {len(F.step_ids())} flow steps"
     )
     assert ids == [F.normalize_id(s) for s in F.step_ids()], (
@@ -844,10 +1027,45 @@ def test_d5_state_census_is_exhaustive():
         f"census does not partition: enforced={len(enforced)} "
         f"waived={len(waived)} na={len(na)} steps={len(F.step_ids())}"
     )
-    assert na == {"P0"}, (
-        f"NA set is {sorted(na)}; only P0 lacks both a blocks_on key and a "
-        f"gate on the current tree — a change here means dimension 5's NA "
-        f"rationale must be re-derived"
+    # The NA rationale, RE-DERIVED over the whole population rather than
+    # restated as a second literal. The line here used to be
+    # `assert na == {"P0"}` — a hardcoded copy of the pin asserted four lines
+    # above, so the two had to be edited together and neither checked the
+    # thing they were both about: that "NA" means, for every step, exactly
+    # "declares no blocks_on key and no gate". That is now measured on all 63.
+    misfiled = sorted(
+        F.normalize_id(s) for s in F.step_ids()
+        if (F.normalize_id(s) in na) != _is_na(s)
+        and F.normalize_id(s) not in waived
+    )
+    assert not misfiled, (
+        f"dimension 5's NA rationale does not hold for {misfiled}: a cell is "
+        f"NA if and only if it declares neither a blocks_on key nor a gate, "
+        f"and these disagree with that derivation"
+    )
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(F.step_ids()) == 69, (
+        f"the NA rationale was re-derived over {len(F.step_ids())} steps, not "
+        f"63; the population moved and this census states a figure for a grid "
+        f"it no longer describes"
+    )
+    assert enforced, (
+        f"dimension 5 enforces ZERO of its {len(F.step_ids())} cells "
+        f"(waived={len(waived)} na={len(na)}); a census over an empty enforced "
+        f"set proves nothing and must refuse rather than pass"
     )
     assert not (waived & na), f"cell in two states at once: {sorted(waived & na)}"
 
@@ -1099,3 +1317,132 @@ def matrix_cell_state(step_id) -> str:
     if _waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# LAYER 3's own anti-starvation and anti-forgiveness guards
+# ══════════════════════════════════════════════════════════════════════
+#: Live floors, same idiom as the layer-1+2 trio above: a FLOOR, so a new
+#: `required_inputs` entry is free and a silent shrink is not.
+_DECLARED_DEP_STEPS_FLOOR = 54
+_DECLARED_DEP_PAIRS_FLOOR = 69
+
+
+def test_d5_declared_input_denominator_is_disclosed():
+    """Layer 3 must not quietly become vacuous either.
+
+    The measured figures on the tree that added this layer, and the reason the
+    layer exists at all:
+
+        layer 1+2 (RECONSTRUCTED from artefact reads) : 12 steps, 16 pairs
+        layer 3   (DECLARED by the flow itself)       : 54 steps, 69 pairs
+
+    A dimension asking "is `blocks_on` the true upstream set" was checking it
+    against the 16 and had never read the 69. If `required_inputs` is ever
+    renamed, restructured or emptied, this clause resolves to zero pairs and
+    all 63 cells go green on a question nobody asked — the exact starvation
+    shape `test_d5_derived_dependency_denominator_is_disclosed` exists for.
+    """
+    steps = [sid for sid in F.step_ids() if declared_input_dependencies(sid)]
+    pairs = {(F.normalize_id(sid), p)
+             for sid in F.step_ids()
+             for p, _ in declared_input_dependencies(sid)}
+    assert len(steps) >= _DECLARED_DEP_STEPS_FLOOR, (
+        f"layer-3 consumer relation SHRANK: {len(steps)} steps declare an "
+        f"intra-flow `required_inputs.from`, floor is "
+        f"{_DECLARED_DEP_STEPS_FLOOR}. A shrinking denominator is how this "
+        f"clause becomes a suite of vacuous passes."
+    )
+    assert len(pairs) >= _DECLARED_DEP_PAIRS_FLOOR, (
+        f"layer-3 pairs SHRANK: {len(pairs)} < {_DECLARED_DEP_PAIRS_FLOOR}"
+    )
+
+
+def test_d5_external_inputs_are_named_not_silently_dropped():
+    """The fail-safe class, counted rather than assumed.
+
+    Layer 3 declines every `from` that names no declared step. That discount
+    is correct — no edge to a non-existent step is possible — and it is also
+    the one place layer 3 could silently forgive everything: if `has_step`
+    ever started returning False for real ids, every pair would be discounted
+    as "external" and the clause would go green over nothing.
+    """
+    external = {F.normalize_id(sid): external_input_declarations(sid)
+                for sid in F.step_ids() if external_input_declarations(sid)}
+    total_from = sum(
+        1 for sid in F.step_ids()
+        for e in (F.step_by_id(sid).get("required_inputs") or [])
+        if isinstance(e, dict) and e.get("from") is not None
+    )
+    n_ext = sum(len(v) for v in external.values())
+    assert n_ext < total_from / 2, (
+        f"{n_ext} of {total_from} `required_inputs.from` values resolve to no "
+        f"declared step. Layer 3 discounts every one of them, so at this "
+        f"proportion the clause is forgiving more than it measures: {external}"
+    )
+    assert external, (
+        "no step declares an input from outside the flow, so the fail-safe "
+        "branch of layer 3 is unreachable and untested on this tree"
+    )
+
+
+def test_d5_the_deferred_register_only_shrinks():
+    """`_DEFERRED_LAYER3_EDGES` is an admission, not an exemption.
+
+    Every entry must still be a LIVE defect. When vibe-ic#1070 lands, each
+    edge gains its `blocks_on` declaration, the entry stops describing
+    anything, and this test reddens until it is deleted — so the register
+    cannot outlive the debt it records, which is how a shrink-only baseline
+    turns into a permanent amnesty.
+    """
+    stale = []
+    for sid, producers_ in sorted(_DEFERRED_LAYER3_EDGES.items()):
+        assert F.has_step(sid), f"deferred register names unknown step {sid!r}"
+        closure = ancestors(sid)
+        declared = {p for p, _ in declared_input_dependencies(sid)}
+        for producer in producers_:
+            if producer not in declared:
+                stale.append(f"{sid} no longer declares it reads {producer}")
+            elif producer in closure:
+                stale.append(
+                    f"{sid} -> {producer} is now ORDERED (closure="
+                    f"{sorted(closure)}); vibe-ic#1070 has landed for this "
+                    f"edge, so delete the register entry"
+                )
+    assert not stale, (
+        "the deferred-edge register no longer describes live defects — it may "
+        "only SHRINK, and shrinking means deleting the entry: " + "; ".join(stale)
+    )
+
+
+def test_d5_the_deferred_register_is_the_only_thing_holding_those_cells_green():
+    """Paired control: remove the forgiveness and the three cells must go red.
+
+    A register that forgives nothing is indistinguishable from no register,
+    and would let a future edit quietly drop the real charge while this file
+    still looked like it was tracking three defects.
+    """
+    # deduped by (consumer, producer): A1 declares `from: D1` TWICE, once for
+    # L1_DATASHEET.json and once for L5_ADI_SPEC.json. Two declarations, one
+    # missing edge — the register records edges, so the comparison must too.
+    charged = {(sid, producer)
+               for sid in _DEFERRED_LAYER3_EDGES
+               for producer, _ in declared_input_dependencies(sid)
+               if producer not in ancestors(sid)}
+    registered = {(sid, p)
+                  for sid, ps in _DEFERRED_LAYER3_EDGES.items() for p in ps}
+    assert charged == registered, (
+        f"the register and the live measurement disagree: measured "
+        f"{sorted(charged)}, registered {sorted(registered)}"
+    )
+
+    # ANTI-VACUITY. The comparison above is {} == {} while the register is
+    # empty, so on its own it would assert nothing. These three edges are the
+    # debt #1070 paid; requiring them to STAY ordered keeps this control live.
+    for sid, producer in _FORMERLY_DEFERRED_LAYER3_EDGES:
+        assert producer in ancestors(sid), (
+            f"{sid} -> {producer} was a deferred layer-3 edge until #1070 "
+            f"declared it, and it is unordered again (closure="
+            f"{sorted(ancestors(sid))}). The debt this register recorded has "
+            f"come back; re-open the entry rather than re-deleting this check."
+        )

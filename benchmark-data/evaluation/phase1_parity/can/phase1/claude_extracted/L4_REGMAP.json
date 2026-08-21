@@ -1,5 +1,0 @@
-{
-  "ic_name": "CAN Specification (Bosch CAN 2.0)",
-  "register_map_present": false,
-  "notes": "CAN 2.0 is a wire-level protocol specification, not a peripheral block guide. There is no architectural register map at the protocol layer. Concrete CAN controller IP blocks (e.g. Bosch C_CAN, M_CAN; Intel/Altera; Microchip MCP2515) define their own register file (typically: control / status / IER / bit-timing / acceptance-filter / mailbox / error-count registers) at the SoC integration level — covered by individual block guides, not by Bosch CAN 2.0."
-}

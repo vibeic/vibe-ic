@@ -1,5 +1,0 @@
-{
-  "ic_name": "I2C-bus (UM10204)",
-  "otp_present": false,
-  "notes": "I2C is a wire-level protocol; no OTP / fuse content at the protocol layer. Individual I2C devices may hard-wire their slave address (effectively factory-OTP) but this is per-device, not protocol-defined."
-}

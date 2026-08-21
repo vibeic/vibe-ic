@@ -1,5 +1,0 @@
-{
-  "ic_name": "MIL-STD-1553B (Military Data Bus)",
-  "register_map_present": false,
-  "notes": "MIL-STD-1553B is a wire-level protocol specification — it defines the bus, the word framing, the message formats, and the bus-controller / remote-terminal / bus-monitor roles. There is no architectural register map at the protocol layer. Concrete 1553 controller and Remote-Terminal IP (e.g. Data Device Corporation BU-65170 / BU-61580 series, Holt HI-6130 / HI-1573, UTMC UT69151, AIM ABC Bus Cards, FPGA cores) each define their own SoC-facing register file — typically: bus-A/bus-B configuration, RT address strap, status-word programmable bits (Busy / Subsystem Flag / Terminal Flag), subaddress descriptor table, 32-word transmit and receive data buffers per subaddress, mode-code mask, BIT word, IRQ-enable / IRQ-status, and message-time-stamp counters. Those register files are documented in each device's data sheet, not in MIL-STD-1553B itself."
-}
