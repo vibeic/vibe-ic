@@ -151,11 +151,25 @@ dispatcher refuses one:
     remain blocking"
 
 `uncheckable_until` before this row is a **wiring error**, and a wiring error
-turns the whole sweep rc 2 regardless. The nine other NOT CHECKED rows carry
-dated exemptions because each is a `run_tolerating_uncheckable` gate whose own
-process returned rc 2; this row is not a gate's verdict at all — it is the
-dispatcher stating that the denominator was zero. Granting it a tolerance was
-considered and rejected upstream, in writing, for a stated reason.
+turns the whole sweep rc 2 regardless.
+
+That the other NOT CHECKED rows are a different KIND of thing is measured, not
+assumed. Every `uncheckable_until` in `repo_hygiene_gates.sh` — all **20** of
+them, dated `2026-11-30` or `2027-02-28` — attaches to a
+`run_tolerating_uncheckable`. Not one attaches to a plain `run`, and not one
+attaches to the population refusal:
+
+    $ grep -c '^[[:space:]]*uncheckable_until ' tools/ci/repo_hygiene_gates.sh
+    20
+    # …and the wrapper on the gate line each one precedes:
+    #   run_tolerating_uncheckable  x20      run  x0      gate_dispatch_over  x0
+
+So every exemption in the file is bought by a GATE whose own process returned
+rc 2 — "I could not look at my subject". This row is not a gate's verdict at all;
+it is the dispatcher stating that the denominator was zero, and it is the only
+NOT CHECKED row in the script with no exemption mechanism available to it.
+Granting it one was considered and rejected upstream, in writing, for a stated
+reason.
 
 **And BLOCKING is right.** The subject of these four gates is post-route geometry
 on published silicon. Today nothing published carries post-route geometry. A
