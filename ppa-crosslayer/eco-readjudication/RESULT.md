@@ -411,21 +411,33 @@ outside `{0, 1}` (measured over its AST), and the producer names no requirement
 at all. `plugin_full_audit.py` D1 + D2 pass, and `source_chip_agnostic_check.py`
 passes over 1546 files.
 
-Wider PPA surface, `pytest -k "ppa or spare or feasib"`: **2091 passed, 14
-failed**. Thirteen of those fourteen **fail identically on `origin/main`** in a
-clean worktree at `6dfe15a32` and are not from this work
-(`test_ppa_layer_exit_contract`, `test_ppa_layer_internal_error_is_not_a_finding`,
-`test_ppa_layer_timing_view_dedup`, `test_ppa_runner_extraction_ledger`). The
-fourteenth was
-`test_ppa_feasibility_separation::test_the_gate_has_no_numeric_margin_of_its_own`,
-which enumerates `FeasibilityPolicy`'s fields exactly so a new one has to be
-argued for in a diff a reviewer sees. That is the mechanism working; the
-argument is now in that test.
+Wider PPA surface, `pytest -k "ppa or spare or feasib or agnostic or
+path_step"`: **2519 passed, 13 failed**. All thirteen fail **identically, by
+test id**, on `origin/main` at `a00f53f20` (v1.11.66) in a clean detached
+worktree — `test_ppa_layer_exit_contract`,
+`test_ppa_layer_internal_error_is_not_a_finding`,
+`test_ppa_layer_timing_view_dedup`, `test_ppa_runner_extraction_ledger`.
+**Zero new red.**
 
-Three other tests were updated because the axis table is now ten and they
-asserted nine by count. Two of them now assert the axis **names** instead of the
-count, because a count goes red for an axis that was legitimately added and
-stays green for one that was renamed.
+Two of those layer sweeps went red on this branch first, and both were real
+findings against this work rather than noise: they parametrise over every
+`ppa_*.py` and fail a program that has not declared how it is invoked, so adding
+`ppa_eco_spare_records.py` reddened them until its vacuous and junk invocations
+were written down. That arm matters more for this program than the general rule
+says — a producer that read a missing spare plan as "0 spares" would emit a
+MEASURED zero, and a measured zero below a declared floor is INFEASIBLE at the
+gate, convicting a run nobody looked at.
+
+Four other tests were updated, each because a mechanism designed to catch this
+caught it:
+
+* `test_ppa_feasibility_separation::test_the_gate_has_no_numeric_margin_of_its_own`
+  enumerates `FeasibilityPolicy`'s fields **exactly**, so `eco_requirement` and
+  then `delivery_path` each had to be argued for in a diff a reviewer sees. The
+  arguments are in that test.
+* Three tests asserted the axis table was nine **by count**. Two now assert the
+  axis **names** instead: a count goes red for an axis that was legitimately
+  added and stays green for one that was renamed.
 
 Constraints honoured: nothing pushed to `main`; no version bump; no
 `--write-baseline`; no GDS touched, no geometry deleted, no pin moved, no rule
