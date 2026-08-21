@@ -72,7 +72,7 @@ def _fake_docker(spef_sta_text):
     report at the path named in the tcl's `report_checks > <rpt>` line."""
     import re as _re
 
-    def fake(container, cmd, timeout=0):
+    def fake(container, cmd, timeout=0, **_):
         if "sta -no_init" in cmd:
             m = _re.search(r"-exit\s+(\S+\.tcl)", cmd)
             if m and Path(m.group(1)).is_file():
@@ -140,7 +140,7 @@ def test_negative_no_spef_behavior_unchanged(tmp_path, monkeypatch):
     p = _proj(tmp_path, est_text=EST_MET_TNS0, with_spef=False)
     # docker stub: every call OK, never writes any report (extraction
     # prerequisites absent → _emit_spef returns False / writes nothing).
-    monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0: (1, "", ""))
+    monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0, **_: (1, "", ""))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
     R.step_canonicalize_artefacts(p, "chip_top", _pdk(), "x")
     canon = p / "phase3/stage3/sta/post_route_timing.rpt"

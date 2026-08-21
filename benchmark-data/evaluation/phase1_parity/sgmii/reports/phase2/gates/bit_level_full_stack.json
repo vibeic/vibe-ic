@@ -1,9 +1,0 @@
-{
-  "pass": false,
-  "rule": "SIM_FULL_STACK_DIR_EXISTS",
-  "error": "sim_full_stack dir phase2/stage1/sim_full_stack not found \u2014 bit-level full-stack tb is mandatory before fpga-test-harness (see spec-to-rtl SKILL.md Rule D)",
-  "rtl_dir": "phase2/stage1/rtl",
-  "sim_dir": "phase2/stage1/sim_full_stack",
-  "min_distinct": 10,
-  "min_opcodes": 3
-}
