@@ -1287,6 +1287,54 @@ def test_one_unreadable_file_is_counted_once_not_once_per_check(tmp_path):
         "the head overstates how much of the tree went unread:\n" + r.stdout)
 
 
+def test_a_refused_pin_points_at_the_phrase_not_the_keyword(tmp_path):
+    """A refusal is only useful if it sends the reader to the right line. This
+    branch already requires the COUNTER side's evidence to name the counter it
+    belongs to; the PIN side had no such check, and its `where` is the only
+    thing telling a reader which of a test file's assertions was not compared.
+
+    Two cases, and the second is the one that discriminates:
+
+      * a denial on a known line, with padding above it, so a hardcoded or
+        off-by-one line number shows;
+      * a MULTI-LINE assertion, where the `assert` keyword and the phrase are on
+        DIFFERENT lines. `where` must point at the PHRASE -- that is what the
+        reader is searching for -- and not at the keyword.
+
+    `pins_of` uses the literal's own `lineno` for exactly this, which is why the
+    multi-line case lands on the phrase."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+
+    emitter = ('def script() -> str:\n    return (\n'
+               '        "  if {[catch {a}]} { incr _n }\\n"\n'
+               '        "  if {[catch {b}]} { incr _n }\\n"\n'
+               '        "  puts \\"PARTIAL: $_n of 2 repairs refused\\"\\n"\n'
+               '        "  if {$_n >= 2} { puts ALL }\\n")\n')
+    padded = ("from thing_emit import script\n\n\n"           # 1-3
+              "def test_a():\n    assert True\n\n\n"           # 4-7
+              "def test_gone():\n    x = 1\n"                  # 8-9
+              '    assert "of 2 repairs refused" not in script()\n')   # 10
+    progs, tests = _tree(tmp_path, emitter, padded)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    doc = json.loads((tmp_path / "r.json").read_text())
+    denied = doc["denied_by_polarity"]
+    assert len(denied) == 1, denied
+    assert denied[0]["where"].endswith(":10"), (
+        f"the refusal points at the wrong line: {denied[0]['where']}")
+
+    multiline = ("from thing_emit import script\n\n\n"        # 1-3
+                 "def test_gone():\n"                          # 4
+                 "    assert (\n"                              # 5  keyword
+                 '        "of 2 repairs refused"\n'            # 6  phrase
+                 "        not in script())\n")                 # 7
+    kept, refused = E.pins(multiline)
+    assert kept == {}, kept
+    assert [ln for _, ln, _ in refused] == [6], (
+        "the refusal points at the `assert` keyword rather than the phrase the "
+        f"reader is looking for: {refused}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
