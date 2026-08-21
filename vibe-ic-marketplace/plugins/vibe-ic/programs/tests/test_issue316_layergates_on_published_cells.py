@@ -118,9 +118,28 @@ def test_the_landed_l8_gate_skips_the_cell_this_one_fails():
     rc_landed, out_landed = _run(
         "l8_clock_period_actionability_check.py", cell)
     rc_new, _ = _run("l8_sta_clock_period_design_owned_check.py", cell)
-    assert rc_landed == 0 and "skipped" in out_landed.lower(), (
-        "the landed L8 gate now judges this cell; re-measure whether the two "
-        f"gates still differ before keeping both. rc={rc_landed}\n{out_landed}")
+    # vibe-ic#1052. The property under test is unchanged — the landed L8 gate
+    # must still REFUSE this cell rather than judge it — but the refusal now
+    # leaves on the disclosed channel: rc 2 (`_vacuous_exit.RC_VACUOUS`), not
+    # the plain 0 it used to launder it through.
+    #
+    # Pinned to 2 EXACTLY, not `!= 1` and not `in (0, 2)`. A "non-fail" rc is
+    # the same laundering one level up: it would re-admit the bare 0 this
+    # change exists to remove, and it would swallow rc 3 (PASS_WITH_WAIVERS)
+    # and any future tier as if they were this one.
+    #
+    # Both original halves are KEPT and a third is added. The rc alone is not
+    # the disclosure — `_vacuous_exit.announce_vacuous` writes the
+    # `VACUOUS_PASS:` sentinel (stderr, so a `--json -` document on stdout
+    # stays parseable; `_run` merges both streams). An exit code with no
+    # sentinel is an undisclosed skip wearing a disclosed skip's number, so
+    # asserting only the rc would let exactly that regress in green.
+    assert (rc_landed == 2
+            and "skipped" in out_landed.lower()
+            and "VACUOUS_PASS:" in out_landed), (
+        "the landed L8 gate now judges this cell, or refused it without "
+        "disclosing; re-measure whether the two gates still differ before "
+        f"keeping both. rc={rc_landed}\n{out_landed}")
     assert rc_new == 1, "the new gate must be the one that sees it"
 
 
