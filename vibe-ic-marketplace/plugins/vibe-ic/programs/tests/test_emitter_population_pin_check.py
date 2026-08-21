@@ -1246,6 +1246,47 @@ def test_literals_that_are_not_adjacent_cannot_lend_each_other_a_polarity():
     assert sorted({v for _, _, d in rows for _, v in d}) == [2], rows
 
 
+#: Unreadable, and reachable by BOTH checks: it contains `incr ` so CHECK A
+#: opens it, and a test names it so `emitter_phrases` opens it too.
+EMITTER_BROKEN_AND_NAMED = (
+    'def s():\n    return "  incr _n\\n  if {$_n >= 2} {}\\n"\n\n\n'
+    'def newer(x)  :::\n    pass\n')
+PIN_NAMES_THE_BROKEN_ONE = (
+    'from thing_emit import s\n\n\ndef test_p():\n'
+    '    assert "of 2 repairs refused" in s()\n')
+
+
+def test_one_unreadable_file_is_counted_once_not_once_per_check(tmp_path):
+    """`record_unparsed` exists because both checks can reach the same file,
+    and its docstring calls a reach report that counts one file twice "its own
+    small lie". Nothing held that up.
+
+    The reach report is this guard's honesty mechanism -- it is what lets a
+    reader tell "nothing to compare" from "I could not read the tree" -- so a
+    report that inflates it is worse than a merely uninformative one. MEASURED
+    by removing the dedupe on a file that BOTH checks open:
+
+        with dedupe      1 entry    "1 source(s) NOT examined"
+        without          2 entries  "2 source(s) NOT examined"   for ONE file
+
+    The fixture reaches both paths on purpose: it contains `incr ` so CHECK A
+    parses it, and a test names it so `emitter_phrases` parses it too. It also
+    lands on the VACUOUS tier, which is where an inflated count would be read
+    most literally -- nothing was compared, so the only numbers a reader has are
+    these."""
+    progs, tests = _tree(tmp_path, EMITTER_BROKEN_AND_NAMED,
+                         PIN_NAMES_THE_BROKEN_ONE)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_VACUOUS, out
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert len(doc["unparsed"]) == 1, (
+        f"one unreadable file was counted once per check: {doc['unparsed']}")
+    assert r.stdout.count("[UNPARSED]") == 1, r.stdout
+    assert "1 source(s) NOT examined" in r.stdout, (
+        "the head overstates how much of the tree went unread:\n" + r.stdout)
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
