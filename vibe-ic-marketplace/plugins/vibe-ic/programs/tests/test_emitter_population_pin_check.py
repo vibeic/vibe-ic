@@ -824,6 +824,42 @@ def test_the_polarity_baseline_refuses_to_grow(tmp_path):
     assert kept == ["one::extract"], kept
 
 
+def test_a_TEST_that_will_not_parse_is_reported_too(tmp_path):
+    """THE OTHER HALF OF THE UNPARSED REACH, and it had no test until it was
+    looked for: `test_a_source_that_will_not_parse_is_REPORTED_not_silently_
+    skipped` breaks a PROGRAM, and CHECK B reads test files through a different
+    branch entirely.
+
+    It matters as much. A test file that will not parse is a PIN this guard did
+    not check, and the pre-`pins` code could not even tell that case apart from
+    "this test names no program" -- both came back as `None` from
+    `named_program`, which is why that function now takes a tree the caller has
+    already parsed.
+
+    Found by asking which lines of this program no test drives, rather than by
+    remembering. The instrument for that was poor -- the suite runs the guard as
+    a SUBPROCESS, `trace` cannot follow it and `coverage` is not installed here
+    -- so it was used as a HINT and this branch was then checked by hand and
+    pinned. An unmeasured coverage number would have been worse than none."""
+    progs, tests = _tree(tmp_path)
+    good = (tests / "test_thing_emit.py").read_text()
+    (tests / "test_thing_emit.py").write_text(good + "\n\ndef newer(x)  :::\n    pass\n",
+                                              encoding="utf-8")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    out = r.stdout + r.stderr
+    assert "[UNPARSED]" in r.stdout, (
+        "an unreadable TEST left the reach in silence:\n" + out)
+    assert "test_thing_emit.py" in r.stdout, out
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert len(doc["unparsed"]) == 1 and "test_thing_emit.py" in doc["unparsed"][0], doc
+    # the pin is gone from the reach, and says so ...
+    assert doc["pins_examined"] == 0, doc
+    # ... while the PROGRAM side is untouched: a broken test must not take the
+    # emitter's own self-check down with it.
+    assert doc["counters_examined"] > 0, doc
+    assert doc["findings"] == [], doc
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
