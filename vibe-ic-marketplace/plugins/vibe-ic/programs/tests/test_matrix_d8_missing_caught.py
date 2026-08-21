@@ -831,8 +831,14 @@ SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
     # in flow order: 26 members, re-derived rather than hand-edited, because a
     # hand-edited tuple is how v1.10.38 shipped a 28-entry pin over a 27-step
     # population.
-    "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5", "A7", "A9",
-    "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36", "37",
+    # 2026-08-21: 26 -> 27. Step 1.6x (v1.11.15) JOINED, with its single
+    # entry `reports/crosslayer/rewrite_equivalence_check.json`. It is the
+    # only movement, and the tuple below is again exactly what
+    # `[k for k in steps if len(required_outputs(k)) < 2]` answers on this
+    # tree, in flow order — re-derived, not hand-edited.
+    "1", "1.6x", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5",
+    "A7", "A9", "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36",
+    "37", "M4", "42", "44", "P0",
     "M4", "42", "44", "P0",
 )
 
@@ -1416,9 +1422,16 @@ def test_d8_cell_census_is_complete():
 #: MISSING downgrade fires, so one more cell's enforcement is measurable rather
 #: than substituted-gate-only.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "D1", "1", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
-    "30", "32", "35", "38",
+    "D1", "1", "1.6x", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8",
+    "14", "28", "30", "32", "35", "38",
 )
+# 2026-08-21: GAINED "1.6x", lost nothing — the benign direction this
+# constant's own test names. Step 1.6x's REAL gate reaches a PASS tier on
+# the seeded fixture, so its d8 cell is measured against the step's own
+# mechanism rather than the substituted stand-in, and
+# `matrix_cell_substitution` moves it into the OWN column. Inserted in flow
+# DECLARATION order (1.6x sits between steps 1 and 2), which is the order
+# this tuple is compared in.
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
 # compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml
 # block from after step 39 to between A5 and A7 to remove the flow's only
@@ -1672,6 +1685,22 @@ def _content_arm_sweep() -> Dict[str, Dict[str, Any]]:
 #: owns, and duplicating it would report one defect as two.
 CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
     "D1": _CONTENT_UNMOVED, "1": _CONTENT_UNMOVED, "2": _CONTENT_UNMOVED,
+    # 1.6x JOINS the real-gate PASS-tier population at v1.11.15. Measured:
+    # UNMOVED — and this one is UNMOVED for a reason that is NOT blindness, so
+    # it is also the only member `_gradable` un-grades.
+    #
+    # Its single declared output, `reports/crosslayer/rewrite_equivalence_check
+    # .json`, is the same path its own gate command passes to `--json`. The gate
+    # WRITES it during `_evaluate_gate`, so the wrong body is overwritten before
+    # the output bookkeeping ever opens it. Reproduced directly: seed the path
+    # with `wrong_body`, run the real `check_step`, read it back — `verdict`
+    # goes "FAIL" -> absent and the bytes differ. Survival: 0 of 1, the only
+    # such row in the population.
+    #
+    # So UNMOVED here says "the gate overwrote the file", not "the gate read it
+    # and did not care". It is recorded rather than folded into the blind set,
+    # which is the distinction the survival clause exists to keep.
+    "1.6x": _CONTENT_UNMOVED,
     # 4 REJOINS the population with `_COVERAGE_BODY`. Measured, not assumed:
     # UNMOVED — corrupting the coverage artefact's content does not move step 4's
     # verdict, because the gate that reads it (`verilator_coverage_measure`) is

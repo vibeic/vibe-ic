@@ -922,9 +922,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x (v1.11.15), replayed singly 2026-08-21: REDDENED
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=65,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             stayed_green=(),
             note="3 steps have no executable gate clause at all and are "
                  "structurally out of this entry's reach: 1 and 12 (files_exist "
@@ -1005,10 +1007,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x (v1.11.15), replayed singly 2026-08-21: REDDENED
+            "1.6x"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=65,
+            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=66,
             stayed_green=("35",),
             note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
                  "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
@@ -1117,9 +1121,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x (v1.11.15), replayed singly 2026-08-21: REDDENED
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             baseline_red=("1",),
             note="the 2 steps not reached declare no required_outputs at all "
                  "(FS1, P0) and are carried by D4-CLI-CONTRACT and "
@@ -1195,10 +1201,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "32", "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3",
             "M4", "40", "41", "42", "43", "44", "P0",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x (v1.11.15), replayed singly 2026-08-21: REDDENED
+            "1.6x"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=68,
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=69,
             note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
                  "sweep, each reddening that cell alone. There is no longer an "
                  "NA cell in this dimension. "
@@ -1292,11 +1300,13 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x (v1.11.15), replayed singly 2026-08-21: REDDENED
+            "1.6x"),
         params={"command":
                 "clock_plan_check . --json reports/phase2/gates/zzmatrixcanary.json"},
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             stayed_green=("DT2",),
             note="61 red = every ENFORCED dimension-6 cell except P0, which "
                  "declares no gate to append to and is carried by "
@@ -1382,9 +1392,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "35", "36", "37", "38", "39", "M2", "M3", "M4", "40", "41", "42",
             "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x (v1.11.15), replayed singly 2026-08-21: REDDENED
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=63,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=64,
             stayed_green=("7", "FS1", "23", "M1"),
             note="58 red = every one of dimension 7's 58 ENFORCED cells, in one "
                  "sweep. The 4 greens are exactly its 4 waived cells. "
@@ -1464,9 +1476,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x (v1.11.15), replayed singly 2026-08-21: REDDENED
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             note="61 red = every one of dimension 8's 61 ENFORCED cells, in one "
                  "sweep. The 2 steps not reached (FS1, P0) declare no "
                  "required_outputs and are dimension 8's 2 NA cells. "
@@ -1826,6 +1840,30 @@ ARTEFACT_CANNOT_REDDEN_AS_MEASURED: int = 1
 #: narrower and newer — the cell cannot be reddened from the CONTENT of the
 #: artefact its step publishes — and they are counted separately for exactly
 #: that reason.
+#: EMPTY, and two cells that LOOK like candidates are deliberately not here.
+#:
+#: `0.5ic/d3` and `1.6x/d3` carry no measured mutation. They are not entered
+#: here because this register means something specific — "a cell no constructed
+#: mutation could redden" — and that is NOT what was measured. Both cells are
+#: ALREADY RED: `--replay D3-UNDECLARED-ARTEFACT --step <either>` returns
+#: ALREADY_RED with baseline_rc=1, so the mutant arm proves nothing either way.
+#: Measured WITH the corpus visible (VIBE_IC_BENCHMARK_DATA pointed at a clone),
+#: so it is not the corpus-absent skip in another costume.
+#:
+#: "I could not tell" is not "nothing can redden it", and recording the second
+#: while having measured the first is the adjacent-measurement disease this
+#: whole campaign is about. `test_every_enforced_cell_carries_a_named_mutation`
+#: agrees, and says so: a NOT-FALSIFIABLE cell may not also be reported
+#: ENFORCED, because "a cell nothing can redden is not enforcing anything".
+#: These two ARE enforcing; their predicate is simply failing right now.
+#:
+#: WHAT THIS LEAVES OPEN is a gap in this ledger, stated rather than papered
+#: over: `census()` requires a measured mutation for every cell whose module
+#: reports ENFORCED, and a cell whose predicate is currently RED cannot supply
+#: one — the scorer's own ALREADY_RED verdict is the refusal. There is no state
+#: between "covered" and "not falsifiable" for it. Closing that means teaching
+#: `census()` about the contradicted cells the coverage census already tracks,
+#: which is a change to this ledger's core semantics and is not made here.
 NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 
 #: The (steps, dimensions, ENFORCED cells) the ledger was built against. Like
@@ -1984,7 +2022,21 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: those reds really happened and is not disowned; the CELL it measured no
 #: longer exists, so the claim it supported goes with it. `0.5ic/d3` is
 #: untouched by this move and remains the one uncovered cell.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 514)
+#: MOVED 2026-08-21, (68, 8, 514) -> (69, 8, 522). +1 STEP: `1.6x` arrived at
+#: v1.11.15 and no sweep has run since. Its EIGHT cells are covered by a
+#: single-step replay each — D1-BLIND-GATE-PROGRAMS, D2-BLIND-GATE-PROGRAMS,
+#: D4-UNGATED-DELIVERABLE, D5-PHANTOM-EDGE, D6-UNCONDITIONAL-OPTIONAL,
+#: D7-GATE-PROBES-A-GHOST and D8-EMPTY-PROMISE all REDDENED it — and its d3
+#: cell is in NOT_FALSIFIABLE with the measured cause. Raising this number
+#: without those replays would be the "widen the baseline until it is green"
+#: move this gate exists to refuse.
+#:
+#: DIMENSIONS STAY 8, and that is a DECLARED gap rather than an oversight.
+#: The matrix now has nine; `CELL_TESTS` has no d9 entry, so dimension 9
+#: contributes no cells to this ledger. See
+#: `test_the_ledger_names_every_dimension_it_does_not_cover`, which refuses
+#: to let that stay silent.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (69, 8, 522)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
