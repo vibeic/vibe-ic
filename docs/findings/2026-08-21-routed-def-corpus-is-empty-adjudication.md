@@ -238,9 +238,28 @@ the run is the mode-2 arm:
     and cannot consume an uncheckable exemption — an unknown denominator must
     remain blocking"
 
-**Measured:** `grep` for that sentence outside `_gate_dispatch.sh` returns
-nothing, and removing the branch leaves the suite green. Four lines stood between
-this corpus and a silently exempted row, and they were a free edit.
+**Measured, 2026-08-21.** `grep` for that sentence outside `_gate_dispatch.sh`
+returns nothing. With the four lines deleted and one `uncheckable_until` written
+above the wiring site, a sweep of two gates — one ordinary gate that passes, plus
+the empty corpus — reports:
+
+    [NOT_CHECKED] EMPTY CORPUS "an observed corpus": producer rc 0 yielded 0 item(s)
+       ^^ NOT CHECKED (rc 2, BLOCKING; no exemption): corpus … is EMPTY  [0s]
+    repo_hygiene_gates: 1 of 2 gate(s) passed; 1 NOT CHECKED — this is NOT a pass
+      over: corpus … is EMPTY … (exempt until 2099-01-01) (0s)
+    $ echo $?
+    0
+
+Two contradictory sentences in one run — *"BLOCKING; no exemption"* beside
+*"exempt until 2099-01-01"* — and **the exit code sides with the exemption**.
+Before the deletion the same input exits 2 with a wiring error. And the deletion
+was free: of the 15 tests in the file it turned exactly ONE red, the new one.
+
+The row is stamped either way. `_dispatch` appends the pending exemption to
+`GATE_EX_UNTIL` *before* it judges it, so the date lands on the record and
+`not_checked_unexempted` comes back empty — measured, and asserted by the test so
+it cannot quietly change shape. Nothing downstream can tell this row from one
+that legitimately bought tolerance. The wiring error is the entire defence.
 
 Two tests are added to `test_routed_def_corpus_dispatch.py`:
 

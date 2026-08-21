@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -353,10 +354,11 @@ def _dispatch_script(root: Path, producer: str, *, preamble: str = "") -> Path:
 
 def _dispatch_run(root: Path, producer: str, owned_label: str,
                   stem: str, *, attest_population: bool = True,
-                  preamble: str = ""):
+                  preamble: str = "", also_owned: Sequence[str] = ()):
     script = _dispatch_script(root, producer, preamble=preamble)
     labels = root / f"{stem}.labels"
-    labels.write_text(owned_label + "\n", encoding="utf-8")
+    labels.write_text("\n".join([owned_label, *also_owned]) + "\n",
+                      encoding="utf-8")
     summary = root / f"{stem}.summary.json"
     attest = root / f"{stem}.attest.jsonl"
     progress = root / f"{stem}.progress.jsonl"
@@ -484,22 +486,38 @@ def test_a_population_refusal_cannot_buy_an_uncheckable_exemption(tmp_path):
     the row from `not_checked_unexempted` and the run stops blocking on it.
     The wiring error is the only thing left refusing the run.
     """
+    # ONE ORDINARY DECIDED GATE, and it is load-bearing. Without it the
+    # micro-suite refuses for DECIDED NOTHING whatever the exemption does, and
+    # the test would pass over a run that never exercised the rule. With it the
+    # sweep has a verdict, so an exemption that IS accepted reaches the
+    # `notchecked != 0` branch — which exits 0. That is the real consequence in
+    # the real hygiene set, where ~70 rows decide.
+    decided = "an ordinary decided gate"
     proc, doc, _attestations, _progress = _dispatch_run(
-        tmp_path, "true", _EMPTY_LABEL, "exempted",
-        preamble=('uncheckable_until 2099-01-01 "an empty corpus is not a '
+        tmp_path, "true", _EMPTY_LABEL, "exempted", also_owned=(decided,),
+        preamble=(f'run "{decided}" "$ROOT" true\n        '
+                  'uncheckable_until 2099-01-01 "an empty corpus is not a '
                   'reason to stop looking"\n        '))
     text = proc.stdout + proc.stderr
+    states = {gate["label"]: gate for gate in doc["gates"]}
 
-    assert doc["gates"][0]["state"] == "NOT_CHECKED"
+    assert states[decided]["state"] == "PASS", doc
+    assert states[_EMPTY_LABEL]["state"] == "NOT_CHECKED", doc
     assert "cannot consume an uncheckable exemption" in text, (
         "an empty population accepted a dated exemption; the one mechanism "
         "keeping 'never a pass' true has been removed")
     assert any("cannot consume an uncheckable exemption" in str(err)
                for err in doc["wiring_errors"]), doc["wiring_errors"]
-    # The refusal is what blocks. Assert the OUTCOME too, so an implementation
-    # that keeps the sentence and drops the consequence is still caught.
+    # THE OUTCOME, not only the sentence: a sweep whose only unchecked row is
+    # the empty corpus must still refuse. Accepting the exemption makes this 0.
     assert proc.returncode == 2, text
-    assert doc["gates"][0]["state"] != "PASS"
+    # AND THE HAZARD ITSELF, asserted so it cannot quietly change shape: the
+    # date IS recorded on the row and the row DOES leave `not_checked_unexempted`.
+    # `_dispatch` appends the pending exemption before it judges it, so nothing
+    # downstream can tell this row from one that legitimately bought tolerance.
+    # The wiring error is the whole defence, which is why it is worth a test.
+    assert states[_EMPTY_LABEL]["exempt_until"] == "2099-01-01", doc
+    assert doc["not_checked_unexempted"] == [], doc
 
 
 def test_the_shipped_producer_over_an_empty_corpus_blocks_and_never_passes(
