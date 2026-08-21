@@ -716,3 +716,28 @@ both runs, which is what makes them a result rather than a sample.
 remain on both arms — nine in `test_landing_merge_verdict.py` and the
 `checker_execution_wiring_audit` one — are the same ten carried on clean main
 in §7, and they are not this branch's.
+
+## 14. The containment check: main never got the skip button
+
+The question this branch exists for is not "is the batch red" — it is whether
+anything can land while stepping around the hygiene gates. Batch 68 landed 30
+commits onto `main` (`a00f53f20` -> `81cd5321b`, v1.11.68) while this was being
+verified, so the containment was checked rather than assumed.
+
+```
+main 81cd5321b, programs/gatekeeper_review.py : no --hygiene-record-in, no --hygiene-record-rc,
+                                                no hygiene_record_in   (0 occurrences)
+main 81cd5321b, tools/gatekeeper-land.sh      : run_gatekeeper_review  (0 occurrences)
+the two target tests on main 81cd5321b        : 2 passed
+```
+
+So neither half of `4232a7301` reached `main`: not the flag, and not the lander
+wiring it came with. The regression is confined to `land/batch67-assembled`, and
+`main`'s no-skip guarantee is intact right now.
+
+That also fixes the shape of what is outstanding. This branch is not repairing
+something live on `main`; it is making sure the ruling's wiring arrives WITH its
+guarantee rather than without it. The wiring and the regression came in one
+commit, so the only two ways to land the ruling are this branch or a batch that
+carries the hole — which is precisely why the split-merge in §9 matters and why
+it is worth a re-merge rather than a shrug.
