@@ -1283,7 +1283,7 @@ Every remaining red is now attributed to one of four causes, none of which is
 | 3 | flow-gate enforcement audit | a POLICY call — but SMALLER than stated here, see **M29**. ~~the flow's `program_exit_zero` clauses make either choice wrong~~: those clauses execute NOWHERE, so `advisory` contradicts nothing and is truthful today. The real question is only whether these two SHOULD be able to stop a step. |
 | 2 | manifest parity | ~~EVIDENCE this host lacks~~ — **WRONG, see M30/M32. 10 of the 15 declared roots ARE here, two carry the artefact. FIXED: 3 reds closed.** |
 | 9 | landing-verdict guard | ~~UNRUNNABLE here~~ — **WRONG, see M8/M18/M26.** It runs on the host in the degraded tier; the two-lane A/B measured **10 BOTH-lane reds**, and designs A and C have since closed **4** of them. 6 remain, each with a named cause (M26). |
-| 2 | `magic` flake, 0.8 s lease family | characterised, ratios recorded |
+| 2 | `magic` flake, 0.8 s lease family | ~~characterised, ratios recorded~~ — **UNBACKED, see M36: no ratios appear anywhere in this document.** Deliberately not re-measured: load-sensitive flakes measured now would describe tonight, not the run this row means. |
 
 **Nothing is left in the "red, cause unknown" state**, which was the state the
 whole 92 started in.
@@ -2242,6 +2242,68 @@ because the census and the live run would then agree.
 **skipped**) and the mutation ledger. That is the second time tonight this
 step has surfaced as an unnamed thread, and it remains the least-documented
 item in the whole triage.
+
+
+## M36 — `0.5ic` characterised at last, and the last unbacked claim in this document
+
+I called `0.5ic` the least-documented item in the triage twice without documenting
+it. It took one look at the flow.
+
+**Step `0.5ic` — "Submission Template Ingest — the operator's slot geometry and
+fixtures (chip/IC path only)"** (`flow/phase1_phase2_phase3.yaml:616`). Its
+`required_inputs` is:
+
+```yaml
+      - from: external
+        check: none
+        what: the shuttle operator's published project template …
+```
+
+The flow argues the case at length and concludes: *"So the geometry is not ours to
+compute. **It is data we never went and got.**"* — the die-identification cells
+are shipped pre-built by the operator's template, and 188 of 194 L19 documents
+carry no machine-usable die budget.
+
+**So `0.5ic`'s two reds have one plain cause: the step's input is EXTERNAL and
+absent.** That is why the live run reports it `skipped` while the census records
+the cell `ENFORCED`, and why no named mutation exists for it — you cannot mutate
+a step that never runs.
+
+It is the same SHAPE as the six `d3_outputs_produced` reds (recorded `ENFORCED`,
+live not-passing) but a different cause: those cite roots of an unsearchable
+kind; this one waits on an artefact from outside the project entirely. **Neither
+is a defect in the code under test**, and both are now named rather than
+attributed to a lane.
+
+### The last unbacked claim, and it is mine
+
+The disposition table's final row reads *"`magic` flake, 0.8 s lease family —
+characterised, **ratios recorded**"*. **There are no ratios in this document.** A
+grep for any `N/M` figure near "magic" or "lease" returns nothing.
+
+The claim may well be true of work done earlier in the engagement, but as this
+document stands it asserts evidence it does not contain — which is precisely the
+defect it spends 2000 lines cataloguing elsewhere. A row that says "ratios
+recorded" and records none is a `.get(..., [])` in prose.
+
+I have NOT re-measured those two flakes to supply the missing ratios: they are
+load-sensitive, this host is shared, and a flake ratio taken now would describe
+tonight rather than the run the row refers to. **The honest repair is to mark the
+claim unbacked, which is what the row now does** — not to manufacture a number
+that looks like the one that went missing.
+
+### Every row audited
+
+| row | verdict |
+|---|---|
+| 11 matrix family | narrowed (M34), then collapsed to one cause with two layers (M35) |
+| 2 coverage bridge | narrowed — an availability lookup, not a vocabulary design (M33) |
+| 3 flow-gate | mis-stated — `advisory` contradicts nothing (M29) |
+| 3 manifest parity | **wrong — fixed, 3 reds closed** (M30, M32) |
+| 9 landing-verdict guard | wrong — runs here; 10 BOTH-lane reds, 4 since closed (M8/M18/M26) |
+| 2 magic/lease flake | **claim unbacked — no ratios in this document** |
+
+Six rows, six corrections. Not one survived audit as written.
 
 
 # ===== REQUESTS TO THE LANDER =====
