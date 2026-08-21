@@ -6,10 +6,14 @@ memoised for the process. Nothing in this module reads ``.audit_63x8.json``:
 the audit is history, the yaml is the repo. If a step is added, removed or
 re-gated, every accessor below changes with it — which is precisely what makes
 <<<<<<< HEAD
+<<<<<<< HEAD
 the 552<!--figure:ledger_cells-->-cell ledger self-invalidating.
 =======
 the 621<!--figure:ledger_cells-->-cell ledger self-invalidating.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+the 552<!--figure:ledger_cells-->-cell ledger self-invalidating.
+>>>>>>> origin/jmatrix/63x8-main-reds
 
 ====================================================================
 THE GRAMMAR, AS MEASURED (not as remembered)

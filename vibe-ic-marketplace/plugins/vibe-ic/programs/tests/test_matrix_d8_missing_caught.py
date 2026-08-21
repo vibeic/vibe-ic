@@ -1786,6 +1786,9 @@ _CONTENT_BEARING_SUFFIXES: Tuple[str, ...] = (".json", ".jsonl")
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 #: Paths a step's OWN gate writes, from the `--json` / `--out` of its own gate
 #: commands. Re-derived from the live yaml, never listed.
 def _gate_written_paths(step_id) -> frozenset:
@@ -1827,6 +1830,7 @@ def _gradable(rec, step_id=None) -> bool:
     So this is the stated rule, implemented; it is not the rule relaxed. A step
     with even ONE rewritten content-bearing file its gate does not write stays
     gradable, and a gate that genuinely stops reading such a file still reddens.
+<<<<<<< HEAD
 =======
 def _survived_the_gate(rec) -> Tuple[str, ...]:
     """The rewritten files still carrying the WRONG body once the gate had run.
@@ -1874,11 +1878,16 @@ def _gradable(rec) -> bool:
     produces. Charging it would have been the campaign's own disease — measuring
     something adjacent and reporting it as if it answered the question.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
     """
     rels = rec.get("rels") or ()
     if not rels or rec.get("unresolved_alts"):
         return False
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
     readable = [r for r in rels
                 if str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)]
     if not readable:
@@ -1887,10 +1896,13 @@ def _gradable(rec) -> bool:
         return True
     written = _gate_written_paths(step_id)
     return any(str(r) not in written for r in readable)
+<<<<<<< HEAD
 =======
     return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)
                for r in _survived_the_gate(rec))
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 
 
 def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one():

@@ -989,6 +989,7 @@ def test_d5_covers_every_cell_exactly_once():
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
 <<<<<<< HEAD
+<<<<<<< HEAD
     assert len(ids) == len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
 =======
     # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
@@ -998,6 +999,9 @@ def test_d5_covers_every_cell_exactly_once():
     # was already red on main before the ninth dimension landed.
     assert len(ids) == len(F.step_ids()) == 69, (
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+    assert len(ids) == len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
+>>>>>>> origin/jmatrix/63x8-main-reds
         f"parametrized {len(ids)} cells over {len(F.step_ids())} flow steps"
     )
     assert ids == [F.normalize_id(s) for s in F.step_ids()], (
@@ -1057,6 +1061,7 @@ def test_d5_state_census_is_exhaustive():
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
 <<<<<<< HEAD
+<<<<<<< HEAD
     assert len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
 =======
     # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
@@ -1066,6 +1071,9 @@ def test_d5_state_census_is_exhaustive():
     # was already red on main before the ninth dimension landed.
     assert len(F.step_ids()) == 69, (
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+    assert len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
+>>>>>>> origin/jmatrix/63x8-main-reds
         f"the NA rationale was re-derived over {len(F.step_ids())} steps, not "
         f"63; the population moved and this census states a figure for a grid "
         f"it no longer describes"

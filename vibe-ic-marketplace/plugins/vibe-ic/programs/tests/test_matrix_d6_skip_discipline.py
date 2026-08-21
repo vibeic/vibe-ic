@@ -948,6 +948,7 @@ def _disclosure_prefixes() -> Tuple[str, ...]:
             _fcc._WAIVER_HINT_PREFIX,
             _fcc._JSON_VACUOUS_HINT_PREFIX)
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 
 
@@ -1015,6 +1016,8 @@ def test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name():
         f"dispatches them in its tier chain; the exclusion is describing an "
         f"older module")
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 
 
 def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:

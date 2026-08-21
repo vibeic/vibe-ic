@@ -1172,6 +1172,7 @@ def test_every_cell_lands_in_exactly_one_state():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+<<<<<<< HEAD
     # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
     # hand: measured with `len(F.step_ids())` on the live yaml. The
     # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
@@ -1179,6 +1180,9 @@ def test_every_cell_lands_in_exactly_one_state():
     # was already red on main before the ninth dimension landed.
 >>>>>>> origin/jm9/d9-verdict-consumed
     assert len(cells) == len(F.step_ids()) == 69
+=======
+    assert len(cells) == len(F.step_ids()) == 69   # 68 -> 69: step 1.6x
+>>>>>>> origin/jmatrix/63x8-main-reds
 
     state = Counter()
     for cell in cells:
@@ -1216,6 +1220,7 @@ def test_every_cell_lands_in_exactly_one_state():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+<<<<<<< HEAD
     # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
     # hand: measured with `len(F.step_ids())` on the live yaml. The
     # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
@@ -1223,6 +1228,9 @@ def test_every_cell_lands_in_exactly_one_state():
     # was already red on main before the ninth dimension landed.
 >>>>>>> origin/jm9/d9-verdict-consumed
     assert sum(state.values()) == 69, state
+=======
+    assert sum(state.values()) == 69, state   # 68 -> 69: step 1.6x
+>>>>>>> origin/jmatrix/63x8-main-reds
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
     # dimension has stopped enforcing anything and should be redesigned.

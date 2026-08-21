@@ -77,6 +77,9 @@ from matrix_63x8 import waivers as W
 # left at 62 is the one this change moves to 66.
 # ──────────────────────────────────────────────────────────────────────
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 # ──────────────────────────────────────────────────────────────────────
 # 2026-08-21 — EVERY TRIPWIRE BELOW MOVES BY EXACTLY ONE, ON ONE CAUSE.
 #
@@ -136,6 +139,7 @@ EXPECTED_DIMS = 9
 # from the yaml. If the flow legitimately changes, these numbers change with it
 # in ONE place and the reviewer is forced to look.
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 # RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
 # landed: the flow's step population moved 68 -> 69 (`1.6x` added in
@@ -143,6 +147,8 @@ EXPECTED_DIMS = 9
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 CENSUS_GATE_PRESENT = 68
 # UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
 # was WITHDRAWN the same day: the only thing that made the declaration
@@ -153,6 +159,7 @@ CENSUS_GATE_PRESENT = 68
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 # RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
 # landed: the flow's step population moved 68 -> 69 (`1.6x` added in
@@ -160,6 +167,8 @@ CENSUS_GATE_PRESENT = 68
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
 # P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
@@ -172,6 +181,7 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 # RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
 # landed: the flow's step population moved 68 -> 69 (`1.6x` added in
@@ -179,6 +189,8 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 CENSUS_BLOCKS_ON_PRESENT = 69
 # 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
 # gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
@@ -201,17 +213,6 @@ CENSUS_BLOCKS_ON_PRESENT = 69
 # this cell". Both sides DID move together. The cell reddened anyway, because
 # this count is a THIRD copy that neither side is tied to.
 <<<<<<< HEAD
-=======
-# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
-# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
-# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
-# for neither. Each value below was re-derived by running the accessor
-# over the live yaml, not by adding one to the old number.
->>>>>>> origin/jm9/d9-verdict-consumed
-CENSUS_BLOCKS_ON_NON_EMPTY = 67
-# 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
-# (dft_post_optimization_scan_survival_check), closing the files_exist-only
-# gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
 <<<<<<< HEAD
 =======
 # RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
@@ -220,6 +221,23 @@ CENSUS_BLOCKS_ON_NON_EMPTY = 67
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
+CENSUS_BLOCKS_ON_NON_EMPTY = 67
+# 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
+# (dft_post_optimization_scan_survival_check), closing the files_exist-only
+# gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
+>>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 CENSUS_GATE_PROGRAMS_NON_EMPTY = 67
 
 
@@ -748,6 +766,7 @@ def test_output_entries_classify_into_the_four_kinds():
     # every path, including the paths where the operator was never asked.
     # = FILE 114 + 2 + 1 + 2 = 119; GLOB and ANY_OF untouched.
 <<<<<<< HEAD
+<<<<<<< HEAD
     # 2026-08-21: 161 -> 163, FILE 119 -> 121, TWO entries with two owners.
     # Two lanes moved this constant in the same batch and BOTH were re-derived
     # rather than incremented, so the merged value is re-derived once more here
@@ -803,6 +822,15 @@ def test_output_entries_classify_into_the_four_kinds():
     assert sum(seen.values()) == 162, seen
     assert seen[F.FILE] == 120
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+    # 2026-08-21: 161 -> 162, FILE 119 -> 120. The SIXTH change, and it is one
+    # entry: step 1.6x's `reports/crosslayer/rewrite_equivalence_check.json`,
+    # added by `7fcbc7397` with none of these pins moved. A plain FILE — no
+    # glob, no OR — so GLOB and ANY_OF are untouched, which is what makes the
+    # attribution checkable rather than asserted.
+    assert sum(seen.values()) == 162, seen
+    assert seen[F.FILE] == 120
+>>>>>>> origin/jmatrix/63x8-main-reds
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
@@ -1243,10 +1271,14 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
 
         assert len(F.step_ids()) == EXPECTED_STEPS + 1
 <<<<<<< HEAD
+<<<<<<< HEAD
         assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 560
 =======
         assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 630
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 560
+>>>>>>> origin/jmatrix/63x8-main-reds
         assert len(C.cells_for(1)) == EXPECTED_STEPS + 1
 
         # The added step has no audit history at all — surfaced, not swallowed.

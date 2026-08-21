@@ -2339,6 +2339,9 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
     # 2026-08-21, 68 -> 69: step 1.6x. The note above is CORRECT about its own
     # change and wrong about the base it applied it to. Measured by driving
     # `flowref` at each revision's yaml through
@@ -2354,6 +2357,7 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
     # never credited, and only the removal was. Subtracting one from a base that
     # was already two behind is how a hand-moved census drifts while every
     # individual edit to it looks careful.
+<<<<<<< HEAD
 =======
     # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
     # hand: measured with `len(F.step_ids())` on the live yaml. The
@@ -2361,6 +2365,8 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
     # (v1.11.18) and this pin was moved for none of them, which is why it
     # was already red on main before the ninth dimension landed.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
     assert len(cells_for(DIM)) == len(live) == 69
 
 
@@ -2849,6 +2855,9 @@ def test_d3_cell_states_partition_all_steps():
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
     # 2026-08-21, 68 -> 69: step 1.6x. The note above is CORRECT about its own
     # change and wrong about the base it applied it to. Measured by driving
     # `flowref` at each revision's yaml through
@@ -2864,6 +2873,7 @@ def test_d3_cell_states_partition_all_steps():
     # never credited, and only the removal was. Subtracting one from a base that
     # was already two behind is how a hand-moved census drifts while every
     # individual edit to it looks careful.
+<<<<<<< HEAD
 =======
     # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
     # hand: measured with `len(F.step_ids())` on the live yaml. The
@@ -2871,6 +2881,8 @@ def test_d3_cell_states_partition_all_steps():
     # (v1.11.18) and this pin was moved for none of them, which is why it
     # was already red on main before the ninth dimension landed.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
     assert len(enforced) + len(waived) + len(na) == 69, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
@@ -2888,10 +2900,14 @@ def test_d3_cell_states_partition_all_steps():
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
 <<<<<<< HEAD
+<<<<<<< HEAD
         f"(52, 2, 15) at 7fcbc7397 + 867de4289. A step moving between states "
 =======
         f"(52, 2, 15) at jm9/d9-verdict-consumed. A step moving between states "
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+        f"(52, 2, 15) at 7fcbc7397 + 867de4289. A step moving between states "
+>>>>>>> origin/jmatrix/63x8-main-reds
         f"is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
@@ -3003,6 +3019,9 @@ def test_d3_cell_states_partition_all_steps():
         "which is exactly what it is for: a step LEAVING has to force someone "
         "to say the number as loudly as one arriving."
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
         "\n2026-08-21: (51, 2, 15) -> (52, 2, 15). +1 ENFORCED, no "
         "reclassification, and it is step 1.6x \u2014 the cross-layer "
         "rewrite-fidelity relation, added by `7fcbc7397` FIVE COMMITS BEFORE "
@@ -3023,6 +3042,7 @@ def test_d3_cell_states_partition_all_steps():
         "69. The population moved THREE times across three commits and only the "
         "third was written down \u2014 so 'a human must move it' is the "
         "mechanism AND, twice running, the failure."
+<<<<<<< HEAD
 =======
         "\n2026-08-21 (jm9/d9-verdict-consumed): (51, 2, 15) -> (52, 2, 15), "
         "+1 STEP with NO reclassification. The step is `1.6x` (cross-layer "
@@ -3044,6 +3064,8 @@ def test_d3_cell_states_partition_all_steps():
         "same tree, and it is why a step ARRIVING needs the same hand-"
         "restatement this file already demands of one leaving."
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
     )
 
 

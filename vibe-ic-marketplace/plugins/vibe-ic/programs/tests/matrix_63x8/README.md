@@ -1,6 +1,9 @@
 # `matrix_63x8` — shared substrate for the flow-step × dimension coverage matrix
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 The Vibe-IC flow has **69<!--figure:flow_steps--> steps**. The 2026-07 audit
 asked **8<!--figure:matrix_dimensions--> questions** of each one.
 69<!--figure:flow_steps--> × 8<!--figure:matrix_dimensions--> =
@@ -68,10 +71,14 @@ Four specific forms of it, all of which an adversarial verifier will catch:
 ## The three-state rule
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 Every one of the 552<!--figure:ledger_cells--> cells must end in **exactly
 =======
 Every one of the 621<!--figure:ledger_cells--> cells must end in **exactly
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+Every one of the 552<!--figure:ledger_cells--> cells must end in **exactly
+>>>>>>> origin/jmatrix/63x8-main-reds
 one** of these, all machine-checkable:
 
 ### `ENFORCED`
@@ -208,10 +215,14 @@ Things that will bite you if you skip the docstring:
   entries are plain path strings. That form lives only in `gate`.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 ### `cells.py` — the 552<!--figure:ledger_cells-->-cell ledger
 =======
 ### `cells.py` — the 621<!--figure:ledger_cells-->-cell ledger
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+### `cells.py` — the 552<!--figure:ledger_cells-->-cell ledger
+>>>>>>> origin/jmatrix/63x8-main-reds
 `ALL_CELLS` is the cross product of `flowref.step_ids()` × `DIMENSIONS`, built
 **live from the yaml, never from the audit JSON**. Add or delete a step and the
 ledger changes with the repo; `test_matrix_63x8_ledger.py` notices.
@@ -343,10 +354,14 @@ Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
 eight modules through pytest's own machinery, asks each module the state of the
 cells it owns, and then RUNS those modules and joins the answer against what
 <<<<<<< HEAD
+<<<<<<< HEAD
 each cell's predicate actually did. **552<!--figure:ledger_cells--> / 552<!--figure:ledger_cells--> cells present,
 =======
 each cell's predicate actually did. **621<!--figure:ledger_cells--> / 621<!--figure:ledger_cells--> cells present,
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+each cell's predicate actually did. **552<!--figure:ledger_cells--> / 552<!--figure:ledger_cells--> cells present,
+>>>>>>> origin/jmatrix/63x8-main-reds
 exactly once.**
 
 **The census has TWO axes, and the first is not quotable on its own.** A cell's

@@ -1164,6 +1164,9 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: producer off; wiring one would mean inventing that dispatch, which is a flow
 #: change and not a pin repair. Being here is the DISCLOSURE, not permission.
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 #: 2026-08-21 — THREE ENTRIES ADDED, FROM TWO SEPARATE CAUSES, and the two are
 #: worth keeping apart because a single-cause story would be wrong here.
 #:
@@ -1185,6 +1188,7 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #:
 #: So this pin was stale for TWO independent reasons before either was noticed,
 #: which is the argument for reading it rather than moving it.
+<<<<<<< HEAD
 =======
 #: THREE ENTRIES ADDED 2026-08-21, each MEASURED, not assumed. The pin was red
 #: on main before the ninth dimension landed; these are what it was red about.
@@ -1208,6 +1212,8 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: permission. Wiring any of the three means inventing a dispatch branch, which
 #: is a flow change and not a pin repair.
 >>>>>>> origin/jm9/d9-verdict-consumed
+=======
+>>>>>>> origin/jmatrix/63x8-main-reds
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("0.5ic", "submission_template_ingest"),
     ("0.5ic", "tapeout_declaration_gen"),
