@@ -1024,6 +1024,65 @@ def test_every_route_a_test_names_its_program_by(tmp_path):
             f"saying so")
 
 
+#: A two-site emitter, to which each prose form below is prepended.
+_TWO_SITE_TAIL = ('def s():\n    return (\n'
+                  '        "  if {[catch {a}]} { incr _n }\\n"\n'
+                  '        "  if {[catch {b}]} { incr _n }\\n"\n'
+                  '        "  if {$_n >= 2} { puts ALL }\\n")\n')
+
+#: Every way prose about the code can mention `incr _n` without the emitted
+#: script containing it. None may contribute a member.
+_PROSE_FORMS = {
+    "module docstring":
+        '"""history: a third repair had its own incr _n."""\n\n\n' + _TWO_SITE_TAIL,
+    "f-string docstring":
+        'V = 3\nf"""a third repair had its own incr _n, rev {V}."""\n\n\n'
+        + _TWO_SITE_TAIL,
+    "function docstring":
+        _TWO_SITE_TAIL.replace(
+            'def s():\n', 'def s():\n    """a third repair had incr _n."""\n'),
+    "class docstring":
+        'class C:\n    """a third repair had its own incr _n."""\n\n\n'
+        + _TWO_SITE_TAIL,
+    "bare block string":
+        _TWO_SITE_TAIL.replace(
+            'def s():\n', 'def s():\n    "a third repair had incr _n"\n'),
+    "hash comment":
+        '# a third repair had its own incr _n\n' + _TWO_SITE_TAIL,
+    "control: no prose at all": _TWO_SITE_TAIL,
+}
+
+
+def test_no_form_of_prose_about_the_code_enters_the_script():
+    """`_emitted_nodes` decides what counts as emitted, and everything else in
+    this file trusts that decision. Its docstring claims a string that is an
+    expression STATEMENT is never emitted -- and, specifically, that an f-string
+    docstring's PARTS are skipped with it, because `ast.walk` reaches each inner
+    `Constant` on its own and skipping the `JoinedStr` alone would let the same
+    prose back in through the other door.
+
+    THAT SECOND CLAIM IS LOAD-BEARING AND WAS UNTESTED. MEASURED by making
+    exactly the mistake it warns about -- `skip.add(id(n.value))` in place of
+    the walk over its parts:
+
+        plain docstring      sites=2      unaffected
+        f-string docstring   sites=3      the prose became a member
+
+    Every form is swept rather than sampled because they reach the skip set by
+    different routes, and the failure is the confident direction: a phantom
+    member makes a truthful emitter disagree with its own denominator."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+
+    for name, src in _PROSE_FORMS.items():
+        rows, refused = E.counters(src)
+        sites = rows[0][1] if rows else 0
+        assert sites == 2, (
+            f"{name}: prose about the code entered the script and the "
+            f"population became {sites}")
+        assert refused == [], f"{name}: {refused}"
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
