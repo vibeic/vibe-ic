@@ -12,13 +12,32 @@ design (incl. a structurally different correct one, and any behavior on the
 don't-care unused state codes), and must SKIP whenever the oracle is not
 unambiguously parseable.
 """
+import shutil
 import sys
 from pathlib import Path
+
+import pytest
 
 PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import kmap_truth_table_oracle_check as K  # noqa: E402
+from _sim_tools import expect_verdict  # noqa: E402
+
+#: `K.check` decides PASS/BLOCK by COMPILING the RTL and RUNNING it against the
+#: oracle it parsed. Without iverilog it returns the fifth verdict the module
+#: already documents — `TOOL_ERR`, "iverilog is not on PATH" — which is the
+#: correct answer to "I could not look". The four tests below assert PASS or
+#: BLOCK, so on a host without the binary they turned that correct refusal into
+#: `assert 'TOOL_ERR' == 'PASS'`: a red naming neither the tool nor the missing
+#: coverage (vibe-ic#1357). The SKIP tests in this file are parse-only and need
+#: no toolchain, so the marker is applied PER TEST and never as `pytestmark`.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_iverilog = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="K.check compiles and runs the RTL to decide PASS/BLOCK; without "
+           "iverilog it can only return TOOL_ERR, so the oracle's verdict is "
+           "unmeasurable on this host")
 
 PROMPT = """
 I would like you to implement a module named TopModule with the following
@@ -97,22 +116,26 @@ def _verdict(tmp_path, prompt, rtl, name="s.sv"):
     return K.check(prompt, str(r))[0]
 
 
+@_needs_iverilog
 def test_fsm_correct_passes(tmp_path):
-    assert _verdict(tmp_path, PROMPT, CORRECT) == "PASS"
+    expect_verdict(_verdict(tmp_path, PROMPT, CORRECT), "PASS")
 
 
+@_needs_iverilog
 def test_fsm_wrong_blocks(tmp_path):
-    assert _verdict(tmp_path, PROMPT, WRONG) == "BLOCK"
+    expect_verdict(_verdict(tmp_path, PROMPT, WRONG), "BLOCK")
 
 
+@_needs_iverilog
 def test_fsm_alt_correct_not_false_blocked(tmp_path):
     # §4.05: a different correct implementation must NOT be blocked
-    assert _verdict(tmp_path, PROMPT, ALT_CORRECT) == "PASS"
+    expect_verdict(_verdict(tmp_path, PROMPT, ALT_CORRECT), "PASS")
 
 
+@_needs_iverilog
 def test_fsm_dontcare_unused_codes_pass(tmp_path):
     # §4.05: unused state codes are don't-care; garbage there must NOT block
-    assert _verdict(tmp_path, PROMPT, DONTCARE) == "PASS"
+    expect_verdict(_verdict(tmp_path, PROMPT, DONTCARE), "PASS")
 
 
 def test_fsm_skip_without_state_encoding(tmp_path):

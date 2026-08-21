@@ -313,6 +313,21 @@ class _FakeRegion:
     def __init__(self, area):
         self._a = area
 
+    # vibe-ic#990 — the recipe now measures a SET of (layer, datatype) specs
+    # per metal layer, so it starts from an empty region and joins one region
+    # per spec. Both are real KLayout API (`Region()` is the documented empty
+    # constructor, `Region#+` is join); this fake grew the two calls the recipe
+    # makes rather than the recipe being bent around the fake.
+    #
+    # Adding AREAS is faithful here only because this fake hands every layer
+    # the same constant and models no geometry at all — there is nothing to
+    # overlap. The recipe's real correctness on overlapping shapes is measured
+    # against a genuine GDSII stream in
+    # `test_issue990_density_counts_the_dummy_fill_datatype`, whose stand-in
+    # computes an exact union.
+    def __add__(self, other):
+        return _FakeRegion(self._a + other._a)
+
     def merge(self):
         pass
 
@@ -353,10 +368,12 @@ class _FakePya:
     Layout = _FakeLayout
 
     @staticmethod
-    def Region(handle):
+    def Region(handle=None):
         # Each selected layer covers a tenth of the die, so a well-formed run
         # produces a plausible density and a dropped layer is visibly absent.
-        return _FakeRegion(100000.0)
+        # `Region()` with no handle is the empty region the recipe accumulates
+        # into (vibe-ic#990) and must contribute nothing.
+        return _FakeRegion(0.0 if handle is None else 100000.0)
 
 
 def _run_recipe(tmp_path, layermap_text, pdk):
