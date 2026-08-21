@@ -275,6 +275,36 @@ module documents: an inadmissible `kind` is "decided without opening a file,
 which is what makes the answer identical on a host that has a corpus and on one
 that does not".
 
+## Verification closed against the SELECTOR's answer, not against my own guess
+
+Deciding for yourself which files a change could have broken is how a change
+breaks one you did not think of. So the repo was asked instead —
+`ci_targeted_test_select.py --base origin/main` on this branch names **46 test
+files**, and all 46 have now been run, one pytest process each, corpus pointer
+unset, on a quiet host:
+
+```
+46 of 46 run
+43 files green
+ 3 files carry exactly the 11 reds documented above, all classified:
+     test_matrix_d3_outputs_produced   6   (reds 1-6, owned elsewhere)
+     test_matrix_mutation_ledger       3   (reds 7-9, NOT_MEASURED)
+     test_matrix_63x8_coverage         2   (reds 14-15, owned elsewhere)
+```
+
+**No red on this branch is unaccounted for, and none of the three fixes broke
+anything the selector can see.** The 22 files not previously run were all green,
+among them several this work would not have thought to check —
+`test_flow_compliance_check` (22), `test_signoff_required_outputs_completeness`
+(21), `test_plugin_full_audit` (11), `test_programs_index_freshness` (11),
+`test_ci_harness_timeout_ceiling_check` (86), `test_tools_and_integration` (19).
+
+The one that mattered most was invisible from the outside:
+**`test_d3_manifest_declaration_parity`** — 13 passed — is a SECOND parity gate
+over the same manifest, distinct from `test_flow_manifest_declaration_parity`,
+and the step-31 entry has to satisfy both. It was not on any list this work had
+built by hand; the selector produced it.
+
 ## Landing note — this branch is conflict-neutral, and there is ONE trap
 
 The brief said to split with `jfindings-63x8` and not duplicate it. That was
