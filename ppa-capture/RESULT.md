@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 15 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 16 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 13 | deterministic rules — the default, and every one names its predicate |
+| **A** | 14 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 1 | the predicate is trivial; the provenance plumbing it must read is not |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -505,6 +505,36 @@ indistinguishable from the 41 that do not.
 them without knowing anything about what went wrong.
 **(d)** yes, demonstrably: it is already naming one nobody has looked at.
 
+### A-14 · a documented command must be accepted by the program it names · `repo.doc_command_reproducibility`
+
+Found by invoking the skill this brief is the loop of. **Its own documented
+invocation of its own driver program does not run:**
+
+    $ python3 enhancement_emit.py --records R.json \
+          --out-skill-section p.md --out-program-rules p.py --out-backlogs d/
+    enhancement_emit.py: error: the following arguments are required: --out-dir
+    rc=2
+
+An existing guard already checks that a command quoted in the release notes and
+manifests names a file that EXISTS. Two things put this case outside it: skills
+are not in its population, and it tests existence rather than acceptance — a
+stale flag and a correct one point at the same existing file.
+
+    quoted commands naming an existing program            165
+    using an option the program neither declares nor mentions  11
+    of those, confirmed by RUNNING them                     2
+      one reports `unrecognized arguments` outright; both exit on an argument error
+
+**Write the screen carefully — mine was wrong twice, in opposite directions, on
+this same corpus.** Matching greedily across lines bled the trailing compliance
+block into the preceding command and reported **47**. Confining the match to one
+line excluded every multi-line invocation and reported **0** — missing the one
+case I had already proven by execution. Joining continuations first gives 11. A
+checker for this that is itself built by grep will reproduce one of those two
+wrong numbers, so the record says so.
+**(o)** yes — it names the case that produced it.
+**(d)** yes: 10 further candidates it found without being told what to look for.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -623,7 +653,7 @@ bucket. My 13 resolve as:
 | resolution | n | records |
 |---|---:|---|
 | ALREADY-PROGRAM | 16 | not records — listed above with their enforcing program |
-| **AUGMENT-EXISTING** | 9 | A-1, A-2, A-5, A-6, A-7, A-8, A-9, A-10, A-11 |
+| **AUGMENT-EXISTING** | 10 | A-1, A-2, A-5, A-6, A-7, A-8, A-9, A-10, A-11, A-14 |
 | **EXTRACT-NEW** | 4 | A-3, A-4, A-12, A-13 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
@@ -656,10 +686,28 @@ applies from the commit that fixes the last true positive onward.
 The skill binds every NEW deterministic gate to ship with (a) **evidence
 emission** — the measured value, the excerpt, the count it judged on, so a second
 track can re-judge the same input — and (b) a **named AI cross-check plus a
-converge step**, run even when the program says PASS. None of my `fix_action`
-fields says this individually; it applies to all 13 and is stated once here so it
-is not lost. A verdict with no attached evidence cannot be cross-checked and is
-incomplete.
+converge step**, run even when the program says PASS. A verdict with no attached
+evidence cannot be cross-checked and is incomplete.
+
+It applies to all 14 records, and it is stated here rather than pasted into each
+`fix_action`. **That is a deliberate call with a cost**, so it is written down:
+`recoveries.json` is the machine-readable artefact an implementer reads, and a
+requirement living only in this prose can be missed. The concrete form is the
+same sentence for every rule — emit the table, the count and the excerpt the
+verdict was computed from — so repeating it fourteen times would add no
+information while making each `fix_action` harder to read for the part that IS
+specific to it.
+
+### The Bucket-T roadmap the skill binds me to could not be written
+
+The skill says every Bucket-T item must be added to
+`benchmark-data/ic/OSS_EDA_FORK_ROADMAP.md`. **That path does not exist in this
+repository** — `benchmark-data/` was split to a repository of its own, so the
+instruction points across a boundary this branch cannot reach. T-1 therefore
+carries its full attribution block in the emitted backlog and is NOT in the
+roadmap. Whoever lands it must add the roadmap entry in the other repository, or
+the instruction should be repointed. Recording the non-compliance, rather than
+satisfying the letter of it by creating a local file nothing reads.
 
 ### The 4th distill target was considered and is empty
 
