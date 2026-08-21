@@ -44,26 +44,68 @@ MEASURED ON THIS COMMIT, and this is why the module exists
 re-run A's gate — against `spm/v1.9.96_gf180mcuD` with 19 reports taken from
 `sha256/clean_run_v1427_20260715`:
 
-    drc_report_check        rc 0 -> 0    SUCCEEDED
     antenna_report_check    rc 0 -> 0    SUCCEEDED
-    em_report_check         rc 0 -> 0    SUCCEEDED
     erc_density_check       rc 0 -> 0    SUCCEEDED
-    lvs_report_check        rc 0 -> 0    SUCCEEDED
-    ir_drop_report_check    rc 0 -> 0    SUCCEEDED
+    drc_report_check        rc 0 -> 1    DEFENDED
+    em_report_check         rc 0 -> 1    DEFENDED
+    ir_drop_report_check    rc 0 -> 1    DEFENDED
+    lvs_report_check        rc 0 -> 1    DEFENDED
     sta_report_check        rc 0 -> 1    DEFENDED
 
-Six of seven sign-off gates certified one design using another design's
-evidence. `sta_report_check` noticed, which is what makes this an attack and not
-a tautology: a probe that "succeeds" against everything measures nothing.
+Two of seven sign-off gates still certify one design using another design's
+evidence. The other four object, which is what makes this an attack and not a
+tautology: a probe that "succeeds" against everything measures nothing.
+
+WHAT THIS TABLE SAID BEFORE, AND WHY THE CORRECTION IS PART OF THE FINDING.
+It read six SUCCEEDED and one DEFENDED, and credited `sta_report_check` with
+noticing. sta did not notice. It tripped `STA_REAL_VIOLATION_FOUND` on a
+negative slack that happened to be in the DONOR's numbers, and
+`STA_REPORT_TOO_SMALL` on one donor file; a clean donor would have passed it.
+On the measurement above, seven of seven gates were blind to design identity and
+the table's one DEFENDED was luck. drc / em / ir_drop now defend for the stated
+reason — their reports declare a design and `eda_report_audit` compares it with
+the module names the project's own Verilog declares. lvs joined them once netgen's
+top-level "Device classes" line was read. The two still listed SUCCEEDED emitted
+no design identity at all — antenna's report was BYTE-IDENTICAL between the cell
+and the donor, two designs on two PDKs, because it was a runner summary of a log
+the cell does not publish. Nothing on the gate side can bind evidence that
+carries no distinguishing byte.
+
+THE PRODUCERS NOW EMIT IT. `phase3_one_shot_runner` stamps `measured_design:`
+plus the sha256 of each input it fed the tool and the RESOLVED path of the tool's
+own log into `reports/phase3/antenna.{rpt,json}` and `reports/density.{rpt,json}`,
+and both gates bind against it. Two fixture designs that previously produced the
+same 32-byte-identical report now produce different bytes, and each gate refuses
+the other design's report by name.
+
+THESE TWO STILL READ SUCCEEDED HERE, AND THAT IS THE HONEST ANSWER. The recorded
+subject is a run PUBLISHED BEFORE the stamp existed, so its antenna and density
+reports carry none — the gate reports NOT_DETERMINED and passes, exactly as it
+must for evidence whose producer predates the binding. The cell cannot be
+re-measured either: it carries no `phase3/stage3/pnr/` at all, so the reports
+cannot be regenerated from it. The mechanism is in place and guarded; what is
+missing is a published run made with it. Calling that closed would be recording
+the publication schedule as security progress, which is the one thing this
+module exists not to do.
 
 AND THE ATTACK THAT DOES NOT WORK, KEPT BECAUSE IT DOES NOT
 -----------------------------------------------------------
-`A1_TAMPER_DESTRUCTIVE` replaces the reports with nonsense. Measured: all five
-gates tried went rc 0 -> 1. Destroying the evidence is DEFENDED, because the
-gate needs the evidence to pass. It is retained as the control that this
-module's verdicts are not all one colour, and as the statement of why the
-dangerous attacks are the SHAPE-PRESERVING ones — a report that still parses and
-reads better is the forgery; a report that is gone is a failure.
+`A1_TAMPER_DESTRUCTIVE` replaces the reports with nonsense. Measured: 7 of 7
+gates go rc 0 -> 1. Destroying the evidence is DEFENDED, because the gate needs
+the evidence to pass. It is retained as the control that this module's verdicts
+are not all one colour, and as the statement of why the dangerous attacks are
+the SHAPE-PRESERVING ones — a report that still parses and reads better is the
+forgery; a report that is gone is a failure.
+
+IT WAS 6 OF 7, AND THIS DOCSTRING SAID "all five gates tried". `ir_drop` passed
+with every `*.rpt` in the cell overwritten, printing two of its own ERROR
+findings about the 26-byte file while it did so, because `_check_tool_authenticity`
+accepted ANY discovered candidate and the one that passed was
+`reports/phase3/ir_drop.json` — a file the attack does not touch and the RUNNER
+writes. The control attack was being defeated by the control's own blind spot,
+and the sentence claiming otherwise had a count in it that matched no gate list
+in this file. `eda_report_audit` now establishes authenticity only from
+tool-written output.
 
 WHY THE SHIPPED TREE IS NEVER TOUCHED
 =====================================
@@ -104,7 +146,7 @@ and compares, and the third case below is the one that makes it honest:
     a recorded pair now UNAVAILABLE    -> the cell it needed is gone. The finding
                                           is UNPROVEN, not fixed.
 
-Without that third case a corpus prune would silently "close" all thirteen and
+Without that third case a corpus prune would silently "close" all of them and
 the ratchet would be measuring the publication schedule instead of the gates —
 the exact defect #527 removed from dimension 3.
 
@@ -121,48 +163,6 @@ before noticing it applied to this file too.
 BOTH directions: while unwired it requires this paragraph, and the moment somebody
 wires it the test fails and forces the paragraph out. What it cannot do is decide
 WHICH step should own the clause — that is a flow declaration and needs the ruling.
-
-A8_LAUNDERED_REGISTER — THE DONOR IS PART OF THE MEASUREMENT
-============================================================
-The thirteen findings above were closed by `_run_evidence_binding`: the gates
-now ask whether the bytes they read are the bytes a register in THIS RUN's tree
-recorded producing. The campaign that certified that closure used a
-`clean_run_*` donor, and MEASURED on this corpus that donor carries ZERO
-`steps/**/STEP_RECORD.json`. So it could substitute the reports and not the
-register, and "all DEFENDED" was a statement about THAT DONOR.
-
-A published SIBLING cell carries 63 of them, at the same relative paths, and
-`STEP_RECORD.json` ends in `.json` — inside :data:`ARTEFACT_SUFFIXES`. Handing
-the target the donor's register along with the donor's reports makes the two
-agree, and the binding certifies the forgery. MEASURED, against the fixed tree,
-`v1.9.96_gf180mcuD` with `v1.10.18_sky130A` as the donor:
-
-    antenna_report_check     rc 0 -> 0    SUCCEEDED
-    em_report_check          rc 0 -> 0    SUCCEEDED
-    erc_density_check        rc 0 -> 0    SUCCEEDED
-    ir_drop_report_check     rc 0 -> 0    SUCCEEDED
-    sta_report_check         rc 0 -> 0    SUCCEEDED
-    drc_report_check         rc 0 -> 1    DEFENDED
-    lvs_report_check         rc 0 -> 1    DEFENDED
-
-and the mechanism isolated, over the paths whose BYTES actually changed:
-
-    STEP_RECORDs substituted   BOUND 47   MISMATCH  6   UNRECORDED 208
-    STEP_RECORDs left alone    BOUND  0   MISMATCH 51   UNRECORDED 170
-
-This is NOT a fourteenth kind of defect. It is the same defect, and it is
-recorded under its own id because a fix's acceptance test that only ever sees
-the donor it was written against measures the donor. `sta_report_check`'s
-original DEFENDED was that error in the other direction.
-
-WHAT WOULD CLOSE IT — stated so it is not mistaken for undone work nobody
-looked at: nothing inside the run tree can. `provenance.jsonl`, every
-`STEP_RECORD.json` and every `written.json` all live in the tree they vouch
-for, so an adversary with write access to the evidence has write access to the
-voucher; today's survival of `provenance.jsonl` rests only on `.jsonl` being
-outside a suffix list. Closing A8 needs an anchor the run cannot write — a
-digest held by the gatekeeper, a signature, or the published tree's own git
-objects — and that is a design change, not a patch to a gate.
 
 THE HONEST LIMIT, PUBLISHED AS A DENOMINATOR
 ============================================
@@ -324,81 +324,29 @@ def attack_cross_design(plugin: Path, cell: Path, donor: Optional[Path],
     return out
 
 
-#: The file names `_run_evidence_binding` reads as a run's own record of what
-#: it produced. `STEP_RECORD.json` ends in `.json`, so it is inside
-#: :data:`ARTEFACT_SUFFIXES` and a substitution attack rewrites it along with
-#: the reports it vouches for. `provenance.jsonl` is not, TODAY, and that is an
-#: accident of the suffix list rather than a property of the register.
-REGISTER_BASENAMES: Tuple[str, ...] = ("STEP_RECORD.json", "provenance.jsonl")
+def _declared_design(tree: Path) -> Optional[str]:
+    """The design a run tree's own sign-off reports say they are about.
 
-
-def shared_substitutable_registers(cell: Path, donor: Path) -> List[str]:
-    """Register files this attack could overwrite: present in BOTH trees and
-    inside :data:`ARTEFACT_SUFFIXES`. The donor's ability to launder is a
-    property of the donor, so it is MEASURED, never assumed."""
-    out: List[str] = []
-    if not (cell.is_dir() and donor.is_dir()):
-        return out
-    for f in sorted(donor.rglob("*")):
-        if (not f.is_file() or f.name not in REGISTER_BASENAMES
-                or f.suffix not in ARTEFACT_SUFFIXES):
-            continue
-        rel = f.relative_to(donor)
-        if (cell / rel).is_file():
-            out.append(rel.as_posix())
-    return out
-
-
-def attack_laundered_register(plugin: Path, cell: Path, donor: Optional[Path],
-                              gates=DEFAULT_GATES) -> List[Attempt]:
-    """A8 — substitute the evidence AND the register that vouches for it.
-
-    THIS IS A3 WITH A BETTER-CHOSEN DONOR, AND THAT IS THE POINT. The run
-    -evidence binding that closed the thirteen A1/A2/A3 findings asks whether
-    the bytes on disk are the bytes a register in THIS RUN's tree recorded
-    producing. The register is inside the tree it vouches for, and
-    `steps/**/STEP_RECORD.json` matches `.json`, so a donor that shares those
-    paths hands over its own digests along with its own reports and the binding
-    certifies the forgery.
-
-    The donor the closure was measured against could not do this — a
-    `clean_run_*` tree carries ZERO `STEP_RECORD.json` — so "all DEFENDED" was a
-    statement about that donor, exactly the way `sta_report_check`'s original
-    DEFENDED was a statement about a donor that happened to carry a violation.
-    A separate attack id keeps the two answers from being averaged into one.
-
-    UNAVAILABLE, with the reason, when the donor shares no substitutable
-    register with the cell: nothing was laundered, so nothing was measured.
+    Read with the same extractor the sign-off gates use, so "same design" means
+    here exactly what it means there. `None` when nothing in the tree declares
+    one — which is a reason to refuse a comparison, not to assume one.
     """
-    obj = ("a gate accepts another run's reports because that run's own "
-           "register was substituted along with them")
-    def _unavailable(reason: str) -> List[Attempt]:
-        # ONE PER GATE, not one for the whole attack. The ratchet compares
-        # (attack, cell:gate) pairs, so a single collective UNAVAILABLE leaves
-        # every recorded A8 finding with no live counterpart at all — which
-        # reads as "the comparison is broken" instead of the ratchet's own
-        # third case, "the evidence went away, so these are UNPROVEN".
-        return [Attempt("A8_LAUNDERED_REGISTER", obj, UNAVAILABLE, reason,
-                        f"{cell.name}:{program}")
-                for program, _argv in gates] or [
-            Attempt("A8_LAUNDERED_REGISTER", obj, UNAVAILABLE, reason,
-                    str(cell))]
-
-    if donor is None or not donor.is_dir():
-        return _unavailable("no register-carrying donor available to launder from")
-    shared = shared_substitutable_registers(cell, donor)
-    if not shared:
-        return _unavailable(
-            f"donor {donor.name} shares no substitutable register with the "
-            f"cell, so this attack would be A3 under another name")
-    out = _substitute_and_rerun(plugin, cell, donor, gates,
-                                "A8_LAUNDERED_REGISTER", obj)
-    for a in out:
-        a.evidence["registers_substituted"] = len(shared)
-        if a.verdict != UNAVAILABLE:
-            a.detail += (f", INCLUDING {len(shared)} register file(s) the "
-                         f"binding reads")
-    return out
+    try:
+        sys.path.insert(0, str(_HERE))
+        import eda_report_audit as ERA  # noqa: PLC0415
+    except ImportError:
+        return None
+    names: set = set()
+    for fp in sorted(tree.rglob("*.rpt")):
+        if not fp.is_file():
+            continue
+        try:
+            names |= ERA._report_declared_designs(fp.read_text(errors="replace"))
+        except OSError:
+            continue
+    if len(names) == 1:
+        return next(iter(names))
+    return None
 
 
 def attack_stale_replay(plugin: Path, cell: Path, older: Optional[Path],
@@ -408,12 +356,41 @@ def attack_stale_replay(plugin: Path, cell: Path, older: Optional[Path],
     Distinct from A3 and strictly harder to notice: the artefact belongs to this
     design, so any check keyed on the design's identity still passes. Only a
     check keyed on WHICH RUN produced it can object.
+
+    THE PREMISE IS NOW CHECKED, BECAUSE IT WAS FALSE. The recorded campaign ran
+    this attack with `older = sha256/clean_run_v1422_20260715` against
+    `cell = spm/v1.9.96_gf180mcuD`::
+
+        cell    top-cell chip_top   pdk gf180mcuD
+        older   top-cell sha256     pdk sky130A
+
+    A different design on a different PDK. So A2 was A3 with a second foreign
+    donor, and its six SUCCEEDED verdicts were six duplicates of A3's — the
+    recorded finding set overstated the number of DISTINCT defects by exactly
+    that much. The property the docstring above claims to isolate, that only a
+    run-keyed check can object, has never been measured at all: every gate that
+    "failed" A2 failed it for the design identity, and the two gates that still
+    fail it would fail A3 the same way.
+
+    An attack whose precondition does not hold must report UNAVAILABLE with the
+    reason. That is this module's own rule — "an attack nobody ran is not an
+    attack that failed" — and it had been applied to every absence except its
+    own premise.
     """
     obj = "a gate accepts an earlier run's artefacts as this run's evidence"
     if older is None or not older.is_dir():
         return [Attempt("A2_STALE_REPLAY", obj, UNAVAILABLE,
                         "no earlier run of the same design is available",
                         str(cell))]
+    mine, theirs = _declared_design(cell), _declared_design(older)
+    if mine is None or theirs is None or mine != theirs:
+        return [Attempt(
+            "A2_STALE_REPLAY", obj, UNAVAILABLE,
+            f"the run offered as an earlier run of this design declares "
+            f"{theirs!r} while the cell declares {mine!r}; replaying it would "
+            f"measure A3_CROSS_DESIGN a second time, not staleness",
+            f"{cell.name}",
+            {"cell_design": mine, "older_design": theirs})]
     return [a for a in _substitute_and_rerun(
         plugin, cell, older, gates, "A2_STALE_REPLAY", obj)]
 
@@ -655,19 +632,10 @@ def mark_resolved(finding: Dict[str, object], resolved_by: str) -> Dict[str, obj
 # --------------------------------------------------------------------------- #
 def run_campaign(plugin: Path, cell: Path, donor: Optional[Path] = None,
                  older: Optional[Path] = None,
-                 gates=DEFAULT_GATES,
-                 launderer: Optional[Path] = None
-                 ) -> Tuple[int, Dict[str, object]]:
-    """Every attack, against one cell. Returns `(rc, report)`.
-
-    `launderer` is a donor that CARRIES A REGISTER at a path this cell also has.
-    It is a separate parameter rather than a second `donor` because a campaign
-    run without one has not tested A8, and an absent parameter says that in the
-    report instead of leaving a reader to infer it.
-    """
+                 gates=DEFAULT_GATES) -> Tuple[int, Dict[str, object]]:
+    """Every attack, against one cell. Returns `(rc, report)`."""
     attempts: List[Attempt] = []
     attempts += attack_cross_design(plugin, cell, donor, gates)
-    attempts += attack_laundered_register(plugin, cell, launderer, gates)
     attempts += attack_stale_replay(plugin, cell, older, gates)
     attempts += attack_tamper_destructive(plugin, cell, gates)
     attempts += attack_violation_deletion(plugin, cell, gates)
@@ -685,7 +653,6 @@ def run_campaign(plugin: Path, cell: Path, donor: Optional[Path] = None,
         "cell": str(cell),
         "donor": donor.name if donor else None,
         "older_run": older.name if older else None,
-        "launderer": launderer.name if launderer else None,
         "counts": {"attempted": attempted, "succeeded": len(succeeded),
                    "defended": len(defended), "unavailable": len(unavailable)},
         # THE DENOMINATOR, PUBLISHED. The adversary's imagination is the new
@@ -740,11 +707,27 @@ def ratchet_diff(recorded: Dict[str, Any],
                                                                   went away; NOT
                                                                   a fix
         held            unchanged
+        newly_attemptable
+                        a pair the record lists as UNPROVEN now produced a
+                        verdict -> the reason it could not be attempted is gone.
+                        Whatever it says now is NEW information and has to be
+                        written down; leaving it out lets an attack come back
+                        into range and report nothing.
+
+    THE FIFTH LIST EXISTS BECAUSE THE RECORD GAINED AN `unproven` SECTION. Until
+    it did, an attack that stopped being attemptable simply vanished from
+    `forging`, which is spelled the same as all of its findings being fixed.
     """
     rec = {(f["attack"], f["target"]) for f in recorded.get("forging", ())}
+    rec_unproven = {(f["attack"], f["target"])
+                    for f in recorded.get("unproven", ())}
     live = {(a.attack, a.target): a.verdict for a in attempts}
     out: Dict[str, List[str]] = {"newly_forging": [], "closed": [],
-                                 "unproven": [], "held": []}
+                                 "unproven": [], "held": [],
+                                 "newly_attemptable": []}
+    for key, verdict in sorted(live.items()):
+        if key in rec_unproven and verdict != UNAVAILABLE:
+            out["newly_attemptable"].append(f"{key[0]} {key[1]} -> {verdict}")
     for key, verdict in sorted(live.items()):
         label = f"{key[0]} {key[1]}"
         if verdict == SUCCEEDED and key not in rec:
@@ -762,10 +745,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("cell", help="the published run/cell to attack")
     ap.add_argument("--donor", help="a DIFFERENT design's cell, for A3")
-    ap.add_argument("--launderer",
-                    help="a donor that carries a register at a path this cell "
-                         "also has, for A8. Without one A8 is UNAVAILABLE and "
-                         "the campaign says so.")
     ap.add_argument("--older", help="an EARLIER run of the same design, for A2")
     ap.add_argument("--plugin", default=str(_HERE.parent),
                     help="plugin root (default: this program's parent)")
@@ -779,8 +758,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     rc, report = run_campaign(
         Path(args.plugin), cell,
         Path(args.donor) if args.donor else None,
-        Path(args.older) if args.older else None,
-        launderer=Path(args.launderer) if args.launderer else None)
+        Path(args.older) if args.older else None)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(Path(args.json), json.dumps(report, indent=2, sort_keys=True)

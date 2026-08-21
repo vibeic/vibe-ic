@@ -46,6 +46,7 @@ proves the script mentions the program; it does not prove the landing stops.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -111,10 +112,41 @@ def _preflight_block() -> tuple[int, str]:
     return start + 1, "\n".join(lines[start:end + 1])
 
 
+#: The three test arms, by the name of the function that runs each one.
+_ARM_FUNCTIONS = ("run_pytest", "run_repo_tools_pytest",
+                  "run_unselectable_pytest")
+
+
 def _first_arm_line() -> int:
+    """The first line that CALLS a test arm — not the first line of a shape.
+
+    This used to be `next(… if line in {"  run_pytest", "run_pytest"})`. The
+    full tier's independent stages now run at the same time and the arms are
+    called from inside the lane bodies the window launches, so that generator
+    matched nothing and `next` raised StopIteration: the test reported a crash
+    where it meant to report a verdict, and "the preflight is not before the
+    first arm" and "I could not find the first arm" became the same red.
+    """
     lines = _land_lines()
-    return next(i + 1 for i, line in enumerate(lines)
-                if line in {"  run_pytest", "run_pytest"})
+    spans = []
+    for name in _ARM_FUNCTIONS:
+        define = next((i for i, line in enumerate(lines)
+                       if line.startswith(f"{name}() {{")), None)
+        assert define is not None, (
+            f"gatekeeper-land.sh no longer defines the test arm {name}")
+        close = next(i for i in range(define + 1, len(lines))
+                     if lines[i] == "}")
+        spans.append((define, close))
+    calls = [
+        i + 1 for i, line in enumerate(lines)
+        if not any(start <= i <= close for start, close in spans)
+        and not line.lstrip().startswith("#")
+        and any(re.search(rf"(?<![\w./-]){name}(?![\w(])", line)
+                for name in _ARM_FUNCTIONS)]
+    assert calls, (
+        "gatekeeper-land.sh defines the test arms but calls none of them — "
+        "there is no first arm for the preflight to come before")
+    return min(calls)
 
 
 #: Interpreter-path variables that route a SECOND copy of the runner into any
@@ -206,6 +238,97 @@ def _real_site_dir() -> Path:
     return Path(proc.stdout.strip()).resolve().parents[1]
 
 
+def _site_processing_dirs() -> list[Path]:
+    """Every directory SITE PROCESSING adds to this installation's path.
+
+    Derived as a set difference -- what the ordinary interpreter can import
+    from, MINUS what an interpreter with site processing off (`-S -I`) can --
+    rather than by matching the names `site-packages` and `dist-packages`. The
+    name match was the first shape and it is a guess about two spellings: it
+    silently returns an INCOMPLETE lane on any installation that adds a
+    directory under some other name, or one a `.pth` file injected.
+
+    BOTH ARMS RUN WITHOUT `PYTHONPATH`/`PYTHONHOME`, and that is load-bearing
+    rather than tidy. `-I` implies `-E`, so the siteless arm cannot honour them
+    and the ordinary arm can -- an asymmetry that puts every ambient entry into
+    the difference as though site processing had added it. MEASURED: under the
+    landing arm, `pytest_per_file_junit` prepends the plugin's own `programs`
+    directory to `PYTHONPATH` for every child it spawns, so the lane came out
+    naming a directory INSIDE the checkout and `trusted_pytest_entry` refused
+    it -- `VIBEIC_TRUSTED_PYTEST_SITE resolved inside the subject checkout`.
+    The entry's guard was right; the lane this helper built was wrong.
+
+    Anything inside the repository is dropped for that same reason. The entry
+    OWNS that refusal and keeps it; this is a builder obeying the contract it
+    builds for, not a second copy of the check. An editable install pointing at
+    the checkout would otherwise reintroduce exactly the failure above on a host
+    that happens to have one.
+
+    The difference is also what makes the ordering assertion sound: none of
+    these directories is on a siteless interpreter's path by construction, so
+    when the lane names them they appear because the lane named them.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if key not in {"PYTHONPATH", "PYTHONHOME"}}
+
+    def seen(*flags: str) -> list[str]:
+        proc = subprocess.run(
+            [sys.executable, *flags, "-c",
+             "import sys" + chr(10) + "for e in sys.path: print(e)"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
+        assert proc.returncode == 0, proc.stderr
+        return [line for line in proc.stdout.split()
+                if line and Path(line).is_dir()]
+
+    siteless = set(seen("-S", "-I"))
+    out: list[Path] = []
+    for item in seen():
+        if item in siteless:
+            continue
+        resolved = Path(item).resolve()
+        if resolved == _ROOT or _ROOT in resolved.parents:
+            continue
+        out.append(resolved)
+    return out
+
+
+def _closure_lane() -> str:
+    """The lane value that names the runner's WHOLE import closure.
+
+    `_real_site_dir()` is where the runner itself lives, and naming only it was
+    this test's first shape. That measures the HOST rather than the gate on any
+    installation whose closure is SPLIT across site directories, and this fleet
+    is exactly that installation. MEASURED on 8HD-d at 46db018669::
+
+        pytest, _pytest, pluggy, iniconfig, packaging
+                                 -> ~/.local/lib/python3.12/site-packages
+        pygments                 -> /usr/lib/python3/dist-packages
+
+    `pytest` imports `pygments` lazily, at terminal-writer time, so a lane
+    naming only the first directory imports and then dies mid-session with
+    `No module named 'pygments'`. That is not this block failing: it is the lane
+    value being half a closure. The same half-closure lane leaves three of
+    `programs/tests/test_trusted_pytest_entry.py`'s own tests red on this fleet,
+    which is why `trusted_pytest_entry` now takes an `os.pathsep`-separated
+    value and this control names the whole thing.
+
+    The directories the ISOLATED interpreter would have kept are included
+    because the substituted interpreter keeps NONE of them, and the fleet's real
+    lane consumer keeps all of them. Naming them is what makes the substitution
+    a substitution rather than a harsher host.
+
+    It is NOT a way to pass. `test_the_full_tier_refuses_once_...` drives the
+    same block with no lane, and `test_a_lane_that_does_not_hold_the_runner_...`
+    drives it with a lane that resolves and is empty; both require the refusal.
+    """
+    seen: list[str] = []
+    for source in [_real_site_dir(), *_site_processing_dirs()]:
+        item = str(source)
+        if source.is_dir() and item not in seen:
+            seen.append(item)
+    return os.pathsep.join(seen)
+
+
 def _run_block(block: str, tmp_path: Path, *, lane: str | None) -> subprocess.CompletedProcess:
     script = tmp_path / "block.sh"
     script.write_text(
@@ -268,12 +391,32 @@ def test_the_host_lane_lets_the_same_tree_record(tmp_path):
     entry cannot import the runner and the same block refuses.
     """
     _, block = _preflight_block()
-    proc = _run_block(block, tmp_path, lane=str(_real_site_dir()))
+    proc = _run_block(block, tmp_path, lane=_closure_lane())
     combined = proc.stdout + proc.stderr
 
     assert proc.returncode == 0, combined
     assert "REACHED_THE_FIRST_ARM" in combined, combined
     assert "host lane" in combined, combined
+
+
+def test_a_lane_that_does_not_hold_the_runner_still_refuses(tmp_path,
+                                                            tmp_path_factory):
+    """The lane is a directory that must HOLD the runner, not a token.
+
+    Without this, `test_the_host_lane_lets_the_same_tree_record` cannot tell an
+    honoured lane from an ignored one -- an entry that quietly fell back to the
+    host's own site directory would pass it, and that fallback is precisely what
+    `trusted_pytest_entry`'s docstring refuses to do ("a silent fallback to the
+    host's own site directory would dissolve the digest-pinned guarantee").
+    """
+    _, block = _preflight_block()
+    empty = tmp_path_factory.mktemp("lane_without_a_runner")
+    proc = _run_block(block, tmp_path, lane=str(empty))
+    combined = proc.stdout + proc.stderr
+
+    assert proc.returncode == 2, combined
+    assert "REACHED_THE_FIRST_ARM" not in combined, combined
+    assert "REFUSE" in combined, combined
 
 
 def test_the_preflight_is_asked_before_the_first_arm():

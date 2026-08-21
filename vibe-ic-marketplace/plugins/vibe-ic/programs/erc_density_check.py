@@ -56,9 +56,6 @@ from typing import List, Optional, Tuple
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).parent))
-# AFTER the sys.path guard, so this module still loads when the file is
-# executed through `spec_from_file_location` rather than as a script.
-import _run_evidence_binding as _reb  # noqa: E402  #1119 — whose report is this?
 try:
     import _path_layout as _pl  # noqa: F401  (used for canonical reports dir)
 except Exception:  # pragma: no cover - _path_layout always present in-repo
@@ -191,18 +188,6 @@ def _parse_layers_from_text(text: str) -> List[Tuple[str, float]]:
     return out
 
 
-def _record_consumed(stats: dict, paths) -> None:
-    """Note the artefacts this run actually OPENED, for the run-evidence binding.
-
-    `setdefault`, not `stats["_consumed"]`, because `_check_density` and
-    `_check_erc` are called directly by tests and by other programs with a
-    `stats` dict THEY built. Indexing broke four such callers with a bare
-    `KeyError: '_consumed'` — a sub-check that a caller cannot call is a worse
-    defect than the missing record it was added to keep.
-    """
-    stats.setdefault("_consumed", []).extend(paths)
-
-
 def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> None:
     djson, drpt = _find_density_artefacts(project_dir)
     if djson is None and drpt is None:
@@ -213,7 +198,6 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
         return
 
     stats["density_checked"] = True
-    _record_consumed(stats, [p for p in (djson, drpt) if p is not None])
     data = None
     text = ""
 
@@ -245,6 +229,48 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
             "ERROR", "DENSITY_NO_PROVENANCE",
             "Density artefact carries no recognizable EDA-tool signature "
             f"(one of {_DENSITY_TOOL_SIGNATURES[:5]}...) — cannot trust"))
+        return
+
+    # Is this artefact about THIS design? (vibe-ic#1119, A3_CROSS_DESIGN)
+    #
+    # THE FINDING. Copying `sha256/clean_run_v1427_20260715`'s same-named
+    # artefacts over `spm/v1.9.96_gf180mcuD` and re-running this gate left it
+    # green: rc 0 -> 0. It could not have done otherwise —
+    # `reports/density.{rpt,json}` named no design anywhere, and differed
+    # between the two runs only in their numbers. The tool-signature check
+    # above asks "did a tool write this"; it cannot ask "about what".
+    #
+    # phase3_one_shot_runner now stamps `measured_design:` plus the sha256 of
+    # the DEF the filler read, so the question is answerable. A report written
+    # before that carries no stamp and is recorded NOT_DETERMINED — never
+    # failed for it, because the gap was in the producer and reddening honest
+    # older evidence for it would get this check removed.
+    #
+    # THE STAMP IS NOT A MEASUREMENT. It makes the artefact ATTRIBUTABLE and
+    # nothing more: every substance check below still has to pass, an absent
+    # artefact is still DENSITY_MISSING, and an empty one is still
+    # DENSITY_EMPTY. Both of those are reached BEFORE this point and return.
+    _binding = "NOT_DETERMINED"
+    try:
+        import eda_report_audit as _era
+        _declared = _era._report_declared_designs(text)
+        _own = _era._project_design_names(project_dir)
+    except Exception:                                   # noqa: BLE001
+        _declared, _own = set(), set()
+    if _declared and _own:
+        _foreign = sorted(n for n in _declared if n not in _own)
+        if _foreign:
+            _binding = False
+            findings.append(Finding(
+                "ERROR", "DENSITY_IS_ABOUT_ANOTHER_DESIGN",
+                f"Density artefact states it measured "
+                f"{', '.join(_foreign)}, which this project's Verilog does not "
+                f"declare — this is another design's fill report (#1119 "
+                f"A3_CROSS_DESIGN)"))
+        else:
+            _binding = True
+    stats["design_binding"] = _binding
+    if _binding is False:
         return
 
     # 1) Per-layer metal CMP density (the genuine 20-80% rule target).
@@ -300,7 +326,6 @@ def _check_erc(project_dir: Path, findings: List[Finding], stats: dict) -> None:
         # ERC report genuinely absent → ERC sub-check does not apply here.
         return
     stats["erc_checked"] = True
-    _record_consumed(stats, [erc])
     text = erc.read_text(errors="replace")
     if not text.strip():
         findings.append(Finding("ERROR", "ERC_EMPTY", f"{erc} is empty"))
@@ -384,51 +409,13 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         "density_checked": False, "per_layer_density": False,
         "layers_ok": 0, "layers_bad": 0, "row_utilization_pct": None,
         "erc_checked": False, "erc_floating_nets": None, "erc_clean": False,
-        "_consumed": [],
+        # True / False / "NOT_DETERMINED" — a third value, published rather
+        # than resolved into a colour. See _check_density.
+        "design_binding": "NOT_DETERMINED",
     }
     _check_density(project_dir, findings, stats)
     _check_erc(project_dir, findings, stats)
-    _bind_consumed_evidence(project_dir, findings, stats)
     return findings, stats
-
-
-# ---------------------------------------------------------------------------
-# WHOSE REPORT IS THIS? (#1119)
-#
-# ENFORCEMENT: AUDIT_ONLY, and that is a MEASUREMENT, not a preference.
-#
-# A MISMATCH is an ERROR finding, so `summary.pass` goes False and `main`
-# returns 1. But `flow_gate_enforcement_audit` classifies this gate AUDIT_ONLY
-# on this tree — the Step-31 clause records the failure and the run continues.
-# A forged green here becomes an auditable FAIL; it does not halt anything.
-# Promoting it is a separate flow change with its own blast radius, and saying
-# so is the point: an unstated default of "advisory" is how 62 of 72 gates
-# ended up unable to stop anything. The two gates in this campaign that ARE
-# ENFORCED are `sta_report_check` and `em_report_check`; see the same section
-# in `eda_report_audit.py` for the full measured split.
-#
-# It fires ONLY on a recorded-and-disagreeing artefact; an artefact no register
-# names is UNRECORDED and changes no verdict. See `_run_evidence_binding`.
-# ---------------------------------------------------------------------------
-def _bind_consumed_evidence(project_dir: Path, findings: List[Finding],
-                            stats: dict) -> None:
-    """Attach the run-binding verdict to `stats`/`findings`. Never raises."""
-    try:
-        assessment = _reb.assess(project_dir, stats.get("_consumed") or ())
-    except Exception as exc:  # pragma: no cover - defensive
-        # A binding check that crashed must not read as one that passed.
-        stats["evidence_binding"] = {
-            "error": f"{type(exc).__name__}: {exc}",
-            "disclosure": "the run-evidence binding could not be evaluated, so "
-                          "nothing was verified about which run produced the "
-                          "artefacts behind this verdict",
-        }
-        return
-    summary = assessment.summary()
-    summary["disclosure"] = assessment.disclosure()
-    stats["evidence_binding"] = summary
-    for b in assessment.mismatched:
-        findings.append(Finding("ERROR", _reb.RULE, b.message(), b.rel))
 
 
 def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict:
@@ -438,6 +425,7 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
         "project_dir": project_dir,
         "summary": {
             "density_checked": stats["density_checked"],
+            "design_binding": stats["design_binding"],
             "per_layer_density": stats["per_layer_density"],
             "layers_ok": stats["layers_ok"],
             "layers_bad": stats["layers_bad"],
@@ -445,7 +433,6 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
             "erc_checked": stats["erc_checked"],
             "erc_floating_nets": stats["erc_floating_nets"],
             "erc_clean": stats["erc_clean"],
-            "evidence_binding": stats.get("evidence_binding"),
             "findings_count": len(findings),
             "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
             "pass": all(f.severity != "ERROR" for f in findings),

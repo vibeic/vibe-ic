@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vibeic.ppa.contract.v1",
+  "title": "vibeic.ppa.contract.v1",
+  "description": "The answer to 'were these two runs even solving the same problem?'. Five identities over declared inputs, the provenance that backs them, the policy that says what may move, and the document's own digest. A PPA comparison is legitimate exactly when problem, analysis and toolchain match and implementation differs.",
+  "type": "object",
+  "required": ["schema", "identities", "run_manifest", "evidence_manifest", "policy", "declared_facts", "resolutions", "candidate", "metrics", "contract_digest"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "vibeic.ppa.contract.v1"},
+    "run_label": {"type": "string"},
+    "identities": {
+      "type": "object",
+      "required": ["problem", "implementation", "analysis", "toolchain", "agent_execution"],
+      "additionalProperties": false,
+      "properties": {
+        "problem": {"$ref": "#/$defs/identity"},
+        "implementation": {"$ref": "#/$defs/identity"},
+        "analysis": {"$ref": "#/$defs/identity"},
+        "toolchain": {"$ref": "#/$defs/identity"},
+        "agent_execution": {"$ref": "#/$defs/identity"}
+      }
+    },
+    "run_manifest": {"type": "object"},
+    "evidence_manifest": {"type": "object"},
+    "policy": {"$ref": "#/$defs/policy"},
+    "declared_facts": {"type": "array", "items": {"$ref": "#/$defs/declared_fact"}},
+    "resolutions": {
+      "type": "array",
+      "description": "Keys where two sources disagreed AND the declaration opted the key into authority resolution. Every entry names the winner and everything it overrode: a resolution that is applied without being written down destroys the one fact a reader needs.",
+      "items": {"$ref": "#/$defs/resolution"}
+    },
+    "candidate": {"$ref": "#/$defs/candidate"},
+    "metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}},
+    "contract_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "identity": {
+      "type": "object",
+      "description": "An identity with an unreadable member is NOT_MEASURED, never a digest over the rest. A digest over 'everything except the file I could not open' is a confident 64-hex value that silently means something narrower than it claims, and two runs that each failed to read a DIFFERENT file would agree.",
+      "required": ["schema", "kind", "status", "members"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"const": "vibeic.ppa.identity.v1"},
+        "kind": {"enum": ["problem", "implementation", "analysis", "toolchain", "agent_execution"]},
+        "status": {"enum": ["MEASURED", "NOT_MEASURED"]},
+        "digest": {"$ref": "#/$defs/digest"},
+        "reason": {"type": "string", "minLength": 1},
+        "unreadable": {"type": "array", "items": {"type": "object"}},
+        "conflicts": {"type": "array", "items": {"type": "object"}},
+        "members": {
+          "type": "object",
+          "required": ["artefacts", "facts"],
+          "additionalProperties": false,
+          "properties": {
+            "artefacts": {
+              "type": "array",
+              "description": "Content-addressed: role and sha256, never a path. Two runs in differently-named directories over byte-identical inputs ARE the same problem.",
+              "items": {
+                "type": "object",
+                "required": ["role", "sha256"],
+                "additionalProperties": false,
+                "properties": {
+                  "role": {"type": "string"},
+                  "sha256": {"$ref": "#/$defs/digest"}
+                }
+              }
+            },
+            "facts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["key", "value"],
+                "additionalProperties": false,
+                "properties": {"key": {"type": "string"}, "value": {}}
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "MEASURED"}}, "required": ["status"]},
+          "then": {"required": ["digest"], "not": {"required": ["reason"]}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "NOT_MEASURED"}}, "required": ["status"]},
+          "then": {
+            "required": ["reason"],
+            "not": {"required": ["digest"]},
+            "description": "No digest at all rather than a null one. A null the reader has to remember to check is the sentinel this schema refuses everywhere else."
+          }
+        }
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "description": "An ABSENT key and an EMPTY list are different facts. An empty mutation_allow_list permits nothing and any mutation against it is a finding; an absent one permits nothing to be CONCLUDED and the verdict is UNDETERMINED.",
+      "additionalProperties": true,
+      "properties": {
+        "missing_power_basis": {
+          "enum": ["REFUSE", "UNDETERMINED"],
+          "description": "What to do when a power metric carries a value and declares no activity basis. There is deliberately no third value meaning 'carry on'."
+        },
+        "missing_image_version": {
+          "enum": ["NOTE", "UNDETERMINED"],
+          "description": "What an unread org.opencontainers.image.version label means. NOTE by default: the digest already pins the bytes a verdict rests on, and making the label UNDETERMINED would produce a gate that can never be green on a host without a registry."
+        },
+        "mutation_allow_list": {"type": "array", "items": {"type": "string"}},
+        "mutation_forbidden": {"type": "array", "items": {"type": "string"}},
+        "resolvable_fact_keys": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Keys opted IN to authority resolution, named individually. The default for a disagreement is REFUSE; a prefix wildcard here would be a hole that widens every time someone adds a key underneath it."
+        },
+        "authority_order": {"type": "array", "items": {"type": "string"}},
+        "defaults_used": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Any entry is a refusal. A default is a number nobody measured, and in a comparison it is indistinguishable from one somebody did."
+        }
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "required": ["key", "authority_order", "winner", "overridden"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "authority_order": {"type": "array", "items": {"type": "string"}},
+        "winner": {"$ref": "#/$defs/claim"},
+        "overridden": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/claim"}}
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": ["source", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {"type": "string"},
+        "value": {},
+        "source_path": {"type": ["string", "null"]}
+      }
+    },
+    "declared_fact": {
+      "type": "object",
+      "required": ["identity", "key", "value", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "identity": {"enum": ["problem", "implementation", "analysis", "toolchain", "agent_execution"]},
+        "key": {"type": "string", "minLength": 1},
+        "value": {},
+        "source": {"type": "string"},
+        "source_path": {"type": "string"},
+        "origin": {"type": "string"},
+        "assumed": {"type": "boolean"}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "baseline_contract_digest": {"$ref": "#/$defs/digest"},
+        "mutations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target"],
+            "additionalProperties": true,
+            "properties": {
+              "target": {"type": "string", "minLength": 1},
+              "from": {},
+              "to": {}
+            }
+          }
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "description": "vibeic.ppa.metric.v1. A number never travels alone, and a row that was not measured carries a reason where its value would be.",
+      "required": ["metric", "status"],
+      "additionalProperties": true,
+      "properties": {
+        "schema": {"const": "vibeic.ppa.metric.v1"},
+        "metric": {"type": "string", "minLength": 1},
+        "status": {"enum": ["MEASURED", "NOT_MEASURED", "NOT_APPLICABLE", "INVALID", "ESTIMATED", "DERIVED"]},
+        "value": {},
+        "unit": {"type": "string"},
+        "reason": {"type": "string"},
+        "formula": {"type": "string"},
+        "scope": {"type": "object"},
+        "source": {"type": "object"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"enum": ["NOT_MEASURED", "NOT_APPLICABLE", "INVALID"]}}, "required": ["status"]},
+          "then": {
+            "not": {"required": ["value"]},
+            "description": "0, -1 and \"\" never mean 'not measured'. A sentinel is worse than a hole because a hole is visible."
+          }
+        },
+        {
+          "if": {"properties": {"status": {"const": "NOT_MEASURED"}}, "required": ["status"]},
+          "then": {"required": ["reason"]}
+        },
+        {
+          "if": {"properties": {"status": {"const": "DERIVED"}}, "required": ["status"]},
+          "then": {"required": ["value", "formula"]}
+        },
+        {
+          "if": {"properties": {"status": {"const": "MEASURED"}}, "required": ["status"]},
+          "then": {"required": ["value"]}
+        }
+      ]
+    }
+  }
+}

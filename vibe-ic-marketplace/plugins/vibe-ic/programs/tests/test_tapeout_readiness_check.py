@@ -116,23 +116,53 @@ def test_the_captured_refusal_is_actually_tracked():
     assert len(on_disk) == len([p for p in out.stdout.split("\0") if p])
 
 
-def test_submission_frame_steps_have_no_counterpart_in_this_tree(tmp_path):
+def test_the_remaining_gap_is_exactly_the_operator_specific_steps(tmp_path):
     """The measured gap, recomputed against the real programs/ directory.
 
-    Not an assertion that we have no frame check — a RESOLUTION. If somebody
-    lands `die_slot_dimension_check.py` or `frame_marker_check.py` this test
-    starts failing and the registry entry, not the claim, is what gets edited."""
+    Not an assertion — a RESOLUTION, and it has already moved once. When this
+    test was written it pinned `KLayout.CheckSize` and `KLayout.GenerateID` as
+    UNCOVERED and said: "if somebody lands `die_slot_dimension_check.py` this
+    test starts failing and the registry entry, not the claim, is what gets
+    edited." `general_precheck` landed, the registry entry was edited, and the
+    claim this file pins is now the NARROWER and more useful one.
+
+    WHAT THE GAP IS NOW, and why it is the right shape to be left at. The
+    operator's precheck is a LibreLane SequentialFlow whose custom steps are
+    mostly general; exactly two of them are the OPERATOR's own:
+
+        KLayout.CheckPadMask   their pad mask, published per purchasable slot
+        KLayout.GenerateID     their die-id fixtures and their ID encoding
+
+    Those two CANNOT have an in-tree counterpart, because a counterpart would
+    be a mask and an encoding we invented pretending to be theirs — and this
+    gate exists precisely because an outside party's rule is not ours to
+    write. Every other ladder step now resolves. So the assertion below is not
+    "the gap shrank"; it is "the gap is now exactly the part that must stay a
+    gap", which is a claim that can fail in both directions:
+
+      * if a general step regresses to UNCOVERED, the first block fails;
+      * if somebody lands a `pad_ring_mask_check` or a `die_id_marker_check`
+        that claims to check somebody else's mask or encoding, the second
+        block fails and that program gets read very carefully.
+    """
     proj = _project(tmp_path)
     rep = trc.evaluate(proj, rundir=_REAL_REFUSAL,
                        image_resolver=_resolves, runner=_no_op_runner(rc=1))
     uncovered = set(rep.uncovered_in_tree)
+    # The steps THIS RUN evaluated, not the whole registry: `CheckPadMask` is
+    # cob-only and is in the ladder only when --cob was set, so intersecting
+    # against the registry would demand a step this run never had.
+    evaluated = {s.step_id for s in rep.steps}
 
-    # The step that refused is the one with nothing of ours behind it.
-    assert "KLayout.CheckSize" in uncovered
-    assert "KLayout.GenerateID" in uncovered
+    operator_specific = {"KLayout.CheckPadMask", "KLayout.GenerateID"}
+    assert uncovered == (operator_specific & evaluated), (
+        "the uncovered set must be exactly the operator-specific steps; "
+        f"got {sorted(uncovered)}")
 
-    # And the gap is specific, not a blanket "we check nothing": the physical
-    # decks DO have in-tree counterparts, so the finding is about the frame.
+    # The two that moved, named so the change is legible rather than implied.
+    assert "KLayout.CheckSize" not in uncovered
+    assert "Checker.KLayoutZeroAreaPolygons" not in uncovered
+    # And the physical decks still resolve, as they always did.
     assert "Checker.MagicDRC" not in uncovered
     assert "Checker.KLayoutAntenna" not in uncovered
     assert "Checker.KLayoutDensity" not in uncovered
@@ -489,7 +519,6 @@ def test_an_unrecognised_verdict_token_is_not_promoted_to_a_pass(tmp_path):
 #     matters; it has to be the ONE non-zero this classifier reads as a failure,
 #     and that is asserted here THROUGH the classifier rather than restated.
 # --------------------------------------------------------------------------- #
-import shlex
 
 import yaml
 
@@ -568,20 +597,82 @@ def test_the_flow_declares_this_gate_with_the_path_this_program_writes():
         f"below drive a gate no step invokes")
     step = steps[_STEP_ID]
 
+    # THE CHAIN IS TWO HOPS SINCE 2026-08-20, AND THIS FOLLOWS IT RATHER THAN
+    # ASSUMING IT. When `37.5self` was retired, this program stopped being the
+    # step's own gate: 37.5ic now declares `tapeout_precheck`, the MERGE of our
+    # ladder and this one, and `tapeout_precheck` runs this program as the
+    # operator ARM. The guarantee being held is unchanged and is now stronger,
+    # because it also pins that the merge really delegates instead of
+    # reimplementing the interface it is supposed to expose:
+    #
+    #     the flow declares  ->  tapeout_precheck        (the BLOCKING slot)
+    #     which invokes      ->  tapeout_readiness_check (this program)
+    #     which writes       ->  reports/phase3/shuttle_precheck.json
+    #     which the step declares as a required output
+    #
+    # The gate is walked STRUCTURALLY, with the executor's own walker. Asserting
+    # `"program_exit_zero" in gate` was a one-level lookup, and it stopped
+    # describing the flow the moment the step took an `all_of` container to hold
+    # both arms in one clause — which is the shape the step's own comment argues
+    # for at length.
     # The BLOCKING slot, not the advisory one. A shuttle refusal recorded and
     # continued past is not an external bar, it is a note.
     gate = step["gate"]
-    assert "program_exit_zero" in gate, sorted(gate)
-    argv = shlex.split(gate["program_exit_zero"])
-    assert argv[0] == "tapeout_readiness_check"
-    assert argv[1:] == _DECLARED_ARGV
+    declared = fcc._declared_gate_commands(gate)
+    assert "tapeout_precheck" in declared, (
+        "step 37.5ic must declare the merged two-arm gate; if it declares this "
+        "program directly again, the arms have been split back into routes and "
+        "a design routed to one is no longer shown the other", declared)
 
-    # And the artefact the step will be judged on is the one that command names.
-    assert step["required_outputs"] == [_DECLARED_OUT]
+    # The MERGE really runs THIS program, at the path the flow will look for.
+    # Read out of `tapeout_precheck`'s source rather than restated, so a merge
+    # that quietly stopped delegating cannot keep this test green.
+    merge_src = (Path(tp_mod.__file__).read_text() if
+                 (tp_mod := importlib.import_module("tapeout_precheck")) else "")
+    assert '"tapeout_readiness_check.py"' in merge_src, (
+        "the merged gate no longer invokes the operator's own checker; the one "
+        "interface in this tree where somebody else's refusal is the verdict "
+        "would then have no runner")
+    assert tp_mod.THEIR_ARM_ARTEFACT == _DECLARED_OUT, (
+        "the merge writes the operator arm somewhere other than the path this "
+        "program writes and the flow declares",
+        tp_mod.THEIR_ARM_ARTEFACT, _DECLARED_OUT)
 
-    # The command resolves to a program that exists — the same resolution the
-    # flow engine performs, so "program not found" cannot hide behind a name.
-    assert fcc._resolve_program_cmd(gate["program_exit_zero"], cwd=None)
+    # And the artefact this program writes is one the step will be judged on.
+    assert _DECLARED_OUT in step["required_outputs"], (
+        "the external verdict's artefact is not a declared output of the step, "
+        "so an absent one would never be noticed", step["required_outputs"])
+
+    # Every command the executor would dispatch resolves to a program that
+    # exists — the same resolution the flow engine performs, so "program not
+    # found" cannot hide behind a name.
+    for command in _gate_command_strings(gate):
+        assert fcc._resolve_program_cmd(command, cwd=None), command
+
+
+def _gate_command_strings(gate):
+    """Every gate command string, walked the way the executor walks it."""
+    out = []
+
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in ("all_of", "any_of"):
+            sub = node.get(key)
+            if isinstance(sub, (list, dict)):
+                walk(sub)
+        for key in fcc._PROGRAM_GATE_KEYS:
+            spec = node.get(key)
+            if isinstance(spec, dict):
+                spec = spec.get("command")
+            if isinstance(spec, str):
+                out.append(spec)
+    walk(gate)
+    return out
 
 
 # ───────────────────────────── every outcome writes exactly the declared file

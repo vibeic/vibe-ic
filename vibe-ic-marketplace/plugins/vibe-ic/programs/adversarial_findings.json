@@ -19,40 +19,38 @@
     "silently 'close' every finding and the ratchet would measure the",
     "publication schedule instead of the gates.",
     "",
-    "THE DONOR IS PART OF THE MEASUREMENT. `donor` cannot substitute a",
-    "register (it carries zero steps/**/STEP_RECORD.json), `launderer`",
-    "can. A campaign that ran only the first would report every A8 finding",
-    "below as DEFENDED, so both are named here and the attack that needs",
-    "the second has its own id rather than being averaged into A3."
+    "`unproven` is that third case WRITTEN DOWN. `forging` holds SUCCEEDED",
+    "only, so an attack that stops being attemptable used to leave this file",
+    "by not appearing -- spelled identically to all of its findings being",
+    "fixed. Each entry names the attack, its subject and the measured reason",
+    "it could not be attempted. A2_STALE_REPLAY is here because its donor was",
+    "never an earlier run of the same design: it was a second FOREIGN design,",
+    "so its verdicts duplicated A3_CROSS_DESIGN and the run-identity property",
+    "it exists to measure has never been measured on this corpus.",
+    "",
+    "An entry leaving `unproven` is adjudicated too: ratchet_diff reports it",
+    "as `newly_attemptable`, because an attack that comes back into range and",
+    "reports nothing is the same silence in the other direction."
   ],
-  "measured_on": "e60b0c94e",
+  "measured_on": "e0e86134",
   "cell": "spm/v1.9.96_gf180mcuD",
   "donor": "sha256/clean_run_v1427_20260715",
   "older_run": "sha256/clean_run_v1422_20260715",
-  "launderer": "spm/v1.10.18_sky130A",
-  "attempted": 28,
   "forging": [
     {
-      "attack": "A8_LAUNDERED_REGISTER",
+      "attack": "A3_CROSS_DESIGN",
       "target": "v1.9.96_gf180mcuD:antenna_report_check"
     },
     {
-      "attack": "A8_LAUNDERED_REGISTER",
-      "target": "v1.9.96_gf180mcuD:em_report_check"
-    },
-    {
-      "attack": "A8_LAUNDERED_REGISTER",
+      "attack": "A3_CROSS_DESIGN",
       "target": "v1.9.96_gf180mcuD:erc_density_check"
-    },
-    {
-      "attack": "A8_LAUNDERED_REGISTER",
-      "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
-    },
-    {
-      "attack": "A8_LAUNDERED_REGISTER",
-      "target": "v1.9.96_gf180mcuD:sta_report_check"
     }
   ],
-  "closed_since_previous_generation": "eed29f5f2",
-  "closed": []
+  "unproven": [
+    {
+      "attack": "A2_STALE_REPLAY",
+      "target": "v1.9.96_gf180mcuD",
+      "reason": "the run offered as an earlier run of this design declares 'sha256' while the cell declares 'chip_top'; replaying it would measure A3_CROSS_DESIGN a second time, not staleness"
+    }
+  ]
 }

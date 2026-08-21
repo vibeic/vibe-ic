@@ -1,31 +1,4 @@
-"""Generate programs/adversarial_findings.json from a LIVE campaign. argv: <plugin>
-
-TWO WAYS THIS GENERATOR COULD ERASE THE RATCHET IT MAINTAINS, BOTH MEASURED
-==========================================================================
-1. IT LOOKED WHERE THE CORPUS NO LONGER IS. `PLUGIN.parents[2]/"benchmark-data"`
-   stopped existing at v1.10.56, when the published trees moved to their own
-   repositories, and this script never read `$VIBE_IC_BENCHMARK_DATA`. On a
-   bare checkout it crashed, which is safe. It is now resolved through
-   `_corpus_location`, the repo's one answer to that question.
-
-2. AN EMPTY CORPUS PRINTED SUCCESS. Pointed at a tree whose cells exist but are
-   EMPTY, every attack returns UNAVAILABLE, `forging` computes as the empty set,
-   and the old script wrote the ledger and exited 0:
-
-       wrote .../adversarial_findings.json with 0 forging pair(s)
-
-   That silently erases every recorded finding, and the ratchet then measures
-   the publication schedule instead of the gates — the precise failure the
-   ledger's own `_comment` warns about, available by accident to anyone who ran
-   the generator on a thin clone. It now REFUSES: a recorded pair that comes
-   back UNAVAILABLE is unproven, not closed, and nothing is written.
-
-   The refusal is loud (rc 2 and a named reason), because a generator that
-   declines quietly reads downstream as a generator that found nothing.
-
-`measured_on` was the literal string "a38902d1" regardless of what was measured.
-It is now derived from the checkout, or the words NOT DETERMINED.
-"""
+"""Generate programs/adversarial_findings.json from a LIVE campaign. argv: <plugin>"""
 import json
 import subprocess
 import sys
@@ -33,77 +6,66 @@ from pathlib import Path
 
 PLUGIN = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(PLUGIN / "programs"))
+sys.path.insert(0, str(PLUGIN / "programs" / "tests"))
 import adversarial_agent as AA  # noqa: E402
-import _corpus_location as _cl  # noqa: E402
+from _published_corpus import CORPUS_ENV, corpus_root  # noqa: E402
 
+# `PLUGIN.parents[2] / "benchmark-data" / "ic"` until the corpus left this
+# repository at `c5d7f2d00`. After that this generator could not reach a single
+# cell on any host, so the one supported way to re-measure the ratchet's own
+# finding set was broken for as long as the ratchet was — a finding could not be
+# closed even by a fix that closed it, because closing requires re-generating
+# this file and the generator had nothing to read.
+_ROOT = corpus_root()
+if _ROOT is None:
+    sys.exit(f"[REFUSED] gen_adversarial_findings: no published corpus. Point "
+             f"${CORPUS_ENV} at a clone of vibeic/benchmark-data. Regenerating "
+             f"this file from a corpus that is not there would publish an EMPTY "
+             f"finding set, which reads as 'every finding closed'.")
+IC = _ROOT / "ic"
 CELL = "spm/v1.9.96_gf180mcuD"
 DONOR = "sha256/clean_run_v1427_20260715"
 OLDER = "sha256/clean_run_v1422_20260715"
-#: A donor that CARRIES a register at a path the cell also has, for A8. The
-#: `clean_run_*` donor above carries zero `steps/**/STEP_RECORD.json`, so a
-#: campaign run with only that donor cannot launder the run-evidence binding
-#: and its "all DEFENDED" is a statement about the donor. Named here so the
-#: ledger records which cell supplied the laundering ability.
-LAUNDERER = "spm/v1.10.18_sky130A"
 
-_GATE = "gen_adversarial_findings"
-_named = PLUGIN.parents[2] / "benchmark-data" / "ic"
-IC, _origin = _cl.resolve(_named, subdir="ic", gate=_GATE, announce=True)
-if not IC.is_dir():
-    # `may_be_absent=False`: this generator MAINTAINS the ratchet. "I could not
-    # find the corpus" must never come out as "there are no findings".
-    raise SystemExit(_cl.refuse(_GATE, _named, IC, _origin,
-                                may_be_absent=False,
-                                scanned="published cell(s)"))
-
-
-def _measured_on() -> str:
-    try:
-        r = subprocess.run(["git", "-C", str(PLUGIN), "rev-parse", "--short", "HEAD"],
-                           capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return "NOT DETERMINED"
-    out = r.stdout.strip()
-    return out if r.returncode == 0 and out else "NOT DETERMINED"
+# MEASURED_ON WAS A TYPED LITERAL and stayed "a38902d1" across every
+# regeneration after it. A finding set whose subject commit is hand-carried
+# says whatever it said last time somebody remembered, and this file exists
+# precisely because a finding must not be negotiable. Derived now.
+try:
+    MEASURED_ON = subprocess.run(
+        ["git", "-C", str(PLUGIN), "rev-parse", "--short=8", "HEAD"],
+        capture_output=True, text=True, timeout=30, check=True).stdout.strip()
+except (OSError, subprocess.SubprocessError):
+    MEASURED_ON = "NOT DETERMINED"
 
 rows = []
-for attack, fn, arg in (
-    ("A3_CROSS_DESIGN", AA.attack_cross_design, IC / DONOR),
-    ("A8_LAUNDERED_REGISTER", AA.attack_laundered_register, IC / LAUNDERER),
-    ("A2_STALE_REPLAY", AA.attack_stale_replay, IC / OLDER),
-    ("A1_TAMPER_DESTRUCTIVE", AA.attack_tamper_destructive, None),
+for attack, fn, kwargs in (
+    ("A3_CROSS_DESIGN", AA.attack_cross_design, {"donor": IC / DONOR}),
+    ("A2_STALE_REPLAY", AA.attack_stale_replay, {"older": IC / OLDER}),
+    ("A1_TAMPER_DESTRUCTIVE", AA.attack_tamper_destructive, {}),
 ):
-    got = fn(PLUGIN, IC / CELL) if arg is None else fn(PLUGIN, IC / CELL, arg)
+    if attack == "A3_CROSS_DESIGN":
+        got = fn(PLUGIN, IC / CELL, kwargs["donor"])
+    elif attack == "A2_STALE_REPLAY":
+        got = fn(PLUGIN, IC / CELL, kwargs["older"])
+    else:
+        got = fn(PLUGIN, IC / CELL)
     for a in got:
-        rows.append({"attack": attack, "target": a.target, "verdict": a.verdict})
+        rows.append({"attack": attack, "target": a.target,
+                     "verdict": a.verdict, "detail": a.detail})
 
 forging = sorted({(r["attack"], r["target"]) for r in rows
                   if r["verdict"] == AA.SUCCEEDED})
 
-# ---------------------------------------------------------------------------
-# REFUSE RATHER THAN ERASE. See the module docstring, case 2.
-# ---------------------------------------------------------------------------
-out = PLUGIN / "programs" / "adversarial_findings.json"
-previous = AA.load_findings_ledger(out)
-recorded = {(f["attack"], f["target"]) for f in previous.get("forging", ())}
-live = {(r["attack"], r["target"]): r["verdict"] for r in rows}
-unproven = sorted(k for k in recorded
-                  if live.get(k, AA.UNAVAILABLE) == AA.UNAVAILABLE)
-if unproven:
-    print("[REFUSED] gen_adversarial_findings: "
-          f"{len(unproven)} recorded finding(s) came back UNAVAILABLE, so this "
-          f"campaign could not re-test them. They are UNPROVEN, not closed, and "
-          f"writing the ledger now would erase them:")
-    for a, tgt in unproven:
-        print(f"    {a:24} {tgt}")
-    print("  Point $VIBE_IC_BENCHMARK_DATA at a corpus that carries the cells "
-          "this ledger names, or adjudicate the removal deliberately.")
-    raise SystemExit(2)
-if not rows:
-    print("[REFUSED] gen_adversarial_findings: the campaign attempted nothing, "
-          "so it says nothing about the gates. That is not an empty finding list.")
-    raise SystemExit(2)
-closed = sorted(recorded - set(forging))
+# UNPROVEN IS RECORDED, NOT DROPPED. `forging` holds only SUCCEEDED, so an
+# attack that stops being attemptable leaves this file by simply not appearing
+# — which reads identically to every one of its findings being fixed. That is
+# the exact failure the ratchet's third case exists to prevent, and the file it
+# guards could not express it. A2_STALE_REPLAY made it concrete: its donor was
+# never an earlier run of the same design, so once the attack started checking
+# its own premise its pairs went UNAVAILABLE, and nothing was fixed.
+unproven = sorted({(r["attack"], r["target"], r["detail"]) for r in rows
+                   if r["verdict"] == AA.UNAVAILABLE})
 doc = {
     "schema": "vibe-ic/adversarial-findings/v1",
     "_comment": [
@@ -125,37 +87,30 @@ doc = {
         "silently 'close' every finding and the ratchet would measure the",
         "publication schedule instead of the gates.",
         "",
-        "THE DONOR IS PART OF THE MEASUREMENT. `donor` cannot substitute a",
-        "register (it carries zero steps/**/STEP_RECORD.json), `launderer`",
-        "can. A campaign that ran only the first would report every A8 finding",
-        "below as DEFENDED, so both are named here and the attack that needs",
-        "the second has its own id rather than being averaged into A3.",
+        "`unproven` is that third case WRITTEN DOWN. `forging` holds SUCCEEDED",
+        "only, so an attack that stops being attemptable used to leave this file",
+        "by not appearing -- spelled identically to all of its findings being",
+        "fixed. Each entry names the attack, its subject and the measured reason",
+        "it could not be attempted. A2_STALE_REPLAY is here because its donor was",
+        "never an earlier run of the same design: it was a second FOREIGN design,",
+        "so its verdicts duplicated A3_CROSS_DESIGN and the run-identity property",
+        "it exists to measure has never been measured on this corpus.",
+        "",
+        "An entry leaving `unproven` is adjudicated too: ratchet_diff reports it",
+        "as `newly_attemptable`, because an attack that comes back into range and",
+        "reports nothing is the same silence in the other direction.",
     ],
-    "measured_on": _measured_on(),
+    "measured_on": MEASURED_ON,
     "cell": CELL,
     "donor": DONOR,
     "older_run": OLDER,
-    "launderer": LAUNDERER,
-    "attempted": len(rows),
     "forging": [{"attack": a, "target": t} for a, t in forging],
-    # THE CLOSURES, IN THE ARTEFACT. A finding count that fell is not readable
-    # as progress unless the artefact says WHAT fell and against WHICH base, so
-    # the pairs that stopped forging are carried here with the commit the
-    # previous ledger was measured on. `attempted` sits beside them for the same
-    # reason: findings that vanish because fewer attacks RAN are not closures,
-    # and a reader can now see both numbers at once.
-    #
-    # This is a DELTA against the previous generation, not a history — running
-    # the generator twice empties it, and the durable record of what closed is
-    # the ledger's own diff in git. The field is named for what it is.
-    "closed_since_previous_generation": previous.get("measured_on", "NOT DETERMINED"),
-    "closed": [{"attack": a, "target": t} for a, t in closed],
+    "unproven": [{"attack": a, "target": t, "reason": d}
+                 for a, t, d in unproven],
 }
+out = PLUGIN / "programs" / "adversarial_findings.json"
 out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-print(f"wrote {out} with {len(forging)} forging pair(s) "
-      f"from {len(rows)} attempted attack(s); {len(closed)} recorded "
-      f"finding(s) CLOSED")
-for a, tgt in forging:
-    print(f"  FORGING  {a:24} {tgt}")
-for a, tgt in closed:
-    print(f"  CLOSED   {a:24} {tgt}")
+print(f"wrote {out} with {len(forging)} forging pair(s) and "
+      f"{len(unproven)} unproven")
+for a, t in forging:
+    print(f"  {a:24} {t}")
