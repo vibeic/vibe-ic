@@ -1509,7 +1509,25 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
         expired = [str(g.get("label")) for g in gates
                    if g.get("exemption_expired")]
 
-    ran = declared - len(deferred)
+    # THE DENOMINATOR SUBTRACTS EVERY STATE THAT DID NOT RUN, not just LISTED
+    # (measured 2026-08-22). `_gate_dispatch.sh` records five non-process
+    # states — LISTED, NOT_CHECKED, OTHER_SHARD, OUT_OF_SCOPE, QUEUED — and
+    # this line subtracted one of them. On a SHARDED record, where a
+    # non-owning shard carries OTHER_SHARD for every gate it does not run, the
+    # summary read
+    #
+    #     [87/87 gate(s) ran in …]
+    #
+    # over a record in which EIGHT gates ran and 79 belonged to other shards.
+    # `gate_discloses_denominator_check` demands of every gate that a PASS say
+    # how much it looked at; this is that requirement applied to the line this
+    # program prints about the whole set.
+    #
+    # NOT_CHECKED is deliberately still counted as having run: the gate
+    # executed and refused, which the summary reports separately and which must
+    # not vanish from the denominator.
+    _not_run = {"LISTED", "OTHER_SHARD", "OUT_OF_SCOPE", "QUEUED"}
+    ran = declared - len([g for g in gates if g.get("state") in _not_run])
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
     if secs is not None:
