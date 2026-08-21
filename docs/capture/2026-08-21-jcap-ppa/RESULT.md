@@ -1655,8 +1655,8 @@ Each mutation was reverted immediately and the working tree confirmed
 byte-identical afterwards (`git diff --exit-code`, zero dirty entries, three
 times).
 
-**Extended to six, and the sixth run disproved a claim.** The same procedure was
-applied to five more of the sixteen:
+**Extended to ten, and one of the runs disproved a claim.** The same procedure
+was applied to seven more of the sixteen:
 
     F-10  de-duplicate by CONTENT, not by path
           -> 3 failed   test_one_measurement_is_not_counted_twice
@@ -1669,8 +1669,29 @@ applied to five more of the sixteen:
     F-2   a backend states its OWN reason for not being drivable
           -> 0 failed, 0 errors   <-- THE GUARD CANNOT FAIL
 
-So **six of the sixteen ALREADY-PROGRAM claims are now proven by execution and
-one is disproven by it.** F-2's guard requires each backend to be drivable or to
+Two more were driven the same way:
+
+    F-14  absolute host paths in an emitted deck are detected
+          -> 5 failed   test_the_real_defect_goes_red
+    (lane) a bad invocation is 3, not the could-not-check code
+          -> 20 failed  test_unknown_flag_is_bad_invocation_not_undetermined
+
+So **ten of the sixteen ALREADY-PROGRAM claims have now been driven: nine fire
+and one cannot.** The six not driven are named rather than left to look covered:
+F-1 and the bundled-schema entry were not attempted; F-13 is enforced by a
+document and a naming convention, which a mutation cannot address; and the
+vacuous-population census plus the two denominator gates resisted an honest
+probe — the probe I built pointed each gate at a synthetic directory, and
+neither gate's population is the directory it is handed. The disclosure gate went
+on probing all 90 declared CI gates, and the zero-denominator gate's population is
+gates that *state* a zero population, which my stub never did. Both returned PASS
+for reasons unrelated to my input, so **neither is evidence and neither is
+counted**. Run against the real tree the second one reports 569 gates probed, 25
+stating a zero population, 24 refusing and 1 exempted; the single `[FAIL]` line my
+synthetic run produced was a stale-exemption notice caused by the truncated
+population, not a defect.
+
+Earlier in this list: F-2's guard requires each backend to be drivable or to
 raise with a reason of at least forty characters — and the production seam
 supplies a generic fallback reason, comfortably longer than forty characters,
 whenever a module declares none. The predicate is therefore true by construction
