@@ -26,8 +26,12 @@ def survivability(host, wt):
         return ""
     kind, ref = hit
     if kind == "ON_REMOTE":
-        return (" [ON_REMOTE — safe to delete: its head is on origin (%s), so the commit survives "
-                "the directory, the clone and the machine]" % ref)
+        return (" [ON_REMOTE — safe to delete: its head is on origin, reachable from `%s`, so the "
+                "commit survives the directory, the clone and the machine. Authority: that ref was "
+                "confirmed present by `git ls-remote --heads origin`, not by a tracking ref — a "
+                "tracking ref is a memory of origin and 537 of this clone's 678 were branches "
+                "origin had deleted. `origin/HEAD` is never named: it is a local symbolic ref and "
+                "`ls-remote --heads` does not list it.]" % ref)
     if kind == "ON_LOCAL_REF_ONLY":
         return (" [ON_LOCAL_REF_ONLY — its head is on a local branch but on NO remote, so it "
                 "survives only as long as THIS CLONE does, and whole clones have been deleted "
@@ -35,6 +39,9 @@ def survivability(host, wt):
     if kind == "UNREFERENCED":
         return (" [UNREFERENCED — **DELETING THIS DIRECTORY DESTROYS THE COMMIT**: its head is on "
                 "no ref at all, so the worktree's own HEAD is the only pointer to it.]")
+    if kind == "NOT_ON_ORIGIN":
+        return (" [survivability UNDETERMINED: this checkout has no resolvable HEAD, so there is "
+                "no commit to preserve or lose — the files on disk are all there is. (%s)]" % ref)
     if kind == "COMMIT_ABSENT":
         return (" [survivability UNDETERMINED: this checkout has no resolvable HEAD, so there is "
                 "no commit to preserve or lose — the files on disk are all there is.]")

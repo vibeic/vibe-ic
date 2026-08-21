@@ -146,3 +146,43 @@ rows of `verdicts_shard_b.tsv` and `verdicts_shard_c_80_recovered.tsv` against c
 The re-fetch used `bin_jharv2/fetch_guarded.sh`, which refuses to fetch a clone whose origin is a
 local path (it moved a correct ref backwards once) and repairs those from a clone with a real
 remote instead. On `.121` it skipped two such clones and repaired them, as designed.
+
+## Seventh mode: I patched the artifact, not the producer — and 236 rows carried it
+
+jharv3 found this in their own file and it was in mine at four times the scale. **236 of my rows
+named `origin/HEAD`** as the ref keeping a commit alive. `origin/HEAD` is a *local symbolic ref*;
+`git ls-remote --heads origin` does not list it, so a reader following that name gets something
+ambiguous. Fixed in `resolve_origin.sh` — the producer — which now excludes it and refuses to
+name any ref not present in `ls-remote` output.
+
+**And my own auditor had failed silently while I read it as a pass.** The first check for this was
+one line of `awk` using `match(s, re, arr)` — a GNU extension. Under `mawk` it matched nothing and
+printed *"0 refs named, 0 dead"* for files naming 236 bad refs. An auditor that finds nothing and
+an auditor that runs on nothing are indistinguishable from the outside. `bin_jharv2/audit_live_refs.py`
+replaces it with a real parser that **asserts it extracted something** before reporting a clean result.
+
+## Eighth: my resolver inherited the host's claim when origin could not confirm it
+
+Worse than the above and the same family as jharv3's 21 stale rows. When no live origin ref
+contained a head, `resolve_origin.sh` **passed the host's own label through** — so a row the host
+called `ON_REMOTE` stayed `ON_REMOTE` with `-` where the ref name should be. **16 rows read "safe
+to delete, it is on the remote" with nothing on the remote behind them.**
+
+Fixed: origin failing to confirm now produces `NOT_ON_ORIGIN`, never the host's answer. The 17
+real commits behind those rows are preserved —
+`harvest/rescue-8HD-9-notonorigin-*` (4) and `harvest/rescue-8HD-8-notonorigin-*` (12).
+
+**Final: 824 heads, 822 ON_REMOTE naming a ref confirmed live by `ls-remote`, 2 with no resolvable
+HEAD. 792 refs named across the four files, 0 not live on origin.**
+
+## main moved: two flips, and one of them is not what it looks like
+
+Re-judged every RECOVER row against `81cd5321b08`. Two moved:
+`/home/reyerchu/_jcap_priv/wt` (jharv3 got the same one independently) and `/home/reyerchu/_landppa`.
+
+`_landppa` needed care. The second route said 72 of its 81 owned files still differ — an apparent
+disagreement. It was not: **the worktree had been reset onto current main**, so the check was
+comparing a head it no longer has. Its LANDED means *"the directory now holds main"*, not *"that
+branch's work landed"* — and its previous head `a17910e9fa9` is not lost, it is on
+`origin/land/batch7-assembled`, confirmed live. The row says all of that, because a bare LANDED
+there would be true and would mislead.
