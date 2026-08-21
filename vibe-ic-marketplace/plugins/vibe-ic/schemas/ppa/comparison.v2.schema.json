@@ -169,12 +169,23 @@
         "checks": {
           "type": "object",
           "minProperties": 1,
-          "description": "Check name -> evidence. The floor the checker expects is drc, lvs, antenna, setup, hold, drv; _ppa/feasibility.py owns the fuller list (it adds IR, EM and equivalence) and a campaign that runs more is held to more, because the SET must match across arms.",
+          "description": "Check name -> evidence. The floor the checker expects is drc, lvs, antenna, setup, hold, drv; _ppa/feasibility.py owns the fuller list (it adds IR, EM and equivalence) and a campaign that runs more is held to more, because the SET must match across arms. A check states its result as `violations`, as `status`, or as `verdict` -- one is enough, and where a check states more than one they must agree. Requiring a count on every check is a type error on the checks that do not produce one: LVS answers whether two named circuits match, not how many of something there were, and `violations: 0` is a slightly odd thing to write about a verdict and invites arithmetic on it downstream.",
           "additionalProperties": {
             "type": "object",
+            "anyOf": [
+              {"required": ["violations"]},
+              {"required": ["status"]},
+              {"required": ["verdict"]}
+            ],
             "properties": {
-              "violations": {"type": "integer", "minimum": 0},
-              "status": {"enum": ["CLEAN", "VIOLATIONS", "NOT_CHECKED"]},
+              "violations": {"type": "integer", "minimum": 0,
+                "description": "A population of findings. 0 is clean. For a check whose result is not a population, use `verdict`."},
+              "status": {"enum": ["CLEAN", "VIOLATIONS", "NOT_CHECKED"],
+                "description": "A stated classification. NOT_CHECKED outranks any count on the same object: an explicit 'I did not check this' must not be resurrected by a count left over from an earlier run."},
+              "verdict": {"type": "string", "minLength": 1,
+                "description": "The literal the tool returned, for a check that produces a verdict rather than a count (LVS: MATCH / CLEAN; equivalence: PROVEN / EQUIVALENT). Adjudicated against the accept set the matching axis of _ppa/feasibility.py declares, so there is one statement in the repository of what an LVS pass looks like. A verdict on a check name that has no verdict spelling derives as NOT_CHECKED, never as clean."},
+              "top_cell": {"type": "string", "minLength": 1,
+                "description": "The top-level circuit a verdict is about. A match between two circuits nobody named is not a fact about this design."},
               "source": {"type": "string"}
             }
           }

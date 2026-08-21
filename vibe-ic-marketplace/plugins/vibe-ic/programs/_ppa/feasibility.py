@@ -85,6 +85,7 @@ __all__ = [
     "FeasibilityPolicy", "PenaltyWeights",
     "AxisResult", "FeasibilityResult",
     "policy_from_document", "promotion_verdict", "adjudicate_set",
+    "views_for", "COV_MEASURED", "COV_NOT_MEASURED", "COV_NO_RECORD",
     "search_penalty", "separation_report", "shared_field_names",
     "set_exit_code",
 ]
@@ -186,10 +187,45 @@ class Axis:
     groups: Tuple[Tuple[Proof, ...], ...]
 
 
+#: WHY `worst_slack_ns` IS A GROUP AND NOT A RELAXATION.
+#:
+#: MEASURED: across all six STA artefacts of a real sign-off run, both
+#: `timing.setup.wns_ns` and `timing.hold.wns_ns` are NOT_MEASURED on every
+#: view, with the reason "the artefact carries no wns line for this view" --
+#: because the two MULTI-CORNER sign-off emitters, the ones that decide setup at
+#: the slow corner and hold at the fast one, call `report_worst_slack` and
+#: `report_tns` and never call `report_wns` at all. So the hold axis was
+#: STRUCTURALLY unprovable: no run of this flow could produce the evidence it
+#: proved from, on any design, ever.
+#:
+#: The tool DOES print the fact, under its other name. OpenSTA's wns is
+#: `min(0, worst_slack)` -- stated in `_ppa/timing.py`'s own header and measured
+#: in `tests/test_ppa_timing.py`, where one view reports `worst slack max 0.19`
+#: beside `wns max 0.00`. Under that identity
+#:
+#:     wns >= 0   <=>   min(0, worst_slack) >= 0   <=>   worst_slack >= 0
+#:
+#: so `slack_nonneg` over `worst_slack_ns` is the SAME PREDICATE, not a looser
+#: one. It admits no candidate that the wns proof would refuse: a negative worst
+#: slack is a negative wns and both VIOLATE. `test_ppa_feasibility_slack_proofs`
+#: asserts that equivalence over a swept range rather than trusting this comment.
+#:
+#: What it is NOT allowed to do is rescue a view nobody analysed. OpenSTA's
+#: `worst_slack` starts at infinity and takes the min over the analysed paths,
+#: so an empty path set leaves it at INF -- and `_ppa/timing.py` emits that as
+#: NOT_MEASURED with the no-paths reason, which this axis then refuses like any
+#: other NOT_MEASURED record. The sentinel is handled where it is read.
+#:
+#: `report_wns` is ALSO now emitted by the two sign-off stanzas (see
+#: `phase3_one_shot_runner._report_wns_tcl`) so that future runs state the fact
+#: directly. This group is what makes the axis provable on the runs that already
+#: exist, and on any tool that reports a worst slack and not a wns.
 DEFAULT_AXES: Tuple[Axis, ...] = (
     Axis("setup", ((Proof("timing.setup.wns_ns", KIND_SLACK_NONNEG),),
+                   (Proof("timing.setup.worst_slack_ns", KIND_SLACK_NONNEG),),
                    (Proof("timing.setup.violations", KIND_COUNT_ZERO),))),
     Axis("hold", ((Proof("timing.hold.wns_ns", KIND_SLACK_NONNEG),),
+                  (Proof("timing.hold.worst_slack_ns", KIND_SLACK_NONNEG),),
                   (Proof("timing.hold.violations", KIND_COUNT_ZERO),))),
     Axis("drv", ((Proof("timing.drv.violations", KIND_COUNT_ZERO),),
                  (Proof("timing.drv.max_tran_violations", KIND_COUNT_ZERO),
@@ -225,6 +261,28 @@ class FeasibilityPolicy:
     """
     axes: Tuple[Axis, ...] = DEFAULT_AXES
     required_views: Tuple[Mapping[str, Any], ...] = ()
+    #: Per-axis override of `required_views`, keyed by axis name.
+    #:
+    #: WHY ONE GLOBAL LIST WAS NOT ENOUGH. The nine axes are not measured in one
+    #: scope namespace. Setup and hold sign off across process corners; DRC, LVS,
+    #: antenna, IR, EM and equivalence are single measurements over one database
+    #: and have no process corner at all. With one global list, a contract that
+    #: declared the timing corners it signs off at ALSO demanded those corners of
+    #: DRC -- so either DRC was permanently uncovered, or its producer had to
+    #: emit the same measurement once per corner under a fabricated scope, N
+    #: records carrying ONE source hash, into an index whose whole job is to
+    #: notice when two numbers claim to be the same fact. That is a modelling
+    #: defect being paid for by a producer.
+    #:
+    #: WHAT THIS DOES NOT CHANGE. An unmeasured required view still sinks the
+    #: axis. A corner nobody ran is a corner nobody ran, and this field cannot
+    #: express "any view will do" -- an axis named with an EMPTY list is
+    #: UNDETERMINED, exactly as an undeclared global list is. What it changes is
+    #: only WHICH views each axis is asked for. An axis this map does not name
+    #: falls back to `required_views`, so a contract written before this field
+    #: existed adjudicates identically.
+    required_views_by_axis: Mapping[str, Tuple[Mapping[str, Any], ...]] = \
+        field(default_factory=dict)
     limits: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     allow_waivers: bool = True
 
@@ -244,16 +302,28 @@ class PenaltyWeights:
 
 @dataclass(frozen=True)
 class AxisResult:
+    """One axis's verdict, and the VIEW COVERAGE the verdict rests on.
+
+    `coverage` is not decoration. An UNDETERMINED axis has two very different
+    causes -- a view nobody ran, and a view somebody ran whose artefact could
+    not support the metric -- and before this field the verdict said only
+    `FEAS_INCOMPLETE_VIEW_SET` for the first and `FEAS_NOT_MEASURED` for the
+    second, with no statement of WHICH view either was about. A reader who
+    wants to re-decide the policy question ("is one unmeasured corner supposed
+    to sink the axis?") needs the per-view answer, so the record states it.
+    """
     name: str
     status: str
     codes: Tuple[str, ...]
     detail: Tuple[Mapping[str, Any], ...] = ()
     waiver_ids: Tuple[str, ...] = ()
+    coverage: Tuple[Mapping[str, Any], ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"axis": self.name, "status": self.status,
                              "codes": list(self.codes),
-                             "evidence": [dict(x) for x in self.detail]}
+                             "evidence": [dict(x) for x in self.detail],
+                             "coverage": [dict(x) for x in self.coverage]}
         if self.waiver_ids:
             d["waiver_ids"] = list(self.waiver_ids)
         return d
@@ -380,18 +450,66 @@ def _evaluate_one(rec: Mapping[str, Any], proof: Proof,
     return AXIS_UNDETERMINED, (C_BAD_RECORD,), ev
 
 
+#: Per-view coverage states, published on every AxisResult.
+COV_MEASURED = "MEASURED"
+#: A record covers the view and states the metric -- the proof could be evaluated.
+COV_NOT_MEASURED = "NOT_MEASURED"
+#: A record covers the view and says it could NOT support the metric. The run
+#: looked; the artefact did not carry the fact. Distinct from COV_NO_RECORD
+#: because the fix is different: one needs a better artefact, the other a run.
+COV_NO_RECORD = "NO_RECORD"
+#: Nothing in the candidate names this metric under a scope covering this view.
+
+
+def views_for(axis_name: str, policy: FeasibilityPolicy
+              ) -> Tuple[Mapping[str, Any], ...]:
+    """The views THIS axis must be covered across.
+
+    `required_views_by_axis` when it names the axis, the global
+    `required_views` otherwise. An axis named with an empty list is NOT thereby
+    exempt: an empty view set is undeclared, and undeclared is UNDETERMINED --
+    there is no spelling here that means "whatever was measured is enough".
+    """
+    per = policy.required_views_by_axis or {}
+    if isinstance(per, Mapping) and axis_name in per:
+        v = per[axis_name]
+        if isinstance(v, Sequence) and not isinstance(v, (str, bytes)):
+            return tuple(dict(x) for x in v if isinstance(x, Mapping))
+        return ()
+    return tuple(policy.required_views)
+
+
 def _evaluate_proof(records: Sequence[Any], proof: Proof,
-                    policy: FeasibilityPolicy
-                    ) -> Tuple[str, Tuple[str, ...], List[Dict[str, Any]]]:
+                    policy: FeasibilityPolicy,
+                    views: Sequence[Mapping[str, Any]]
+                    ) -> Tuple[str, Tuple[str, ...], List[Dict[str, Any]],
+                               List[Dict[str, Any]]]:
+    """Adjudicate one proof, and REPORT the per-view coverage it rested on.
+
+    The coverage rows are built for every declared view whatever the verdict, so
+    a SATISFIED axis states its coverage too -- a reader checking whether the
+    view set was the right one should not have to make the axis fail first.
+    """
     named = [r for r in records
              if isinstance(r, Mapping) and r.get("metric") == proof.metric]
     if not named:
-        return AXIS_UNDETERMINED, (C_METRIC_ABSENT,), [
-            {"metric": proof.metric, "kind": proof.kind, "absent": True}]
+        cov = [{"metric": proof.metric, "view": dict(v),
+                "state": COV_NO_RECORD,
+                "reason": "no record in this candidate names this metric"}
+               for v in views]
+        return (AXIS_UNDETERMINED, (C_METRIC_ABSENT,),
+                [{"metric": proof.metric, "kind": proof.kind, "absent": True}],
+                cov)
 
     codes: List[str] = []
     evidence: List[Dict[str, Any]] = []
     usable: List[Mapping[str, Any]] = []
+    #: Rejected records are kept WITH their scope, not just their code. Before
+    #: this, a NOT_MEASURED row contributed a bare code and the verdict could
+    #: not say which view it was about -- so "the ff corner was never analysed"
+    #: and "the ff corner was analysed and the report carried no wns line" were
+    #: one sentence.
+    rejected: List[Tuple[Mapping[str, Any], str]] = []
     for rec in named:
         defect = _record_defect(rec)
         if defect is not None:
@@ -400,31 +518,66 @@ def _evaluate_proof(records: Sequence[Any], proof: Proof,
                              "rejected": defect,
                              "status": (rec.get("status")
                                         if isinstance(rec, Mapping) else None)})
+            rejected.append((rec, defect))
             continue
         usable.append(rec)
 
-    if not policy.required_views:
+    if not views:
         # Not declared is not the same as satisfied. Without a declared view
         # set nothing here can tell a single-corner run from full coverage.
         codes.append(C_VIEWS_NOT_DECLARED)
-        return AXIS_UNDETERMINED, tuple(dict.fromkeys(codes)), evidence
+        return (AXIS_UNDETERMINED, tuple(dict.fromkeys(codes)), evidence,
+                [{"metric": proof.metric, "view": None,
+                  "state": COV_NO_RECORD,
+                  "reason": "no required view is declared for this axis, so "
+                            "there is nothing this proof could be complete "
+                            "across"}])
 
     verdict = AXIS_SATISFIED
     uncovered: List[Mapping[str, Any]] = []
-    for view in policy.required_views:
+    coverage: List[Dict[str, Any]] = []
+    for view in views:
         hits = [r for r in usable if _covers(r.get("scope") or {}, view)]
         if not hits:
             uncovered.append(view)
+            # Was the view covered by a record that could NOT support the
+            # metric? That is a different finding from a view nobody ran, and
+            # the reason the artefact gave is carried through verbatim.
+            near = [(r, d) for r, d in rejected
+                    if isinstance(r, Mapping)
+                    and _covers(r.get("scope") or {}, view)]
+            if near:
+                coverage.append({
+                    "metric": proof.metric, "view": dict(view),
+                    "state": COV_NOT_MEASURED,
+                    "codes": sorted({d for _, d in near}),
+                    "reason": "; ".join(
+                        sorted({str(r.get("reason") or "the record states no "
+                                    "reason") for r, _ in near})),
+                    "sources": sorted({str((r.get("source") or {}).get("path")
+                                           or "") for r, _ in near if
+                                       isinstance(r.get("source"), Mapping)}),
+                })
+            else:
+                coverage.append({
+                    "metric": proof.metric, "view": dict(view),
+                    "state": COV_NO_RECORD,
+                    "reason": "no record covering this view names this metric"})
             continue
+        states: List[str] = []
         for rec in hits:
             st, cs, ev = _evaluate_one(rec, proof, policy)
             ev["required_view"] = dict(view)
             evidence.append(ev)
             codes.extend(cs)
+            states.append(st)
             if st == AXIS_VIOLATED:
                 verdict = AXIS_VIOLATED
             elif st == AXIS_UNDETERMINED and verdict != AXIS_VIOLATED:
                 verdict = AXIS_UNDETERMINED
+        coverage.append({"metric": proof.metric, "view": dict(view),
+                         "state": COV_MEASURED, "records": len(hits),
+                         "outcomes": sorted(set(states))})
 
     if uncovered:
         codes.append(C_INCOMPLETE_VIEW_SET)
@@ -436,20 +589,24 @@ def _evaluate_proof(records: Sequence[Any], proof: Proof,
             verdict = AXIS_UNDETERMINED
 
     codes = [c for c in dict.fromkeys(codes) if c != C_OK] or [C_OK]
-    return verdict, tuple(codes), evidence
+    return verdict, tuple(codes), evidence, coverage
 
 
 def _evaluate_axis(records: Sequence[Any], axis: Axis,
                    policy: FeasibilityPolicy) -> AxisResult:
+    views = views_for(axis.name, policy)
     group_status: List[str] = []
     codes: List[str] = []
     evidence: List[Dict[str, Any]] = []
+    coverage: List[Dict[str, Any]] = []
     for group in axis.groups:
         st = AXIS_SATISFIED
         for proof in group:
-            pst, pcodes, pev = _evaluate_proof(records, proof, policy)
+            pst, pcodes, pev, pcov = _evaluate_proof(records, proof, policy,
+                                                     views)
             codes.extend(pcodes)
             evidence.extend(pev)
+            coverage.extend(pcov)
             if pst == AXIS_VIOLATED:
                 st = AXIS_VIOLATED
             elif pst == AXIS_UNDETERMINED and st != AXIS_VIOLATED:
@@ -465,7 +622,7 @@ def _evaluate_axis(records: Sequence[Any], axis: Axis,
 
     keep = [c for c in dict.fromkeys(codes) if c != C_OK]
     return AxisResult(axis.name, status, tuple(keep) or (C_OK,),
-                      tuple(evidence))
+                      tuple(evidence), (), tuple(coverage))
 
 
 # ---------------------------------------------------------------------------
@@ -518,8 +675,11 @@ def _apply_waivers(axes: Sequence[AxisResult], waivers: Sequence[Any],
             out.append(a)
             continue
         if a.status == AXIS_VIOLATED:
+            # `a.coverage` is carried through: a WAIVED axis is a violation
+            # somebody signed for, and the reader is entitled to see the same
+            # per-view evidence they signed against.
             out.append(AxisResult(a.name, AXIS_WAIVED, a.codes, a.detail,
-                                  tuple(ids)))
+                                  tuple(ids), a.coverage))
             for rec in adjudicated:
                 if rec.get("waiver_id") in ids and rec.get("applied") is None:
                     rec["applied"] = True
@@ -613,6 +773,21 @@ def policy_from_document(doc: Mapping[str, Any]) -> FeasibilityPolicy:
     if not isinstance(views, Sequence) or isinstance(views, (str, bytes)):
         views = ()
     views = tuple(dict(v) for v in views if isinstance(v, Mapping))
+    #: Per-axis views. A key naming no axis in the table is DROPPED and not
+    #: silently honoured: `required_views_by_axis: {"drc ": [...]}` must not
+    #: quietly become a policy nobody can find the effect of.
+    per_axis: Dict[str, Tuple[Mapping[str, Any], ...]] = {}
+    raw_per = doc.get("required_views_by_axis")
+    if isinstance(raw_per, Mapping):
+        known = {a.name for a in DEFAULT_AXES}
+        for name, vs in raw_per.items():
+            if not isinstance(name, str) or name not in known:
+                continue
+            if isinstance(vs, Sequence) and not isinstance(vs, (str, bytes)):
+                per_axis[name] = tuple(dict(v) for v in vs
+                                       if isinstance(v, Mapping))
+            else:
+                per_axis[name] = ()
     limits = doc.get("limits") or {}
     if not isinstance(limits, Mapping):
         limits = {}
@@ -620,6 +795,7 @@ def policy_from_document(doc: Mapping[str, Any]) -> FeasibilityPolicy:
     return FeasibilityPolicy(
         axes=DEFAULT_AXES,
         required_views=views,
+        required_views_by_axis=per_axis,
         limits={str(k): dict(v) for k, v in limits.items()
                 if isinstance(v, Mapping)},
         allow_waivers=True if allow is None else bool(allow),
