@@ -1,5 +1,0 @@
-{
-  "fields": {
-    "scan_topology": "N/A — protocol spec; SerDes BIST/loopback used for bring-up, no DFT scan defined."
-  }
-}

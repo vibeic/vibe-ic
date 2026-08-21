@@ -37,6 +37,21 @@ import yaml
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _FCC = _PROGRAMS / "flow_compliance_check.py"
 
+#: Bound for every `flow_compliance_check` launch in this file. NOT a round
+#: number picked by feel: `ci_harness_timeout_ceiling_check` (BLOCKING)
+#: resolves the pytest harness bound from `tools/gatekeeper-land.sh` —
+#: `--timeout=180`, `--timeout-method=thread` — and permits any ONE blocking
+#: call at most `180 // 3` = 60 s. Above that the inner bound can never fire:
+#: pytest reaches 180 s first and takes the whole SESSION down, so `--maxfail`
+#: stops counting and every other file in the subset loses its verdict,
+#: including files that had already passed.
+#: The landed value was 300 at all three call sites. MEASURED here: every one
+#: of them drives the producer over a THREE-STEP invented flow declared in this
+#: file, on a tmp_path project holding at most one JSON file — 0.14 s worst of
+#: six calls. 60 s is ~400x headroom, and this file's slowest test makes two of
+#: these calls, which the `// 3` divisor exists to leave room for.
+_FCC_TIMEOUT_S = 60
+
 
 _TINY_FLOW = {
     "version": "test",
@@ -70,7 +85,8 @@ def _run_probe(tmp_path, make_step1_pass: bool):
     proc = subprocess.run(
         [sys.executable, str(_FCC), str(proj), "--flow-def", str(flow),
          "--json", str(out)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=300)
+        capture_output=True, text=True, cwd=str(_PROGRAMS),
+        timeout=_FCC_TIMEOUT_S)
     return proc, json.loads(out.read_text())
 
 
@@ -108,6 +124,8 @@ def test_downstream_entries_name_their_root_cause(tmp_path):
     """41 blockers of which 36 are consequences of 4 is a different backlog
     from 41 independent ones. Fails pre-change: no report field carries it."""
     proc, doc = _run_probe(tmp_path, make_step1_pass=True)
+    assert "blockers" in doc, ("the report carries no blocker list, so nothing "
+                               "names a root cause")
     by_id = {b["step_id"]: b for b in doc["blockers"]}
     assert 1 not in by_id, "step 1 passed and must not be listed"
     assert by_id[2]["derived_from"] == []
@@ -122,16 +140,26 @@ def test_no_classification_can_move_a_verdict(tmp_path):
     the exit code must be byte-identical, and the report must SAY the list is
     empty because of the failure rather than letting an empty list read as a
     clean one.
+
+    The injected shim TOLERATES the classifier being absent on purpose, so
+    that on the pre-change tree this test still runs the program to completion
+    and fails on the two CONTENT assertions at the bottom rather than on an
+    import — a control that dies of a missing module measures the module's
+    existence, not the behaviour.
     """
     proc_ok, doc_ok = _run_probe(tmp_path / "ok", make_step1_pass=False)
 
     sitecustomize = tmp_path / "boom"
     sitecustomize.mkdir()
     (sitecustomize / "usercustomize.py").write_text(
-        "import _blocker_classification as b\n"
+        "try:\n"
+        "    import _blocker_classification as b\n"
+        "except Exception:\n"
+        "    b = None\n"
         "def _boom(*a, **k):\n"
         "    raise RuntimeError('forced classifier failure')\n"
-        "b.build_blockers = _boom\n")
+        "if b is not None:\n"
+        "    b.build_blockers = _boom\n")
     proj = tmp_path / "boomproj"
     (proj / "build").mkdir(parents=True)
     flow = tmp_path / "probe_flow2.yaml"
@@ -145,13 +173,95 @@ def test_no_classification_can_move_a_verdict(tmp_path):
          "'--json', %r]; "
          "import runpy; runpy.run_path(%r, run_name='__main__')"
          % (str(sitecustomize), str(proj), str(flow), str(out), str(_FCC))],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=300,
+        capture_output=True, text=True, cwd=str(_PROGRAMS),
+        timeout=_FCC_TIMEOUT_S,
         env={"PYTHONPATH": env_path, "PATH": "/usr/bin:/bin"})
     doc_boom = json.loads(out.read_text())
 
+    # the verdict half — true on BOTH trees, which is the point: a classifier
+    # that could move a verdict would break these, and nothing else would.
     assert doc_boom["overall"] == doc_ok["overall"]
     assert doc_boom["counts"] == doc_ok["counts"]
     assert proc_boom.returncode == proc_ok.returncode
-    assert doc_boom["blockers"] == []
-    assert "forced classifier failure" in doc_boom["blocker_list_error"]
+    # the disclosure half — content, and the part that fails pre-change
+    assert doc_boom.get("blockers") == [], (
+        "a run whose classifier raised must still publish an explicit empty "
+        "list, not silence")
+    assert "forced classifier failure" in doc_boom.get("blocker_list_error", ""), (
+        "an empty list produced by a crash must not be indistinguishable from "
+        "a clean one")
     assert "WARN" in proc_boom.stderr
+
+
+# BEHAVIOURAL-CONTROL 5 — the commercial-tool narrowing, end to end.
+#
+# The review of this PR named the gap: reverting the producer's `_oss_deferred`
+# construction from the run's OWN deferral decisions to bare membership of
+# `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS` passed the whole suite, even though it
+# is a change in the fabricating direction (a step whose gate reached a verdict,
+# or a downstream cascade, flips to MISSING_CAPABILITY/commercial-tool-required).
+# This drives the REAL producer CLI so the narrowing wiring in
+# `flow_compliance_check.main` is what is under test, not a re-statement of it.
+_OSS_MEMBER_FLOW = {
+    "version": "test",
+    "flow_name": "oss_membership_probe",
+    "total_steps": 3,
+    "stages": {"stage_probe": "probe"},
+    "steps": [
+        {"id": 1, "name": "Emit netlist", "stage": "stage_probe",
+         "required_outputs": ["build/netlist.json"],
+         "gate": {"files_exist": ["build/netlist.json"]}, "blocks_on": []},
+        # id 2 is NOT a key in _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS. Its own
+        # artefact is absent, keeping a NON-blocked failure on the run so the
+        # PASS_WITH_OPEN_SOURCE_CONSTRAINTS promotion cannot fire — which means
+        # step 13 below is a plain blocker this run did NOT defer, not a genuine
+        # open-source deferral.
+        {"id": 2, "name": "Emit floorplan", "stage": "stage_probe",
+         "required_outputs": ["build/floorplan.def"],
+         "gate": {"files_exist": ["build/floorplan.def"]}, "blocks_on": []},
+        # id 13 IS a key in _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS. It is absent
+        # here for an ordinary reason — the artefact was not produced — NOT
+        # because this run routed it into the open-source deferral.
+        {"id": 13, "name": "Emit equivalence proof", "stage": "stage_probe",
+         "required_outputs": ["build/equiv.json"],
+         "gate": {"files_exist": ["build/equiv.json"]}, "blocks_on": []},
+    ],
+}
+
+
+def test_membership_in_the_oss_table_alone_does_not_make_a_blocker_a_missing_capability(tmp_path):
+    """OVER-CORRECTION CONTROL, through the real producer CLI.
+
+    Step 13's id is a key in `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS`, but this
+    run did not route it into the open-source deferral — its artefact is simply
+    absent. The producer's narrowing (`_oss_deferred` is built from
+    `oss_blocked_skipped` + `os_constraints_deferrals`, the run's own decisions,
+    never from bare table membership) means step 13 classifies on the evidence
+    it actually has: `declared-artefact-absent` / UNCLASSIFIED.
+
+    Reverting that construction to iterate the table makes step 13 flip to
+    MISSING_CAPABILITY / commercial-tool-required and fails this test; the
+    narrowed wiring passes it. On the pre-change tree the program writes no
+    `blockers` key at all, so this fails on CONTENT there too, not on a symbol.
+    """
+    proj = tmp_path / "member"
+    (proj / "build").mkdir(parents=True)
+    (proj / "build" / "netlist.json").write_text('{"cells": []}\n')  # step 1 PASS
+    flow = tmp_path / "member_flow.yaml"
+    flow.write_text(yaml.safe_dump(_OSS_MEMBER_FLOW))
+    out = proj / "report.json"
+    proc = subprocess.run(
+        [sys.executable, str(_FCC), str(proj), "--flow-def", str(flow),
+         "--json", str(out)],
+        capture_output=True, text=True, cwd=str(_PROGRAMS),
+        timeout=_FCC_TIMEOUT_S)
+    doc = json.loads(out.read_text())
+    assert "blockers" in doc, "the report publishes no classified blocker list"
+    by_id = {b["step_id"]: b for b in doc["blockers"]}
+    assert 13 in by_id, "the table-member step must still be ON the list"
+    assert by_id[13]["classification"] != "MISSING_CAPABILITY", (
+        "mere membership of the open-source table fabricated a capability gap "
+        "on a step this run did not defer")
+    assert by_id[13]["classification"] == "UNCLASSIFIED"
+    assert by_id[13]["basis"] == "declared-artefact-absent"
+    assert by_id[13]["basis"] != "commercial-tool-required"

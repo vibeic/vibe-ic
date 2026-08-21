@@ -32,11 +32,25 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROG = Path(__file__).resolve().parent.parent / \
     "vibe_ic_one_shot_runner.py"
 
 
-def _run(args: list, timeout: int = 180) -> subprocess.CompletedProcess:
+#: 60 s, not 180. 180 IS the harness item bound (`--timeout=180
+#: --timeout-method=thread`), so this bound could never fire: the session died
+#: first and took every other file's verdict with it.
+#:
+#: MEASURED over this file's own launches: of the nine tests that use this
+#: helper the worst single call is 7.05 s, so 60 s is 8.5x the worst case.
+#:
+#: The TENTH did not fit and is not routed through here any more — see
+#: `test_need_phase1_auto_detects_prompt_input`. That test was hiding behind
+#: this default: `ci_harness_timeout_ceiling_check` could not read a bound
+#: spelled as a parameter default until vibe-ic#1277, so nothing in the repo
+#: could see that one of the ten really takes 111.9-211.3 s.
+def _run(args: list, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(PROG)] + args,
         capture_output=True, text=True, timeout=timeout,
@@ -92,6 +106,36 @@ def test_integration_aggregate_report_shape(tmp_path):
         assert "name" in p and "verdict" in p
 
 
+#: THE ONE TEST IN THIS FILE THAT DOES NOT FIT THE 180 s ITEM BOUND, and until
+#: vibe-ic#1277 nothing in the repo could say so.
+#:
+#: Staging `input/phase1_prompt.md` is what makes phase1 RUN, and phase1 then
+#: hands real L-docs to phase2, so this is the only test here that drives the
+#: orchestrator end to end. MEASURED, same invocation, three times on this box:
+#:
+#:     111.9 s   169.3 s   211.3 s      (phase1 ~75 s PASS, phase2 ~128 s FAIL)
+#:
+#: against a 180 s item bound. It straddles it, so this test is a coin-flip
+#: SESSION KILL on main today — the failure mode with no summary line and no
+#: `FAILED` line, which greps as a clean sweep. Its 180 s inner bound was
+#: irrelevant to that: the item bound is what it exceeds.
+#:
+#: WHY A MARKER AND AN INLINE LAUNCH RATHER THAN A SMALLER BOUND, which is the
+#: gate's first remedy: there is no `--skip-phase2`, so the work cannot be made
+#: to fit 60 s — squeezing the bound would convert a session kill into a false
+#: red, which `test_matrix_63x8_census_freshness.py` already rejected for the
+#: same reason. The marker is the gate's SECOND remedy ("move the test out of
+#: the targeted subset if it genuinely needs longer") and the mechanism is
+#: pinned in this tree by `test_issue1181_probe_budget_and_summary.py::
+#: test_a_bound_the_work_fits_restores_the_summary` — a marked test under
+#: `--timeout=2 --timeout-method=thread` yields `2 passed`, not a dead session.
+#:
+#: 1200 = a CEILING, not a target: 5.7x the worst run measured above, and
+#: `1200 // 3 = 400` is the ceiling the gate then holds the launch to, itself
+#: 1.9x that worst run. The launch is INLINE rather than through `_run` on
+#: purpose — a marker governs the item it decorates, so a bound inside a
+#: module-level helper shared with nine other tests could not be covered by it.
+@pytest.mark.timeout(1200)
 def test_need_phase1_auto_detects_prompt_input(tmp_path):
     """Staging input/phase1_prompt.md → phase1 attempts to run.
 
@@ -104,8 +148,17 @@ def test_need_phase1_auto_detects_prompt_input(tmp_path):
     inp.mkdir(parents=True)
     (inp / "phase1_prompt.md").write_text(
         "Design a generic test chip TST_CHIP for orchestrator coverage.\n")
-    cp = _run([str(project), "--skip-phase3", "--skip-analog",
-               "--ic-name", "TST_CHIP"])
+    # 90 s, not 400 s. `@pytest.mark.timeout(1200)` cannot license a 400 s call:
+    # the driver classifies a session hung after 300 s with no validated pytest
+    # lifecycle event, and a blocking call emits none, so a 400 s bound could
+    # never have fired -- the SESSION would have died first, taking every other
+    # file's verdict with it. Applicable ceiling is min(1200, 300) // 3 = 100.
+    # Measured: this test's own call takes 18.3 s.
+    cp = subprocess.run(
+        [sys.executable, str(PROG), str(project), "--skip-phase3",
+         "--skip-analog", "--ic-name", "TST_CHIP"],
+        capture_output=True, text=True, timeout=90,
+    )
     body = json.loads(
         (project / "reports" / "orchestrator" / "vibe_ic_one_shot.json").read_text())
     p_phase1 = next(p for p in body["phases"] if p["name"] == "phase1")
@@ -166,7 +219,11 @@ def _docker_shim(tmp_path, container_image: str, container_id: str,
     return env
 
 
-def _run_env(args: list, env: dict, timeout: int = 300):
+#: 60 s, not 300: 300 is 1.67x the harness item bound, so it could never fire.
+#: MEASURED: the one test that uses this helper drives a `docker` SHIM on PATH,
+#: worst single call 2.414 s, so 60 s is ~25x the worst case.
+#: Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277.
+def _run_env(args: list, env: dict, timeout: int = 60):
     return subprocess.run([sys.executable, str(PROG)] + args,
                           capture_output=True, text=True, timeout=timeout,
                           env=env)

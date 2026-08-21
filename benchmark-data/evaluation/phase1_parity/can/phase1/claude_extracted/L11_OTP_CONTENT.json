@@ -1,5 +1,0 @@
-{
-  "ic_name": "CAN Specification (Bosch CAN 2.0)",
-  "otp_present": false,
-  "notes": "CAN 2.0 is a wire-level protocol spec; no OTP / fuse / configuration ROM at the protocol layer. Concrete CAN controllers may use OTP to lock acceptance filters or bit-timing presets, but this is a per-device feature, not protocol-defined."
-}

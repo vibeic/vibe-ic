@@ -1,5 +1,0 @@
-{
-  "gate": "pg_rail_geometry_check",
-  "verdict": "SKIP",
-  "reason": "no routed.def under the project — nothing to judge"
-}

@@ -12,8 +12,11 @@ bare, unchanged — the split NEVER activates without an authoritative complete
 expected-file match.
 """
 import json
+import shutil
 import sys
 from pathlib import Path
+
+import pytest
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
@@ -93,6 +96,13 @@ def test_load_expected_files_map_only_multifile(tmp_path):
     assert m == {"m2": ["rtl/bar.sv", "rtl/foo.sv"]}   # s1 single, o1 output-only omitted
 
 
+_HAS_TOOLCHAIN = (shutil.which("iverilog") is not None
+                  and shutil.which("yosys") is not None)
+
+
+@pytest.mark.skipif(not _HAS_TOOLCHAIN,
+                    reason="asserts a PASS verdict end-to-end: needs a real "
+                           "iverilog AND yosys.")
 def test_gate_record_splits_bare_multifile_blob(tmp_path):
     # end-to-end: a bare blob with foo+bar for a 2-file problem → gate emits the
     # split JSON envelope (not the duplicated blob).

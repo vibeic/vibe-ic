@@ -18,6 +18,44 @@ Substance gate (foundry_handoff_package_check) verifies the kit is
 complete before tapeout — this generator just gives the engineer a
 deterministic starting point so the rest of the workflow doesn't stall.
 
+WHAT THE KIT NOW PRODUCES, AND WHAT IT STILL OWES (2026-08-20)
+==============================================================
+The scribe-line frame is still not produced, and MUST NOT BE: a file named
+`.gds` that is not a GDS is a fabricated artefact, and that decision (#446)
+stands. What changed is that the remainder now names its owner instead of
+shrugging.
+
+  MEASURED IN, no longer pending on anybody
+    voltage / temperature corners   read off the liberty basenames the
+                                    sign-off flow itself consumed. They used
+                                    to be `["VDD_min","VDD_nom","VDD_max"]`
+                                    and `[-40, 25, 85, 125]` — canned literals
+                                    behind a PENDING_FOUNDRY_ prefix, wrong
+                                    for 8 of the 8 published roots carrying a
+                                    kit.
+    handoff mode                    shuttle / undeclared, resolved from step
+                                    37.5ic's own report. Absence of that
+                                    report is UNDECLARED, never "dedicated".
+    the operator's identity          named, on the shuttle path, off that
+                                    same report.
+
+  STILL OWED, each naming a party and a closing artefact in `open_items`
+    3 to the reticle owner  mask layers, steppers, WAT structures + the
+                            scribe frame — the OPERATOR's on a shuttle
+    2 to the contract       yield target, WAT acceptance limits; these do not
+                            exist at all for a shuttle slot buyer
+    1 to the test house     ATE loadboard id
+    1 to US                 ATE patterns, convertible from the L10 seeds this
+                            member already lists
+
+  MEASURED AND NOT AVAILABLE — the scribe frame. Every PDK tree in the pinned
+  image was searched: `process_monitor` 0 files, `scribe` 17 files of which
+  none is geometry, and the libs.ref of all 6 PDK roots holds only standard
+  cells, IO, primitive devices and SRAM macros. No open PDK ships a scribe or
+  PCM layout, because the scribe line belongs to whoever owns the reticle.
+  Upstream has no analogue either: LibreLane and OpenROAD have no WAT, scribe
+  or mask-spec step at all — they stop at the GDS.
+
 chip-AGNOSTIC. Exits 0 on success, 2 if project dir missing or
 prerequisites absent.
 """
@@ -34,6 +72,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 import _published_tree  # noqa: E402
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 
 def _read_text(p: Path) -> str:
@@ -311,6 +351,369 @@ def _pdk_from_signoff_flow(project: Path):
     return next(iter(names)) if len(names) == 1 else None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THE CORNERS THIS DESIGN WAS ACTUALLY SIGNED OFF AT (Step-38 enhancement)
+#
+# `corner_test_vectors.json` used to ship these two lines:
+#
+#     "PENDING_FOUNDRY_voltage_corners": ["VDD_min", "VDD_nom", "VDD_max"],
+#     "PENDING_FOUNDRY_temperature_corners_celsius": [-40, 25, 85, 125],
+#
+# Neither is pending on the foundry and neither was measured. They are CANNED
+# LITERALS wearing an honest-looking prefix, and they are wrong for every design
+# in the published corpus. MEASURED over the 8 published roots that carry a
+# hand-off kit, reading the liberty files the sign-off flow itself consumed:
+#
+#     8 of 8    resolve at least one liberty corner
+#     2 of 8    resolve the full three-corner set
+#               ff_n40C_1v95 / tt_025C_1v80 / ss_100C_1v40
+#
+# So the kit shipped a foundry `[-40, 25, 85, 125] °C` for a design signed off
+# at -40 / 25 / 100 °C — a temperature the design was never characterised at,
+# and the one it WAS characterised at missing. A fabricated value behind a
+# PENDING_ prefix is worse than an empty field, because it is actionable.
+#
+# The corners are OURS and the flow already knows them. `_pdk_from_signoff_flow`
+# established the mechanism: the assets the sign-off flow actually consumed are
+# ground truth. The liberty BASENAME carries the operating point, so the same
+# walk that names the PDK also names the corners.
+#
+# THE GRAMMAR IS MEASURED, NOT REMEMBERED — every liberty basename shipped in
+# the pinned image was enumerated (2026-08-20, sha256:66c33ff2…):
+#
+#   form A   sky130 / gf180mcu   ..._<proc>_<T>C_<V>.lib
+#            sky130_fd_sc_hd__tt_025C_1v80.lib          25 C   1.80 V
+#            gf180mcu_fd_io__ff_n40C_5v50.lib          -40 C   5.50 V
+#   form B   IHP                 ..._<proc>_<V>V_<T>C.lib   (order swapped,
+#                                `p` for the decimal point, `m` for minus)
+#            sg13g2_stdcell_typ_1p20V_25C.lib           25 C   1.20 V
+#            sg13cmos5l_io_fast_1p32V_3p6V_m40C.lib    -40 C   1.32 + 3.6 V
+#   form C   asap7               asap7sc7p5t_AO_RVT_TT_nldm_211120.lib
+#   form D   nangate45           NangateOpenCellLibrary_typical.lib
+#
+# Forms C and D carry NO operating point in the name. They must resolve to
+# NOT_DETERMINED — never to a default — and the count of basenames that failed
+# to parse is reported so the non-answer is a datum.
+#
+# BOTH DELIMITERS ARE LOAD-BEARING, and each was put there by a measured false
+# positive in the shipped filename set:
+#   * `asap7sc7p5t` -> `7p5` would read as 7.5 V. It is a CELL HEIGHT (7.5
+#     track). Requiring `_` before the token excludes it.
+#   * `gf180mcu_fd_sc_mcu7t5v0__…` -> `5v0` would read as 5.0 V from the
+#     LIBRARY NAME rather than from the corner. Same `_` guard excludes it;
+#     the real `_5v00.` in the corner field still matches.
+#   * `sky130_ef_io__gpiov2_pad_…` -> `v2` needs a digit before `v`, and has
+#     `o`. Excluded by the digit requirement.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# A liberty file anywhere under a PDK tree, as the flow's own artefacts spell it.
+_SIGNOFF_LIB_RE = re.compile(r"/foss/pdks/[^\s'\";:)\]]*?\.lib")
+
+# `_1v80` / `_5v00` / `_1p20V` / `_3p6V` — delimited on the left, and closed by
+# a delimiter or an optional unit suffix on the right.
+_LIB_VOLT_RE = re.compile(r"(?<=_)(\d{1,2})[vp](\d{1,2})V?(?=_|\.|$)")
+# `_025C` / `_n40C` / `_m40C` / `_125C` — `n` and `m` both spell a minus sign.
+_LIB_TEMP_RE = re.compile(r"(?<=_)([nm]?)(\d{1,3})C(?=_|\.|$)")
+
+
+def _corner_from_liberty_name(stem: str):
+    """(volts, temps) parsed out of ONE liberty basename.
+
+    Returns two lists, either of which may be empty. A file naming several
+    rails (`…_1v95_1v65.lib` — core and IO) yields every one of them: picking
+    one would be a guess about which rail the reader means."""
+    volts = [float(f"{a}.{b}") for a, b in _LIB_VOLT_RE.findall(stem)]
+    temps = [(-1 if sign else 1) * int(digits)
+             for sign, digits in _LIB_TEMP_RE.findall(stem)]
+    return volts, temps
+
+
+def _signoff_liberty_corners(project: Path) -> dict:
+    """The operating corners the sign-off flow's OWN liberty files declare.
+
+    Reads the same published-tree-restricted artefact set `_pdk_from_signoff_
+    flow` reads, so it inherits that function's contract: on a published tree
+    only tracked files count, because the question is what a reader RECEIVES.
+
+    Never guesses. When no liberty path is named, or none of the ones named
+    carry an operating point in their filename, the corners come back empty and
+    `liberty_seen` / `liberty_unparsed` state the size of the search that
+    established it."""
+    seen: set = set()
+    volts: set = set()
+    temps: set = set()
+    unparsed: list = []
+    for p in _signoff_flow_texts(project):
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        for hit in _SIGNOFF_LIB_RE.findall(text):
+            seen.add(hit)
+    for lib in sorted(seen):
+        stem = lib.rsplit("/", 1)[-1]
+        v, t = _corner_from_liberty_name(stem)
+        if not v and not t:
+            unparsed.append(stem)
+            continue
+        volts.update(v)
+        temps.update(t)
+    return {
+        "voltages_v": sorted(volts),
+        "temperatures_celsius": sorted(temps),
+        "liberty_files": sorted(lib.rsplit("/", 1)[-1] for lib in seen),
+        "liberty_seen": len(seen),
+        "liberty_unparsed": sorted(unparsed),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHUTTLE OR DEDICATED MASK SET — the split that decides who owns this kit
+#
+# On a multi-project shuttle the submitter buys a SLOT, not a reticle. The
+# scribe line, the PCM structures, the stepper and the mask layer table are the
+# OPERATOR's, and `PENDING_FOUNDRY` is then the correct answer rather than a
+# gap — the defect is only that the note never said WHO it was pending on. On a
+# dedicated mask set the same fields are the customer's problem.
+#
+# Step 38 did not know which case it was in. It still cannot be TOLD — nothing
+# in the flow declares it — but it can now MEASURE the one case that leaves
+# evidence: step 37.5ic runs the shuttle operator's own container and writes
+# `reports/phase3/shuttle_precheck.json`, which names the operator, its
+# lifecycle status and the verdict it returned. A design that has asked a
+# shuttle operator for a verdict is on the shuttle path, and the operator's
+# identity is then a fact off a run rather than a declaration.
+#
+# THE ABSENCE OF THAT REPORT IS NOT A DEDICATED MASK SET. It is the far more
+# likely case that 37.5ic has not run. Reading absence as "dedicated" would
+# rebuild this repository's own recurring defect — an empty result made
+# indistinguishable from a determined one — one level up, so the third value is
+# UNDECLARED and it is neither of the other two.
+# ─────────────────────────────────────────────────────────────────────────────
+
+MODE_SHUTTLE = "shuttle"
+MODE_DEDICATED = "dedicated"
+MODE_UNDECLARED = "undeclared"
+
+_SHUTTLE_PRECHECK_REPORT = "reports/phase3/shuttle_precheck.json"
+
+
+def _sha256_of(path: Path):
+    """sha256 of a file, or None when it cannot be read."""
+    import hashlib
+    try:
+        return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _handoff_mode(project: Path) -> dict:
+    """Which of the two situations this hand-off is in, and on what evidence.
+
+    Precedence:
+      1. an explicit L1 `tapeout_metadata.handoff_mode` declaration, when the
+         spec carries one. NOTHING IN THE FLOW WRITES THIS KEY TODAY — it is
+         read here so that the declaration, when the flow gains one, lands in
+         a place that already consumes it rather than needing this program
+         changed again. Its absence is the ordinary case, not an error.
+      2. `reports/phase3/shuttle_precheck.json` — 37.5ic asked an operator, so
+         this is the shuttle path and the operator is named.
+      3. UNDECLARED. Not dedicated. See the block comment above.
+    """
+    declared = _l1_tapeout_metadata(project).get("handoff_mode")
+    if isinstance(declared, str) and declared.strip().lower() in (
+            MODE_SHUTTLE, MODE_DEDICATED):
+        return {
+            "mode": declared.strip().lower(),
+            "basis": "L1_DATASHEET.tapeout_metadata.handoff_mode",
+            "operator": None,
+            "operator_status": None,
+            "precheck_verdict": None,
+            "precheck_report": None,
+            "precheck_report_sha256": None,
+        }
+    rpt = project / _SHUTTLE_PRECHECK_REPORT
+    if rpt.is_file():
+        try:
+            data = json.loads(rpt.read_text(errors="replace"))
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        return {
+            "mode": MODE_SHUTTLE,
+            "basis": _SHUTTLE_PRECHECK_REPORT,
+            "operator": data.get("shuttle") or data.get("shuttle_id"),
+            "operator_status": data.get("shuttle_status") or data.get("status"),
+            "precheck_verdict": data.get("verdict"),
+            "precheck_report": _SHUTTLE_PRECHECK_REPORT,
+            "precheck_report_sha256": _sha256_of(rpt),
+        }
+    return {
+        "mode": MODE_UNDECLARED,
+        "basis": (f"no {_SHUTTLE_PRECHECK_REPORT} on disk and no L1 "
+                  f"tapeout_metadata.handoff_mode declaration. Absence of a "
+                  f"shuttle precheck is NOT a dedicated mask set — step 37.5ic "
+                  f"most likely has not run."),
+        "operator": None,
+        "operator_status": None,
+        "precheck_verdict": None,
+        "precheck_report": None,
+        "precheck_report_sha256": None,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHO OWNS EACH OPEN ITEM — the PENDING_FOUNDRY_* pile, differentiated
+#
+# Nine fields carried the same prefix and the same silence about who would
+# close them. Three of them are not the foundry's at all:
+#
+#   voltage_corners / temperature_corners_celsius   OURS, and DERIVABLE NOW —
+#       they are the corners the sign-off liberty files declare. They no longer
+#       appear here because they are no longer pending on anybody.
+#   test_patterns                                   OURS. The L10 seeds are
+#       already in this member; converting them to ATE vectors is work we owe,
+#       not a foundry reply.
+#
+# Two more are a CONTRACT rather than a foundry deliverable, and on a shuttle
+# they do not exist: a slot buyer has no per-customer lot yield target and no
+# private WAT limit table.
+#
+# `owner` is the party who closes the item. `closed_by` names the artefact that
+# would close it, so the note says what to go and get. `applies_in_mode` says
+# which of the two situations the item exists in at all.
+# ─────────────────────────────────────────────────────────────────────────────
+
+OWNER_OPERATOR = "shuttle_operator"     # the party that owns the reticle
+OWNER_FOUNDRY = "foundry"
+OWNER_CONTRACT = "customer_foundry_contract"
+OWNER_TEST_HOUSE = "test_house"
+OWNER_US = "this_flow"
+
+_BOTH = (MODE_SHUTTLE, MODE_DEDICATED, MODE_UNDECLARED)
+_DEDICATED_ONLY = (MODE_DEDICATED, MODE_UNDECLARED)
+
+#: field -> (owner-on-dedicated, closing artefact, modes it exists in)
+_OPEN_ITEM_OWNERS = {
+    "PENDING_FOUNDRY_mask_layers": (
+        OWNER_FOUNDRY,
+        "the process mask layer index -> GDS layer/datatype table",
+        _BOTH),
+    "PENDING_FOUNDRY_reticle_steppers": (
+        OWNER_FOUNDRY,
+        "the reticle field size, alignment-mark set and kerf width for the "
+        "stepper the lot runs on",
+        _BOTH),
+    "PENDING_FOUNDRY_wat_structures": (
+        OWNER_FOUNDRY,
+        "the PCM structure list probed in the scribe line",
+        _BOTH),
+    "PENDING_FOUNDRY_yield_target_pct": (
+        OWNER_CONTRACT,
+        "the lot acceptance agreement",
+        _DEDICATED_ONLY),
+    "PENDING_FOUNDRY_acceptance_criteria": (
+        OWNER_CONTRACT,
+        "the per-parameter WAT limit table in the lot acceptance agreement",
+        _DEDICATED_ONLY),
+    "PENDING_FOUNDRY_test_patterns": (
+        OWNER_US,
+        "conversion of the L10 seeds already listed in this member into ATE "
+        "patterns from the cocotb / Verilator traces this flow produced",
+        _BOTH),
+    "PENDING_FOUNDRY_loadboard_id": (
+        OWNER_TEST_HOUSE,
+        "the ATE loadboard part number and revision from the test house",
+        _BOTH),
+    "PENDING_FOUNDRY_scribe_line_layout": (
+        OWNER_FOUNDRY,
+        "the scribe-line PCM / alignment frame GDS from the mask-set kit",
+        _BOTH),
+}
+
+#: On a shuttle these belong to the SLOT OPERATOR, not to the submitter's
+#: foundry contact: the reticle, its scribe line and its PCM structures are
+#: shared across every project in the shuttle and are the operator's to define.
+_OPERATOR_OWNED_ON_SHUTTLE = (
+    "PENDING_FOUNDRY_mask_layers",
+    "PENDING_FOUNDRY_reticle_steppers",
+    "PENDING_FOUNDRY_wat_structures",
+    "PENDING_FOUNDRY_scribe_line_layout",
+)
+
+STATUS_OPEN = "OPEN"
+STATUS_NA = "NOT_APPLICABLE_IN_MODE"
+
+
+def _open_item(field: str, mode_info: dict) -> dict:
+    """The ownership record for ONE open item, resolved against the mode.
+
+    An unknown field is NOT silently owner-less: it is recorded with
+    `owner: null` and an explicit reason, and the gate FAILs on exactly that
+    shape. A new PENDING_FOUNDRY_* field added without an owner is the shrug
+    this whole structure exists to stop, so it must be loud."""
+    mode = mode_info.get("mode") or MODE_UNDECLARED
+    spec = _OPEN_ITEM_OWNERS.get(field)
+    if spec is None:
+        return {
+            "field": field,
+            "owner": None,
+            "owner_name": None,
+            "closed_by": None,
+            "applies_in_mode": None,
+            "status": STATUS_OPEN,
+            "note": ("no ownership declared for this field in "
+                     "_OPEN_ITEM_OWNERS — an open item that does not name "
+                     "who closes it is not a disclosure."),
+        }
+    owner, closed_by, modes = spec
+    if mode == MODE_SHUTTLE and field in _OPERATOR_OWNED_ON_SHUTTLE:
+        owner = OWNER_OPERATOR
+    return {
+        "field": field,
+        "owner": owner,
+        # The operator's identity is a MEASURED fact off 37.5ic's report when
+        # the mode is shuttle, and null otherwise — never a placeholder name.
+        "owner_name": (mode_info.get("operator")
+                       if owner == OWNER_OPERATOR else None),
+        "closed_by": closed_by,
+        "applies_in_mode": list(modes),
+        "status": STATUS_OPEN if mode in modes else STATUS_NA,
+    }
+
+
+def _open_items(fields, mode_info: dict) -> list:
+    return [_open_item(f, mode_info) for f in fields]
+
+
+def _pending_foundry_count(handoff_dir: Path):
+    """(fields_in_json_members, total_including_the_scribe_note).
+
+    TWO NUMBERS BECAUSE THERE ARE TWO POPULATIONS, and the one number that
+    used to stand here silently conflated them. The literal `9` it replaces
+    counted PENDING_FOUNDRY_* KEYS inside the JSON members and did not count
+    the scribe-line note; the GATE's `pending_foundry_fields` does count the
+    note, which is why a corpus kit with nine keys reports "10 open items".
+    Quoting either number where the other is meant is a different measurement,
+    not a rounding error, so both are stated.
+
+    Counted off the members on disk, so neither can disagree with the kit it
+    describes. The literal was right only for as long as nobody changed the
+    field set — and this change does: the two corner fields stop being pending
+    on anybody, so the JSON count goes 9 -> 7."""
+    n = 0
+    for m in sorted(handoff_dir.glob("*.json")):
+        try:
+            data = json.loads(m.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            n += sum(1 for k in data if str(k).startswith("PENDING_FOUNDRY_"))
+    note = (handoff_dir / "scribe_line_layout.PENDING_FOUNDRY.txt").is_file()
+    return n, n + (1 if note else 0)
+
+
 def _pdk_statements_diverge(signoff: str, spec: str) -> bool:
     """Do these two PDK statements describe DIFFERENT processes?
 
@@ -520,6 +923,15 @@ def main(argv=None) -> int:
         _ident["spec_pdk_target"] = str(spec_pdk_target)
         _ident["pdk_source"] = "signoff_flow"
 
+    # WHICH OF THE TWO SITUATIONS THIS KIT IS IN. Resolved once and carried by
+    # every member, so a reader who opens ONE member still learns whether the
+    # reticle is theirs or the slot operator's — and so the gate can compare
+    # the mode the kit CLAIMS against the evidence on disk.
+    mode_info = _handoff_mode(project)
+
+    # The corners the sign-off liberty files declare. Measured, not defaulted.
+    corners = _signoff_liberty_corners(project)
+
     # Step 1: mask_spec.json — deterministic starting point. The mask
     # layer table is foundry-specific so we mark it TODO.
     mask_spec = {
@@ -546,8 +958,12 @@ def main(argv=None) -> int:
         "PENDING_FOUNDRY_reticle_steppers": (
             "Author: stepper field size, alignment marks, kerf width."
         ),
+        "handoff_mode": mode_info,
+        "open_items": _open_items(
+            ("PENDING_FOUNDRY_mask_layers",
+             "PENDING_FOUNDRY_reticle_steppers"), mode_info),
     }
-    (handoff_dir / "mask_spec.json").write_text(
+    _aa.write_text(handoff_dir / "mask_spec.json",
         json.dumps(mask_spec, indent=2, ensure_ascii=False) + "\n")
 
     # Step 2: wat_plan.json — Wafer Acceptance Test plan.
@@ -575,8 +991,13 @@ def main(argv=None) -> int:
         "PENDING_FOUNDRY_acceptance_criteria": (
             "Author: pass/fail thresholds for each WAT parameter."
         ),
+        "handoff_mode": mode_info,
+        "open_items": _open_items(
+            ("PENDING_FOUNDRY_wat_structures",
+             "PENDING_FOUNDRY_yield_target_pct",
+             "PENDING_FOUNDRY_acceptance_criteria"), mode_info),
     }
-    (handoff_dir / "wat_plan.json").write_text(
+    _aa.write_text(handoff_dir / "wat_plan.json",
         json.dumps(wat_plan, indent=2, ensure_ascii=False) + "\n")
 
     # Step 3: corner_test_vectors.json — ATE corner test kit.
@@ -592,8 +1013,29 @@ def main(argv=None) -> int:
         "pdk": pdk_name,
         "test_pattern_seeds_from_l10": l10_ids,
         "test_pattern_seed_count": len(l10_ids),
-        "PENDING_FOUNDRY_voltage_corners": ["VDD_min", "VDD_nom", "VDD_max"],
-        "PENDING_FOUNDRY_temperature_corners_celsius": [-40, 25, 85, 125],
+        # NOT pending on anybody. These are the corners the sign-off liberty
+        # files declare, read off the flow's own asset paths — the same ground
+        # truth `_pdk_from_signoff_flow` uses to name the PDK. What stood here
+        # before was `["VDD_min","VDD_nom","VDD_max"]` and
+        # `[-40, 25, 85, 125]`: canned literals wearing a PENDING_FOUNDRY_
+        # prefix, wrong for every design in the published corpus, and
+        # actionable enough for a foundry to test against. When the PDK's
+        # liberty names carry no operating point (asap7, nangate45) these are
+        # null and `corner_source` says NOT_DETERMINED — never a default.
+        "corner_source": ("signoff_liberty" if (corners["voltages_v"]
+                                                or corners["temperatures_celsius"])
+                          else "NOT_DETERMINED"),
+        "voltage_corners_v": corners["voltages_v"] or None,
+        "temperature_corners_celsius": corners["temperatures_celsius"] or None,
+        "signoff_liberty_files": corners["liberty_files"],
+        # The size of the search that produced the answer — or that failed to.
+        # A null corner set beside `liberty_seen: 0` and one beside
+        # `liberty_seen: 5, liberty_unparsed: 5` are different facts.
+        "corner_search": {
+            "liberty_paths_seen": corners["liberty_seen"],
+            "liberty_names_without_operating_point":
+                corners["liberty_unparsed"],
+        },
         "PENDING_FOUNDRY_test_patterns": (
             "Author: convert each L10 seed above into an ATE pattern "
             "(input vector + expected output + corner constraints) from "
@@ -603,8 +1045,12 @@ def main(argv=None) -> int:
         "PENDING_FOUNDRY_loadboard_id": (
             "Author: ATE loadboard part number + revision."
         ),
+        "handoff_mode": mode_info,
+        "open_items": _open_items(
+            ("PENDING_FOUNDRY_test_patterns",
+             "PENDING_FOUNDRY_loadboard_id"), mode_info),
     }
-    (handoff_dir / "corner_test_vectors.json").write_text(
+    _aa.write_text(handoff_dir / "corner_test_vectors.json",
         json.dumps(corner_kit, indent=2, ensure_ascii=False) + "\n")
 
     # Step 4: scribe line — ORGANIC-20260606 #446: NO file wearing the
@@ -622,10 +1068,50 @@ def main(argv=None) -> int:
         if head.startswith(b"# PLACEHOLDER"):
             scribe_path.unlink()  # remove the old fabricated placeholder
     if not scribe_path.is_file():
-        (handoff_dir / "scribe_line_layout.PENDING_FOUNDRY.txt").write_text(
-            "scribe_line_layout.gds is FOUNDRY-SUPPLIED (PCM structures "
-            "+ alignment marks) and is NOT generated here (#446). Obtain "
-            "it from the shuttle/foundry kit and place it beside this "
+        # THE NOTE NOW NAMES ITS OWNER. It used to say the frame was
+        # "FOUNDRY-SUPPLIED" and stop, which is a shrug in two ways: it never
+        # said WHICH foundry-side party owns it (on a shuttle it is the slot
+        # operator, not the submitter's foundry contact), and it never said
+        # what had been done to establish that we cannot produce it.
+        #
+        # The shape is borrowed from LibreLane's `KLayout.SealRing`, which
+        # skips with "KLAYOUT_SEALRING_SCRIPT is unset. KLayout.SealRing may
+        # not be supported for the {PDK} PDK. This step will be skipped." —
+        # a legitimate skip that names the PDK and the missing variable, so a
+        # reader knows exactly what would make it run. We do the same and add
+        # the machine-readable half LibreLane does not have: this text is
+        # accompanied by `open_items` records inside the JSON members, so a
+        # refusal is a datum rather than a line in a log.
+        _scribe_owner = _open_item(
+            "PENDING_FOUNDRY_scribe_line_layout", mode_info)
+        _owner_line = _scribe_owner["owner"]
+        if _scribe_owner.get("owner_name"):
+            _owner_line += f" ({_scribe_owner['owner_name']})"
+        _aa.write_text(handoff_dir / "scribe_line_layout.PENDING_FOUNDRY.txt",
+            "scribe_line_layout.gds is NOT generated by this flow, and is "
+            "NOT a placeholder for one that could be (#446).\n"
+            "\n"
+            f"  handoff mode : {mode_info['mode']}\n"
+            f"  mode basis   : {mode_info['basis']}\n"
+            f"  owner        : {_owner_line}\n"
+            f"  closed by    : {_scribe_owner['closed_by']}\n"
+            "\n"
+            "WHY THIS FLOW CANNOT PRODUCE IT — measured, not assumed.\n"
+            "Every PDK tree in the pinned EDA image was searched on "
+            "2026-08-20 for a shipped scribe / PCM / process-monitor layout:\n"
+            "  - 'process_monitor'  0 files\n"
+            "  - 'scribe'          17 files, NONE of them geometry: they are\n"
+            "                      fill-deck keep-out constants, one layer\n"
+            "                      declaration, and five matches on the\n"
+            "                      English word 'described'\n"
+            "  - libs.ref of all 6 PDK roots holds only standard cells, IO,\n"
+            "    primitive devices and SRAM macros — no test-structure "
+            "library\n"
+            "So the frame is not a thing the flow declined to build. No open "
+            "PDK ships one, because the scribe line belongs to whoever owns "
+            "the reticle.\n"
+            "\n"
+            "Obtain it from the party named above and place it beside this "
             "note before tapeout.\n"
             # #484: the design NAME line is ALWAYS present (design_top / pdk
             # can both be null for two pre-resolution designs, which made
@@ -652,9 +1138,23 @@ def main(argv=None) -> int:
         "                                (see scribe_line_layout.PENDING_FOUNDRY.txt)\n"
         "  corner_test_vectors.json    — ATE corner test kit\n"
         "\n"
-        "PENDING_FOUNDRY_* entries inside each JSON mark fields the foundry /\n"
-        "production team supplies before tape-out (open items). Substance\n"
-        "gate `foundry_handoff_package_check` (Step 35) audits completeness.\n"
+        "PENDING_FOUNDRY_* entries inside each JSON mark fields somebody\n"
+        "OTHER THAN THIS FLOW closes before tape-out. Each one now carries an\n"
+        "`open_items` record naming that party, the artefact that would close\n"
+        "it, and whether it exists at all in this hand-off mode. Substance\n"
+        "gate `foundry_handoff_package_check` (Step 38) audits completeness\n"
+        "and FAILs an open item that names no owner.\n"
+        "\n"
+        f"Handoff mode: {mode_info['mode']}"
+        + (f" (operator: {mode_info['operator']})"
+           if mode_info.get("operator") else "") + "\n"
+        f"  basis: {mode_info['basis']}\n"
+        "\n"
+        "Sign-off corners, read off the liberty files the flow itself\n"
+        "consumed (NOT foundry-supplied, NOT defaults):\n"
+        f"  voltage_corners_v            = {corners['voltages_v'] or 'NOT_DETERMINED'}\n"
+        f"  temperature_corners_celsius  = {corners['temperatures_celsius'] or 'NOT_DETERMINED'}\n"
+        f"  from {corners['liberty_seen']} liberty path(s) named by the flow\n"
         "\n"
         "Authored design facts auto-included:\n"
         f"  cell_count    = {cells}\n"
@@ -664,6 +1164,7 @@ def main(argv=None) -> int:
     )
 
     # Step 5: audit summary
+    _pending_counts = _pending_foundry_count(handoff_dir)
     audit_path = audit_dir / "foundry_handoff_audit.json"
     audit = {
         "program": "foundry_handoff_pack_gen",
@@ -690,7 +1191,32 @@ def main(argv=None) -> int:
             "gds_size_bytes": (primary_gds.stat().st_size
                                if primary_gds else 0),
         },
-        "pending_foundry_count": 9,  # PENDING_FOUNDRY_* fields (#449)
+        # COUNTED, not asserted. This was the literal `9` for as long as there
+        # happened to be nine PENDING_FOUNDRY_* fields; it did not move when a
+        # field was added or removed, so it could only ever have been right by
+        # coincidence. It is now derived from the members actually written, and
+        # it drops to seven in this change because the two corner fields stopped
+        # being pending on anybody.
+        "pending_foundry_count": _pending_counts[0],
+        # The same items as the gate's `pending_foundry_fields` counts them —
+        # the JSON keys PLUS the scribe-line note. See _pending_foundry_count.
+        "pending_open_items_total": _pending_counts[1],
+        # WHOSE ACCEPTANCE, AND WHAT THEY SAID (Q4). On the shuttle path the
+        # operator's own precheck verdict is the most load-bearing thing in the
+        # hand-off — it is the ONE judgement in this flow we do not write. The
+        # kit REFERENCES it by path and pins the bytes it saw, rather than
+        # copying it: a copy can drift from the report it was copied from, and
+        # "the artefact changed after the evidence" is this repository's own
+        # worst failure shape.
+        "handoff_mode": mode_info,
+        "signoff_corners": {
+            "source": ("signoff_liberty" if (corners["voltages_v"]
+                                             or corners["temperatures_celsius"])
+                       else "NOT_DETERMINED"),
+            "voltage_corners_v": corners["voltages_v"] or None,
+            "temperature_corners_celsius": corners["temperatures_celsius"] or None,
+            "liberty_paths_seen": corners["liberty_seen"],
+        },
         "notes": (
             "Skeleton emits design facts + PENDING_FOUNDRY_* open items. "
             "Production tape-out requires foundry-supplied scribe layout + "
