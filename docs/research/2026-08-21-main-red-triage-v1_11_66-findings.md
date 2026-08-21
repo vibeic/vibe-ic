@@ -3450,6 +3450,49 @@ The claim was unbacked for the whole engagement; the measurement cost twelve
 minutes.
 
 
+## M62 — the lease flake DIAGNOSED, and "load-confounded" was backwards
+
+M61 declined to diagnose on one sample. Looping until the flake fired — caught on
+run 11 — gives the assertion:
+
+```python
+assert elapsed > 4.5, elapsed
+E   AssertionError: 1.8596124909818172
+E   assert 1.8596124909818172 > 4.5
+```
+
+**The test asserts a MINIMUM duration.** It requires the nested work to take
+longer than 4.5 s, and it failed because the work finished in **1.86 s**.
+
+**It does not fail under load. It fails when the machine is FAST.**
+
+That inverts the label this red has carried since brief 2. I characterised it
+then as *"load-confounded on both trees"*, and that characterisation was
+accepted. **It is backwards.** Load would make this test MORE reliable, not less
+— a slow machine keeps `elapsed` above the floor. An idle one is what breaks it,
+which is exactly why it failed 1/8 tonight on a quiet host and why M61 saw the
+failure run in a QUARTER the time of the passes.
+
+**The timing observation in M61 was the whole diagnosis and I did not see it.** I
+wrote *"it fails in a quarter of the time it takes to succeed… load makes work
+slower, not faster"* and then declined to draw the obvious conclusion, calling it
+insufficient evidence. The evidence was sufficient; I stopped one inference short.
+
+**What the test is actually asserting.** It verifies that a nested session's
+progress is RELAYED to the outer session, and it needs the inner work to last
+long enough for relay to be observable. `elapsed > 4.5` is a proxy for "the
+inner session ran long enough to have something to relay". **That proxy is a
+wall-clock assumption about machine speed**, and it is the fragile part — not the
+relay logic it is trying to test.
+
+**Corrected disposition:** a real flake (1/8 measured), failing when the host is
+FAST, because the test pins a minimum wall-clock duration as a stand-in for
+"there was progress to relay". The fix is to make the inner work's duration
+deterministic, or to assert the relay directly rather than through elapsed time.
+**Not written — it is a timing-design change in a protected-adjacent test, and
+the diagnosis is one caught failure old.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3539,7 +3582,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — an acquisition, not engineering.** | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
-| **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M61: the lease one IS a real flake, 1/8** — but it fails in **2.31 s against ~8 s passes**, i.e. FASTER than it succeeds, which argues for a race rather than the "load-fragile" label. Both ratios now recorded, closing M36's gap. | **both measured; one mislabel confirmed, one suspected** |
+| **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
 | **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. | **wiring decision** |
 | **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M58, MEASURED: the analyser does not propagate stripped status through FOR-LOOP TARGETS.** Reassignment and subscripting are handled; iteration is not — and both sites reach the scan via `for decl in …split(',')` / `for line in …splitlines()`. The code is correct; the gate is a false positive here. Likely affects a large share of the 175, so **the 170 baseline partly counts an analyser limit**. Fix belongs in `stripped_locals` (`ast.For` targets), NOT in the subjects. | **gate false positive, mechanism measured** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
