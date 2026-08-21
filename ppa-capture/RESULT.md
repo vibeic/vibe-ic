@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 12 records, and the eleven rules that were already programs
+# The PPA cluster, DISTILLED — 14 records, and the fifteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -23,7 +23,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 10 | deterministic rules — the default, and every one names its predicate |
+| **A** | 12 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 1 | the predicate is trivial; the provenance plumbing it must read is not |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -61,7 +61,17 @@ it now — checked by reading it, not by trusting the fix note.
 | F-14 absolute host paths in emitted scripts | `programs/emitted_script_portability_check.py` — a shipped gate, `26 of 34` on the run that produced it | every emitted analysis deck |
 | F-15 no artefact prints a hold `wns` | `_ppa/feasibility.py:227-228` — the hold axis proves from the worst-slack name too | both timing axes, both proof groups |
 | F-18 a count is demanded where the schema allows a status | `_ppa/benchmark.py` `CHECK_CLEAN` / `VERDICT_CLEAN`; `test_ppa_verdict_and_scope_shapes.py` | every floor check, verdict-valued or count-valued |
-| (smaller) `jsonschema` not a dependency | `_ppa/jsonschema_bundled.py` — bundled, so a stock host is covered | and it names the 3.2.0 case the import guard missed |
+| (smaller) `jsonschema` not a dependency | `_ppa/jsonschema_bundled.py` — bundled, so a stock host is covered | and it names the too-old case the import guard missed |
+
+Four more classes, drawn from the six lane records rather than from the 18, are
+also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
+
+| class | already enforced by |
+|---|---|
+| a PASS must say how much it looked at | `programs/gate_discloses_denominator_check.py` — a shipped gate over a 493-program population, with four measured walking bugs in its own header |
+| a gate that read NOTHING must not exit 0 | `programs/gate_zero_denominator_refuses_check.py` — and its header states exactly why the first gate does not imply it, which is the distinction I would otherwise have re-derived |
+| a bad invocation is 3, and asking for `--help` is not a bad invocation | `programs/_ppa/cli_exit.py` reads the exit code rather than catching the type; `test_ppa_layer_exit_contract.py` carries BOTH arms — the two are one defect from opposite sides, so a suite testing one manufactures the other |
+| a present-but-empty population is never a pass | `tests/test_ppa_layer_vacuous_population.py` — the right question, on 8 of 19 programs; the coverage gap is recorded under **A-3**, not as a class of its own |
 
 Three more are fixed on this tree but their guard is the fix itself, and the
 CLASS is what this lane recorded instead:
@@ -164,6 +174,26 @@ Measured on this tree, this morning:
 The floor was written on a night when 14 and 14 were the same number. It now
 passes over a population of 19 with 4 holes in it, and its own message still
 reads "the fourteen shipped programs".
+
+**The same defect sits on four tables in this layer, not one.** Two more,
+measured here:
+
+    present-but-empty input cases declared : 8   (`range(8)`)
+    programs those 8 cases reach          : 8 of 19
+    NEVER given a present-but-empty input : 11
+
+and that file DOES carry a guard —
+`test_the_case_table_matches_the_parametrisation` — which asserts the table
+against **its own length**. That is self-consistency: it passes for any table
+and cannot see the population. It is the obvious wrong guard, already built,
+which is why the record's fix action names it.
+
+The fourth is the producer census itself: the backend package **discovers five**
+modules and **three are drivable**, while the census names three producers by
+hand. The one it does not name emits **3 of 3 records the canonical consumer
+refuses** — `BAD_METRIC_NAME`, and `SCOPE_INCOMPLETE` and `NO_UNIT` behind it —
+on this tree, today.
+
 **(o)** yes. **(d)** yes, and in the direction a floor can never see — an entry
 left behind for a member since deleted.
 
@@ -270,6 +300,45 @@ dead branch and an unused branch have in common, and why nothing caught it.
 it also catches the harder direction: a branch that works today and dies when
 the vocabulary gains a separator.
 
+### A-11 · discovery selects on the parsed document not on the filename · `ppa.head_to_head`
+
+    _RECORD_GLOB = "**/*head_to_head*.json"
+
+Run against the two record trees this repository already carries:
+
+    ppa-crosslayer/records   582 json   15 declare the comparison schema   glob selects  0
+    ppa-e2e/records          496 json    2 declare the comparison schema   glob selects  4
+
+Zero of fifteen in one tree. In the other it selects **four where only two are
+inputs** — the other two are the gate's own `_report` documents, which declare
+no schema and carry an entirely different key set. Both directions of wrong,
+from a name.
+
+The two shipped denominator gates do not catch it and cannot: both are satisfied
+by *a* disclosed count, and this gate discloses honestly — over a population that
+was already filtered by the thing under suspicion.
+**(o)** yes. **(d)** yes — the predicate is "select on the declared schema", so
+it holds for any document class this layer gains, and the third disclosed number
+it requires (files that would not parse) is the half neither denominator gate
+asks for.
+
+### A-12 · an optional import is guarded by capability not by exception type · `benchmark.verify_claim_done`
+
+Present-but-too-old and absent are different states; only one is an import
+failure. The measured cost of conflating them: the gate raised on an attribute
+that arrived in the dependency's next major release, and returned **the exit code
+reserved for a finding about the subject under test** — a crash publishing itself
+as a verdict — with **33 test identifiers red on a stock host** for that one
+attribute. The test-side guard had the same hole from the other side: skipping on
+importability covers one of the two ways a dependency can be out of reach.
+
+A broad static screen finds 79 of 131 handler sites using an attribute of the
+guarded name outside the handler. **That is an upper bound on candidates, not a
+defect count** — a use already behind a capability flag satisfies the rule and
+the screen cannot see the flag. It is quoted for sizing and the record says so.
+**(o)** yes. **(d)** yes — the rule is per attribute of any optionally-imported
+name, so it covers a dependency this layer adopts next, not the one that bit.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -319,6 +388,21 @@ and `tests/test_enhancement_emit.py` pass (69 passed, 4 skipped), as does
 
 No gate is implemented. No version bumped. No baseline written. Nothing pushed
 to main.
+
+## Where each record came from
+
+| source named in the brief | records it produced |
+|---|---|
+| `ppa-e2e/FINDINGS.md` F-1..F-18 | A-1, A-2, A-6, A-7, A-8, C-1 — and eleven ALREADY-PROGRAM |
+| `ppa-e2e/RESULT.md` (13 requests) | folded into the above. Paid on this tree: **1, 2, 4, 5, 6, 8, 10, 11, 12**. Partly paid: **3** (8 of 9 axes gained a producer), **9** (three of four scope keys), **13** (host paths yes, the reliability count and the relative output path no). **7** was answered with a DIFFERENT fix than the one requested — the source artefact was not put in the scope; instead the index learned to tell corroboration from conflict, which settles the fatal half and leaves two genuinely disagreeing artefacts refused, on purpose |
+| `ppa-crosslayer/RESULT.md` (10 requests) | T-1; and it is the evidence that F-3 went 0 → 6 axes and that `drv` is the one left |
+| `jrc_ppa-layer-rc-contract` | A-3, A-4 |
+| `jcorpus_ppa-corpus-mode` | A-5, A-11 |
+| `agent_jppa-tests` | A-12; and the fourth-instance measurement under A-3 |
+| `agent_jppafeas-feasibility-producers` | A-1, A-2 |
+| `jrecords_record-shape-reconcile` | the producer-census instance under A-3 |
+| `jreq_lander-three` | its three requests are landed; nothing left to distil |
+| using the emitter this brief mandates | A-9, A-10 |
 
 ## The one thing I could not settle
 
