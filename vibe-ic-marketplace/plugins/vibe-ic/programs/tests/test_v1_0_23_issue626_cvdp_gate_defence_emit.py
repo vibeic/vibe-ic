@@ -45,6 +45,7 @@ PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
 sys.path.insert(0, str(HARNESS))
 import cvdp_gate as G  # noqa: E402
+from _sim_tools import NEEDS_SIM  # noqa: E402
 
 _HAS_IVERILOG = shutil.which("iverilog") is not None
 
@@ -109,6 +110,7 @@ def _verbatim_compiles(completion: str, tmp_path: Path) -> bool:
 # ── (1) the fix: emitted completion is de-fenced AND compiles verbatim ───────
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@NEEDS_SIM
 def test_fenced_emit_is_defenced_and_compiles_verbatim(tmp_path):
     ok, out_rec, entry = G.gate_record({"id": "p1", "completion": FENCED},
                                        _wd(tmp_path))
@@ -134,6 +136,7 @@ def test_original_fenced_completion_would_elab_error_verbatim(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@NEEDS_SIM
 def test_unchanged_fenced_draft_still_defenced(tmp_path):
     """The emit must be UNCONDITIONAL: even a fenced draft that needs NO
     hygiene fix (the dominant ELAB_ERROR shape) must be de-fenced. Before the
@@ -148,6 +151,7 @@ def test_unchanged_fenced_draft_still_defenced(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@NEEDS_SIM
 def test_prose_then_fenced_emits_only_compiled_code(tmp_path):
     ok, out_rec, entry = G.gate_record(
         {"id": "p_prose", "completion": PROSE_THEN_FENCED}, _wd(tmp_path))
@@ -161,6 +165,7 @@ def test_prose_then_fenced_emits_only_compiled_code(tmp_path):
 # ── (2) NEGATIVE no-leak ─────────────────────────────────────────────────────
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@NEEDS_SIM
 def test_multifence_emits_all_bodies_NOLEAK(tmp_path):
     """no-leak (c): a multi-fence completion emits ALL module bodies, not just
     the first, and de-fenced."""
@@ -174,6 +179,7 @@ def test_multifence_emits_all_bodies_NOLEAK(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@NEEDS_SIM
 def test_bare_completion_unchanged_NOLEAK(tmp_path):
     """no-leak (b): a bare fence-less code completion passes through unchanged
     (it was never fenced; the fix must not touch this path)."""
@@ -185,6 +191,7 @@ def test_bare_completion_unchanged_NOLEAK(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@NEEDS_SIM
 def test_json_dict_single_file_normalized_to_bare_rtl_NOLEAK(tmp_path):
     """no-leak (a), SUPERSEDED BY #680: a SINGLE-RTL-FILE JSON code-dict
     completion is the dominant `no_schema=True` shape (297/302). The harness
@@ -206,6 +213,7 @@ def test_json_dict_single_file_normalized_to_bare_rtl_NOLEAK(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@NEEDS_SIM
 def test_json_dict_multifile_stays_json_NOLEAK(tmp_path):
     """no-leak (a'), #680: a genuinely MULTI-FILE JSON code-dict (>1 RTL file)
     is decoded by the harness under its schema, so it MUST stay the JSON

@@ -67,6 +67,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _source_record_merge import merge_source_records  # noqa: E402
+
 
 @dataclass
 class Finding:
@@ -98,15 +101,25 @@ def parse_bitmap(bitmap_arg: Optional[str],
             out.update(json.loads(Path(bitmap_arg).read_text()))
         except Exception as e:
             raise SystemExit(2) from e
-    _layers = {}
-    for p in (l3_path, l4_path):
-        if p and p.exists():
-            for _b, _bits in _load_bitmap_from_layer(p).items():
-                if _bits or _b not in _layers:
-                    _layers[_b] = _bits
-    for _b, _bits in _layers.items():
-        if _bits or _b not in out:
-            out[_b] = _bits
+    # L3 and L4 are PEER sources -- neither is an override of the other -- so a
+    # byte both of them name must not be resolved by which one this loop reads
+    # last. `_load_bitmap_from_layer` returns `{byte: {}}` for a byte declared
+    # with no bit rows, and `audit()` then extracts zero (signal, bit) pairs for
+    # it: that byte's positions are simply never checked, and with other bytes
+    # still populated the `empty_bitmap` WARN does not fire either. Silent
+    # under-check, decided by argument order.
+    merged, _conflicts = merge_source_records(
+        (_load_bitmap_from_layer(p) for p in (l3_path, l4_path)
+         if p and p.exists()),
+        on_conflict="richer")
+    for byte_name, bits in merged.items():
+        # Layer-over-`--bitmap` precedence is UNCHANGED: a layer that DESCRIBES
+        # the byte still wins, exactly as before. Only a layer that merely NAMES
+        # it no longer does. Narrowing this to the empty case is deliberate --
+        # whether an explicit `--bitmap` should outrank a layer doc is a real
+        # question, and it is not this rule's to answer.
+        if bits or byte_name not in out:
+            out[byte_name] = bits
     return out
 
 

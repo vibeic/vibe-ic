@@ -57,6 +57,60 @@ import score_iverilog_tb as SC        # noqa: E402
 _HAS_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 _iv = pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog/vvp unavailable")
 
+
+#: THE PRECONDITION THE FACET-B TESTS ACTUALLY NEED, probed rather than assumed.
+#:
+#: Two of them assert that binding `#(.STG_WIDTH(16))` to a module with no such
+#: parameter FAILS elaboration with `parameter 'STG_WIDTH' not found`. That is
+#: not a property of Verilog — it is a property of one iverilog. MEASURED on
+#: Icarus Verilog 11.0 (stable), the version on this host:
+#:
+#:     iverilog -g2012 -o out m.v tb.v
+#:     tb.v:3: warning: parameter STG_WIDTH not found in tb.u.
+#:     rc=0
+#:
+#: A WARNING and rc=0. The tests were guarded on `iverilog/vvp unavailable`,
+#: which is true here and irrelevant: iverilog is present and simply does not
+#: reproduce the precondition, so both asserted a toolchain behaviour they had
+#: never established. Same shape as vibe-ic#1128 — a test stating half its
+#: precondition — one layer along: there the missing half was a second BINARY,
+#: here it is a BEHAVIOUR of the binary that is present.
+#:
+#: Probed by compiling the minimal case once, at import, rather than keyed on a
+#: version string: the version that changed this is not the point, the behaviour
+#: is, and a version comparison would go stale the next time it moves.
+def _iverilog_errors_on_unknown_param() -> bool:
+    if not _HAS_IVERILOG:
+        return False
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        (d / "m.v").write_text(
+            "module m(input a, output b);\n  assign b = a;\nendmodule\n")
+        (d / "tb.v").write_text(
+            "module tb;\n  reg a=0; wire b;\n"
+            "  m #(.NO_SUCH_PARAM(16)) u(.a(a), .b(b));\n"
+            "  initial #1 $finish;\nendmodule\n")
+        try:
+            r = subprocess.run(
+                ["iverilog", "-g2012", "-o", str(d / "out"),
+                 str(d / "m.v"), str(d / "tb.v")],
+                capture_output=True, text=True, timeout=60)
+        except Exception:            # noqa: BLE001 - absent/unusable toolchain
+            return False
+        return r.returncode != 0
+
+
+_IV_ERRORS_ON_UNKNOWN_PARAM = _iverilog_errors_on_unknown_param()
+
+#: Names WHICH half is missing, so a reader of the run learns what stopped being
+#: checked rather than inferring it. A skip is green (vibe-ic#1128).
+_iv_param_strict = pytest.mark.skipif(
+    not _IV_ERRORS_ON_UNKNOWN_PARAM,
+    reason=("needs an iverilog that ERRORS on an override of a parameter the "
+            "module does not declare; this one "
+            + ("is absent" if not _HAS_IVERILOG else
+               "only warns (rc=0) — Icarus 11.0 behaviour")))
+
 _LAYOUT = {
     "tb_filename": "testbench.v",
     "ref_glob": "verified_*.v",
@@ -294,6 +348,7 @@ _B_CAND_WRONG = (
 _B_CAND_HAS_PARAM = _B_GOLDEN.replace("STG_WIDTH=16", "STG_WIDTH=16")
 
 
+@_iv_param_strict
 def test_facetB_prefix_reproduces_param_not_found(tmp_path):
     """PRE-FIX REPRODUCE: the no-parameter candidate bound by `#(.STG_WIDTH(16))`
     fails iverilog elaboration with EXACTLY `parameter `STG_WIDTH' not found`."""
@@ -316,6 +371,7 @@ def test_facetB_prefix_reproduces_param_not_found(tmp_path):
 
 
 @_iv
+@_iv_param_strict
 def test_facetB_param_injection_flips_to_pass(tmp_path):
     """POST-FIX: on the `parameter `STG_WIDTH' not found` error the score path
     auto-retries ONCE, injecting a passthrough `parameter STG_WIDTH=16`, and the

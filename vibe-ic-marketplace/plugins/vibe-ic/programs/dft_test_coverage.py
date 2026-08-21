@@ -76,6 +76,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atpg_untestable_fault_classify as au  # noqa: E402
 import _dft_bit_expand as bx  # noqa: E402
+from _source_record_merge import merge_source_records  # noqa: E402
 
 RC_OK, RC_CANNOT = 0, 2
 
@@ -170,14 +171,17 @@ def compute(cut_netlist: Path, coverage_yml: Path, liberties=None, top=None,
     # nets can carry no test; we intersect its answer with Fault's uncovered
     # faults below.
     if directions is None:
-        directions = {}
-        for lp in (liberties or []):
-            p = Path(lp)
-            if p.is_file():
-                for _c, _pins in au.parse_liberty_pin_directions(
-                        p.read_text(errors="replace")).items():
-                    if _pins or _c not in directions:
-                        directions[_c] = _pins
+        # Same rule as the classifier's own `--liberty` merge: a liberty that
+        # names a cell but declares no pin DIRECTION for it (a `pg_pin`-only
+        # block) yields `{cell: {}}`, and under `dict.update` that emptiness
+        # would erase another liberty's real pin map purely because it sorted
+        # later. An emptied cell drops out of `classify()` entirely, taking its
+        # observability edges with it, which INFLATES the reported coverage.
+        directions = merge_source_records(
+            (au.parse_liberty_pin_directions(p.read_text(errors="replace"))
+             for p in (Path(lp) for lp in (liberties or [])) if p.is_file()),
+            on_conflict="richer",
+        )[0]
     else:
         directions = dict(directions)
     if not directions:
