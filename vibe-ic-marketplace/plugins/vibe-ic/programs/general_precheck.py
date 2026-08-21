@@ -203,6 +203,41 @@ OPERATOR_SPECIFIC_EXCLUDED: Tuple[Tuple[str, str], ...] = (
      "template there are no fixtures and no encoding to conform to."),
 )
 
+#: Where a DELEGATED checker's artefact goes. THIS LADDER'S OWN DIRECTORY, with
+#: basenames of its own, and both halves of that are load-bearing.
+#:
+#: Until this constant existed, the five delegates wrote to the FLOW'S canonical
+#: report paths — `reports/phase3/{die_finishing,antenna_signoff,drc_router,
+#: drc_signoff,density_signoff}.json` — four of which the flow itself produces
+#: from a step gate, and three of which a step declares as a `required_output`.
+#: This ladder therefore OVERWROTE four sign-off artefacts it does not own, with
+#: the output of a WEAKER invocation. MEASURED on `reports/phase3/drc_signoff.json`,
+#: the two argv forms aimed at that one path:
+#:
+#:     step 31   drc_report_check . --mode drc --signoff \
+#:                   --under reports/phase3/drc_signoff.rpt --json <path>
+#:               -> 811 B, findings [DRC_REPORT_EXISTS, SCOPE_NOT_FOUND],
+#:                  summary.scoped_under = ['reports/phase3/drc_signoff.rpt']
+#:     here      drc_report_check . --mode drc --json <path>
+#:               -> 308 B, findings [DRC_REPORT_EXISTS], no scope keys at all
+#:
+#: `--signoff` is a WRAPPER flag adding two independent refusals (a producer
+#: that is a rule deck applied to a layout, and evidence of a streamed layout);
+#: `--under` scopes discovery to the artefact step 31 declares. This ladder
+#: passes neither, so what it left behind was a strictly weaker verdict wearing
+#: the sign-off's filename — and `signoff_ladder_run.check_tier_1_drc` grades
+#: release-gating tier T1 off that file while `final_report_generate` echoes it
+#: into the sign-off summary a reader treats as the deliverable.
+#:
+#: THE BASENAMES ARE DIFFERENT TOO, not just the directory. Discovery in this
+#: tree is by recursive glob — `reports/**/drc_signoff.json`,
+#: `reports/**/antenna.json`, `reports/**/metal_density*.json` — so a copy of
+#: ours under a private directory keeping the canonical NAME would still be
+#: found and could still be graded as the sign-off. `test_general_precheck`
+#: asserts no delegate report path collides with anything the flow declares or
+#: designates, so the next delegate added cannot reintroduce this.
+DELEGATE_REPORT_DIR = "reports/phase3/general_precheck"
+
 #: How a delegated checker is invoked and what its rc means. `argv_tail` is
 #: appended after the project directory. `report_rel` is where the checker's
 #: own artefact goes, so the evidence quoted is the checker's, not ours.
@@ -263,7 +298,7 @@ LADDER: Tuple[Step, ...] = (
          "a seal ring was declared as required and the layout does not carry "
          "one",
          delegate=Delegate("die_finishing_check", (),
-                           "reports/phase3/die_finishing.json"),
+                           f"{DELEGATE_REPORT_DIR}/precheck_seal_ring.json"),
          note="Placed here because this is where the live operator tool "
               "MEASURABLY refused a published layout (2026-08-18, ladder step "
               "3 of 16, 'requires a seal ring (guard ring) around the die')."),
@@ -272,22 +307,22 @@ LADDER: Tuple[Step, ...] = (
     Step("Checker.KLayoutDensity", "Density Checker", 7, DELEGATED,
          "layer density outside the accepted window",
          delegate=Delegate("metal_layer_density_check", (),
-                           "reports/phase3/density_signoff.json",
+                           f"{DELEGATE_REPORT_DIR}/precheck_density.json",
                            positional="reports_dir")),
     Step("Checker.KLayoutZeroAreaPolygons", "Zero Area Polygons Checker", 8,
          OWN_GEOMETRY, "the layout contains zero-area polygons"),
     Step("Checker.KLayoutAntenna", "Antenna Checker", 9, DELEGATED,
          "antenna ratio violations",
          delegate=Delegate("antenna_report_check", (),
-                           "reports/phase3/antenna_signoff.json")),
+                           f"{DELEGATE_REPORT_DIR}/precheck_antenna.json")),
     Step("Checker.MagicDRC", "Magic DRC Checker", 10, DELEGATED,
          "Magic DRC violations",
          delegate=Delegate("drc_report_check", ("--mode", "drc"),
-                           "reports/phase3/drc_signoff.json")),
+                           f"{DELEGATE_REPORT_DIR}/precheck_magic_drc.json")),
     Step("Checker.KLayoutDRC", "KLayout DRC Checker", 11, DELEGATED,
          "KLayout DRC violations",
          delegate=Delegate("drc_report_check", ("--mode", "drc"),
-                           "reports/phase3/drc_router.json")),
+                           f"{DELEGATE_REPORT_DIR}/precheck_klayout_drc.json")),
 )
 
 

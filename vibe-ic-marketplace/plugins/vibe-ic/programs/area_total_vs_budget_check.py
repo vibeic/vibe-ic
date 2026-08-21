@@ -122,6 +122,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#1470
 
 TOOL = "area_total_vs_budget_check"
 VERSION = "1.0.0"
@@ -390,7 +391,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out,
+                          json.dumps(rep, indent=2, ensure_ascii=False) + "\n")
 
     scope = (f"read {len(rep['areas_read'])} synth area figure(s) and "
              f"{len(rep['ceiling_sources'])} L19 copy/copies")

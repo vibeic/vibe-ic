@@ -120,7 +120,7 @@ def _local_eda_image():
 # not available" about an image whose presence it never established.
 from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
                                probe_skip_reason)
-PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 _IMAGE_STATE, _IMAGE_DETAIL = probe(
