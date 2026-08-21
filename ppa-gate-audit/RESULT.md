@@ -482,3 +482,75 @@ checkout — reported UNDETERMINED and the row failed. It does not fail on a tre
 nobody is editing. The numbers above are from a re-run on a committed, untouched
 tree. The failing row is recorded here rather than quietly dropped, because a
 reader comparing two runs deserves to know which one was the measurement.
+
+---
+
+# Part 4 — the four UNDETERMINED head-to-head records have ONE root cause
+
+Gate 1 refuses one record and cannot decide four. The refusal (`h2h_F`) is Part 1.
+The four undetermined ones are worth naming precisely, because three of them share
+a single missing field and the campaign already demonstrates the fix in its own
+tree.
+
+## `rc_corner: null` on every slow-corner timing scope
+
+    h2h_A                                         SCOPE_SENTINEL
+    ppa-e2e/records/head_to_head.json             SCOPE_SENTINEL
+    ppa-e2e/records/head_to_head_diagnostic_power.json  SCOPE_SENTINEL
+
+All three, both arms, the same field:
+
+    timing_wns_ns.scope = { "stage": "post_route_extracted", "process": "ss",
+                            "voltage_v": 1.6, "temperature_c": 100.0,
+                            "rc_corner": null, ... }
+
+And the records that PASS, at the typical corner:
+
+    h2h_B, h2h_C … h2h_O
+    timing_wns_ns.scope = { ..., "process": "tt", "rc_corner": "max", ... }
+
+Every `process: tt` timing scope in this campaign states its RC corner. Every
+`process: ss` timing scope leaves it `null`. So the slow-corner post-route
+extraction ran without recording which parasitic corner it extracted at, on both
+arms of every comparison that uses it.
+
+The gate's objection is not pedantry: `null == null`, so two numbers taken under
+conditions nobody recorded would satisfy a scope-equality test and read as taken
+under the SAME conditions. Its own words — *"`null` and `""` are not
+unknown-corner markers … State the field or omit the key."* Omitting the key is
+also accepted, and it means something different and honest: this measurement has
+no RC corner. Writing `null` claims there is one and declines to say which.
+
+**Repair, one field, in the producer:** whatever writes the `ss` timing scope
+should emit the RC corner it extracted at, exactly as the `tt` path already does.
+This is a defect in the RECORD, not in the design and not in the gate.
+
+## `h2h_B`: a synthesis-stage power number with no operating mode
+
+    h2h_B                                         SCOPE_INCOMPLETE
+      power_mw.scope = { "stage": "synth", "scenario": "default", "process": "tt",
+                         "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib", ... }
+      -> "power_mw scope does not declare ['mode']"
+
+`h2h_C` measures power at `post_route_extracted` and its scope carries
+`"mode": "functional"`. The `stage: synth` power path does not. Same one-field
+repair, same producer-side fix, and the compliant shape already exists two records
+over.
+
+## Why this matters for the headline
+
+`h2h_A` and `h2h_B` compare the cross-layer winner against `vibe-ic-phase3-defaults`
+— the untuned baseline, which is the comparison `h2h_F` cannot make. Twelve such
+comparisons PASS, so the lane's claim against the shipped default is carried. But
+the two that pair the slow corner or the synthesis-stage power with it are the two
+that would extend that claim to the SS corner and to pre-layout power, and neither
+can be decided until one field is written.
+
+## The brief's third data source does not exist
+
+`ppa-crosslayer/eco-readjudication/`, named in the brief as holding per-candidate
+contract and feasibility JSON, is on **no branch of this repository**: 1524 remote
+refs scanned, 0 carry that path. The only `readjudication` matches anywhere are
+four unrelated test files under `programs/tests/`. What it describes is what
+`ppa-crosslayer/records/trials/*/{contract,candidates,feasibility_report}.json`
+holds, and that is what every number in this report was measured against.
