@@ -474,6 +474,78 @@ def test_the_gate_clears_phrases_on_SPELLING_not_on_the_argument():
         f"docstring's 'only spelling' account no longer holds: {groups}")
 
 
+#: Five ways a real emitter spells the same honest script -- three `incr` sites
+#: and a denominator of 3. `emitted_script` reads string LITERALS where the
+#: pre-polarity revision read the raw file, so each of these is a way the
+#: narrowing could have lost a site.
+_SPELLINGS = {
+    "adjacent literals":
+        'def s():\n'
+        '    return (\n'
+        '        "  if {[catch {a}]} { incr _n }\\n"\n'
+        '        "  if {[catch {b}]} { incr _n }\\n"\n'
+        '        "  if {[catch {c}]} { incr _n }\\n"\n'
+        '        "  if {$_n >= 3} { puts ALL }\\n")\n',
+    "one triple-quoted block":
+        'def s():\n'
+        '    return """\n'
+        '  if {[catch {a}]} { incr _n }\n'
+        '  if {[catch {b}]} { incr _n }\n'
+        '  if {[catch {c}]} { incr _n }\n'
+        '  if {$_n >= 3} { puts ALL }\n'
+        '"""\n',
+    "f-strings":
+        'def s(tag):\n'
+        '    return (\n'
+        '        f"  if {{[catch {{a}}]}} {{ incr _n }} ;# {tag}\\n"\n'
+        '        f"  if {{[catch {{b}}]}} {{ incr _n }} ;# {tag}\\n"\n'
+        '        f"  if {{[catch {{c}}]}} {{ incr _n }} ;# {tag}\\n"\n'
+        '        f"  if {{$_n >= 3}} {{ puts {tag} }}\\n")\n',
+    "list append and join":
+        'def s():\n'
+        '    parts = []\n'
+        '    parts.append("  if {[catch {a}]} { incr _n }")\n'
+        '    parts.append("  if {[catch {b}]} { incr _n }")\n'
+        '    parts.append("  if {[catch {c}]} { incr _n }")\n'
+        '    parts.append("  if {$_n >= 3} { puts ALL }")\n'
+        '    return "\\n".join(parts)\n',
+    "%-format and .format":
+        'def s(x):\n'
+        '    return ("  if {[catch {a}]} { incr _n } ;# %s" % x\n'
+        '            + "\\n  if {[catch {b}]} {{ incr _n }} ;# {0}".format(x)\n'
+        '            + "\\n  if {[catch {c}]} { incr _n }"\n'
+        '            + "\\n  if {$_n >= 3} { puts ALL }")\n',
+}
+
+
+def test_the_narrowing_loses_no_site_in_any_emitter_spelling():
+    """`emitted_script`'s docstring claims "nothing that was matchable stops
+    being matchable" when the subject moved from the raw file to the string
+    literals. That is a claim about a corpus this tree barely exercises -- it
+    holds exactly ONE counter -- so it is measured against constructed spellings
+    instead of taken on the one real sample.
+
+    MEASURED against the pre-polarity revision of this file: all five agree,
+    site for site and denominator for denominator.
+
+    A SIXTH SPELLING IS DELIBERATELY NOT IN THIS SET, and is named rather than
+    quietly dropped: an emitter that builds each repair through a HELPER CALL
+    reads as ONE site on both revisions, because K counts `incr` written in the
+    source and not times emitted. That is the known limitation recorded under
+    "WHAT THIS CANNOT COUNT" in the module docstring; it is not a narrowing
+    regression, and asserting today's behaviour here would cement a refusal of
+    an honest emitter."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+    for name, src in _SPELLINGS.items():
+        rows, refused = E.counters(src)
+        assert refused == [], f"{name}: polarity refused something: {refused}"
+        assert len(rows) == 1, f"{name}: expected one counter, got {rows}"
+        counter, sites, dens = rows[0]
+        assert (counter, sites) == ("_n", 3), f"{name}: read {sites} site(s)"
+        assert sorted({v for _, v in dens}) == [3], f"{name}: dens {dens}"
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

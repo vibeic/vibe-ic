@@ -83,6 +83,27 @@ Narrowing to POPULATION phrases with a HARD-CODED denominator is what makes the
 question answerable: those are the only ones where the emitter states the number
 itself, and therefore the only ones where a test can disagree with it.
 
+WHAT THIS CANNOT COUNT, AND IT PREDATES THE POLARITY WORK
+==========================================================
+K is the number of `incr` sites written IN THE SOURCE, not the number of times
+the script emits one. An emitter that builds each repair through a helper --
+
+    def _repair(name):
+        return "  if {[catch {%s}]} { incr _n }\n" % name
+    return "  set _n 0\n" + _repair("a") + _repair("b") + _repair("c") + ...
+
+-- is HONEST and states a population of 3, and this guard refuses it: "counter
+$_n is incremented at 1 site(s) but its comparison denominator says 3". MEASURED
+identically against the pre-polarity revision of this file, so it is a property
+of the K-is-a-count premise, not of anything the polarity work changed.
+
+IT IS LEFT ALONE ON PURPOSE. The honest repair is a design decision -- whether K
+is a COUNT or a LOWER BOUND -- and reading it as a lower bound means no longer
+refusing `sites < denominator`, which is a relaxation of the comparison this
+guard exists to make. That is the owner's call to make in daylight, not a thing
+to slip in beside a polarity fix. Recorded here so the next reader meets it as a
+known limitation with a reproducer rather than as a mystery refusal.
+
 THE REACH IS PRINTED, ALWAYS
 ============================
 This guard's population is small, and a verdict that does not say so would
