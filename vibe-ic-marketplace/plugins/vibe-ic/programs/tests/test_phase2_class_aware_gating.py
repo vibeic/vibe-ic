@@ -178,6 +178,30 @@ def test_generic_class_real_compile_failure_still_fails(tmp_path):
     assert "defect" in sr.detail.lower() or "compile" in sr.detail.lower()
 
 
+def test_absent_compiler_is_distinguished_from_a_rejected_source():
+    """vibe-ic#1394 — the predicate that separates "could not measure" from
+    "measured and found a defect". Host-independent: no simulator needed.
+
+    The NEGATIVE direction is the load-bearing half. A genuine compile error
+    over a missing `include` also says "No such file or directory", so a
+    predicate that matched on that phrase would convert real structural
+    defects into skips — the inverse of the bug, and strictly worse than it.
+    """
+    # Failed to EXECUTE: our own wrappers' marker, and the shell's own rc.
+    assert p2._compiler_was_not_found(
+        127, "", "COMMAND_NOT_FOUND: [Errno 2] No such file or "
+                 "directory: 'iverilog'")
+    assert p2._compiler_was_not_found(
+        127, "", "bash: line 1: : command not found")
+    # RAN and rejected the source -> must NOT read as not-found, even when the
+    # message carries the very phrase a missing binary produces.
+    assert not p2._compiler_was_not_found(
+        1, "", "core_top.v:3: Include file foo.vh not found: "
+               "No such file or directory")
+    assert not p2._compiler_was_not_found(1, "", "syntax error near '$$$'")
+    assert not p2._compiler_was_not_found(0, "", "")
+
+
 def test_qsf_gen_skips_for_generic_class_without_board_top(tmp_path):
     top = "core_top"
     rtl = f"module {top}(input clk); endmodule\n"
