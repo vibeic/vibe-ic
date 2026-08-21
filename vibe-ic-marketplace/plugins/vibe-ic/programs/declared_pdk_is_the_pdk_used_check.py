@@ -47,20 +47,27 @@ EXIT
     0  the libraries the tools loaded are consistent with the declared target
     1  they are not — including "a target is declared and no PDK is staged",
        and including "a PDK is staged that Phase 1 could not NAME, and no
-       target is declared" (#697), and "a target is declared and this run
-       recorded no library load at all" (`no_library_load_recorded: true` in the
-       JSON record, #710). An unnameable process is not a skippable case: it is
-       the one that makes every later claim unverifiable. The no-load case is a
-       FAIL because nothing was demonstrated, NOT because a different PDK was
-       shown to have been used — the two are reported apart so a caller is never
-       told a load happened when none did.
-    2  no target declared AND no cell library loaded AND the staged PDK, if
-       any, was nameable — there was no physical implementation to judge. A
-       run that DID load libraries without a declared target exits 1, because
-       it cannot show it used the intended process. A design that writes down
-       an explicit "not applicable" IS in this state and is judged in it, with
-       the written words carried in `declared_not_applicable` so the record
-       distinguishes "said so" from "never populated the field".
+       target is declared" (#697). An unnameable process is not a skippable
+       case: it is the one that makes every later claim unverifiable. Every
+       rc 1 is a statement about a library load that HAPPENED: this gate never
+       returns 1 without a library it can name.
+    2  the question cannot be asked of this run, with the missing input NAMED.
+       Two states reach it:
+         * no target declared AND no cell library loaded AND the staged PDK,
+           if any, was nameable — there was no physical implementation to
+           judge. A design that writes down an explicit "not applicable" IS in
+           this state and is judged in it, with the written words carried in
+           `declared_not_applicable` so the record distinguishes "said so"
+           from "never populated the field".
+         * a target IS declared and this run records NO cell-library load at
+           all (`no_library_load_recorded: true`, `missing_input` naming what
+           was absent) — vibe-ic#1002. This was an rc 1 through #710, printing
+           "0 librar(ies) across 0 log(s) — nothing to compare" one line under
+           its own FAIL. `gate_zero_denominator_refuses_check` is the house
+           rule for that shape and it says REFUSE. See the branch itself for
+           the corpus measurement that says nothing was hidden by the change.
+       A run that DID load libraries without a declared target still exits 1,
+       because it cannot show it used the intended process.
 
 WHERE THE DECLARATION IS READ FROM
 ==================================
@@ -486,6 +493,19 @@ def loaded_libraries(run: Path, cap: int = 400) -> Tuple[Set[str], int]:
     The tool's log is used rather than the flow's configuration because the
     question is what RAN, and a configuration that was ignored is precisely the
     failure being looked for.
+
+    THE LIMIT OF THIS CHANNEL, MEASURED (vibe-ic#1002)
+    -------------------------------------------------
+    A published run does not have to keep its tool logs, and most do not. Of
+    the 107 tracked run dirs, 9 declare a target and produce ZERO library
+    names here; 7 of those carry no ``*.log`` at all. Three of the nine
+    nevertheless carry a MAPPED gate-level netlist whose instantiated cell
+    names would answer the question — and each of those three CORROBORATES its
+    own declaration, so nothing was hidden. The netlist is deliberately NOT
+    read here: adding a second evidence channel changes what the gate PASSES as
+    well as what it refuses, and that is a separate measured change, not a
+    rider on a refusal fix. Until then a run with no tool log gets rc 2 with
+    the missing input named, never a verdict.
     """
     names: Set[str] = set()
     scanned = 0
@@ -638,6 +658,61 @@ def main(argv=None) -> int:
         print(f"declared_pdk_is_the_pdk_used: rc=2 NOT CHECKED — {rec['reason']}")
         return 2
 
+    if not libs:
+        # A ZERO DENOMINATOR REFUSES; IT DOES NOT FAIL (vibe-ic#1002).
+        #
+        # This branch used to be rc 1 with the reason "this run's logs record no
+        # cell-library load at all ... it is the absence of the evidence the
+        # question needs" — a sentence that states a REFUSAL and then returns a
+        # VERDICT. `gate_zero_denominator_refuses_check` is the house rule for
+        # exactly that shape: a zero beside a POPULATION word is "not a result at
+        # all". A FAIL says "I looked and it was wrong"; this branch printed
+        # `0 librar(ies) across N log(s) — nothing to compare` on the line under
+        # its own FAIL.
+        #
+        # MEASURED, `tools/d9_corpus_baseline.py --only
+        # declared_pdk_is_the_pdk_used_check` on 107 published run dirs: RED 10.
+        # NINE of the ten are this branch; the tenth is the contradiction this
+        # file was written for and is untouched below. Seven of the nine carry
+        # no `*.log` at all — the scan population itself is empty. The other two
+        # scanned 9 and 1 logs, both of which are a simulation-soak log and a
+        # formal-proof log: a real file population, zero comparanda, which is
+        # the same zero denominator arriving by a different route.
+        #
+        # THE MOTIVATING DEFECT IS NOT SOFTENED, and that is checkable rather
+        # than asserted. The docstring's own case is "the place-and-route log
+        # named the image's built-in cell library 72 times" — `libs` NON-empty,
+        # so it never reaches this branch. The corpus agrees: the one root whose
+        # logs DO name libraries that contradict its declaration still exits 1.
+        #
+        # WHAT THIS COSTS, said out loud rather than left for a reader to find.
+        # The prior FAIL was defended (#710) on the theory that a vanished PDK
+        # is "just as capable of producing logs that name nothing as logs that
+        # name the wrong thing". That theory was never measured; it is measured
+        # here, and on this corpus it does not hold: of the nine, none carries a
+        # generated artefact that contradicts its own declaration, and three
+        # carry a gate-level netlist whose cell names CORROBORATE it. So the
+        # nine hid no contradiction — but the netlist is evidence this gate does
+        # not read, and that limit is recorded in `loaded_libraries.__doc__`.
+        rec["verdict"] = "NOT CHECKED"
+        rec["no_library_load_recorded"] = True
+        rec["reason"] = ("a PDK target is declared and this run records no "
+                         "cell-library load to compare it against, so the "
+                         "question this gate asks cannot be asked of this run. "
+                         "This is NOT a finding that a different PDK was used, "
+                         "and it is NOT a pass: it is a refusal, and the input "
+                         "it lacks is named below.")
+        rec["missing_input"] = (
+            "a recorded cell-library load: no *.log under the run names a "
+            ".lef/.lib file")
+        _emit(a.json, rec)
+        print(f"declared_pdk_is_the_pdk_used: rc=2 NOT CHECKED — {rec['reason']}")
+        print(f"    declared : {target}   (from {source})")
+        print(f"    staged   : {staged} file(s) under input/pdk/")
+        print(f"    MISSING  : a recorded cell-library load — 0 librar(ies) "
+              f"named across {scanned} log(s) scanned, nothing to compare")
+        return 2
+
     want = tokens(target)
     hits = sorted({n for n in libs
                    if shares_identity(want, n) or shares_stem_identity(want, n)})
@@ -740,41 +815,6 @@ def main(argv=None) -> int:
               f"process-node claim in the same declaration — a LEF filename "
               f"does not carry either.")
         return 0
-
-    if not libs:
-        # A CHECK MUST NOT STATE A CONCLUSION ITS OWN EVIDENCE CONTRADICTS.
-        #
-        # Both reasons below assert that some OTHER library was used instead —
-        # "the flow ran on whatever library was available", "the staged PDK was
-        # not the one used". Each is a claim about a load that happened. With
-        # `libs` empty NO load was recorded at all, so the run's own logs carry
-        # neither sentence. Measured on a real run: a design that had just
-        # declared its target and staged 11521 enablement files, with no tool
-        # step yet, was told "the staged PDK was not the one used" over
-        # `loaded : 0 distinct librar(ies)` printed on the very next line.
-        #
-        # THE VERDICT DOES NOT SOFTEN. It stays FAIL, for the reason this file
-        # exists: a run that declares a process and cannot show a single library
-        # load has not demonstrated it implemented against that process, and the
-        # motivating defect — a staged PDK that silently went missing — is just
-        # as capable of producing logs that name nothing as logs that name the
-        # wrong thing. Only the REASON changes, from an unsupported accusation
-        # to the true one, plus a machine-readable field so a caller can tell
-        # "not established yet" from "established, and it was the wrong PDK"
-        # without parsing prose.
-        rec["verdict"] = "FAIL"
-        rec["no_library_load_recorded"] = True
-        rec["reason"] = ("a PDK target is declared and this run's logs record no "
-                         "cell-library load at all, so which process the tools "
-                         "used cannot be established from this run. This is not "
-                         "evidence that a different PDK was used — it is the "
-                         "absence of the evidence the question needs.")
-        _emit(a.json, rec)
-        print(f"declared_pdk_is_the_pdk_used: FAIL — {rec['reason']}")
-        print(f"    declared : {target}   (from {source})")
-        print(f"    staged   : {staged} file(s) under input/pdk/")
-        print(f"    loaded   : 0 librar(ies) across {scanned} log(s) — nothing to compare")
-        return 1
 
     rec["verdict"] = "FAIL"
     rec["no_library_load_recorded"] = False
