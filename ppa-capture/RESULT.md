@@ -280,6 +280,11 @@ the vocabulary gains a separator.
 The technique is known to work: one emitter now derives every self-describing
 line from what it linked, and stamps what it ACTUALLY opened when it degrades.
 It is applied in one place out of many.
+**(o)** yes — the header said post-route and the session linked pre-route, which
+its own input list would have contradicted.
+**(d)** yes — the predicate is "is this claim entailed by the input list", which
+is indifferent to what the claim is about; it covers a corner, a basis, a
+liberty, or an activity model equally.
 
 ### T-1 · post-route repair faults after routing completes · `phase3.pnr_setup_repair` · OpenROAD
 
@@ -294,6 +299,11 @@ preserve the state encoding do. Signal 11, exit 139, AFTER the router printed it
 own completion line. Bad samples committed at
 `ppa-crosslayer/records/trials/{x03,x04,x11,x12,x13,y03,y04,y08,z24,z25}/`;
 golden at `ppa-crosslayer/records/trials/c02/`, same build, same PDK, same script.
+**(o)** yes — the samples ARE the original, retained.
+**(d)** the enhancement is stated as a behaviour, not as a patch to these ten
+inputs: the stage must exit non-zero with a named diagnostic on any instance it
+cannot repair, so a different netlist shape that reaches the same fault is
+covered by the same acceptance criterion.
 
 ---
 
