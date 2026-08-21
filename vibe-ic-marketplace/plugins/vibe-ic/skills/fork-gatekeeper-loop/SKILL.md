@@ -56,6 +56,46 @@ mode — verification is the gate, not permission.
    If any of these is nonzero, that is open work, not a report to file
    and wait on. Merge, verify, push — same tick.
 
+   **FOUR NUMBERS, FOUR DIFFERENT QUESTIONS — only one of them is this
+   duty.** Measured 2026-08-14/15, after the same confusion cost three
+   separate investigations in two days:
+
+   | number | what it asks | closed by |
+   |---|---|---|
+   | `sync_lag_at_merge` | did this round take everything **it saw** upstream? | merging |
+   | `sync_lag` | how far behind upstream are we **right now**? | merging (but it moves) |
+   | `release_lag` (`pin..tip`) | is the image built from our current tip? | rebuilding the image |
+   | `image_behind` (`pin..upstream`) | is the image behind upstream? | both of the above |
+
+   **Duty 1 is `sync_lag_at_merge`.** The others are honest dashboard
+   numbers and must keep being published, but failing a round on them
+   makes its colour depend on when somebody else pushes: the merge runs
+   early and the verdict is computed ~1h later, after the build and a
+   31 GB push. Measured 2026-08-14: two forks merged everything their own
+   fetch resolved, the round still printed *"7 commit(s) still behind
+   upstream ... it did not happen"* about a merge that provably DID
+   happen, and on a quiet day the identical code printed 0. A gate whose
+   colour is a race is one people learn to route around.
+   `daily_0530` records each fork's `upstream_evidence.tip_seen`; that is
+   the goalpost this duty is measured against.
+
+   **Some rows must NEVER be converged.** A `contents_assertion` (e.g.
+   `open_pdks`) is not a pin: the artefact is prebuilt and the build only
+   ASSERTS what it carries, so there is no ref to be behind. Advancing it
+   rebuilds nothing and turns a true statement false (vibeic-eda#74, #78,
+   #79). If a nonzero number on such a row looks like a gap, the defect is
+   in how the row is PRESENTED, never in the assertion. Making a number
+   green by editing what it asserts is the same act as raising a baseline
+   to silence a gate — refuse it, and say why.
+
+   **A fork that declares no `post_merge_check` is unguarded, and that is
+   open work under duty 3.** Measured 2026-08-15: verilator carried real
+   correctness fixes with `0 post-merge check(s) declared`; the day's merge
+   took four upstream commits, one of which edited the exact file holding
+   our solver-probe fix. It survived — but the only thing that established
+   that was a person reading the diff. A clean merge is a statement about
+   text, not about meaning.
+
 2. **Fix every open issue/PR on every fork repo and on `vibeic-eda`,
    yourself, without being asked case by case.** Most fork repos have
    GitHub Issues disabled (they are forks, not standalone projects) — check
@@ -106,6 +146,34 @@ mode — verification is the gate, not permission.
    the page updated" after an entire evening spent on an image release,
    because the page update is a completely separate, much cheaper step that
    had simply never been run.
+
+   **Verify the page by a number you independently know, never by its
+   version label.** The page's `image_version` comes from the ledger cache,
+   not from `VERSION`, so both can read "current" while every row beneath
+   them is stale. Measured 2026-08-15: the label matched `VERSION` exactly
+   and the page still claimed verilator was 2 behind, minutes after that
+   fork had been merged to 0 — the page predated the merge. Pick a row
+   whose true value you just established by hand and check THAT.
+   Corollary, same day: do not infer a column's meaning from one
+   coincidence. `behind_commits` was read as release lag because it equalled
+   `pin..tip` once; a later state where `pin..tip` was 0 and the column said
+   2 showed it is `pin..upstream`.
+
+   **After a release, four things are true or the work is not done**, and
+   each has failed separately in this repo:
+   1. the moved pins are COMMITTED (`check_release_pins_committed`) — a
+      release that builds from the working tree and leaves the edit
+      uncommitted makes HEAD describe an image nobody shipped, and every
+      number computed from HEAD is then computed against a commit that
+      exists in no artefact;
+   2. and PUSHED — `fork_gap_report` reads pins from GitHub via `_gh_file`,
+      so a local commit changes no reported number;
+   3. the image is in the registry (`docker manifest inspect`), not merely
+      built — `LOCAL ONLY` is a real outcome of a timed-out push;
+   4. the image's own `/vibeic/provenance/<tool>.json` names the expected
+      commit. That file is the one source that cannot be talked into a wrong
+      answer; when RELEASED.json, the Dockerfile and the registry disagree,
+      believe it.
 
 ## What "verified" actually means before duty 1-4 execute
 
@@ -236,3 +304,22 @@ None. This is a standing identity, not a task with an end state — like
 direct-instruction invocation it runs until every one of the four duties
 reads clean (0 gap, 0 open issues/PRs, image reflects every landed commit,
 page reflects current state), then reports what it did.
+
+## Compliance gate (mandatory)
+
+After producing your output, save it to a file and run:
+
+```bash
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/fork-gatekeeper-loop/compliance.yaml \
+    <your_output_file>
+```
+
+Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
+`compliance.yaml` in the corresponding skill directory enumerates
+every required element of your output: section headers, metadata fields,
+handoff lines, tool invocations.
+
+**Your task is not complete until the audit returns PASS.** Missing
+elements are the single largest source of skill-execution non-determinism
+across different agents.

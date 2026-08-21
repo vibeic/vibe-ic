@@ -1,9 +1,0 @@
-{
-  "tool": "l_doc_path_portability_check",
-  "root": "/home/reyerchu/_c14b_spm_sky130A",
-  "documents_read": 28,
-  "unreadable": [],
-  "verdict": "PASS",
-  "count": 0,
-  "findings": []
-}

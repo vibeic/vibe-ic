@@ -95,14 +95,39 @@ def test_dockerexec_uses_argv_spawn_not_bashc_escape():
         "dockerExec still uses the double-quote-only escape — reintroduces "
         "the command-injection vector"
     )
-    # The fixed dispatch: spawnSync('docker', ['exec', CONTAINER, 'bash', '-c', cmd])
+    # The fixed dispatch: an argv ARRAY ending in "bash", "-c", cmd, so `cmd`
+    # reaches bash as one element with no intervening host shell.
+    #
+    # 2026-08-19: this used to pin one exact literal,
+    # `_spawnSync("docker", ["exec", CONTAINER, "bash", "-c", cmd]`, which went
+    # red the moment the argv grew an in-container `timeout` wrapper -- a
+    # change that does not touch the injection property at all. A guard that
+    # fails on a safe edit gets "fixed" by deleting it, so it now asserts the
+    # PROPERTY: every argv dockerExec can build must terminate in bash -c cmd,
+    # and no host shell may be reintroduced.
     i = SRC.find("function dockerExec(")
     assert i > 0
-    body = SRC[i: i + 1500]
-    assert '_spawnSync("docker", ["exec", CONTAINER, "bash", "-c", cmd]' in body, (
-        "dockerExec must dispatch via an argv array so cmd is passed verbatim "
-        "to bash -c with no intervening host shell"
+    body = SRC[i: i + 4000]
+    tails = re.findall(r'"bash",\s*"-c",\s*cmd\s*\]', body)
+    assert tails, (
+        "dockerExec must dispatch via an argv array ending in bash -c cmd so "
+        "cmd is passed verbatim with no intervening host shell"
     )
+    assert '_spawnSync("docker"' in body, (
+        "dockerExec must reach docker through _spawnSync (argv), not a shell"
+    )
+    for shelly in ("execSync(", "shell: true", "/bin/sh -c"):
+        assert shelly not in body, (
+            f"dockerExec reintroduced a host shell via {shelly!r}"
+        )
+    # Every argv branch must end that way -- one safe branch plus one unsafe
+    # branch is still an injection vector.
+    branches = re.findall(r'\[\s*"exec",\s*CONTAINER,(?:[^\]]*?)\]', body)
+    assert branches, "no docker-exec argv found in dockerExec"
+    for b in branches:
+        assert re.search(r'"bash",\s*"-c",\s*cmd\s*$', b.rstrip("] \n")), (
+            f"a dockerExec argv branch does not end in bash -c cmd: {b}"
+        )
 
 
 # ── 3. host-executing handlers run tools via argv + validate inputs ─────────

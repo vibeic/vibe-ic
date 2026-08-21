@@ -121,23 +121,59 @@ the number of sites each must find, the flow step whose gate is re-run, the cell
 that step's own gate command through ``flow_compliance_check``'s own verdict
 mapping — so the entry cannot claim a red the flow would not honour.
 
-**HALF THE SEED SET PROVES A CELL CANNOT REDDEN, AND THAT IS THE DELIVERABLE.**
-Four of the eight entries record :data:`CANNOT_REDDEN`. Multiplying every figure
-in a power report by 1000 does not move step 33's gate. Raising a power-grid
-segment current by a factor of 25000 does not move step 25's. Substituting 221
-NAND primitives for AND does not move step 9's, and the gate's own report
-enumerates the substituted cell while passing. Rewriting the router's FINAL
-iteration from 0 violations to 12 does not move step 21's — while rewriting the
-runner's SUMMARY of that same file to 17 does, which is the pair that says what
-the green at step 21 is actually a statement about.
+**PART OF THE SEED SET PROVES A CELL CANNOT REDDEN, AND THAT IS THE
+DELIVERABLE.** Four of the eight entries recorded :data:`CANNOT_REDDEN` when the
+channel was seeded on 2026-08-11. THREE were closed the same day, by two
+independent pieces of D9 Phase 1 work, and the fourth was answered in a way that
+is not a closure and should not be counted as one.
 
-These are published as ledger entries, not hidden as gaps: an entry that says
+CLOSED — the gate was believing the wrong author:
+  * ``ART-ROUTER-FINAL-ITERATION`` (step 21). Rewriting the router's FINAL
+    iteration from 0 violations to 12 did not move the gate, while rewriting the
+    runner's SUMMARY of that same file to 17 did. That pair said what step 21's
+    green was actually a statement about: the runner's arithmetic, not the
+    router's result.
+  * ``ART-NETLIST-PRIMITIVE-SWAP`` (step 9). Substituting 221 NAND primitives
+    for AND did not move the gate, and its own report enumerated the substituted
+    cell while passing.
+
+CLOSED — a number was read, reported, and never compared:
+  * ``ART-EM-CURRENT-DENSITY`` (step 25). Step 25's gate gained a clause that
+    screens the peak segment current against the total current the SAME report
+    says the net is supplied with. That authority is declared in the artefact,
+    so the comparison is available on every run, and the SAME byte edits that
+    recorded STAYED_GREEN now record REDDENED.
+
+NOT CLOSED, AND CORRECTLY SO:
+  * ``ART-POWER-FIGURES-X1000`` (step 33) was the same defect as step 25 — a
+    number read, reported, never compared — and the difference in outcome is not
+    effort, it is whether AN AUTHORITY EXISTS TO COMPARE AGAINST. Step 33's gate
+    also gained a comparison clause, total power against L19's
+    ``power_budget_uw``, but 0 of the 17 published runs carrying a power report
+    declare that budget, so the clause REFUSES (`INCOMPLETE`, naming what it
+    lacks) instead of passing. The mutation does not redden it because nothing
+    can: there is no authority. **A cell that refuses is not a cell that
+    passes**, and the flow's per-step listing now says INCOMPLETE where it used
+    to say PASS.
+
+TWO OF THE FOUR ARE NOW CLOSED, and they were ONE DEFECT IN TWO PLACES: the
+gate believed a summary written by the RUNNER instead of the output written by
+the TOOL. Substituting 221 NAND primitives for AND did not move step 9's gate
+while that gate's own report ENUMERATED the substituted cell; rewriting the
+router's FINAL iteration from 0 violations to 12 did not move step 21's, while
+rewriting the runner's SUMMARY of the same file to 17 did — the pair that said
+what the green at step 21 was actually a statement about. Both now redden,
+because each gate reads the tool's own artefact and treats a disagreement
+between two published statements of one quantity as a finding.
+
+These were published as ledger entries, not hidden as gaps: an entry that says
 "this mutation should redden cell X and does not" is precisely the record this
 campaign exists to produce. :data:`ARTEFACT_CANNOT_REDDEN_AS_MEASURED` pins the
 count so it cannot drift, and each such entry is a PIN, not a waiver — the day a
 gate learns to notice, its replay stops matching the record and the gate file
 fails by name, demanding the entry be updated in the same change that closes the
-gap. Closing them is Phase 1 and is deliberately NOT done here.
+gap. That is exactly how the two closures above were forced to declare
+themselves: the count moved from 4 to 2 in the same diff.
 
 WHAT THIS CHANNEL COSTS, AND HOW IT IS SCHEDULED. Every artefact entry is
 re-executed in BOTH replay modes — there is no "witness subset" to hide in,
@@ -228,11 +264,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+try:  # the shared isolation harness (#996) — see its module docstring
+    import _run_isolation as _iso
+except ImportError:  # pragma: no cover - exercised by the packaged layout
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _run_isolation as _iso
 
 try:
     import yaml
@@ -513,6 +556,21 @@ def _k_blocks_on_append_phantom(step: Dict, _p: Dict) -> bool:
     return True
 
 
+def _k_closed_loop_fallback_phantom(step: Dict, _p: Dict) -> bool:
+    """Repoint a `closed_loop.fallback_to` at a step id that does not exist.
+
+    The `blocks_on` sibling of this edit is :func:`_k_blocks_on_append_phantom`;
+    this one reaches the OTHER edge set — the CONVERGENCE edges — which had no
+    mutation at all until 2026-08-20, because nothing in the repository read
+    them.
+    """
+    cl = step.get("closed_loop")
+    if not isinstance(cl, dict) or "fallback_to" not in cl:
+        return False
+    cl["fallback_to"] = "__PHANTOM" + CANARY_SUFFIX + "__"
+    return True
+
+
 def _k_notes_append_ghost_program(step: Dict, _p: Dict) -> bool:
     notes = step.get("notes")
     if not isinstance(notes, str):
@@ -535,6 +593,7 @@ YAML_KINDS: Dict[str, Callable[[Dict, Dict], bool]] = {
     "required_outputs_empty": _k_required_outputs_empty,
     "required_outputs_delete_key": _k_required_outputs_delete_key,
     "blocks_on_append_phantom": _k_blocks_on_append_phantom,
+    "closed_loop_fallback_phantom": _k_closed_loop_fallback_phantom,
     "notes_append_ghost_program": _k_notes_append_ghost_program,
 }
 
@@ -642,6 +701,39 @@ class Mutation:
 REDDENS = "REDDENED"
 CANNOT_REDDEN = "STAYED_GREEN"
 ARTEFACT_EXPECTATIONS = (REDDENS, CANNOT_REDDEN)
+
+#: The verdict for a pair whose gate was ALREADY RED before the mutation was
+#: applied. It is a MEASUREMENT OUTCOME, never an expectation: it is absent from
+#: :data:`ARTEFACT_EXPECTATIONS` on purpose, because the ledger records what the
+#: gates COULD catch, and letting an entry declare this would turn a measured
+#: gap into a re-recorded one (#1432). Pinned by
+#: ``test_ALREADY_RED_is_not_a_recordable_expectation``.
+ALREADY_RED = "ALREADY_RED"
+
+#: How many pairs a replay may find UNMEASURABLE before the ledger stops
+#: believing its own denominator, per mode.
+#:
+#: A CEILING, not an equality. The count SHRINKS on its own as the underlying
+#: reds are fixed — an equality pin would go red on good news, which is the
+#: wrong direction for a number nobody edits deliberately.
+#:
+#: PROVENANCE, stated because the two numbers were established differently:
+#:
+#:   * ``witness`` = 0 is MEASURED. Every witness is green on main, which is why
+#:     the default mode is honest today. A witness going unmeasurable is a real
+#:     event and this 0 makes it a failure, not a shrug — prohibition 3 of
+#:     #1432: this must not become a reason to relax ``witness`` mode.
+#:   * ``all`` = 24 is 1 OBSERVED + 23 DERIVED. One pair
+#:     (``D3-UNDECLARED-ARTEFACT`` @ step 15, ``baseline_rc=1``) was replayed to
+#:     completion on ``24ff95307``; the other 23 were computed by intersecting
+#:     each entry's ``applies_to`` with main's measured red set, not observed
+#:     failing. A ceiling is the safe direction for a predicted number.
+#:
+#: 14 of the 24 are d7 cells that #1310+#1339 and #1377 close, 9 are the d3
+#: cells of #1349, and 1 is d4 ``[step 1]`` (#1235/#1193). When those land this
+#: number falls without anyone touching the ledger, and LOWERING it then is the
+#: maintenance this ceiling is asking for.
+UNMEASURABLE_CEILING = {"witness": 0, "all": 24}
 
 
 @dataclass(frozen=True)
@@ -763,6 +855,53 @@ class NotFalsifiable:
 _SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each declared "
           "flow step>   (2026-08-06, 63 steps, one pytest run per step)")
 
+#: The 2026-08-06 sweep, PLUS a single-step replay on 2026-08-11 for an entry
+#: that gained exactly one step. Spelled out rather than folded into
+#: :data:`_SWEEP` because the two are different amounts of evidence: the bulk of
+#: ``applies_to`` rests on the 63-step sweep, and the added step rests on one
+#: replay run on a later tree. An entry using this must name the added step, so
+#: a reader can tell which claim rests on which run.
+_SWEEP_THEN_ONE = (
+    _SWEEP + "   THEN   matrix_mutation_ledger.py --replay {name} --step "
+             "{added}   (2026-08-11, the one step this entry gained)")
+
+#: The five PATH-SPECIFIC steps (`0.5ic` `15.5ic` `26.5ic` `37.5ip` `37.5ic`)
+#: arrived after every sweep above, so none of them is in any `applies_to` the
+#: 2026-08-06/08-11 runs produced. Appended rather than folded into
+#: :data:`_SWEEP` for the same reason :data:`_SWEEP_THEN_ONE` is separate: the
+#: bulk of each `applies_to` rests on a 63-step sweep on a 2026-08 tree, and
+#: these five rest on five single-step replays run on 2026-08-20. A reader can
+#: tell which claim rests on which run.
+_THEN_FIVE = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
+              "<each of 0.5ic, 15.5ic, 26.5ic, 37.5ip, 37.5ic>   (2026-08-20, "
+              "the five path-specific steps this entry gained)")
+
+#: `37.5self` (the General Precheck) HAD a suffix of its own here — it arrived
+#: after every sweep above AND after the five path-specific steps, so it rested
+#: on one single-step replay of its own. IT IS GONE, together with the step:
+#: 2026-08-20 the owner retired `37.5self` as a step and folded the general
+#: precheck into `37.5ic` as a SECOND ARM rather than a third route, so the
+#: flow went 69 -> 68 and the cells that replay measured no longer exist. The
+#: replay is not disowned and its result is not re-typed as some other step's;
+#: the CELL it measured was removed, so the claim it supported was removed with
+#: it. Every `reddened` below moves by exactly one for that reason, and by
+#: nothing else — `test_lock3_every_entry_is_arithmetically_consistent_with_
+#: its_own_evidence` re-derives it from `len(applies_to)` on every run.
+
+#: The sweep for the CONVERGENCE-edge entry. It is deliberately NOT
+#: :data:`_SWEEP`: `closed_loop` is declared by a MINORITY of steps, so a
+#: 63-step sweep would report a mostly-NOT_APPLICABLE run and the real
+#: denominator would be buried. This one names its own denominator — every step
+#: that DECLARES a `closed_loop`, derived from the live yaml at replay time, not
+#: from a number written down here.
+_CL_SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each step "
+             "declaring a closed_loop, derived live from the flow yaml>   "
+             "(2026-08-20, one pytest run per step)")
+
+#: A full re-sweep on 2026-08-11 — same shape as :data:`_SWEEP`, later tree.
+_RESWEEP = ("matrix_mutation_ledger.py --replay {name} --jobs 8   "
+            "(2026-08-11, every declared step, one pytest run per step)")
+
 MUTATIONS: Tuple[Mutation, ...] = (
     # ---------------- dimension 1 — wiring -----------------------------
     Mutation(
@@ -781,14 +920,26 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
             "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
-            "41", "42", "43", "44"),
+            "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D1-BLIND-GATE-PROGRAMS --step 1.6x` -> REDDENED (7.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=60,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             stayed_green=(),
             note="3 steps have no executable gate clause at all and are "
                  "structurally out of this entry's reach: 1 and 12 (files_exist "
                  "only) and P0 (no gate key). They are covered by "
-                 "D1-UNREACHABLE-CLAUSE and D1-ORPHAN-UMBRELLA-GATE."),
+                 "D1-UNREACHABLE-CLAUSE and D1-ORPHAN-UMBRELLA-GATE. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D1-BLIND-GATE-PROGRAMS "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D1-UNREACHABLE-CLAUSE",
@@ -851,19 +1002,42 @@ MUTATIONS: Tuple[Mutation, ...] = (
         witness="21",
         applies_to=(
             "D1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "FS1",
-            "DT1", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
-            "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
-            "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
-            "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41",
-            "42", "43", "44"),
+            "DT1", "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8",
+            "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
+            "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
+            "33", "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
+            "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D2-BLIND-GATE-PROGRAMS --step 1.6x` -> REDDENED (2.0s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=59,
+            date="2026-08-11",
+            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=66,
             stayed_green=("35",),
-            note="59 red = every one of dimension 2's 59 ENFORCED cells, in one "
-                 "sweep. The 3 waived cells (1, 12, 35) and the NA cell (P0) "
-                 "are the only steps not reddened: 1/12/P0 have no executable "
+            note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
+                 "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
+                 "the only steps not reddened: 1 and P0 have no executable "
                  "clause to blind, and 35's gate is files_exist + advisory, "
-                 "which is precisely why it is waived."),
+                 "which is precisely why it is waived. "
+                 "STEP 12 WAS ADDED 2026-08-11 and the old note's claim that it "
+                 "'has no executable clause to blind' was, by then, false. "
+                 "`23d96bf5` (v1.10.0, 'close the matrix_63x8 dimension-2 "
+                 "content gap on Step 12') gave step 12 a "
+                 "`program_exit_zero: dft_post_optimization_scan_survival_check` "
+                 "clause and lifted its dimension-2 waiver in the same change — "
+                 "so the very commit that made 12/d2 ENFORCED also created the "
+                 "edit site this mutation needs, and nothing re-ran the sweep. "
+                 "Replayed 2026-08-11: `--replay D2-BLIND-GATE-PROGRAMS "
+                 "--step 12` -> REDDENED in 1.5s. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D2-BLIND-GATE-PROGRAMS "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
 
     # ---------------- dimension 3 — outputs produced -------------------
@@ -876,7 +1050,15 @@ MUTATIONS: Tuple[Mutation, ...] = (
                "deleting the artefact, reached from the declaration end — which "
                "is the end a CI host without the campaign's run trees can move.",
         red_signal="step",
-        witness="21",
+        # WAS "21" until 2026-08-11. A witness must be GREEN at baseline — this
+        # class's own contract, three lines up in `Mutation` — and step 21's
+        # dimension-3 cell no longer is, so the entry was proving nothing and
+        # said so: `ALREADY_RED`. Re-picked by a rule rather than by taste:
+        # the FIRST step in flow-declaration order that is green at baseline.
+        # That is D1, measured at 4.1 s (the slowest of the 37 green
+        # candidates; the fastest are 38 and DT2 at 1.7 s). Speed is not the
+        # criterion and is recorded only so the cost of this choice is visible.
+        witness="D1",
         applies_to=(
             "D1", "1", "2", "3", "4", "5", "7", "8", "9", "10", "11", "DT1",
             "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
@@ -884,16 +1066,42 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
             "34", "35", "36", "37", "38", "M2", "M3", "M4"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=53,
-            baseline_red=("11", "15", "17", "19", "20", "29", "30", "32",
-                          "M2", "M3", "M4"),
+            date="2026-08-11", command=_RESWEEP, reddened=53,
+            baseline_red=("12", "15", "17", "19", "20", "21", "22", "23", "24",
+                          "25", "26", "30", "32", "M2", "M3", "M4"),
             stayed_green=("6", "39", "M1"),
-            note="53 red = every one of dimension 3's 53 ENFORCED cells. 11 of "
-                 "them were ALREADY red at 1ea6689b (their declared artefacts "
-                 "genuinely do not exist), so 42 reds are attributable to this "
-                 "mutation; the 11 are falsifiable by definition and are named "
-                 "here rather than counted twice. The 3 greens are the waived "
-                 "cells, whose strict xfail correctly held."),
+            note="53 red = every one of dimension 3's 53 ENFORCED cells. 16 of "
+                 "them are ALREADY red before the mutation (their declared "
+                 "artefacts genuinely do not resolve), so 37 reds are "
+                 "attributable to this mutation; the 16 are falsifiable by "
+                 "definition and are named here rather than counted twice. The "
+                 "3 greens are the waived cells, whose strict xfail correctly "
+                 "held. "
+                 "BASELINE_RED MOVED 11 -> 16 ON 2026-08-11, and the move is a "
+                 "FINDING, not an accommodation. Newly red: 12, 21, 22, 23, 24, "
+                 "25, 26. No longer red: 11, 29. Re-measured by the full sweep "
+                 "(`--replay D3-UNDECLARED-ARTEFACT --jobs 8`, 53 pairs, 37 "
+                 "REDDENED + 16 ALREADY_RED, no other outcome). "
+                 "ONE cause for all nine moves: "
+                 "`benchmark-data/ic/spm/v1.9.96_gf180mcuD/reports/"
+                 "write_ledger.json` (captured 2026-08-06T19:17:51Z) is stale "
+                 "with respect to the commit that carries it, in BOTH "
+                 "directions — 21 artefacts it records as WRITTEN are absent "
+                 "from the commit (all under `phase3/stage3/**` and "
+                 "`phase3/stage4/foundry_handoff/**`; step 21's `routed.def` is "
+                 "recorded at 481667 B and was never added in any commit, and "
+                 "is not gitignored), and 4 specs it records as NOT WRITTEN are "
+                 "present in it (step 11's `scan_netlist.v`, `atpg_coverage.rpt` "
+                 "and `reports/phase2/dft/coverage.json`, step 12's "
+                 "`post_dft_netlist.v`). Because the ledger BINDS those steps to "
+                 "that run root, they no longer fall back to the root that does "
+                 "carry the artefact, and they redden. "
+                 "THE STALE LEDGER IS DELIBERATELY NOT REPAIRED HERE. Re-emitting "
+                 "a published run's record is a benchmark-data rewrite that "
+                 "would erase the historical fact that the run produced those "
+                 "artefacts, and it is not this change's subject. It is left "
+                 "RED and published; `test_d3_the_write_ledger_population_is_"
+                 "derived_from_the_commit` states the remedy in its own words."),
     ),
 
     # ---------------- dimension 4 — criteria match ---------------------
@@ -913,13 +1121,25 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D4-UNGATED-DELIVERABLE --step 1.6x` -> REDDENED (2.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             baseline_red=("1",),
             note="the 2 steps not reached declare no required_outputs at all "
                  "(FS1, P0) and are carried by D4-CLI-CONTRACT and "
-                 "D4-PROSE-NAMES-A-GHOST."),
+                 "D4-PROSE-NAMES-A-GHOST. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D4-UNGATED-DELIVERABLE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D4-CLI-CONTRACT",
@@ -936,9 +1156,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "A8", "A9", "17", "19", "20", "22", "DT2", "DT3", "23",
                     "24", "25", "26", "28", "29", "30", "31", "34", "35", "36",
                     "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41", "42",
-                    "43", "44"),
+                    "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D4-CLI-CONTRACT --step 1.6x` -> REDDENED (2.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=50,
+            date="2026-08-06", command=_SWEEP, reddened=51,
             stayed_green=("D1", "21", "33"),
             note="carries FS1, the one step with a gate and no required_outputs. "
                  "D1/21/33 stayed green because their first clause's program "
@@ -982,12 +1205,90 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
             "DT2", "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31",
             "32", "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3",
-            "M4", "40", "41", "42", "43", "44"),
+            "M4", "40", "41", "42", "43", "44", "P0",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D5-PHANTOM-EDGE --step 1.6x` -> REDDENED (2.3s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=62,
-            note="62 red = every one of dimension 5's 62 ENFORCED cells, in one "
-                 "sweep, each reddening that cell alone. P0 is the single NA "
-                 "cell and declares no blocks_on key to append to."),
+            date="2026-08-11",
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=69,
+            note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
+                 "sweep, each reddening that cell alone. There is no longer an "
+                 "NA cell in this dimension. "
+                 "P0 WAS ADDED 2026-08-11 and the old note's claim that it "
+                 "'declares no blocks_on key to append to' was, by then, false. "
+                 "`332b9985` ('flow: stage membership was declared twice and "
+                 "the copies disagreed') gave P0 `blocks_on: [1]`, which "
+                 "self-invalidated dimension 5's pinned NA exactly as that pin "
+                 "was written to do — step P0's own cell went red demanding "
+                 "re-evaluation. The re-evaluation was done, not waived: "
+                 "`d5_problems('P0')` is empty, so P0 runs the full predicate as "
+                 "an ENFORCED cell. Replayed 2026-08-11: `--replay "
+                 "D5-PHANTOM-EDGE --step P0` -> REDDENED in 1.6s. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D5-PHANTOM-EDGE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
+    ),
+
+    # THE OTHER EDGE SET. `D5-PHANTOM-EDGE` above mutates `blocks_on`; this one
+    # mutates `closed_loop.fallback_to`, and the two are not substitutes.
+    # REPLAYED before this entry was written: `--replay D5-PHANTOM-EDGE --step 33`
+    # comes back REDDENED on a tree where step 33 declares NO closed_loop at all,
+    # because step 33 has a `blocks_on` to append a phantom to. A replay of the
+    # blocks_on entry is therefore not evidence about a convergence edge, and
+    # reading it as such is the "adjacent measurement" this campaign exists to
+    # stamp out.
+    Mutation(
+        name="D5-PHANTOM-FALLBACK",
+        dim=5, channel=FLOW_YAML, kind="closed_loop_fallback_phantom",
+        what="repoint the step's `closed_loop.fallback_to` at a step id that "
+             "does not exist",
+        breaks="a CONVERGENCE edge that resolves to nothing — the flow says "
+               "'on this verdict, go back to step K' and there is no step K. "
+               "Until 2026-08-20 that was not a defect anything could see: the "
+               "flow carried NINETEEN `closed_loop` declarations and the "
+               "repository had ZERO readers of the key. The 63x8 substrate even "
+               "shipped the accessor (`flowref.closed_loop`, exported in "
+               "`__all__`) with no caller. Every convergence edge in the flow "
+               "was unfalsifiable as a class.",
+        red_signal="step",
+        witness="24",
+        applies_to=(
+            "2", "3", "4", "5", "8", "9", "10", "13", "A7", "A9", "14",
+            "20", "23", "24", "25", "26", "27", "28", "31", "32", "33",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D5-PHANTOM-FALLBACK --step 1.6x` -> REDDENED (2.2s).
+            "1.6x"),
+        measured=Measurement(
+            date="2026-08-20",
+            command=_CL_SWEEP.replace("{name}", "D5-PHANTOM-FALLBACK"),
+            reddened=22,
+            note="21 red = every step that declares a `closed_loop`, in one sweep, "
+                 "each reddening that cell alone; UNMEASURABLE 0 of 21. Times in the "
+                 "commit message. THE DENOMINATOR IS THE POINT: 21, not 63 — "
+                 "`closed_loop` is declared by a MINORITY of steps and every other step "
+                 "has no edit site at all, so a whole-flow sweep would have "
+                 "reported the majority NOT_APPLICABLE and buried the real "
+                 "count. TWO OF THE 21 ARE NEW IN "
+                 "THIS CHANGE (steps 9 and 33, the area and power convergence edges) "
+                 "and both reddened, which is the whole reason the entry exists: the "
+                 "brief that asked for those edges named `--replay D5-PHANTOM-EDGE "
+                 "--step 33` as the proof, and that replay comes back REDDENED on a "
+                 "tree where step 33 declares NO closed_loop at all — it reaches "
+                 "`blocks_on`, which step 33 already had. A criterion that cannot "
+                 "distinguish the change from no change is not a proof of the "
+                 "change. BIDIRECTIONAL CONTROL, run by hand before this entry was "
+                 "written: with step 24's fallback repointed at "
+                 "`__PHANTOM_MUTANT__`, "
+                 "`test_d5_blocks_on_covers_the_real_dependency_graph[step24]` fails "
+                 "with `CL-FALLBACK-UNRESOLVED`; on the unmutated flow the same cell "
+                 "passes."),
     ),
 
     # ---------------- dimension 6 — skip discipline --------------------
@@ -1007,16 +1308,28 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D6-UNCONDITIONAL-OPTIONAL --step 1.6x` -> REDDENED (5.9s).
+            "1.6x"),
         params={"command":
                 "clock_plan_check . --json reports/phase2/gates/zzmatrixcanary.json"},
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             stayed_green=("DT2",),
             note="61 red = every ENFORCED dimension-6 cell except P0, which "
                  "declares no gate to append to and is carried by "
                  "D6-UMBRELLA-ALWAYS-SKIPS. DT2 is the one waived cell and its "
-                 "strict xfail correctly held."),
+                 "strict xfail correctly held. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D6-UNCONDITIONAL-OPTIONAL "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D6-ADVISORY-ONLY-GATE",
@@ -1035,9 +1348,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT3", "23",
             "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34",
             "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41",
-            "42", "43", "44"),
+            "42", "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D6-ADVISORY-ONLY-GATE --step 1.6x` -> REDDENED (5.9s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=59,
+            date="2026-08-06", command=_SWEEP, reddened=60,
             stayed_green=("DT2",),
             note="a second, independent lever on 59 of the same cells; kept "
                  "because it charges a different leg (L1b) than "
@@ -1088,12 +1404,24 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34",
             "35", "36", "37", "38", "39", "M2", "M3", "M4", "40", "41", "42",
-            "43", "44"),
+            "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-GATE-PROBES-A-GHOST --step 1.6x` -> REDDENED (62.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=58,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=64,
             stayed_green=("7", "FS1", "23", "M1"),
             note="58 red = every one of dimension 7's 58 ENFORCED cells, in one "
-                 "sweep. The 4 greens are exactly its 4 waived cells."),
+                 "sweep. The 4 greens are exactly its 4 waived cells. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D7-GATE-PROBES-A-GHOST "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D7-UNDECLARED-KEY",
@@ -1108,9 +1436,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "A3", "A7", "A8", "A9", "15", "16", "17", "18", "19", "20",
                     "21", "22", "DT2", "DT3", "24", "25", "26", "27", "28",
                     "29", "30", "31", "32", "33", "34", "35", "36", "37", "38",
-                    "M2", "M3", "M4", "40", "41", "42", "43", "44"),
+                    "M2", "M3", "M4", "40", "41", "42", "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-UNDECLARED-KEY --step 1.6x` -> REDDENED (65.2s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=48,
+            date="2026-08-06", command=_SWEEP, reddened=49,
             stayed_green=("D1", "1", "7", "12", "A1", "A2", "A4", "A5", "A6",
                           "14", "23", "39", "M1"),
             note="13 steps stayed green and the reason is measured, not "
@@ -1133,9 +1464,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
         applies_to=("1", "2", "4", "8", "10", "11", "12", "A1", "A2", "A4",
                     "A5", "A7", "15", "16", "17", "18", "19", "20", "21", "22",
                     "DT3", "26", "27", "28", "29", "30", "31", "32", "34",
-                    "35", "36", "38"),
+                    "35", "36", "38",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-RENAMED-DELIVERABLE --step 1.6x` -> REDDENED (65.0s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=32,
+            date="2026-08-06", command=_SWEEP, reddened=33,
             stayed_green=("D1", "3", "5", "6", "7", "9", "DT1", "13", "A3",
                           "A6", "A8", "A9", "14", "DT2", "23", "24", "25",
                           "33", "37", "39", "M1", "M2", "M3", "M4", "40", "41",
@@ -1161,12 +1495,24 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D8-EMPTY-PROMISE --step 1.6x` -> REDDENED (2.0s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             note="61 red = every one of dimension 8's 61 ENFORCED cells, in one "
                  "sweep. The 2 steps not reached (FS1, P0) declare no "
-                 "required_outputs and are dimension 8's 2 NA cells."),
+                 "required_outputs and are dimension 8's 2 NA cells. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D8-EMPTY-PROMISE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
 )
 
@@ -1301,103 +1647,23 @@ ARTEFACT_MUTATIONS: Tuple[ArtefactMutation, ...] = (
                  "three spliced items are found as three real violations."),
     ),
 
-    # ---------------- PROVE THE CELL CANNOT REDDEN ----------------------
-    # These four are the deliverable, not the residue. Each is a cell that is
-    # ENFORCED, green, and unmoved by a defect of a magnitude no reviewer would
-    # call marginal. They are Phase 1's work list, and they are pinned here so
-    # that closing one is a visible diff rather than a silent improvement.
-    ArtefactMutation(
-        name="ART-EM-CURRENT-DENSITY",
-        dim=2, step_id="25", run_dir=_RUN,
-        artefact="reports/phase3/em.rpt",
-        edits=(Edit("max segment current: 1.963e-04 A",
-                    "max segment current: 5.0 A", 1),
-               Edit("Maximum current    : 1.96e-04 A",
-                    "Maximum current    : 5.00e+00 A", 2)),
-        gate="em_report_check . --mode em --json reports/phase3/em_signoff.json",
-        what="raise the peak power-grid segment current from 1.963e-04 A to "
-             "5.0 A — a factor of about 25000 — in every place the report "
-             "states it",
-        breaks="an electromigration screen against a current the metal cannot "
-               "carry. 5 A through a power-grid segment sized for microamps is "
-               "not a marginal call; it is a part that fails in the field.",
-        expected=CANNOT_REDDEN,
-        red_signal="",
-        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
-                 "zero findings, and its own report still reads MEASURED. "
-                 "em_report_check establishes that an EM analysis RAN and that "
-                 "the report carries a tool signature and a current figure; it "
-                 "never compares that figure against any limit, because no "
-                 "Jmax is resolved from the PDK at this step. There is "
-                 "therefore no magnitude of current this cell can refuse.",
-        measured=Measurement(
-            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
-            note="RECORDED AS A FINDING. Step 25's dimension-2 cell is ENFORCED "
-                 "and its gate is structurally falsifiable (D2-BLIND-GATE-"
-                 "PROGRAMS reddens it by renaming the program). It is not "
-                 "falsifiable from the CONTENT of the artefact it audits."),
-    ),
-    ArtefactMutation(
-        name="ART-POWER-FIGURES-X1000",
-        dim=2, step_id="33", run_dir=_RUN,
-        artefact="reports/phase3/power.rpt",
-        edits=(Edit("e-04", "e-01", 4), Edit("e-05", "e-02", 4),
-               Edit("e-06", "e-03", 1), Edit("e-10", "e-07", 3)),
-        what="multiply every non-zero figure in the OpenSTA power table by 1000 "
-             "by shifting its exponent three decades — internal, switching, "
-             "leakage and total, per group and in the Total row",
-        breaks="a power report off by three orders of magnitude. The zeros are "
-               "deliberately left alone, so the table stays internally "
-               "consistent and a reader checking that the rows sum to the "
-               "total finds nothing wrong.",
-        gate=("power_report_check . --mode power "
-              "--json reports/phase2/gates/power_report.json"),
-        expected=CANNOT_REDDEN,
-        red_signal="",
-        observed="the gate's verdict does not move: baseline PASS, mutant PASS. "
-                 "power_report_check establishes that the report came from a "
-                 "real power tool and carries leakage plus dynamic categories; "
-                 "the NUMBERS are never read against a budget, a die area, or "
-                 "the design's own supply. A 1000x power figure is the same "
-                 "PASS as the true one.",
-        measured=Measurement(
-            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
-            note="RECORDED AS A FINDING. 12 substitutions applied, exact-count "
-                 "checked; the 12 `0.00e+00` entries are correctly untouched "
-                 "because zero times 1000 is still zero."),
-    ),
-    ArtefactMutation(
-        name="ART-NETLIST-PRIMITIVE-SWAP",
-        dim=2, step_id="9", run_dir=_RUN,
-        artefact="phase2/stage2/synth/netlist.v",
-        edits=(Edit("\\$_NAND_", "\\$_AND_", 221),),
-        gate=("synth_netlist_check --netlist phase2/stage2/synth/netlist.v "
-              "--json reports/phase2/synth_netlist.json"),
-        what="substitute the generic primitive $_NAND_ for $_AND_ at all 221 "
-             "instantiation sites in the synthesised netlist",
-        breaks="221 gates whose output is inverted with respect to what "
-               "synthesis produced — a netlist that no longer implements the "
-               "RTL. This is the substitution a bad ECO script or a "
-               "mis-ordered techmap pass leaves behind.",
-        expected=CANNOT_REDDEN,
-        red_signal="",
-        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
-                 "total_cells 449 before and after. The gate's own report "
-                 "ENUMERATES `$_AND_` in its cell_type_counts, so it is not "
-                 "that the substitution was invisible to it — the gate counts "
-                 "cells and checks the netlist parses and is non-empty, and "
-                 "forms no opinion about which primitive belongs where. "
-                 "Function is nobody's business at this step; the equivalence "
-                 "check that would notice is at a step this gate does not "
-                 "block on.",
-        measured=Measurement(
-            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
-            note="RECORDED AS A FINDING. Note also what the corpus shows: every "
-                 "netlist.v published under benchmark-data/ is generic-primitive "
-                 "form with zero technology-mapped cells, so the swap could only "
-                 "be primitive-for-primitive. That is a separate observation "
-                 "and it is NOT actioned here."),
-    ),
+    # ---------------- CLOSED IN PHASE 1 ---------------------------------
+    # Both entries below were recorded CANNOT_REDDEN on 2026-08-11 and are
+    # REDDENS as of 2026-08-11 (D9 Phase 1). They are one defect in two places:
+    # THE GATE BELIEVED A SUMMARY WRITTEN BY THE RUNNER INSTEAD OF THE OUTPUT
+    # WRITTEN BY THE TOOL. Neither gate was made stricter about violations or
+    # about primitives; each was made to READ THE TOOL'S OWN ARTEFACT and to
+    # treat a disagreement between two published statements of one quantity as
+    # a finding rather than a tie broken silently in the summary's favour.
+    #
+    # MEASURED BLAST RADIUS over all 107 published run dirs, each gated on a
+    # `cp -a` copy: step 21 PASS -> FAIL 0, step 9 PASS -> FAIL 1
+    # (`evaluation/phase1_parity/sgmii`, adjudicated by hand — its netlist.v
+    # carries signals its own RTL never declares while the tool's own output
+    # beside it carries the RTL's, i.e. a stale ghost). No run went FAIL ->
+    # PASS. The corroboration is not inert: all 14 published router reports and
+    # all 15 gated netlists were corroborated against a tool source, so the
+    # zeros above are measured agreement, not absence.
     ArtefactMutation(
         name="ART-ROUTER-FINAL-ITERATION",
         dim=2, step_id="21", run_dir=_RUN,
@@ -1416,32 +1682,176 @@ ARTEFACT_MUTATIONS: Tuple[ArtefactMutation, ...] = (
              "line at the top of the same file untouched",
         breaks="the router finishing with 12 unresolved violations while the "
                "summary above it still says 0. Same file, same step, same gate "
-               "as ART-DRC-ROUTER-SUMMARY, which DOES redden — the pair is the "
-               "point: the gate believes the runner's summary, not the tool.",
+               "as ART-DRC-ROUTER-SUMMARY, which ALSO reddens — the pair is "
+               "the point: before this was closed the gate believed the "
+               "runner's summary and never read the tool.",
+        expected=REDDENS,
+        red_signal='"real_violation_total": 12',
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="CLOSED. `_check_drc` now reads the router's own final "
+                 "iteration through the SHARED grammar "
+                 "`_signoff_drc_format.router_iter_last_count` — the one "
+                 "`phase3_one_shot_runner._drt_final_violations` already uses, "
+                 "so the cross-check cannot disagree with the runner by "
+                 "reading a different grammar — and raises "
+                 "DRC_SUMMARY_CONTRADICTS_TOOL when the summary disagrees. "
+                 "The corpus says the disagreement is real and not "
+                 "hypothetical: 7 of the 14 published router reports carry a "
+                 "summary that contradicts their own tool transcript, which is "
+                 "the residue of a runner bug the runner itself has since "
+                 "fixed (see the comment at phase3_one_shot_runner:32190) and "
+                 "that this gate could not see. Those 7 were already red and "
+                 "stay red; what is new is that the gate now says WHY."),
+    ),
+    ArtefactMutation(
+        name="ART-NETLIST-PRIMITIVE-SWAP",
+        dim=2, step_id="9", run_dir=_RUN,
+        artefact="phase2/stage2/synth/netlist.v",
+        edits=(Edit("\\$_NAND_", "\\$_AND_", 221),),
+        gate=("synth_netlist_check --netlist phase2/stage2/synth/netlist.v "
+              "--json reports/phase2/synth_netlist.json"),
+        what="substitute the generic primitive $_NAND_ for $_AND_ at all 221 "
+             "instantiation sites in the synthesised netlist",
+        breaks="221 gates whose output is inverted with respect to what "
+               "synthesis produced — a netlist that no longer implements the "
+               "RTL. This is the substitution a bad ECO script or a "
+               "mis-ordered techmap pass leaves behind.",
+        expected=REDDENS,
+        red_signal="CELL_CENSUS_CONTRADICTS_TOOL",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="CLOSED. The cell census this gate ALREADY enumerated now "
+                 "decides something: it is compared against the census of "
+                 "`netlist_yosys.v`, the file the synthesiser itself wrote and "
+                 "which the runner copies to the audited `netlist.v`. The "
+                 "gate's finding names both sides per type ($_AND_ 221 vs 0, "
+                 "$_NAND_ 0 vs 221). NOT done, and measured rather than "
+                 "preferred: the yosys `stat` block is NOT used as a second "
+                 "authority, because one invocation logs a block per netlist "
+                 "it writes and on this very run the last block in synth.log "
+                 "describes a DIFFERENT file (287 technology-mapped cells vs "
+                 "this netlist's 449) — a rule keyed on it would raise a "
+                 "contradiction where nothing is wrong."),
+    ),
+
+    # ---------------- PROVE THE CELL CANNOT REDDEN ----------------------
+    # These two are the deliverable, not the residue. Each is a cell that is
+    # ENFORCED, green, and unmoved by a defect of a magnitude no reviewer would
+    # call marginal. They are the remaining work list, and they are pinned here
+    # so that closing one is a visible diff rather than a silent improvement.
+    ArtefactMutation(
+        name="ART-EM-CURRENT-DENSITY",
+        dim=2, step_id="25", run_dir=_RUN,
+        artefact="reports/phase3/em.rpt",
+        edits=(Edit("max segment current: 1.963e-04 A",
+                    "max segment current: 5.0 A", 1),
+               Edit("Maximum current    : 1.96e-04 A",
+                    "Maximum current    : 5.00e+00 A", 2)),
+        gate=("em_peak_current_authority_check . "
+              "--json reports/phase3/em_current_authority.json"),
+        what="raise the peak power-grid segment current from 1.963e-04 A to "
+             "5.0 A — a factor of about 25000 — in every place the report "
+             "states it",
+        breaks="an electromigration screen against a current the metal cannot "
+               "carry. 5 A through a power-grid segment sized for microamps is "
+               "not a marginal call; it is a part that fails in the field.",
+        expected=REDDENS,
+        red_signal="EM_PEAK_CURRENT_EXCEEDS_SUPPLY",
+        observed="CLOSED 2026-08-11. The edits below are BYTE-IDENTICAL to the "
+                 "ones that recorded CANNOT_REDDEN — only the gate this entry "
+                 "re-runs, and the flow that wires it, changed. Step 25's gate "
+                 "became an `all_of` and gained a clause that makes the number "
+                 "reach a comparison: `em_peak_current_authority_check` "
+                 "delegates the real per-layer J-vs-Jmax screen to "
+                 "`em_current_density_check` (614 lines, previously with zero "
+                 "references in the flow yaml) and, independently of any PDK, "
+                 "screens the peak against the total current the SAME report "
+                 "says the net is supplied with — Total power / Supply "
+                 "voltage. 5 A against a net supplied with 7.44e-04 A is a "
+                 "contradiction inside one artefact, and the limit is 1.0 "
+                 "because it is conservation of charge, not a guardband. The "
+                 "SIBLING clause `em_report_check` still cannot be moved by "
+                 "this edit and that record stands; it was never the clause "
+                 "that could.",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="baseline INCOMPLETE (rc 0 — the Jmax authority is absent in "
+                 "every published run, so the clause REFUSES rather than "
+                 "passing), mutant FAIL rc 1 naming the injected 5.0 A against "
+                 "the 7.4444e-04 A the report itself declares. Corpus blast "
+                 "radius measured over 109 discovered published run roots "
+                 "BEFORE the wiring: 0 PASS->FAIL at step 25. The peak/supply "
+                 "ratio was adjudicated BY HAND on all 13 runs carrying an EM "
+                 "report: 0.049-0.712, worst-case 29% headroom."),
+    ),
+    ArtefactMutation(
+        name="ART-POWER-FIGURES-X1000",
+        dim=2, step_id="33", run_dir=_RUN,
+        artefact="reports/phase3/power.rpt",
+        edits=(Edit("e-04", "e-01", 4), Edit("e-05", "e-02", 4),
+               Edit("e-06", "e-03", 1), Edit("e-10", "e-07", 3)),
+        what="multiply every non-zero figure in the OpenSTA power table by 1000 "
+             "by shifting its exponent three decades — internal, switching, "
+             "leakage and total, per group and in the Total row",
+        breaks="a power report off by three orders of magnitude. The zeros are "
+               "deliberately left alone, so the table stays internally "
+               "consistent and a reader checking that the rows sum to the "
+               "total finds nothing wrong.",
+        gate=("power_total_vs_budget_check . "
+              "--json reports/phase2/gates/power_budget.json"),
         expected=CANNOT_REDDEN,
         red_signal="",
-        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
-                 "and its own stdout still reads `real_violation_total=0` with "
-                 "the router's last word reading 12 in the file it just parsed. "
-                 "The count is taken from the `violation report:` summary the "
-                 "RUNNER writes at the top of the artefact; the tool's own "
-                 "final iteration is quoted in the same file for provenance and "
-                 "is never read. A runner that mis-summarises its own tool is "
-                 "invisible here, and so is anyone who edits only the summary.",
+        observed="STILL CANNOT REDDEN, AND THAT IS NOW THE CORRECT ANSWER "
+                 "RATHER THAN A HOLE. Re-pointed 2026-08-11 at the clause step "
+                 "33 gained for exactly this defect. The verdict no longer "
+                 "moves because it is no longer a PASS: baseline INCOMPLETE, "
+                 "mutant INCOMPLETE, both rc 0, and BOTH name the authority "
+                 "the run does not have. `power_total_vs_budget_check` "
+                 "compares total power against L19's `power_budget_uw` and "
+                 "REFUSES when it is unset — MEASURED over the corpus, 0 of "
+                 "the 17 published runs carrying a power report declare that "
+                 "budget (3 of 195 L19 copies do, and that design publishes no "
+                 "power report), so there is not one published run in which "
+                 "the comparison could have been made. `flow_compliance_check` "
+                 "now reports step 33 as INCOMPLETE rather than PASS on this "
+                 "run. A budget is a REQUIREMENT that must arrive in the "
+                 "design's own input documents; deriving one from die area, "
+                 "supply voltage or a sibling tool's number would be a "
+                 "threshold nobody declared, and a ruler fitted to this corpus "
+                 "is worse than an admitted absence. The mutation WOULD redden "
+                 "a run whose L19 states a budget — asserted directly in "
+                 "`programs/tests/test_power_total_vs_budget_check.py`, which "
+                 "is where that half of the predicate is proven, because the "
+                 "corpus cannot prove it.",
         measured=Measurement(
             date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
-            note="RECORDED AS A FINDING, and the sharpest one in the set: the "
-                 "SAME gate on the SAME file reddens for a summary edit and "
-                 "not for a tool-output edit, so the cell's green is a "
-                 "statement about the runner's arithmetic, not the router's."),
+            note="12 substitutions applied, exact-count checked; the 12 "
+                 "`0.00e+00` entries are correctly untouched because zero "
+                 "times 1000 is still zero. Corpus blast radius of the new "
+                 "clause, measured over 109 discovered published run roots: "
+                 "0 PASS->FAIL at step 33."),
     ),
 )
 
 #: How many artefact entries currently prove the cell they target CANNOT be
 #: reddened from artefact content. PINNED, exactly like the emptiness of
 #: :data:`NOT_FALSIFIABLE`, so the number can only move in a visible diff.
-#: Closing one of these is Phase 1 work and is deliberately NOT done here.
-ARTEFACT_CANNOT_REDDEN_AS_MEASURED: int = 4
+#: Closing one of these is Phase 1 work.
+#:
+#: 4 -> 1 on 2026-08-11, in three independent changes that each closed what they
+#: measured: ART-ROUTER-FINAL-ITERATION and ART-NETLIST-PRIMITIVE-SWAP (the gate
+#: believed a summary the runner wrote instead of the output the tool wrote),
+#: then ART-EM-CURRENT-DENSITY (a peak current gained a declared authority to be
+#: compared against). Each moved this number in the same change that closed its
+#: entry, which is the whole point of pinning it.
+#:
+#: The one that remains is ART-POWER-FIGURES-X1000, and it is NOT open work in
+#: the same sense. Its entry says why staying here is now the correct answer:
+#: the cell REFUSES, naming the budget it lacks, and no published run declares
+#: the budget that would let it redden. A cell that refuses is not a cell that
+#: passes; this count is of cells that pass when they should not.
+ARTEFACT_CANNOT_REDDEN_AS_MEASURED: int = 1
 
 #: Cells no constructed mutation could redden. EMPTY as measured 2026-08-06.
 #: An entry here is a finding to publish, never a reason to weaken a predicate.
@@ -1457,7 +1867,275 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: The (steps, dimensions, ENFORCED cells) the ledger was built against. Like
 #: ``GRID_AS_MEASURED`` in the coverage meta-test, this is the review gate and
 #: never an input: every count below is recomputed live.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 481)
+#:
+#: MOVED 481 -> 482 on 2026-08-11, and the move is a FINDING rather than an
+#: accommodation, so it is landed in its own commit with the cause named. The
+#: grid did not grow a step (63 both before and after) and no cell was waived
+#: away; ONE cell changed state. ``332b9985`` ("flow: stage membership was
+#: declared twice and the copies disagreed") gave step P0 ``blocks_on: [1]``,
+#: which took P0's dimension-5 cell from NA to ENFORCED. Bisected over the 15
+#: commits that touched the flow or the dimension modules between ``0387e67a``
+#: (where 481 was authored and was CORRECT — 12/d2 WAIVED, 12/d5 ENFORCED,
+#: P0/d5 NA) and today: ``23d96bf5`` swapped step 12 between dimensions 2 and 5
+#: for a net change of zero, and ``332b9985`` is the only commit that moved the
+#: total. Neither re-ran the ledger's sweep, which is why the arithmetic sat
+#: one short for three days rather than failing on the day it drifted.
+#:
+#: The +1 is COVERED, not merely counted: ``D5-PHANTOM-EDGE`` was replayed
+#: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
+#: replay would be exactly the "widen the baseline until it is green" move the
+#: gate exists to refuse.
+#:
+#: MOVED 482 -> 479 on 2026-08-14 (vibe-ic#1421). THREE cells left ENFORCED and
+#: they are NAMED in :data:`LEDGER_CELLS_NOT_ENFORCED` below — M2/d3, M3/d3 and
+#: M4/d3 — which is the whole reason that inventory now exists. `bcd444425`
+#: ("the mixed-signal steps were never unpublished", #1159) recorded those three
+#: steps as dormant: all four mixed-signal steps carry the same step-level
+#: ``condition: {files_exist: [phase1/analog/analog_block_list.json]}`` and that
+#: path occurs ZERO times in ``git ls-tree -r HEAD``, so the steps have never
+#: run here and dimension 3 answers NA rather than pretending to measure them.
+#:
+#: The drop is NOT the ledger being re-recorded to match a gate that stopped
+#: catching, and the difference is checkable rather than asserted. Dimension 3's
+#: ``matrix_na_precondition`` RE-DERIVES the dormancy live on every call from
+#: the flow yaml and the admissible run roots — publish any tree carrying the
+#: condition file and all three cells go back to ENFORCED and this pin reddens
+#: in the other direction. A cell that was silently losing its mutation would
+#: have no such live precondition to show, and lowering the count for one is the
+#: move this pin exists to refuse.
+#:
+#: THE COMMIT THAT CAUSED THE MOVE DID NOT MAKE IT, and that is the defect
+#: vibe-ic#1421 records. #1159 moved every counter it could see — the d3
+#: manifest's ``_LIVE_ENTRY_COUNT``, the 63x8 ledger's entry totals — and could
+#: not see this one, because it lives in ``programs/`` rather than the test
+#: tree and no diff connects a flow-yaml edit to it. It presented as a batch
+#: INTERACTION (no PR in the batch touches this file) when it is one PR and one
+#: number.
+#:
+#: MOVED 479 -> 478 on 2026-08-15 (vibe-ic#1421 again, and this time the gate
+#: caught it on the day it drifted). ONE cell left ENFORCED and it is NAMED in
+#: :data:`LEDGER_CELLS_NOT_ENFORCED` below — 34/d7 — which is the whole reason
+#: that inventory exists. ``9167b162`` ("flow(#1215): the write-record pin fired
+#: correctly — dispose the promotions, then move it") registered a dimension-7
+#: waiver on step 34: W2 charges ``reports/phase3/cmp_fill_emit.json`` as
+#: produced, gate-read and undeclared, and the waiver argues the READ half is an
+#: artefact of the consumer oracle mining a gate program's own default-output
+#: constant rather than a path anything in the tree reads.
+#:
+#: WHY IT REACHED main UNRECORDED, stated so it is not mistaken for the same
+#: defect twice: ``9167b162`` and ``aa9b39d5`` (the commit 19 minutes later that
+#: authored this inventory) are NEITHER an ancestor of the other. The pin was
+#: measured on a tree that did not yet carry the waiver, the waiver was written
+#: against a tree that did not yet carry the pin, and the two met for the first
+#: time on main. That is a genuine batch INTERACTION — unlike the -3 above, which
+#: only presented as one.
+#:
+#: NOT a gate that stopped catching, and the difference is checkable rather than
+#: asserted. Dimension 7's ``matrix_cell_state`` re-derives this cell's state from
+#: the live waiver registry on every call: withdraw the waiver and 34/d7 goes
+#: straight back to ENFORCED and this pin reddens in the other direction, naming
+#: the same cell. A cell whose mutation had quietly stopped reddening it would
+#: still answer ENFORCED here and would move neither this number nor that list,
+#: which is exactly why the -1 has to arrive with the cell named.
+#: MOVED (63, 8, 478) -> (68, 8, 514) on 2026-08-20. The flow GREW FIVE STEPS
+#: — `0.5ic` `15.5ic` `26.5ic` `37.5ip` `37.5ic`, the path-specific chip/IC and
+#: cell/IP steps — and this is the first move of this pin that is a shape change
+#: rather than a reclassification, so it is stated as one. 68 x 8 = 544 cells,
+#: 30 of them not ENFORCED (see below), 544 - 30 = 514.
+#:
+#: +36 ENFORCED is NOT the arithmetic 5 x 8 = 40. Four of the five carry a
+#: step-level `condition: {files_exist: [input/submission_template/...]}` with
+#: `condition_kind: design_dependent`, and no admissible run root satisfies it,
+#: so dimension 3 answers NA_DORMANT_CONDITION for 15.5ic, 26.5ic, 37.5ip and
+#: 37.5ic — four NA cells, named below. `0.5ic` carries no condition (it is the
+#: step that WRITES `input/submission_template/slots/*.yaml`, so it cannot be
+#: conditioned on its own output) and its d3 cell is ENFORCED. 40 - 4 = 36.
+#:
+#: EVERY ONE OF THE 36 WAS REPLAYED, NOT COUNTED. 35 of them are covered by a
+#: measured mutation added to `applies_to` above (`--replay <NAME> --step <id>`
+#: -> REDDENED, per-cell times in the commit message). The 36th, `0.5ic/d3`, is
+#: NOT covered and is not pretended to be: the d3 mutation replays
+#: ALREADY_RED there (`--replay D3-UNDECLARED-ARTEFACT --step 0.5ic`,
+#: baseline_rc=1), because step 0.5ic's own dimension-3 cell is red on main —
+#: no published corpus cell ran the chip/IC path, so neither declared output
+#: exists in any admissible run root. A pair that is red before the edit
+#: "proves nothing either way" in this program's own words, and recording it as
+#: covered would be exactly the forgery the ledger exists to refuse. It stays
+#: uncovered and `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
+#: stays red, naming one cell instead of thirty-six.
+#:
+#: MOVED (68, 8, 514) -> (69, 8, 521) at v1.11.5. The flow grew ONE step,
+#: `37.5self` ("General Precheck — the tape-out check for a design with NO
+#: operator"), the third route out of stage 4: 37.5ic is an outside operator's
+#: refusal and 37.5ip is the IP terminal, and a chip taping itself out was
+#: neither, so until this step it passed no submission check at all. Another
+#: shape change, stated as one: 69 x 8 = 552 cells, 31 of them not ENFORCED
+#: (see below), 552 - 31 = 521.
+#:
+#: +7 AND NOT 8, for the reason its three siblings are NA: the step carries
+#: `condition: {files_exist: [input/submission_template/SELF_TAPEOUT.txt]}`
+#: with `condition_kind: design_dependent`, no admissible run root satisfies
+#: it, and dimension 3 therefore re-derives NA_DORMANT_CONDITION for it live.
+#: The cell is NOT "left ENFORCED"; it entered the grid NA, and it is named in
+#: the inventory below rather than only subtracted here.
+#:
+#: The other 7 were NOT counted into coverage on the strength of the +7: each
+#: is covered by a mutation family whose `applies_to` already resolves an edit
+#: site on this step, which the census re-checks live per cell (LOCK 1) rather
+#: than trusting the list — `census()` reports `uncovered == ['0.5ic/d3']` and
+#: nothing else on this tree, so `37.5self` arrived fully covered on those
+#: seven dimensions. `0.5ic/d3` is unchanged by this move and stays the one
+#: uncovered cell, for the reason argued directly above.
+#: MOVED (69, 8, 521) -> (68, 8, 514) at smrg/retire-37p5self, and this is the
+#: FIRST TIME THIS PIN HAS EVER GONE DOWN ON A SHAPE CHANGE. The flow LOST one
+#: step: `37.5self` is retired, because the general precheck was never a third
+#: ROUTE out of stage 4 — it is a second ARM of `37.5ic`, which now runs our
+#: ladder on every design that reaches it and the shuttle operator's own
+#: container IN ADDITION wherever the PDK ships a precheck and its template was
+#: fetched. 68 x 8 = 544 cells, 30 of them not ENFORCED (see below),
+#: 544 - 30 = 514.
+#:
+#: -7 AND NOT 8, and it is the exact mirror of the +7 recorded directly above.
+#: `37.5self/d3` was NA, never ENFORCED — it entered the grid NA and it leaves
+#: the grid NA — so seven ENFORCED cells go and the eighth was never in the
+#: count. This pin's own rule is that "a cell moving OUT of ENFORCED must say
+#: which cell and why", and the seven are named by their owner: every d1/d2/
+#: d4/d5/d6/d7/d8 cell of the removed step. There is no eighth to name here
+#: because there was never an eighth; the NA one is struck from
+#: :data:`LEDGER_CELLS_NOT_ENFORCED` below instead, which is where it lived.
+#:
+#: NOTHING ELSE MOVED, AND THAT IS MEASURED, NOT ASSUMED. The live grid was
+#: recomputed from the eight dimension modules on this tree and its
+#: not-ENFORCED inventory diffed against the pinned one: the ONLY difference in
+#: either direction is `("37.5self", 3, "NA")`. A step removal that had
+#: silently reclassified a neighbouring cell — the exact shape #1421 records
+#: the scalar being unable to see — would appear in that diff as a second
+#: entry. There is none, so the -7 is one cause and not a batch.
+#:
+#: THE COVERAGE CLAIM SHRINKS WITH IT AND IS NOT REDISTRIBUTED. The seven
+#: `applies_to` tuples that named `37.5self` drop it, and each entry's
+#: `measured.reddened` moves by exactly one, which
+#: `test_lock3_every_entry_is_arithmetically_consistent_with_its_own_evidence`
+#: re-derives from `len(applies_to)` on every run. The replay that produced
+#: those reds really happened and is not disowned; the CELL it measured no
+#: longer exists, so the claim it supported goes with it. `0.5ic/d3` is
+#: untouched by this move and remains the one uncovered cell.
+#: 2026-08-21: (68, 8, 514) -> (69, 8, 522). +1 step and +8 ENFORCED cells, and
+#: they are the same step: 1.6x, added to the flow by `7fcbc7397` with none of
+#: these registries moved. All eight of its cells are ENFORCED — it declares a
+#: gate, one required_output and `blocks_on: [1]`, carries no step-level
+#: condition and holds no waiver — so the count moves by exactly 8 and no cell
+#: changed state. Twelve mutation entries gained "1.6x", each REPLAYED rather
+#: than assumed; the two that could not be are named in the note on
+#: LEDGER_CELLS_NOT_ENFORCED.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (69, 8, 522)
+
+#: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
+#: owning dimension module answers. The COMPANION to the count above, and the
+#: reason it is here rather than folded into that tuple: **a count cannot name
+#: what moved, and two cells trading places move nothing.**
+#:
+#: That is not hypothetical, and it is not only history. The bisect recorded
+#: above found ``23d96bf5`` swapping step 12 between dimensions 2 and 5 "for a
+#: net change of zero" — a real state change on two real cells that the scalar
+#: was structurally unable to report, and it went unreported. Pinned as an
+#: inventory, the same swap is two findings that name both cells.
+#:
+#: The SAME change that forced the -3 carries a live second instance. Diffing
+#: the eight modules' answers across ``6011b4886`` -> ``75776dbb`` gives FOUR
+#: moved cells, not three: M1/d3 went WAIVED -> NA when its waiver was
+#: withdrawn for the same dormancy reason. That cell was never ENFORCED on
+#: either side, so it contributes nothing to 482 -> 479 and the count cannot
+#: mention it. It is in this tuple, so a reader can see it.
+#:
+#: It also decides the question the count alone leaves open, which is the one
+#: vibe-ic#1421 is about: 482 -> 479 could be three enforcements deliberately
+#: retired or three gates that quietly stopped catching, and no reader of the
+#: number can tell. A reader of this tuple sees WHICH three and in WHAT state,
+#: so the diff that lowers it has to say what it is doing.
+#:
+#: Measured 2026-08-14 on ``75776dbb`` from the eight dimension modules'
+#: ``matrix_cell_state``, the same live source the count is summed from. 25
+#: cells: 10 WAIVED (a registered, argued waiver) and 15 NA (a precondition the
+#: module re-derives live). 504 - 25 = 479, and the gate asserts that
+#: arithmetic rather than trusting it.
+#:
+#: RE-MEASURED 2026-08-15 on ``2efa6af3`` (v1.10.43 main) from the same eight
+#: modules: 26 cells — 11 WAIVED and 15 NA. 504 - 26 = 478. The one added cell is
+#: 34/d7, named below with the state it landed in and argued in the note on
+#: :data:`LEDGER_AS_MEASURED` above. This is the first drift this inventory
+#: caught AFTER the fact rather than recorded alongside its own cause: the -3
+#: above was written by the same commit that added the inventory, whereas here
+#: the count alone would have read as a bare 479 -> 478 with nothing to say
+#: which of 504 cells moved, or in which direction.
+LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
+    # ── dimension 2 ───────────────────────────────────────────────────
+    ("1", 2, "WAIVED"),
+    ("35", 2, "WAIVED"),
+    ("P0", 2, "NA"),
+    # ── dimension 3 ───────────────────────────────────────────────────
+    ("6", 3, "WAIVED"),
+    ("39", 3, "WAIVED"),
+    ("40", 3, "NA"),
+    ("41", 3, "NA"),
+    ("42", 3, "NA"),
+    ("43", 3, "NA"),
+    ("44", 3, "NA"),
+    ("FS1", 3, "NA"),
+    ("M1", 3, "NA"),
+    # M2-M4/d3: ENFORCED -> NA on 2026-08-14 (#1159), the -3 above.
+    ("M2", 3, "NA"),
+    ("M3", 3, "NA"),
+    ("M4", 3, "NA"),
+    ("P0", 3, "NA"),
+    # 15.5ic/26.5ic/37.5ip/37.5ic d3: the four path-specific steps that arrived
+    # 2026-08-20 with a step-level `condition: files_exist:
+    # [input/submission_template/...]` and `condition_kind: design_dependent`.
+    # No admissible run root satisfies it, so dimension 3 re-derives
+    # NA_DORMANT_CONDITION live for each. They are NOT "left ENFORCED" — they
+    # were never ENFORCED: they entered the grid in this state, which is why
+    # the +36 above is 36 and not 40. Publish a run tree carrying the condition
+    # file and all four go ENFORCED and this inventory reddens in the other
+    # direction, naming them.
+    ("15.5ic", 3, "NA"),
+    ("26.5ic", 3, "NA"),
+    ("37.5ip", 3, "NA"),
+    ("37.5ic", 3, "NA"),
+    # 37.5self/d3 STOOD HERE and is STRUCK, at smrg/retire-37p5self. It was
+    # added at v1.11.5 on exactly the same reading as the four above —
+    # `condition: {files_exist: [input/submission_template/SELF_TAPEOUT.txt]}`,
+    # `condition_kind: design_dependent`, no admissible run root satisfying it
+    # — and it entered the grid NA and was never ENFORCED.
+    #
+    # IT IS NOT REMOVED BECAUSE ITS STATE CHANGED. Its STEP was retired: the
+    # general precheck is now the first ARM of 37.5ic rather than a route of
+    # its own, so `37.5self` is not a step of this flow and `37.5self/d3` is
+    # not a cell of this grid. That distinction is the one this inventory
+    # exists to keep: a cell that LEFT ENFORCED and a cell that LEFT THE GRID
+    # are different facts, and `grid_findings` reports them with different
+    # words ("LEFT ENFORCED" vs "is no longer a cell of this grid"). It said
+    # the second one, by name, before this line was struck.
+    #
+    # 37.5ic/d3 above is UNCHANGED and still NA. It gained the `SELF_TAPEOUT.txt`
+    # marker as a second `any_of` alternative in its condition, so a run tree
+    # carrying EITHER router file now sends it ENFORCED — a wider door to the
+    # same state, not a different state.
+    # ── dimension 5 ───────────────────────────────────────────────────
+    ("12", 5, "WAIVED"),
+    # ── dimension 6 ───────────────────────────────────────────────────
+    ("DT2", 6, "WAIVED"),
+    # ── dimension 7 ───────────────────────────────────────────────────
+    ("7", 7, "WAIVED"),
+    ("23", 7, "WAIVED"),
+    # 34/d7: ENFORCED -> WAIVED on 2026-08-15 (`9167b162`, #1215), the -1 above.
+    ("34", 7, "WAIVED"),
+    ("FS1", 7, "WAIVED"),
+    ("M1", 7, "WAIVED"),
+    ("P0", 7, "NA"),
+    # ── dimension 8 ───────────────────────────────────────────────────
+    ("FS1", 8, "NA"),
+    ("P0", 8, "NA"),
+)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1736,7 +2414,7 @@ class ReplayResult:
         if not self.applied:
             return "NO_EDIT_SITE"
         if self.baseline_rc != 0:
-            return "ALREADY_RED"
+            return ALREADY_RED
         if self.mutant_rc in (None, 0):
             return "STAYED_GREEN"
         return "RED_FOR_ANOTHER_REASON"
@@ -1750,23 +2428,214 @@ class ReplayResult:
         by the third one arriving. For an ARTEFACT_MUTATION entry recorded
         ``STAYED_GREEN`` this is the pin: the day the gate learns to notice, the
         verdict stops matching and the gate file says so by name.
+
+        Deliberately FALSE for :attr:`unmeasurable`. An already-red pair has not
+        reproduced anything, and banking it as proof is the failure
+        ``test_control_the_baseline_must_pass_or_the_entry_is_already_red``
+        exists to catch. Consumers must ask :attr:`unmeasurable` FIRST and score
+        it as its own outcome — see that property's note.
         """
         return self.verdict == self.expected
 
+    @property
+    def unmeasurable(self) -> bool:
+        """The gate COULD NOT BE MEASURED on this pair — it was already red.
 
-def _run_cell(dim: int, sid: str, cwd: Path,
-              flow_override: Optional[Path], timeout: int) -> Tuple[int, str]:
+        The third state, distinct from both REDDENED and STAYED_GREEN (#1432).
+
+        A pair with ``baseline_rc != 0`` was failing BEFORE the mutation was
+        applied. Nothing was disproved, because nothing could be: the predicate
+        the mutation was supposed to move was not standing up to begin with.
+        Scoring that as "the mutation failed to redden the cell" is *could not
+        look* recorded as *found a defect* — the same conflation this repository
+        already removed from ``_vacuous_exit`` (rc 2), ``dual_track_select``'s
+        ``UNCHECKABLE`` (#1335), ``tracked_under``'s empty set on a failed
+        ``git`` (#1360), and rc=127 read as a structural defect (#1398).
+
+        It matters most HERE because this ledger is the instrument the rest of
+        the campaign is measured with: a false "the gate stopped catching" sends
+        an author hunting a regression that does not exist.
+
+        THIS IS NOT A SKIP. Unmeasurable pairs are counted, disclosed via
+        ``record_property``, and bounded by :data:`UNMEASURABLE_CEILING`, so a
+        gate that stops catching *and* whose witness happens to be red cannot
+        hide in this state. It is also not a licence to re-record: no ledger
+        entry may DECLARE this verdict, because the ledger is the record of what
+        the gates COULD catch, not of what they currently do.
+
+        ``NOT_REPLAYABLE`` is deliberately NOT folded in here. That is a
+        different failure — the replay never ran at all — and it keeps its
+        existing handling untouched.
+        """
+        return self.verdict == ALREADY_RED
+
+
+def _decoded(chunk) -> str:
+    """Whatever a killed child left behind, as text.
+
+    ``TimeoutExpired`` carries the output accumulated before the kill, and it
+    carries it as BYTES even when the call asked for ``text=True`` — CPython
+    builds the exception inside ``_check_timeout``, before any decoding. A
+    partial tail is still worth showing the reader, so it is decoded here with
+    ``replace`` rather than dropped for being ragged.
+    """
+    if chunk is None:
+        return ""
+    if isinstance(chunk, bytes):
+        return chunk.decode("utf-8", "replace")
+    return chunk
+
+
+def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]:
+    """``(cell rc, why-unreadable)`` from pytest's OWN report of the one cell.
+
+    ``0``/``1`` is the CELL's colour. ``None`` means the cell has no colour to
+    read, and the reason is returned rather than folded into one — a replay that
+    could not read its cell must be NOT_REPLAYABLE, never a quiet ALREADY_RED
+    and never a quiet STAYED_GREEN.
+
+    A ``skipped`` testcase is one of those, and it was the LAST unreadable path
+    still being given a colour (vibe-ic#1421). It used to map to 0, on this
+    argument:
+
+        "the two locks that consume this ask whether the cell went PASS ->
+        FAIL, and a skip is not a fail. It is only ever a witness's BASELINE
+        that could be skipped ... so a skip cannot manufacture a red."
+
+    The last sentence is false, and the conclusion only ever covered ONE of the
+    two ways to be wrong. The skip conditions in a cell test are properties of
+    the CHECKOUT, not of the mutation — dimension 3's cell skips when the
+    published corpus is not in this tree — so they hold on BOTH arms, and the
+    mutant arm skips too. `replay` then reads baseline 0, mutant 0, and scores
+    the pair STAYED_GREEN, whose meaning in LOCK 2's own words is "the ledger
+    says this edit reddens the cell; re-running it says otherwise, so the
+    recorded proof no longer holds". Measured on ``ee849c19e``:
+
+        D3-UNDECLARED-ARTEFACT @ D1  ->  STAYED_GREEN, baseline_rc=0,
+        mutant_rc=0, not_replayable=''      (both arms: `1 skipped`)
+
+    That is the headline claim of vibe-ic#1421 — "a recorded mutation stopped
+    reddening its witness" — asserted over a cell nobody looked at. A skip
+    cannot manufacture a red; it manufactures the FALSE NEGATIVE instead, which
+    is the expensive direction and the one this ledger exists to refuse. It is
+    the same conflation already removed from a fired bound (#1403), a session
+    exit status read as the cell's colour (#1412) and an already-red witness
+    (#1432); this is the fourth and it is the one that pointed the wrong way.
+    """
+    if not junit.is_file():
+        return None, (f"pytest wrote no report (process rc={proc_rc}) — the "
+                      f"session died before it could record the cell")
+    try:
+        cases = ET.parse(junit).getroot().iter("testcase")
+    except ET.ParseError as exc:
+        return None, f"pytest report unparseable (process rc={proc_rc}): {exc}"
+    cases = list(cases)
+    if len(cases) != 1:
+        return None, (f"pytest reported {len(cases)} testcase(s), not 1 "
+                      f"(process rc={proc_rc}) — the nodeid selected nothing, "
+                      f"or collection produced more than the cell")
+    bad = [c for c in cases[0] if c.tag in ("failure", "error")]
+    if bad:
+        return 1, ""
+    skipped = [c for c in cases[0] if c.tag == "skipped"]
+    if skipped:
+        said = (skipped[0].get("message") or skipped[0].get("type")
+                or "").strip().replace("\n", " ")
+        return None, (
+            f"pytest SKIPPED the cell (process rc={proc_rc}), so this arm was "
+            f"NOT MEASURED: {said or 'no reason recorded'}. A skipped cell has "
+            f"no colour. Scored 0 it makes a mutant arm nobody ran read as "
+            f"STAYED_GREEN — a recorded mutation that stopped reddening its "
+            f"witness — and a baseline arm nobody ran read as a green witness. "
+            f"That is not evidence the gate stopped catching, and it is not a "
+            f"reason to re-record the ledger or re-pick the witness. Give the "
+            f"cell what it needs to answer (the skip reason names it) and "
+            f"re-run the pair")
+    return 0, ""
+
+
+def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
+              timeout: int) -> Tuple[Optional[int], str, str]:
+    """Run the one cell and return ``(cell rc, output, why-unreadable)``.
+
+    THE COLOUR COMES FROM THE REPORT, NOT FROM THE EXIT STATUS (vibe-ic#1412).
+    A pytest process exits non-zero for the cell OR for anything the SESSION
+    decided, and the two are not the same claim. The measured instance: the
+    plugin's own ``conftest.py`` loads ``suite_write_guard``, which discovers
+    its subject with ``git rev-parse --show-toplevel`` from its own file. In the
+    ``cp -al`` mirror this function is handed, that resolves to whatever
+    repository happens to enclose ``TMPDIR`` — and the mirror's own
+    ``__pycache__`` is UNTRACKED there whenever that repository's ignore rules
+    are not this one's, so the guard sets ``session.exitstatus = 1`` while the
+    cell itself reports ``1 passed``. LOCK 2 then read ``baseline rc=1`` and
+    called a green cell ALREADY_RED — on clean main, for no reason but where
+    the operator's scratch directory sat.
+
+    Both directions were broken, and the other one is worse: a mutant arm whose
+    session went red for its own reasons, with the declared ``red_signal``
+    string anywhere in the output, would have been recorded REDDENED for a
+    mutation that moved nothing.
+
+    ``PYTEST_DISABLE_PLUGIN_AUTOLOAD`` already pins what the child loads from
+    the HOST for exactly this reason; this pins what it loads from the REPO.
+    The output is still the whole stdout+stderr, because ``red_signal`` is
+    matched against it.
+    """
     env = dict(os.environ)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     if flow_override is None:
         env.pop(FLOW_YAML_ENV, None)
     else:
         env[FLOW_YAML_ENV] = str(flow_override)
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
-         "-q", "-p", "no:randomly", "--no-header", "-rN"],
-        cwd=str(cwd), capture_output=True, text=True, timeout=timeout, env=env)
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    # OUTSIDE `cwd`: the report is this function's instrument, and an instrument
+    # that lands in the tree under measurement perturbs the next gate to look.
+    holder = Path(tempfile.mkdtemp(prefix="matmut_cellreport_"))
+    junit = holder / "cell.xml"
+    try:
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
+                 "-q", "-p", "no:randomly", "--no-header", "-rN",
+                 "--junit-xml", str(junit)],
+                cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+                env=env)
+        except subprocess.TimeoutExpired as exc:
+            # THE BOUND FIRING IS A MEASUREMENT FAILURE, NOT A COLOUR
+            # (vibe-ic#1403).
+            #
+            # Every other way this cell can be unreadable already returns a
+            # REASON and lets `replay` score it NOT_REPLAYABLE — that is the
+            # doctrine `_cell_rc_from_report` is written to, in as many words:
+            # "a replay that could not read its cell must be NOT_REPLAYABLE,
+            # never a quiet ALREADY_RED". The bound firing was the ONE
+            # unreadable path that did not obey it, because `subprocess.run`
+            # raises instead of returning, and the exception escaped through
+            # `replay` -> `replay_many`'s `pool.map` to the caller.
+            #
+            # The consequence is the one this issue is about. LOCK 2 died with
+            # a `TimeoutExpired` traceback and no verdict, which reads to a
+            # harness — and to a reader in a hurry — exactly like the red that
+            # means "a gate stopped catching". It is the opposite: nothing was
+            # measured on this arm at all.
+            #
+            # rc is None, so the arm has NO COLOUR and cannot be scored. It is
+            # not folded into ALREADY_RED (which would say the witness was
+            # pre-reddened, a claim this has no evidence for) and not into
+            # STAYED_GREEN (which would say the gate lost its teeth, the
+            # expensive wrong answer). `not_replayable` makes `proved` and
+            # `as_recorded` both False, so this can never buy a pass.
+            return None, _decoded(exc.stdout) + _decoded(exc.stderr), (
+                f"the cell exceeded its {timeout}s bound and was killed, so "
+                f"pytest never recorded it — this arm was NOT MEASURED. That "
+                f"is not evidence the gate stopped catching, and it is not a "
+                f"reason to re-record the ledger or re-pick the witness. "
+                f"Re-run the pair; if it is genuinely this slow, raise the "
+                f"bound in a change that states the measurement")
+        out = (proc.stdout or "") + (proc.stderr or "")
+        rc, why = _cell_rc_from_report(junit, proc.returncode)
+        return rc, out, why
+    finally:
+        shutil.rmtree(holder, ignore_errors=True)
 
 
 def replay(mut: Mutation, sid: Optional[str] = None,
@@ -1809,8 +2678,10 @@ def replay(mut: Mutation, sid: Optional[str] = None,
             mutant.write_text(
                 yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
                 encoding="utf-8")
-            base_rc, _ = _run_cell(mut.dim, sid, PLUGIN_ROOT, None, timeout)
-            mut_rc, out = _run_cell(mut.dim, sid, PLUGIN_ROOT, mutant, timeout)
+            base_rc, _, base_why = _run_cell(
+                mut.dim, sid, PLUGIN_ROOT, None, timeout)
+            mut_rc, out, mut_why = _run_cell(
+                mut.dim, sid, PLUGIN_ROOT, mutant, timeout)
             patched = "flow/phase1_phase2_phase3.yaml (substituted)"
         else:
             mirror = scratch / "mirror"
@@ -1818,24 +2689,35 @@ def replay(mut: Mutation, sid: Optional[str] = None,
                            check=True, capture_output=True)
             for pyc in mirror.rglob("__pycache__"):
                 shutil.rmtree(pyc, ignore_errors=True)
-            base_rc, _ = _run_cell(mut.dim, sid, mirror, None, timeout)
+            base_rc, _, base_why = _run_cell(mut.dim, sid, mirror, None, timeout)
             patched = apply_to_tree(mut, mirror)
             if patched is None:
                 return ReplayResult(
                     mut.name, mut.dim, sid, False, base_rc, None, False,
                     f"anchor for {mut.name} is absent or not unique in "
-                    f"{mut.params.get('file')}", time.time() - started)
+                    f"{mut.params.get('file')}", time.time() - started,
+                    "REDDENED",
+                    f"baseline arm: {base_why}" if base_why else "",
+                    mut.channel)
             for pyc in mirror.rglob("__pycache__"):
                 shutil.rmtree(pyc, ignore_errors=True)
-            mut_rc, out = _run_cell(mut.dim, sid, mirror, None, timeout)
+            mut_rc, out, mut_why = _run_cell(mut.dim, sid, mirror, None, timeout)
         seen = mut.red_signal in out
         tail = "\n".join(l for l in out.strip().splitlines() if l.strip())[-1200:]
+        # An arm whose cell could not be READ has no colour, and a colourless
+        # arm must not be scored. NOT_REPLAYABLE carries the reason; silence
+        # here is how "could not look" becomes "looked and it was red".
+        unreadable = "; ".join(
+            f"{arm} arm: {why}"
+            for arm, why in (("baseline", base_why), ("mutant", mut_why)) if why)
         return ReplayResult(
             mut.name, mut.dim, sid, True, base_rc, mut_rc, seen,
             f"patched {patched}; baseline rc={base_rc}, mutant rc={mut_rc}, "
             f"red_signal {mut.red_signal!r} "
-            f"{'present' if seen else 'ABSENT'}\n--- mutant tail ---\n{tail}",
-            time.time() - started, "REDDENED", "", mut.channel)
+            f"{'present' if seen else 'ABSENT'}"
+            f"{('; UNREADABLE — ' + unreadable) if unreadable else ''}"
+            f"\n--- mutant tail ---\n{tail}",
+            time.time() - started, "REDDENED", unreadable, mut.channel)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -1898,12 +2780,18 @@ def _copy_published_run(src: Path, dst: Path) -> None:
 
     MEASURED, not reasoned: an earlier draft of this replay used ``cp -al`` and
     left eight JSON artefacts of the published run modified in the worktree
-    (`git status` named them; they were restored from HEAD). The rule in the
-    brief — never mutate a published run in place — is enforced here by copying
-    for real, and checked afterwards by :func:`_stat_manifest`.
+    (`git status` named them; they were restored from HEAD).
+
+    DELEGATED to :func:`_run_isolation.copy_run` (#996). That module is where
+    this hazard is now stated once, because three separate pieces of work hit
+    it on one day and each wrote its own careful treatment. The behaviour is
+    unchanged in the direction that matters — a real copy, refused if it shares
+    an inode with the source — and STRENGTHENED in one: the shared helper
+    compares the ``(dev, ino)`` sets of the whole tree, where the check below
+    looks at ``st_nlink`` of the single edited artefact. A published run whose
+    OTHER files were hardlinked would have passed here and does not there.
     """
-    subprocess.run(["cp", "-a", str(src), str(dst)],
-                   check=True, capture_output=True)
+    _iso.copy_run(src, dst)
 
 
 def _stat_manifest(root: Path) -> Dict[str, Tuple[int, int]]:
@@ -1913,16 +2801,15 @@ def _stat_manifest(root: Path) -> Dict[str, Tuple[int, int]]:
     no reads) and it catches the failure that actually happened: a gate program
     truncating a shared inode. A pure "did we copy correctly" assertion would
     not have — the copy was correct; the SHARING was the defect.
+
+    DELEGATED to :func:`_run_isolation.snapshot` (#996), narrowed back to the
+    ``(size, mtime_ns)`` pair this module compares so the equality below keeps
+    meaning exactly what it did. The shared snapshot also carries ``dev``/``ino``,
+    which are deliberately dropped here: an inode number changing under an
+    unchanged size and mtime is a re-copy, not a perturbation of the content
+    this replay is measuring.
     """
-    out: Dict[str, Tuple[int, int]] = {}
-    for p in root.rglob("*"):
-        if p.is_file():
-            try:
-                st = p.stat()
-            except OSError:  # pragma: no cover - races on a shared tree
-                continue
-            out[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns)
-    return out
+    return {k: (s.size, s.mtime_ns) for k, s in _iso.snapshot(root).items()}
 
 
 def replay_artefact(mut: ArtefactMutation, timeout: int = 900) -> ReplayResult:
@@ -2042,10 +2929,104 @@ def replay_plan(mode: Optional[str] = None) -> Tuple[Tuple[str, str], ...]:
 
 
 def replay_many(plan: Sequence[Tuple[str, str]], jobs: int = 8,
-                timeout: int = 900) -> Tuple[ReplayResult, ...]:
+                timeout: int = 900,
+                progress_callback: Optional[Callable[[int, int], None]] = None,
+                budget: Optional[float] = None,
+                ) -> Tuple[ReplayResult, ...]:
+    """Re-execute every pair in ``plan``, optionally under a TOTAL wall budget.
+
+    ``timeout`` bounds ONE cell and ``budget`` bounds the WHOLE plan, and the
+    second is not a refinement of the first — it is the only bound that exists
+    at the level where this function can outlive its caller. ``timeout`` is
+    per-cell, so the aggregate cost of a plan was ``len(frozen)`` cells deep and
+    UNDECLARED: nothing anywhere stated how long ``replay_many`` may take, and
+    no amount of lowering ``timeout`` states it.
+
+    WHY AN UNDECLARED AGGREGATE IS NOT MERELY SLOW (vibe-ic#1410). The landing
+    harness pins ``--timeout=180 --timeout-method=thread``
+    (``tools/ci/repo_hygiene_gates.sh``). The thread method cannot unwind a
+    thread blocked in ``as_completed``, so when the aggregate exceeds the bound
+    pytest takes the whole PROCESS down rather than failing the test. MEASURED
+    on clean ``7c376e348``, default ``witness`` mode, whole file, that harness
+    with ``--timeout`` lowered to a bound this plan cannot afford::
+
+        REALEXIT=1
+        lines matching passed|failed|error in the whole output:   0
+        FAILED lines:                                             0
+
+    Ninety-odd tests had already reached a verdict and not one of them is
+    reported. A script grepping that output for failures reads ZERO, and zero
+    is what it reads whether the run was clean or never happened. AN EMPTY
+    RESULT IS NOT A ZERO, and this parameter is what stops one being produced.
+
+    ``budget=None`` (the default, and what the audit lane and every existing
+    caller uses) is exactly the previous behaviour: no deadline, every pair runs
+    however long it takes, and the population is asserted complete.
+
+    With a budget, pairs are run until the deadline and pairs that were never
+    STARTED are OMITTED from the return value — never fabricated, never scored,
+    never given a colour they were not measured to have. Omission is right HERE
+    and wrong for a cell that was attempted: a pair the pool never picked up was
+    not a replay at all, so there is no arm to report and nothing to call
+    NOT_REPLAYABLE. A pair that WAS started and whose cell blew its clamp keeps
+    the module's existing doctrine — ``_run_cell`` returns a REASON and
+    :func:`replay` scores it ``NOT_REPLAYABLE`` — and stays in the results.
+
+    The shortfall is therefore visible to the caller as
+    ``len(results) < len(plan)``, which is precisely what
+    ``test_the_replay_actually_ran_and_is_not_starved`` already asserts on. A
+    replay that was cut off reports itself as STARVED; it does not report the
+    mutations it never reached as having stopped reddening anything.
+
+    ``progress_callback`` is called only for pairs that actually produced a
+    result, and its denominator stays ``len(frozen)`` in every case. A cut-off
+    run therefore stops short of its own total, which is the disclosure — the
+    denominator must never shrink to match what was achieved.
+    """
+    import time
+    frozen = tuple(plan)
+    if not frozen:
+        return ()
+    deadline = (None if budget is None
+                else time.monotonic() + max(0.0, float(budget)))
+
+    def _one(pair: Tuple[str, str]) -> Optional[ReplayResult]:
+        if deadline is None:
+            return replay(mutation(pair[0]), pair[1], timeout)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # NEVER STARTED. Returning None omits it; see the docstring for why
+            # omission is the honest answer for this case and only this case.
+            return None
+        # Halved because :func:`replay` runs TWO cells back to back (baseline
+        # then mutant) under this same bound, so an unhalved clamp lets a single
+        # pair overrun the whole-plan deadline by an entire cell.
+        cell = min(timeout, max(1, int(remaining // 2)))
+        return replay(mutation(pair[0]), pair[1], cell)
+
+    results: List[Optional[ReplayResult]] = [None] * len(frozen)
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        return tuple(pool.map(
-            lambda pair: replay(mutation(pair[0]), pair[1], timeout), plan))
+        pending = {
+            pool.submit(_one, pair): index
+            for index, pair in enumerate(frozen)
+        }
+        completed = 0
+        try:
+            for future in as_completed(pending):
+                outcome = future.result()
+                results[pending[future]] = outcome
+                if outcome is None:
+                    continue
+                completed += 1
+                if progress_callback is not None:
+                    progress_callback(completed, len(frozen))
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
+    if deadline is None:
+        assert all(result is not None for result in results)
+    return tuple(result for result in results if result is not None)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2192,15 +3173,47 @@ def main(argv: Optional[List[str]] = None) -> int:
             # RECORDS `STAYED_GREEN` is reproducing a published finding when it
             # stays green, and reporting it as a failure would push an author
             # toward deleting the record instead of closing the gap.
-            mark = "ok  " if r.as_recorded else "FAIL"
+            #
+            # `unmeasurable` is asked FIRST and is NOT a failure (#1432): the
+            # gate was red before the edit, so the pair says nothing about
+            # whether the gate still has teeth. It is still PRINTED, and still
+            # counted below, because a silent skip would hand the ledger the
+            # blind spot it exists to prevent.
+            mark = "n/m " if r.unmeasurable else "ok  " if r.as_recorded \
+                else "FAIL"
             note = ("" if r.expected == "REDDENED"
                     else "  [recorded finding: the cell CANNOT redden]")
+            if r.unmeasurable:
+                note = (f"  [UNMEASURABLE: red before the edit "
+                        f"(baseline_rc={r.baseline_rc}), so this pair proves "
+                        f"nothing either way]")
             print(f"  [{mark}] {r.mutation} @ step {r.step_id}: {r.verdict} "
                   f"({r.seconds:.1f}s){note}")
-            if not r.as_recorded:
+            if not r.as_recorded and not r.unmeasurable:
                 rc = 1
                 print(f"        expected {r.expected}, got {r.verdict}")
                 print("        " + r.detail.replace("\n", "\n        "))
+
+        unmeasurable = [r for r in results if r.unmeasurable]
+        # `--replay-witnesses` builds the witness plan outright, whatever the
+        # env-configured mode is, so the mode is read off the SELECTOR that
+        # built the plan rather than from `replay_mode()`.
+        mode = "witness" if a.replay_witnesses else None
+        ceiling = UNMEASURABLE_CEILING.get(mode) if mode else None
+        print(f"  UNMEASURABLE {len(unmeasurable)} of {len(results)} pair(s)"
+              + (f", ceiling {ceiling} for mode {mode!r}"
+                 if ceiling is not None else ""))
+        # The ceiling is enforced only for a WHOLE-MODE plan. `--replay NAME`
+        # and `--replay-artefacts` are deliberate slices, and a slice's count
+        # cannot be compared against a whole-mode budget.
+        if ceiling is not None and len(unmeasurable) > ceiling:
+            rc = 1
+            print(f"  [FAIL] {len(unmeasurable)} unmeasurable pair(s) exceeds "
+                  f"the ceiling of {ceiling} for mode {mode!r}; the ledger "
+                  f"cannot measure this much of itself")
+            for r in unmeasurable:
+                print(f"        {r.mutation} @ step {r.step_id}: "
+                      f"baseline_rc={r.baseline_rc}")
 
     if a.json_out:
         Path(a.json_out).parent.mkdir(parents=True, exist_ok=True)

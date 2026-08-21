@@ -1,11 +1,17 @@
-# `matrix_63x8` — shared substrate for the 63 × 8 coverage matrix
+# `matrix_63x8` — shared substrate for the flow-step × dimension coverage matrix
 
-The Vibe-IC flow has **63<!--figure:flow_steps--> steps**. The 2026-07 audit
-asked **8<!--figure:matrix_dimensions--> questions** of each one.
-63<!--figure:flow_steps--> × 8<!--figure:matrix_dimensions--> =
-**504<!--figure:ledger_cells--> cells**. This package is the substrate that
+The Vibe-IC flow has **69<!--figure:flow_steps--> steps**. The 2026-07 audit
+asked **9<!--figure:matrix_dimensions--> questions** of each one.
+69<!--figure:flow_steps--> × 9<!--figure:matrix_dimensions--> =
+**621<!--figure:ledger_cells--> cells**. This package is the substrate that
 all eight dimension test-modules import so they agree on what a step is, what
 a gate says, and which cells exist.
+
+Five of those steps are PATH-SPECIFIC and do not run for every design: 0.5ic,
+15.5ic, 26.5ic and 37.5ic belong to the chip/IC path, 37.5ip is the cell/IP
+path's terminal step. They are cells here like any other — the matrix asks whether a
+step is declared, wired and gated, not whether this design runs it. The
+package name keeps its `63x8` spelling: it is the campaign's name, not a count.
 
 Every digit in this file that describes the flow is DERIVED: it carries a
 `<!--figure:...-->` anchor naming the binding that produced it, and
@@ -47,7 +53,7 @@ Four specific forms of it, all of which an adversarial verifier will catch:
 
 ## The three-state rule
 
-Every one of the 504<!--figure:ledger_cells--> cells must end in **exactly
+Every one of the 621<!--figure:ledger_cells--> cells must end in **exactly
 one** of these, all machine-checkable:
 
 ### `ENFORCED`
@@ -138,8 +144,8 @@ Things that will bite you if you skip the docstring:
 * **`required_outputs` is ALL-of across entries**, but `" OR "` *inside* one
   entry is any-of. It used to be any-of across entries and that was a real
   false-pass bug — see `programs/flow_compliance_check.py` ~line 6150.
-* **`blocks_on` is present on 63<!--figure:blocks_on_declared--> steps but non-empty on only 61<!--figure:blocks_on_nonempty-->.** D1 and A1
-  declare it *empty* because they are the flow's genuine roots. "63<!--figure:blocks_on_declared--> steps have
+* **`blocks_on` is present on 69<!--figure:blocks_on_declared--> steps but non-empty on only 67<!--figure:blocks_on_nonempty-->.** D1 and A1
+  declare it *empty* because they are the flow's genuine roots. "69<!--figure:blocks_on_declared--> steps have
   blocks_on" is a presence count, not a dependency count.
 * **`total_steps: 44`** in the yaml counts the numeric steps only. It is not
   `len(steps)`.
@@ -147,10 +153,10 @@ Things that will bite you if you skip the docstring:
   `advisory_program_exit_zero` does **not**, `optional_program_exit_zero`
   blocks only when its `condition_files_exist` are present. Treating an
   advisory clause as enforcement is measuring something adjacent.
-* **No `program_exit_zero` form exists in `required_outputs`** — all 134<!--figure:required_output_entries-->
+* **No `program_exit_zero` form exists in `required_outputs`** — all 164<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
-### `cells.py` — the 504<!--figure:ledger_cells-->-cell ledger
+### `cells.py` — the 621<!--figure:ledger_cells-->-cell ledger
 `ALL_CELLS` is the cross product of `flowref.step_ids()` × `DIMENSIONS`, built
 **live from the yaml, never from the audit JSON**. Add or delete a step and the
 ledger changes with the repo; `test_matrix_63x8_ledger.py` notices.
@@ -238,7 +244,7 @@ from matrix_63x8 import cells as C, flowref as F, waivers as W
 
 The ledger's unit is a step, but dimensions 2 (falsifiability), 4
 (criteria-match) and 6 (skip discipline) each ask their question of a gate
-CLAUSE — 161<!--figure:blocking_clauses--> blocking clauses over 62<!--figure:gated_steps--> gated steps. A cell-level
+CLAUSE — 177<!--figure:blocking_clauses--> blocking clauses over 68<!--figure:gated_steps--> gated steps. A cell-level
 `xfail(strict=True)` cannot express "5 of this step's 6 clauses are proven and
 the 6th is not", so those modules carry an in-module per-clause register with
 the same both-directions anti-rot semantics (a stale entry reddens; an entry
@@ -281,7 +287,7 @@ thread-parallel test execution.
 Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
 eight modules through pytest's own machinery, asks each module the state of the
 cells it owns, and then RUNS those modules and joins the answer against what
-each cell's predicate actually did. **504<!--figure:ledger_cells--> / 504<!--figure:ledger_cells--> cells present,
+each cell's predicate actually did. **621<!--figure:ledger_cells--> / 621<!--figure:ledger_cells--> cells present,
 exactly once.**
 
 **The census has TWO axes, and the first is not quotable on its own.** A cell's
@@ -314,31 +320,34 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**504 cells: 458 ENFORCED, 24 ENFORCED-CONTRADICTED, 11 WAIVED, 11 NA.**
+**621 cells: 539 ENFORCED, 6 ENFORCED-CONTRADICTED, 8 WAIVED, 19 NA, 46 ENFORCED-SKIPPED, 3 WAIVED-SKIPPED.**
 
-The 24 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 458: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 6 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 539: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
-**What these 504 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
+**What these 621 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
 `ENFORCED` is published SPLIT, because it is not one thing. It means a live predicate ran and passed; it does not say WHAT it ran against, and that turns out to be three different answers:
 
-* **16** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
-* **45** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
-* **397** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
+* **19** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
+* **117** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
+* **403** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
 
-The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
+The 8 WAIVED and 19 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
-| dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |
-|-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------:|---:|
-| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 | 0 |
-| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 0 | 2 | 1 |
-| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 37 | 16 | 3 | 7 |
-| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 62 | 1 | 0 | 0 |
-| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 61 | 1 | 1 | 0 |
-| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
-| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 52 | 6 | 4 | 1 |
-| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 16 | 45 | 0 | 0 | 0 | 2 |
-| **total** | | **16** | **45** | **397** | **24** | **11** | **11** |
+| dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | NOT MEASURED | WAIVED | NA |
+|-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------------:|-------:|---:|
+| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 69 | 0 | 0 | 0 | 0 |
+| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 66 | 0 | 0 | 2 | 1 |
+| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 0 | 6 | 48 | 0 | 15 |
+| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 69 | 0 | 0 | 0 | 0 |
+| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 68 | 0 | 0 | 1 | 0 |
+| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 68 | 0 | 0 | 1 | 0 |
+| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 63 | 0 | 1 | 4 | 1 |
+| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 18 | 49 | 0 | 0 | 0 | 0 | 2 |
+| 9 | `verdict_consumed` — When this step FAILs, does the verdict reach the exit code — or is it reported and discarded? | 1 | 68 | 0 | 0 | 0 | 0 | 0 |
+| **total** | | **19** | **117** | **403** | **6** | **49** | **8** | **19** |
+
+**NOT MEASURED is not a pass and not a defect.** Those 49 cells have a predicate that declined to run, naming a resource it could not reach — most often a published corpus this checkout does not carry. They are counted here so a dimension whose cells could not be driven cannot read as a dimension with nothing to report; read them as UNKNOWN, never as coverage.
 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 
@@ -512,8 +521,21 @@ that matter most:
 
 ### Can a cell be reddened by changing a number in a PUBLISHED REPORT?
 
-**8 artefact mutations registered; 4 currently prove the cell they target cannot
-redden.**
+**8<!--figure:artefact_mutations_registered--> artefact mutations registered;
+1<!--figure:artefact_cannot_redden--> currently prove the cell they target
+cannot redden.**
+
+Both digits are ANCHORED and re-derived by
+`tools/gen_matrix_63x8_census.py --check-figures` against
+`matrix_mutation_ledger` itself. They were hand-typed until 2026-08-12 and by
+then the first was right and the second was wrong by three: the ledger's own
+count moved 4 -> 2 -> 1 across `46dbf43d` and `fc664a57`, each time in the
+change that closed the gap it measured, and this file went on publishing 4 with
+a four-row table naming three gates as unable to fail that had learned to fail.
+The replay guards the LEDGER; nothing guarded its PUBLICATION. A stale "this
+gate cannot fail" is the worse direction of that error — it reads as a disclosed
+known gap, so it collects the credit for honesty while describing a gate that is
+now doing its job.
 
 That is the `ARTEFACT_MUTATION` channel of `programs/matrix_mutation_ledger.py`,
 added because the ledger's first two channels both edit the SOURCE — the flow
@@ -528,19 +550,40 @@ gate through the flow's own verdict mapping. Run it with
 `matrix_mutation_ledger.py --replay-artefacts` (3.1 s for all 8) and read the
 count with `--census`.
 
-The four that prove a cell CANNOT redden are the point of the channel, not its
-residue:
+The ones that prove a cell CANNOT redden are the point of the channel, not its
+residue. The table below is the LIVE finding set and every cell named in it must
+be one `matrix_mutation_ledger.artefact_findings()` currently returns —
+`test_matrix_artefact_mutation_channel.test_the_readme_publishes_the_live_finding_set`
+compares the two in BOTH directions, so a finding that closes cannot be left
+standing here and a finding that opens cannot be left unpublished.
+
+<!-- ARTEFACT FINDINGS TABLE — the `cell` column must equal
+     matrix_mutation_ledger.artefact_findings(); do not edit by hand without
+     re-running --replay-artefacts -->
 
 | cell | edit | what the gate did |
 |---|---|---|
-| 25/d2 | peak power-grid segment current 1.96e-04 A → 5.0 A (~25000x) | PASS, zero findings — no Jmax is resolved, so no current is refusable |
 | 33/d2 | every non-zero power figure x1000 | PASS — tool signature and categories are checked; the numbers are read against nothing |
-| 9/d2 | 221 `$_NAND_` → `$_AND_` | PASS — the gate's own report *enumerates* `$_AND_` and counts cells, and forms no view on which primitive belongs |
-| 21/d2 | router's FINAL iteration `DRT-0199` 0 → 12 | PASS, still printing `real_violation_total=0` — the count comes from the RUNNER's summary line, not the router's last word |
 
-The last one is the sharpest: the SAME gate on the SAME file *does* redden when
-the runner's summary is edited 0 → 17. So step 21's green is a statement about
-the runner's arithmetic, not the router's result.
+<!-- END ARTEFACT FINDINGS TABLE -->
+
+**Three entries left this table by being FIXED, and what they were is worth
+keeping.** `ART-EM-CURRENT-DENSITY` (25/d2, peak power-grid segment current
+1.96e-04 A → 5.0 A) passed because no Jmax was resolved, so no current was
+refusable; it reddens now that a peak current has a declared authority to be
+compared against. `ART-NETLIST-PRIMITIVE-SWAP` (9/d2, 221 `$_NAND_` → `$_AND_`)
+and `ART-ROUTER-FINAL-ITERATION` (21/d2, the router's FINAL iteration
+`DRT-0199` 0 → 12) both passed because the gate believed a summary the RUNNER
+wrote instead of the output the TOOL wrote — step 21 kept printing
+`real_violation_total=0` while the same gate on the same file *did* redden when
+the runner's summary was edited 0 → 17. Its green was a statement about the
+runner's arithmetic, not the router's result. That is the shape to look for
+next, and it is the reason these three are recorded here rather than deleted.
+
+The remaining entry is not open work in the same sense as the three that closed:
+the ledger's own note records that step 33's cell REFUSES, naming the budget it
+lacks, and no published run declares the budget that would let it redden. A cell
+that refuses is not a cell that passes.
 
 These are pinned by `ARTEFACT_CANNOT_REDDEN_AS_MEASURED`, and pinned is not
 waived — the day a gate learns to read its artefact, its replay stops matching
