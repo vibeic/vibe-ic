@@ -234,6 +234,10 @@
     "repo.test_population": {
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
       "bucket_B_skill_file": "skills/full-test-audit/SKILL.md"
+    },
+    "repo.doc_command_reproducibility": {
+      "bucket_A_program": "programs/changelog_command_reproducibility_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     }
   },
   "default_routing": {
