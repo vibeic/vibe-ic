@@ -799,19 +799,69 @@ other eighteen — and one of those three, my own `$HOME` mistake, accounts for
 thirteen on its own. Counting reds was never going to find this; only grouping
 them did.
 
-### The G2 note: zero defects is not the same as harmless
+### The G2 note — RETRACTED AND REPLACED (M17)
 
-G2 is not a defect in main, but it is not benign either. **No test in
-`test_landing_merge_verdict.py` can run in the pinned image at all** — they all
-die at the absent Docker CLI. That is the CI lane. So the landing verdict's own
-guard is not being exercised by CI; it is exercised only where someone runs it
-by hand, on a host that (here) also lacks git >= 2.38. Combined with M13 — six
-of the ten end-to-end guards in that file cannot reach the paths they name, and
-two more pass without being able to fail — the honest summary is that **this
-file guards considerably less than its green count suggests**, and the reason is
-split across three unrelated causes, none of which is a bug in the code under
-test. Whether the pinned image should carry a Docker CLI is a lane decision I do
-not own, but it belongs on the same list as the other three escalations.
+**I published a wrong claim here and am correcting it.** The previous version of
+this section said:
+
+> No test in `test_landing_merge_verdict.py` can run in the pinned image at all
+> — they all die at the absent Docker CLI. So the landing verdict's own guard is
+> not being exercised by CI.
+
+**That is false.** Measured in the pinned image
+(`sha256:66c33ff2…d01ff`, `--skip` first, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`):
+
+```
+134 tests collected
+22 failed, 112 passed          (reproduced twice, same 22 IDs)
+```
+
+**112 of 134 pass in the CI lane.** The absent Docker CLI is real — confirmed
+directly, `command -v docker` returns nothing in the image — but it takes out 22
+tests, not the file. The conclusion I drew from it, that this guard is not
+exercised by CI, is withdrawn.
+
+I wrote that claim from a measurement I remembered from earlier in this session
+rather than one I re-ran. It is the fifth claim of mine in this thread to fail on
+re-measurement, and it only surfaced because I went back to check a recollection
+I had already committed. **Anything in this document sourced from memory rather
+than from a command in the same session should be treated as suspect until
+re-run.**
+
+The 22 image-lane failures, by ID:
+
+```
+test_a_host_without_merge_tree_names_the_version_found_and_needed
+test_end_to_end_a_green_test_cannot_move_b1_to_another_commit
+test_end_to_end_a_known_good_branch_is_allowed
+test_end_to_end_an_innocuous_diff_that_leaves_a_test_red_is_refused
+test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord
+test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts
+test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave
+test_end_to_end_index_flags_cannot_hide_changed_b1_bytes
+test_end_to_end_mutable_base_cache_is_disabled_and_remeasured
+test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta
+test_end_to_end_relinked_parent_selection_is_norecord
+test_end_to_end_replace_refs_cannot_redefine_the_verified_tree
+test_end_to_end_the_fallback_allows_a_known_good_branch
+test_end_to_end_the_fallback_still_refuses_an_innocuous_diff_that_leaves_a_test_red
+test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence
+test_end_to_end_what_is_gated_is_the_squash_and_not_the_branch
+test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees
+test_pid_only_term_kills_a_term_ignoring_b2_and_removes_worktrees
+test_reassert_refuses_a_record_that_was_not_a_pass
+test_reassert_refuses_when_the_base_moved
+test_the_forced_fallback_is_the_only_thing_the_env_var_can_do
+test_the_tier_the_script_picks_matches_this_hosts_real_capability
+```
+
+Every test M13 named as red is in this list, which is consistent — but M13's
+conclusions were measured by ID in both lanes and do NOT rest on this section.
+**M13, M14, M15 and M16 are unaffected by this retraction.**
+
+Whether these 22 are image-only or also red on the host is a by-ID A/B, not
+something to infer. It is running; until it lands, the honest statement is only
+that **22 of this file's 134 tests do not run in the CI lane, and 112 do.**
 
 **REVISED BY M13.** Of the 22, four (G4 x2, G5, G6) ARE a demonstrated defect in
 main — one defect, not four: six test-only env knobs that cannot cross the
