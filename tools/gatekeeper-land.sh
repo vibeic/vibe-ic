@@ -1532,10 +1532,11 @@ fi
 # doctrine means no workflow runs before main moves. The lander is the one path
 # every landing actually takes.
 #
-# THE BUDGET IS FOUR MINUTES AND A TIMEOUT BLOCKS. `timeout` returns 124, which
-# is not 0 and not 1, so the case statement below maps it — with every other
-# unexpected status — to rc 2 UNDETERMINED. A review that could not decide must
-# never reach the stamp as a review that decided nothing was wrong.
+# THERE IS A BUDGET AND A TIMEOUT BLOCKS. `timeout` returns 124, which is not 0
+# and not 1, so the case statement below maps it — with every other unexpected
+# status — to rc 2 UNDETERMINED. A review that could not decide must never
+# reach the stamp as a review that decided nothing was wrong. The ruling set
+# that budget at four minutes; what it is now, and why it moved, is below.
 #
 # IT RUNS THE HYGIENE SET. IT IS NOT HANDED A RECORD OF ONE.
 #
@@ -1557,9 +1558,25 @@ fi
 # window has joined. Four minutes cannot contain that, and a deadline that can
 # only ever expire is not a deadline; it is an unconditional refusal wearing
 # one. 1800 s is the outer bound because it is `repo_hygiene_gate`'s own
-# `_HYGIENE_STALL_GRACE_S`: below it, this `timeout` kills runs that the gate
-# itself still considers alive, and the kill would be reported here as the
-# review's verdict.
+# `_HYGIENE_STALL_GRACE_S`: below it, this `timeout` kills runs that the
+# REVIEW'S OWN SUPERVISOR still considers alive, and the kill would be reported
+# here as the review's verdict.
+#
+# THAT IS NOT THE GRACE THAT GOVERNS THE SET, and the earlier wording here said
+# it was. Measured 2026-08-22: there are TWO watchdogs and they differ 6x.
+# `repo_hygiene_gate` passes `stall_grace` to a supervisor it wraps around the
+# subprocess; it does NOT pass `--stall-grace` to the runner, which therefore
+# uses `repo_hygiene_parallel.DEFAULT_STALL_GRACE_S` = 300 s for every shard.
+# A shard that goes 300 s without a completed gate record is killed as hung,
+# its attestation truncates, and the coverage protocol reports
+# PROGRESS_PROTOCOL_INCOMPLETE / rc 199 — which arrives here as
+# `ERROR parallel hygiene incomplete`, a refusal about the HOST rather than
+# about the tree. Reproduce with `--stall-grace 5` on any tree (~70 s).
+#
+# 1800 remains the right value for THIS timeout: it is an outer bound, it is
+# above every observed complete run, and a landing must never kill a review
+# that is still deciding. The correction is only to what the number means —
+# it bounds the review, not the hygiene set.
 #
 # The half of the ruling that is load-bearing is untouched: a review that did
 # not decide arrives as rc 2 and BLOCKS, never as rc 0. That is what the case
@@ -1573,6 +1590,13 @@ GK_REVIEW_BUDGET_S="${GATEKEEPER_REVIEW_BUDGET_S:-1800}"
 # Its own path, never `$GK_HYG_RECORD`: that one is the differential's baseline
 # and a second writer would silently replace what `hygiene_finding_delta` came
 # to read.
+#
+# `review()` would keep this record in a temporary directory of its own and
+# adjudicate `gate_red_since` from it in-process, so naming a path changes no
+# verdict. What it buys is the case where the record is worth the most: the
+# `gk_cleanup` trap runs on a normal exit and does NOT run on a SIGKILL, so a
+# landing killed part-way leaves this file behind for a human to read, while
+# the review's own tempdir would have gone with it.
 GK_REVIEW_RECORD="$LANE_DIR/gatekeeper-review-hygiene.json"
 run_gatekeeper_review() {
   local out rc
