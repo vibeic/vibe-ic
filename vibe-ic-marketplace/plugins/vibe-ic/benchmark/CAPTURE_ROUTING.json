@@ -238,6 +238,10 @@
     "repo.doc_command_reproducibility": {
       "bucket_A_program": "programs/changelog_command_reproducibility_check.py",
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "phase3.lec_post_layout": {
+      "bucket_A_program": "programs/lec_post_layout_check.py",
+      "bucket_B_skill_file": "skills/equivalence-check/SKILL.md"
     }
   },
   "default_routing": {

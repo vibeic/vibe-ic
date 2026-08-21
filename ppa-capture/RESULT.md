@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 16 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 17 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 13 | deterministic rules — the default, and every one names its predicate |
+| **A** | 14 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -625,6 +625,28 @@ wrong numbers, so the record says so.
 **(o)** yes — it names the case that produced it.
 **(d)** yes: 10 further candidates it found without being told what to look for.
 
+### A-15 · a tool-error verdict must carry the tool's own diagnostic · `phase3.lec_post_layout`
+
+**This is the record that settled F-16**, and it came from asking why the
+attribution was impossible rather than from finding the answer directly.
+
+    the consuming gate   a substance check over a produced document — it NEVER
+                         runs the tool, yet its finding text names the tool
+    the producing step   runs the tool, and retains NOTHING from it: no exit
+                         status, no output tail
+
+Two layers assert that the tool failed; neither saw the tool. A genuine tool
+defect and a setup gap in the step's own invocation produce a byte-identical
+record, and those are fixed in different repositories — so the verdict cannot be
+routed, which is exactly the wall this lane hit.
+
+Worse than unattributable: the consuming gate **restates** the attribution it
+inherited, so an unevidenced claim appears at two layers and reads as
+corroborated.
+**(o)** yes — had the diagnostic been retained, F-16 would have been assignable
+on the day it was found instead of open across a whole lane.
+**(d)** yes — it is per tool-invoking step, and the tree has many.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -713,17 +735,41 @@ to main.
 | using the emitter this brief mandates | A-9, A-10 |
 | the brief's own line that the ASYMMETRY is the richest material | **A-13** — the one I had read and not acted on |
 
-## The one thing I could not settle
+## The one thing I could not settle — now settled, and it did not go where I expected
 
-**F-16 — post-layout equivalence returns a tool error.** The consumer side is
-already correct and general: `_ppa/signoff.read_equivalence` refuses a proof
-whose gate netlist is not the one that became the layout, and
-`lec_post_layout_check.py` is a shipped gate for exactly this. What remains is
-that the run itself reports `yosys did not produce a parseable output`. I could
-not establish from the evidence whether that is the forked tool or the
-invocation, and Bucket T requires that answer — a T record naming the wrong
-layer sends the fix to the wrong repository. It is stated here rather than
-filed, and it needs one reproduction with the tool's own stderr retained.
+**F-16 is NOT a forked-tool defect, and the record that would have sent it to the
+wrong repository was never written.**
+
+For most of this lane I left it open on the honest ground that I could not tell a
+tool defect from an invocation gap. Working out *why* I could not tell is what
+settled it:
+
+* the consuming gate is a substance check over a produced document — **it never
+  runs the tool**, so its finding text names a cause it cannot observe;
+* the producing step, which does run the tool, **retains nothing from it** — no
+  exit status, no output tail.
+
+So two layers assert that the tool failed and neither saw the tool. That is why
+the attribution was unfalsifiable, and it is a defect in its own right — **A-15**.
+
+The tree then answers the question the record could not. The runner's own helper
+documents this exact abort: physical-only cells present in the routed netlist and
+absent from the timing library stop the tool before the comparison begins, and
+the helper calls that a **false** tool-error, fixing it by emitting blackbox
+stubs. The failure class is **the step's own setup**, not the tool.
+
+Two lessons worth separating. Not filing the Bucket-T record was right — the
+evidence for the tool was never there. But "I cannot attribute this" was not the
+end of the enquiry: the reason I could not attribute it was itself the finding,
+and the answer was in the tree the whole time.
+
+## What remains open
+
+**One item, and it is not mine to close.** The skill binds every Bucket-T record
+to the forked-tool roadmap at `benchmark-data/ic/OSS_EDA_FORK_ROADMAP.md`, and
+`benchmark-data/` is a separate repository. T-1 carries its full attribution
+block in the emitted backlog; whoever lands it must add the roadmap entry there,
+or the instruction should be repointed.
 
 ---
 
