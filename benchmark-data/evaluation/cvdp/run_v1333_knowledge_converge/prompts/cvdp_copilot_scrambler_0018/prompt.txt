@@ -1,4 +1,0 @@
-The `inter_block` module instantiates the `intra_block` module, which should be excluded from consideration during the review. In addition to this instantiation, the `inter_block` module contains internal logic that will be the focus of the review. Perform a LINT code review on the `inter_block` module, addressing the two following issues:
-
-- Unused signals.  
-- Mixing blocking and non-blocking assignments. 

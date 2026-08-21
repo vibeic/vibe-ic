@@ -62,6 +62,16 @@ def test_unknown_when_rtl_present_without_ledger(tmp_path):
     assert "no provenance ledger" in reason
 
 
+def test_unknown_when_vhdl_present_without_ledger(tmp_path):
+    """VHDL is authored RTL too; a Verilog generator must not treat it as empty."""
+    _write(tmp_path, "top.vhd", "entity top is end entity;\n")
+    verdict, reason, ev = rp.classify(tmp_path)
+    assert verdict == rp.UNKNOWN
+    assert ev["file_count"] == 1
+    assert ev["files"] == ["top.vhd"]
+    assert "no provenance ledger" in reason
+
+
 def test_unknown_is_a_preserve_verdict(tmp_path):
     assert rp.UNKNOWN in rp.PRESERVE_VERDICTS
     assert rp.AUTHORED in rp.PRESERVE_VERDICTS
@@ -82,6 +92,35 @@ def test_wrong_schema_ledger_degrades_to_unknown(tmp_path):
     rp.ledger_path(tmp_path).write_text(json.dumps(
         {"schema": rp.SCHEMA_VERSION + 99, "files": {}}))
     assert rp.classify(tmp_path)[0] == rp.UNKNOWN
+
+
+def test_symlinked_ledger_cannot_assert_generator_ownership(
+        tmp_path):
+    top = _write(tmp_path, "top.v", "module top(); endmodule\n")
+    external = tmp_path / "external-ledger.json"
+    external.write_text(json.dumps({
+        "schema": rp.SCHEMA_VERSION,
+        "files": {"top.v": rp.sha256_file(top)},
+    }))
+    rp.ledger_path(tmp_path).symlink_to(external)
+
+    assert rp.load_ledger(tmp_path) is None
+    assert rp.classify(tmp_path)[0] == rp.UNKNOWN
+
+
+def test_malformed_removed_only_digest_does_not_claim_generated(tmp_path):
+    _rtl(tmp_path)
+    rp.ledger_path(tmp_path).write_text(json.dumps({
+        "schema": rp.SCHEMA_VERSION,
+        "files": {"top.v": "not-a-sha256"},
+    }))
+
+    assert rp.load_ledger(tmp_path) is None
+    verdict, reason, evidence = rp.classify(tmp_path)
+    assert verdict == rp.UNKNOWN
+    assert evidence == {"file_count": 0, "ledger_present": True,
+                        "ledger_valid": False}
+    assert "unavailable digests" in reason
 
 
 # ---- GENERATED — stamped and untouched ---------------------------------
@@ -143,6 +182,22 @@ def test_deletion_alone_is_not_authorship(tmp_path):
     verdict, _, ev = rp.classify(tmp_path)
     assert verdict == rp.GENERATED
     assert ev["removed"] == ["alu.v"]
+
+
+def test_deletion_of_the_only_generated_file_retains_ledger_ownership(
+        tmp_path):
+    """Removed-only is GENERATED even when no sibling RTL remains on disk."""
+    _write(tmp_path, "top.v", "module top(); endmodule\n")
+    rp.stamp(tmp_path, generator="unit-test")
+    (_rtl(tmp_path) / "top.v").unlink()
+
+    verdict, reason, ev = rp.classify(tmp_path)
+
+    assert verdict == rp.GENERATED
+    assert ev["file_count"] == 0
+    assert ev["removed"] == ["top.v"]
+    assert ev["ledger_generator"] == "unit-test"
+    assert "digest-bound restoration" in reason
 
 
 def test_non_rtl_file_does_not_fake_authorship(tmp_path):
@@ -213,6 +268,14 @@ def test_stamp_records_digests_for_every_rtl_file(tmp_path):
     assert payload["schema"] == rp.SCHEMA_VERSION
     top = _rtl(tmp_path) / "top.v"
     assert payload["files"]["top.v"] == rp.sha256_file(top)
+
+
+def test_stamp_records_vhdl_files(tmp_path):
+    _write(tmp_path, "top.vhd", "entity top is end entity;\n")
+    _write(tmp_path, "sub/unit.vhdl", "entity unit is end entity;\n")
+    payload = rp.stamp(tmp_path)
+    assert set(payload["files"]) == {"top.vhd", "sub/unit.vhdl"}
+    assert rp.classify(tmp_path)[0] == rp.GENERATED
 
 
 def test_load_ledger_returns_none_when_absent(tmp_path):
