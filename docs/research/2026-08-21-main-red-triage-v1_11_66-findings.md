@@ -2983,6 +2983,61 @@ gate, including when the gate asks** — and this is exactly the moment it asks
 nicely, having just delivered good news. Recorded, not run.
 
 
+## M51 — what the three unwired checkers ARE, and why two of them matter more than the count
+
+Reading their docstrings. These are not three inert scripts.
+
+### 1. `closed_loop_edge_check` — and the irony is load-bearing
+
+> *"a declared `closed_loop` must be an edge something can actually take, or the
+> declaration is decoration."* The canonical flow declares **nineteen**
+> `closed_loop:` blocks, and nothing takes them.
+
+**This is a checker that detects declarations nothing executes — and it is
+itself a declaration nothing executes.** It is unwired, so the nineteen
+decorative `closed_loop:` blocks it was written to catch remain uncounted by any
+automatic verdict. The tool for the disease has the disease.
+
+That is not a joke at the repository's expense; it is the strongest single
+argument in this document for wiring it. **A guard against decoration cannot be
+allowed to be decorative.**
+
+### 2. `slot_pad_budget_check` — an unwired checker that already found real silicon defects
+
+> *"does this design's interface FIT the purchased slot? MEASURED (gf180mcuD
+> chip-path campaign, 2026-08-20). Nine benchmark ICs were taken down the chip
+> path. **Five of them cannot be bonded out on ANY purchasable slot.**"*
+
+**Five of nine designs cannot be bonded**, measured, and the checker that
+establishes it runs only when its own test does. This is the most consequential
+thing in my six-item list and it was recorded as the words "gates are wired to
+something".
+
+**And it connects to M36.** Slot geometry comes from the shuttle operator's
+published project template — which is exactly step `0.5ic`'s
+`from: external, check: none` input, the one the flow says *"is data we never
+went and got"*. So wiring this checker and un-skipping `0.5ic` are plausibly
+**the same missing artefact**, not two items. I have NOT confirmed that they
+consume the identical input; the docstrings are consistent with it and I am
+flagging the link rather than asserting it — co-location of subject matter is
+the same weak evidence that produced M43 and M48.
+
+### 3. `ppa_pr_scope_check` — Appendix C's twenty review questions, answered by machine
+
+Least urgent of the three: it automates a human checklist rather than guarding an
+artefact. Unwired, it means the twenty questions are back to being asked of a
+person, which the docstring notes *"does not produce twenty answers"*.
+
+### What this changes
+
+The "3 unwired checkers" line reads like housekeeping. It is not: one is a
+guard-against-decoration that is decorative, one has already measured five
+unbondable designs and reports to nobody, and one silently returns a review
+burden to humans. **Wiring is still a decision I do not own** — the gate names
+four possible homes — but the cost of leaving them unwired is now stated in what
+they detect rather than in how many they are.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
