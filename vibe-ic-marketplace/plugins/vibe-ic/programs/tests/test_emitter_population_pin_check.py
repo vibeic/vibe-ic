@@ -1083,6 +1083,55 @@ def test_no_form_of_prose_about_the_code_enters_the_script():
         assert refused == [], f"{name}: {refused}"
 
 
+def _two_site_emitter_stating(line):
+    """A two-`incr` emitter whose script is exactly `line`."""
+    body = 'def s():\n    return (\n'
+    body += '        "  if {[catch {a}]} { incr _n }\\n"\n' * 2
+    return body + '        %r\n    )\n' % (line + "\n")
+
+
+def test_the_population_floor_holds_at_exactly_two(tmp_path):
+    """`MIN_POPULATION` separates a POPULATION from a PRESENCE TEST, and the
+    boundary is where an off-by-one lives. It is unguarded and this branch
+    restructured the line that enforces it -- from an inline
+    `value >= MIN_POPULATION and ...` into an early `continue` -- so the
+    restructure is checked rather than assumed.
+
+    BOTH DIRECTIONS COST, and they are not symmetric. Admitting D=1 is noise:
+    the file records 8 false findings over this corpus before the bound existed.
+    Dropping D=2 is worse and quieter -- a genuine two-member population simply
+    stops being compared, and the guard still prints PASS. So the row that
+    matters most is D=2, the first real population.
+
+    Swept over all three denominator kinds, because the bound is applied once
+    for a loop that runs over `_DEN_TEMPLATES` and a kind could be excluded
+    from it without any single-kind test noticing."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+
+    assert E.MIN_POPULATION == 2, (
+        "the floor moved; this test states 2 in its own name and reasoning and "
+        "must be re-read, not re-pointed")
+    kinds = {
+        "comparison": '  if {$_n >= %d} { puts ALL }',
+        "ratio": '  puts "($_n/%d) refused"',
+        "prose": '  puts "PARTIAL: $_n of %d repairs refused"',
+    }
+    for kind, tmpl in kinds.items():
+        for d in (0, 1):
+            rows, _ = E.counters(_two_site_emitter_stating(tmpl % d))
+            found = sorted({v for _, _, dens in rows for _, v in dens})
+            assert found == [], (
+                f"{kind}: `{d}` was read as a population, not a presence test "
+                f"-- that is the 8-false-findings shape: {found}")
+        for d in (2, 3):
+            rows, _ = E.counters(_two_site_emitter_stating(tmpl % d))
+            found = sorted({v for _, _, dens in rows for _, v in dens})
+            assert found == [d], (
+                f"{kind}: `{d}` is a real population and stopped being "
+                f"compared -- silently: {found}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
