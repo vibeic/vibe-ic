@@ -370,12 +370,13 @@ def test_the_declaration_stays_inside_the_readers_window():
     """The bound is invisible from inside the docstring, so it needs a test
     that names it. Measured on the sibling gate: two paragraphs of prose moved
     the line to byte 4371 and the gate silently went UNDECLARED."""
+    import flow_gate_enforcement_audit as A
     src = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
     idx = src.find("ENFORCEMENT:")
-    assert 0 <= idx < 4000, (
+    assert 0 <= idx < A.DECL_WINDOW_BYTES, (
         f"the ENFORCEMENT declaration sits at byte {idx}; `declared_intent` "
-        f"reads only the first 4000. Present and unread reports as UNDECLARED "
-        f"— move it above the prose.")
+        f"reads only the first {A.DECL_WINDOW_BYTES}. Present and unread "
+        f"reports as UNDECLARED — move it above the prose.")
 
 
 def test_the_declaration_matches_what_the_gate_actually_does(monkeypatch):
