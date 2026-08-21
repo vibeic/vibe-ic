@@ -427,3 +427,30 @@ def reduction_record(baseline: Mapping[str, Any], candidate: Mapping[str, Any],
             "baseline_record": _cj.digest_of(dict(baseline)),
             "candidate_record": _cj.digest_of(dict(candidate)),
         })
+
+
+# ── the driver seam (`_ppa/backends/__init__.py`) ───────────────────────────
+#: `stage` cannot be derived from the artefact or its path. yosys prints TWO
+#: statistics blocks in one transcript -- generic and technology-mapped -- and
+#: they are two different stages of one run whose counts differ by an order of
+#: magnitude. Guessing which one a caller meant is how a pre-techmap count gets
+#: compared against a mapped one, so the driver requires it to be stated.
+EXTRACT_REQUIRES = ("stage",)
+
+
+def extract_records(path, *, stage=None, kind=None, top=None, **_opts):
+    """Canonical PROXY area records from a yosys transcript.
+
+    `stage` is REQUIRED and is not defaulted: see EXTRACT_REQUIRES above.
+    """
+    if not stage:
+        raise ValueError(
+            "yosys needs --stage: one transcript holds a generic and a "
+            "technology-mapped statistics block, they are different stages of "
+            "one run, and nothing in the file or its name says which one a "
+            "caller means")
+    p = Path(path)
+    text = p.read_text(errors="replace")
+    return records_from_stat(text, stage=stage, kind=kind, top=top,
+                             path=str(p),
+                             tool_version=None)

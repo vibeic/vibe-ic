@@ -264,9 +264,9 @@ def test_a_limit_compared_across_units_is_undetermined():
 
 # --- the schema the lane owns ----------------------------------------------
 def test_the_emitted_report_validates_against_the_schema_this_lane_owns(tmp_path):
-    jsonschema = pytest.importorskip("jsonschema")
+    from _ppa import schema_validation as _SV
     schema = json.loads((_PROGRAMS.parent / "schemas" / "ppa" /
                          "feasibility.v1.schema.json").read_text())
     _, doc = run(tmp_path, {"required_views": [VIEW],
                             "candidates": [candidate()]})
-    jsonschema.Draft7Validator(schema).validate(doc)
+    assert _SV.engine_or_skip(schema).errors(doc) == []

@@ -367,6 +367,17 @@ fi
 DRIVER="$CAND_PLUGIN/programs/pytest_per_file_junit.py"
 
 launch_targeted() {                # launch_targeted <plugin> <sel> <junit> <arm>
+  # NO `-p pytest_timeout` and NO `--timeout` in the arm below, for the reason
+  # this lane's own test states in tools/ci/test_repo_tools_tests_gate.py:
+  #   "A fixed pytest timeout kills the session and loses its JUnit; it must
+  #    never be reintroduced as a quick substitute for the driver's lifecycle
+  #    record."
+  # And a second, harder reason: `pytest_timeout` is ABSENT from the anchored
+  # runner image, and `-p <name>` is a hard import, so the session would die in
+  # pytest's pre-parse before collecting a single test. The supervision is
+  # already in the same invocation: --stall-after and --aggregate-stall-after
+  # bound the CHILD by forward progress, and an overrun there is a named
+  # UNMEASURED rather than a clean zero.
   setsid bash -c '
     cd "$1" || exit 2
     exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
@@ -378,8 +389,7 @@ launch_targeted() {                # launch_targeted <plugin> <sel> <junit> <arm
       --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
       --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
       --stop-after-failures 0 \
-      -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
-      --timeout=180 --timeout-method=thread
+      -- python3 -m pytest -q -p no:cacheprovider
   ' "gkdiff-$4" "$1" "$2" "$3" "$DRIVER" "$4"
 }
 

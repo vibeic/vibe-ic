@@ -1184,6 +1184,31 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #:
 #: So this pin was stale for TWO independent reasons before either was noticed,
 #: which is the argument for reading it rather than moving it.
+#:
+#: The other lane recorded the same three entries with a different
+#: derivation, kept because it answers a different question — WHY they are
+#: unwired rather than WHEN they arrived:
+#:
+#: on main before the ninth dimension landed; these are what it was red about.
+#:
+#:   ("0.5ic", "tapeout_declaration_gen")
+#:       referenced by exactly one other program, `tapeout_declaration_check`,
+#:       which AUDITS its output rather than dispatching it. No gate clause
+#:       names it and no runner AST-dispatches it.
+#:   ("1.6x", "crosslayer_rewrite_equivalence")
+#:   ("1.6x", "crosslayer_search_space")
+#:       step 1.6x arrived in v1.11.15 under the message "wire step 1.6x to an
+#:       executor". What was wired is the JUDGE, not the tools:
+#:       `design_one_shot_runner` dispatches the string constant
+#:       `"crosslayer_rewrite_equivalence_check.py"` (AST-confirmed at line
+#:       8457) and its own docstring says so in as many words — "Runs the JUDGE
+#:       (`crosslayer_rewrite_equivalence_check`), never the tool". The two
+#:       TOOLS stay declared on the step and dispatched by nothing, which is
+#:       this pin's subject exactly.
+#:
+#: As the block below already says: being here is the DISCLOSURE, not
+#: permission. Wiring any of the three means inventing a dispatch branch, which
+#: is a flow change and not a pin repair.
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("0.5ic", "submission_template_ingest"),
     ("0.5ic", "tapeout_declaration_gen"),
