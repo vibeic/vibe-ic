@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "DALI is a published protocol specification (IEC 62386 multi-part series) — there is no PDK, floor-plan, SDC, UPF, or DFT artifact associated with it. The TI SLAA422A application report demonstrates a working implementation on the MSP430F2131 / MSP430G2xx2 value-line devices using their integrated UART-less GPIOs, Timer_A3 PWM, and Watchdog Timer Plus interval mode. Any implementing IP / chip ships its own physical-design collateral; the protocol-level document only specifies bit timing (1200 baud Manchester, TE = 416.67 μs), bus voltage (9.5..22.5 V DC), bus current cap (250 mA), opto-isolation requirement, and the logical command set."
-  }
-}

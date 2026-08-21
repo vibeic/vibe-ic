@@ -1,0 +1,105 @@
+[
+  {
+   "name": [
+      "inv",
+      "inv"
+   ],
+   "devices": [
+       [
+         ["nch", 1],
+         ["pch", 1 ]
+       ], [
+         ["nch", 1 ],
+         ["pch", 1 ]
+       ]
+   ],
+   "nets": [
+    4,
+    4
+   ],
+   "badnets": [
+   ],
+   "badelements": [
+   ],
+   "pins": [
+      [
+        "Y",
+        "A",
+        "VSS",
+        "VDD"
+      ], [
+        "Y",
+        "A",
+        "VSS",
+        "VDD"
+      ]
+   ]
+  },
+  {
+   "name": [
+      "top",
+      "top"
+   ],
+   "devices": [
+       [
+         ["inv", 2 ]
+       ], [
+         ["inv", 2 ]
+       ]
+   ],
+   "nets": [
+    5,
+    6
+   ],
+   "badnets": [
+      [
+        [
+          [
+            "Y1",
+            [
+              [ "inv", "Y", 2 ]
+            ]
+          ],
+          [
+            "(no matching net)",
+            [
+              [ "", "", 0 ]
+            ]
+          ]
+        ], [
+          [
+            "Y1",
+            [
+              [ "inv", "Y", 1 ]
+            ]
+          ],
+          [
+            "Y2",
+            [
+              [ "inv", "Y", 1 ]
+            ]
+          ]
+        ]
+      ]
+   ],
+   "badelements": [
+   ],
+   "pins": [
+      [
+        "Y1",
+        "VSS",
+        "VDD",
+        "B",
+        "A",
+        "(no matching pin)"
+      ], [
+        "Y1",
+        "VSS",
+        "VDD",
+        "B",
+        "A",
+        "Y2"
+      ]
+   ]
+  }
+]

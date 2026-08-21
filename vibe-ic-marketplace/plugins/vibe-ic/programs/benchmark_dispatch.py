@@ -23,57 +23,20 @@ REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
 EXPERT_AGENT_MD = Path(__file__).resolve().parent.parent / "agents" / "ic-expert-agent.md"
 
 
-def _render_lesson_digest(run_p: Path,
-                          expert_md: Path = EXPERT_AGENT_MD) -> int:
-    """ORGANIC-20260605-shapec-lesson-digest-injection — surface captured
-    lessons to blind single-shot authors.
-
-    The benchmark-enhancement-capture loop appends general-pattern
-    `### Skill:` sections to agents/ic-expert-agent.md, but batch authoring
-    agents historically received only the blind instructions + the prompt, so
-    already-captured recoveries recurred in the very next clean-room campaign
-    (4 of 6 close-loop recoveries in the v0.2.42 two-track run were
-    recurrences). This renders every ACTIVE `### Skill:` section (retired
-    `### ~~Skill:` strikethrough sections excluded) into
-    `<RUNDIR>/lessons.md`, which blind_instructions_shape_c.md makes a
-    MUST-READ before authoring.
-
-    Blindness is preserved by the capture policy itself: captured sections are
-    chip-AGNOSTIC general patterns with no design identifiers and no oracle
-    data. Deterministic extraction — no LLM. Returns the lesson count.
-    """
-    if not expert_md.is_file():
-        return 0
-    lessons: list[str] = []
-    cur: list[str] | None = None
-    for line in expert_md.read_text(errors="replace").splitlines():
-        if line.startswith("### "):
-            if cur:
-                lessons.append("\n".join(cur).rstrip())
-            cur = [line] if line.startswith("### Skill:") else None
-            continue
-        if line.startswith("## ") or line.startswith("# "):
-            if cur:
-                lessons.append("\n".join(cur).rstrip())
-            cur = None
-            continue
-        if cur is not None:
-            cur.append(line)
-    if cur:
-        lessons.append("\n".join(cur).rstrip())
-    if not lessons:
-        return 0
-    head = (
-        "# Captured-lesson digest (READ BEFORE AUTHORING)\n\n"
-        "Rendered by `benchmark_dispatch.py --setup` from the general-pattern\n"
-        "`### Skill:` sections of `agents/ic-expert-agent.md`\n"
-        "(ORGANIC-20260605-shapec-lesson-digest-injection). These are\n"
-        "chip-AGNOSTIC patterns captured from prior close-loop recoveries —\n"
-        "no design identifiers, no oracle data — so reading them preserves\n"
-        "blindness while preventing already-captured recoveries from\n"
-        "recurring. Apply any section whose shape matches your problem.\n\n")
-    (run_p / "lessons.md").write_text(head + "\n\n".join(lessons) + "\n")
-    return len(lessons)
+# ORGANIC-20260605-shapec-lesson-digest-injection — surface captured lessons to
+# blind single-shot authors. The renderer was hoisted to the shared module
+# `_lesson_digest` so the PRODUCTION spec-to-rtl path (design_one_shot_runner
+# step_rtl_gen WAIVE) surfaces the SAME corpus to runner-driven authors. This
+# thin alias preserves the historical `benchmark_dispatch._render_lesson_digest`
+# entry point (Shape-C `--setup`) and its name for existing tests.
+#
+# CONSUME CONTRACT (#733 — staged != consumed): the rendered digest header makes
+# it MANDATORY that BEFORE authoring each design the author keyword-match the
+# design genre against each section's "When to apply" and apply every matched
+# section (Section 4-E: apply unless the spec states otherwise). The digest is
+# blindness-clean — `_lesson_digest` scrubs benchmark design identifiers so no
+# design-name->solution association is surfaced.
+from _lesson_digest import render_lesson_digest as _render_lesson_digest  # noqa: E402
 
 
 def _load_registry() -> dict:
@@ -91,12 +54,12 @@ def _entry(name: str) -> dict:
 
 
 def _env_check():
-    """Detect environment requirements (iverilog, iic-eda container, MCP)."""
+    """Detect environment requirements (iverilog, vibeic-eda container, MCP)."""
     have_iverilog = subprocess.run(["which", "iverilog"], capture_output=True).returncode == 0
     try:
         docker_ps = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
                                    capture_output=True, text=True, timeout=5).stdout
-        have_iiceda = "iic-eda" in docker_ps
+        have_iiceda = "vibeic-eda" in docker_ps
     except (FileNotFoundError, subprocess.TimeoutExpired):
         have_iiceda = False
     return {"iverilog": have_iverilog, "iic_eda_running": have_iiceda}
@@ -161,6 +124,10 @@ def cmd_show(bench: str):
         print(f"     python3 {Path(__file__).name} {bench} --setup --dataset <DATASET> --run <RUNDIR>")
         print(f"  3. Drive batches per blind instructions: {bi}")
         print(f"     For each design: vibe_ic_one_shot_runner.py <project> --skip-phase3 --skip-analog --skip-hardware")
+        exp = Path(__file__).resolve().parent / "shape_b_sample_export.py"
+        print(f"  3b. Export each sample (DETERMINISTIC sole emit path, #678 — "
+              f"never hand-copy a single module):")
+        print(f"      python3 {exp} --project <project> --leaf <leaf> --samples <RUNDIR>/samples [--module <name>]")
         print(f"  4. Score: python3 {scorer} --bench {bench} --dataset <DATASET> --run <RUNDIR>")
     elif shape == "C":
         bi = HARNESS / "blind_instructions_shape_c.md"
@@ -426,11 +393,28 @@ def cmd_reattempt_floor(bench: str) -> int:
     return 0
 
 
-def cmd_score(bench: str, run: str, dataset: str | None):
+def cmd_score(bench: str, run: str, dataset: str | None,
+              allow_ungated: bool = False, allow_direct_agent: bool = False):
     e = _entry(bench)
     if e["shape"] not in ("B", "C"):
         raise SystemExit(f"--score only handles Shape B + C here. Shape {e['shape']} → use score_cocotb_mcp.py / benchmark-verify skill.")
     run_p = Path(run).resolve()
+    # Front-door Vibe-IC entry gate (owner directive 2026-06-28): refuse to
+    # score a run that did not enter through the Vibe-IC plugin.  Direct-agent
+    # authoring / patching followed by a host-scorer invocation measures
+    # "Opus + MCP-EDA", not Vibe-IC.
+    entry_guard = Path(__file__).resolve().parent / "vibe_ic_entry_guard.py"
+    if entry_guard.is_file() and not allow_direct_agent:
+        rc = subprocess.call([sys.executable, str(entry_guard), str(run_p),
+                              "--strict"])
+        if rc != 0:
+            raise SystemExit(
+                "Vibe-IC entry guard FAILed — this run lacks evidence of "
+                "passing through vibe_ic_one_shot_runner.py / phase1. "
+                "Run the benchmark through the Vibe-IC plugin; direct-agent "
+                "authoring/patching cannot be scored as canonical. "
+                "Pass --allow-direct-agent only for a disclosed NON-CANONICAL "
+                "exploratory run.")
     # Front-door clean-room gate (ORGANIC-20260604): refuse to score a run that
     # inherited prior samples / scores / memory. The published pass@1 must come
     # from a clean-room run ('一定是重跑', user directive 2026-06-04).
@@ -489,6 +473,28 @@ def cmd_score(bench: str, run: str, dataset: str | None):
               "scored on this branch MUST disclose 'blindness audit "
               "unavailable' in its RESULT.md (ORGANIC-20260605-transcripts-"
               "export-default).")
+    # Front-door GATE-AS-SOLE-EMIT-PATH guard: every scoreable sample MUST carry a
+    # valid emit-path attestation (gates_atomic / shape_b_sample_export wrote it on a
+    # clean emit). A sample authored directly into samples/ — bypassing the emit gates
+    # + port-reorder — has none, so the number would measure the raw author, not the
+    # runner (and silently undercount emit-gate-recoverable designs). HARD-BLOCK by
+    # default, exactly like the clean-room + blindness guards; --allow-ungated opts an
+    # exploratory direct-author run out (its RESULT.md MUST then disclose NON-CANONICAL).
+    emit_chk = Path(__file__).resolve().parent / "emit_attestation_check.py"
+    if emit_chk.is_file():
+        rc = subprocess.call([sys.executable, str(emit_chk), "--samples",
+                              str(run_p / "samples")] + ([] if allow_ungated else ["--strict"]))
+        if rc != 0 and not allow_ungated:
+            raise SystemExit(
+                "emit-attestation guard FAILed — one or more samples were NOT produced "
+                "by the deterministic emit path (gates_atomic.py / shape_b_sample_export.py), "
+                "so the emit gates + port-reorder never fired and this run is NON-CANONICAL. "
+                "Author into a work dir and emit through the gate (the runner does this "
+                "automatically), or pass --allow-ungated for a disclosed exploratory run.")
+    if allow_direct_agent:
+        print("NOTICE: --allow-direct-agent passed — this run is NON-CANONICAL and "
+              "its RESULT.md MUST disclose that it did not enter through the "
+              "Vibe-IC runner.")
     scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
     cmd = [sys.executable, str(scorer), "--bench", bench, "--dataset", str(ds_p), "--run", str(run_p)]
     print("$ " + " ".join(cmd))
@@ -514,6 +520,13 @@ def main():
                          "clean-room FULL re-run.")
     ap.add_argument("--dataset", help="dataset path on disk")
     ap.add_argument("--run", help="run dir")
+    ap.add_argument("--allow-ungated", action="store_true",
+                    help="OPT-IN: score even if some samples lack an emit-path attestation "
+                         "(a disclosed exploratory direct-author run, NON-CANONICAL). Default "
+                         "HARD-BLOCKs ungated samples so the published number reflects the runner.")
+    ap.add_argument("--allow-direct-agent", action="store_true",
+                    help="OPT-IN: score even if the run lacks Vibe-IC runner entry evidence "
+                         "(NON-CANONICAL). Default HARD-BLOCKs direct-agent authoring/patching.")
     a = ap.parse_args()
 
     if a.list:
@@ -537,7 +550,9 @@ def main():
     if a.score:
         if not a.run:
             raise SystemExit("--score requires --run")
-        cmd_score(a.bench, a.run, a.dataset)
+        cmd_score(a.bench, a.run, a.dataset,
+                  allow_ungated=a.allow_ungated,
+                  allow_direct_agent=a.allow_direct_agent)
         return
     if a.reattempt_floor:
         sys.exit(cmd_reattempt_floor(a.bench))
@@ -545,7 +560,7 @@ def main():
     # default: show plan + env status
     env = _env_check()
     print(f"# Environment: iverilog={'OK' if env['iverilog'] else 'MISSING'}, "
-          f"iic-eda container={'RUNNING' if env['iic_eda_running'] else 'NOT RUNNING'}")
+          f"vibeic-eda container={'RUNNING' if env['iic_eda_running'] else 'NOT RUNNING'}")
     print()
     cmd_show(a.bench)
 
