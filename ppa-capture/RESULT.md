@@ -343,6 +343,21 @@ installed product. A refusal that leaves the damage behind is worse than either
 outcome alone, which is why the record requires the resolve-and-refuse to happen
 before any directory is created.
 
+**A stronger reproduction, found by accident while probing something else.** The
+caller need not supply anything at all:
+
+    $ cd <install>/programs && python3 <a-command>          # no arguments
+    rc=0
+    $ git status --short
+    ?? programs/reports/<a-command>.json
+
+The command carries a **relative default** output path, so it plants a directory
+in the shipped product and **returns success**. That is worse than the
+refused-but-wrote case twice over: there is no caller mistake to blame, and no
+non-zero code to notice. It is also the first thing an ordinary user does —
+run a tool with no arguments to see what it does. So the check must cover
+DEFAULTS, not just caller-supplied paths.
+
 **Nearest prior art, checked rather than assumed:** `programs/suite_write_guard.py`
 blocks a TEST RUN that leaves the tree it tests dirty, and it exists because
 three writers into the installed tree were each found by accident. It is scoped
