@@ -35999,8 +35999,13 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             # `POST_ROUTE_SPEF` to every consumer that keeps extracted and
             # unextracted timing apart, so it is never rounded up to the
             # flattering one. Both values are already in `_sta_basis`.
-            f'puts $_f "STA_BASIS: {basis}"\n'
-            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
+            # ONE stanza, not two. Both lanes added a STA_BASIS block here and
+            # the text merged cleanly into a report that stamped its basis
+            # TWICE — a second spelling of one fact is a fact two readers
+            # disagree about, and `_sta_basis.declared_basis` reads the first
+            # match. This lane's block is the landed one's superset (the same
+            # two lines plus the netlist and the SPEF a reader cannot otherwise
+            # recover), so it is the one kept.
             f'puts $_f "OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} '
             f'late={_FLAT_OCV_DERATE_LATE} flat-OCV"\n'
             f'puts $_f "STA_BASIS: {basis_stamp}"\n'
