@@ -320,9 +320,31 @@ stall kill. Red 13's `stage=running` stall means the 10-15 s gap stretched past
 60 s under three-way concurrency — about a 5x stretch — and THAT is the question
 worth asking next, not how long any item is.
 
-What is now measured end to end: renewal happens inside items, its gap is
-10-15 s idle, the window is 60 s, and a stall needs that gap to stretch ~5x.
-What is still unknown: which probe supplies the renewal, and what stretched it.
+**And the first unknown is now closed by reading the call site.**
+`pytest_per_file_junit.py` drives the outcome run as:
+
+```
+_wd.run_supervised(list(cmd), output_progress=False,
+                   domain_progress_probe=_progress_sample,
+                   stall_grace_s=stall_after, ...)
+```
+
+`output_progress=False` — **stdout is explicitly not progress**, exactly as the
+coverage module's docstring claims ("Output and CPU activity are not progress").
+The renewal therefore comes from `domain_progress_probe=_progress_sample`, the
+nonce-bound semantic protocol the child's own pytest plugin writes. So the
+10-15 s cadence measured above is the SEMANTIC protocol emitting during a long
+item, not stdout keeping the run alive by accident — which is the reassuring
+answer rather than the alarming one.
+
+What is now measured end to end: output is not progress (code); renewal is
+semantic and happens INSIDE items (bisection); its gap is 10-15 s on an idle box
+(bisection); the production window is 60 s, giving 4-6x margin; and red 13's
+stall requires that gap to stretch ~5x under three-way concurrency.
+
+**The single remaining unknown is what stretched it**, and this report stops
+there rather than inventing a fifth mechanism. Every previous attempt to reason
+past a measurement in this section was wrong, twice provably so.
 
 ## 13 — not "the host". One item, 18.95 s, against a 60 s window
 
