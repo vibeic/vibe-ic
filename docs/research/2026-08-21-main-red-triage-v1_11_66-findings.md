@@ -3232,6 +3232,50 @@ coincidence: these gates were written by someone who had already made these
 mistakes and troubled to name them precisely.
 
 
+## M56 — I went to fix the two `slot_pad_budget_check` scans and did NOT, because the code looks correct
+
+M55 called these "fixable per-site". Investigating before editing — the M46/M54
+habit — the picture reversed.
+
+**By dataflow, both flagged sites read comment-stripped text:**
+
+* `:246-247` — `src = re.sub(r"//[^\n]*", "", text)` then `re.sub(r"/\*.*?\*/", ...)`
+* `:262` — `rest = src[m.end():]`, and `decl` comes from `rest` → **site 2 fed from stripped `src`**
+* `:298-299` — `raw_no_comment` stripped the same way; `s` comes from it → **site 1 fed from stripped text**
+
+**So the code appears already correct**, which contradicts the gate. Rather than
+believe either of us on assertion, I read what the gate counts as a stripper:
+
+```python
+_STRIPPER = re.compile(r"strip.*comment|_strip_hdl|decomment|no_comment", re.I)
+def _strips_comments_inline(call):   # re.sub(<a comment pattern>, ...)
+```
+
+It recognises inline `re.sub` with a comment pattern — which `:246` is. **But at
+`:257` `src` is REASSIGNED by a third `re.sub` whose pattern is about
+`` `ifdef ``/`` `endif `` directives, not comments.** A conservative def-use walk
+cannot know that a non-stripper reassignment preserves comment-strippedness, so
+the chain plausibly breaks there and both downstream reads are reported as
+untouched.
+
+**NOT VERIFIED — that mechanism is my reading of the analyser, not a measurement
+of it.** What IS established is that both sites trace to `re.sub` comment strips,
+and that the gate offers an inline-recognition path those strips should satisfy.
+
+**I did not change the code, and that is the point of this section.** The
+available "fixes" were: rename a local to match `_STRIPPER` (`no_comment` — a
+name chosen to satisfy an analyser), or re-strip already-stripped text. **Both
+are editing working code to silence a gate**, which is the move
+`matrix_mutation_ledger` forbids in as many words: *"Never weaken the predicate,
+widen a waiver, or edit a fixture to suit."* A false positive is closed by fixing
+the ANALYSER or by recording the exemption with evidence — not by decorating the
+subject.
+
+**If the mechanism above is right, the finding belongs to the gate**, and the
+count 175-vs-170 is 5 sites of which at least 2 may be sound. **Which makes the
+baseline itself suspect**, and I am explicitly not touching that either.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3323,7 +3367,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | the ratios this document claims to record and does not (M36). Deliberately not re-measured — load-sensitive, shared host. | **an honest gap** |
 | **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. | **wiring decision** |
-| **`declaration scans strip comments`** | 5 regexes scanning unstripped text, **named in M55** (175 vs baseline 170). **2 of the 5 are `slot_pad_budget_check`** — see its two other rows; one program, three findings. Fix: strip comments on the value that REACHES the scan, not on a sibling. | **named, fixable per-site** |
+| **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M56: the 2 `slot_pad_budget_check` sites appear ALREADY CORRECT** — both trace to inline `re.sub` comment strips; the likely cause is a non-stripper `re.sub` reassignment at `:257` breaking the analyser's def-use chain. **Do not rename a local or re-strip to satisfy it.** Check the analyser before the subjects. | **possible gate false positive** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
 
 ## D. Corrections to my own earlier reports — the complete list
