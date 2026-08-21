@@ -1,0 +1,9 @@
+{
+  "_comment": "Finding-emitting loops that iterate an opt-in registry, as they stand on the tree registry_is_the_iteration_domain.py shipped with. MAY ONLY SHRINK. This file is a FILTER over the population the checker derives — never the population itself — which is the shape the rule requires. A row that matches nothing is a FAIL, not a silence: it cannot rot into a suppression list that outlives its own truth. There is no --write-baseline; rows are hand-authored from --json and reviewed as a diff.",
+  "known": [
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/gate_red_since_check.py::gate_red_since.json::ledger::row",
+      "reason": "The live instance the 2026-08-21 matrix capture measured and the reason this rule exists. The acknowledgement ledger has zero rows, so the only finding-emitting loop in the module runs zero times, and the gate exits '[PASS] every red is NEW or owned by a live, unexpired acknowledgement' beside a hygiene suite reporting eight live reds. Recorded, not repaired: the repair changes what the gate BLOCKS on, and this lane distils rules — it does not re-scope a live gate. Removing this row is the acceptance criterion for that repair."
+    }
+  ]
+}
