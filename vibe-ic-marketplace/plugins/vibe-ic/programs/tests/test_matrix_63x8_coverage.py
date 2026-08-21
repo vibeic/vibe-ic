@@ -113,9 +113,14 @@ from matrix_63x8.cells import DIMENSIONS, DIMENSION_NAMES
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = F.PLUGIN_ROOT
 
-#: The eight dimension modules, DISCOVERED not listed. A ninth appearing, or
-#: one going missing, changes this set and reddens the census below.
-DIMENSION_MODULE_GLOB = "test_matrix_d[1-8]_*.py"
+#: The dimension modules, DISCOVERED not listed. A tenth appearing, or one
+#: going missing, changes this set and reddens the census below.
+#:
+#: The range moved 1-8 -> 1-9 when dimension 9 (`verdict_consumed`) was added.
+#: It is a CHARACTER CLASS, not a count: `d10` would not match it, so the day a
+#: tenth dimension lands this glob must be widened deliberately rather than
+#: silently admitting a two-digit spelling.
+DIMENSION_MODULE_GLOB = "test_matrix_d[1-9]_*.py"
 
 #: A cell test's parametrize id is exactly ``step<flow step id>``. Anything with
 #: a suffix (dimension 8's ``step8-out0`` per-entry sweep) is a finer-grained
@@ -137,12 +142,19 @@ VALID_STATES = ("ENFORCED", "WAIVED", "NA")
 #:     census table in ``matrix_63x8/README.md`` must be regenerated in the same
 #:     change rather than left asserting a number that no longer reproduces.
 #:
-#: Seven dimensions are deliberately NOT here. The question is open for them and
+#: Dimension 9 joined on 2026-08-21: its L3 leg holds 68 of 69 steps' gates at a
+#: known tier with a `files_exist` stand-in and measures the consumption path
+#: rather than the step's own gate, so those cells are SUBSTITUTED. The one
+#: gate-less step (P0) is driven through its own structural umbrella and reads
+#: OWN. Declaring is what keeps that 68/1 split in the published table instead of
+#: dying inside a single "ENFORCED 69".
+#:
+#: The remaining dimensions are deliberately NOT here. The question is open for them and
 #: is not answerable from outside the module that built the predicate — see
 #: ``matrix_63x8/substitution.py``, "WHY UNDECLARED IS A STATE AND NOT A
 #: DEFAULT". Their cells are published as UNDECLARED, never folded into either
 #: answer.
-DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8,)
+DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8, 9)
 
 #: ``(steps, dimensions, cells)`` as MEASURED on 2026-07-27.
 #:
@@ -154,7 +166,25 @@ DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8,)
 #: the silent shape to refuse. A new step means eight new cells whose predicates
 #: nobody has looked at, so the count change must redden HERE, by name, and be
 #: acknowledged in the same commit that adds the step.
-GRID_AS_MEASURED: Tuple[int, int, int] = (67, 8, 536)
+#: MOVED BY HAND 2026-08-21, (67, 8, 536) -> (69, 9, 621). The derivation, so a
+#: reviewer can re-run it rather than trust it:
+#:
+#:   * DIMENSIONS 8 -> 9: `verdict_consumed` added
+#:     (`programs/tests/test_matrix_d9_verdict_consumed.py`).
+#:   * STEPS: the pin said 67 while `STEP_IDS_AS_MEASURED` beside it listed 68
+#:     ids — the pair is meant to move together and had been moved half-way, so
+#:     the count was already wrong before this change. Measured live:
+#:       `python3 -c "from matrix_63x8 import flowref as F; print(len(F.step_ids()))"`
+#:       -> 69, ids delta against the old list: +'0.5ic', +'1.6x', -'37.5self'
+#:     (68 + 2 - 1 = 69). '1.6x' landed in v1.11.15, '37.5self' was retired in
+#:     v1.11.18; '0.5ic' predates both.
+#:   * CELLS: 69 * 9 = 621, recomputed here and by `expected_cells()`.
+#:
+#: This number is DELIBERATELY not derived from the yaml. Deriving a tripwire
+#: from the same source the assertion reads makes the assertion tautological —
+#: see `matrix_63x8/README.md`. It is moved by hand, once, with the measurement
+#: above recorded beside it.
+GRID_AS_MEASURED: Tuple[int, int, int] = (69, 9, 621)
 
 #: The flow's step ids, in declaration order, as measured 2026-07-28. Pinned
 #: alongside the count so a rename or an add-plus-remove — which leaves the
@@ -172,13 +202,20 @@ GRID_AS_MEASURED: Tuple[int, int, int] = (67, 8, 536)
 #: Both are verified by `test_matrix_d5_deps_correct.py`'s D5-FORWARD-EDGE and
 #: D5-MISSING-EDGE clauses, and the graph is still acyclic (D5-CYCLE, plus
 #: `test_d5_runtime_ordering_guard_loads_the_same_edges`).
+#: `37.5self` (General Precheck) joined after 37.5ic and before 38: the chip
+#: path with NO operator. 37.5ic's condition wants the shuttle's slot template
+#: and 37.5ip is the IP/hardmacro terminal, so a design taping ITSELF out
+#: matched neither and reached tape-out having passed no submission check.
+#: Declared where it runs — after step 37 writes the chip GDS, beside the two
+#: routes it is mutually exclusive with.
 STEP_IDS_AS_MEASURED: Tuple[str, ...] = (
-    'D1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', 'FS1',
-    'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8',
-    'A9', '14', '15', '15.5ic', '16', '17', '18', '19', '20', '21', '22',
-    'DT2', 'DT3', '23', '24', '25', '26', '26.5ic', '27', '28', '29', '30',
-    '31', '32', '33', '34', '35', '36', '37', '37.5ip', '37.5ic', '38',
-    '39', 'M1', 'M2', 'M3', 'M4', '40', '41', '42', '43', '44', 'P0',
+    'D1', '0.5ic', '1', '1.6x', '2', '3', '4', '5', '6', '7', '8', '9',
+    '10', '11', 'FS1', 'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5',
+    'A6', 'A7', 'A8', 'A9', '14', '15', '15.5ic', '16', '17', '18',
+    '19', '20', '21', '22', 'DT2', 'DT3', '23', '24', '25', '26',
+    '26.5ic', '27', '28', '29', '30', '31', '32', '33', '34', '35',
+    '36', '37', '37.5ip', '37.5ic', '38', '39', 'M1', 'M2', 'M3', 'M4',
+    '40', '41', '42', '43', '44', 'P0',
 )
 
 #: Written to a scratch dir and loaded with ``-p``; dumps what pytest really
@@ -475,10 +512,26 @@ def test_live_collection_relays_finite_semantic_progress_past_old_bound(
     """Several completed collections may outlive a former total deadline."""
     old_fixed_bound = 0.3
     seen = []
+    # RECORD AND FORWARD, never replace. This test's subject is that a live
+    # collection RELAYS finite semantic progress; a spy that swallows the call
+    # makes the collection silent, which is the opposite of its subject. It
+    # matters outside this file: the enclosing driver test
+    # `test_pytest_per_file_junit.py::
+    #  test_nested_collect_progress_is_relayed_to_the_outer_session`
+    # runs THIS node under a 0.8 s forward-progress lease, and with the emitter
+    # swallowed the seven 0.14 s collections relayed nothing at all, so the
+    # outer session killed a perfectly healthy child as hung --
+    # `WATCHDOG_STALLED … PROGRESS_PROTOCOL_INCOMPLETE: terminal event missing
+    # (stage=running)`. Instrumentation that removes the behaviour it measures
+    # can only ever certify itself.
+    _forward = _domain_progress
+
+    def _record_and_forward(scope, completed, total):
+        seen.append((scope, completed, total))
+        _forward(scope, completed, total)
+
     monkeypatch.setattr(
-        sys.modules[__name__], "_domain_progress",
-        lambda scope, completed, total:
-        seen.append((scope, completed, total)))
+        sys.modules[__name__], "_domain_progress", _record_and_forward)
     monkeypatch.setattr(
         sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S",
         old_fixed_bound)
@@ -639,10 +692,10 @@ def test_the_grid_size_is_computed_from_the_live_flow_yaml():
         f"the flow yaml declares duplicate step ids: "
         f"{[s for s in steps if [F.normalize_id(x) for x in steps].count(F.normalize_id(s)) > 1]}"
     )
-    assert len(DIMENSIONS) == 8, f"DIMENSIONS is {DIMENSIONS!r}, expected 8"
-    assert sorted(DIMENSIONS) == list(range(1, 9))
+    assert len(DIMENSIONS) == 9, f"DIMENSIONS is {DIMENSIONS!r}, expected 9"
+    assert sorted(DIMENSIONS) == list(range(1, 10))
     expected = len(steps) * len(DIMENSIONS)
-    assert expected == len(steps) * 8
+    assert expected == len(steps) * 9
     # And the value is the one every other test in this file uses.
     assert expected_cells() == expected
 
@@ -682,13 +735,13 @@ def expected_cells() -> int:
     return len(F.step_ids()) * len(DIMENSIONS)
 
 
-def test_eight_dimension_modules_own_the_eight_dimensions():
+def test_every_dimension_module_owns_exactly_one_dimension():
     """One module per dimension, no gaps, no two modules owning one dimension."""
     mods = dimension_modules()
-    assert sorted(mods) == list(range(1, 9)), (
+    assert sorted(mods) == list(range(1, 10)), (
         f"dimension modules found: "
         f"{ {d: Path(m.__file__).name for d, m in mods.items()} }; "
-        f"dimensions with no module: {sorted(set(range(1, 9)) - set(mods))}. "
+        f"dimensions with no module: {sorted(set(range(1, 10)) - set(mods))}. "
         f"A dimension with no module contributes 63 UNCOVERED cells."
     )
     for dim, mod in mods.items():

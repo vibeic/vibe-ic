@@ -1461,6 +1461,53 @@ def _shell_function(source: str, name: str) -> str:
     return source[start:end + len("\n}\n")]
 
 
+def test_a_missing_receipt_quotes_the_arms_own_refusal_not_only_the_symptom(
+        tmp_path):
+    """THREE DIFFERENT CAUSES REDUCED TO ONE SENTENCE, measured in one evening.
+
+    When an arm writes no receipt, the validator can only say `cannot resolve
+    runner receipt: [Errno 2] No such file or directory`, and that same line
+    was what a reader saw for `subject would expose the host HOME to the
+    candidate` (TMPDIR under $HOME), for `cannot start Docker CLI` (a runtime
+    with no engine), and for `candidate ended without the exact semantic
+    terminal record` (the progress-scan defect). The runner's own log holds the
+    distinguishing line and is deleted with the run directory, so it has to be
+    quoted at the refusal or it is gone.
+
+    Asserted against the script's OWN function text, and both ways: a log that
+    exists must be quoted, and a log that does not exist must be NAMED as
+    absent -- "I could not run it" may not read the same as "I ran it and it
+    failed"."""
+    driver = tmp_path / "driver.sh"
+    driver.write_text(
+        "set -uo pipefail\n"
+        'RUN="$1"\n'
+        + _shell_function(_VERIFY.read_text(encoding="utf-8"),
+                          "arm_norecord_diagnosis")
+        + 'arm_norecord_diagnosis B1 "$2"\n')
+    run = tmp_path / "run"
+    run.mkdir()
+    record_log = tmp_path / "record.log"
+    record_log.write_text(
+        "[NORECORD] hermetic landing arm receipt: cannot resolve runner "
+        "receipt: [Errno 2] No such file or directory\n")
+
+    absent = subprocess.run(
+        ["bash", str(driver), str(run), str(record_log)],
+        capture_output=True, text=True, timeout=_T)
+    assert "b1-runner.log" in absent.stderr, absent.stderr
+    assert "did not even start" in absent.stderr, absent.stderr
+
+    (run / "b1-runner.log").write_text(
+        "[NORECORD] hermetic candidate: subject would expose the host HOME "
+        "to the candidate\n")
+    quoted = subprocess.run(
+        ["bash", str(driver), str(run), str(record_log)],
+        capture_output=True, text=True, timeout=_T)
+    assert "would expose the host HOME" in quoted.stderr, quoted.stderr
+    assert "cannot resolve runner receipt" in quoted.stderr, quoted.stderr
+
+
 def test_reading_one_arms_exit_code_cannot_byte_compile_the_shared_runtime(
         tmp_path):
     """THE INSTRUMENT WROTE INTO THE THING IT WAS MEASURING.

@@ -77,48 +77,24 @@ try:  # sibling module; programs/ is on sys.path when run as a script
     import _docker_memory as _dmem
 except ImportError:  # pragma: no cover - packaged/flattened layouts
     from . import _docker_memory as _dmem  # type: ignore
+import _eda_image as _img
 import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
 def _resolve_docker_image() -> str:
     """Resolve the EDA docker image, preferring the forked vibeic-eda
-    distribution (the iic-osic-tools fork this plugin actually ships and that
-    carries Fault + iverilog + yosys) over the upstream image, which may not be
-    pulled locally. Order: explicit env override → first locally-present
-    PINNED vibeic-eda tag → legacy upstream name (last resort).
+    distribution (the iic-osic-tools fork this plugin ships, carrying Fault +
+    iverilog + yosys) over the upstream image.
 
-    The fork tags below are pinned, never ``:latest``: a floating tag can
-    silently resolve to a stale local image whose tool behavior no longer
-    matches what the plugin was verified against. Every ``vibeic-eda:X.Y.Z``
-    literal here is a LIVE POINTER tracked by
-    ``tools/vibeic-eda/sync_image_version.py`` (this file is registered in its
-    INSTALL_DOC_CANDIDATES), so ``--set``/``--bump`` rewrites it mechanically
-    and ``--check`` fails the suite on drift — do not hand-edit out of step.
-
-    Historically this was hardcoded to ``hpretl/iic-osic-tools:latest``; on a
-    machine that only has the fork pulled, ``docker run`` failed with
-    image-not-found and the whole DFT step silently died. chip-AGNOSTIC."""
-    env = os.environ.get("VIBEIC_EDA_IMAGE") or os.environ.get("IIC_EDA_IMAGE")
-    if env:
-        return env
-    candidates = (
-        "ghcr.io/vibeic/vibeic-eda:0.3.13",
-        "vibeic-eda:0.3.13",
-        "vibeic/vibeic-eda:0.3.13",
-        "hpretl/iic-osic-tools:latest",
-    )
-    for img in candidates:
-        try:
-            r = subprocess.run(["docker", "image", "inspect", img],
-                               capture_output=True, timeout=15)
-            if r.returncode == 0:
-                return img
-        except Exception:
-            pass
-    # nothing found locally — return the fork's pinned canonical name; the
-    # caller's `docker run` then pulls exactly the verified image (or surfaces
-    # a clear pull error) rather than running a stale floating tag.
-    return "ghcr.io/vibeic/vibeic-eda:0.3.13"
+    The version is ASKED FOR, not remembered. It used to be a pinned literal
+    kept in step by `sync_image_version.py`, on the stated grounds that the tag
+    "matches what the plugin was verified against" — and nothing ever verified
+    that. vibeic-eda's own release gate does, and `_eda_image` asks the registry
+    which image is current rather than trusting a local `:latest`, which is how
+    this once resolved to `hpretl/iic-osic-tools:latest` on a machine that had
+    only the fork and made the whole DFT step die on image-not-found.
+    chip-AGNOSTIC."""
+    return _img.resolve()
 
 
 DOCKER_IMAGE = _resolve_docker_image()

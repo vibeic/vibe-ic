@@ -17,64 +17,40 @@
     "",
     "That third case is the one that matters: without it a corpus prune would",
     "silently 'close' every finding and the ratchet would measure the",
-    "publication schedule instead of the gates."
+    "publication schedule instead of the gates.",
+    "",
+    "`unproven` is that third case WRITTEN DOWN. `forging` holds SUCCEEDED",
+    "only, so an attack that stops being attemptable used to leave this file",
+    "by not appearing -- spelled identically to all of its findings being",
+    "fixed. Each entry names the attack, its subject and the measured reason",
+    "it could not be attempted. A2_STALE_REPLAY is here because its donor was",
+    "never an earlier run of the same design: it was a second FOREIGN design,",
+    "so its verdicts duplicated A3_CROSS_DESIGN and the run-identity property",
+    "it exists to measure has never been measured on this corpus.",
+    "",
+    "An entry leaving `unproven` is adjudicated too: ratchet_diff reports it",
+    "as `newly_attemptable`, because an attack that comes back into range and",
+    "reports nothing is the same silence in the other direction."
   ],
-  "measured_on": "a38902d1",
+  "measured_on": "e0e86134",
   "cell": "spm/v1.9.96_gf180mcuD",
   "donor": "sha256/clean_run_v1427_20260715",
   "older_run": "sha256/clean_run_v1422_20260715",
   "forging": [
     {
-      "attack": "A1_TAMPER_DESTRUCTIVE",
-      "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:antenna_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:drc_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:em_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:erc_density_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
-    },
-    {
-      "attack": "A2_STALE_REPLAY",
-      "target": "v1.9.96_gf180mcuD:lvs_report_check"
-    },
-    {
       "attack": "A3_CROSS_DESIGN",
       "target": "v1.9.96_gf180mcuD:antenna_report_check"
     },
     {
       "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:drc_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:em_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
       "target": "v1.9.96_gf180mcuD:erc_density_check"
-    },
+    }
+  ],
+  "unproven": [
     {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:ir_drop_report_check"
-    },
-    {
-      "attack": "A3_CROSS_DESIGN",
-      "target": "v1.9.96_gf180mcuD:lvs_report_check"
+      "attack": "A2_STALE_REPLAY",
+      "target": "v1.9.96_gf180mcuD",
+      "reason": "the run offered as an earlier run of this design declares 'sha256' while the cell declares 'chip_top'; replaying it would measure A3_CROSS_DESIGN a second time, not staleness"
     }
   ]
 }
