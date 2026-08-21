@@ -1,0 +1,13 @@
+y01 nr_csel16 auto 0.30 0.02 ks
+y02 nr_csel16 auto 0.30 0.02 sk
+y03 nr_csel16 auto 0.30 0.02 hc
+y04 nr_rca auto 0.30 0.02 ks
+y05 nr_rca auto 0.30 0.02 sk
+y06 base auto 0.30 0.02 ks
+y07 csa_alt_maj auto 0.30 0.02 rab_swap
+y08 nr_rca auto 0.60 0.00 none
+c02 csa_alt_maj auto 0.60 0.00 none
+c03 nr_csel16 auto 0.60 0.00 none
+c04 hier_split auto 0.60 0.00 none
+c05 csa_alt_maj auto 0.60 0.02 none
+c06 nr_csel16 auto 0.60 0.02 none
