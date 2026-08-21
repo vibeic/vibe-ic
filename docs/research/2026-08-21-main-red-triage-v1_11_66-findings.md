@@ -1904,6 +1904,58 @@ its body does not assert, and the same mistake as the six guards whose knobs
 never arrived. A clause that describes an intention is not a mechanism.
 
 
+## M30 — escalation 2 was ALSO wrong: the evidence IS on this host
+
+Having found escalation 1 mis-stated (M29), I audited escalation 2 the same way.
+**It is wrong too, and more plainly.**
+
+I wrote: *"The manifest declares 15 run roots and **0 of the 15 are present on
+this host**."* Measured now, resolving the manifest's relative `run_roots` keys
+against `/home/reyerchu` and `/home/reyerchu/vibe-ic`:
+
+```
+present: 10/15
+```
+
+and **two of them carry the missing artefact**, both fully admissible — each has
+`provenance.jsonl` AND `reports/orchestrator/`, which is the criterion the
+manifest itself states:
+
+| declared run root | admissibility | `reports/phase3/drc_signoff.json` |
+|---|---|--:|
+| `benchmark-data/ic/spm/v1.9.96_gf180mcuD` | `provenance.jsonl` + `reports/orchestrator/` | **1919 B** |
+| `benchmark-data/ic/caravel_user_project/v1.9.43_sky130A` | `provenance.jsonl` + `reports/orchestrator/` | **1034 B** |
+
+**Why I got it wrong:** I searched for the roots from inside my own clone, which
+has no `benchmark-data/` tree — it left the repo, and the published corpus is
+empty upstream (M11). The declared roots live in the OPERATOR's checkout at
+`/home/reyerchu/vibe-ic`. Resolving relative paths against the wrong base
+returned zero, and I reported the zero as absence. **That is the exact failure
+this document names in its own rule-9 section: "I could not look" reported as "I
+looked and there was nothing."** I did it to myself while writing the escalation.
+
+**What this changes:** the D3 manifest entry for step 31 CAN be measured honestly
+here, from a declared, admissible run root. That closes two more BOTH reds. The
+blocker I escalated does not exist.
+
+**What I did NOT do, and what remains before the entry is written:**
+
+1. Confirm the entry's exact schema against a sibling entry in `steps` — the
+   manifest records *"where a real run produced it, at what path, and at what
+   size in bytes"*, so the format matters and I have not read one yet.
+2. Decide what the flow comment's arithmetic implies once the entry exists —
+   *"16 roots carry `drc_signoff.rpt`, 3 carry `drc_signoff.json`, so 13 would
+   report the new entry MISSING."* Thirteen MISSING may be the correct, expected
+   record of a partially-produced output, or it may trip a different check. That
+   is a fact to establish, not to assume — and assuming is what produced both
+   this error and M29's.
+
+**Two escalations audited, two found wrong.** Both were mine, both were stated
+confidently, and both survived unexamined because an escalation reads as humility
+rather than as a claim. **A blocker is a claim about the world and needs the same
+evidence as a finding.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Four files:** this document, a design
