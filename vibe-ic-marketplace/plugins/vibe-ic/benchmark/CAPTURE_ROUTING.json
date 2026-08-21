@@ -262,6 +262,10 @@
     "repo.tracked_artefact_hygiene": {
       "bucket_A_program": "programs/tracked_json_yaml_parses_check.py",
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "ppa.schema_coverage": {
+      "bucket_A_program": "programs/_ppa/schema_validation.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     }
   },
   "default_routing": {

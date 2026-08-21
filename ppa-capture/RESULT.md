@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 26 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 27 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 23 | deterministic rules — the default, and every one names its predicate |
+| **A** | 24 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -932,6 +932,32 @@ paths I could only audit here, and now this.
 **(o)** yes. **(d)** yes — it is per gate per consumed tree, so it covers the
 next tree that is split out.
 
+### A-25 · every emitted document type must have the schema its interface promises · `ppa.schema_coverage`
+
+A lane asked, in its requests, why one document type had no schema file when the
+interface says every instance document has one. It is not one type:
+
+    document-type identifiers producers emit    29
+    schema files present                        14
+    types with NO schema                        >= 17
+
+At least 17, because the matching errs toward reporting a schema as present. The
+type the lane asked about is among them, and so are the bundle, the sign-off
+record set, the frontier and the evidence manifest.
+
+**This is an upstream cause, not a peer of the other records.** Two findings
+already in this batch reduce to it:
+
+* **A-15** — a tool-error verdict carries no diagnostic, and *"there is no schema
+  for the artefact, which is why nothing requires the field"*;
+* **A-17** — two producers resolve a provenance convention in opposite
+  directions, with nothing to state which is meant.
+
+Neither can be fixed where it was found. Both need the document type to be
+describable first, which reframes them as symptoms and puts the repair here.
+**(o)** yes. **(d)** yes — and in the reverse direction too: a schema for a type
+nothing emits is a document class that went away and left its contract behind.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1142,6 +1168,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-22 | 216 imports | 51 | narrowed to true third-party; one package, proven fatal |
 | A-23 | — | 0 of 21 | **this batch passes its own new check** |
 | A-24 | 37 gates | 98 consumers | the consumed tree is outside every one of them |
+| A-25 | 29 types | **17 unschema'd** | upstream cause of A-15 and A-17 |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
