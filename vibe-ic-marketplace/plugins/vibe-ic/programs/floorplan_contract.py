@@ -27,10 +27,13 @@ read the same contract so they cannot drift.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import _reference_flow_boundary as _rfb
 
 # Canonical DEF/OpenLane DIE_AREA rect: "llx lly urx ury" (4 numbers, any of
 # the JSON-array / prose / TCL separators). W = urx-llx, H = ury-lly.
@@ -45,6 +48,120 @@ _DIE_WIDTH_RE = re.compile(
 _DIE_HEIGHT_RE = re.compile(
     r"DIE_HEIGHT`?\s*[:=|]\s*\*{0,2}\s*(\d+(?:\.\d+)?)\s*(?:um|µm)?",
     re.IGNORECASE)
+# A LABELLED `W x H <length-unit>` row — the form real design documents use:
+#
+#     | Die size | **2400 x 2400 um (5.76 mm2)** (1.4M cells + 20 macros; L1) |
+#     | Core die (no seal ring) | 1300 x 1300 um |
+#
+# MEASURED (vibe-ic#376 instance 3): 194 of 194 tracked L19 documents carry
+# `die_area_budget_um: null`, because every recogniser above needs a
+# `DIE_AREA` / `DIE_WIDTH` keyword and none of these rows has one. The
+# extractor therefore returned "no mandated floorplan", the emitter returned
+# early, and `phase3_one_shot_runner`'s documented precedence
+# (`... > L19-mandated die_area_budget_um > 'auto'`) never reached its middle
+# rung on any design.
+#
+# TWO DISCRIMINATORS, both load-bearing and both measured:
+#   * the LABEL must name a die — without it, `1024x768` and `16x16` match;
+#   * the VALUE must carry a LENGTH unit — without it, an array shape matches.
+# Over the published input documents the labelled form hits 16 occurrences
+# across 2 ICs; dropping the label requirement takes it to 24. Those 8 extra
+# are exactly what this must not read as a die.
+_DIE_LABELLED_WXH_RE = re.compile(
+    r"([^\n|]{0,40}\bdie\b[^\n|]{0,30})[|:\s]+[^\n|]{0,20}?"
+    r"(\d{2,5}(?:\.\d+)?)\s*[x\u00d7]\s*(\d{2,5}(?:\.\d+)?)"
+    r"\s*(?:um|\u00b5m|micron)",
+    re.IGNORECASE)
+
+# A prose die statement can be NEGATED, and until this guard the extractor could
+# not tell. Measured on a real retarget: a design moving to a different process
+# wrote, in its own L9 constraints document,
+#
+#     "The origin project's fixed die rectangle of <W> x <H> um is the die of an
+#      external harness on a different process. It has NO meaning here and is
+#      REMOVED, not translated."
+#
+# `_DIE_LABELLED_WXH_RE` matched "die ... <W> x <H> um" inside that statement and
+# the extractor published <W>x<H> as `L19.fields.die_area_budget_um` — i.e. as
+# that design's MANDATED fixed die, which `phase3_one_shot_runner` then treats as
+# an absolute floorplan. The document said the opposite of what was recorded, and
+# nothing in the flow could notice: a run would have been hard-sized onto a die
+# belonging to a different chip on a different process. The design had no way to
+# say "this die does not apply" — every phrasing of the denial re-declared it.
+#
+# THE SAME DEFECT WAS ALREADY FIXED ONCE, ELSEWHERE. `pdk_target` extraction
+# carries `_FOUNDRY_NEGATION_RE` + `_foundry_match_trustworthy` for exactly this
+# ("prose like 'fabbed at <foundry> but NOT as a process target' mis-extracts").
+# That hardening was never extended to the floorplan contract, so the identical
+# polarity blindness survived in the neighbouring field of the same document.
+#
+# WHY NOT A PLAIN NEGATION SEARCH — two ways that goes wrong, both handled:
+#
+#   * Real die statements carry harmless negations as PARENTHETICAL qualifiers:
+#     "1300 x 1300 um (no seal ring)", "2200 x 1600 um (not including scribe)".
+#     Vetoing those would turn a silent wrong value into a silent missing value,
+#     which is no better. So bracketed spans that do NOT contain the matched
+#     dimensions are blanked before looking for a negation.
+#
+#   * The denial usually does not live in the same SENTENCE as the number — it
+#     follows it ("... is the die of an external harness. It has NO meaning
+#     here."). Sentence scope therefore misses the common case. But paragraph
+#     scope would over-trigger on a markdown TABLE, where an unrelated row
+#     ("| Status | not final |") sits in the same block as a real die row. So
+#     the scope is the LINE for a table row and the PARAGRAPH for prose.
+#
+# Chip-, PDK- and vendor-AGNOSTIC: the vocabulary is structural negation only.
+# vibe-ic#712 — shared with `phase1_doc_one_shot_runner`; see `_prose_polarity`.
+# This field needs BOTH tiers: a die can be denied ("no fixed die") or RETIRED
+# while still printed in full ("removed, not translated"), which is the case
+# #711 measured.
+from _prose_polarity import NEGATION_RE as _DIE_NEGATION_RE  # noqa: E402
+_BRACKETED_RE = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}")
+
+
+def _die_statement_scope(text: str, start: int, end: int) -> Tuple[int, int]:
+    """The span of text whose polarity governs the die figure at [start, end).
+
+    A markdown TABLE ROW is a self-contained record, so its scope is its own
+    line — otherwise an unrelated cell in a neighbouring row would veto a valid
+    die. Prose is scoped to its PARAGRAPH, because a denial is normally written
+    as the sentence AFTER the one carrying the number.
+    """
+    line_lo = text.rfind("\n", 0, start) + 1
+    line_hi = text.find("\n", end)
+    line_hi = len(text) if line_hi < 0 else line_hi
+    if "|" in text[line_lo:line_hi]:
+        return line_lo, line_hi
+    para_lo = text.rfind("\n\n", 0, start)
+    para_lo = 0 if para_lo < 0 else para_lo + 2
+    para_hi = text.find("\n\n", end)
+    para_hi = len(text) if para_hi < 0 else para_hi
+    return para_lo, para_hi
+
+
+def _die_statement_negated(text: str, start: int, end: int) -> bool:
+    """True when the die VALUE spanning [start, end) sits in a statement that
+    denies it — so the document states what the design is NOT, and the figure
+    must not be recorded as a mandate.
+
+    `start`/`end` must bound the NUMERIC VALUE, not the whole regex match, so
+    that a bracket sitting inside the match but beside the number (a label such
+    as "Core die (no seal ring)") is still recognised as a qualifier.
+    """
+    lo, hi = _die_statement_scope(text, start, end)
+    span = text[lo:hi]
+    rel_s, rel_e = start - lo, end - lo
+
+    def _blank(m):
+        # Keep any bracket that CONTAINS the value (e.g. "DIE_AREA = [0,0,W,H]");
+        # blank the ones that merely sit beside it.
+        if m.start() <= rel_s and m.end() >= rel_e:
+            return m.group(0)
+        return " " * (m.end() - m.start())
+
+    return bool(_DIE_NEGATION_RE.search(_BRACKETED_RE.sub(_blank, span)))
+
+
 _FP_SIZING_PROSE_RE = re.compile(
     r"FP_SIZING\b[\s:=|`'\")(]{0,6}(absolute|relative)", re.IGNORECASE)
 
@@ -58,14 +175,23 @@ _MAX_BYTES_PER_FILE = 400_000
 
 # §4.05 (TIGHT / no-oracle-read): a fixed-floorplan contract is a DESIGN
 # statement (design_src config + spec docs). NEVER derive it from a golden /
-# oracle / reference-flow / expected-solution tree — those are off-limits.
-# Any input file whose relative path carries one of these directory segments
-# is skipped. chip-AGNOSTIC (pure directory-name vocabulary).
-_OFF_LIMITS_SEGMENTS = {
-    "reference_flow", "ref_flow", "reference", "golden", "oracle",
-    "expected", "expected_output", "solution", "solutions", "answer",
-    "answers", "ground_truth",
-}
+# oracle / expected-solution tree — those are off-limits end to end, and their
+# vocabulary is defined ONCE in `_reference_flow_boundary` so no two programs
+# can disagree about what "oracle" means.
+#
+# The reference-flow segments below are an ADDITIONAL, DELIBERATELY STRICTER
+# rule that belongs to THIS program only, and it is not a claim that the whole
+# tree is oracle — measured over the tracked corpus a reference flow is MIXED
+# (recipe config + one QoR-rules oracle artifact; see the module docstring of
+# `_reference_flow_boundary`). This program stays stricter than that boundary
+# because a floorplan contract has an independent source in `design_src`, so
+# skipping the tree wholesale costs it nothing and keeps the read trivially
+# provable. A program that genuinely needs the recipe (phase-3 knob ingest)
+# sits exactly on the boundary instead.
+#
+# Any input file whose relative path carries one of these directory segments is
+# skipped. chip-AGNOSTIC (pure directory-name vocabulary).
+_OFF_LIMITS_SEGMENTS = set(_rfb.OFF_LIMITS_TREE_SEGMENTS)
 
 
 def _rel(project: Path, p: Path) -> str:
@@ -250,14 +376,27 @@ def _prose_die_area(project: Path,
     L9/constraint/floorplan prose docs first, then any input doc. Returns
     (die_wxh, source_rel) or None."""
     def _scan(text: str) -> Optional[str]:
+        # Every recogniser below iterates ALL of its matches and skips the
+        # negated ones, so a statement that denies a die ("... is REMOVED, not
+        # translated") can neither be recorded as a mandate nor poison a genuine
+        # affirmative statement later in the same document. Same doctrine as the
+        # #457 pdk_target loop. The span handed to the guard is the NUMERIC
+        # VALUE, not the whole match — see `_die_statement_negated`.
         for m in _DIE_AREA_RECT_RE.finditer(text):
             wxh = _rect_to_wxh(*(float(m.group(i)) for i in (1, 2, 3, 4)))
-            if wxh:
+            if wxh and not _die_statement_negated(text, m.start(1), m.end(4)):
                 return wxh
         mw, mh = _DIE_WIDTH_RE.search(text), _DIE_HEIGHT_RE.search(text)
-        if mw and mh:
+        if (mw and mh
+                and not _die_statement_negated(text, mw.start(1), mw.end(1))
+                and not _die_statement_negated(text, mh.start(1), mh.end(1))):
             return _rect_to_wxh(0.0, 0.0, float(mw.group(1)),
                                 float(mh.group(1)))
+        for m in _DIE_LABELLED_WXH_RE.finditer(text):
+            if _die_statement_negated(text, m.start(2), m.end(3)):
+                continue
+            return _rect_to_wxh(0.0, 0.0, float(m.group(2)),
+                                float(m.group(3)))
         return None
 
     prose = [(r, t) for (r, p, t) in files
@@ -425,3 +564,295 @@ def extract_floorplan_contract(project: Path,
     result["floorplan_hints"] = deduped
     result["constraints_present"] = bool(die_wxh or deduped)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Fixed-pinout wrapper detection (DFT boundary-scan applicability)
+# ---------------------------------------------------------------------------
+# A design whose TOP-LEVEL PORT GEOMETRY is fixed by an external parent — an
+# OpenLane ``FP_DEF_TEMPLATE`` copies the die outline AND every pin position out
+# of a template DEF the parent (harness / management SoC) handed down — is a
+# *fixed-pinout wrapper*: its ports connect to that parent BY NAME, not to chip
+# pads. `fault chain` defaults to inserting a boundary-scan register wrapping
+# every top-level port; on such a wrapper that register is BOTH wrong DFT (the
+# pins are not pads, so there is nothing at the chip boundary to scan) AND a
+# physical hazard — MEASURED on caravel_user_project × sky130A: the 606-cell
+# boundary register routed across a fixed 2920×3520 µm die at the functional
+# 25 ns clock produced an SS-corner setup violation of −0.73 ns (TNS −11.63) and
+# a +707 % instance blow-up. `fault chain --skip-boundary` inserts the internal
+# scan chain only, which is the correct DFT for this class. This predicate is
+# the deterministic, chip-AGNOSTIC selector for it — no agent chooses the flag.
+#
+# THE SIGNAL is ``FP_DEF_TEMPLATE`` (a template DEF that fixes the pin
+# placement), NOT a chip name. A standalone padframe chip defines its own pads
+# via a padring; it does NOT take its outline/pins from a parent's template DEF.
+# So the presence of a fixed pin-placement template for the top module is a
+# specific, sound marker of "ports are not chip pads". ``FP_PIN_ORDER_CFG`` /
+# ``pin_order*.cfg`` alone is weaker (any design may order its own pins) and is
+# reported as CORROBORATION, never as the sole trigger.
+def is_fixed_pinout_wrapper(project: Path,
+                            top_module: Optional[str] = None
+                            ) -> Tuple[bool, Dict[str, Any]]:
+    """Is ``top_module`` (or the design, if unnamed) a fixed-pinout wrapper?
+
+    Returns ``(is_fixed_pinout, evidence)``. ``is_fixed_pinout`` is True only
+    when a fixed pin-placement DEF template (``FP_DEF_TEMPLATE``) governs the
+    top — the load-bearing marker that the ports are a parent interface, not
+    chip pads. ``evidence`` records exactly what was read, so the decision is
+    auditable and never a bare boolean.
+
+    chip-AGNOSTIC: derives entirely from the design's own staged input via
+    ``extract_floorplan_contract`` — no chip / vendor / SKU literal.
+    """
+    if not isinstance(project, Path):
+        project = Path(project)
+    contract = extract_floorplan_contract(project, top_module)
+    hints = contract.get("floorplan_hints") or []
+    def_hints = [h for h in hints if h.get("kind") == "def_template"]
+    # A def_template for THIS top (or one carrying no DESIGN_NAME, which the
+    # extractor leaves unset when the config omitted it) governs the top's
+    # pins. A def_template that names a DIFFERENT module is a sub-macro's
+    # template and does not, on its own, make the top fixed-pinout.
+    # AN UNNAMED TEMPLATE IS ONLY THE TOP'S WHEN THERE IS NOTHING ELSE IT COULD
+    # BE (gatekeeper, landing #625). `design_name` is unset whenever the config
+    # omitted `DESIGN_NAME`, and `extract_floorplan_contract` collects configs
+    # from the whole input tree — so a SUB-MACRO config that declares
+    # `FP_DEF_TEMPLATE` and omits `DESIGN_NAME` produced an unnamed hint that
+    # matched any top. DRIVEN before this line was written:
+    #
+    #     sub_blk config, FP_DEF_TEMPLATE set, DESIGN_NAME omitted
+    #     is_fixed_pinout_wrapper(project, "padframe_chip") -> True
+    #
+    # and True here means `--skip-boundary`, so a padframe chip whose ports ARE
+    # pads would silently lose its boundary-scan register. That is the unsafe
+    # direction: the opposite error is a loud timing violation, this one is a
+    # silent DFT loss. The named negative control above cannot see it, because
+    # its sub-macro names itself.
+    #
+    # So an unnamed template counts only when it is the ONLY one — then there
+    # is no other design it could belong to. With several and one unnamed, which
+    # governs the top is not established, and not established means the default
+    # (keep the boundary register) rather than a guess.
+    if top_module:
+        named = [h for h in def_hints if h.get("design_name") == top_module]
+        unnamed = [h for h in def_hints if h.get("design_name") is None]
+        matched = named or (unnamed if len(def_hints) == 1 else [])
+    else:
+        matched = def_hints
+    is_fixed = bool(matched)
+    fp_sizing = next((h["value"] for h in hints
+                      if h.get("kind") == "fp_sizing"), None)
+    pin_order = [h for h in hints if h.get("kind") == "pin_order"]
+    evidence: Dict[str, Any] = {
+        "is_fixed_pinout": is_fixed,
+        "top_module": top_module,
+        "def_template": (matched[0]["value"] if matched else None),
+        "def_template_source": (matched[0].get("source") if matched else None),
+        "def_template_design_name": (
+            matched[0].get("design_name") if matched else None),
+        "fp_sizing": fp_sizing,
+        "die_area_um": contract.get("die_area_budget_um"),
+        "pin_order_cfg": (pin_order[0]["value"] if pin_order else None),
+        # Every def_template seen, so a reader can tell a top template from a
+        # sub-macro one without re-deriving.
+        "all_def_templates": [
+            {"value": h.get("value"), "source": h.get("source"),
+             "design_name": h.get("design_name")}
+            for h in def_hints],
+        "reason": (
+            "FP_DEF_TEMPLATE fixes the top's pin placement → ports are a "
+            "parent interface, not chip pads → boundary-scan register is "
+            "incorrect DFT here; insert the internal scan chain only "
+            "(--skip-boundary)"
+            if is_fixed else
+            "no FP_DEF_TEMPLATE governs the top → not a fixed-pinout wrapper; "
+            "default boundary-scan behaviour is unchanged"),
+    }
+    return is_fixed, evidence
+
+
+# ---------------------------------------------------------------------------
+# Design-declared DRV limits (max-fanout / max-transition)
+# ---------------------------------------------------------------------------
+# A fixed-floorplan design ships an OpenLane-style config, and this module
+# already reads it for DIE_AREA / FP_SIZING / FP_DEF_TEMPLATE /
+# FP_PIN_ORDER_CFG. The SAME file routinely also states the design's DRV
+# limits — `MAX_FANOUT_CONSTRAINT`, `SYNTH_MAX_FANOUT`,
+# `MAX_TRANSITION_CONSTRAINT` — and the phase-3 SDC builder looked for them
+# ONLY in the L9 markdown, with a regex shaped for a markdown TABLE ROW. A
+# design that declares its cap in JSON therefore read as "declares no cap",
+# no `set_max_fanout` was emitted, `repair_design` never split the
+# high-fanout nets, and the sign-off max-fanout table came back empty BY
+# CONSTRUCTION — UNMEASURED, which is not the same claim as zero.
+#
+# PER-PDK / PER-SCL SCOPING IS LOAD-BEARING, not a nicety. An OpenLane
+# config carries caps for PDKs and cell libraries a given run is NOT
+# building for, under `pdk::<glob>` / `scl::<name>` blocks. Reading the cap
+# WITHOUT the PDK is precisely how a foreign library's tighter cap gets
+# applied to the wrong run. Resolution order, most specific last:
+#     top-level keys
+#       -> `pdk::<glob>` block whose glob matches the active PDK
+#         -> `scl::<name>` block whose name matches the active cell library
+# A block that matches neither contributes NOTHING.
+#
+# §4.05 / no-fabricate: only a real positive numeric declaration counts; a
+# missing, zero or non-numeric value yields None so the caller keeps its own
+# default. Off-limits (golden / oracle / reference-flow) trees are skipped by
+# `_iter_input_files`, so a cap that only exists in one is never read.
+#
+# chip-AGNOSTIC: pure OpenLane config-key grammar. The PDK and cell-library
+# names are supplied BY THE CALLER; no chip, PDK or design literal appears.
+
+_DRV_FANOUT_KEYS = ("MAX_FANOUT_CONSTRAINT", "SYNTH_MAX_FANOUT")
+_DRV_SLEW_KEYS = ("MAX_TRANSITION_CONSTRAINT",)
+# The SAME config states the design's routing-layer envelope. OpenLane names
+# them `RT_MAX_LAYER` / `RT_MIN_LAYER` (v1 spelled them `GLB_RT_MAXLAYER` /
+# `GLB_RT_MINLAYER`, and `RT_CLOCK_MIN_LAYER` scopes the clock separately).
+# They are DESIGN INPUT — a declared ceiling on where this design may route —
+# and the phase-3 `global_route` was emitted bare, so the declaration reached
+# no tool. Same per-(pdk, scl) scoping as the caps above: a routing ceiling
+# stated under `pdk::sky130*` must not be applied to a gf180 run.
+_DRV_ROUTE_MAX_LAYER_KEYS = ("RT_MAX_LAYER", "GLB_RT_MAXLAYER")
+_DRV_ROUTE_MIN_LAYER_KEYS = ("RT_MIN_LAYER", "GLB_RT_MINLAYER")
+_DRV_ROUTE_CLK_MIN_LAYER_KEYS = ("RT_CLOCK_MIN_LAYER", "GLB_RT_CLOCK_MINLAYER")
+
+
+def _scope_matches(prefix: str, spec: str, actual: str) -> bool:
+    """Does an OpenLane `<prefix>::<spec>` block apply to `actual`?
+
+    `spec` is an fnmatch glob (`sky130*`), matched case-insensitively. An
+    empty `actual` matches nothing — an unknown PDK must not inherit a
+    scoped cap.
+    """
+    if not actual:
+        return False
+    del prefix  # the caller has already split on it; kept for call-site clarity
+    return fnmatch.fnmatchcase(actual.lower(), spec.strip().lower())
+
+
+def _collect_scoped(cfg: Dict[str, Any], pdk: str, scl: str
+                    ) -> List[Dict[str, Any]]:
+    """Config dicts that apply to (pdk, scl), least specific first."""
+    layers: List[Dict[str, Any]] = [cfg]
+    for key, val in cfg.items():
+        if not isinstance(key, str) or not isinstance(val, dict):
+            continue
+        low = key.lower()
+        if low.startswith("pdk::"):
+            if _scope_matches("pdk", key[5:], pdk):
+                layers.append(val)
+                for k2, v2 in val.items():
+                    if (isinstance(k2, str) and isinstance(v2, dict)
+                            and k2.lower().startswith("scl::")
+                            and _scope_matches("scl", k2[5:], scl)):
+                        layers.append(v2)
+        elif low.startswith("scl::"):
+            if _scope_matches("scl", key[5:], scl):
+                layers.append(val)
+    return layers
+
+
+def _positive_int(v: Any) -> Optional[int]:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v > 0 else None
+    if isinstance(v, float) and float(v).is_integer():
+        return int(v) if v > 0 else None
+    if isinstance(v, str):
+        try:
+            n = int(v.strip())
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+    return None
+
+
+def _positive_float(v: Any) -> Optional[float]:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v) if float(v) > 0 else None
+    if isinstance(v, str):
+        try:
+            n = float(v.strip())
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+    return None
+
+
+def _layer_name(v: Any) -> Optional[str]:
+    """A LEF routing-layer NAME as declared in a flow config, or None.
+
+    Accepts only a bare identifier (`met4`, `Metal4`, `M4`) — the shape a LEF
+    `LAYER <name>` carries. A number, a list, an empty string or anything with
+    whitespace/punctuation is refused, so a mis-typed key can never be spliced
+    into a `set_routing_layers` argument.
+    """
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if not s or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", s):
+        return None
+    return s
+
+
+def declared_drv_limits(project: Path, pdk: str = "", scl: str = ""
+                        ) -> Dict[str, Any]:
+    """The design's OWN DRV limits, read from its staged flow config(s).
+
+    Returns ``{"max_fanout": int|None, "max_fanout_source": rel|None,
+    "max_transition_ns": float|None, "max_transition_source": rel|None}``.
+
+    Scoped per (``pdk``, ``scl``) — see the module note above. Never raises;
+    a project that declares nothing yields all-None so the caller's own
+    default stands unchanged.
+    """
+    out: Dict[str, Any] = {"max_fanout": None, "max_fanout_source": None,
+                           "max_transition_ns": None,
+                           "max_transition_source": None,
+                           "route_max_layer": None,
+                           "route_max_layer_source": None,
+                           "route_min_layer": None,
+                           "route_min_layer_source": None,
+                           "route_clock_min_layer": None,
+                           "route_clock_min_layer_source": None}
+    if not project or not Path(project).is_dir():
+        return out
+    try:
+        files = _iter_input_files(Path(project))
+    except Exception:                                        # noqa: BLE001
+        return out
+    for rel, _abs, text in files:
+        if not _looks_like_openlane_config(Path(rel).name, text):
+            continue
+        if not text.lstrip().startswith("{"):
+            continue
+        try:
+            cfg = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        for layer in _collect_scoped(cfg, pdk, scl):
+            for key in _DRV_FANOUT_KEYS:
+                n = _positive_int(_ci_get(layer, key))
+                if n is not None:
+                    out["max_fanout"] = n
+                    out["max_fanout_source"] = f"{rel}:{key}"
+            for key in _DRV_SLEW_KEYS:
+                f = _positive_float(_ci_get(layer, key))
+                if f is not None:
+                    out["max_transition_ns"] = f
+                    out["max_transition_source"] = f"{rel}:{key}"
+            for field, keys in (("route_max_layer", _DRV_ROUTE_MAX_LAYER_KEYS),
+                                ("route_min_layer", _DRV_ROUTE_MIN_LAYER_KEYS),
+                                ("route_clock_min_layer",
+                                 _DRV_ROUTE_CLK_MIN_LAYER_KEYS)):
+                for key in keys:
+                    name = _layer_name(_ci_get(layer, key))
+                    if name is not None:
+                        out[field] = name
+                        out[f"{field}_source"] = f"{rel}:{key}"
+    return out

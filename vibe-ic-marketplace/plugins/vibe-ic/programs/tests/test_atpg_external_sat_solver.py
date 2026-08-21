@@ -28,10 +28,23 @@ import path_delay_fault_atpg_run as pdf   # noqa: E402
 
 _FAULTS = [("_42_", "STR", "1'b0", "1'b0"), ("_43_", "STF", "1'b1", "1'b1")]
 
+#: The per-fault `sat -timeout` these tests hand the SCRIPT BUILDER.
+#:
+#: Kept at or under `ci_harness_timeout_ceiling_check`'s per-call ceiling
+#: (harness bound // 3 = 60 s) even though nothing here can block: as the module
+#: docstring says, these tests are PURE — `_build_batch_script` returns a
+#: STRING and no process is launched, so the measured worst case at these call
+#: sites is the cost of formatting text. It used to be 180, which put two
+#: entries on that gate's advisory list — the list of bounds it cannot resolve
+#: and therefore cannot clear — where they sat as an unreviewable count. A
+#: value inside the ceiling needs no exemption at all.
+_SAT_TIMEOUT_S = 60
+
 
 def test_dt1_batch_emits_select_solver_when_chosen():
     s = tdf._build_batch_script("f.v", "m.v", "top", _FAULTS, ["a", "b"],
-                                sat_timeout=180, select_solver="kissat")
+                                sat_timeout=_SAT_TIMEOUT_S,
+                                select_solver="kissat")
     # every per-fault prove routes at the chosen external solver
     proves = [ln for ln in s.splitlines() if ln.startswith("sat -prove trig 0")]
     assert proves, "no per-fault prove emitted"
@@ -45,9 +58,9 @@ def test_dt1_batch_omits_select_solver_by_default():
     # Fallback path (no external backend) must be byte-for-byte the old command:
     # NO -select-solver token at all, so behaviour on a stale image is unchanged.
     s = tdf._build_batch_script("f.v", "m.v", "top", _FAULTS, ["a"],
-                                sat_timeout=180, select_solver="")
+                                sat_timeout=_SAT_TIMEOUT_S, select_solver="")
     assert "-select-solver" not in s
-    assert "sat -prove trig 0 -timeout 180 -set f1." in s
+    assert f"sat -prove trig 0 -timeout {_SAT_TIMEOUT_S} -set f1." in s
 
 
 # ── DT2 (path-delay; DT3/SDD reuses these verdicts) ─────────────────────────

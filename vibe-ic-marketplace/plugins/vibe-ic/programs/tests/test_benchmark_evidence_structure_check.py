@@ -108,18 +108,52 @@ def test_malformed_manifest_fails(tmp_path):
     assert "GDS_MANIFEST" in r.stdout
 
 
-def test_committed_raw_gds_fails(tmp_path):
+def _sparse(p, size: int):
+    """A file of `size` bytes that costs no disk — `st_size` is what the rule
+    reads, and writing 51 real MB per test is a slow way to learn nothing."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("wb") as fh:
+        fh.truncate(size)
+
+
+def test_a_committed_gds_under_the_ceiling_is_accepted(tmp_path):
+    """#419 — this test asserted the OPPOSITE until v1.6.61, and that is
+    exactly why all three reference cells failed their own structure check
+    while `.gitignore` accepted the files they carry. A 0.8 MB GDS is
+    evidence a reviewer can open; refusing it by extension in order to avoid
+    a 105 MB one is the wrong instrument."""
     d = _make_conformant(tmp_path)
     (d / "phase3" / "stage4" / "gds" / "top.gds").write_bytes(b"RAWGDS")
     r = _run([str(d)])
+    assert r.returncode == 0, r.stdout
+    assert "NO_RAW_GEOMETRY" not in r.stdout or "[PASS]" in r.stdout
+
+
+def test_a_committed_gds_over_the_ceiling_still_fails(tmp_path):
+    """The paired half. Above the ceiling the file cannot be committed at
+    all, and the message has to say what to do instead."""
+    d = _make_conformant(tmp_path)
+    _sparse(d / "phase3" / "stage4" / "gds" / "big.gds", 51 * 1000 * 1000)
+    r = _run([str(d)])
     assert r.returncode == 1
     assert "NO_RAW_GEOMETRY" in r.stdout
+    assert "git-lfs" in r.stdout and "GDS_MANIFEST" in r.stdout
 
 
-def test_committed_raw_def_and_spef_fail(tmp_path):
+def test_committed_def_and_spef_under_the_ceiling_are_accepted(tmp_path):
+    """`.spef`/`.oas` were never gitignored at all, so the three reference
+    cells' .spef files needed no force-add — only this rule objected."""
     d = _make_conformant(tmp_path)
     (d / "phase2" / "stage1" / "rtl" / "x.def").write_text("DESIGN\n")
     (d / "reports" / "phase3" / "y.spef").write_text("*SPEF\n")
+    r = _run([str(d)])
+    assert r.returncode == 0, r.stdout
+
+
+def test_an_oversized_spef_fails_like_an_oversized_gds(tmp_path):
+    """The rule is about size, not about which of the four extensions it is."""
+    d = _make_conformant(tmp_path)
+    _sparse(d / "reports" / "phase3" / "huge.spef", 51 * 1000 * 1000)
     r = _run([str(d)])
     assert r.returncode == 1
     assert "NO_RAW_GEOMETRY" in r.stdout

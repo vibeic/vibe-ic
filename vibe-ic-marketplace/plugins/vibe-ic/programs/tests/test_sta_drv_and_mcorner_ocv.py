@@ -27,7 +27,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from conftest import func_src
+from _source_pin import func_src
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -160,13 +160,21 @@ def test_emit_mcorner_ocv_sta_source_carries_full_rigor():
     assert "_flat_ocv_derate_tcl" in win        # two-command derate helper
     assert "OCV_DERATE_APPLIED" in win
     assert "_report_check_types_tcl" in win     # guarded + marked check types
-    assert "slew capacitance" in win            # -fields {slew capacitance}
+    # ORGANIC #540 — the worst-PATH dump moved into its own shared helper (it
+    # had to: the flag needed translating, and the same one-token bug was at
+    # both corner emitters). The emitter must CALL it; the `-fields {slew
+    # capacitance}` this test used to look for here now lives in the helper,
+    # asserted below against the helper's real OUTPUT.
+    assert "_report_worst_paths_tcl" in win
     assert "SETUP" in win and "HOLD" in win      # setup@ss, hold@ff split
     assert "process=" in win                    # process-corner labelling
     # the shared check-types helper carries the command + authoritative marker.
     helper = func_src(src, "_report_check_types_tcl")
     assert "report_check_types -recovery -removal -max_slew" in helper
     assert "min_pulse_width" in helper
+    # the worst-path helper still asks for the slews, so a slew explosion stays
+    # visible on the path that carries it.
+    assert "slew capacitance" in R._report_worst_paths_tcl("/x/out.rpt", "-max")
 
 
 def test_emit_mcorner_ocv_sta_skips_without_netlist(tmp_path):
@@ -290,8 +298,21 @@ _x/A                                    1.50    0.90    0.60 (MET)
                                      Required  Actual
 Pin                                    Width   Width   Slack
 _clk (high)                             1.30    9.85    8.55 (MET)
+SIGNOFF_WORST_PATHS_REPORTED path_delay=max group_path_count=3
 SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width max_capacitance
 """
+
+# ORGANIC #540 — why the fixture above gained a line. It was captured from a
+# REAL OpenSTA 3.1.0 sign-off report, and it carries no startpoint, no endpoint
+# and no arrival breakdown, because the emitter's `report_checks` was erroring
+# into a silent `catch` on every invocation. Nobody noticed: the test that owns
+# this fixture was checking the DRV marker, which did appear. The fixture was a
+# faithful record of a BROKEN report asserted to PASS the sign-off rigor gate —
+# which is exactly the blindness #540 reports. The line added above is the one
+# the FIXED emitter now writes. The unfixed shape is kept below, and is now
+# required to FAIL.
+_OPENSTA_310_NO_WORST_PATH = _OPENSTA_310_WITH_MARKER.replace(
+    "SIGNOFF_WORST_PATHS_REPORTED path_delay=max group_path_count=3\n", "")
 
 _OPENSTA_310_NO_MARKER = """\
 OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV
@@ -323,6 +344,75 @@ def test_rigor_gate_passes_on_opensta310_output_via_marker():
     assert res["verdict"] == "PASS", res
     assert res["recovery_checked"] and res["removal_checked"]
     assert res["min_pulse_width_checked"]
+
+
+def test_rigor_gate_fails_a_report_whose_slack_has_no_path_behind_it():
+    """ORGANIC #540 — a sign-off report that records a slack with NO worst-path
+    evidence must FAIL, and the finding must name that as the gap.
+
+    This is the exact corpus shape: full derate, full check-types marker, a
+    `worst slack` number — and nothing saying what produced it, because
+    `report_checks` errored inside a `catch`. The gate used to PASS it, so the
+    defect was invisible to the one gate positioned to see it."""
+    res = G.evaluate(_OPENSTA_310_NO_WORST_PATH)
+    assert res["verdict"] == "FAIL", res
+    assert res["worst_path_evidence"] is False, res
+    assert res["worst_path_evidence_source"] is None, res
+    assert any("worst-path evidence" in m for m in res["missing"]), res
+    # the dimensions that already worked must be unaffected — this FAILs for
+    # the path gap ALONE, not by collateral damage to the check-type detection.
+    assert res["ocv_derate_applied"] and res["recovery_checked"]
+    assert res["removal_checked"] and res["min_pulse_width_checked"]
+    assert len(res["missing"]) == 1, res
+
+
+def test_rigor_gate_reads_a_failed_path_query_as_negative_evidence():
+    """A report whose path query FAILED and SAID so must FAIL — and the reason
+    the tool gave must survive into the finding.
+
+    §4.05: the loud failure marker exists so the report states why it has no
+    path. A gate that treated the marker's mere presence as "the emitter did
+    its job" would convert an explicit error into a pass."""
+    body = _OPENSTA_310_NO_WORST_PATH + (
+        "SIGNOFF_WORST_PATHS_FAILED path_delay=max reason=Error 514: "
+        "t.tcl line 1, '-max' is not a known keyword or flag.\n")
+    res = G.evaluate(body)
+    assert res["verdict"] == "FAIL", res
+    assert res["worst_path_evidence"] is False, res
+    assert res["worst_path_query_failures"], res
+    assert "Error 514" in res["worst_path_query_failures"][0], res
+    assert any("FAILED" in m for m in res["missing"]), res
+
+
+def test_a_failed_pass_outranks_a_sibling_pass_that_succeeded():
+    """A two-pass report (setup + hold) where ONE pass lost its path is NOT
+    evidenced. The surviving pass cannot account for the other's slack, and a
+    gate that let a good setup section cover a dead hold section would restore
+    exactly the partial-evidence hole #540 is about."""
+    body = (_OPENSTA_310_WITH_MARKER
+            + "=== HOLD corner ===\nworst slack min 0.20\n"
+              "SIGNOFF_WORST_PATHS_FAILED path_delay=min reason=Error 514: "
+              "'-min' is not a known keyword or flag.\n")
+    res = G.evaluate(body)
+    assert res["worst_path_evidence"] is False, res
+    assert res["verdict"] == "FAIL", res
+    assert "path_delay=min" in res["worst_path_query_failures"][0], res
+
+
+def test_a_real_path_dump_counts_without_any_marker():
+    """A report from a pre-marker emitter (or another tool) still counts when it
+    carries a genuine path dump.
+
+    `_emit_spef_sta` calls a bare `report_checks` with no flag — it never had
+    the bug and never carries the marker, and it must not be failed for that."""
+    body = _OPENSTA_310_NO_WORST_PATH + (
+        "Startpoint: reg_a (rising edge-triggered flip-flop clocked by clk)\n"
+        "Endpoint: reg_b (rising edge-triggered flip-flop clocked by clk)\n"
+        "                           1.42   data arrival time\n")
+    res = G.evaluate(body)
+    assert res["worst_path_evidence"] is True, res
+    assert res["worst_path_evidence_source"] == "path-dump", res
+    assert res["verdict"] == "PASS", res
 
 
 def test_rigor_gate_fails_opensta310_without_marker_no_false_pass():

@@ -16,7 +16,7 @@ or had its direction mismatched (e.g., `id_bus_tx_en` declared `output`
 in L9 but `inout` in RTL because the agent chose to merge tristate).
 
 Mid-flow consequences:
-  - QSF/SDC generators (`aid_class_qsf_gen` / `aid_class_sdc_gen`) read
+  - QSF/SDC generators (`qsf_gen` / `sdc_gen`) read
     L9 and emit pin assignments for pins that don't exist in synth →
     Quartus warns, agent ignores, hardware silently floats.
   - Reverse case: an RTL port not in L9 means no pin assignment → the
@@ -1124,6 +1124,46 @@ def _resolve_compile_defines(project: Path) -> set:
     return {define}
 
 
+def _rtl_power_pin_face(rtl_path: Path,
+                        top_name: Optional[str] = None) -> set:
+    """ORGANIC-20260722 #784 — return the set of port names declared inside the
+    RTL top module's ```ifdef USE_POWER_PINS`` arm (empty when the top has no
+    such arm, or on ANY parse/import error so the gate degrades to its
+    historical exact-name diff).
+
+    Reuses the SAME comment-mask / port-block / power-gate helpers the
+    auto-emitted chip_top wrapper uses (`design_one_shot_runner._chip_top_*`),
+    so the emitter and this gate can never disagree about which pins are the
+    power face. chip-AGNOSTIC: keyed on the universal ``USE_POWER_PINS`` macro
+    name only."""
+    try:
+        import design_one_shot_runner as _d
+        text = _d._chip_top_mask_comments(
+            rtl_path.read_text(errors="ignore"))
+        anchor = None
+        if isinstance(top_name, str) and top_name.strip():
+            anchor = re.search(
+                r"\bmodule\s+%s\s*[(#]" % re.escape(top_name.strip()), text)
+        if anchor is None:
+            anchor = re.search(r"\bmodule\s+\w+\s*[(#]", text)
+        if anchor is None:
+            return set()
+        _params, port_block = _d._chip_top_extract_param_and_ports(
+            text, anchor.end() - 1)
+        if not port_block:
+            return set()
+        # `_chip_top_power_pin_gated_names` yields every IDENTIFIER inside the
+        # guarded arm — including the `inout`/`wire` declaration keywords, which
+        # is harmless where it is used as a membership filter over an
+        # already-extracted name list, but would put non-ports into a set we
+        # SUBTRACT from both sides here. Intersect with the block's real port
+        # names so the face is exactly "ports declared in the power arm".
+        return (_d._chip_top_power_pin_gated_names(port_block)
+                & _d._chip_top_port_names(port_block))
+    except Exception:  # pragma: no cover — defensive
+        return set()
+
+
 def parse_rtl_top_ports(rtl_path: Path,
                         top_name: Optional[str] = None,
                         defines: Optional[set] = None) -> list[dict]:
@@ -1218,6 +1258,61 @@ def waived(project: Path) -> tuple[bool, str]:
 
 
 # ─── main ─────────────────────────────────────────────────────────
+def _exclusion_advisories(only_l9_optional, reused_prefix_matched,
+                          reused_tied_off, reused_config_gated,
+                          reused_ip_passthrough, l3_alias_reconciled):
+    """The WARN lines that explain which pins were EXCLUDED from the mismatch
+    set, and on what grounds.
+
+    #345 salvage 1. These were emitted inline under `if not findings:` — the
+    PASS path only. Every one of them is a statement about what was taken OUT
+    of the comparison, so on a FAIL the reader saw N findings with no record
+    of the exclusions that shaped them. If an exclusion rule is wrong the
+    finding list is wrong, and the evidence was being suppressed precisely
+    then. Built once here so all three verdict paths print the same set.
+    """
+    out = []
+    if only_l9_optional:
+        # v0.3.4 — #491 R4: doc-optional pins the RTL top legitimately omits.
+        out.append(f"  WARN (advisory) — L9 doc-OPTIONAL pin(s) not in "
+                   f"RTL top: {only_l9_optional}")
+    if reused_prefix_matched:
+        # ORGANIC #659: reused-IP struct-bus roots reconciled with their
+        # prefix-expanded scalar pads.
+        _pm = ", ".join(f"{root}\u2192{pads}"
+                        for root, pads in reused_prefix_matched)
+        out.append(f"  WARN (advisory) — reused-IP struct-bus flatten "
+                   f"reconciled (root \u2194 prefix-expanded pads): {_pm}")
+    if reused_tied_off:
+        # ORGANIC #659: SOURCE_MANIFEST-documented intentional tie-offs
+        # dropped from the L9-only diff.
+        out.append(f"  WARN (advisory) — reused-IP SOURCE_MANIFEST tie-off(s) "
+                   f"omitted from RTL top (intentional, internally driven): "
+                   f"{reused_tied_off}")
+    if reused_config_gated:
+        # ORGANIC #781: L9 pins the chosen reused-IP configuration
+        # parameterises away — doc described a fuller variant than was
+        # instantiated, not a dropped pin.
+        out.append(f"  WARN (advisory) — reused-IP CONFIG-GATED L9 pin(s) not "
+                   f"exposed by the instantiated IP variant "
+                   f"(doc-over-declaration, not a dropped pin): "
+                   f"{reused_config_gated}")
+    if reused_ip_passthrough:
+        # ORGANIC #781: chip_top ports that ARE real declared ports of the
+        # instantiated reused-IP module (faithful passthrough) which the L9
+        # doc named differently / did not list.
+        out.append(f"  WARN (advisory) — reused-IP passthrough port(s) present "
+                   f"in chip_top and in the instantiated IP but not enumerated "
+                   f"in L9 (legitimate IP surface): {reused_ip_passthrough}")
+    if l3_alias_reconciled:
+        # ORGANIC #778: residual pin(s) reconciled against the L3 doc's own
+        # alias grammar — a documented duplicate spelling, not a dropped or
+        # invented pin.
+        out.append(f"  WARN (advisory) — L3 doc-declared pin alias(es) "
+                   f"reconciled (not a mismatch): {l3_alias_reconciled}")
+    return out
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print("Usage: l9_rtl_pin_consistency_check.py <project_dir>")
@@ -1295,6 +1390,31 @@ def main(argv: list[str]) -> int:
     # the strip and false-FAILs.
     l9_names = {n for n in l9_names if not _is_implicit_pin(n)}
     rtl_names = {n for n in rtl_names if not _is_implicit_pin(n)}
+
+    # ORGANIC-20260722 #784 — strip the RTL top's OWN `ifdef USE_POWER_PINS
+    # face from BOTH sides. #704 made the parser preprocessor-aware and blanks
+    # not-taken arms; USE_POWER_PINS is in NEITHER the SIMULATION nor the
+    # SYNTHESIS define-set, so a supply pin declared behind that guard vanished
+    # from `rtl_names` while L9 still declares it (every PDK datasheet lists the
+    # supplies) → a permanent false "L9 declares pins missing from RTL top:
+    # ['vccd1','vssd1']" on any design using the universal USE_POWER_PINS
+    # convention. Simply TAKING the arm is not the fix either: the hardened
+    # face legitimately carries supplies the functional pin table never lists
+    # (unused-domain rails), which would flip the false-missing into an equally
+    # false "RTL has ports not in L9".
+    #
+    # Supply pins are owned by the power-intent / PDN layer (L21), not by this
+    # gate — whose stated purpose is QSF/SDC pin ASSIGNMENT correctness, and a
+    # supply rail is never pin-assigned. The exemption is therefore SYMMETRIC
+    # and derived from the DUT's own source: only names literally declared
+    # inside that module's USE_POWER_PINS arm are exempt, so a dropped
+    # FUNCTIONAL pin can never hide behind it. A top with no USE_POWER_PINS arm
+    # yields an empty set → byte-identical behaviour. chip-AGNOSTIC: the
+    # USE_POWER_PINS macro name only; no chip/vendor/rail literal.
+    power_face = _rtl_power_pin_face(rtl_top, top_name)
+    if power_face:
+        l9_names = l9_names - power_face
+        rtl_names = rtl_names - power_face
 
     only_l9_all = sorted(l9_names - rtl_names)
     only_rtl_all = sorted(rtl_names - l9_names)
@@ -1462,57 +1582,24 @@ def main(argv: list[str]) -> int:
             print(f"  WARN — {len(_unknown)} L9 entr"
                   f"{'y' if len(_unknown) == 1 else 'ies'} skipped for "
                   f"unknown reason: {_unknown}")
-        if only_l9_optional:
-            # v0.3.4 — #491 R4 advisory (non-gating): doc-optional
-            # pins the RTL top legitimately omits.
-            print(
-                f"  WARN (advisory) — L9 doc-OPTIONAL pin(s) not in "
-                f"RTL top: {only_l9_optional}"
-            )
-        if reused_prefix_matched:
-            # ORGANIC #659 advisory (non-gating): reused-IP struct-bus
-            # roots reconciled with their prefix-expanded scalar pads.
-            _pm = ", ".join(
-                f"{root}→{pads}" for root, pads in reused_prefix_matched)
-            print(
-                f"  WARN (advisory) — reused-IP struct-bus flatten "
-                f"reconciled (root ↔ prefix-expanded pads): {_pm}"
-            )
-        if reused_tied_off:
-            # ORGANIC #659 advisory (non-gating): SOURCE_MANIFEST-
-            # documented intentional tie-offs dropped from the L9-only diff.
-            print(
-                f"  WARN (advisory) — reused-IP SOURCE_MANIFEST tie-off(s) "
-                f"omitted from RTL top (intentional, internally driven): "
-                f"{reused_tied_off}"
-            )
-        if reused_config_gated:
-            # ORGANIC #781 advisory (non-gating): L9 pins the chosen reused-IP
-            # configuration parameterises away (not ports of the instantiated
-            # IP module). Doc described a fuller variant than was instantiated.
-            print(
-                f"  WARN (advisory) — reused-IP CONFIG-GATED L9 pin(s) not "
-                f"exposed by the instantiated IP variant (doc-over-declaration"
-                f", not a dropped pin): {reused_config_gated}"
-            )
-        if reused_ip_passthrough:
-            # ORGANIC #781 advisory (non-gating): chip_top ports that ARE real
-            # declared ports of the instantiated reused-IP module (faithful
-            # passthrough) which the L9 doc named differently / did not list.
-            print(
-                f"  WARN (advisory) — reused-IP passthrough port(s) present "
-                f"in chip_top and in the instantiated IP but not enumerated "
-                f"in L9 (legitimate IP surface): {reused_ip_passthrough}"
-            )
-        if l3_alias_reconciled:
-            # ORGANIC #778 advisory (non-gating): residual pin(s) reconciled
-            # against the L3 doc's own `<a>` (or `<b>`) alias grammar — a
-            # documented duplicate spelling, not a dropped/invented pin.
-            print(
-                f"  WARN (advisory) — L3 doc-declared pin alias(es) "
-                f"reconciled (not a mismatch): {l3_alias_reconciled}"
-            )
+        for _a in _exclusion_advisories(
+                only_l9_optional, reused_prefix_matched, reused_tied_off,
+                reused_config_gated, reused_ip_passthrough,
+                l3_alias_reconciled):
+            print(_a)
         return 0
+
+    # #345 salvage 1. EVERY advisory above says WHY a pin was EXCLUDED from
+    # the mismatch set — config-gated, passthrough, tie-off, alias-reconciled.
+    # They used to print only under `if not findings:`, i.e. only on PASS. So
+    # on a FAIL a reader saw N findings and no record of what had been taken
+    # OUT of that comparison, which is the one moment the exclusions matter:
+    # if an exclusion rule is wrong, the finding list is wrong, and the
+    # evidence that would show it was suppressed exactly then. Printed on all
+    # three paths now.
+    _advisories = _exclusion_advisories(
+        only_l9_optional, reused_prefix_matched, reused_tied_off,
+        reused_config_gated, reused_ip_passthrough, l3_alias_reconciled)
 
     is_waived, rationale = waived(project)
     if is_waived:
@@ -1522,6 +1609,8 @@ def main(argv: list[str]) -> int:
         )
         for f in findings:
             print(f"  · {f}")
+        for _a in _advisories:
+            print(_a)
         return 0
 
     print(
@@ -1530,6 +1619,8 @@ def main(argv: list[str]) -> int:
     )
     for f in findings:
         print(f"  · {f}")
+    for _a in _advisories:
+        print(_a)
     return 1
 
 
