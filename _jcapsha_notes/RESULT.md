@@ -290,6 +290,28 @@ is in `evidence/` and the disagreement is the finding.
 
 ---
 
+## The one change to shipped plugin content, and its red
+
+This branch changes exactly one shipped file: it adds a `phase3.pad_ring` entry
+to the capture-routing table. Its red, shown by removing the entry and
+re-running the same emit:
+
+```
+WARNING: 4 Bucket-A record(s) had no routable `bucket_A_program`
+  - step='phase3.pad_ring' rule='upstream_input_set_pin'
+  - step='phase3.pad_ring' rule='upstream_arithmetic_pin'
+  - step='phase3.pad_ring' rule='unhonoured_knob_degrades_loudly'
+  - step='phase3.pad_ring' rule='component_vocabulary_admits_its_namespace'
+```
+
+Every Bucket-A sketch in this capture is skipped without it, and no
+Bucket-A file is written at all. The step needed its own entry because its
+producer and its gate are `pad_ring_gen` / `pad_ring_check`, so it must NOT
+inherit its floorplan neighbour's routing to the PnR runner. The four suites
+that read the table are green with the entry in place (above).
+
+---
+
 ## Reproduce
 
 On a clean tree (`git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`):
