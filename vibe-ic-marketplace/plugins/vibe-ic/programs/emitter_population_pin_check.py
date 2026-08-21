@@ -65,7 +65,7 @@ DENIAL as a member. So every increment site and every literal denominator is
 asked, through the ONE vocabulary in `_prose_polarity`, whether the statement it
 sits in denies it; what that refuses is PRINTED, never quietly dropped.
 
-`phrases` is not asked the same question, and the difference is structural, not
+`phrases_of` is not asked the same question, and the difference is structural, not
 an oversight: it reads `of <N> <tail>`, a statement of how big a set IS. A
 message that denies something else in the same breath ("no repair applied, 0 of 3
 repairs refused") still states that population correctly, and suppressing the pin
@@ -180,9 +180,13 @@ MIN_POPULATION = 2
 _RECORD_BREAKS = ("\n",)
 
 
-def _emitted_strings(text: str) -> List[Tuple[int, int, str]]:
-    """``[(lineno, col, value)]`` for every string in `text` that is EMITTED,
-    in source order.
+def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
+    """The `ast.Constant` behind every emitted string.
+
+    THE ONE PLACE that decides what counts as emitted. `emitted_script_of` wants
+    the text, `pins_of` wants the node so it can ask what the surrounding code
+    does with it, and a second copy of this rule is how the two would come to
+    disagree about which strings are prose about the code.
 
     PROSE ABOUT THE CODE IS NOT THE SCRIPT, AND THIS IS WHERE THAT IS DECIDED.
     A string that is an expression STATEMENT is never emitted: it is the module,
@@ -192,27 +196,8 @@ def _emitted_strings(text: str) -> List[Tuple[int, int, str]]:
     neither is a statement of the population the emitted script carries.
 
     An f-string docstring's PARTS are skipped with it. `ast.walk` reaches each
-    inner `Constant` on its own, so skipping the `JoinedStr` node alone would let
-    the same prose back in through the other door.
-
-    Source order, not `ast.walk` order, because the caller joins these into one
-    text and a script read out of order is not the script.
-    """
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return []
-    return sorted((n.lineno, n.col_offset, n.value)
-                  for n in _emitted_nodes(tree))
-
-
-def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
-    """The `ast.Constant` behind every emitted string.
-
-    THE ONE PLACE that decides what counts as emitted -- `_emitted_strings`
-    wants the text, `pins` wants the node so it can ask what the surrounding
-    code does with it, and a second copy of this rule is how the two would come
-    to disagree about which strings are prose about the code.
+    inner `Constant` on its own, so skipping the `JoinedStr` node alone would
+    let the same prose back in through the other door.
     """
     skip: Set[int] = set()
     for n in ast.walk(tree):
@@ -220,7 +205,7 @@ def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
                                                   (ast.Constant, ast.JoinedStr)):
             for part in ast.walk(n.value):
                 skip.add(id(part))
-    #: UNORDERED. Only `emitted_script` needs source order -- a script read out
+    #: UNORDERED. Only `emitted_script_of` needs source order -- a script read out
     #: of order is not the script -- and it sorts for itself. `phrases_of` and
     #: `pins_of` key by tail and by node, so sorting for them was a sort per
     #: file across every test in the tree, paid to answer a question neither
@@ -231,13 +216,8 @@ def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
 
 
 def emitted_script_of(tree: ast.AST) -> str:
-    """`emitted_script`, for a caller that has already parsed."""
-    return "\n".join(v for _, _, v in sorted(
-        (n.lineno, n.col_offset, n.value) for n in _emitted_nodes(tree)))
-
-
-def emitted_script(text: str) -> str:
-    """The emitted strings of `text` as ONE flat text, one record per line.
+    """The emitted strings of a parsed module as ONE flat text, one record
+    per line.
 
     STILL FLAT, for the reason `counters` always gave: the emitted script is
     assembled from many adjacent string literals, and a block-aware reader would
@@ -252,28 +232,16 @@ def emitted_script(text: str) -> str:
     were already separated by a quote, a newline and the next line's indentation,
     so no pattern here could span the seam then either.
     """
-    try:
-        return emitted_script_of(ast.parse(text))
-    except SyntaxError:
-        return ""
+
+    return "\n".join(v for _, _, v in sorted(
+        (n.lineno, n.col_offset, n.value) for n in _emitted_nodes(tree)))
 
 
 def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
-    """`phrases`, for a caller that has already parsed. One parse per file is
-    most of this guard's runtime, so asking two questions must not cost two."""
-    out: Dict[str, Set[Tuple[str, int]]] = {}
-    for node in _emitted_nodes(tree):
-        for m in PHRASE.finditer(node.value):
-            out.setdefault(m.group(2).strip(), set()).add(
-                (m.group(1), node.lineno))
-    return out
-
-
-def phrases(text: str) -> Dict[str, Set[Tuple[str, int]]]:
     """``{tail: {(value, lineno)}}`` -- every population phrase the emitter CAN
     print.
 
-    NOT ASKED FOR POLARITY, and the asymmetry with `pins` below is measured, not
+    NOT ASKED FOR POLARITY, and the asymmetry with `pins_of` below is measured, not
     stylistic. This set is the answer to "what values does this emitter state?",
     and a value missing from it makes a CORRECT pin look stale. An emitter that
     prints `puts "no repair applied; 0 of 3 repairs refused"` does state
@@ -332,10 +300,12 @@ def phrases(text: str) -> Dict[str, Set[Tuple[str, int]]]:
     third answer -- "reads prose, and correctly does not honour a denial" -- not
     a stretched entry in either.
     """
+
     out: Dict[str, Set[Tuple[str, int]]] = {}
-    for lineno, _, value in _emitted_strings(text):
-        for m in PHRASE.finditer(value):
-            out.setdefault(m.group(2).strip(), set()).add((m.group(1), lineno))
+    for node in _emitted_nodes(tree):
+        for m in PHRASE.finditer(node.value):
+            out.setdefault(m.group(2).strip(), set()).add(
+                (m.group(1), node.lineno))
     return out
 
 
@@ -461,7 +431,7 @@ def counters(text: str) -> Tuple[List[Tuple[str, int, List[Tuple[str, int]]]],
     """``([(name, increment_sites, [(kind, D)])], [(what, matched, denial)])``.
 
     THE SUBJECT IS THE EMITTED SCRIPT, not the file that prints it -- see
-    `emitted_script`. Read flat, for the reason this function always gave.
+    `emitted_script_of`. Read flat, for the reason this function always gave.
 
     POLARITY (vibe-ic#712). The script is read for two claims -- a MEMBERSHIP
     (`incr X`) and a THRESHOLD (`$X >= D`) -- and a script states both in English

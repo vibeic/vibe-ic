@@ -269,7 +269,7 @@ def test_a_retired_denominator_in_the_script_is_not_read_as_live(tmp_path):
 
 def test_prose_about_the_code_is_not_the_emitted_script(tmp_path):
     """The subject half. A docstring and a `#` comment are prose ABOUT the code;
-    the script contains neither. `phrases` already excluded docstrings on this
+    the script contains neither. `phrases_of` already excluded docstrings on this
     exact argument and `counters` did not, so one file answered one question two
     ways."""
     progs, tests = _tree(tmp_path, EMITTER_PROSE_ABOUT_CODE, PIN_2)
@@ -293,7 +293,7 @@ def test_a_denial_is_bounded_by_the_line_it_is_written_on(tmp_path):
     on the return code alone would not see that, so the reach is asserted.
 
     The fixture is ONE triple-quoted block on purpose. Separate adjacent string
-    literals are joined by `emitted_script` into a blank line, which is already
+    literals are joined by `emitted_script_of` into a blank line, which is already
     a `SENTENCE_BREAK`; only inside a multi-line literal is the declared record
     break the thing doing the work."""
     progs, tests = _tree(tmp_path, EMITTER_MULTILINE_BLOCK, PIN_2)
@@ -412,7 +412,7 @@ def test_the_emitter_side_is_NOT_asked_the_same_question(tmp_path):
     """THE ASYMMETRY, PINNED, because it is the one thing about this fix that a
     later reader would most reasonably try to "tidy up" into symmetry.
 
-    `phrases` answers "what values does this emitter state?" and a value missing
+    `phrases_of` answers "what values does this emitter state?" and a value missing
     from that set makes a CORRECT pin look stale. This emitter prints
     `no repair applied, 0 of 3 repairs refused` -- it DOES state
     `of 3 repairs refused`. Ask it for polarity and the tail leaves the emitted
@@ -433,13 +433,13 @@ def test_the_emitter_side_is_NOT_asked_the_same_question(tmp_path):
 
 
 def test_the_gate_clears_phrases_on_SPELLING_not_on_the_argument():
-    """`phrases`' docstring claims the polarity gate clears it for a MECHANICAL
+    """`phrases_of`' docstring claims the polarity gate clears it for a MECHANICAL
     reason rather than for the argument written above that claim. A claim a
     reader has to take on faith is the shape vibe-ic#712 exists to remove, so it
     is checked here.
 
     IF THIS GOES RED because the gate's predicate was widened, the fix is to
-    update that paragraph in `phrases` -- the clearance has stopped being
+    update that paragraph in `phrases_of` -- the clearance has stopped being
     mechanical and the function now needs adjudicating on its merits. Do NOT
     relax this test; its whole job is to make that moment visible."""
     import ast
@@ -448,9 +448,9 @@ def test_the_gate_clears_phrases_on_SPELLING_not_on_the_argument():
     import prose_polarity_consulted_check as G
 
     fn = {n.name: n for n in ast.walk(ast.parse(PROG.read_text(encoding="utf-8")))
-          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}["phrases"]
+          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}["phrases_of"]
 
-    assert G._searches_prose(fn), "phrases no longer reads prose at all"
+    assert G._searches_prose(fn), "phrases_of no longer reads prose at all"
     assert G._match_derived_names(fn) == set(), (
         "`m` now enters `derived` -- the for-target gap named in the docstring "
         "has been closed")
@@ -478,7 +478,7 @@ def test_the_gate_clears_phrases_on_SPELLING_not_on_the_argument():
 
 
 #: Five ways a real emitter spells the same honest script -- three `incr` sites
-#: and a denominator of 3. `emitted_script` reads string LITERALS where the
+#: and a denominator of 3. `emitted_script_of` reads string LITERALS where the
 #: pre-polarity revision read the raw file, so each of these is a way the
 #: narrowing could have lost a site.
 _SPELLINGS = {
@@ -522,7 +522,7 @@ _SPELLINGS = {
 
 
 def test_the_narrowing_loses_no_site_in_any_emitter_spelling():
-    """`emitted_script`'s docstring claims "nothing that was matchable stops
+    """`emitted_script_of`'s docstring claims "nothing that was matchable stops
     being matchable" when the subject moved from the raw file to the string
     literals. That is a claim about a corpus this tree barely exercises -- it
     holds exactly ONE counter -- so it is measured against constructed spellings
@@ -768,7 +768,7 @@ def extract(text, rec):
 
 
 def test_the_polarity_baseline_refuses_to_grow(tmp_path):
-    """`phrases`' docstring cites this to explain why the polarity gate cannot
+    """`phrases_of`' docstring cites this to explain why the polarity gate cannot
     simply be sharpened: a wider predicate makes pre-existing extractors visible
     all at once, and the debt register MAY ONLY SHRINK, so it cannot take them.
 
