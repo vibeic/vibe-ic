@@ -253,59 +253,67 @@ the path twice — which the first version of this fix did.
 > owner's for the same reason, but it is a different change with a different
 > justification, and picking the rc would have treated the symptom.
 
-## RETRACTED: THE rc TABLE I PUBLISHED HERE WAS NOT EVIDENCE
+## WITHDRAWN TWICE, AND THE THIRD MEASUREMENT INVERTS THE FINDING
 
-I originally printed a table of exit codes and said the three gates "do not
-agree about what an absent corpus means". **That table is withdrawn.** It
-compared different things, and I built it wrongly twice before noticing.
+I published two things here that were artefacts of how I drove the instrument,
+and the correction is worth more than either.
 
-`_corpus_location` defines FOUR outcomes, and which one you get depends on the
-ORIGIN of the path as well as on what is there:
+**First** I printed a table of exit codes and said the three
+`--corpus-may-be-absent` gates "disagree about what an absent corpus means".
+That table compared different outcomes of `_corpus_location`'s four-way contract
+(env-set-and-unreadable is rc 2; nothing-anywhere-with-opt-in is rc 0), because I
+drove the siblings with `--corpus <empty dir>` and the third with no pointer at
+all. Rebuilt to be even-handed it inverted. **Withdrawn.**
 
-    env set + unreadable                    -> UNDETERMINED (rc 2), never excused
-    env set + present but not a git checkout-> UNDETERMINED (rc 2)
-    nothing anywhere + call site opted in   -> NO_CORPUS   (rc 0)
-    nothing anywhere + nobody opted in      -> UNDETERMINED (rc 2)
-
-My first table compared the siblings driven by `--corpus <empty dir>` against
-`benchmark_evidence_index` driven with no pointer at all — a different outcome
-of that contract, not a different opinion about the same one. Rebuilding it to
-be even-handed inverted the result (siblings rc 0, the index rc 2), because I
-had then given the index an env pointer at a missing path, which is the first
-outcome above. **Both tables were artefacts of how I drove the gates.** rc 0 for
-"nothing anywhere and the call site opted in" is the contract, and every gate
-here obeys it.
-
-## WHAT SURVIVES, MEASURED WITH ONE VARIABLE
-
-Same host, same tree, environment UNSET, no arguments — the only comparison in
-which the three are asked the same question the same way:
+**Then** I said the surviving finding was that `benchmark_evidence_index` never
+adopted the shared seam, and that the fix was one import. Measured with one
+variable — env unset, no arguments — the three did differ:
 
     l_doc_field_producer_check         -> /home/reyerchu/benchmark-data/ic
     evidence_citation_resolves_check   -> /home/reyerchu/benchmark-data/ic
     benchmark_evidence_index           -> NO_CORPUS
 
-Two gates read a corpus that is sitting right there; the third says there is
-none. That is a disagreement about WHERE the corpus is, and it is not an
-artefact of how I drove them.
+**That was still my host.** Run from a checkout with no `benchmark-data` above
+it, ALL THREE report NO_CORPUS:
 
-The cause is in `_corpus_location`'s own opening paragraph, which names the
-culprit:
+    checkout under /home/reyerchu (…/benchmark-data is a sibling)   l_doc rc 1  evidence rc 1  index rc 0
+    checkout under /tmp/… (nothing above it)                        l_doc rc 0  evidence rc 0  index rc 0
 
-> `tracked_symlink_portability_check`, `tracked_symlink_target_present_check`
-> and **`benchmark_evidence_index`** (v1.10.60) each re-derived the same
-> resolution by hand. This module is that resolution written ONCE, for the same
-> reason `_published_tree` exists: three programs asked the same question on the
-> same day and three programs got it wrong the same way.
+The difference was never a disagreement about the seam. `_corpus_location.resolve`
+does not walk parents at all. The CALLERS do:
 
-The seam was written **for** this gate, and this gate never adopted it: it still
-carries its own `CORPUS_ENV` and `IC_SUBDIR = "benchmark-data/ic"`, so it only
-ever looks INSIDE the repo — the assumption `c5d7f2d00` invalidated when the
-cells moved out.
+    named = next((b / "benchmark-data/ic" for b in here.parents
+                  if (b / "benchmark-data/ic").is_dir()), …)
 
-**The fix is one import, not an exit code.** Routed through the seam it finds
-the corpus and returns its real verdict, which is FAIL — the bound measurement
-above already shows what that verdict is.
+`here` is the PROGRAM file, so that walk climbs out of the repository and into
+`$HOME`. Eight programs do it, including both siblings.
+`benchmark_evidence_index` is anchored on `repo_root / IC_SUBDIR` and does not —
+which makes it the **host-independent** one of the three, and my proposed "fix"
+would have spread the defect rather than cured it. It is not made.
+
+## AND THIS CORRECTS TWO OF MY OWN EIGHT ROWS
+
+`L-doc field producer` and `evidence citation resolves` are **rc 1 FAIL** on a
+checkout that has a corpus above it and **rc 0 PASS** on one that does not. Both
+measured, same commit, same tree.
+
+So their red is **host-determined, not commit-determined**, and `c5d7f2d00` is
+where that happened: before it the corpus was INSIDE the repo, so these gates
+were a function of the commit; moving it out made them a function of the commit
+AND of what sits above the checkout. Nothing noticed — including me, when I gave
+them rows with a bisected `since` as though the repo had gone red.
+
+The bisection was not wrong; it was measured in worktrees that all sat under
+`/home/reyerchu`, so it correctly dates the red **for a host that can reach a
+corpus**. What it does not do is what the other six rows do, which is date a
+property of this repository's history.
+
+Both rows are therefore annotated rather than deleted: they state a CONDITION,
+not a deadline, and they must not be read as blocking a corpus-less landing host.
+That is the same standard that denied `published-evidence index honest` a row —
+if a gate's truth depends on an external repository's state, a clock counting
+commits here cannot describe it. Applying that standard to a finding of my own
+that had already shipped is the only way it means anything.
 
 **Not changed here, deliberately.** Returning rc 2 would make it NOT_CHECKED on
 every unbound host, and it is dispatched with a plain blocking `run`, under which
