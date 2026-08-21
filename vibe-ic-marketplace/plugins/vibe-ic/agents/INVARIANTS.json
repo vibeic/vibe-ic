@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "package": "vibe-ic-marketplace/plugins/vibe-ic/agents",
+  "role": "Agent definitions. The agents themselves are the markdown files at this package's root; the subdirectories (class_kb, defaults, ic_expert_db, lessons, qbank) hold knowledge the agents read, not agent definitions.",
+  "invariants": [
+    {
+      "id": "agents.agent-declares-name-and-description",
+      "statement": "Every agent definition at this package's root opens with a YAML frontmatter fence and declares both name and description.",
+      "why": "An agent is routed to by its description and addressed by its name. Missing either makes the agent unroutable while still appearing to exist, which is the hardest kind of registration bug to see.",
+      "rule": {
+        "kind": "require_regex",
+        "include": [
+          "*.md"
+        ],
+        "regex": "\\A---\\n(?=(?:.*\\n)*?name:)(?=(?:.*\\n)*?description:)"
+      },
+      "counterexample": [
+        {
+          "path": "shadow-agent.md",
+          "proves": "a missing description is caught",
+          "content": "---\nname: shadow-agent\n---\n\nYou are an agent.\n"
+        },
+        {
+          "path": "shadow-agent.md",
+          "proves": "a missing name is caught",
+          "content": "---\ndescription: does things\n---\n\nYou are an agent.\n"
+        },
+        {
+          "path": "shadow-agent.md",
+          "proves": "a missing frontmatter fence is caught",
+          "content": "name: shadow-agent\ndescription: does things\n"
+        }
+      ]
+    },
+    {
+      "id": "agents.no-absolute-host-path",
+      "statement": "No agent definition at this package's root may contain an absolute /home/<user> path; the placeholder form /home/<your-user> is the way to show one.",
+      "why": "An agent definition is a standing instruction. A host-specific path in it is an instruction the agent will follow on a machine where that path is somebody else's, or nobody's.",
+      "rule": {
+        "kind": "forbid_regex",
+        "include": [
+          "*.md"
+        ],
+        "regex": "/home/(?!<)"
+      },
+      "counterexample": {
+        "path": "field-agent.md",
+        "content": "---\nname: field-agent\ndescription: audit\n---\n\nRun in /home/someuser/vibe-ic.\n"
+      }
+    }
+  ]
+}

@@ -3,11 +3,12 @@
 
 WHY THIS EXISTS
 ===============
-`_STRUCTURAL_RTL_GATES` registers 243 checkers. 33 of them reject the argv the
-umbrella builds — argparse exits 2 before the check runs — so they return no
-verdict at all. `_gate_invocation` records that faithfully as `NOT_INVOCABLE`,
-and its docstring is emphatic that this is a VERDICT and not a marker, because
-folding it into `SKIP` is what made 39 registered gates read as benign in #492.
+`_STRUCTURAL_RTL_GATES` registers 246 checkers. 36 of them reject the argv the
+umbrella builds — argument parsing exits 2 before the check runs — so they
+return no verdict at all. `_gate_invocation` records that faithfully as
+`NOT_INVOCABLE`, and its docstring is emphatic that this is a VERDICT and not a
+marker, because folding it into `SKIP` is what made 39 registered gates read as
+benign in #492.
 
 Then `_p0_buckets_from_records` folds it into `SKIP` anyway:
 
@@ -16,12 +17,12 @@ Then `_p0_buckets_from_records` folds it into `SKIP` anyway:
 
 and `_run_structural_rtl_gates` returns `(len(fails) == 0)` as the umbrella's
 pass flag. So the separation exists in the reporting and is lost in the verdict:
-a project where 33 registered checkers produced nothing still gets
-`status = "PASS"` from P0 (vibe-ic#559).
+a project where 36 registered checkers produced nothing still gets
+`status = "PASS"` from P0 (vibe-ic#559). P0's true coverage is 210 of 246.
 
 THIS PROGRAM DOES NOT FIX THAT. Making `NOT_INVOCABLE` fail today would turn P0
 red everywhere and a gate that blocks every landing gets deleted, not fixed. It
-stops the number GROWING while the 33 are triaged, which is the part that can be
+stops the number GROWING while the 36 are triaged, which is the part that can be
 done without a judgement call about any individual gate.
 
 WHY A SUBSET AND NOT A COUNT
@@ -35,9 +36,9 @@ The predicate is `measured ⊆ recorded`, deliberately:
   describing anything.
 
 Subset gives the useful asymmetry. Fixing a gate leaves the set a subset and
-passes. Registering a 34th un-invocable gate does not, and fails.
+passes. Registering a 37th un-invocable gate does not, and fails.
 
-REMOVAL CONDITION, stated so it is observable rather than intended: as the 33 are
+REMOVAL CONDITION, stated so it is observable rather than intended: as the 36 are
 triaged — classified into `_ZERO_DENOMINATOR_CLASSIFICATION` with a re-derived
 #492 measurement, wired, or de-registered — `KNOWN_NOT_INVOCABLE` shrinks. When it
 reaches zero this file is `git rm`-ed and `NOT_INVOCABLE` is made to enter the
@@ -46,13 +47,41 @@ put the next one without thinking.
 
 THE DISCRIMINATOR, and why the obvious one is wrong
 ===================================================
-"argparse rejected the argv" is `rc == 2` AND `usage:` on stderr.
+"the umbrella's argv was rejected" is NOT `rc == 2` alone, measured: 181 of 243
+gates exit 2 against a throwaway project directory, because most of them use
+exit 2 for their own "input not found". Filtering on the error WORDING is also
+wrong — it only finds the phrasings you thought of.
 
-`rc == 2` alone is not it, measured: 181 of 243 gates exit 2 against a throwaway
-project directory, because most of them use exit 2 for their own "input not
-found". Only argparse prints its `usage:` line on rejection; a gate's hand-written
-error never does. Filtering on the error WORDING is also wrong — it only finds
-the phrasings you thought of.
+THIS FILE USED TO RE-TYPE THE PREDICATE, AND THE RE-TYPED ONE WAS NARROWER.
+Until vibe-ic#559 (round 7) the line here read
+
+    return r.returncode == 2 and "usage:" in (r.stderr or "")
+
+which is `_gate_invocation`'s RULE A and only Rule A. The umbrella itself has
+always used `_gate_invocation.classify_not_invocable`, which is Rule A **plus**
+RULE B: a gate that hand-rolls its own required-argument check prints an
+``error:`` line NAMING a long option the caller never supplied, and argparse
+never runs, so no `usage:` block is ever printed. `_gate_invocation`'s own
+docstring names the four gates that only Rule B catches.
+
+Measured at v1.9.74 over the 246 registered gates, both arms driven from
+`_structural_gate_argv` against the same empty probe directory:
+
+    the umbrella (Rule A + Rule B)   36 NOT_INVOCABLE
+    this file    (Rule A only)       32
+
+The gap was not four stale names — it was a whole RULE. The consequence is the
+one this ratchet exists to prevent: a NEW gate that hand-rolls its
+required-argument check goes permanently silent under P0 and this check still
+prints `[PASS] ... No new silent gate`. A ratchet blind to half the mechanism it
+ratchets is the "silence reads as benign" defect at one remove.
+
+The fix is the #492 fix applied to the predicate instead of to the argv: the
+argv already comes from the umbrella's own builder rather than a re-typed
+literal (`_structural_gate_argv`), and the classification now comes from the
+umbrella's own classifier rather than a re-typed literal
+(`_gate_invocation.classify_not_invocable`), called with the same
+``supplied_flags`` the umbrella passes. One predicate, one owner.
 
 Exit: 0 subset holds, 1 a new un-invocable gate appeared, 2 could not measure.
 """
@@ -66,7 +95,10 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gate_invocation                                        # noqa: E402
 
 RC_OK, RC_DRIFT, RC_CANNOT_MEASURE = 0, 1, 2
 
@@ -81,16 +113,18 @@ GATE_TIMEOUT_S = 25
 POSITIONAL_MARKER = "<positional/unrecognized>"
 
 #: Measured 33 on 2026-07-30 at v1.8.58; 32 after #559 converted
-#: `fpga_wrapper_input_polluter_check` (v1.8.82). The name is DELETED here
-#: rather than kept with a note: the predicate is `measured ⊆ recorded`, so
-#: a fixed gate left in the list would let a newly-silent one take its place
-#: without changing the total. Of these, exactly 8 carry a recorded
-#: decision in `_ZERO_DENOMINATOR_CLASSIFICATION`; four more are decided in the
-#: prose above `_STRUCTURAL_GATE_ARGV_ADAPTERS` (`testbench_exists_check` would
-#: redden the corpus 102/107) and are invisible to any program because that
-#: decision was written as a comment. The rest have no record of anyone having
-#: decided. This list does not endorse any of them — it pins the size of the
-#: problem so it cannot grow silently.
+#: `fpga_wrapper_input_polluter_check` (v1.8.82); **36 at v1.9.74**, once the
+#: discriminator stopped re-typing Rule A and started calling the umbrella's own
+#: classifier. The four that appear here for the first time —
+#: `fpga_async_input_synchronizer_check`, `mask_application_check`,
+#: `payload_bit_position_check`, `periodic_signal_required_check` — are not new
+#: silences. They have rejected the umbrella's argv since #492 measured them
+#: (they are the four `_gate_invocation`'s docstring names as Rule-B-only), and
+#: this file could not see any of them. A name is DELETED here rather than kept
+#: with a note: the predicate is `measured ⊆ recorded`, so a fixed gate left in
+#: the list would let a newly-silent one take its place without changing the
+#: total. This list does not endorse any of them — it pins the size of the
+#: problem so it cannot grow silently, and it was pinning the WRONG SIZE.
 KNOWN_NOT_INVOCABLE: Tuple[str, ...] = (
     "backlog_sanitize_check",
     "bit_count_modulo_check",
@@ -98,18 +132,22 @@ KNOWN_NOT_INVOCABLE: Tuple[str, ...] = (
     "crc_bitorder_check",
     "crc_seed_consistency_check",
     "cross_constant_invariant_check",
+    "fpga_async_input_synchronizer_check",
     "fpga_qsf_lint",
     "fresh_agent_provenance_check",
     "interface_encoding_audit",
     "json_schema_check",
     "l12_sequence_implementation_check",
     "l9_completeness_check",
+    "mask_application_check",
     "module_port_audit",
     "oe_pattern_check",
     "openroad_tcl_deprecation_check",
     "otp_write_lock_gate_check",
     "output_artifact_check",
     "packet_length_check_present",
+    "payload_bit_position_check",
+    "periodic_signal_required_check",
     "phase1_gate_contract_check",
     "practical_notes_specificity_check",
     "pre_awake_silence_check",
@@ -127,17 +165,43 @@ KNOWN_NOT_INVOCABLE: Tuple[str, ...] = (
 )
 
 
-def _rejects_the_umbrella_argv(argv: List[str]) -> bool:
-    """True when argparse refused this argv, as opposed to the gate refusing its
-    input. See the module docstring for why both halves are load-bearing."""
+def _why_rejected(argv: List[str]) -> Optional[str]:
+    """The umbrella's OWN reason string for this argv, or ``None``.
+
+    Delegates to `_gate_invocation.classify_not_invocable` — the same function
+    `flow_compliance_check._eval_gate_worker` calls, with the same
+    ``supplied_flags`` derived from the same argv. Re-typing the predicate here
+    is what made this ratchet blind to Rule B (see the module docstring): the
+    umbrella recorded 36 NOT_INVOCABLE while this file measured 32, and the four
+    it could not see were not a stale list but a whole rule.
+    """
     try:
         r = subprocess.run(argv, capture_output=True, text=True,
                            timeout=GATE_TIMEOUT_S)
     except subprocess.TimeoutExpired:
-        return False          # got past parsing into real work
+        return None           # got past parsing into real work
     except (OSError, subprocess.SubprocessError):
-        return False          # a launch failure is not a parse verdict
-    return r.returncode == 2 and "usage:" in (r.stderr or "")
+        return None           # a launch failure is not a parse verdict
+    if r.returncode != 2:
+        # `classify_not_invocable` is documented as valid for rc 2 ONLY — the
+        # two meanings of rc 2 are the whole thing it separates. Calling it on
+        # an rc 0/1 result would read a gate's own findings prose as an
+        # invocation defect.
+        return None
+    return _gate_invocation.classify_not_invocable(
+        r.stdout, r.stderr,
+        supplied_flags=[a for a in argv if a.startswith("--")])
+
+
+def _rejects_the_umbrella_argv(argv: List[str]) -> bool:
+    """True when the gate never got past argument parsing on this argv, as
+    opposed to the gate refusing its input.
+
+    Kept as a boolean predicate because that is what `measure` and the
+    regression tests want; the classification itself lives in `_why_rejected`,
+    which owns nothing and delegates everything.
+    """
+    return _why_rejected(argv) is not None
 
 
 def measure(jobs: int = 8) -> Dict[str, object]:
@@ -192,16 +256,38 @@ UMBRELLA_SUPPLIABLE: frozenset = frozenset({
 
 
 def _required_flags(argv: List[str]) -> List[str]:
-    """What argparse says this gate requires, or the positional marker."""
+    """What the gate says it requires, or the positional marker.
+
+    TWO SOURCES, because there are two rejection protocols and this function
+    used to know only one. argparse writes ``the following arguments are
+    required: --a, --b``; a gate that hand-rolls the check (Rule B) never
+    reaches argparse's required-argument machinery and writes its own line, e.g.
+    ``error: top module not resolved (give --top or --qsf)``.
+
+    Reading only the first meant EVERY Rule-B gate fell through to
+    `POSITIONAL_MARKER`, which is a member of `UMBRELLA_SUPPLIABLE`, so
+    `_split_undecided` filed all of them as an ordinary `wiring_gap` — the pile
+    labelled "mechanical work". Three of the four measured at v1.9.74 need a
+    value that is a fact about the DESIGN (an AND-mask table, a periodic-signal
+    manifest, a payload bitmap); calling that mechanical is precisely the
+    mis-split the two piles exist to prevent.
+
+    The second source is the SAME text Rule B keyed on, and it is scoped the
+    same way: a flag the caller DID supply is the gate's verdict about the
+    value, not a statement about what it needs.
+    """
     try:
         r = subprocess.run(argv, capture_output=True, text=True,
                            timeout=GATE_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError):
         return [POSITIONAL_MARKER]
     m = re.search(r"required:\s*(.+)", r.stderr or "")
-    if not m:
-        return [POSITIONAL_MARKER]
-    return [s.strip() for s in m.group(1).split(",") if s.strip()]
+    if m:
+        return [s.strip() for s in m.group(1).split(",") if s.strip()]
+    named = _gate_invocation.rule_b_named_options(
+        r.stdout, r.stderr,
+        supplied_flags=[a for a in argv if a.startswith("--")])
+    return named or [POSITIONAL_MARKER]
 
 
 def _licensed_gates() -> Set[str]:

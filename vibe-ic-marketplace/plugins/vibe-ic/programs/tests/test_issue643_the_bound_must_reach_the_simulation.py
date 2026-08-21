@@ -135,10 +135,15 @@ def test_the_inner_deadline_fires_before_the_host_one(monkeypatch):
     abandoning the work."""
     monkeypatch.setattr(S, "_container_has_timeout", lambda c: True)
     seen = _capture_argv(monkeypatch)
-    S._bounded_vvp("bin", timeout=120, cwd="/w", route=("ct", "vvp"))
+    # 60 and not 120: `_capture_argv` monkeypatches `S.subprocess.run`, so this
+    # call launches nothing and the measured worst case is a dict write. 120 was
+    # over `ci_harness_timeout_ceiling_check`'s per-call ceiling (harness // 3 =
+    # 60 s) and sat on that gate's advisory list. The 5 s head start is what the
+    # test is about, and it is the same claim at any scale.
+    S._bounded_vvp("bin", timeout=60, cwd="/w", route=("ct", "vvp"))
     argv, kw = seen["argv"], seen["kw"]
-    assert argv[argv.index("timeout") + 2] == "115"
-    assert kw["timeout"] == 120, "the host bound stays as the backstop"
+    assert argv[argv.index("timeout") + 2] == "55"
+    assert kw["timeout"] == 60, "the host bound stays as the backstop"
 
 
 def test_a_short_bound_does_not_become_a_nonpositive_one(monkeypatch):

@@ -317,7 +317,52 @@ def build_result(worst_dyn_mv: float, vdd_v: Optional[float],
                  cap_model: Optional[str],
                  static_mv: Optional[float] = None) -> Dict[str, object]:
     """Assemble the dynamic_ir.json payload (real transient numbers + honest
-    disclosure). Keeps the gate-consumed keys max_dynamic_drop_mv / vdd_v."""
+    disclosure). Keeps the gate-consumed keys max_dynamic_drop_mv / vdd_v.
+
+    HONEST LABEL OF THE TRANSIENT TIER. When NO on-die capacitance is supplied
+    the fork's transient solver runs in its `quasi-static` mode, where the
+    dynamic droop is a DETERMINISTIC scaling of the static drop: the tool prints
+    a constant `Dynamic/static ratio : 2.00` and the dynamic number is exactly
+    2x the static one for EVERY design (measured: sky130A caravel 0.0728 =
+    2x0.0364; gf180 spm 14.3 = 2x7.15 — the same 2.00 to three significant
+    figures across two different designs, PDKs, supplies and periods). Such a
+    number answers the STATIC question scaled by a constant; it carries no
+    independent di/dt information and is a conservative UPPER BOUND, not a
+    genuine transient result. Only a decap-aware solve (on-die capacitance
+    supplied) is a genuine dynamic droop. The payload therefore DISCLOSES which
+    of the two it is (`scaled_static_bound`) and never labels a quasi-static
+    bound as "not a static echo". chip-AGNOSTIC: keyed on the tool's own
+    capacitance-model string, no design/PDK/vendor literal."""
+    _is_genuine = isinstance(cap_model, str) and cap_model.startswith("on-die-cap")
+    scaled_static_bound = not _is_genuine
+    _solver_desc = (
+        "OpenROAD PSM `analyze_power_grid -transient` performs the static DC "
+        "operating point + a backward-Euler RC time-stepping solve under a "
+        "vectorless per-clock triangular current model. The per-instance "
+        "VECTORED DVD with a SAIF/VCD activity trace + package/board L·di/dt "
+        "(RedHawk-SC / Voltus vectored) is the accuracy refinement tracked "
+        "separately.")
+    if _is_genuine:
+        disclosure = (
+            "REAL decap-aware transient (di/dt) IR-drop: " + _solver_desc +
+            " On-die capacitance was supplied, so this is a genuine dynamic "
+            "droop, not a fixed scaling of the static drop.")
+    elif isinstance(cap_model, str) and cap_model.startswith("quasi-static"):
+        disclosure = (
+            "QUASI-STATIC SCALED-STATIC BOUND (no on-die decap supplied): " +
+            _solver_desc + " With no on-die capacitance the transient solve "
+            "degenerates to a FIXED ratio of the static drop (the tool prints a "
+            "constant Dynamic/static ratio), so this number is the static solve "
+            "scaled by that ratio — a conservative UPPER BOUND, not an "
+            "independent di/dt measurement. A reader must not take it as a "
+            "genuine vectored/decap-aware transient result; supply on-die decap "
+            "(-decap_cap) for a genuine transient solve.")
+    else:
+        disclosure = (
+            "SCALED-STATIC BOUND (capacitance model undetermined): " +
+            _solver_desc + " The solve's capacitance model could not be read, "
+            "so genuineness cannot be asserted; this number is treated as a "
+            "conservative static-derived bound, not a genuine di/dt result.")
     res: Dict[str, object] = {
         "signoff_dimension": "dynamic_transient_ir_drop",
         "analysis_mode": "transient_psm",
@@ -332,16 +377,10 @@ def build_result(worst_dyn_mv: float, vdd_v: Optional[float],
         "timestep_s": timestep_s,
         "current_model": current_model,       # vectorless (base) / vectored (#8)
         "capacitance_model": cap_model,        # quasi-static / on-die-cap
-        "disclosure": (
-            "REAL transient (di/dt) IR-drop: OpenROAD PSM `analyze_power_grid "
-            "-transient` performs the static DC operating point + a "
-            "backward-Euler RC time-stepping solve under a vectorless per-clock "
-            "triangular current model (quasi-static when no on-die capacitance "
-            "is supplied). This is the BASE transient tier — the per-instance "
-            "VECTORED DVD with a SAIF/VCD activity trace + package/board L·di/dt "
-            "(RedHawk-SC / Voltus vectored) is the accuracy refinement tracked "
-            "separately. The number is a genuine dynamic droop, not a static "
-            "echo (a quasi-static solve yields ~2x the static drop)."),
+        # True when the number is a scaling of the static solve (quasi-static /
+        # undetermined), False for a genuine decap-aware transient solve.
+        "scaled_static_bound": scaled_static_bound,
+        "disclosure": disclosure,
     }
     if static_tr_mv is not None:
         res["static_from_transient_mv"] = round(static_tr_mv, 4)

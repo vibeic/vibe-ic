@@ -99,6 +99,31 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 import _path_layout as _pl  # noqa: E402
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
+
+
+# ───────────── what this gate REGENERATES inside the project ────────────
+# This gate does not only READ the project — it RENDERS an injection
+# testbench into it and compiles that testbench there, on every run, so two
+# files under `phase2/` carry this gate's timestamp rather than the design
+# round's. Anything that dates a run by mtime has to know that, and the only
+# place that can state it without drifting is here, where the writing happens.
+#
+# MEASURED: `flow_compliance_check` on an untouched copy of
+# `benchmark-data/ic/opentitan_aes` moved 40 files; the only two outside
+# `reports/` are exactly these. `result_md_audit_provenance_check` read one of
+# them as "a newer round of the design" and reported the tree STALE from the
+# second run onward, on a tree nobody had touched.
+#: Where the rendered injection testbench is written, project-relative.
+FI_TB_RELPATH = "phase2/stage2/safety/fmeda_fi_tb.v"
+#: Every project-relative path this gate rewrites on a run. The compiled
+#: object is `<tb>.vvp` on BOTH injection backends (`_run_injection_host` and
+#: the container leg both build `f"{tb_rel}.vvp"`).
+REGENERATED_PROJECT_PATHS: Tuple[str, ...] = (
+    FI_TB_RELPATH, FI_TB_RELPATH + ".vvp")
 
 
 # ─────────────────────────── ASIL floors ────────────────────────────────
@@ -731,35 +756,18 @@ def build_ecc_injection_tb(spec: MechanismSpec,
 
 
 # ───────────────────────── docker / iverilog ────────────────────────────
-#: Image refs probed, in order, for a locally-present EDA container. ONE list,
-#: shared by `_resolve_docker_image` and `_local_docker_image`, so the pin and
-#: the fallback order cannot drift between the two.
-_IMAGE_CANDIDATES = (
-    "ghcr.io/vibeic/vibeic-eda:0.2.63",
-    "vibeic-eda:0.2.63",
-    "vibeic/vibeic-eda:0.2.63",
-    "hpretl/iic-osic-tools:latest",
-)
+#: The image is RESOLVED, not remembered. This was a pinned candidate list kept
+#: in step by `sync_image_version.py`; the version it pinned claimed to be "what
+#: the plugin was verified against", and nothing ever verified that.
+#: vibeic-eda's own release gate does — see `_eda_image`.
+import _eda_image as _img
 
 
 def _resolve_docker_image() -> str:
-    """The image ref to use, falling back to the pin when none is local.
-
-    NOTE the fallback: this ALWAYS returns a ref, including one the daemon does
-    not have. Use `_local_docker_image` when the answer must distinguish
+    """The image ref to use. ALWAYS returns a ref, including one the daemon does
+    not have — use `_local_docker_image` when the answer must distinguish
     "present" from "would have to be fetched"."""
-    env = os.environ.get("VIBEIC_EDA_IMAGE") or os.environ.get("IIC_EDA_IMAGE")
-    if env:
-        return env
-    for img in _IMAGE_CANDIDATES:
-        try:
-            r = subprocess.run(["docker", "image", "inspect", img],
-                               capture_output=True, timeout=15)
-            if r.returncode == 0:
-                return img
-        except Exception:
-            pass
-    return _IMAGE_CANDIDATES[0]
+    return _img.resolve()
 
 
 _IVERILOG_ROOT = "/foss/tools/iverilog"
@@ -769,36 +777,13 @@ _ENV_PREAMBLE = (
 )
 
 
-def _local_docker_image() -> Optional[str]:
+def _local_docker_image():
     """The container this run can use WITHOUT a registry pull, else None.
 
-    `_resolve_docker_image` returns the pinned default even when NOTHING is
-    present locally, so a caller acting on it hands `docker run` an image the
-    daemon must fetch — 6.68 GB across 84 layers for the pinned tag. That is
-    not a slow run, it is an unbounded one from the caller's point of view,
-    and it is why this backend must be resolved BEFORE it is used.
-
-    An explicit `VIBEIC_EDA_IMAGE` / `IIC_EDA_IMAGE` is honoured as-is: the
-    caller named that image on purpose and may well intend it to be pulled.
-    Without an override, a candidate is offered only when the LOCAL daemon
-    already has it. `docker image inspect` is a daemon-local query that never
-    touches the network, and it is bounded here so the PROBE cannot become the
-    hang it exists to prevent.
-    """
-    env = os.environ.get("VIBEIC_EDA_IMAGE") or os.environ.get("IIC_EDA_IMAGE")
-    if env:
-        return env
-    if not shutil.which("docker"):
-        return None
-    for img in _IMAGE_CANDIDATES:
-        try:
-            r = subprocess.run(["docker", "image", "inspect", img],
-                               capture_output=True, timeout=15)
-            if r.returncode == 0:
-                return img
-        except Exception:
-            return None
-    return None
+    Kept distinct from `_resolve_docker_image` for the reason it was written:
+    acting on a ref nothing has locally hands `docker run` a 6.68 GB fetch
+    across 84 layers, which is an unbounded run from the caller's view."""
+    return _img.local_image()
 
 
 def _host_iverilog() -> bool:
@@ -904,7 +889,8 @@ def run_injection_iverilog(project: Path,
     run_cmd = f"vvp /work/{vvp_out}"
     full = _ENV_PREAMBLE + compile_cmd + " && " + run_cmd
     docker_cmd = [
-        "docker", "run", "--rm", "--entrypoint", "bash",
+        "docker", "run", "--rm", *_dmem.docker_memory_flags(),
+        "--entrypoint", "bash",
         "-v", f"{project}:/work", img, "-c", full,
     ]
     try:
@@ -1240,11 +1226,10 @@ def run(project: Path, args) -> Tuple[int, dict]:
 
     # 3) render TB + run the REAL injection
     tb = build_ecc_injection_tb(spec, max_vectors=args.max_vectors)
-    tb_dir = project / "phase2" / "stage2" / "safety"
-    tb_dir.mkdir(parents=True, exist_ok=True)
-    tb_path = tb_dir / "fmeda_fi_tb.v"
+    tb_rel = FI_TB_RELPATH                      # the DECLARED path, not a copy
+    tb_path = project / tb_rel
+    tb_path.parent.mkdir(parents=True, exist_ok=True)
     tb_path.write_text(tb)
-    tb_rel = str(tb_path.relative_to(project))
 
     ec, out, err = run_injection_iverilog(
         project, spec_rtl_rel, tb_rel, tb_top="fmeda_fi_tb",

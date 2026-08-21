@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "dft_present": false,
-    "notes": "RS-485 does not specify DFT / scan / BIST — it is purely an electrical interface standard. Each RS-485 transceiver chip applies its own analog-DFT (driver current limit ATPG, receiver threshold trim, ESD protection verification) at the silicon level. System-level diagnostics rely on differential bus probing (scope), TDR for stub assessment, and higher-level protocol CRC/BCC for application-layer error detection. SoC-integrated UART blocks with RS-485 wrappers add standard scan insertion at the integrator level."
-  }
-}

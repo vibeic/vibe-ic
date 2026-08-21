@@ -24,6 +24,16 @@ Failure rules:
                               exist, or the producer recorded BLOCKED on
                               A3. There is no design netlist behind the
                               measurement.
+  A4_SWEEP_STALE_VS_NETLIST
+                           — the artefact publishes a sha256 of the deck it
+                             simulated and the deck THIS FLOW DECLARES
+                             (`<block>.sp` / `tb_<block>.sp`) does not hash to
+                             it. Either the deck changed since, or the digest
+                             is true only of some other file the artefact
+                             named instead; both mean the corner numbers are
+                             about a superseded circuit. The flow-declared
+                             path is the anchor the artefact cannot move.
+                             See `_sweep_stale_fail`.
   A4_NETLIST_NOT_FROM_A3   — the artefact discloses a deck the sweep
                               program authored itself
                               (`netlist_provenance` != `a3_netlist`).
@@ -42,6 +52,18 @@ Failure rules:
                               (and at least one is FAIL or all blank)
   A4_NO_SIMULATOR_RUN      — every declared corner has
                               `simulator_run: false`. v10632 escape.
+  A4_NETLIST_SHA_MISMATCH  — the artefact records a `netlist_sha256` /
+                              `netlist_testbench_sha256`, but the file it
+                              names hashes differently NOW: the sweep
+                              measured a circuit that is no longer on disk.
+  A4_SHA_CLAIM_UNANCHORED  — a sha256 is recorded, the companion path field
+                              names no file, AND the flow-declared deck is
+                              not readable either — so there is nothing at
+                              all to check the digest against. (When the
+                              flow-declared deck IS readable it answers, and
+                              a disagreement is A4_SWEEP_STALE_VS_NETLIST.)
+  A4_SHA_SOURCE_UNREADABLE — the recorded path cannot be read, so the
+                              recorded hash cannot be verified.
   A4_CORNER_MARGIN_FAIL    — the nominal corner is in-spec but a REAL
                               process/temp corner is outside the spec
                               window (#185): the sweep is graded on its
@@ -70,6 +92,7 @@ chip-AGNOSTIC.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -368,6 +391,219 @@ def _a3_netlist(project: Path, block: str) -> tuple:
     return rel, found
 
 
+
+# ── THE RECORDED DIGEST, ASKED OF BOTH PATHS THAT CAN ANSWER IT ───────────
+#
+# A corner artefact records `netlist_sha256` and `netlist_testbench_sha256`
+# next to the paths they are the hash OF. Nothing re-computed them, so the
+# fields were a claim, not evidence.
+#
+# MEASURED on a converged analog run before this change: a block's
+# corner_results.json recorded
+#   netlist_sha256 = 978f8936c27a3cc6eb0f2d38d7a561fab4e2b11029938b15fbeb18c971300546
+# while the file it names, `phase3/analog/<block>/<block>.sp`, hashed
+#   929f0980f941efcf472e74beeb2192bf93eea21c7aea2b2796841fd23088af0a
+# and this gate returned PASS. A second block in the same run disagreed the
+# same way. `grep -n "sha256" analog_a4_corner_sweep_check.py` had no hits.
+#
+# What that buys an escape: edit the netlist after the sweep and the sweep's
+# verdict still certifies A4 for a circuit that is no longer on disk — the
+# corner numbers describe one design, the netlist A5/A6 lay out is another,
+# and every downstream step reads the second while quoting the first.
+#
+# THE RULE, with no tool, step or block name in it:
+#
+#   A measurement that publishes a digest of its own input certifies only
+#   while that digest still recomputes from the input on disk.
+#
+# Two DIFFERENT files can be "the input on disk", and the difference is the
+# whole reason both halves of this ladder exist:
+#
+#   (a) the path the ARTEFACT NAMES (`netlist_source` / `netlist_testbench`).
+#       Asking this catches the ordinary staleness: the deck was edited after
+#       the sweep — the moment A3 refuses a deck for an ideal primitive, or a
+#       reviewer swaps an ideal R for the PDK device, the fix is an edit to
+#       the file, and the corner_results.json beside it keeps saying
+#       `simulator_run: true` and keeps certifying A4 on numbers measured on
+#       the circuit that was replaced. "Re-run A4 after a netlist change" was
+#       an instruction in prose that nothing enforced; this executes it.
+#
+#   (b) the path the FLOW DECLARES (`<block>.sp` / `tb_<block>.sp`, resolved
+#       exactly as `analog_a3_netlist_gen_check` resolves them). Asking this
+#       catches what (a) structurally cannot: the artefact CHOOSES the name in
+#       (a), so a digest can be made true by pointing the name somewhere else.
+#       The disclosed residual escape was precisely that — `netlist_source`
+#       naming a different existing file with that file's true digest, while
+#       A3's own `<block>.sp` is something else. (a) verifies happily; the
+#       digest is nonetheless not true of the deck A3 declared and every
+#       downstream step reads. The flow-declared path is not the artefact's
+#       to move, so it is the anchor that cannot be argued with.
+#
+# ORDER, and WHO OWNS WHAT — one fact must never produce two findings:
+#   1. If a path is NAMED, the named-path rules judge it first and own it
+#      outright (`A4_SHA_SOURCE_UNREADABLE`, `A4_NETLIST_SHA_MISMATCH`). They
+#      are the sharper diagnosis: they quote the artefact's own words back.
+#   2. Then the flow-declared path gets its say — but by construction it can
+#      only ADD a finding when it is a DIFFERENT file, because when the two
+#      resolve to the same bytes step 1 already compared exactly this digest
+#      against exactly these bytes and returned. So `A4_SWEEP_STALE_VS_NETLIST`
+#      fires only on the (b)-shaped escape, or when nothing was named at all.
+#   3. `A4_SHA_CLAIM_UNANCHORED` is LAST, and is now literally true when it
+#      fires: a digest is recorded, no path is named, AND the flow-declared
+#      input is not there either — so there is genuinely nothing to check it
+#      against. Where the earlier form of this rule failed every unnamed
+#      digest, step 2 now answers most of them against an anchor the artefact
+#      cannot choose, which is a stronger check than the name it declined to
+#      write. Failing a digest that recomputes from the flow-declared input
+#      would punish the absence of a companion claim while the claim actually
+#      made is verifiable and TRUE.
+#
+# SILENT WITHOUT A CLAIM, for the same reason `A3_PROVENANCE_REF_MISMATCH` is:
+# an artefact that records no hash makes no claim and is left alone here (other
+# rules judge whether it may certify while saying nothing). Measured: no
+# corner_results.json tracked in this repo carries either digest field, so this
+# ladder adds no finding to any existing tree — it protects the producer path,
+# which is the only path that can be stale in these specific ways. Silence is
+# not upgraded to evidence, and disclosure is not punished.
+#
+# TWO RESIDUALS THIS LADDER DOES NOT CLOSE, both measured rather than assumed:
+#
+#   * a digest true of another real file while the flow-declared deck is
+#     DELETED rather than changed passes here, because step 2 declines to
+#     speak when the declared input is gone. That state belongs to
+#     `A4_NETLIST_ABSENT`, which returns early whenever `netlist_provenance`
+#     is set, so nothing currently owns it. Closing it means re-scoping that
+#     rule, which is a change with its own false-positive surface.
+#   * `netlist_testbench_sha256` is checked against `tb_<block>.sp` in the
+#     FIRST root that has one, while the producer only accepts a stimulus deck
+#     whose netlist sits beside it. A split installation — stimulus in one
+#     root, netlist only in the other — can therefore make step 2 hash a file
+#     the producer never used. No artefact in this repo publishes that field,
+#     and the behaviour is unchanged by putting the two rules together.
+#
+# chip-AGNOSTIC throughout: field names, the flow's own filename patterns, and
+# sha256. No design, tool or block literal.
+#: (recorded digest field, companion path field the artefact NAMES,
+#:  flow-declared filename pattern, what the file IS)
+_SHA_CLAIMS = (
+    ("netlist_sha256", "netlist_source", "{block}.sp", "the netlist"),
+    ("netlist_testbench_sha256", "netlist_testbench", "tb_{block}.sp",
+     "the stimulus deck"),
+)
+
+
+def _sha256_of(path: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _sweep_stale_fail(project: Path, block: str, rel: str, sha_key: str,
+                      pattern: str, what: str, want: str,
+                      ) -> tuple:
+    """The (b) half for ONE digest field: recompute the digest from the path
+    the FLOW DECLARES, whatever the artefact chose to name.
+
+    Returns `(answered, finding)`. `answered` is False when the flow-declared
+    input is absent or unreadable — the sweep's input is GONE, which
+    `A4_NETLIST_ABSENT` owns for the netlist half and says better, and which a
+    vanished stimulus deck is not this rule's subject for either."""
+    path, found = resolve_block_artefact(
+        project, block, pattern.format(block=block), DECLARED_PHASE)
+    if not found:
+        return False, None
+    actual = _sha256_of(path)
+    if actual is None:
+        return False, None
+    if actual.lower() == want:
+        return True, None
+    try:
+        in_rel = str(path.relative_to(project))
+    except ValueError:
+        in_rel = str(path)
+    return True, {
+        "block": block, "rule": "A4_SWEEP_STALE_VS_NETLIST",
+        "rel_path": rel,
+        "stale_input": in_rel,
+        "declared_sha256": want,
+        "actual_sha256": actual,
+        "detail": (
+            f"the sweep publishes `{sha_key}` {want[:12]}... for {what}, and "
+            f"the deck this flow declares, `{in_rel}`, hashes to "
+            f"{actual[:12]}.... Either the file changed after the sweep ran, "
+            f"or the digest is true of some other file the artefact named "
+            f"instead — both mean every corner number here was measured on a "
+            f"circuit that is not the one A3 declared and A5/A6 lay out, "
+            f"while the fields that record WHICH netlist was simulated all "
+            f"still read correctly, because they were written first. Re-run "
+            f"A4 on the declared deck and quote the new corner numbers. A "
+            f"netlist change that was never re-simulated is not a fix."),
+    }
+
+
+def _sha_claim_fail(project: Path, block: str, data: dict, rel: str
+                    ) -> Optional[dict]:
+    """Re-hash every file this artefact records a sha256 FOR — the one it
+    NAMES and the one the flow DECLARES — and return the first finding, or
+    None. See the ladder note above for who owns which state."""
+    for sha_key, path_key, pattern, what in _SHA_CLAIMS:
+        claimed = data.get(sha_key)
+        if not isinstance(claimed, str) or not claimed.strip():
+            continue                       # no claim made → nothing to verify
+        want = claimed.strip().lower()
+        named = data.get(path_key)
+        named_path = None
+        if isinstance(named, str) and named.strip():
+            # (a) the path the artefact names — it owns its own words first.
+            named_path = Path(named)
+            if not named_path.is_absolute():
+                named_path = project / named
+            actual = _sha256_of(named_path)
+            if actual is None:
+                return {
+                    "block": block, "rule": "A4_SHA_SOURCE_UNREADABLE",
+                    "rel_path": rel,
+                    "detail": (f"{path_key}={named!r} is recorded as {what} "
+                               f"this sweep measured, but it cannot be read "
+                               f"now, so {sha_key} cannot be verified."),
+                }
+            if actual.lower() != want:
+                return {
+                    "block": block, "rule": "A4_NETLIST_SHA_MISMATCH",
+                    "rel_path": rel,
+                    "detail": (f"{sha_key} records {claimed} but {named!r} "
+                               f"hashes {actual} now — {what} on disk is NOT "
+                               f"the one this corner sweep measured. Re-run "
+                               f"the sweep on the current file, or the corner "
+                               f"verdict certifies a circuit nothing "
+                               f"downstream reads."),
+                }
+        # (b) …and the path the flow declares, which the artefact cannot move.
+        # When it resolves to the same bytes as the named path, the comparison
+        # above already made it and returned, so this can only ever ADD a
+        # finding about a DIFFERENT file — never a second finding about one.
+        answered, stale = _sweep_stale_fail(project, block, rel, sha_key,
+                                            pattern, what, want)
+        if stale is not None:
+            return stale
+        if named_path is None and not answered:
+            # Nothing named, and the flow-declared input could not answer
+            # either: the digest is anchored to nothing at all.
+            return {
+                "block": block, "rule": "A4_SHA_CLAIM_UNANCHORED",
+                "rel_path": rel,
+                "detail": (f"{sha_key}={claimed[:16]}... is recorded but "
+                           f"{path_key!r} names no file, and the deck this "
+                           f"flow declares "
+                           f"({pattern.format(block=block)}) is not readable "
+                           f"either, so the hash cannot be checked against "
+                           f"anything. A hash of an unnamed input is not "
+                           f"provenance."),
+            }
+    return None
+
+
 def _check_block(project: Path, block: str
                  ) -> tuple[Optional[str], List[dict]]:
     path, found = resolve_block_artefact(
@@ -397,6 +633,15 @@ def _check_block(project: Path, block: str
     nl = _netlist_disclosed_fail(project, block, data, rel)
     if nl is not None:
         return "FAIL", [nl]
+    # ...and STILL the subject: the artefact's own hashes must still hold, of
+    # the deck it NAMES and of the deck this flow DECLARES. Asked here, beside
+    # the other two subject rules and ahead of every value rule, because a
+    # corner number measured on a superseded circuit is not a margin problem —
+    # it is a measurement of something else. One ladder, so one recorded digest
+    # can never produce two findings.
+    sha = _sha_claim_fail(project, block, data, rel)
+    if sha is not None:
+        return "FAIL", [sha]
     corners = data.get("corners")
     if not isinstance(corners, list) or not corners:
         return "FAIL", [{

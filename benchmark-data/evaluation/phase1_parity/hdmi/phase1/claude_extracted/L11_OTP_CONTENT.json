@@ -1,5 +1,0 @@
-{
-  "ic_name": "HDMI / DVI TMDS (TI TFP410 PanelBus Digital Transmitter — subset)",
-  "otp_present": false,
-  "notes": "The TFP410 datasheet does not document an OTP (One-Time Programmable) / fuse content. Vendor identification (VEN_ID = 0x014C), device identification (DEV_ID = 0x0410), and revision identification (REV_ID) are hardwired (mask-ROM or metal-strap), not user-programmable fuses. There is no user-programmable cryptographic key, calibration trim, or unique device serial number specified at the TFP410 silicon level — TFP410 is a stateless DVI/HDMI PHY + encoder. HDCP cryptographic keys (which would normally live in OTP in HDCP-compliant transmitters) are NOT inside TFP410 — HDCP cipher is system-level and assumed to be implemented in a separate device. Therefore this item is reported as NOT APPLICABLE at the TFP410 specification level."
-}
