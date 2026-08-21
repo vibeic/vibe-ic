@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
+from _published_corpus import corpus_root, needs_corpus
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
@@ -110,12 +110,26 @@ def test_a_truncated_report_cannot_manufacture_a_PASS(tmp_path):
     assert v.startswith("FAIL"), v
 
 
-def test_no_committed_run_is_contradicted(tmp_path):
+@needs_corpus
+def test_no_committed_run_is_contradicted():
     """Corpus sweep: for every committed run the echoed verdict must START
-    with the runner's own status. Any re-derivation would show up here."""
-    root = _PROGRAMS.parents[3] / "benchmark-data"
-    if not root.is_dir():
-        pytest.skip("no corpus")
+    with the runner's own status. Any re-derivation would show up here.
+
+    WHERE THE RUNS ARE READ FROM (the 2026-08 split). The published runs moved
+    to `vibeic/benchmark-data`, so the sweep asks `_published_corpus` for a
+    corpus it can actually read — an in-tree `benchmark-data/` that still
+    carries cells, or a clone named by `$VIBE_IC_BENCHMARK_DATA`.
+
+    The old guard here was `if not (repo / "benchmark-data").is_dir(): skip`,
+    and it stopped being the question at the split: `benchmark-data/` still
+    exists in this checkout because it holds the DESIGN INPUTS the flow reads.
+    So the guard never fired, the walk found no committed run, and the floor
+    below failed with `checked == 0` — a FAILURE claims this repository
+    contradicts its own runner, when the truth is only that the runs are not
+    here to read. Absent data is "could not look", and the honest rendering of
+    that is the skip this mark carries.
+    """
+    root = corpus_root()
     checked = 0
     for rec in root.rglob("reports/orchestrator/phase3_one_shot.json"):
         proj = rec.parents[2]

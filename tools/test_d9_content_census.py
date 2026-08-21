@@ -222,3 +222,91 @@ def test_no_oracle_is_consulted_anywhere(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-q", __file__]))
+
+
+# --------------------------------------------------------------------------
+# ARM A IS A BASELINE, AND NOT EVERY ARM A CAN BE ONE.
+#
+# Both of these were found by re-probing step 11 across THREE published runs
+# instead of one, and both were the census accusing a gate of the sample's
+# limitation. The step reported EXISTENCE-ONLY on a single run and
+# CONTENT-SENSITIVE across three.
+# --------------------------------------------------------------------------
+
+_ARM_A_GATES = {
+    # already RED before anything is mutated: its arm C staying red is not
+    # evidence that the bytes went unread, because the first finding masks any
+    # second one. Measured shape: caravel `dft_atpg_coverage_check` A=FINDING.
+    "already_failing_gate": """
+        import sys
+        print("[FAIL] already_failing_gate: unrelated pre-existing finding")
+        sys.exit(1)
+        """,
+    # examined nothing on the pristine tree, then found something once the
+    # bytes moved. Measured shape: spm `dft_signoff_check` NO-INPUT -> FINDING.
+    "vacuous_then_finding_gate": """
+        import json, sys, pathlib
+        d = json.loads((pathlib.Path(sys.argv[1]) / "reports/x.json").read_text())
+        if d["total"] >= 0:
+            print("VACUOUS_PASS: vacuous_then_finding_gate examined nothing")
+            sys.exit(0)
+        print("[FAIL] negative total")
+        sys.exit(1)
+        """,
+}
+
+
+@pytest.fixture()
+def planted_arm_a(tmp_path, monkeypatch):
+    progs = tmp_path / "programs"
+    progs.mkdir()
+    for name, body in _ARM_A_GATES.items():
+        (progs / f"{name}.py").write_text(textwrap.dedent(body))
+    run = tmp_path / "repo" / "run"
+    (run / "reports").mkdir(parents=True)
+    (run / "reports" / "x.json").write_text(json.dumps({"a": 2, "b": 3, "total": 5}))
+    monkeypatch.setattr(C.F, "required_outputs", lambda sid: ("reports/x.json",))
+    monkeypatch.setattr(C.F, "split_any_of", lambda e: (e,))
+    monkeypatch.setattr(C.F, "is_glob", lambda p: False)
+    monkeypatch.setattr(C.F, "program_path", lambda n: progs / f"{n}.py")
+    return tmp_path / "repo"
+
+
+def test_a_run_whose_arm_A_is_already_RED_cannot_decide(planted_arm_a, tmp_path):
+    """It must say INCONCLUSIVE, not EXISTENCE-ONLY.
+
+    Scoring it EXISTENCE-ONLY reports the SAMPLE's limitation as the GATE's
+    defect — an accusation the probe did not earn.
+    """
+    scratch = tmp_path / "s1"; scratch.mkdir()
+    cell = C.three_arm_cell("1", "run", ["already_failing_gate"],
+                            planted_arm_a, scratch, 60)
+    info = cell["programs"]["already_failing_gate"]
+    assert info["arm_a"].startswith("FINDING"), info
+    assert info["verdict"] == C.INCONCLUSIVE, info
+
+
+def test_NO_INPUT_moving_to_FINDING_is_the_bytes_being_READ(planted_arm_a, tmp_path):
+    """The strongest evidence the probe can produce, previously discarded.
+
+    The sibling's `verdict_moved` requires arm A to be content-derived, which is
+    right for a DELETION arm and wrong here: the file is still present, so a
+    verdict that moves can only have moved because of the bytes.
+    """
+    scratch = tmp_path / "s2"; scratch.mkdir()
+    cell = C.three_arm_cell("1", "run", ["vacuous_then_finding_gate"],
+                            planted_arm_a, scratch, 60)
+    info = cell["programs"]["vacuous_then_finding_gate"]
+    assert info["arm_a"].startswith("NO-INPUT"), info
+    assert info["arm_c"].startswith("FINDING"), info
+    assert info["verdict"] == C.CONTENT_SENSITIVE, info
+
+
+def test_one_deciding_run_outranks_an_inconclusive_one(planted_arm_a):
+    """A cell is not condemned by the run that could not decide."""
+    mk = lambda v: {"programs": {"g": {"verdict": v}}}
+    assert C.cell_verdict([mk(C.INCONCLUSIVE), mk(C.CONTENT_SENSITIVE)]) \
+        == C.CONTENT_SENSITIVE
+    assert C.cell_verdict([mk(C.INCONCLUSIVE), mk(C.EXISTENCE_ONLY)]) \
+        == C.EXISTENCE_ONLY
+    assert C.cell_verdict([mk(C.INCONCLUSIVE)]) == C.INCONCLUSIVE
