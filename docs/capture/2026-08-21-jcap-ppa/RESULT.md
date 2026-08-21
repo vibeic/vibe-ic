@@ -1070,7 +1070,11 @@ interface says every instance document has one. It is not one type:
     schema files present                        14
     types with NO schema                        >= 17
 
-At least 17, because the matching errs toward reporting a schema as present. The
+At least 17 — and the arithmetic is not 29 minus 14, which is the first thing a
+reader will try. The matching errs toward reporting a schema as PRESENT, so 17 is
+a floor on the unschema'd, implying at most 12 of the 29 types are actually
+covered. Two of the 14 schema files therefore match no emitted type at all, which
+is the reverse direction this record's second answer names. The
 type the lane asked about is among them, and so are the bundle, the sign-off
 record set, the frontier and the evidence manifest.
 
@@ -1079,8 +1083,10 @@ already in this batch reduce to it:
 
 * **A-15** — a tool-error verdict carries no diagnostic, and *"there is no schema
   for the artefact, which is why nothing requires the field"*;
-* **A-17** — two producers resolve a provenance convention in opposite
-  directions, with nothing to state which is meant.
+* **A-17** — one provenance convention is resolved both ways, and
+  re-measurement showed it is inconsistent *within* producers rather than
+  cleanly between them, so there is no producer-level owner to arbitrate and
+  nothing states which is meant.
 
 Neither can be fixed where it was found. Both need the document type to be
 describable first, which reframes them as symptoms and puts the repair here.
