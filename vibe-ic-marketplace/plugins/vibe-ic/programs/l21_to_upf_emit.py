@@ -31,6 +31,13 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import List
+
+#: The field BOTH rail synthesisers write — `_POWER_KEY` in
+#: `l21_macro_supply_rail_synth` and `l21_doc_supply_rail_synth`.
+#: This module used to read `supply`, which neither has ever written
+#: (vibe-ic#688).
+_POWER_KEY = "power_net"
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -60,9 +67,29 @@ def render_upf(fields: dict, top: str, source_rel: str) -> str:
         f"set_design_top {top}",
         "",
     ]
+    # ORGANIC #688 — read the key the PRODUCERS write. Both
+    # `l21_macro_supply_rail_synth` and `l21_doc_supply_rail_synth` declare
+    # `_POWER_KEY = "power_net"`, and neither has ever written a field called
+    # `supply`. So `d.get("supply")` was always None, the `or` branch always
+    # fired, and every emitted supply net and supply port carried a FABRICATED
+    # name built from the domain name — `VDD_VDD` for a domain whose real net is
+    # `VDD`. A handoff artefact that invents the name of every rail it declares
+    # is not a handoff artefact.
+    #
+    # `supply` is still accepted first: it costs nothing and a hand-written
+    # layer may use it. The fallback chain ends in None, not in a manufactured
+    # string — see below.
+    missing: List[str] = []
     for d in domains:
         name = str(d["name"])
-        supply = str(d.get("supply") or f"VDD_{name}")
+        _s = d.get("supply") or d.get(_POWER_KEY) or d.get("rail")
+        if not _s:
+            # NOT `f"VDD_{name}"`. A name nobody can resolve is worse than an
+            # absence: UPF consumers bind by net name, so a fabricated one binds
+            # to nothing while reading exactly like a declaration that worked.
+            missing.append(name)
+            continue
+        supply = str(_s)
         lines += [
             f"create_power_domain PD_{name} -include_scope",
             f"create_supply_net {supply} -domain PD_{name}",
@@ -100,6 +127,19 @@ def render_upf(fields: dict, top: str, source_rel: str) -> str:
         lines.append(
             f"set_level_shifter LS_{ls.get('name', dom)} "
             f"-domain PD_{dom} -applies_to both -rule both")
+    if missing:
+        # #688 — a domain whose supply net cannot be resolved must not be
+        # emitted with an invented name, and must not be quietly dropped
+        # either: a UPF that silently omits a power domain reads as a design
+        # that does not have one. Refuse, and name them.
+        raise ValueError(
+            "cannot resolve the supply net for power domain(s): "
+            + ", ".join(missing)
+            + f". The power-intent layer carries none of 'supply', "
+              f"'{_POWER_KEY}' or 'rail' for them. UPF consumers bind by net "
+              f"NAME, so emitting a manufactured one (the old `VDD_<domain>`) "
+              f"binds to nothing while reading exactly like a declaration that "
+              f"worked.")
     return "\n".join(lines) + "\n"
 
 
