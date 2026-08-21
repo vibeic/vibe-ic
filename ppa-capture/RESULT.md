@@ -777,6 +777,10 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-8 | 24 of 54 axes | 8 | narrowed; found a live defect |
 | A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off |
 | A-14 | 11 candidates | **8 confirmed** | strengthened; 3 masked, not cleared |
+| A-3 | 161 floors | 36 | rescoped; `>= 1` is a different, valid assertion |
+| A-4 | 32 prefix globs | needs a discriminator | **most are correct**; see below |
+| A-6 | — | 0 false positives | clean **where the record puts it**; placement warning |
+| A-10 | — | population of **1** | real defect, but the guard protects one site |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 
 In every case the discriminator was invisible from the defect that motivated the
@@ -795,13 +799,27 @@ were supplied. **Every rule here will be built by someone writing the same scree
 I wrote.** Each `fix_action` now names the specific way its own screen goes
 wrong.
 
-**Eight Bucket-A rules remain UNSWEPT**, and that is the honest limit of this
-lane. Their numbers measure the defect they name, which is real, but nobody has
-yet measured how often they would fire on legitimate state. Two of the eight —
-the two vocabulary diffs — are false-positive-free by construction, since a set
-difference over declared tables cannot invent a member. The other six should be
-swept before they are built, and on a base rate of five narrowings in six sweeps
-they should be expected to change.
+**Every Bucket-A rule is now swept or accounted for.** Nine were swept outright.
+A-1 and A-2 are false-positive-free by construction — a set difference over
+declared tables cannot invent a member. A-9 and A-13 were swept during
+construction: A-9's 6-of-29 IS its sweep, and A-13 required the generic-token
+exclusion before it produced a usable number at all.
+
+Three of the last four changed what the record says:
+
+* **A-4 needs a discriminator the record did not have.** 32 test files select by
+  filename prefix and MOST ARE CORRECT — the universal prefix meaning *every
+  test* is the right selector for a suite-wide property. The rule fires only
+  where a prefix stands in for a SEMANTIC SUBSET, which is where a naming
+  convention and a boundary can drift apart.
+* **A-6 is clean where the record puts it, and only there.** No program in the
+  shared writer's population writes into the installed tree, so no false
+  positives. But the tree's two real in-tree regenerators live at repository
+  root, outside that population, and neither imports the writer. The same
+  predicate on a broader hook would catch them, and they are legitimate.
+* **A-10 guards a population of one.** Exactly one pattern of that shape exists.
+  The defect is live and thrice-confirmed and worth fixing; as a *guard* its
+  value is the next one, not this one. Saying so is the honest measure.
 
 The failure mode to avoid is therefore the opposite of the usual one: an
 implementer who reads "must run clean" and narrows a correct guard until the tree
