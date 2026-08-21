@@ -91,6 +91,22 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "crosslayer_rewrite_equivalence::module_ports":
+        "Verilog/SystemVerilog module port declarations. The matched text is a "
+        "production of the HDL grammar — `module m(input wire [7:0] a, ...)` in the "
+        "ANSI form and `module m(a, b); input [7:0] a;` in the non-ANSI form — "
+        "written by a synthesis-bound source file, in which there is no form that "
+        "DENIES a port: Verilog gives no way to write 'a is NOT an input'. A port "
+        "either appears in a declaration or it does not, and absence is already how "
+        "this function reports it (the name is simply not in the returned list, and "
+        "the caller turns an empty list into NOT_MEASURED rather than into an "
+        "empty-but-fine wrapper). This is the same class as the already-exempted "
+        "digital_hardmacro_gen::read_interface and _pad_ring::parse_def. The two "
+        "defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) "
+        "both read English design documents, where denial is spellable and was "
+        "spelled; consulting `_prose_polarity` on a port list would add a branch "
+        "that can never fire, and a call that can never fire is a green light "
+        "rather than a check.",
     "macro_obs_geometry_intersect_check::parse_via_layers":
         "LEF/DEF 5.8 VIAS section. The matched text is `- <viaName> ... "
         "+ LAYERS <lower> <cut> <upper> ;` — a production of the DEF grammar, "

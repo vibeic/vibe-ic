@@ -61,6 +61,8 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#1470
+import _prose_polarity as _polarity  # vibe-ic#712
 
 # A markdown table row: starts and ends with '|' after stripping.
 _ROW_RE = re.compile(r"^\s*\|(.*)\|\s*$")
@@ -306,6 +308,12 @@ def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
             window = text[m.start():m.start() + _IO_WINDOW]
             # The window must not run past a blank line into the next topic.
             window = window.split("\n\n", 1)[0]
+            # vibe-ic#712 — this reads an ENGLISH design document, where denial is
+            # spellable and gets spelled ("no I/O delay is declared for this
+            # block"). Writing the percentage out of a sentence that DENIES it is
+            # the #706/#711 defect exactly.
+            if _polarity.is_denied(window):
+                continue
             if not _PERIOD_TOKEN_RE.search(window):
                 continue
             pcts = _PCT_RE.findall(window)
@@ -389,7 +397,7 @@ def main(argv=None) -> int:
     rep["library"] = lib
     rep["pdk"] = args.pdk
     if args.json:
-        Path(args.json).write_text(json.dumps(rep, indent=2) + "\n")
+        atomic_write_text(Path(args.json), json.dumps(rep, indent=2) + "\n")
     print(json.dumps(rep, indent=2))
     # 0 = a period was resolved; 1 = nothing declared for this library.
     return 0 if rep["period_ns"] is not None else 1
