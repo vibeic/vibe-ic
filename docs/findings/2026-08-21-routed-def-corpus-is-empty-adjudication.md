@@ -160,6 +160,53 @@ could only ever say "nothing to look at". All four directions are pinned:
 
 ---
 
+## The block is real, and here is the whole chain
+
+"It blocks" was the brief's premise and I had been repeating it. Traced link by
+link, from the hook actually installed on this host and the shipped landing
+script — **not** by running a landing, which would mean running the 11-minute
+sweep this brief rules out:
+
+1. **Push to `main`** — the pre-push hook, `PUSH_TO_MAIN=1` branch, requires
+   `.git/gatekeeper-stamp` (via `--absolute-git-dir`, so per-worktree) and
+   requires it to name the exact `HEAD` being pushed.
+2. **Only one writer.** `gatekeeper-land.sh` writes that stamp, and only in the
+   `[ "$FAILED" -eq 0 ]` arm. Every other arm does `rm -f` on it:
+   *"FAILURES ABOVE — stamp removed; the pre-push hook will refuse"*.
+3. **That script runs the sweep.** `lane_hygiene` → `run_capture "full:repo-hygiene"`
+   → `tools/ci/repo_hygiene_gates.sh`.
+4. **The sweep refuses.** The routed-DEF population refusal is an unexempted
+   mode-2 `NOT_CHECKED`, so `nunexempted != 0` and `gate_dispatch_finish` does
+   `exit 2` — *"UNEXEMPTED NOT_CHECKED gate(s) block this run; no complete
+   verdict exists for: …"*.
+5. **Which becomes `FAILED`.** `run_capture` records the rc; the lane resolves
+   red; the stamp is removed; the hook refuses the push.
+
+The landing script already records this exact outage class, in its own words,
+one line below the stamp removal:
+
+> This tier is ABSOLUTE: it refuses on any red, including one the base tree
+> already carries. On 2026-08-17 that made main's own tip unpushable to main.
+
+**So the consequence, said out loud: until one cell carrying a routed DEF is
+published, `main` is unpushable to `main` through the sanctioned path.** That is
+not a side effect of this finding — it is the finding's cost, and a reader
+deserves it stated rather than left to discover.
+
+It still does not change the verdict. The remedy is to publish a cell that meets
+`INDEX.md`'s bar, or to decide deliberately to accept the block — not to weaken
+the gate that noticed. An honest refusal that blocks is worth more than a
+manufactured pass that does not, and the corpus is empty precisely because
+someone applied that rule one repository upstream.
+
+(The hook installed on this host is an OLDER revision than
+`tools/git-hooks/pre-push` — it still runs `benchmark evidence structure` at
+push, which the tracked version removed as a landing concern, and it reads the
+whole stamp file rather than its first line. Both carry the main-only stamp gate,
+so the chain above holds on either.)
+
+---
+
 ## Why there is no dated exemption, and why BLOCKING stays
 
 **A dated exemption is not available at this wiring site, by design.** The
