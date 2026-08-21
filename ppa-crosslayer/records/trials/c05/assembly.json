@@ -1,0 +1,23 @@
+{
+  "trial": "c05",
+  "notes": [
+    "ppa_signoff_records rc=0: ppa_signoff_records: 8 record(s), 5 MEASURED, 3 NOT_MEASURED",
+    "_ppa.timing rc=0",
+    "power stage derived from the session's own inputs: power session linked '/home/reyerchu/_jxlayer/run/trials/c05/phase2/stage2/synth/spm_synth.v'; read_spef=False",
+    "ppa_feasibility_check rc=2"
+  ],
+  "feasibility_verdict": "UNDETERMINED",
+  "axes": {
+    "setup": "SATISFIED",
+    "hold": "SATISFIED",
+    "drv": "UNDETERMINED",
+    "drc": "SATISFIED",
+    "lvs": "SATISFIED",
+    "antenna": "SATISFIED",
+    "ir": "SATISFIED",
+    "em": "UNDETERMINED",
+    "equivalence": "UNDETERMINED"
+  },
+  "record_count": 145,
+  "measured": 127
+}

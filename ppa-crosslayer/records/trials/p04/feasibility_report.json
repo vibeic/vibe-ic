@@ -1,0 +1,1326 @@
+{
+  "candidates": [
+    {
+      "axes": [
+        {
+          "axis": "setup",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "coverage": [
+            {
+              "metric": "timing.setup.wns_ns",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 4,
+              "state": "MEASURED",
+              "view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.setup.wns_ns",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 2,
+              "state": "MEASURED",
+              "view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.setup.worst_slack_ns",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 4,
+              "state": "MEASURED",
+              "view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.setup.worst_slack_ns",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 2,
+              "state": "MEASURED",
+              "view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.setup.violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.setup.violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 7,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+                "raw": "wns max 0.00",
+                "sha256": "sha256:3a923d84692021fb454ddd80e2ae61c35ea85d01f52b7ba9513a46ba08d6a5a7",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 37,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_spef_based.rpt",
+                "raw": "wns max 0.00",
+                "sha256": "sha256:3e8282f5cb07754f1e05dda16795f7e2e54e2d1ec28923d1744311c08dfb1e83",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 7,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_mcorner_ocv.rpt",
+                "raw": "wns max 0.00",
+                "sha256": "sha256:3a923d84692021fb454ddd80e2ae61c35ea85d01f52b7ba9513a46ba08d6a5a7",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 37,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_spef_based.rpt",
+                "raw": "wns max 0.00",
+                "sha256": "sha256:3e8282f5cb07754f1e05dda16795f7e2e54e2d1ec28923d1744311c08dfb1e83",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "required_view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "tt",
+                "rc_corner": "max",
+                "stage": "post_route_extracted",
+                "temperature_c": 25.0,
+                "voltage_v": 1.8
+              },
+              "source": {
+                "line": 13,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "raw": "wns max 0.00",
+                "sha256": "sha256:7e4e6a1221e3a4c4ffb4de046735ab581b68f7f28455d22b34a42e577c4a46c5",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "required_view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "tt",
+                "rc_corner": "max",
+                "stage": "post_route_extracted",
+                "temperature_c": 25.0,
+                "voltage_v": 1.8
+              },
+              "source": {
+                "line": 13,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_spef_multicorner.rpt",
+                "raw": "wns max 0.00",
+                "sha256": "sha256:7e4e6a1221e3a4c4ffb4de046735ab581b68f7f28455d22b34a42e577c4a46c5",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.worst_slack_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 5,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+                "raw": "worst slack max 3.58",
+                "sha256": "sha256:3a923d84692021fb454ddd80e2ae61c35ea85d01f52b7ba9513a46ba08d6a5a7",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 3.58
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.worst_slack_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 38,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_spef_based.rpt",
+                "raw": "worst slack max 4.95",
+                "sha256": "sha256:3e8282f5cb07754f1e05dda16795f7e2e54e2d1ec28923d1744311c08dfb1e83",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 4.95
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.worst_slack_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 5,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_mcorner_ocv.rpt",
+                "raw": "worst slack max 3.58",
+                "sha256": "sha256:3a923d84692021fb454ddd80e2ae61c35ea85d01f52b7ba9513a46ba08d6a5a7",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 3.58
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.worst_slack_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 38,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_spef_based.rpt",
+                "raw": "worst slack max 4.95",
+                "sha256": "sha256:3e8282f5cb07754f1e05dda16795f7e2e54e2d1ec28923d1744311c08dfb1e83",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 4.95
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.worst_slack_ns",
+              "required_view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "tt",
+                "rc_corner": "max",
+                "stage": "post_route_extracted",
+                "temperature_c": 25.0,
+                "voltage_v": 1.8
+              },
+              "source": {
+                "line": 11,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "raw": "worst slack max 6.19",
+                "sha256": "sha256:7e4e6a1221e3a4c4ffb4de046735ab581b68f7f28455d22b34a42e577c4a46c5",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 6.19
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.worst_slack_ns",
+              "required_view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "tt",
+                "rc_corner": "max",
+                "stage": "post_route_extracted",
+                "temperature_c": 25.0,
+                "voltage_v": 1.8
+              },
+              "source": {
+                "line": 11,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_spef_multicorner.rpt",
+                "raw": "worst slack max 6.19",
+                "sha256": "sha256:7e4e6a1221e3a4c4ffb4de046735ab581b68f7f28455d22b34a42e577c4a46c5",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 6.19
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.setup.violations"
+            }
+          ],
+          "status": "SATISFIED"
+        },
+        {
+          "axis": "hold",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "coverage": [
+            {
+              "metric": "timing.hold.wns_ns",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 2,
+              "state": "MEASURED",
+              "view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.hold.wns_ns",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 2,
+              "state": "MEASURED",
+              "view": {
+                "process": "ff",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.hold.worst_slack_ns",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 2,
+              "state": "MEASURED",
+              "view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.hold.worst_slack_ns",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 2,
+              "state": "MEASURED",
+              "view": {
+                "process": "ff",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.hold.violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "timing.hold.violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "process": "ff",
+                "stage": "post_route_extracted"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.wns_ns",
+              "required_view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "hold",
+                "clock": null,
+                "mode": "functional",
+                "process": "tt",
+                "rc_corner": "min",
+                "stage": "post_route_extracted",
+                "temperature_c": 25.0,
+                "voltage_v": 1.8
+              },
+              "source": {
+                "line": 129,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "raw": "wns min 0.00",
+                "sha256": "sha256:7e4e6a1221e3a4c4ffb4de046735ab581b68f7f28455d22b34a42e577c4a46c5",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.wns_ns",
+              "required_view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "hold",
+                "clock": null,
+                "mode": "functional",
+                "process": "tt",
+                "rc_corner": "min",
+                "stage": "post_route_extracted",
+                "temperature_c": 25.0,
+                "voltage_v": 1.8
+              },
+              "source": {
+                "line": 129,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_spef_multicorner.rpt",
+                "raw": "wns min 0.00",
+                "sha256": "sha256:7e4e6a1221e3a4c4ffb4de046735ab581b68f7f28455d22b34a42e577c4a46c5",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.wns_ns",
+              "required_view": {
+                "process": "ff",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "hold",
+                "clock": null,
+                "mode": "functional",
+                "process": "ff",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": -40.0,
+                "voltage_v": 1.95
+              },
+              "source": {
+                "line": 126,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+                "raw": "wns min 0.00",
+                "sha256": "sha256:3a923d84692021fb454ddd80e2ae61c35ea85d01f52b7ba9513a46ba08d6a5a7",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.wns_ns",
+              "required_view": {
+                "process": "ff",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "hold",
+                "clock": null,
+                "mode": "functional",
+                "process": "ff",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": -40.0,
+                "voltage_v": 1.95
+              },
+              "source": {
+                "line": 126,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_mcorner_ocv.rpt",
+                "raw": "wns min 0.00",
+                "sha256": "sha256:3a923d84692021fb454ddd80e2ae61c35ea85d01f52b7ba9513a46ba08d6a5a7",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.worst_slack_ns",
+              "required_view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "hold",
+                "clock": null,
+                "mode": "functional",
+                "process": "tt",
+                "rc_corner": "min",
+                "stage": "post_route_extracted",
+                "temperature_c": 25.0,
+                "voltage_v": 1.8
+              },
+              "source": {
+                "line": 127,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "raw": "worst slack min 0.59",
+                "sha256": "sha256:7e4e6a1221e3a4c4ffb4de046735ab581b68f7f28455d22b34a42e577c4a46c5",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.59
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.worst_slack_ns",
+              "required_view": {
+                "process": "tt",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "hold",
+                "clock": null,
+                "mode": "functional",
+                "process": "tt",
+                "rc_corner": "min",
+                "stage": "post_route_extracted",
+                "temperature_c": 25.0,
+                "voltage_v": 1.8
+              },
+              "source": {
+                "line": 127,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_spef_multicorner.rpt",
+                "raw": "worst slack min 0.59",
+                "sha256": "sha256:7e4e6a1221e3a4c4ffb4de046735ab581b68f7f28455d22b34a42e577c4a46c5",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.59
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.worst_slack_ns",
+              "required_view": {
+                "process": "ff",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "hold",
+                "clock": null,
+                "mode": "functional",
+                "process": "ff",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": -40.0,
+                "voltage_v": 1.95
+              },
+              "source": {
+                "line": 124,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+                "raw": "worst slack min 0.31",
+                "sha256": "sha256:3a923d84692021fb454ddd80e2ae61c35ea85d01f52b7ba9513a46ba08d6a5a7",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.31
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.worst_slack_ns",
+              "required_view": {
+                "process": "ff",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "hold",
+                "clock": null,
+                "mode": "functional",
+                "process": "ff",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": -40.0,
+                "voltage_v": 1.95
+              },
+              "source": {
+                "line": 124,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "reports/phase3/sta_mcorner_ocv.rpt",
+                "raw": "worst slack min 0.31",
+                "sha256": "sha256:3a923d84692021fb454ddd80e2ae61c35ea85d01f52b7ba9513a46ba08d6a5a7",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.31
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.hold.violations"
+            }
+          ],
+          "status": "SATISFIED"
+        },
+        {
+          "axis": "drv",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "coverage": [
+            {
+              "metric": "timing.drv.violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "stage": "post_route"
+              }
+            },
+            {
+              "metric": "timing.drv.max_tran_violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "stage": "post_route"
+              }
+            },
+            {
+              "metric": "timing.drv.max_cap_violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "stage": "post_route"
+              }
+            },
+            {
+              "metric": "timing.drv.max_fanout_violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "stage": "post_route"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.drv.violations"
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.drv.max_tran_violations"
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.drv.max_cap_violations"
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.drv.max_fanout_violations"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "drc",
+          "codes": [
+            "FEAS_OK"
+          ],
+          "coverage": [
+            {
+              "metric": "physical.drc.violations",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 1,
+              "state": "MEASURED",
+              "view": {
+                "stage": "signed_off_gds"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "count_zero",
+              "metric": "physical.drc.violations",
+              "required_view": {
+                "stage": "signed_off_gds"
+              },
+              "scope": {
+                "stage": "signed_off_gds",
+                "tool": "klayout"
+              },
+              "source": {
+                "parser": "_ppa/signoff.py",
+                "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+                "path": "reports/phase3/drc_signoff.json",
+                "sha256": "sha256:d5ad6783522454997243db2f6686810e630487bfae600a76c53a4479aeb27a75",
+                "tool": "klayout"
+              },
+              "unit": "count",
+              "value": 0
+            }
+          ],
+          "status": "SATISFIED"
+        },
+        {
+          "axis": "lvs",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "coverage": [
+            {
+              "metric": "physical.lvs.verdict",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 1,
+              "state": "MEASURED",
+              "view": {
+                "stage": "post_route_extracted"
+              }
+            },
+            {
+              "metric": "physical.lvs.violations",
+              "reason": "no record in this candidate names this metric",
+              "state": "NO_RECORD",
+              "view": {
+                "stage": "post_route_extracted"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "accept": [
+                "CLEAN",
+                "MATCH"
+              ],
+              "kind": "verdict_in",
+              "metric": "physical.lvs.verdict",
+              "required_view": {
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "stage": "post_route_extracted",
+                "tool": "netgen"
+              },
+              "source": {
+                "parser": "_ppa/signoff.py",
+                "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+                "path": "reports/phase3/lvs_verdict.json",
+                "sha256": "sha256:814a21659fe75ced8127588a4f45782a074ca9773c0324328f3a1807b6cb37b2",
+                "tool": "netgen"
+              },
+              "unit": "verdict",
+              "value": "MATCH"
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "physical.lvs.violations"
+            }
+          ],
+          "status": "SATISFIED"
+        },
+        {
+          "axis": "antenna",
+          "codes": [
+            "FEAS_OK"
+          ],
+          "coverage": [
+            {
+              "metric": "physical.antenna.violations",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 1,
+              "state": "MEASURED",
+              "view": {
+                "stage": "post_route"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "count_zero",
+              "metric": "physical.antenna.violations",
+              "required_view": {
+                "stage": "post_route"
+              },
+              "scope": {
+                "stage": "post_route",
+                "tool": "openroad"
+              },
+              "source": {
+                "parser": "_ppa/signoff.py",
+                "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+                "path": "reports/phase3/antenna.json",
+                "sha256": "sha256:8c0d2baebb026f60474001c67af58910cf7a372ff7dde94fe4da0d12d55ec0ab",
+                "tool": "openroad"
+              },
+              "unit": "count",
+              "value": 0
+            }
+          ],
+          "status": "SATISFIED"
+        },
+        {
+          "axis": "ir",
+          "codes": [
+            "FEAS_UNIT_MISMATCH"
+          ],
+          "coverage": [
+            {
+              "metric": "power.ir.violations",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 1,
+              "state": "MEASURED",
+              "view": {
+                "stage": "post_route"
+              }
+            },
+            {
+              "metric": "power.ir.worst_drop_v",
+              "outcomes": [
+                "UNDETERMINED"
+              ],
+              "records": 1,
+              "state": "MEASURED",
+              "view": {
+                "stage": "post_route"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "count_zero",
+              "metric": "power.ir.violations",
+              "required_view": {
+                "stage": "post_route"
+              },
+              "scope": {
+                "stage": "post_route",
+                "tool": "openroad-psm"
+              },
+              "source": {
+                "parser": "_ppa/signoff.py",
+                "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+                "path": "reports/phase3/ir_drop.json",
+                "sha256": "sha256:33c56471d452ab173c01f1cde57cb903b4238ab6a6b66a192ed1d44942b3c986",
+                "tool": "openroad-psm"
+              },
+              "unit": "count",
+              "value": 0
+            },
+            {
+              "kind": "limit_max",
+              "limit": {
+                "max": 0.18
+              },
+              "metric": "power.ir.worst_drop_v",
+              "required_view": {
+                "stage": "post_route"
+              },
+              "scope": {
+                "stage": "post_route",
+                "tool": "openroad-psm"
+              },
+              "source": {
+                "parser": "_ppa/signoff.py",
+                "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+                "path": "reports/phase3/ir_drop.json",
+                "sha256": "sha256:33c56471d452ab173c01f1cde57cb903b4238ab6a6b66a192ed1d44942b3c986",
+                "tool": "openroad-psm"
+              },
+              "unit": "V",
+              "value": 0.000247
+            }
+          ],
+          "status": "SATISFIED"
+        },
+        {
+          "axis": "em",
+          "codes": [
+            "FEAS_NOT_MEASURED",
+            "FEAS_INCOMPLETE_VIEW_SET"
+          ],
+          "coverage": [
+            {
+              "codes": [
+                "FEAS_NOT_MEASURED"
+              ],
+              "metric": "reliability.em.violations",
+              "reason": "the current-density screen states verdict 'nothing', which is neither PASS, FAIL nor SKIPPED",
+              "sources": [
+                "reports/phase3/em.json"
+              ],
+              "state": "NOT_MEASURED",
+              "view": {
+                "stage": "post_route"
+              }
+            },
+            {
+              "codes": [
+                "FEAS_NOT_MEASURED"
+              ],
+              "metric": "reliability.em.worst_ratio",
+              "reason": "the current-density screen states no `summary.worst_utilization`, so no segment was screened against a Jmax and no ratio exists",
+              "sources": [
+                "reports/phase3/em.json"
+              ],
+              "state": "NOT_MEASURED",
+              "view": {
+                "stage": "post_route"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "count_zero",
+              "metric": "reliability.em.violations",
+              "rejected": "FEAS_NOT_MEASURED",
+              "status": "NOT_MEASURED"
+            },
+            {
+              "metric": "reliability.em.violations",
+              "uncovered_views": [
+                {
+                  "stage": "post_route"
+                }
+              ]
+            },
+            {
+              "kind": "limit_max",
+              "metric": "reliability.em.worst_ratio",
+              "rejected": "FEAS_NOT_MEASURED",
+              "status": "NOT_MEASURED"
+            },
+            {
+              "metric": "reliability.em.worst_ratio",
+              "uncovered_views": [
+                {
+                  "stage": "post_route"
+                }
+              ]
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "equivalence",
+          "codes": [
+            "FEAS_NOT_MEASURED",
+            "FEAS_INCOMPLETE_VIEW_SET"
+          ],
+          "coverage": [
+            {
+              "codes": [
+                "FEAS_NOT_MEASURED"
+              ],
+              "metric": "equivalence.verdict",
+              "reason": "the proven pair is RTL against 'post_dft_netlist.v (synth)', which names no post-layout netlist. The routed netlist that became the layout was not the gate side of this proof, so it establishes no post-route equivalence",
+              "sources": [
+                "reports/lec.json"
+              ],
+              "state": "NOT_MEASURED",
+              "view": {
+                "stage": "post_route"
+              }
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "verdict_in",
+              "metric": "equivalence.verdict",
+              "rejected": "FEAS_NOT_MEASURED",
+              "status": "NOT_MEASURED"
+            },
+            {
+              "metric": "equivalence.verdict",
+              "uncovered_views": [
+                {
+                  "stage": "post_route"
+                }
+              ]
+            }
+          ],
+          "status": "UNDETERMINED"
+        }
+      ],
+      "candidate_id": "p04",
+      "codes": [
+        "drv:FEAS_METRIC_ABSENT",
+        "em:FEAS_NOT_MEASURED",
+        "em:FEAS_INCOMPLETE_VIEW_SET",
+        "equivalence:FEAS_NOT_MEASURED",
+        "equivalence:FEAS_INCOMPLETE_VIEW_SET"
+      ],
+      "verdict": "UNDETERMINED",
+      "waivers": []
+    }
+  ],
+  "exit_code": 2,
+  "policy": {
+    "allow_waivers": false,
+    "axes": [
+      "setup",
+      "hold",
+      "drv",
+      "drc",
+      "lvs",
+      "antenna",
+      "ir",
+      "em",
+      "equivalence"
+    ],
+    "limits": {
+      "power.ir.worst_drop_v": {
+        "max": 0.18
+      },
+      "reliability.em.worst_ratio": {
+        "max": 1.0
+      }
+    },
+    "required_views": [
+      {
+        "process": "ss",
+        "stage": "post_route_extracted"
+      },
+      {
+        "process": "tt",
+        "stage": "post_route_extracted"
+      }
+    ],
+    "required_views_by_axis": {
+      "antenna": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "drc": [
+        {
+          "stage": "signed_off_gds"
+        }
+      ],
+      "drv": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "em": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "equivalence": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "hold": [
+        {
+          "process": "tt",
+          "stage": "post_route_extracted"
+        },
+        {
+          "process": "ff",
+          "stage": "post_route_extracted"
+        }
+      ],
+      "ir": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "lvs": [
+        {
+          "stage": "post_route_extracted"
+        }
+      ],
+      "setup": [
+        {
+          "process": "ss",
+          "stage": "post_route_extracted"
+        },
+        {
+          "process": "tt",
+          "stage": "post_route_extracted"
+        }
+      ]
+    },
+    "views_used_by_axis": {
+      "antenna": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "drc": [
+        {
+          "stage": "signed_off_gds"
+        }
+      ],
+      "drv": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "em": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "equivalence": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "hold": [
+        {
+          "process": "tt",
+          "stage": "post_route_extracted"
+        },
+        {
+          "process": "ff",
+          "stage": "post_route_extracted"
+        }
+      ],
+      "ir": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "lvs": [
+        {
+          "stage": "post_route_extracted"
+        }
+      ],
+      "setup": [
+        {
+          "process": "ss",
+          "stage": "post_route_extracted"
+        },
+        {
+          "process": "tt",
+          "stage": "post_route_extracted"
+        }
+      ]
+    }
+  },
+  "policy_digest": "sha256:d3ad1baaa143ef8a993aae4c3d792cbb6d413540512122184fd32d6d72491adb",
+  "schema": "vibeic.ppa.feasibility.v1",
+  "sources": {
+    "candidates": "/home/reyerchu/_jxlayer/records/trials/p04/candidates.json",
+    "contract": null
+  },
+  "verdict": "UNDETERMINED"
+}

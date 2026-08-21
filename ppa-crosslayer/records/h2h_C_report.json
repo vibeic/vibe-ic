@@ -1,0 +1,59 @@
+{
+  "contract": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+  "declared_schema": "vibeic.ppa.comparison.v2",
+  "measurement_bases": [
+    "post_route_sta",
+    "post_route_sta"
+  ],
+  "ok": false,
+  "problem": {
+    "clock_target_ns": 10.0,
+    "corners": [
+      "ss",
+      "tt",
+      "ff"
+    ],
+    "pdk": "sky130A",
+    "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
+  },
+  "record": "/home/reyerchu/_jxlayer/records/h2h_C.json",
+  "refusal": {
+    "code": "FEASIBILITY_NOT_CHECKED",
+    "message": "feasibility is not established for ['vibe-ic-crosslayer-searched', 'vibe-ic-phase3-defaults']: vibe-ic-crosslayer-searched: ['drv']; vibe-ic-phase3-defaults: ['drv']. An unclosed or unverified implementation cannot be the cheaper one, and a comparison that did not look is UNDETERMINED."
+  },
+  "roles": {
+    "baselines": [
+      "vibe-ic-phase3-defaults"
+    ],
+    "subject": "vibe-ic-crosslayer-searched"
+  },
+  "scope": {
+    "area_um2": {
+      "fill": "post_fill",
+      "stage": "post_route",
+      "tool": "openroad"
+    },
+    "power_mw": {
+      "activity_basis": "VECTORLESS",
+      "group": "Total",
+      "liberty": null,
+      "mode": "functional",
+      "process": "tt",
+      "scenario": "diagnostic",
+      "stage": "post_route_extracted",
+      "temperature_c": 25.0,
+      "tool": "opensta",
+      "voltage_v": 1.8
+    },
+    "timing_wns_ns": {
+      "check": "setup",
+      "clock": null,
+      "mode": "functional",
+      "process": "tt",
+      "rc_corner": "max",
+      "stage": "post_route_extracted",
+      "temperature_c": 25.0,
+      "voltage_v": 1.8
+    }
+  }
+}

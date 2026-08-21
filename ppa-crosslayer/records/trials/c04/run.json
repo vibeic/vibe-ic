@@ -1,0 +1,18 @@
+{
+  "trial": "c04",
+  "levers": {
+    "rtl_variant": "hier_split",
+    "synthesis_strategy": "none"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.60",
+    "spare_cell_density": "0.00"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 268.315,
+    "cpu_seconds": 317.914,
+    "peak_rss_mb": 638.4
+  }
+}
