@@ -1322,9 +1322,9 @@ fills fixed-size evidence windows) and OUTSIDE `$HOME` (the hermetic runner
 refuses a subject under it). `/tmp/ps` satisfies both; the descriptive path I
 used for most of this job satisfies neither.
 
-### The nine instrument defects, consolidated
+### The ten instrument defects, consolidated
 
-That section covered one rule. By the end there were nine, and **every one of them
+That section covered one rule. By the end there were ten, and **every one of them
 produced a confident, plausible, WRONG answer rather than an error.** That is the
 property worth internalising: a broken instrument almost never announces itself:
 
@@ -1338,6 +1338,7 @@ property worth internalising: a broken instrument almost never announces itself:
 | 6 | `cd X && CMD &` backgrounds the whole list, not just `CMD` | two files written into the operator's checkout | absolute paths in anything backgrounded |
 | 8 | grepping pytest's `...`-elided `repr` as if it were the run's output | two probes returned two of eleven gate lines; the missing nine were simply not in the string | dump the output to a file; a `repr` is not a capture |
 | 9 | **backticks inside a heredoc'd commit message run as command substitution** | `` `ifdef/`endif `` in a `git commit -F -` body silently became `endif`; bash printed `ifdef/: No such file or directory` to stderr and the commit went through with altered text | quote the heredoc delimiter (`<<'EOF'` is not enough when the body is built by a preceding shell expansion) or avoid backticks in messages |
+| 10 | **an unterminated heredoc swallows the REST OF THE SCRIPT into the commit message** | a stray quote left the delimiter unmatched; the `git push` line became part of the message, so the commit landed with shell code in its body **and was never pushed**. Signal: one bash warning | build the message in a FILE and use `git commit -F <file>` — this also fixes #9 |
 | 7 | `tail -N` as a CAPTURE truncates the `FAILED` list | diffed against a complete baseline it invented a difference and reported **"fixed by my change"** — a fix I had not made | capture the full list; `tail` is for looking, never for comparing |
 
 **The common shape:** 1 and 6 fail loudly and cost time. **2, 3, 4, 5 and 7 fail
@@ -3491,6 +3492,38 @@ FAST, because the test pins a minimum wall-clock duration as a stand-in for
 deterministic, or to assert the relay directly rather than through elapsed time.
 **Not written — it is a timing-design change in a protected-adjacent test, and
 the diagnosis is one caught failure old.**
+
+
+## M63 — instrument defect #10, and the two commit-message defects share one cure
+
+Committing M62's section-C fix, bash printed
+`warning: here-document at line 51 delimited by end-of-file`. **The commit landed
+anyway** — and inspection showed two failures, not one:
+
+1. The message body had **swallowed the rest of the script**: `git push -q origin
+   …` and the final `echo` were recorded INSIDE the commit message.
+2. **Therefore the push never ran.** `origin` was still two commits behind while
+   the local tree looked finished.
+
+**The second is the dangerous one.** A corrupted message is cosmetic; a silently
+skipped push means "I pushed it" is false while every local check says clean.
+Had I not run `git log origin/…..HEAD`, I would have reported the branch pushed
+when it was not — and this session has ended a dozen turns with exactly that
+claim.
+
+**Fixed properly:** the commit was UNPUSHED, so `--amend` needed no force-push.
+Message rewritten from a FILE via `git commit -F`, verified with
+`git log -1 --format=%B | grep -c 'git push'` → `0`, then pushed.
+
+**#9 and #10 have the same cure.** Both are commit bodies built inline in a shell
+heredoc — one eaten by backticks, one by an unmatched delimiter. **Write the
+message to a file and use `git commit -F <file>`.** That is now the tenth entry
+and the second whose guard is "stop constructing this input in shell".
+
+**Ten defects. The distribution has not moved:** two fail loudly, **eight fail
+quietly**, and the quiet ones are where every real cost has been. This one added
+a new failure mode to the catalogue — **not a wrong answer, but a step that did
+not happen while reporting success.**
 
 
 # ===== REQUESTS TO THE LANDER =====
