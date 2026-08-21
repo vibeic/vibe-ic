@@ -108,8 +108,19 @@ _MEASURED_ON = "2026-08-01"
 #: exemption was measured and the reason. Dated inventory, never a bare
 #: allow-list: an entry that stops being true raises STALE_INVENTORY_ENTRY.
 _ZERO_IS_A_PASS: Dict[str, Dict[str, str]] = {
-    name: {"measured": _MEASURED_ON, "reason": reason}
-    for name, reason in ()
+    name: {"measured": measured, "reason": reason}
+    for name, measured, reason in (
+        ("professional_tb_check", "2026-08-14",
+         "A professional testbench is an OPTIONAL step. When it did not run there is "
+         "no report to read, and the checker says so out loud "
+         "(VACUOUS_PASS: professional_tb examined 0 testbench report(s)). Making it "
+         "refuse with rc 2 would force every run WITHOUT that step to disclose a skip "
+         "it does not owe, so rc 0 is the correct verdict here and the prose is the "
+         "disclosure. See professional_tb_check.py:337-346, where this argument was "
+         "already written in a comment this gate could not read. Recorded here so the "
+         "argument lives where the gate looks, and so STALE_INVENTORY_ENTRY fires if it "
+         "ever stops being true."),
+    )
 }
 
 

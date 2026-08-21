@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
+from _entry_guard_fixture import write_prompt_report  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 AUDIT = PLUGIN / "programs" / "blindness_audit.py"
@@ -223,15 +224,10 @@ def _stage_run(tmp_path, transcript_body: str):
     run = tmp_path / "run"
     (run / "samples").mkdir(parents=True)
     (run / "work").mkdir()
-    # Vibe-IC entry-guard evidence (vibe_ic_entry_guard.py, owner directive
-    # 2026-06-28): --score refuses a run that never entered through the runner
-    # BEFORE it reaches the blindness audit. These dispatch tests exercise the
-    # blindness-audit stage, so stage one runner-entry evidence file (the
-    # phase1-engine L1 output) to satisfy that upstream gate; the blindness
-    # audit still runs and remains the behaviour under test.
-    ev = run / "phase1" / "generated_docs"
-    ev.mkdir(parents=True)
-    (ev / "L1_DATASHEET.json").write_text("{}\n")
+    # The upstream entry gate now validates producer semantics, not file
+    # presence.  Stage its producer-derived prompt envelope so this test still
+    # isolates the downstream blindness-audit behaviour.
+    write_prompt_report(run)
     (run / ".bench_config.json").write_text(json.dumps({
         "bench": "verilogeval-v2", "dataset": str(ds), "shape": "C",
         "problems": 1, "batches": 1, "clean_room": True,
