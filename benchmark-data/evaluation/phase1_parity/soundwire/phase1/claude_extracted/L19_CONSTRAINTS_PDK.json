@@ -1,5 +1,0 @@
-{
-  "ic_name": "MIPI SoundWire (Overview)",
-  "constraints_pdk_present": false,
-  "notes": "MIPI SoundWire is a wire-level audio bus specification — it does not mandate a PDK, process technology, cell library, or floorplan. Implementations are realized in concrete SoundWire Master / Slave / Monitor IP blocks targeting a wide variety of mobile and mobile-influenced CMOS processes. The specification only constrains the I/O electrical behavior at the supply rails 1.2 V or 1.8 V, the maximum bus Clock frequency of 13 MHz typical (faster in specific settings such as a single Slave close to the Master), and the PHY-level handover parameters (tDZ_Data_Max < tZD_Data_Min, tOH_Data_Min, V_OH_Data_Min / V_OL_Data_Max, V_TP_Clock / V_TN_Clock envelopes). Detailed numeric thresholds, jitter budgets, and rise/fall-time limits are pinned only in the gated v1.0 specification; the public webinar explicitly notes 'No requirements on jitter (ppm, ps) in SoundWire spec'. Bus-keeper drive strength, pad capacitance limits, and PCB trace impedance are implementation- and system-design concerns."
-}

@@ -47,6 +47,15 @@ never re-implemented):
                                          was actually issued
   * blindness_audit.py                 — (optional, only when transcripts are
                                          supplied) prompt-only blindness audit
+  * control_substance_check.py         — (only when the control evidence is
+                                         supplied) how many of the change's
+                                         pre-fix control tests OBSERVED A
+                                         VALUE, as opposed to only noticing
+                                         that something was absent. A control
+                                         whose every failure is "the module the
+                                         fix introduces does not exist yet"
+                                         BLOCKS: "the tests fail pre-fix" is
+                                         true of every new file ever written
   * tools/ci/repo_hygiene_gates.sh     — (#538) the ENTIRE repo-hygiene set CI
                                          runs, INVOKED rather than re-listed,
                                          so a gate added to CI is covered here
@@ -94,6 +103,9 @@ CLI
                          [--pytest-cmd "<cmd>"]
                          [--commit-cmds-file <f>]   # PR commit command strings
                          [--transcripts <dir/file> --dataset <root>]  # blindness
+                         [--control-junit <f>] [--control-text <f>]  # the
+                                                    # pre-fix control's own
+                                                    # pytest report
                          [--repo <dir>] [--plugin-root <dir>]
                          [--changed-file <f>]       # override diff (one path/line)
                          [--json OUT]
@@ -126,12 +138,16 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import _watchdog as _wd
 
 
 _PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -726,6 +742,75 @@ def blindness_gate(transcripts: Optional[str],
 
 
 # --------------------------------------------------------------------------
+# control_substance_check — the PRE-FIX CONTROL, GRADED (vibe-ic#381).
+#
+# The standard control in this repo is "copy the change's new test file onto
+# clean main, run it, show it FAILS", and it is reported in a PR body as "the
+# tests fail pre-fix". Measured on two live PRs, that sentence covered a run
+# that collected NOTHING (551 lines of new test, one ModuleNotFoundError, zero
+# assertions executed — true of every new file ever written) and a run whose
+# 4-of-4 "behavioural" failures were 3-of-4 absence of a field the fix adds.
+# `control_substance_check` reads the control's own pytest report and counts
+# how many failures actually observed a VALUE.
+#
+# It shipped with nothing but its own unit test running it, which is the exact
+# shape it exists to name — a fixture proving the logic, never the artefacts —
+# and it is composed here because this program is the only place in the repo
+# that judges a base..head CHANGE rather than the tree.
+#
+# THE POLICY, stated rather than buried, and it follows `ci_ran_at_all_check`
+# twenty lines down:
+#   * evidence supplied + tautological  -> rc 1, BLOCKING. This is the gate.
+#   * evidence supplied + substantive   -> rc 0 with the count.
+#   * NO evidence + the diff changes test files -> rc -1, a LOUD non-blocking
+#     disclosure naming the count of test files whose control was not graded.
+#     Blocking here would refuse every landing from day one over evidence the
+#     workflow does not yet produce, and a gate that must be bypassed to work
+#     is a gate that gets bypassed for real reasons too.
+#   * NO evidence + no test file changed -> rc -1, not applicable.
+# The disclosure is never silent: the summary reaches the review record either
+# way, which is the difference between a decision and an oversight.
+# --------------------------------------------------------------------------
+def control_substance_gate(control_junit: Optional[str],
+                           control_text: Optional[str],
+                           files: List[str]) -> GateResult:
+    prog = _PROGRAMS_DIR / "control_substance_check.py"
+    if not prog.is_file():
+        return GateResult("control_substance_check", -1, "checker not present")
+    changed_tests = [f for f in files
+                     if f.endswith(".py") and ("/tests/" in f
+                                               or "/test_" in f)]
+    if not control_junit and not control_text:
+        if changed_tests:
+            return GateResult(
+                "control_substance_check", -1,
+                f"NO CONTROL EVIDENCE SUPPLIED and the diff changes "
+                f"{len(changed_tests)} test file(s) — nothing graded whether "
+                f"the pre-fix control observed a value or only noticed an "
+                f"absence. Re-run with --control-junit <the control run's "
+                f"pytest --junitxml>")
+        return GateResult("control_substance_check", -1,
+                          "not applicable — the diff changes 0 test file(s) "
+                          "and no control evidence was supplied")
+    argv: List[str] = []
+    if control_junit:
+        argv += ["--junit", control_junit]
+    if control_text:
+        argv += ["--text", control_text]
+    rc, out, err = _run_program(prog, argv)
+    blob = ((out or "") + (err or "")).strip()
+    first = (blob.splitlines() or [""])[0][:240]
+    if rc == 0:
+        return GateResult("control_substance_check", 0,
+                          first or "the control observed a value")
+    if rc == 1:
+        return GateResult("control_substance_check", 1,
+                          f"TAUTOLOGICAL CONTROL — {first}")
+    return GateResult("control_substance_check", 2,
+                      f"control evidence could not be read: {first}")
+
+
+# --------------------------------------------------------------------------
 # run_output_completeness — a benchmark/IC run under review whose RESULT.md is
 # EMPTY / MISSING / STUB must NOT land (v1.3.51). When the PR's change-set adds
 # or edits a run deliverable (a RESULT.md), self-check that run_dir's deliverable
@@ -901,17 +986,211 @@ def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
 # convention applied one level up.
 # --------------------------------------------------------------------------
 _HYGIENE_SCRIPT_REL = "tools/ci/repo_hygiene_gates.sh"
+_HYGIENE_PARALLEL_REL = (
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py")
 
-#: Generous ceiling, not a target. Measured on this repo the full set is
-#: minutes, dominated by one gate that runs every other gate twice. A run that
-#: exceeds this is reported as ERROR — never as a pass — because a hygiene set
-#: that did not finish has told us nothing.
-_HYGIENE_TIMEOUT_S = 3600
+#: No runtime estimate.  This is the maximum interval with neither captured
+#: output nor a completed gate record before the shared progress watchdog calls
+#: the coordinator stalled.  Any forward progress resets it, however long the
+#: complete hygiene run legitimately needs.
+_HYGIENE_STALL_GRACE_S = 1800
+
+
+# --------------------------------------------------------------------------
+# THE PUBLISHED CORPUS IS AN INPUT TO THIS GATE, SO THIS GATE RESOLVES IT.
+#
+# WHAT WAS WRONG
+# --------------
+# v1.10.56 moved the published cells into their own repository
+# (https://github.com/vibeic/benchmark-data.git).  `tools/ci/routed_def_corpus.py`
+# enumerates the corpus "published cells carrying a routed DEF" from the tree
+# `$VIBE_IC_BENCHMARK_DATA` names, and `repo_hygiene_gates.sh:591` wires that
+# producer with `GATE_DISPATCH_ATTEST_POPULATION=1`, so a population of zero is
+# a BLOCKING dispatcher-owned refusal (`_gate_dispatch.sh:1270`) that cannot be
+# excused (`_dispatch` mode 2, ll. 637-641/667-670).  That refusal is CORRECT.
+#
+# What was wrong is that this program — the one a maintainer runs before every
+# push — never resolved the corpus at all.  It inherited whatever the operator
+# happened to have exported, so on an ordinary checkout the set spent four
+# minutes and then certified nothing, and no line in the run named the cause or
+# the remedy.
+#
+# MEASURED (2026-08-20, clean origin/main 3199e9b3, this host):
+#     pointer UNSET -> 75 of 80 decided, 71 passed, 4 failed, 5 NOT CHECKED,
+#                      the routed-DEF corpus EMPTY and BLOCKING, 239s wasted.
+#     pointer SET   -> 77 of 83 decided, 73 passed, 4 failed, 6 NOT CHECKED, 241s,
+#                      and `published-evidence index honest` FAILS — a real,
+#                      committed-INDEX-is-stale defect the empty corpus hid
+#                      outright.
+#
+# WHY RESOLVE-AND-REFUSE AND NOT "LET AN EMPTY CORPUS BE A STATED NOT_CHECKED"
+# ---------------------------------------------------------------------------
+# The second option is one line and it is the wrong line, on this repository's
+# own recorded evidence:
+#
+#   * `_corpus_location.py:41-46,63-66` — "nothing anywhere + the CALL SITE
+#     opted in -> NO_CORPUS (rc 0) ... an rc 0 for a scan that did not happen is
+#     the false certificate this whole gate suite exists to remove, and the only
+#     thing keeping it from becoming the general answer is that somebody has to
+#     type it."
+#   * `_gate_dispatch.sh:637-641` — mode 2 is private precisely so an empty
+#     population "must never acquire the non-fatal tolerance that a human may
+#     buy with `uncheckable_until`"; ll. 667-670 make attaching one a WIRING
+#     ERROR.  Softening the empty corpus means deleting a guard whose comment
+#     records the measured reason it exists.
+#   * `repo_hygiene_gates.sh:539-547` — the last time this exact corpus read as
+#     CHECKED while nothing in it was opened (the `$ROOT/$ABSOLUTE` prefix bug),
+#     four gates were absorbed under exemptions whose stated reasons were FALSE.
+#     The comment ends: "the empty-population refusal above cannot see this,
+#     because the population is 1, not 0."  At 0 the blocking refusal is the
+#     only thing left that can notice.
+#   * The LANDING arm already resolves it and already dies loudly when it
+#     cannot (`tools/gatekeeper-verify-merge.sh:617-640`).  A review that is
+#     PERMISSIVE where landing is STRICT is the "MERGE_OK, then main went RED"
+#     shape this whole gate was written to end (see the block at line 928).
+#
+# So the corpus is resolved HERE, with the SAME precedence the landing arm uses
+# — one order, not two — and a corpus that cannot be resolved is rc 2 with the
+# cause and the remedy named, BEFORE the four-minute set is spent.
+#
+# WHY THE BOUND SHA IS EXPORTED TOO
+# ---------------------------------
+# `_corpus_location.resolve()` prefers a NAMED root over the pointer, and some
+# gates compute that named root by walking `Path(__file__).parents` (e.g.
+# `l_doc_field_producer_check.py:299-302`), which climbs out of the repository.
+# MEASURED on this host: those gates adopted `$HOME/benchmark-data` and printed
+# "VIBE_IC_BENCHMARK_DATA=… is set and NOT followed".  A pointer that can be
+# shadowed by whatever happens to sit above the checkout is not a binding.
+# `GATEKEEPER_BENCHMARK_DATA_SHA` is the mechanism this repo already built for
+# exactly that (`_corpus_location.py:137-156`): with it set, the pointer wins
+# unconditionally and every candidate-local shadow is refused.  It also reaches
+# the record as `corpus_inputs.benchmark_data_sha`, which the landing arm's
+# `hygiene_record_binds_benchmark()` already validates.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO
+# ----------------------------------
+# It does not fetch and it does not judge CURRENCY.  Binding the checkout's HEAD
+# says WHICH tree was scanned, which is the property a review needs; proving the
+# tree equals the canonical `origin/main` is the landing arm's job and it owns a
+# whole program for it (`tools/ci/benchmark_data_landing_checkout.py measure`).
+# A review gate that reached the network would be a review gate that fails when
+# the network does.
+# --------------------------------------------------------------------------
+_CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+_CORPUS_CHECKOUT_ENV = "VIBEIC_BENCHMARK_DATA_CHECKOUT"
+_CORPUS_BOUND_SHA_ENV = "GATEKEEPER_BENCHMARK_DATA_SHA"
+_CORPUS_DEFAULT_DIRNAME = "_matrix_benchmark_data"
+_CORPUS_SUBDIR = "ic"
+_CORPUS_ORIGIN = "https://github.com/vibeic/benchmark-data.git"
+_OID_CHARS = set("0123456789abcdef")
+
+
+def _corpus_remedy() -> str:
+    return (f"Remedy: clone the published corpus and name it — "
+            f"`git clone {_CORPUS_ORIGIN} ~/{_CORPUS_DEFAULT_DIRNAME}`, or "
+            f"export {_CORPUS_ENV}=<path to that clone>.")
+
+
+def _published_corpus_binding() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """`(env additions, refusal)` for the published-corpus checkout.
+
+    Exactly one of the two is None.  The refusal is a complete sentence naming
+    the slot that supplied the path, what was wrong with it, and the remedy —
+    it is the whole verdict a reader gets, so it may not be a bare word.
+    """
+    slots = (
+        (_CORPUS_ENV, os.environ.get(_CORPUS_ENV) or None),
+        (_CORPUS_CHECKOUT_ENV, os.environ.get(_CORPUS_CHECKOUT_ENV) or None),
+    )
+    named: Optional[Path] = None
+    slot = ""
+    for key, value in slots:
+        if value:
+            named, slot = Path(value), key
+            break
+    if named is None:
+        home = os.environ.get("HOME") or ""
+        if not home:
+            return None, (f"ERROR — the published corpus could not be located: "
+                          f"neither {_CORPUS_ENV} nor {_CORPUS_CHECKOUT_ENV} is "
+                          f"set and HOME is unset, so there is no default "
+                          f"checkout to fall back on. NOTHING WAS SCANNED and "
+                          f"the hygiene set was NOT run. " + _corpus_remedy())
+        named = Path(home) / _CORPUS_DEFAULT_DIRNAME
+        slot = ""
+
+    if not named.is_dir():
+        # SET AND WRONG IS NOT ABSENT (`_corpus_location.py:26-29`), and NOTHING
+        # ANYWHERE is not a pass either. The two are different states with
+        # different remedies, so they get different sentences; neither is rc 0.
+        if slot:
+            return None, (f"ERROR — the published corpus at {named} (from "
+                          f"{slot}) is not a readable directory, so the "
+                          f"per-cell gates had nothing to examine. A pointer "
+                          f"that is set and wrong is a broken configuration, "
+                          f"not an absent corpus. NOTHING WAS SCANNED and the "
+                          f"hygiene set was NOT run. " + _corpus_remedy())
+        return None, (f"ERROR — no published-corpus checkout: {_CORPUS_ENV} and "
+                      f"{_CORPUS_CHECKOUT_ENV} are both unset and the default "
+                      f"{named} does not exist. The published cells moved to "
+                      f"their own repository in v1.10.56, so this tree carries "
+                      f"none and the per-cell gates would examine 0 of them. "
+                      f"NOTHING WAS SCANNED and the hygiene set was NOT run. "
+                      + _corpus_remedy())
+
+    resolved = named.resolve()
+    # The producer reads git's INDEX (`tools/ci/routed_def_corpus.py:42-83`), so
+    # a loose directory enumerates zero cells and that zero is "I could not
+    # look", not "there are none" — the one substitution this whole module
+    # exists to refuse.
+    top = _git_text(resolved, ["rev-parse", "--show-toplevel"])
+    if top is None or Path(top).resolve() != resolved:
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"is not the ROOT of a git checkout"
+                      + (f" (git reports its root as {top})" if top else "")
+                      + f". The corpus producer reads git's INDEX; over a "
+                      f"tarball fetch, an archive export or a dead clone it "
+                      f"would enumerate zero cells and that is 'I could not "
+                      f"look', not 'there are none'. NOTHING WAS SCANNED and "
+                      f"the hygiene set was NOT run. " + _corpus_remedy())
+
+    if not (resolved / _CORPUS_SUBDIR).is_dir():
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"is a git checkout but carries no {_CORPUS_SUBDIR}/ "
+                      f"directory, so it is not the published-cell repository "
+                      f"this gate needs. NOTHING WAS SCANNED and the hygiene "
+                      f"set was NOT run. " + _corpus_remedy())
+
+    sha = _git_text(resolved, ["rev-parse", "HEAD"])
+    if (sha is None or len(sha) not in (40, 64)
+            or any(ch not in _OID_CHARS for ch in sha)):
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"has no readable HEAD commit, so the verdicts could not "
+                      f"be bound to the tree that produced them. NOTHING WAS "
+                      f"SCANNED and the hygiene set was NOT run. "
+                      + _corpus_remedy())
+
+    return {_CORPUS_ENV: str(resolved), _CORPUS_BOUND_SHA_ENV: sha}, None
+
+
+def _git_text(cwd: Path, argv: List[str]) -> Optional[str]:
+    """One line of git output, or None when git could not answer."""
+    try:
+        proc = subprocess.run(["git", "-C", str(cwd), *argv],
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.strip()
+    return out or None
 
 
 def repo_hygiene_gate(repo: Path,
                       script: Optional[Path] = None,
-                      timeout: int = _HYGIENE_TIMEOUT_S) -> GateResult:
+                      stall_grace: int = _HYGIENE_STALL_GRACE_S,
+                      summary_out: Optional[Path] = None,
+                      progress_out: Optional[Path] = None) -> GateResult:
     """Run `tools/ci/repo_hygiene_gates.sh` and report its own coverage record.
 
     `script` is a test seam in the same spirit as `override_files` — it lets a
@@ -921,7 +1200,14 @@ def repo_hygiene_gate(repo: Path,
     that it cannot be forgotten.
     """
     name = "repo_hygiene_gates"
-    path = Path(script) if script is not None else (repo / _HYGIENE_SCRIPT_REL)
+    if script is not None:
+        path = Path(script)
+        command = ["bash", str(path)]
+    else:
+        parallel = repo / _HYGIENE_PARALLEL_REL
+        path = parallel if parallel.is_file() else (repo / _HYGIENE_SCRIPT_REL)
+        command = ([sys.executable, str(path)] if path == parallel
+                   else ["bash", str(path)])
     if not path.is_file():
         # An honest SKIP that states its denominator: this tree wires no
         # hygiene set, so 0 gates were consulted. Never dressed up as a pass
@@ -930,35 +1216,77 @@ def repo_hygiene_gate(repo: Path,
                           f"skipped — 0 gate(s) consulted: {_HYGIENE_SCRIPT_REL} "
                           f"not present under {repo}")
 
+    # BEFORE the four-minute set, not after it. A corpus that cannot be
+    # resolved makes every per-cell verdict impossible, so spending the set to
+    # discover that costs four minutes and reports the consequence instead of
+    # the cause. `script is not None` is the unit-test seam (see the docstring):
+    # a fixture script wires no corpus and must not be made to need one.
+    corpus_env: Dict[str, str] = {}
+    if script is None:
+        corpus_env_or_none, corpus_refusal = _published_corpus_binding()
+        if corpus_refusal is not None:
+            return GateResult(name, 2, corpus_refusal)
+        corpus_env = corpus_env_or_none or {}
+
     with tempfile.TemporaryDirectory(prefix="hygiene_summary_") as td:
         summary_path = Path(td) / "summary.json"
+        progress = None
         try:
-            # watchdog-exempt: bounded shell-runner — the call carries an
-            # explicit wall-clock timeout and the TimeoutExpired path below
-            # reports ERROR, never a pass, so work that escapes into the
-            # script cannot outlive this budget nor be mistaken for a clean
-            # result. That bound holds whatever the script launches, which is
-            # what class (c) is protecting against; the set happens to be all
-            # `python3` gates today, but the exemption does not rest on it.
-            proc = subprocess.run(
-                ["bash", str(path), "--summary-json", str(summary_path)],
-                cwd=str(repo), capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return GateResult(name, 2,
-                              f"ERROR — the hygiene set did not finish within "
-                              f"{timeout}s; nothing was concluded")
+            env = os.environ.copy()
+            env.update(corpus_env)
+            if progress_out is not None:
+                progress = Path(progress_out).resolve()
+                progress.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    progress.unlink()
+                except FileNotFoundError:
+                    pass
+                env["GATE_DISPATCH_ATTESTATION_FILE"] = str(progress)
+            def _popen(argv, **kwargs):
+                return subprocess.Popen(
+                    argv, cwd=str(repo), start_new_session=True, **kwargs)
+
+            def _kill_group(proc, _reason):
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    return
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+                # The coordinator may exit on TERM while one of its workers
+                # ignores it.  Kill the remaining process group either way.
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+            supervised = _wd.run_supervised(
+                [*command, "--summary-json", str(summary_path)],
+                env=env, log_path=progress,
+                stall_grace_s=stall_grace, poll_s=5,
+                hard_ceiling_s=float("inf"), popen_factory=_popen,
+                kill=_kill_group)
         except OSError as exc:
             return GateResult(name, 2, f"ERROR — could not run {path}: {exc}")
+
+        if supervised.outcome != "natural":
+            return GateResult(
+                name, 2,
+                "ERROR — hygiene progress watchdog reported "
+                f"{supervised.outcome} after no output or completed-gate "
+                f"record advanced for {stall_grace}s; nothing was concluded")
 
         if not summary_path.is_file():
             # The script ran but produced no record, so we cannot say what it
             # covered. "I do not know what ran" is its own state and must not
             # reach a reader as a pass.
-            tail = ((proc.stderr or proc.stdout or "").strip().splitlines()
+            tail = ((supervised.err or supervised.out or "").strip().splitlines()
                     or ["(no output)"])[-1][:180]
             return GateResult(name, 2,
                               f"ERROR — {_HYGIENE_SCRIPT_REL} exited "
-                              f"{proc.returncode} without writing its coverage "
+                              f"{supervised.rc} without writing its coverage "
                               f"record; coverage unknown. Last line: {tail}")
         try:
             doc = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -966,7 +1294,60 @@ def repo_hygiene_gate(repo: Path,
             return GateResult(name, 2,
                               f"ERROR — unreadable coverage record: {exc}")
 
-    return _hygiene_verdict(doc, proc.returncode)
+        # vibe-ic#1025 — hand the record on to a caller that has a second
+        # question about it. Before this, the ONLY production copy of the
+        # dispatcher's record was this temp file, destroyed on the next line,
+        # so no consumer could ask anything a single run cannot answer — which
+        # is why `a permanently red gate is a gate that gets skipped` had no
+        # machinery under it. Copied rather than relocated: the temp dir stays
+        # the owner, so a caller that passes nothing is byte-for-byte
+        # unaffected.
+        if summary_out is not None:
+            try:
+                summary_out.write_text(json.dumps(doc, indent=2,
+                                                  ensure_ascii=False) + "\n",
+                                       encoding="utf-8")
+            except OSError as exc:
+                return GateResult(name, 2,
+                                  f"ERROR — could not hand on the coverage "
+                                  f"record: {exc}")
+
+    return _hygiene_verdict(doc, supervised.rc)
+
+
+def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
+    """Adjudicate this run's reds against the acknowledgement ledger (#1025).
+
+    A SEPARATE gate rather than a clause folded into `repo_hygiene_gates`,
+    because the two answer different questions and a reader has to be able to
+    tell them apart: the hygiene gate says WHICH gates are red, this one says
+    which of those reds is NEW and which acknowledgement has run out of time.
+    Folding them would report an expired deadline under the headline
+    "repo_hygiene_gates FAILED", pointing the reader at the gate rather than at
+    the row that came due.
+
+    It is also deliberately NOT wired into `_gate_dispatch.sh`. The dispatcher's
+    rc is pinned by vibe-ic#1025's own guard (`run` blocks on rc 2,
+    `run_tolerating_uncheckable` does not), and a ledger that could move that rc
+    would be a ledger that can buy a green.
+    """
+    name = "gate_red_since"
+    prog = Path(__file__).resolve().parent / "gate_red_since_check.py"
+    if not prog.is_file():                      # pragma: no cover - packaging
+        return GateResult(name, -1, "skipped — checker not present")
+    if not record.is_file():
+        # The hygiene gate errored before writing a record. It has already
+        # reported that; saying "no red is overdue" over a record that does not
+        # exist would be this program committing the defect it audits for.
+        return GateResult(name, -1,
+                          "skipped — 0 gate state(s) examined: the hygiene set "
+                          "produced no record to adjudicate")
+    rc, out, err = _run_program(prog, ["--record", str(record),
+                                       "--repo", str(repo)])
+    line = (out.strip().splitlines() or [""])[-1]
+    if rc == 2:
+        return GateResult(name, -1, f"skipped — {line}")
+    return GateResult(name, rc, line or (err.strip()[:200] or "no output"))
 
 
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
@@ -989,6 +1370,29 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     # message about a record that is perfectly consistent, pointing a reader
     # away from the one thing that happened.
     wrote = by_state("WROTE_CORPUS")
+
+    # vibe-ic#584 — the three keys that make NOT_CHECKED load-bearing HERE and
+    # not only in the script's exit code. Before this, `not_checked` reached the
+    # summary STRING and nothing else: the sweep printed "3 NOT CHECKED — this
+    # is NOT a pass" and this function returned rc 0, i.e. MERGE_OK.
+    #
+    # Derived from the per-gate records when the top-level key is absent, and
+    # derived FAIL-SAFE: a record written by a script predating the exemption
+    # mechanism carries no `exempt_until` on any gate, so every NOT_CHECKED in
+    # it reads as UNEXEMPTED and refuses. The opposite default would make "hand
+    # a record in the old format" the way to buy silence for the whole
+    # mechanism.
+    wiring = [str(w) for w in (doc.get("wiring_errors") or [])]
+    unexempted = doc.get("not_checked_unexempted")
+    if unexempted is None:
+        unexempted = [str(g.get("label")) for g in gates
+                      if g.get("state") == "NOT_CHECKED"
+                      and not g.get("exempt_until")]
+    expired = doc.get("exemptions_expired")
+    if expired is None:
+        expired = [str(g.get("label")) for g in gates
+                   if g.get("exemption_expired")]
+
     ran = declared - len(deferred)
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
@@ -1010,6 +1414,14 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
         return GateResult(name, 2,
                           "ERROR — the hygiene script declared 0 gates; "
                           "nothing was checked and this is NOT a pass")
+    if wiring:
+        # The set's own DECLARATION is wrong, so no count it reports means what
+        # it says. ERROR rather than FAIL: nothing was concluded about the tree.
+        return GateResult(name, 2,
+                          f"ERROR — {len(wiring)} wiring error(s) in the "
+                          f"hygiene gate declarations, so the set certifies "
+                          f"nothing: " + "; ".join(wiring[:3])
+                          + (" …" if len(wiring) > 3 else "") + f" [{where}]")
     if wrote:
         # BEFORE the FAIL branch. Every gate that ran after a corpus write read
         # a tree this run modified, so any accompanying failure may be about
@@ -1031,6 +1443,68 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
                           + ", ".join(sorted(failed)[:6])
                           + (" …" if len(failed) > 6 else "")
                           + f" [{where}]")
+    # AFTER the FAIL branch, and both are rc 1, so the ordering decides only
+    # which sentence a maintainer reads first — a gate that RAN and found
+    # something is the one to act on. Neither is lost: both are named in
+    # `where`.
+    if unexempted:
+        # The lie-shape this whole change is about: the sweep NAMED a gate it
+        # could not run and this function answered MERGE_OK over it. A gate
+        # allowed to go unchecked must have said so in advance, with a date and
+        # a reason, at the line that wires it.
+        return GateResult(name, 1,
+                          f"{len(unexempted)} gate(s) NOT CHECKED with no "
+                          f"declared exemption — the hygiene set is smaller "
+                          f"than it reports: "
+                          + ", ".join(sorted(unexempted)[:6])
+                          + (" …" if len(unexempted) > 6 else "")
+                          + f" [{where}]")
+    if expired:
+        return GateResult(name, 1,
+                          f"{len(expired)} uncheckable exemption(s) are PAST "
+                          f"their review date; re-review the gate and either "
+                          f"restate the date with a reason that is still true "
+                          f"or remove the tolerance: "
+                          + ", ".join(sorted(expired)[:6])
+                          + (" …" if len(expired) > 6 else "") + f" [{where}]")
+    # vibe-ic#1025 — a sweep that reached NO verdict is not a pass, and this
+    # branch is what makes that true HERE and not only in the script's exit
+    # code. Before it, an all-refusing sweep fell past every branch above to
+    # the final `GateResult(name, 0, where)` — a GREEN gate — carrying
+    # "6 NOT CHECKED (not a pass)" inside `where`, i.e. as prose beside a
+    # passing verdict. That is #584's lie shape one level up: #584 made each
+    # individual refusal buy a dated exemption, and never asked what happens
+    # when the exempted set is ALL of them.
+    #
+    # BEFORE the `script_rc != 0` branch, for the reason the `wrote` branch is
+    # before the FAIL branch: that branch's sentence is about an INCONSISTENCY
+    # between the record and the exit code, and here the record and the exit
+    # code agree perfectly — every gate ran and none of them concluded
+    # anything. Reported through it, a wholly vacuous sweep reads as "the
+    # script and its own summary disagree", pointing a reader away from the one
+    # thing that happened.
+    #
+    # Derived from `gates` — the same source `failed` / `not_checked` /
+    # `wrote` above come from — and NOT from the top-level `passed` counter. A
+    # record may legitimately carry `gates` without the roll-up counters
+    # (several of this repo's fixtures do), and reading an absent counter as 0
+    # would make an all-PASS record look like it decided nothing: the very
+    # failure this branch reports, manufactured by the branch itself.
+    #
+    # `executed` excludes LISTED and OTHER_SHARD for the same reasons the
+    # script does: a `--list` run decided nothing BY REQUEST and already says
+    # so, and a shard that owns no gate was never asked the question.
+    executed = [g for g in gates
+                if g.get("state") in ("PASS", "FAIL", "NOT_CHECKED",
+                                      "WROTE_CORPUS")]
+    decided = len(by_state("PASS")) + len(failed)
+    if executed and decided == 0:
+        return GateResult(name, 2,
+                          f"ERROR — the hygiene set DECIDED NOTHING: 0 of "
+                          f"{len(executed)} gate(s) that ran reached a "
+                          f"verdict, {len(not_checked)} NOT CHECKED. Nothing "
+                          f"was concluded about this tree, and that is not a "
+                          f"pass [{where}]")
     if script_rc != 0:
         # Red script, no failing gate named: a setup/summary inconsistency we
         # must not paper over.
@@ -1043,9 +1517,52 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
 # --------------------------------------------------------------------------
 # subprocess runner for the file-walking gates.
 # --------------------------------------------------------------------------
-def _run_program(prog: Path, args: List[str]) -> Tuple[int, str, str]:
-    proc = subprocess.run([sys.executable, str(prog), *args],
-                          capture_output=True, text=True)
+#: What ONE driven program may spend before this gate stops waiting for it.
+#: vibe-ic#1208.
+#:
+#: MUST BE TIGHTER THAN THE HARNESS TIMEOUT ABOVE IT, and the first version of
+#: this fix was not. At 300s under the suite's `--timeout=180`, pytest's own
+#: timeout fires FIRST, and because it is thread-based it cannot interrupt a
+#: subprocess wait — so the invocation still produced no summary and the bound
+#: never got a chance to act. MEASURED: wall=181.63s, no summary, unchanged.
+#: A bound only helps if whatever is waiting on it is prepared to wait longer.
+_PROGRAM_TIMEOUT_S = 90.0
+
+
+def _run_program(prog: Path, args: List[str],
+                 timeout: float = _PROGRAM_TIMEOUT_S) -> Tuple[int, str, str]:
+    """Drive `prog` as a subprocess. Returns `(rc, stdout, stderr)`.
+
+    BOUNDED (vibe-ic#1208). This had no `timeout=` at all, and it is the one
+    chokepoint all 15 gate drivers go through — `plugin_audit_gate` puts
+    `plugin_full_audit.py` over the entire plugin root through it.
+
+    An unbounded wait here is not "a slow gate". The wait lands in
+    `subprocess.communicate` -> `selector.poll`, which pytest's
+    `--timeout-method=thread` CANNOT interrupt: the timeout fires, prints its
+    stack, and the invocation still never returns. What the operator sees is
+    not "one test timed out" but a run with NO SUMMARY LINE — which greps as
+    neither a pass nor a failure. Three of this program's own test modules
+    could not be run in a pinned selection on clean `a38902d1` because of it,
+    and this is the program that decides whether a batch may land.
+
+    A TIMEOUT RETURNS 124, NEVER 0. Every caller here treats non-zero as a
+    failing gate, so "I could not determine this" lands on the safe side of
+    the verdict. A bounded wait that returned 0 would be a worse defect than
+    the hang: it would convert "never finished" into "clean".
+    """
+    try:
+        proc = subprocess.run([sys.executable, str(prog), *args],
+                              capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        def _txt(v) -> str:
+            if v is None:
+                return ""
+            return v.decode("utf-8", "replace") if isinstance(v, bytes) else v
+        return 124, _txt(exc.stdout), (
+            f"{prog.name}: exceeded the {timeout:g}s bound and was stopped "
+            f"(#1208) — this gate is UNDETERMINED, which is reported as a "
+            f"failure because it is not a clean result\n" + _txt(exc.stderr))
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -1060,12 +1577,16 @@ def review(base: str, head: str, *,
            commit_cmds: Optional[List[str]] = None,
            transcripts: Optional[str] = None,
            dataset: Optional[str] = None,
+           control_junit: Optional[str] = None,
+           control_text: Optional[str] = None,
            version_by_gatekeeper: bool = False,
            override_files: Optional[List[str]] = None,
            override_cur: Optional[str] = None,
            override_prev: Optional[str] = None,
            batch: bool = False,
-           hygiene_script: Optional[Path] = None) -> Verdict:
+           hygiene_script: Optional[Path] = None,
+           hygiene_report: Optional[Path] = None,
+           hygiene_progress: Optional[Path] = None) -> Verdict:
     """Run the deterministic gatekeeper and return a Verdict.
 
     `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
@@ -1143,10 +1664,22 @@ def review(base: str, head: str, *,
     gates.append(ci_ran_gate(repo, head, cadence))
     gates.append(run_deliverable_gate(repo, files))
     gates.append(blindness_gate(transcripts, dataset))
+    gates.append(control_substance_gate(control_junit, control_text, files))
     # #538 — LAST because it is by far the longest, so every cheap machine gate
     # has already printed by the time this starts. It is the whole CI hygiene
     # set, invoked (not re-listed) so that MERGE_OK means what it reads as.
-    gates.append(repo_hygiene_gate(repo, script=hygiene_script))
+    # #1025 — the hygiene record is adjudicated a second time, for a question
+    # one run cannot answer: is any of this red OLD, and has any of it outlived
+    # the deadline its acknowledgement set? The record is handed over rather
+    # than the set re-run.
+    with tempfile.TemporaryDirectory(prefix="gate_red_since_") as _td:
+        _record = (Path(hygiene_report).resolve() if hygiene_report is not None
+                   else Path(_td) / "hygiene.json")
+        _record.parent.mkdir(parents=True, exist_ok=True)
+        gates.append(repo_hygiene_gate(repo, script=hygiene_script,
+                                       summary_out=_record,
+                                       progress_out=hygiene_progress))
+        gates.append(gate_red_since_gate(repo, _record))
 
     # 5. verdict.
     blocking = [f"{g.name}: {g.summary}" for g in gates if not g.green]
@@ -1207,6 +1740,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="blindness-audit transcript dir/file (optional)")
     ap.add_argument("--dataset", default=None,
                     help="blindness-audit dataset root (required with --transcripts)")
+    ap.add_argument("--control-junit", default=None,
+                    help="the PRE-FIX control run's pytest --junitxml report; "
+                         "graded by control_substance_check, which BLOCKS on a "
+                         "control whose every failure is an absence")
+    ap.add_argument("--control-text", default=None,
+                    help="the same control as a pasted pytest console log "
+                         "(weaker than --junit; the checker measures the gap)")
     ap.add_argument("--repo", default=None,
                     help="repo root for git ops (default: cwd's repo)")
     ap.add_argument("--plugin-root", default=None,
@@ -1227,6 +1767,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "gatekeeper_assign_version.py and re-runs this review "
                          "WITHOUT the flag on the bumped tree)")
     ap.add_argument("--json", default=None, help="write the verdict JSON here")
+    ap.add_argument(
+        "--gate-record", dest="hygiene_report", default=None,
+        help=("persist the complete repo-hygiene summary/attestation JSON at "
+              "this path instead of keeping it only for the in-process "
+              "gate-red-since adjudication"))
+    ap.add_argument(
+        "--gate-progress", dest="hygiene_progress", default=None,
+        help=("append one owner-only JSONL process attestation after each "
+              "completed hygiene gate; intended for sparse monitoring of a "
+              "long run without polling its full stdout"))
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve() if args.repo else _find_repo_root()
@@ -1256,9 +1806,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                    role=args.role, pytest_cmd=args.pytest_cmd,
                    commit_cmds=commit_cmds,
                    transcripts=args.transcripts, dataset=args.dataset,
+                   control_junit=args.control_junit,
+                   control_text=args.control_text,
                    version_by_gatekeeper=args.version_by_gatekeeper,
                    override_files=override_files,
-                   batch=args.batch)
+                   batch=args.batch,
+                   hygiene_report=(Path(args.hygiene_report)
+                                   if args.hygiene_report else None),
+                   hygiene_progress=(Path(args.hygiene_progress)
+                                     if args.hygiene_progress else None))
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

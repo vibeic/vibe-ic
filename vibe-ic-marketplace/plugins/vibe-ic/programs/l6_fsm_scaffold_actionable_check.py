@@ -1,6 +1,35 @@
 #!/usr/bin/env python3
 """l6_fsm_scaffold_actionable_check.py — SEMANTIC layer gate for L6.
 
+ENFORCEMENT: advisory — on both axes, TODAY, and the section below headed
+"BLOCKS (exit 1)" is about a THIRD axis that is unchanged. Reconciled here
+because until vibe-ic#1035 this file argued at length for blocking while the
+flow wired it advisory, and nothing in the tree connected the two claims:
+
+  * VERDICT SEVERITY — rc 1, unchanged. A finding here is a FAIL, not a
+    warning. That is what "BLOCKS (exit 1)" below argues for, and the argument
+    stands on its own terms: both readers of L6 degrade silently in the PASS
+    direction, so a finding here becomes a manufactured PASS four steps later.
+  * FLOW SLOT — `advisory_program_exit_zero`, by MEASUREMENT and not by
+    preference. Re-measured on 2ec8fc2f with `tools/d9_corpus_baseline.py
+    --only l6_fsm_scaffold_actionable_check`: 41 of 107 published roots red,
+    0 CLEAN, 66 NO-INPUT, identical to the Phase-0 baseline at 93bfcf95f. Every
+    one of the 41 is a TRUE finding, and that is exactly why blocking would be
+    wrong: across all 107 published `L6_CONTROL_LOGIC.json`, 36 carry
+    `fsm_states` and exactly ONE (espi) carries a single transition, because
+    the prose-walker `l6_fsm_prose_walker_v1_6_484` emits `transitions: []`
+    every time it runs. Blocking would fail 41 published roots for one broken
+    extractor. The defect is in the PRODUCER, not in 41 designs.
+  * CAN IT STOP THE STEP — no. No runner spawns this gate inline, so its
+    verdict reaches step 1 only when `flow_compliance_check` evaluates the
+    clause. This is the axis `flow_gate_enforcement_audit` measures and the one
+    the `ENFORCEMENT:` token above names.
+
+PROMOTION CONDITION, stated so this is a re-measurement and not a judgement
+call: repair the L6 transition extractor, then re-run the command above. When
+the red count is driven by designs rather than by the walker, this declaration
+becomes `blocking` and the flow row becomes `program_exit_zero`.
+
 THE CONSUMER MODEL, STATED FIRST BECAUSE PART A DEPENDS ON IT (#509)
 =====================================================================
 ``phase2_scaffold_gen`` is an ORACLE, not a flow step. No runner and no
@@ -17,8 +46,13 @@ not any program consumes it — and it is the only honest one. A blocking
 gate whose stated reason does not happen is a gate nobody can evaluate.
 See ``phase2_scaffold_gen``'s own docstring for the measurement.
 
-BLOCKS (exit 1). Rationale for blocking rather than advising
-=============================================================
+BLOCKS (exit 1). Why a finding here is a FAIL and not a warning
+===============================================================
+A claim about this program's VERDICT SEVERITY only. It is NOT a claim about
+the flow slot — that is decided, and measured, in the `ENFORCEMENT:` block at
+the top of this docstring, which records why the row is advisory today and what
+would promote it. Read on its original terms the argument below is unaffected:
+
 Both readers of L6 degrade SILENTLY and in the PASS direction:
 
   * ``phase2_scaffold_gen.emit_fsm_v()`` — the scaffold contract's
@@ -37,7 +71,7 @@ Both readers of L6 degrade SILENTLY and in the PASS direction:
     rule and the gate reports PASS.
 
 A gate whose failure mode is a manufactured PASS four steps downstream
-cannot be advisory. FAIL blocks.
+cannot be reported as a warning. FAIL is rc 1.
 
 The contract this gate enforces
 ===============================

@@ -1,5 +1,0 @@
-{
-  "ic_name": "SPI Block (S12SPIV4)",
-  "otp_present": false,
-  "notes": "No OTP / fuse / configuration-ROM content in the SPI peripheral block guide. All configuration is via the run-time register file (SPICR1, SPICR2, SPIBR)."
-}
