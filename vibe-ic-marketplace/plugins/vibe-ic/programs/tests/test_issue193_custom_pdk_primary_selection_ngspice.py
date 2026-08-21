@@ -80,10 +80,13 @@ comment. What was checked, and what was not:
     parameter read from `inspect.signature` — a positional pass cannot hide from
     that, and it is how the strategy was once wired into the sole production
     call site by a one-line edit with the whole analog/PDK suite still green.
-    Result: 50 call sites to the three entry points, of which exactly ONE is
-    production (`analog_real_corner_sweep` -> `resolve_deck_context`) and it
-    passed no farm_dir; 3 were internal to the defining module and 46 were
-    tests.
+    Result, measured 2026-07-27 in 9993a66e and PINNED to it: 50 call sites to
+    the three entry points, of which exactly ONE is production
+    (`analog_real_corner_sweep` -> `resolve_deck_context`) and it passed no
+    farm_dir; 3 were internal to the defining module and 46 were tests. The
+    tally moves as tests are added; what the pin records is the state the
+    deletion was judged safe against, which is the thing that has to stay
+    legible.
   * the strategy's OTHER half was unwired too: a farm only works if ngspice
     also RUNS from it, and both production `_run_ngspice` call sites pass
     cwd=None.

@@ -1,0 +1,3 @@
+{"doc_id":"L21","doc_name":"L21_POWER_INTENT","applicability":"APPLICABLE",
+ "fields":{"power_domains":[],"isolation_cells":[],"level_shifters":[],"upf_path":null},
+ "extraction_status":"NOT_YET_EXTRACTED","extraction_evidence":{}}

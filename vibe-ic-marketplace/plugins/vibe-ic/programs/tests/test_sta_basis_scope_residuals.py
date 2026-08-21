@@ -194,6 +194,136 @@ def test_post_route_scope_is_not_substantiated_by_pre_layout_corners(tmp_path):
     assert res.passed is False
 
 
+# vibe-ic — real post-route sign-off evidence OUTSIDE per_corner/ substantiates
+# the claim per_corner/ alone cannot. MEASURED (spm x sky130A, 2026-08-07): a
+# real run whose own `sta_corner: all analyzed sign-off corners MET` verdict
+# passed still failed THIS gate, because `_emit_multi_corner_sta`'s post-route
+# call only refreshes per_corner/ when the project stages its own
+# `input/pdk/liberty/*.lib` — no default run does — while the real post-route
+# multi-corner sign-off (`_emit_mcorner_ocv_sta`, resolved via
+# `_resolve_signoff_corner_libs` against the container's OWN PDK corners, no
+# staging required) lands in `sta_mcorner_ocv.rpt` instead and per_corner/ is
+# never touched again. `mcorner_ocv_stance.json` and `sta_mcorner_ocv.rpt`
+# below are byte-for-byte a real run's output (public sky130A grammar).
+_REAL_MCORNER_OCV_STANCE = """{
+  "signoff_dimension": "multi_corner_ocv_process",
+  "setup_process_corner": "SS",
+  "hold_process_corner": "FF",
+  "multi_process_corner": true,
+  "ocv_derate": {"early": 0.95, "late": 1.05, "mode": "flat-OCV"},
+  "report": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+  "setup_worst_slack_ns": 4.56,
+  "hold_worst_slack_ns": 0.38,
+  "violated_corners": [],
+  "corner_library_resolution": {
+    "axis": "process",
+    "liberty_by_corner": {
+      "FF": "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v95_ccsnoise.lib",
+      "SS": "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_100C_1v60.lib"
+    },
+    "distinct_library_count": 2,
+    "reported_corner_count": 2,
+    "collapsed": false,
+    "unresolved_corners": [],
+    "unresolved_reason": null,
+    "degradation_disclosure": null
+  },
+  "timing_closed_multi_corner": true,
+  "disclosure": "Multi-corner OCV sign-off: SETUP @ SS process (slow) + max-RC, HOLD @ FF process (fast) + min-RC, flat-OCV \\u00b15% + recovery/removal/MPW."
+}
+"""
+
+_REAL_MCORNER_OCV_RPT = """\
+=== SETUP corner: process=SS liberty=/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_100C_1v60.lib, SPEF=chip_top.max.spef ===
+OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV
+worst slack max 4.56
+tns max 0.00
+Startpoint: test (input port clocked by clk)
+Endpoint: __uuf__._470_ (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+    Cap    Slew   Delay    Time   Description
+-----------------------------------------------------------------------
+                   0.00    0.00   clock clk (rise edge)
+                          11.00 ^ __uuf__._470_/CLK (sky130_fd_sc_hd__dfxtp_1)
+                          10.73   data required time
+-----------------------------------------------------------------------
+                          10.73   data required time
+                          -6.17   data arrival time
+-----------------------------------------------------------------------
+                           4.56   slack (MET)
+
+
+SIGNOFF_WORST_PATHS_REPORTED path_delay=max group_path_count=3
+Group                                  Slack
+--------------------------------------------
+No paths found.
+
+SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width max_capacitance max_fanout
+=== HOLD corner: process=FF liberty=/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v95_ccsnoise.lib, SPEF=chip_top.min.spef ===
+OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV
+worst slack min 0.38
+tns max 0.00
+Startpoint: __uuf__._506_ (rising edge-triggered flip-flop clocked by clk)
+Endpoint: __uuf__._507_ (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: min
+
+    Cap    Slew   Delay    Time   Description
+-----------------------------------------------------------------------
+                   0.00    0.00   clock clk (rise edge)
+                           0.37 ^ __uuf__._507_/CLK (sky130_fd_sc_hd__dfxtp_1)
+                           0.36   data required time
+-----------------------------------------------------------------------
+                           0.36   data required time
+                          -0.73   data arrival time
+-----------------------------------------------------------------------
+                           0.38   slack (MET)
+
+
+SIGNOFF_WORST_PATHS_REPORTED path_delay=min group_path_count=3
+Group                                  Slack
+--------------------------------------------
+No paths found.
+
+SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width max_capacitance max_fanout
+"""
+
+
+def test_real_post_route_signoff_elsewhere_substantiates_the_claim(tmp_path):
+    """THE FIX. Same fixture as the test above (per_corner/ is pre-layout-only)
+    PLUS the real evidence a default run actually produces post-route. Must
+    now PASS — the claim is substantiated, just not by per_corner/ alone."""
+    proj = _project(tmp_path, corners=("SS", "TT", "FF"),
+                    corner_basis="PRE_LAYOUT_ESTIMATE")
+    rp3 = proj / "reports" / "phase3"
+    rp3.mkdir(parents=True, exist_ok=True)
+    (rp3 / "mcorner_ocv_stance.json").write_text(_REAL_MCORNER_OCV_STANCE)
+    sta_dir = proj / "phase3" / "stage3" / "sta"
+    (sta_dir / "sta_mcorner_ocv.rpt").write_text(_REAL_MCORNER_OCV_RPT)
+    with _scoped(proj, [_STEP23_REL]):
+        res = ERA._check_sta(proj)
+    assert "STA_CORNER_BASIS_MISMATCH" not in _rules(res), res.findings
+    assert res.passed is True
+
+
+def test_signoff_basis_corners_elsewhere_returns_zero_without_the_evidence(tmp_path):
+    """The helper itself, isolated: no mcorner_ocv/multicorner report at all
+    -> 0 SIGNOFF-basis corners, never a guess. This is what keeps the fix from
+    being an unconditional escape hatch — remove the evidence added by the
+    test above and POST_ROUTE substantiation returns to 0.
+
+    PRE_LAYOUT is NOT asserted at 0 here: `read_records` also reads
+    per_corner/ itself (that IS its per-corner sweep), and this fixture's
+    per_corner/ genuinely holds 3 PRE_LAYOUT_ESTIMATE reports — 3 is the
+    honest count for that basis, not a gap in the helper."""
+    proj = _project(tmp_path, corners=("SS", "TT", "FF"),
+                    corner_basis="PRE_LAYOUT_ESTIMATE")
+    assert ERA._signoff_basis_corners_elsewhere(proj, "POST_ROUTE") == 0
+    assert ERA._signoff_basis_corners_elsewhere(proj, "NOT_A_REAL_BASIS") == 0
+
+
 def test_pre_layout_scope_is_not_substantiated_by_post_route_corners(tmp_path):
     """THE MIRROR. The rule is symmetric or it is a special case."""
     proj = _project(tmp_path, corners=("SS", "TT", "FF"),

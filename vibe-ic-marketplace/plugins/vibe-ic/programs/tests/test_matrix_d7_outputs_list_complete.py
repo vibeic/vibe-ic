@@ -8,12 +8,18 @@ nothing declares, so nothing checks it exists, so its absence is invisible.**
 No gate goes red. A downstream checker simply reads a file that is not there
 and takes its "absent" branch, and the run reports PASS.
 
-One cell per flow step, 63 in all, each ending in exactly one of three
+One cell per flow step, 69 in all, each ending in exactly one of three
 machine-checkable states:
 
-  ENFORCED  the live predicate runs and passes            58
-  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   4
-  NA        the NA precondition is asserted LIVE           1
+  ENFORCED  the live predicate runs and passes           63
+  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason    5
+  NA        the NA precondition is asserted LIVE          1
+
+Those four numbers are DERIVED, not remembered — ``cells_for(DIM)`` against the
+live yaml, counted by ``test_every_cell_lands_in_exactly_one_state``. They read
+``63 / 58 / 4 / 1`` here for as long as it took six steps to arrive and one to
+leave without anybody restating them, which is the same defect that test's own
+pin exists to prevent one step lower down.
 
 ====================================================================
 WHAT IS MEASURED, AND FROM WHAT
@@ -94,12 +100,108 @@ Mutation-proved before landing; each mutation applied to the GUARDED THING
   * the sole declaration of an UNCONDITIONALLY produced, outside-read gate
     output deleted -> W1 fires, proving the optionality exemption did not
     retire the rule.
+
+====================================================================
+THE RUN'S OWN RECORD — W2's SECOND PRODUCER ORACLE (2026-08-06)
+====================================================================
+Everything above is decided from the yaml and from Python ASTs, and W2 asked
+"does the flow produce this path" by asking the AST alone. When the answer was
+no it dropped the path, with the comment ``externally supplied by design``.
+That was a claim this module's own :data:`RESOLUTION_LIMITS` contradicted in
+writing: a write performed inside a shelled-out OpenROAD/KLayout script is not
+a Python write position and is invisible to an AST.
+
+``programs/step_write_ledger.py`` records the other half — one ``lstat`` walk
+of what a run ACTUALLY wrote, residualled against the declaration — and until
+2026-08-06 no dimension read it. ``matrix_d7_write_record`` is this
+dimension's reader, and it is wired at ONE seam:
+``matrix_d7_artifact_graph._w2_population`` consults it only where
+``writers_of()`` came back empty. Nothing else changes — not the attribution
+cascade, not the ``declaring_entry`` relaxation, not the load-bearing class,
+not the waivers. The record may only ever make W2 consider MORE paths; a path
+W2 charges today is charged with a record present, absent, or silent about it.
+(This is the mirror of dimension 3, where the ledger may only ever SUBTRACT
+evidence: d3 asks whether a DECLARED artefact was produced, d7 asks whether
+the declaration is COMPLETE, so the safe direction is opposite in each.)
+
+ADMISSIBILITY IS #527's, RESTATED FOR RECORDS. A record decides nothing unless
+THE COMMIT CARRIES IT (``git ls-tree -r HEAD``). No ``$HOME`` search, no env
+var, no operator-supplied directory, no manifest of machine paths — a cell
+whose colour depends on a tree outside the repository is the defect #527
+removed from dimension 3. Each residual path is then re-verified LIVE before
+it may promote anything: a symlink is not evidence of a write, a zero-byte
+file is not a produced artefact, and an untracked path is a property of one
+working tree. A record is a claim about the past; it is not evidence about
+today.
+
+MEASURED ON THIS COMMIT: no tracked ``reports/write_ledger.json`` exists
+anywhere in THIS REPOSITORY, and for a while that sentence was the whole of the
+story — the population was empty, W2's oracle was the AST alone, and this
+paragraph said :data:`RECORD_BOUND_ROOTS` "pins the empty population". Both
+halves stopped being true and the second stopped being true FIRST: the pin
+names two roots, and the records are in the PUBLISHED CORPUS —
+``benchmark-data/ic/spm/v1.10.18_sky130A`` and
+``benchmark-data/ic/spm/v1.9.96_gf180mcuD`` each carry
+``reports/write_ledger.json`` tracked at the corpus's own HEAD. Discovery could
+not see them, because it searched only this repository after the subtree had
+left it, which is exactly the shape vibe-ic#1703 named one dimension over: the
+pointer switched the skip OFF without switching discovery ON.
+:func:`matrix_d7_write_record.record_roots` now reads an EXPLICITLY OFFERED
+corpus as a second tree under the same rule, so the pin is answerable again.
+None of this is silent either way: every dimension-7 failure message and every
+cell's ``record_property`` carries the
+:func:`matrix_d7_write_record.binding_notes` sentence saying which roots
+answered and why each other one did not.
+
+MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
+``$HOME/_sky130A_r3_run`` and
+``$HOME/campaign_v1544/spm/converge_1.5.44_gf180mcuD`` yield 335 and
+264 written-never-declared candidates. **That is not 335 findings, and the
+difference is the whole of the work.** Filtered through W2's existing rules —
+undeclared, artefact-shaped, gate-read, not a step-condition input — 12 and 9
+survive, landing on steps 11, 21, 23, 24, 27, 30, D1, DT2, DT3 and M2; zero
+are unattributable. Ten of those cells are green today. The two that are not
+inferences at all are ``phase3/stage3/pnr/openroad.log`` and the post-PnR gate
+netlist, each recorded in its run's OWN ``provenance.jsonl`` as **openroad's
+declared output** and read by the gates of steps 21 and 30 — artefacts a rule
+was calling "externally supplied by design" while the run's log said openroad
+wrote them. The per-path table is in ``matrix_d7_write_record``'s docstring.
+None of it fires here, because none of those trees is in the commit; the day
+one is published, :data:`RECORD_BOUND_ROOTS` turns that into a named event and
+each promotion must be declared in the yaml or waived with evidence.
+
+MEASURED END TO END, with a real run's record actually committed: 4 -> 13
+steps carrying findings, 12 findings gained, **0 lost**, 0 unattributable, 0
+of the 335 residual paths refused by the live evidence rules. The twelve are
+NOT twelve of the same thing, and the triage is written down in
+``matrix_d7_write_record``'s docstring rather than left for the day it fires:
+four are real omissions the AST provably cannot see (two of them
+:data:`RESOLUTION_LIMITS` entry 1 verbatim — a write whose path root is a
+function parameter), three are CONDITIONAL skip sentinels that must NOT be
+declared (W2 has no #537 optionality exemption, and giving it one would move
+cells that are red today, so it is not done here), one points at a chip name
+hardcoded in a plugin program rather than at a missing declaration, and three
+land on a step that is already red and waived.
+
+WHY THE OTHER 323 ARE NOT FINDINGS, STATED SO NOBODY RE-DERIVES IT. Of the 335,
+328 are captured by no ``required_outputs`` entry; of those, 327 can be charged
+to no step by the plugin's own tables, because the one-shot runners carry no
+per-step segmentation (:data:`RESOLUTION_LIMITS` entry 2) and because
+``provenance.jsonl`` names EDA BINARIES while the flow names plugin programs —
+measured overlap between the two vocabularies on both runs, **0 of 164**. The
+residual cannot be read per step directly. This binding does not pretend it
+can: it answers only the narrower question W2 was already asking, and the step
+a promotion lands on is chosen by W2's own cascade.
 """
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import shutil
+import subprocess
 import tempfile
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -109,9 +211,25 @@ import yaml
 
 import flow_compliance_check as FCC
 import matrix_d7_artifact_graph as G
+import matrix_d7_write_record as R
+import step_write_ledger as SWL
 from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers
 from matrix_63x8.cells import cells_for
+
+# WHERE W2's OBSERVED PRODUCER ORACLE WENT.
+#
+# `matrix_d7_write_record` binds W2 to the `reports/write_ledger.json` a run
+# left behind, and every root that carries one — `RECORD_BOUND_ROOTS` below —
+# is a PUBLISHED CELL. Those moved to https://github.com/vibeic/benchmark-data,
+# so in this checkout `R.record_roots()` is empty, W2 degrades to the AST alone,
+# and the findings that only the OBSERVED half could see disappear. A waived
+# cell whose finding disappears XPASSes, and a strict xfail turns that into
+# "the waiver is stale — remove it". It is not stale; the evidence for it was
+# not readable. A check that cannot measure must never report that it measured,
+# so those cells SKIP naming the corpus (vibe-ic#1357's rule for an absent tool,
+# applied to an absent corpus) and run untouched wherever the corpus is present.
+from _published_corpus import SKIP_REASON, corpus_root, needs_corpus  # noqa: E402
 
 DIM = 7
 
@@ -191,6 +309,11 @@ def _describe(step_id, findings):
         )
         for f in exempt:
             lines.append(f"    - {f.path} (condition: see gate)")
+    # WHICH producer oracle answered. Stated in BOTH directions on purpose:
+    # if only the bound case were annotated, "the AST alone decided this"
+    # would become the meaning of SILENCE and a reader would be inferring it
+    # from the absence of a line.
+    lines.append(f"  [write record: {'; '.join(R.binding_notes())}]")
     return "\n".join(lines)
 
 
@@ -222,6 +345,16 @@ def test_d7_required_outputs_list_is_complete(cell, record_property):
 
     evidence = G.evidence_findings(sid)
     record_property("d7_evidence_undeclared", [f.path for f in evidence])
+    # WHICH producer oracle W2 had available for this cell — published on
+    # every cell, green or red, so "the AST alone" is a recorded property of
+    # the run rather than something a reader has to assume.
+    record_property("d7_write_record_binding", list(R.binding_notes()))
+    record_property(
+        "d7_record_promoted",
+        [f.path for f in G.findings_for(sid)
+         if f.rule == G.W2 and R.observed_producers_of(f.path)
+         and not G.writers_of(f.path)],
+    )
     # The exempted class is recorded on the cell too, so "W1 skipped it" is a
     # published property of the run and not a silent branch in the analyser.
     record_property(
@@ -230,6 +363,16 @@ def test_d7_required_outputs_list_is_complete(cell, record_property):
     )
 
     findings = G.findings_for(sid)
+    # A WAIVED cell with nothing to show, on a tree where W2's OBSERVED half
+    # observed nothing and there is no corpus to read it from, is UNMEASURABLE
+    # rather than healed: the finding its waiver names may be exactly one of the
+    # record-promoted ones that vanished with the published cells. Reporting the
+    # strict-xfail XPASS would tell an author to delete a waiver on the strength
+    # of evidence nobody read. All four conditions are required, so a cell that
+    # genuinely healed still XPASSes wherever the record binding is alive.
+    if (not findings and _waiver_for(sid) is not None
+            and not R.observed_writes() and corpus_root() is None):
+        pytest.skip(SKIP_REASON)
     assert not findings, _describe(sid, findings)
 
 
@@ -552,20 +695,215 @@ def test_w1_still_fires_on_an_unconditionally_produced_undeclared_output(tmp_pat
 
 
 def _conditional_anchor():
-    """``(step, path)`` of a CONDITIONAL finding on an OTHERWISE-CLEAN step.
+    """``(step, path)`` of a CONDITIONAL finding a later W1 charge is owed to.
 
     "Otherwise clean" is what makes the control a control. Step 23 also
-    carries a conditional output, but it is red for thirteen unrelated W2
-    findings, so a red observed after mutating it would prove nothing about
-    the exemption. The anchor is therefore the conditional finding whose step
-    has no other finding at all — on the current flow that is step 27, and it
-    is found by measurement rather than named.
+    carries a conditional output, but it is red for sixteen unrelated W2
+    findings, so a red observed after mutating it would prove much less about
+    the exemption than the same red on a quiet step. The anchor was therefore
+    the conditional finding whose step has no other finding AT ALL — on the
+    flow as shipped in 2026-07 that was step 27, and it was found by
+    measurement rather than named.
+
+    THAT REQUIREMENT WAS A CLIFF, and it fell off. Step 27 acquired ONE
+    unrelated ``W2`` finding — on ``reports/phase3/si_mcf_sta.json``, the
+    condition trigger of the very clause whose OUTPUT is the anchor, a
+    different path under a different rule — and the search returned ``None``.
+    Both parametrisations then aborted on their own precondition with "this
+    control measures nothing", so one unrelated red silently deleted a
+    negative control instead of degrading it.
+
+    So the requirement is split into the part that is LOAD-BEARING and the
+    part that is merely PREFERABLE, and only the first can disqualify:
+
+    * hard — ``path`` must carry no ``W1`` charge yet. Every assertion this
+      control makes is about ``path`` under W1 (:func:`_w1_paths`), so this is
+      exactly what buys attributability: a W1 charge seen after the mutation
+      cannot have been there before. A finding under another rule, or under
+      W1 on another path, can neither produce nor mask it.
+    * soft — the step should be as quiet as possible, so the CELL's red is
+      attributable too and not only the path's. This is a ranking, not a
+      filter: candidates are ordered by how many findings their step carries,
+      flow order breaking ties.
+
+    A step with no finding at all therefore still wins whenever the flow
+    supplies one — the anchor the author chose is not quietly given up — and
+    when none exists the control keeps measuring on the quietest step there
+    is instead of measuring nothing. Both halves are guarded:
+    :func:`test_the_anchor_search_takes_the_least_perturbed_candidate` and
+    :func:`test_the_anchor_search_survives_an_unrelated_finding_on_every_step`.
     """
+    candidates = []
+    for order, sid in enumerate(F.step_ids()):
+        findings = G.conditional_findings(sid)
+        if not findings:
+            continue
+        path = findings[0].path
+        if path in _w1_paths(sid):
+            continue        # a later W1 charge here would not be the mutation's
+        candidates.append(
+            (len(G.findings_for(sid)), order, F.normalize_id(sid), path)
+        )
+    if not candidates:
+        return None
+    _noise, _order, step, path = min(candidates)
+    return step, path
+
+
+def _anchor_candidates():
+    """``{step: findings-on-that-step}`` for every step the search may pick.
+
+    The guards below need the population the ranking ranges over, and they
+    must read it the same way :func:`_conditional_anchor` does or they would
+    be grading a different corpus.
+    """
+    out = {}
     for sid in F.step_ids():
         findings = G.conditional_findings(sid)
-        if findings and not G.findings_for(sid):
-            return F.normalize_id(sid), findings[0].path
-    return None
+        if not findings:
+            continue
+        if findings[0].path in _w1_paths(sid):
+            continue
+        out[F.normalize_id(sid)] = len(G.findings_for(sid))
+    return out
+
+
+def _manufacture_a_second_candidate(monkeypatch) -> str:
+    """Give the flow a SECOND anchor candidate, and return its step.
+
+    A preference between candidates cannot be observed on a flow that supplies
+    one, and this control used to SKIP in that case. A skip is a green that
+    tested nothing — the failure mode this whole module exists to remove — and
+    it is not hypothetical here: disposing step 27's promotion (#1215/#1619)
+    takes the live population from two candidates to one, so the ranking would
+    have gone unguarded on the very tree the fix is aimed at.
+
+    So the subject is manufactured instead, the way
+    :func:`test_w4_exemption_is_exercised_on_a_mutated_flow` manufactures W4's:
+    the NOISIEST step that carries no conditional finding is given a synthetic
+    one. Noisiest on purpose — the ranking must be seen preferring the quiet
+    live candidate over a loud manufactured one, which is the direction that
+    can actually fail.
+    """
+    real_cond = G.conditional_findings
+    step = max(
+        (sid for sid in F.step_ids() if not real_cond(sid)),
+        key=lambda sid: (len(G.findings_for(sid)), F.normalize_id(sid)),
+    )
+    key = F.normalize_id(step)
+
+    class _Synthetic:
+        rule = G.C1
+        path = "reports/phase3/SYNTHETIC_second_candidate.json"
+
+        def __str__(self):
+            return f"{self.rule}: {self.path}"
+
+    monkeypatch.setattr(
+        G, "conditional_findings",
+        lambda sid: ((_Synthetic(),) if F.normalize_id(sid) == key
+                     else real_cond(sid)),
+    )
+    return key
+
+
+def test_the_anchor_search_takes_the_least_perturbed_candidate(monkeypatch):
+    """The quietest candidate wins, and the preference is COMPUTED.
+
+    The ranking is what keeps "otherwise clean" a preference instead of a
+    cliff, and a preference nobody checks is a comment. Two arms, and neither
+    is allowed to skip: when the live flow supplies fewer than two candidates
+    the second is manufactured (see above), so this runs on every tree.
+
+      RANKING   the chosen step carries the fewest findings of any candidate.
+                A search returning the first candidate in flow order passes
+                "is not None" and fails this.
+      MOVES     inflate the winner's findings past the runner-up's and the
+                anchor must MOVE. A ranking pinned to a step id, or read off
+                anything but the measurement, survives arm 1 and dies here.
+    """
+    if len(_anchor_candidates()) < 2:
+        _manufacture_a_second_candidate(monkeypatch)
+    candidates = _anchor_candidates()
+    assert len(candidates) >= 2, (
+        f"only {len(candidates)} anchor candidate(s) even after manufacturing "
+        f"one, so the preference cannot be observed and this control would be "
+        f"asserting nothing: {candidates}"
+    )
+
+    anchor = _conditional_anchor()
+    assert anchor is not None
+    step, _path = anchor
+    assert candidates[step] == min(candidates.values()), (
+        f"the search chose step {step}, which carries {candidates[step]} "
+        f"finding(s), while a candidate with {min(candidates.values())} "
+        f"exists: {candidates}. The control would then be attributing a red "
+        f"on a noisier step than it had to."
+    )
+
+    runner_up = min((s for s in candidates if s != step),
+                    key=lambda s: (candidates[s], s))
+    real = G.findings_for
+
+    class _Unrelated:
+        rule = G.W2
+        path = "reports/phase3/UNRELATED_ranking_probe.json"
+
+        def __str__(self):
+            return f"{self.rule}: {self.path}"
+
+    louder = tuple(_Unrelated() for _ in range(candidates[runner_up] + 1))
+    monkeypatch.setattr(
+        G, "findings_for",
+        lambda sid: (tuple(real(sid)) + louder
+                     if F.normalize_id(sid) == step else real(sid)),
+    )
+    moved = _conditional_anchor()
+    assert moved is not None and moved[0] == runner_up, (
+        f"step {step} was made noisier than step {runner_up} "
+        f"({candidates[step] + len(louder)} findings vs {candidates[runner_up]}) "
+        f"and the search still returned {moved}. The preference is not being "
+        f"computed from the findings."
+    )
+
+
+def test_the_anchor_search_survives_an_unrelated_finding_on_every_step(
+        monkeypatch):
+    """PAIRED GUARD: the failure that deleted this control must not recur.
+
+    One ``W2`` finding on one unrelated path returned ``None`` from the old
+    search. Reproduce the general form of it — an unrelated finding on EVERY
+    step, so no step is silent under every rule — and require that a usable
+    anchor still comes back.
+
+    "Usable" is the second half and it carries the weight: returning any old
+    step would satisfy ``is not None`` while destroying the attributability
+    the anchor exists for, so the returned path is required to be free of W1
+    exactly as the control's own precondition requires.
+    """
+    real = G.findings_for
+
+    class _Unrelated:
+        rule = G.W2
+        path = "reports/phase3/UNRELATED_never_a_real_artifact.json"
+
+        def __str__(self):
+            return f"{self.rule}: {self.path}"
+
+    monkeypatch.setattr(
+        G, "findings_for", lambda sid: tuple(real(sid)) + (_Unrelated(),)
+    )
+    anchor = _conditional_anchor()
+    assert anchor is not None, (
+        "one unrelated finding on every step deleted the anchor entirely, "
+        "which is the exact failure this ranking exists to prevent"
+    )
+    step, path = anchor
+    assert path not in _w1_paths(step), (
+        f"the search returned step {step} / {path}, which already carries "
+        f"a W1 charge; a charge seen after the mutation would not be the "
+        f"mutation's and the control would be measuring nothing"
+    )
 
 
 @pytest.mark.parametrize(
@@ -588,19 +926,23 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
           blocks on such a clause exactly like a plain one, so the VOCABULARY
           alone must not buy an exemption — only a real condition does.
 
-    Both mutate the yaml, never a test. If either fails to redden the cell,
-    step 27 is green for a reason other than the one this change claims.
+    Both mutate the yaml, never a test. If either fails to redden the anchor's
+    path, that path is exempt for a reason other than the one this change
+    claims. The anchor is whatever :func:`_conditional_anchor` measures, never
+    a step named here — naming one is how this control came to depend on the
+    flow keeping step 27 quiet.
     """
     anchor = _conditional_anchor()
     assert anchor is not None, (
-        "no step is GREEN solely because of the optionality exemption, so "
-        "removing the optionality cannot be shown to redden anything and this "
-        "control measures nothing"
+        "no exempted path is free of a W1 charge, so removing the optionality "
+        "cannot be shown to redden anything and this control measures nothing"
     )
     step, path = anchor
-    assert not G.findings_for(step), (
-        f"step {step} is already red before the mutation; the control cannot "
-        f"attribute the red to the mutation"
+    assert path not in _w1_paths(step), (
+        f"step {step} already carries a W1 charge on {path} before the "
+        f"mutation, so a charge seen afterwards would not be the mutation's "
+        f"and this control could attribute nothing. Findings on the step: "
+        f"{[str(f) for f in G.findings_for(step)]}"
     )
 
     def edit(doc):
@@ -637,7 +979,7 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
 
     # And back: the exemption returns with the flow's own optionality.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
-    assert not G.findings_for(step)
+    assert path not in _w1_paths(step)
 
 
 def _no_list_but_writes_anchor():
@@ -789,21 +1131,37 @@ def test_unattributable_findings_are_surfaced_not_dropped():
             f"{finding.path} is declared after all; the unattributable list is "
             "carrying a non-finding"
         )
-        assert G.writers_of(finding.path), (
-            f"{finding.path} has no producer; the unattributable list is "
-            "carrying a phantom"
+        assert G.writers_of(finding.path) or R.observed_producers_of(finding.path), (
+            f"{finding.path} has no producer under EITHER oracle — no "
+            f"programs/*.py write position resolves it and no admissible run "
+            f"record observed a run writing it; the unattributable list is "
+            f"carrying a phantom"
         )
 
 
 def test_every_cell_lands_in_exactly_one_state():
-    """63 cells; ENFORCED + WAIVED + NA == 63, and no cell is in two states.
+    """69 cells; ENFORCED + WAIVED + NA == 69, and no cell is in two states.
 
     The census is derived live, not written down: a step added to the yaml
     lands here as ENFORCED and this arithmetic keeps holding, while a waiver
     for a step that has stopped failing is caught by its own ``strict=True``.
     """
     cells = cells_for(DIM)
-    assert len(cells) == len(F.step_ids()) == 63
+    # 68 -> 69, and the previous number was wrong rather than stale. Two steps
+    # moved and only one of them was counted:
+    #   `1.6x` ARRIVED at v1.11.15 (ppa(phase4): wire step 1.6x to an executor)
+    #   `37.5self` was RETIRED at v1.11.18 (the general precheck was never a
+    #       third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    #       every design that reaches that step, and the operator's container
+    #       runs IN ADDITION wherever the PDK ships a precheck and its template
+    #       was fetched. A PDK with no shuttle precheck is the same step with
+    #       one fewer arm, not a different route.)
+    # v1.11.18 wrote `69 -> 68` by DECREMENTING, and the count it decremented
+    # from predated `1.6x`. That is precisely the failure this pin exists to
+    # make loud, so the number is re-derived rather than adjusted: the live
+    # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
+    # A step arriving OR leaving must force a human to say the number out loud.
+    assert len(cells) == len(F.step_ids()) == 69
 
     state = Counter()
     for cell in cells:
@@ -816,7 +1174,21 @@ def test_every_cell_lands_in_exactly_one_state():
         )
         state["NA" if is_na else ("WAIVED" if is_waived else "ENFORCED")] += 1
 
-    assert sum(state.values()) == 63, state
+    # 68 -> 69, and the previous number was wrong rather than stale. Two steps
+    # moved and only one of them was counted:
+    #   `1.6x` ARRIVED at v1.11.15 (ppa(phase4): wire step 1.6x to an executor)
+    #   `37.5self` was RETIRED at v1.11.18 (the general precheck was never a
+    #       third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    #       every design that reaches that step, and the operator's container
+    #       runs IN ADDITION wherever the PDK ships a precheck and its template
+    #       was fetched. A PDK with no shuttle precheck is the same step with
+    #       one fewer arm, not a different route.)
+    # v1.11.18 wrote `69 -> 68` by DECREMENTING, and the count it decremented
+    # from predated `1.6x`. That is precisely the failure this pin exists to
+    # make loud, so the number is re-derived rather than adjusted: the live
+    # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
+    # A step arriving OR leaving must force a human to say the number out loud.
+    assert sum(state.values()) == 69, state
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
     # dimension has stopped enforcing anything and should be redesigned.
@@ -870,6 +1242,14 @@ def test_waivers_meet_the_registry_standard():
         for w in dim_waivers()
         if not G.findings_for(w.step_id) and G.na_precondition(w.step_id) is None
     ]
+    # Same unmeasurable state as the cell test above, reached from the registry
+    # side: with W2's OBSERVED half empty and no corpus to read it from, a
+    # record-promoted finding is invisible and its waiver looks like dead
+    # weight. "Remove them" would be advice founded on evidence nobody read.
+    # Everything else in this test has already been asserted by the time this
+    # line is reached; only the LAST claim is the one that cannot be made.
+    if inert and not R.observed_writes() and corpus_root() is None:
+        pytest.skip(SKIP_REASON)
     assert not inert, (
         f"waivers whose step has no findings — remove them: {inert}"
     )
@@ -920,6 +1300,623 @@ def test_resolution_limits_are_declared():
     )
     for limit in G.RESOLUTION_LIMITS:
         assert len(limit) > 60, limit
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE RUN'S OWN WRITE RECORD — W2's SECOND PRODUCER ORACLE
+#
+# `_w2_population` used to drop a gate-read, undeclared path with
+#     if not producers: continue  # externally supplied by design
+# whenever no `programs/*.py` write position resolved it. The three tests below
+# are the control for replacing that inference with a measurement, and they are
+# bidirectional by construction: the FORWARD case fails against the
+# byte-identical pre-change `matrix_d7_artifact_graph.py`, and three REVERSE
+# cases must still pass on both sides.
+# ══════════════════════════════════════════════════════════════════════
+_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_AUTHOR_NAME": "d7", "GIT_AUTHOR_EMAIL": "d7@example.invalid",
+            "GIT_COMMITTER_NAME": "d7", "GIT_COMMITTER_EMAIL": "d7@example.invalid"}
+
+
+def _start_run(probe: Path) -> None:
+    """Drop the emitter's own t0 marker, then wait out the mtime clock.
+
+    ``mark_run_start`` stamps ``time.time()``; a file inode's mtime comes from
+    the kernel's COARSE realtime clock, which lags by up to one timer tick. So
+    a file genuinely created after t0 can carry an mtime a few milliseconds
+    BEFORE it, and ``in_run_window`` (``mtime >= t0``) then reads false — the
+    emitter would report an empty residual and this control would pass while
+    measuring nothing. MEASURED on this host: t0 1785994463.5058, mtime of a
+    file written immediately after it 1785994463.5048.
+
+    Irrelevant on a real run, where writes land seconds to hours after t0.
+    Here it is the difference between a control and a no-op, so the wait is
+    explicit rather than left to luck.
+    """
+    assert SWL.mark_run_start(probe)
+    time.sleep(0.05)
+
+
+@contextlib.contextmanager
+def _probe_run_root(prefix: str):
+    """A throwaway run tree that is its OWN git repository.
+
+    It has to be a real repo, not a directory: the admissibility rule this
+    control exists to exercise is "the COMMIT carries the record", answered by
+    ``git ls-tree -r HEAD``. A probe that could not be committed would let the
+    control pass without ever testing the rule.
+
+    Kept UNDER 20 FILES on purpose. ``step_write_ledger.mtime_fidelity``
+    declares a tree flattened when ``n >= 20 and (distinct <= 4 or
+    top_mtime_share >= 0.5)``, and a probe built inside one second trips both
+    disjuncts — the emitter would then WITHHOLD the very residual under test
+    and the control would be measuring the withholding, not the binding.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix=prefix))
+    try:
+        env = {**os.environ, **_GIT_ENV}
+
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=str(tmp), check=True,
+                                  capture_output=True, env=env)
+
+        git("init", "-q")
+        git("commit", "-q", "--allow-empty", "-m", "root")
+
+        def commit(*paths: str):
+            if paths:
+                git("add", "--", *paths)
+            git("commit", "-q", "--allow-empty", "-m", "probe")
+
+        yield tmp, commit
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _w2_dropped_candidates() -> Tuple[Tuple[str, str], ...]:
+    """``((path, owning step), ...)`` — every path W2 drops for "no producer".
+
+    Derived LIVE from the same three indices ``_w2_population`` uses, and the
+    owner from the same cascade, so this control cannot go stale against a
+    yaml edit and cannot silently start probing a path the rule no longer
+    considers. A hard-coded path would do both.
+    """
+    same_dir = G._same_dir_declarers()
+    consumers = G._gate_consumers()
+    skip = G._step_condition_basenames()
+    out: List[Tuple[str, str]] = []
+    for path in sorted(consumers):
+        if "*" in path or "?" in path or not G.is_artifact_path(path):
+            continue
+        if os.path.basename(path) in skip or G.declaring_entry(path):
+            continue
+        if G.writers_of(path):
+            continue                      # the AST already calls it produced
+        if path.startswith(SWL._D7_INPUT_PREFIXES):
+            continue                      # the emitter excludes run INPUTS
+        cons = consumers[path]
+        decl = same_dir.get(os.path.dirname(path), frozenset())
+        both = decl & cons
+        owner = (next(iter(both)) if len(both) == 1 else
+                 next(iter(cons)) if len(cons) == 1 else
+                 next(iter(decl)) if len(decl) == 1 else None)
+        if owner is not None:
+            out.append((path, owner))
+    return tuple(out)
+
+
+def _plant_record(probe: Path, commit, path: str) -> Dict[str, Any]:
+    """Write *path*, run the REAL emitter, commit both. Returns the record.
+
+    The record is never hand-written. If ``step_write_ledger`` changes what it
+    records, this control changes with it or it breaks — which is the point: a
+    control asserting against a fixture shaped like the record stops testing
+    the record.
+    """
+    _start_run(probe)                     # t0, so the run window is KNOWN
+    target = probe / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("// written by a tool this plugin only shells out to\n")
+    commit(path)
+    res = SWL.emit(probe)
+    assert res.get("ok"), res
+    commit(R.RECORD_REL)
+    return json.loads((probe / R.RECORD_REL).read_text())
+
+
+def _bind(monkeypatch, probe: Path, rel: str = "probe") -> None:
+    """Point the record reader at *probe* and drop every derived memo."""
+    monkeypatch.setattr(
+        R, "record_roots", lambda: (R.RecordRoot(rel=rel, path=probe),))
+    R.clear_caches()
+    G.clear_flow_caches()
+
+
+def _unbind() -> None:
+    R.clear_caches()
+    G.clear_flow_caches()
+
+
+def test_d7_a_run_record_promotes_a_write_the_ast_cannot_see(monkeypatch):
+    """THE CONTROL for "no Python program writes it" == "the flow does not".
+
+    FORWARD — a path some gate READS, that no step DECLARES, and that no
+    ``programs/*.py`` write position resolves, is dropped by ``_w2_population``
+    as "externally supplied by design". A run then writes it, its own write
+    ledger records it in ``written_never_declared``, and the commit carries
+    that ledger. The path is produced, consumed and declared by nobody — W2's
+    exact predicate — and the owning step must be charged.
+    **This assertion fails against the byte-identical pre-change
+    ``matrix_d7_artifact_graph.py``**, which drops the path before it can be
+    attributed.
+
+    REVERSE A — the record is REMOVED and nothing else changes: the finding
+    disappears and the step's findings are byte-for-byte what they were
+    before. Backward compatibility, asserted rather than described; this half
+    passes against the pre-change file too, by construction.
+
+    REVERSE B — the record may only ADD. Every finding the step had WITHOUT a
+    record it still has WITH one. A binding that could take a finding away
+    would be a route around a rule, not a sharpening of one.
+
+    REVERSE C — the promotion is not "any file in the run tree". A second
+    file, written by the same run and recorded by the same ledger, but that NO
+    gate reads, must NOT become a finding: W2 asks for produced AND consumed,
+    and a rule that fires on everything a run writes would charge 335 paths on
+    a real run instead of 12.
+    """
+    candidates = _w2_dropped_candidates()
+    assert candidates, (
+        "no gate-read, undeclared path is dropped by W2 for lack of a Python "
+        "producer, so this control has nothing to exercise. If the flow "
+        "genuinely reached that state, delete the record oracle in the same "
+        "change rather than leaving an unexercised branch.")
+
+    chosen: Optional[Tuple[str, str]] = None
+    for path, owner in candidates:
+        with _probe_run_root("d7_record_pick_") as (probe, commit):
+            doc = _plant_record(probe, commit, path)
+            if any(r.get("rel") == path
+                   for r in doc["residual"]["written_never_declared"]):
+                chosen = (path, owner)
+                break
+    assert chosen is not None, (
+        f"the emitter reported none of the {len(candidates)} candidate paths "
+        f"in its written_never_declared residual, so this control cannot "
+        f"exercise the binding. Check step_write_ledger's own exclusions "
+        f"(_D7_INPUT_PREFIXES, claimed_patterns) against the candidate list.")
+    path, owner = chosen
+
+    with _probe_run_root("d7_record_bind_") as (probe, commit):
+        # ---- baseline: the AST alone, exactly today's answer ---------
+        _unbind()
+        before = tuple(str(f) for f in G.findings_for(owner))
+        assert not any(f.path == path for f in G.findings_for(owner)), (
+            f"{path} is already charged to step {owner} without any record; "
+            f"this control cannot show what the record added")
+
+        doc = _plant_record(probe, commit, path)
+        assert any(r.get("rel") == path
+                   for r in doc["residual"]["written_never_declared"]), doc[
+                       "residual"]["written_never_declared"][:5]
+
+        # A companion write nobody reads — REVERSE C's subject.
+        quiet = "phase3/stage3/pnr/d7_probe_unread_artefact.log"
+        (probe / quiet).parent.mkdir(parents=True, exist_ok=True)
+        (probe / quiet).write_text("nobody reads this\n")
+        commit(quiet)
+        res = SWL.emit(probe)          # re-emit so the record covers both files
+        assert res.get("ok"), res
+        commit(R.RECORD_REL)
+
+        # ---- FORWARD -------------------------------------------------
+        _bind(monkeypatch, probe)
+        assert R.observed_producers_of(path), (
+            f"the record does not observe {path!r}; the reader refused it — "
+            f"{R.binding_notes()}")
+        after = G.findings_for(owner)
+        promoted = [f for f in after if f.path == path]
+        assert promoted, (
+            f"step {owner}'s gate reads {path!r}, no step declares it, and "
+            f"the run's own committed write ledger records the run writing it "
+            f"({R.observed_producers_of(path)}) — yet W2 still calls it "
+            f"'externally supplied by design'. Findings now: "
+            f"{[str(f) for f in after]}; record says: {R.binding_notes()}")
+        assert promoted[0].rule == G.W2, promoted[0]
+        assert promoted[0].producer.startswith(R.OBSERVED_PREFIX), (
+            f"an OBSERVED producer must be labelled as one, so a reader can "
+            f"tell it from an AST-derived producer: {promoted[0].producer!r}")
+
+        # ---- REVERSE B: the record may only ADD ----------------------
+        assert set(before) <= {str(f) for f in after}, (
+            f"the record REMOVED a finding step {owner} had without it: "
+            f"{sorted(set(before) - {str(f) for f in after})}")
+
+        # ---- REVERSE C: produced AND consumed, not produced alone ----
+        assert R.observed_producers_of(quiet), (
+            "the companion file is not in the record either, so REVERSE C is "
+            "asserting nothing")
+        charged = [f for s in F.step_ids() for f in G.findings_for(s)
+                   if f.path == quiet]
+        assert not charged, (
+            f"a file the run wrote that NO gate reads was charged as a "
+            f"dimension-7 finding: {charged}. W2 requires produced AND "
+            f"consumed; without that this binding would charge every one of a "
+            f"real run's 335 undeclared writes.")
+
+        # ---- REVERSE A: no record -> exactly the pre-binding answer --
+        (probe / R.RECORD_REL).unlink()
+        _bind(monkeypatch, probe)
+        assert not R.observed_producers_of(path), R.binding_notes()
+        assert tuple(str(f) for f in G.findings_for(owner)) == before, (
+            "a run tree with no write record must be decided exactly as it "
+            "was before this binding existed")
+    _unbind()
+
+
+def test_d7_a_record_is_a_claim_about_the_past_not_evidence_about_today(
+        monkeypatch):
+    """The three evidence rules, re-applied live, each with its own reverse.
+
+    The record says a run wrote a path. That is a statement about the past.
+    Before it may promote anything the artefact is re-verified from ``lstat``
+    RIGHT NOW, because a record that outlived its artefact would let a
+    dimension charge a step on the strength of a JSON file:
+
+      * a SYMLINK is not evidence of a write — an alias is not content;
+      * a ZERO-BYTE file is not a produced artefact;
+      * an UNTRACKED path is a property of one working tree, and ``git clean
+        -xdf`` must not be able to change a cell's colour (#527).
+
+    Each is asserted against a record that DOES name the path — the emitter is
+    re-run over the good tree first, so the refusal is the live rule's doing
+    and not the record's silence — and the reverse case (the good artefact,
+    same record) must promote.
+    """
+    candidates = _w2_dropped_candidates()
+    assert candidates, "no candidate path; see the FORWARD control"
+
+    for label, damage in (
+        ("deleted", lambda p: p.unlink()),
+        ("emptied", lambda p: p.write_text("")),
+        ("aliased", lambda p: (p.unlink(),
+                               p.symlink_to(Path("..") / "real.txt"))),
+    ):
+        picked = None
+        for path, owner in candidates:
+            with _probe_run_root(f"d7_record_{label}_") as (probe, commit):
+                doc = _plant_record(probe, commit, path)
+                if not any(r.get("rel") == path
+                           for r in doc["residual"]["written_never_declared"]):
+                    continue
+                picked = path
+                target = probe / path
+                (target.parent / "real.txt").write_text("elsewhere\n")
+
+                # REVERSE: the good artefact + this very record -> promoted.
+                _bind(monkeypatch, probe)
+                assert R.observed_producers_of(path), (
+                    f"[{label}] the reader refused the intact tree, so the "
+                    f"refusal below would prove nothing: {R.binding_notes()}")
+
+                damage(target)
+                _bind(monkeypatch, probe)
+                assert not R.observed_producers_of(path), (
+                    f"[{label}] the record promoted {path!r} although the "
+                    f"artefact is {label} — a record is a claim about the "
+                    f"past, not evidence about today")
+                assert R.rejections(), (
+                    f"[{label}] the refusal was silent; every rejected "
+                    f"residual path must be reported under its own name")
+                break
+        assert picked, f"[{label}] no usable candidate path"
+    _unbind()
+
+
+def test_d7_an_uncommitted_record_may_not_decide_a_cell(monkeypatch):
+    """#527, restated for records — and both directions of it.
+
+    A record can only make a cell REDDER. An untracked one would therefore let
+    ``git clean -xdf`` change a verdict and let two checkouts of one commit
+    disagree, which is exactly the host-dependence #527 removed from dimension
+    3, arriving from the other side. So the rule is not "records never bind";
+    it is "a record binds once the repository carries it", and this asserts
+    the transition rather than either end of it.
+    """
+    candidates = _w2_dropped_candidates()
+    assert candidates, "no candidate path; see the FORWARD control"
+
+    for path, owner in candidates:
+        with _probe_run_root("d7_record_track_") as (probe, commit):
+            _start_run(probe)
+            target = probe / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("// produced by a shelled-out tool\n")
+            commit(path)
+            assert SWL.emit(probe).get("ok")          # written, NOT committed
+            doc = json.loads((probe / R.RECORD_REL).read_text())
+            if not any(r.get("rel") == path
+                       for r in doc["residual"]["written_never_declared"]):
+                continue
+
+            _bind(monkeypatch, probe)
+            assert not R.observed_producers_of(path), (
+                "an UNCOMMITTED write record changed a verdict: the colour of "
+                "this cell would then depend on whether somebody had run "
+                "step_write_ledger in their working tree")
+            assert any("not consulted" in n.lower() or "NOT consulted" in n
+                       for n in R.binding_notes()), R.binding_notes()
+
+            commit(R.RECORD_REL)
+            _bind(monkeypatch, probe)
+            assert R.observed_producers_of(path), (
+                f"the commit now carries the record and it still does not "
+                f"bind: {R.binding_notes()}")
+            assert any(f.path == path for f in G.findings_for(owner))
+            break
+    else:                                              # pragma: no cover
+        pytest.fail("no candidate path survived the emitter's own exclusions")
+    _unbind()
+
+
+def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch):
+    """An EMPTY residual and a WITHHELD one are different facts.
+
+    ``step_write_ledger`` refuses to report ``written_never_declared`` when the
+    run window is unknown or when the tree's mtimes are flattened — measured,
+    a git checkout stamps every tracked file with one mtime, and the published
+    cell ``benchmark-data/ic/spm/v1.5.66_gf180mcuD`` has 216 files across 3
+    distinct mtimes. Both cases produce an EMPTY residual.
+
+    Because this binding can only ADD, an empty residual is harmless to the
+    verdict. It is NOT harmless to the REASON printed beside it: "the run wrote
+    nothing undeclared" and "the record declined to answer" would read
+    identically. So a withheld record is refused BY NAME, and the note says
+    which of the two it was.
+
+    The consequence is stated in ``matrix_d7_write_record``'s docstring and is
+    the honest cost of this rule: a record published inside a git working tree
+    will normally be refused here.
+    """
+    with _probe_run_root("d7_record_withheld_") as (probe, commit):
+        # No t0 marker and no orchestrator summary -> the window is UNKNOWN and
+        # the emitter withholds the D7 residual. Its own doing, not this test's.
+        (probe / "phase3" / "stage3" / "pnr").mkdir(parents=True)
+        (probe / "phase3" / "stage3" / "pnr" / "openroad.log").write_text("x\n")
+        commit("phase3/stage3/pnr/openroad.log")
+        assert SWL.emit(probe).get("ok")
+        commit(R.RECORD_REL)
+        doc = json.loads((probe / R.RECORD_REL).read_text())
+        assert not doc["run_window"]["known"], doc["run_window"]
+        assert doc["residual"]["written_never_declared_total"] == 0
+        assert doc["undetermined"], (
+            "the emitter no longer says WHY it withheld; this control rests on "
+            "that sentence")
+
+        _bind(monkeypatch, probe)
+        assert R.observed_writes() == {}, R.observed_writes()
+        note = " ".join(R.binding_notes())
+        assert "WITHHELD" in note and "run window is unknown" in note, note
+
+        # REVERSE: give the same tree a t0 marker, re-emit, and it binds.
+        _start_run(probe)
+        (probe / "phase3" / "stage3" / "pnr" / "openroad.log").write_text("yy\n")
+        commit("phase3/stage3/pnr/openroad.log")
+        assert SWL.emit(probe).get("ok")
+        commit(R.RECORD_REL)
+        _bind(monkeypatch, probe)
+        assert R.observed_writes(), (
+            f"the same tree with a known run window must bind: "
+            f"{R.binding_notes()}")
+    _unbind()
+
+
+#: Run roots whose write record this dimension consults. MEASURED 2026-08-06
+#: and EMPTY: ``git ls-tree -r --name-only HEAD | grep -c write_ledger.json``
+#: is 0 — ``step_write_ledger`` landed the same day and no run tree has been
+#: re-published since — so W2's producer oracle is the AST alone and every one
+#: of the 63 cells is decided exactly as it was before the binding.
+#:
+#: The pin is what makes the first published record a LOUD, NAMED event. The
+#: per-step promotions this module's docstring tabulates (12 on
+#: ``_sky130A_r3_run``, 9 on ``converge_1.5.44_gf180mcuD``, over steps 11, 21,
+#: 23, 24, 27, 30, D1, DT2, DT3 and M2) were measured against run trees the
+#: commit does not carry. On the day one of them IS carried, this test reddens
+#: and each promotion must be re-measured and then either DECLARED in the flow
+#: yaml or waived with evidence — not discovered later from a cell that
+#: quietly changed colour.
+#:
+#: THE DAY CAME, AND THE PIN MOVES ONLY NOW THAT THE PROMOTIONS ARE DISPOSED
+#: (#1215). ``benchmark-data/ic/spm/v1.10.18_sky130A`` was published carrying
+#: ``reports/write_ledger.json``, the test reddened, and it stayed red through
+#: four closed PRs because the dispositions were the decision — not the pin.
+#: Re-measured rather than inherited from the issue. TWO records are carried,
+#: consulted, and between them refuse 273 of their residual paths on live
+#: re-verification:
+#:
+#:     v1.10.18_sky130A   captured 2026-08-09   399 candidates, 144 refused
+#:     v1.9.96_gf180mcuD  captured 2026-08-08   394 candidates, 129 refused
+#:
+#: The A/B against a forced-empty ``observed_writes()`` over all 63 steps
+#: leaves **5** promotions on 5 steps, with **0** findings lost — the one
+#: direction this binding may never move:
+#:
+#:     step D1  reports/audit/phase1/expert_parse_track.json   DECLARED
+#:     step 23  reports/phase3/sta/post_route_signoff_corner.json  DECLARED
+#:     step 24  reports/phase3/dynamic_ir.json                 DECLARED
+#:     step 27  reports/phase3/si_mcf_sta.json                 DECLARED
+#:     step 34  reports/phase3/cmp_fill_emit.json              WAIVED
+#:
+#: Five, not the seven the issue measured against a different pair of roots:
+#: step 11's ``dft/coverage.yml`` and M2's ``L21_POWER_INTENT.json`` were
+#: declared separately before this change, and the second root was withdrawn
+#: and later re-published from the run's own later capture (#1529).
+#:
+#: The four DECLARED are named in ``flow/phase1_phase2_phase3.yaml`` on the
+#: step that PRODUCES them, each with its blast radius measured by
+#: ``flow_compliance_check.check_step`` over the manifest run roots — on a
+#: fresh copy per arm, because ``check_step`` runs the gate and the gate
+#: writes the artefact, so two arms sharing one tree is not an A/B. Each is
+#: also recorded PRODUCED_BY_RUN in ``matrix_d3_output_manifest.json``,
+#: because the yaml half alone is a HALF FIX that relocates the red into
+#: dimension 3 rather than removing it (measured: d7 6 -> 1, d3 6 -> 10).
+#: Step 34 is WAIVED instead, on the measured fact that nothing reads it: its
+#: apparent consumer is ``metal_fill_emit``'s own default-output constant,
+#: counted as a read by :func:`matrix_d7_artifact_graph._gate_consumers`.
+#:
+#: The pin therefore names a population whose every promotion has a
+#: disposition. It is BOOKKEEPING, deliberately last, and it cannot be used as
+#: evidence that the dispositions happened —
+#: :func:`test_d7_the_write_record_population_is_named_root_by_root` asserts
+#: both halves of the invariant so that a pin naming a root which contributes
+#: nothing is as loud as a population that grew quietly.
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
+
+
+class _FakeObservation:
+    """The one field :func:`pin_complaints` reads off an observation."""
+
+    def __init__(self, root: str) -> None:
+        self.root = root
+
+
+def pin_complaints(pinned, measured, observed, notes):
+    """Everything wrong with the pin, as SENTENCES. Empty means clean.
+
+    A pure predicate over the four things the pin is a claim about, taking
+    them as arguments rather than reading :mod:`matrix_d7_write_record`
+    itself, so the assertion over the SHIPPED tree and the paired guards below
+    run the exact same code. A guard exercising a private copy of this logic
+    would prove only that the copy works — the failure mode
+    ``test_flow_declares_no_output_twice`` names for the same reason.
+
+    *observed* is ``observed_writes()``: ``{path: (Observation, ...)}``, or
+    ``None`` when the reader could not answer at all.
+    """
+    out = []
+    pinned_set, measured_set = set(pinned), set(measured)
+    if measured_set != pinned_set:
+        out.append(
+            f"the set of run roots whose write record decides this dimension "
+            f"changed.\n  measured: {sorted(measured_set)}\n"
+            f"  pinned:   {sorted(pinned_set)}\n"
+            f"  per root: {list(notes)}\n"
+            f"Every promotion count in this module's docstring was measured "
+            f"against the pinned set. Re-measure them, then move the pin — a "
+            f"population that grows quietly is how a dimension stops "
+            f"describing what it measures.")
+    if not notes or not all(n and n.strip() for n in notes):
+        out.append(
+            "the reader published no reason at all; a degrade to the "
+            "pre-binding behaviour must never be silent")
+    if not pinned_set:
+        if observed:
+            out.append(
+                f"no root is bound, yet the observation index is non-empty: "
+                f"{sorted(observed)[:5]}")
+        return out
+    # THE OTHER HALF, which had never been written because the population had
+    # always been empty (#1215). Without it, moving the pin trades one
+    # unasserted state for another: `measured` is derived from
+    # `observed_writes() is not None`, and `{} is not None` is True — so a
+    # binding that went INERT (records stop being read, or every observation
+    # is refused) would still report every root as bound and this test would
+    # still pass, while the pin went on claiming that a named root decides
+    # this dimension and nothing decided it.
+    if not observed:
+        out.append(
+            f"the pin names {sorted(pinned_set)}, yet the binding observed "
+            f"NOTHING at all. A pinned population with an empty observation "
+            f"index is the pre-binding behaviour wearing the binding's "
+            f"name.\n  per root: {list(notes)}")
+        return out
+    contributing = {o.root for obs in observed.values() for o in obs}
+    if contributing != pinned_set:
+        out.append(
+            f"a pinned root must CONTRIBUTE, not merely load.\n"
+            f"  pinned:       {sorted(pinned_set)}\n"
+            f"  contributing: {sorted(contributing)}\n"
+            f"  silent:       {sorted(pinned_set - contributing)}\n"
+            f"  unpinned:     {sorted(contributing - pinned_set)}\n"
+            f"A root that loads and then promotes nothing is "
+            f"indistinguishable here from one that was never consulted, "
+            f"which is the state this pin exists to make loud.")
+    return out
+
+
+@needs_corpus
+def test_d7_the_write_record_population_is_named_root_by_root():
+    """Backward compatibility, stated rather than assumed.
+
+    "A run with no record keeps today's behaviour" is only honest if a reader
+    can see WHICH runs those are and WHY. This asserts the pinned population
+    and, for every root, that the reader returns a SENTENCE — no record,
+    untracked, wrong schema, withheld residual — so a degrade to the
+    pre-binding behaviour is never silent. Since #1215 it also asserts the
+    NON-EMPTY half: a pinned root that contributes nothing is as loud as a
+    population that grew quietly.
+    """
+    _unbind()
+    observed = R.observed_writes()
+    measured = tuple(sorted(
+        r.label for r in R.record_roots() if observed is not None
+        and R._load(r)[0] is not None))
+    assert pin_complaints(
+        RECORD_BOUND_ROOTS, measured, observed, R.binding_notes()) == []
+
+
+def test_the_pin_FIRES_when_the_binding_goes_inert():
+    """PAIRED GUARD, and the reason the non-empty half exists at all.
+
+    The state: the records still load, so every pinned root is `measured`,
+    but the binding produces no observation whatsoever. Before #1215 this was
+    invisible — `{} is not None` is True, `measured` still equalled the pin,
+    and the test passed while nothing decided the dimension.
+    """
+    pinned = ("benchmark-data/ic/spm/v1.10.18_sky130A",)
+    complaints = pin_complaints(pinned, pinned, {}, ("consulted",))
+    assert complaints, "an inert binding must not read as a bound one"
+    assert "observed NOTHING at all" in complaints[0]
+
+
+def test_the_pin_FIRES_when_a_pinned_root_contributes_nothing():
+    """PAIRED GUARD: the pin may not name a root that promotes nothing.
+
+    Two roots load and only one is ever the source of an observation. The
+    silent one is named, so it cannot be mistaken for a root that was simply
+    quiet this time.
+    """
+    pinned = ("root/loud", "root/silent")
+    observed = {"reports/x.json": (_FakeObservation("root/loud"),)}
+    complaints = pin_complaints(pinned, pinned, observed, ("consulted",))
+    assert complaints, "a pinned root that contributes nothing must be loud"
+    assert "root/silent" in complaints[0] and "silent:" in complaints[0]
+
+
+def test_the_pin_FIRES_on_an_unpinned_root_that_contributes():
+    """PAIRED GUARD, the other direction: growth must stay loud.
+
+    The half that already existed, re-proved through the shared predicate so
+    that refactoring the assertion cannot have quietly dropped it.
+    """
+    complaints = pin_complaints(
+        (), ("benchmark-data/ic/spm/v1.10.18_sky130A",), {}, ("consulted",))
+    assert complaints, "a population that grew must not read as unchanged"
+    assert "changed" in complaints[0]
+
+
+def test_the_pin_is_SILENT_on_a_healthy_binding():
+    """The other half of every guard above: it must not fire on the good state.
+
+    Without this, all three guards could be satisfied by a predicate that
+    complains unconditionally — a check that always fires measures nothing.
+    """
+    pinned = ("root/loud",)
+    observed = {"reports/x.json": (_FakeObservation("root/loud"),)}
+    assert pin_complaints(pinned, pinned, observed, ("consulted",)) == []
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1146,3 +2143,210 @@ def test_self_certified_evidence_is_named_and_refusable():
         "synthesized fixture, so neither the advisory nor the strict refusal "
         "was exercised — this test measured nothing"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# vibe-ic#1265 — the write-detector and the ATOMIC writers
+# ──────────────────────────────────────────────────────────────────────
+#: The three shapes an atomic helper call actually arrives in. All three name
+#: the destination FIRST, which is what makes them invisible to a detector that
+#: only knows `p.write_text(...)` — there the path is the ATTRIBUTE VALUE, here
+#: it is `args[0]`.
+_ATOMIC_CALL_SHAPES = '''
+from pathlib import Path
+import _atomic_output
+import _atomic_artefact
+import _atomic_artefact as _aa
+from _atomic_output import atomic_write_text
+
+def a(project):
+    _atomic_output.atomic_write_text(project / "reports" / "alpha.json", "{}")
+
+def b(project):
+    _atomic_artefact.atomic_write_text(project / "reports" / "beta.json", "{}")
+
+def c(project):
+    atomic_write_text(project / "reports" / "gamma.json", "{}")
+
+def d(project):
+    (project / "reports" / "delta.json").write_text("{}")
+
+def e(project):
+    helper_write(project / "reports" / "epsilon.json", "{}")
+
+def f(project):
+    _atomic_artefact.write_text(project / "reports" / "zeta.json", "{}")
+
+def g(project):
+    _aa.write_json(project / "reports" / "eta.json", {})
+
+def h(project):
+    (project / "reports" / "theta.json").write_text(
+        project / "reports" / "NOT_A_DESTINATION.json")
+
+def i(project):
+    _aa.publish(project / "reports" / "omega.json", "{}")
+'''
+
+
+def _detected(src: str) -> set:
+    import ast as _ast
+    return {"/".join(t) for t in G._collect_writes(_ast.parse(src))}
+
+
+def test_d7_the_write_detector_sees_an_atomic_write(monkeypatch):
+    """A program converted to an atomic writer must still read as a WRITE.
+
+    WHY THIS EXISTS (vibe-ic#1265). The detector recognised `open()`,
+    `p.open("w")`, `p.write_text` and `p.write_bytes` — every one of which
+    carries the path as the ATTRIBUTE VALUE. An atomic helper carries it as
+    `args[0]` instead, so the moment a program was converted the delegate walk
+    saw NO WRITE at all, and dimension 7 stopped being able to say that the
+    program produces its declared output. MEASURED on the byte-identical
+    pre-change file: all three atomic shapes below are MISSED and only
+    `delta.json` is seen.
+
+    That is not a hypothetical conversion. vibe-ic#1241's group (d) is
+    SEVENTEEN programs to be routed through exactly this call, and each one
+    would have gone silent here.
+
+    THE VOCABULARY IS MODULE-AGNOSTIC ON PURPOSE, and this test pins that
+    rather than describing it: `_atomic_output.atomic_write_text` (#1265) and
+    `_atomic_artefact.atomic_write_text` (#1110) are two open candidates for
+    the same primitive and the arbitration is not settled. A detector keyed on
+    the winning module would report NO WRITE for every program converted
+    through the other name — the same defect, one module over — so both are
+    asserted, together with the bare `from ... import` form.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    for want in ("reports/alpha.json",      # module-qualified, _atomic_output
+                 "reports/beta.json",       # module-qualified, _atomic_artefact
+                 "reports/gamma.json"):     # bare, after `from ... import`
+        assert want in seen, (
+            f"{want} was written by an atomic helper and the detector did not "
+            f"see it; d7 would report this program as producing nothing. "
+            f"detected={sorted(seen)}")
+
+
+def test_d7_the_plain_write_shapes_still_resolve(monkeypatch):
+    """PAIRED GUARD, direction one: the old shapes are not traded away.
+
+    Widening a detector by rewriting how it resolves a call is exactly where
+    the previously-working half gets dropped, so the plain attribute form is
+    asserted in the same fixture that exercises the new one.
+    """
+    assert "reports/delta.json" in _detected(_ATOMIC_CALL_SHAPES)
+
+
+def test_d7_a_first_argument_is_not_a_write_on_its_own(monkeypatch):
+    """PAIRED GUARD, direction two: the rule is a VOCABULARY, not "args[0]".
+
+    The cheap way to make the shapes above resolve is to treat the first
+    argument of every call as a destination. That would report a write for any
+    function that merely RECEIVES a path — `_load(p)`, `_check(p)`, a helper
+    that reads it — and dimension 7 would start charging steps for artefacts
+    nothing produces. `helper_write` is not in `_ATOMIC_WRITERS`, so its
+    argument must not be counted, and this test fails the moment the
+    implementation stops consulting the set.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    assert "reports/epsilon.json" not in seen, (
+        "a call NOT in the atomic vocabulary had its first argument counted "
+        f"as a write — the rule has become 'args[0]', not a vocabulary. "
+        f"detected={sorted(seen)}")
+    assert "helper_write" not in G._ATOMIC_WRITERS
+
+
+def test_d7_the_write_detector_sees_a_SHADOWING_atomic_write(monkeypatch):
+    """vibe-ic#1452 — the drop-in atomic writers must read as writes too.
+
+    #1265 taught this detector the atomic helpers whose names are NEW
+    (`atomic_write_text`), by name alone. It did not teach it the ones that
+    KEEP the name of the `Path` method they replace and move the destination
+    to the first argument — `_atomic_artefact.write_text(p, data)`, whose own
+    docstring says it is "signature-compatible on purpose" so that converting
+    a call site is "deleting `.write_text(` and calling this instead".
+
+    That shape hit the pre-existing `elif fn.attr in ("write_text",
+    "write_bytes")` branch, which reads the destination off the RECEIVER — and
+    the receiver is the module alias `_aa`, which resolves to no path at all.
+    So the write silently vanished. MEASURED on the byte-identical pre-change
+    tree: 32 such call sites across 8 programs, and 21 declared artefact paths
+    that no oracle could attribute to any producer, among them
+    `eco_trigger_decision.json` — which `phase3_one_shot_runner` writes on the
+    line above the one that appends it to `written`.
+
+    This is #1265's defect recurring through the OTHER conversion route, which
+    is exactly what that row's own comment predicted would happen if the
+    vocabulary were keyed on the wrong thing.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    for want in ("reports/zeta.json",   # module-qualified drop-in write_text
+                 "reports/eta.json"):   # module-qualified drop-in write_json
+        assert want in seen, (
+            f"{want} was written by a drop-in atomic helper and the detector "
+            f"did not see it; d7 would report this program as producing "
+            f"nothing. detected={sorted(seen)}")
+
+
+def test_d7_a_shadowing_writer_does_not_steal_the_receiver_form(monkeypatch):
+    """PAIRED GUARD: when the RECEIVER is the path, it stays the destination.
+
+    `write_text` names two different calls — the `Path` method, whose
+    destination is the receiver, and the drop-in helper, whose destination is
+    `args[0]`. Reading `args[0]` unconditionally would make every
+    `p.write_text(payload)` report a write to whatever it PASSES, which for a
+    program that writes one artefact naming another is a producer attributed
+    to the wrong path. `h()` in the fixture writes `theta.json` and passes a
+    second artefact-shaped path as CONTENT; only the first is a write.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    assert "reports/theta.json" in seen, (
+        f"the plain Path.write_text form was traded away. detected={sorted(seen)}")
+    assert "reports/NOT_A_DESTINATION.json" not in seen, (
+        "a path passed as CONTENT to Path.write_text was counted as a write — "
+        f"the receiver stopped winning. detected={sorted(seen)}")
+
+
+def test_d7_the_shadowing_rule_is_a_vocabulary_too(monkeypatch):
+    """PAIRED GUARD, direction two: not "any attribute call's first argument".
+
+    The cheap way to make the shapes above resolve is to count `args[0]` for
+    every attribute call whose receiver is not a path. That would charge a
+    program for every helper it merely HANDS a path to. `_aa.publish(...)` is
+    not in `_SHADOWING_ATOMIC_WRITERS`, so it must not be counted, and this
+    fails the moment the implementation stops consulting the set.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    assert "reports/omega.json" not in seen, (
+        "an attribute call NOT in the shadowing vocabulary had its first "
+        f"argument counted as a write. detected={sorted(seen)}")
+    assert "publish" not in G._SHADOWING_ATOMIC_WRITERS
+
+
+def test_d7_both_write_walks_share_one_atomic_vocabulary(monkeypatch):
+    """The module carries TWO traversals that must agree about what a write is.
+
+    `_collect_writes` and the delegate walk inside `flag_value_is_written` are
+    separate copies of the same shapes — the second exists to answer "does the
+    program this gate names write its --json target". They are bound to ONE
+    frozen set so the vocabulary cannot drift even though the traversals can;
+    asserting the shared name is what keeps a future edit from teaching one
+    walk and silently leaving the other blind, which is the failure this whole
+    row is about.
+    """
+    assert isinstance(G._ATOMIC_WRITERS, frozenset) and G._ATOMIC_WRITERS
+    # vibe-ic#1452 — the drop-in writers are a SECOND vocabulary with the same
+    # obligation, and it is asserted here rather than in a test of its own so
+    # that the next set added to this module has an obvious place to be named.
+    assert (isinstance(G._SHADOWING_ATOMIC_WRITERS, frozenset)
+            and G._SHADOWING_ATOMIC_WRITERS)
+    src = Path(G.__file__).read_text(encoding="utf-8")
+    assert src.count("_SHADOWING_ATOMIC_WRITERS") >= 3, (
+        "the drop-in atomic vocabulary is referenced fewer than three times "
+        "(its definition plus both walks), so one traversal is not consulting "
+        "it and can go blind on its own")
+    assert src.count("_ATOMIC_WRITERS") >= 3, (
+        "the atomic vocabulary is referenced fewer than three times "
+        "(its definition plus both walks), so one traversal is not consulting "
+        "it and can go blind on its own")

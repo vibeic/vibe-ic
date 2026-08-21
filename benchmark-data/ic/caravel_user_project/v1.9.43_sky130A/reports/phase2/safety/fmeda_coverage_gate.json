@@ -1,6 +1,0 @@
-{
-  "gate": "fmeda_coverage_check",
-  "verdict": "VACUOUS_PASS",
-  "passed": true,
-  "reason": "no declared safety mechanism (ECC/parity/lockstep) found \u2014 FMEDA diagnostic-coverage step vacuously skipped"
-}

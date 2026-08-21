@@ -16,7 +16,7 @@
 # same-named container automatically.
 #
 # Usage:
-#   ./restart-eda.sh                      # recreate on the PINNED vibeic/vibeic-eda:$(cat VERSION)
+#   ./restart-eda.sh                      # recreate on the newest vibeic-eda image this host holds, BY DIGEST
 #   ./restart-eda.sh 0.2.11               # bare tag  -> vibeic/vibeic-eda:0.2.11
 #   ./restart-eda.sh vibeic/vibeic-eda:latest   # full ref honored as-is (explicit floating opt-in)
 #   FORCE=1 ./restart-eda.sh              # recreate even if an EDA job is running
@@ -41,18 +41,31 @@ EDA_PROCS='openroad|yosys|magic|netgen|klayout|iverilog|verilator|ngspice|fault|
 die() { echo "restart-eda: $*" >&2; exit "${2:-1}"; }
 
 # --- resolve requested image ref -------------------------------------------
-# The no-arg default is the PINNED version from the VERSION file next to this
-# script (the image's single source of truth), never a floating `latest`: a
-# stale local `latest` would silently recreate the container on an outdated
-# toolchain. Floating tags stay available by passing them explicitly.
+# The no-arg default is a DIGEST, asked of `_eda_image.py` — never a floating
+# `latest`, because a stale local `latest` would silently recreate the container
+# on an outdated toolchain. Floating tags stay available by passing them
+# explicitly.
+#
+# It used to be `$(cat VERSION)` — vibeic-eda's version number stored in this
+# repo, which charged a PR here per image release. That file is gone. The helper
+# is SHELLED OUT TO rather than reimplemented here: "which image" is one rule,
+# and a bash second opinion is how the two copies drift.
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
   arg="$1"
 else
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  [[ -f "${SCRIPT_DIR}/VERSION" ]] || die \
-    "no tag argument and no VERSION file at ${SCRIPT_DIR}/VERSION — pass a tag explicitly"
-  arg="$(tr -d '[:space:]' < "${SCRIPT_DIR}/VERSION")"
-  [[ -n "$arg" ]] || die "VERSION file ${SCRIPT_DIR}/VERSION is empty — pass a tag explicitly"
+  RESOLVER=""
+  probe="${SCRIPT_DIR}"
+  while [[ "$probe" != "/" ]]; do
+    cand="${probe}/vibe-ic-marketplace/plugins/vibe-ic/programs/_eda_image.py"
+    [[ -f "$cand" ]] && { RESOLVER="$cand"; break; }
+    probe="$(dirname "$probe")"
+  done
+  [[ -n "$RESOLVER" ]] || die \
+    "no tag argument and no _eda_image.py above ${SCRIPT_DIR} — pass a tag explicitly"
+  arg="$(python3 "$RESOLVER" --judged)" || die \
+    "no tag argument and ${RESOLVER} could not name an image on this host — pass a tag explicitly"
+  [[ -n "$arg" ]] || die "${RESOLVER} --judged printed nothing — pass a tag explicitly"
 fi
 if [[ "$arg" == *:* || "$arg" == */* ]]; then
   IMAGE="$arg"                    # a full ref (repo[:tag] or repo/path) — honor as-is
@@ -126,9 +139,42 @@ echo "   cmd          : ${CMD[*]:-<image default>}   (entrypoint stays image-bak
 echo "== removing old container (if any)"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
+# --- memory ceiling --------------------------------------------------------
+# MEASURED 2026-08-19 across a seven-machine fleet: 45 EDA containers were
+# running with `HostConfig.Memory == 0`. A container with no cgroup limit does
+# not share the host's memory, it IS the host's memory, and `ulimit -v` inside
+# the image is `unlimited`, so a tool never gets an allocation failure it can
+# report. On two of those machines a yosys took the whole box — 54 GB apiece
+# for two siblings, then 109 GB for the survivor once the kernel had killed its
+# twin and freed the room — and what actually died was the desktop session,
+# because the OOM killer picks by oom_score_adj, not by who caused it.
+#
+# The ceiling comes from programs/_docker_memory.py so the shell and the Python
+# `docker run` callers cannot drift apart. Exit 2 from that helper means it
+# could not determine a ceiling; that is a REFUSAL, never a fallback to
+# unbounded — a safety guard whose failure mode is "no guard" reports success
+# while leaving exactly the configuration that took a host down.
+#
+#   VIBEIC_DOCKER_MEMORY=48g   explicit ceiling
+#   VIBEIC_DOCKER_MEMORY=0     opt out on purpose
+_MEMTOOL="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/../../vibe-ic-marketplace/plugins/vibe-ic/programs/_docker_memory.py"
+declare -a MEMFLAGS=()
+if [[ -f "$_MEMTOOL" ]]; then
+  if _memout="$(python3 "$_MEMTOOL" --flags 2>&1)"; then
+    while IFS= read -r _f; do [[ -n "$_f" ]] && MEMFLAGS+=( "$_f" ); done <<< "$_memout"
+  else
+    die "could not determine a container memory ceiling: ${_memout}"
+  fi
+else
+  die "missing ${_MEMTOOL} — refusing to create '${NAME}' with no memory ceiling.
+   Set VIBEIC_DOCKER_MEMORY=<size> to name one, or VIBEIC_DOCKER_MEMORY=0 to opt out."
+fi
+echo "   memory       : ${MEMFLAGS[*]:-<unlimited — opted out>}"
+
 declare -a RUN=( docker run -d --name "$NAME" )
 [[ -n "$USER_SPEC" ]] && RUN+=( -u "$USER_SPEC" )
 [[ -n "$WORKDIR"  ]] && RUN+=( -w "$WORKDIR" )
+[[ ${#MEMFLAGS[@]} -gt 0 ]] && RUN+=( "${MEMFLAGS[@]}" )
 RUN+=( "${BINDS[@]}" "$IMAGE" )
 [[ ${#CMD[@]} -gt 0 ]] && RUN+=( "${CMD[@]}" )
 
