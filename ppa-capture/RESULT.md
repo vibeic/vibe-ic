@@ -1314,6 +1314,32 @@ happened anyway because the rule as written asks for a control and not for the
 one property that makes a control real: **it must demonstrate SEPARATION.** A-27
 now says so.
 
+## The ALREADY-PROGRAM claims — can the guards they name actually fail?
+
+Sixteen findings produced no record because a program already enforces the class.
+Each was verified by reading that program. But an ALREADY-PROGRAM entry asserts
+**coverage**, and unverified coverage is the subject of three records in this
+batch — so the claims owe the same separation test as everything else: *can the
+named guard fail?*
+
+    files backing the claims, checked         9
+    carrying tests whose names indicate a
+      negative arm                            all 9, between 1 and 10 each
+    read directly to confirm the name means
+      what it says                            1
+
+**The name count is a screen and is labelled as one** — a test called
+`…is_never_withheld` might assert a positive. So one was read in full, the
+negative arm of the census backing two of the three findings the brief singles
+out. It reconstructs the pre-fix declaration, asserts the consumer refuses it by
+code, and its own docstring states the stake: *"If `unit_suffix_of` stopped
+firing, the census above would pass over a tree where every unit was wrong."*
+
+That is one anchor under a nine-file screen, not sixteen verified guards, and the
+difference is stated rather than rounded. Reading the other fifteen negative arms
+is a bounded, mechanical follow-up; what this establishes is that the claims are
+not resting on tests that merely assert the happy path.
+
 ---
 
 ## Summary
