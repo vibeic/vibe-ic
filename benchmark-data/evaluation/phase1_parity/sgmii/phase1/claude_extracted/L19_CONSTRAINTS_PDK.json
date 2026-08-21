@@ -1,8 +1,0 @@
-{
-  "fields": {
-    "pdk_target": "N/A (protocol spec, not a tapeout)",
-    "io_standard": "LVDS / CML differential",
-    "line_rate_gbd": 1.25,
-    "ddr_clock_mhz": 625
-  }
-}

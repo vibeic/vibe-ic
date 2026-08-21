@@ -615,7 +615,19 @@ def test_no_report_is_the_flows_own_n_a_and_not_this_gates_verdict(tmp_path):
     gate = {"optional_program_exit_zero": _step27_si_gate_spec()}
     proj = _b_no_report(tmp_path / "flow_noreport")
     passed, reasons = F._evaluate_gate(proj, gate)
-    assert passed is True and reasons == [], reasons
+    assert passed is True, reasons
+    # THE PROPERTY THIS TEST IS ABOUT is that the flow never RAN the gate, and
+    # that is asserted directly rather than through the absence of any reason
+    # at all. W4 stopped that absence from being the evidence: an unmet
+    # condition now leaves a record naming what was not looked at and the
+    # reason the clause declares for why that is a genuine not-applicable. The
+    # gate still does not run, which is what "the split is not credited with a
+    # behaviour the flow already had" needs.
+    assert not any(r.startswith(F._RAN_HINT_PREFIX) for r in reasons), reasons
+    na = [r for r in reasons if r.startswith(F._NOT_APPLICABLE_HINT_PREFIX)]
+    assert len(na) == 1 and "si_mcf_sta.json" in na[0], reasons
+    assert not [r for r in reasons
+                if not r.startswith(F._NOT_APPLICABLE_HINT_PREFIX)], reasons
     # ... and invoked directly it is a NOT_RUN, not a design failure.
     r, doc = _run(proj)
     assert (r.returncode, doc["verdict"]) == (G.RC_FAIL, "NOT_RUN")
