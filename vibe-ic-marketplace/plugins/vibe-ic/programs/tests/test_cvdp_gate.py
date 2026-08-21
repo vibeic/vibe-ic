@@ -23,7 +23,20 @@ HARNESS = PLUGIN / "benchmark"
 sys.path.insert(0, str(HARNESS))
 import cvdp_gate as G  # noqa: E402
 
-_HAS_IVERILOG = shutil.which("iverilog") is not None
+#: The guard's definition lives in `_sim_tools` so it exists ONCE rather
+#: than once per file — eight copies of `shutil.which("yosys")` is the
+#: drift shape this repo removes from registries one at a time. Same
+#: semantics: skip only on genuine absence, and name the missing tool.
+#: See that module for the measured 38-test / 8-file cluster.
+from _sim_tools import (  # noqa: E402
+    MISSING as _MISSING_SIM, NEEDS_SIM as _NEEDS_SIM)
+
+#: Derived from the shared set rather than probed a second time. This
+#: file already guarded 18 OTHER tests on `_HAS_IVERILOG and _HAS_YOSYS`
+#: — the both-tools rule was always this file's intent; the 13 fixed
+#: here were simply left on the older iverilog-only marker.
+_HAS_IVERILOG = "iverilog" not in _MISSING_SIM
+_HAS_YOSYS = "yosys" not in _MISSING_SIM
 
 GOOD = """Here is the fix:
 
@@ -87,7 +100,7 @@ def test_559_required_module_names_from_prompt():
         "Design a 4-bit counter.") == set()
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_559_filename_module_mismatch_is_advisory_with_prompts(tmp_path):
     # ORGANIC #642 round-2 — a filename hint (`rtl/foo.sv`) is NOT the harness
     # TOPLEVEL (cocotb sets it from the module DECLARATION name). A
@@ -112,7 +125,7 @@ def test_559_filename_module_mismatch_is_advisory_with_prompts(tmp_path):
                for n in e.get("notes", []))
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_559_matching_module_passes_and_no_prompts_unchanged(tmp_path):
     good = ("```verilog\nmodule foo(input a, output b);\n"
             "assign b=a;\nendmodule\n```\n")
@@ -144,7 +157,7 @@ def test_extract_code_kinds():
     assert kind == "doc_only" and code is None
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_buggy_completions_blocked_good_gated_in(tmp_path):
     batch = _write_batch(tmp_path, [
         {"id": "p_good", "completion": GOOD},
@@ -165,7 +178,7 @@ def test_buggy_completions_blocked_good_gated_in(tmp_path):
     assert verd["p_good"] == "PASS"
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_negative_context_module_instantiation_not_blocked(tmp_path):
     # NEGATIVE no-leak (#528): Unknown module type from the problem's
     # context files is a LEGAL copilot shape — must gate in.
@@ -176,7 +189,7 @@ def test_negative_context_module_instantiation_not_blocked(tmp_path):
     assert [r["id"] for r in _read_jsonl(out)] == ["p_ctx"]
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_doc_only_completion_tolerated(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_doc", "completion": DOC_ONLY}])
     out = tmp_path / "responses.jsonl"
@@ -188,7 +201,7 @@ def test_doc_only_completion_tolerated(tmp_path):
     assert rep["records"][0]["verdict"] == "PASS_DOC_ONLY"
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_hygiene_fix_is_enforced_in_gate(tmp_path):
     # a draft with a reset-less power-up register: rtl_hygiene_lint --fix
     # must run INSIDE the gate (the gated-in completion may differ from the
@@ -279,7 +292,7 @@ endmodule
 """
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_text_fence_before_broken_verilog_blocks(tmp_path):
     # HIGH (review): a ```text fence before the verilog fence used to skew
     # fence pairing — the broken code passed as doc_only (block-evasion).
@@ -291,7 +304,7 @@ def test_review_text_fence_before_broken_verilog_blocks(tmp_path):
     assert _read_jsonl(out) == []
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_text_fence_before_good_verilog_gates_in(tmp_path):
     # the same skew also DROPPED good code (compiled the prose → false
     # block). The good record must gate in as code, not doc_only.
@@ -307,7 +320,7 @@ def test_review_text_fence_before_good_verilog_gates_in(tmp_path):
     assert rep["records"][0]["kind"] == "fenced"
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_two_fence_writeback_not_duplicated(tmp_path):
     # HIGH (review): the old write-back substituted the CONCATENATED blob
     # into every fence (f1+f2 twice → duplicate declarations). The emitted
@@ -328,7 +341,7 @@ def test_review_two_fence_writeback_not_duplicated(tmp_path):
     assert "```" not in body
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_unknown_module_does_not_mask_genuine_error(tmp_path):
     # MED (review): icarus aborts on the unknown context module BEFORE
     # reporting the author's own genuine error (undeclared signal under
@@ -342,7 +355,7 @@ def test_review_unknown_module_does_not_mask_genuine_error(tmp_path):
     assert _read_jsonl(out) == []
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_review_report_discloses_iverilog_version(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_doc2", "completion": DOC_ONLY}])
     out = tmp_path / "responses.jsonl"
@@ -355,7 +368,6 @@ def test_review_report_discloses_iverilog_version(tmp_path):
 
 # ── #531 yosys smoke + #535 transmission integrity ─────────────────────────
 
-_HAS_YOSYS = shutil.which("yosys") is not None
 
 IVERILOG_OK_YOSYS_EMPTY = "```verilog\n// no module at all — just a comment\n```"
 
@@ -571,7 +583,7 @@ def test_round2_json_dict_extraction():
     assert G.extract_code(JSON_DICT_SCHEMA) == (None, "doc_only")
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_round2_json_dict_good_gates_in_broken_blocked(tmp_path):
     batch = _write_batch(tmp_path, [
         {"id": "p_jgood", "completion": JSON_DICT_GOOD},
@@ -613,7 +625,7 @@ def test_round2_531_json_dict_reaches_yosys_smoke(tmp_path):
     assert [r["id"] for r in _read_jsonl(out)] == ["p_jsmoke"]
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+@_NEEDS_SIM
 def test_round2_535_empty_completion_blocked_not_doc_only(tmp_path):
     # #535 reopen: whitespace-only / trivially-short completions are the
     # corruption shape and must BLOCK — never PASS_DOC_ONLY.

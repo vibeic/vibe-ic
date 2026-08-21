@@ -37,6 +37,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "benchmark"))
 import cvdp_gate as G  # noqa: E402
+from _sim_tools import NEEDS_SIM  # noqa: E402
 
 _RID = "cvdp_copilot_gf_multiplier_0013"
 # author writes the top `gf_mac` and CORRECTLY instantiates the context-provided
@@ -103,6 +104,7 @@ def _run(tmp_path, prompts_line, dataset_line=None):
 
 
 @pytest.mark.skipif(not _have_iverilog(), reason="iverilog/vvp not available")
+@NEEDS_SIM
 def test_negative_no_context_downgrades_to_warn_not_block(tmp_path):
     """#734 END-STATE: local_export-shape prompts (NO input.context) → the
     context-module completion is NOT hard-blocked; a loud INACTIVE WARN fires
@@ -115,6 +117,7 @@ def test_negative_no_context_downgrades_to_warn_not_block(tmp_path):
 
 
 @pytest.mark.skipif(not _have_iverilog(), reason="iverilog/vvp not available")
+@NEEDS_SIM
 def test_positive_dataset_reenables_exclusion(tmp_path):
     """With --dataset carrying input.context{gf_multiplier}, the #715 exclusion
     fires properly — gf_multiplier is a known context module, not blocked, and
@@ -137,6 +140,7 @@ def test_positive_dataset_reenables_exclusion(tmp_path):
 
 
 @pytest.mark.skipif(not _have_iverilog(), reason="iverilog/vvp not available")
+@NEEDS_SIM
 def test_positive_known_context_still_hard_blocks_dropped_file(tmp_path):
     """Protection RETAINED: when input.context is KNOWN (here empty — gf_multiplier
     is therefore NOT context-provided), the instantiated-undefined prompt-required
