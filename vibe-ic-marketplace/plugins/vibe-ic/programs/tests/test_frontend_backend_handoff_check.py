@@ -86,17 +86,18 @@ def test_fail_missing_sdc(tmp_path):
     assert any("MISSING_SDC" in f["rule"] for f in errors)
 
 
-# -- Test 4: Self-skip when project hasn't reached backend --
+# -- Test 4: not-yet-at-backend is VACUOUS (rc 2), not a PASS (#515) --
 
 def test_skip_no_backend(tmp_path):
     (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
     (tmp_path / "phase2" / "stage1" / "rtl" / "top.v").write_text("module top; endmodule\n")
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
     assert rpt["summary"]["reason"] == "not_backend_stage"
+    assert "VACUOUS_PASS:" in r.stderr, r.stderr
 
 
 # -- Test 5: FAIL when analog blocks exist but no hardmacro LEF --
@@ -116,3 +117,48 @@ def test_fail_missing_lef_with_analog(tmp_path):
     assert rpt["passed"] is False
     errors = [f for f in rpt["findings"] if f["severity"] == "ERROR"]
     assert any("MISSING_HARDMACRO_LEF" in f["rule"] for f in errors)
+
+
+# ---------------------------------------------------------------------------
+# #515 JUDGEMENT — NO_DFT_EVIDENCE is a non-blocking rc-0 ADVISORY.
+#
+# #515 asked for a deliberate choice between rc 1 ("this design should have
+# scan and does not") and rc 2 ("DFT is out of scope here"). The decision, with
+# its reasoning, is written into `audit()`; these two tests pin it so it cannot
+# drift silently in either direction.
+#
+# The load-bearing fact is the FIRST assertion: the finding fires on a run
+# whose `summary["skipped"]` is False — every required deliverable WAS
+# examined. Calling that run vacuous would be a false claim in the opposite
+# direction to the one #515 removes.
+# ---------------------------------------------------------------------------
+
+def test_no_dft_evidence_is_an_advisory_not_a_skip_and_not_a_fail(tmp_path):
+    _write_gate_netlist(tmp_path)      # no scan_en / scan_in / scan_out
+    _write_sdc(tmp_path)
+    _write_def(tmp_path)
+    r = _run(tmp_path)
+    rpt = _load_report(tmp_path)
+    assert any(f["rule"] == "NO_DFT_EVIDENCE" for f in rpt["findings"])
+    # The gate examined the handoff — this is NOT the vacuous case.
+    assert rpt["summary"]["skipped"] is False
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "VACUOUS_PASS:" not in r.stderr
+    dft = next(f for f in rpt["findings"] if f["rule"] == "NO_DFT_EVIDENCE")
+    assert dft["severity"] == "WARN"
+    assert "ADVISORY" in dft["message"]
+
+
+def test_dft_evidence_present_suppresses_the_advisory(tmp_path):
+    _write_gate_netlist(tmp_path)
+    _write_sdc(tmp_path)
+    _write_def(tmp_path)
+    (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
+    (tmp_path / "phase2" / "stage1" / "rtl" / "scan.v").write_text(
+        "module scan(input scan_en, input scan_in, output scan_out);\n"
+        "endmodule\n"
+    )
+    r = _run(tmp_path)
+    rpt = _load_report(tmp_path)
+    assert not any(f["rule"] == "NO_DFT_EVIDENCE" for f in rpt["findings"])
+    assert r.returncode == 0, r.stdout + r.stderr

@@ -4,7 +4,7 @@ description: Chain /vibe-ic-phase2 → /vibe-ic-phase3 via phase23_one_shot_runn
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 3] [--skip-phase2|--skip-phase3]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-phase23 <project-dir>` (e.g. `/vibe-ic-phase23 1st_benchmark_sn2025/phase2_v0119.48-vendor`).
+> `/vibe-ic-phase23 <project-dir>` (e.g. `/vibe-ic-phase23 1st_benchmark_example/phase2_v0119.48-vendor`).
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 

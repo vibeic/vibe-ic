@@ -88,8 +88,10 @@ ALLOW_MARKER = "<!-- specificity-allow"
 HARD_RULES: list[tuple[str, str, str]] = [
     ("chip_name_as3616", r"\bAS3616\b",
      "Hard-coded benchmark chip name <chip-class>"),
-    ("project_codename_sn2025", r"\bSN2025\b",
-     "Project codename <benchmark> leaks into general-purpose docs"),
+    # A genuinely sensitive internal project codename is NOT hard-coded here as
+    # a literal (that would be the leak). Its real value(s) come from the
+    # PRIVATE config and are turned into `project_codename_<value>` rules at
+    # runtime by `_deny_list_codename_rules()` below.
     ("tester_md905", r"MD[-_ ]?905\b",
      "Tester product name <half-duplex-tester> — describe protocol, not a SKU"),
     ("vendor_product_lightning", r"\bLightning\b",
@@ -131,7 +133,11 @@ HARD_RULES: list[tuple[str, str, str]] = [
 # scan, not a hardcode — adding a token to the deny list automatically gates
 # its leakage into general docs.
 # ---------------------------------------------------------------------------
-_DENY_LIST_PATH = PLUGIN_ROOT / "tests" / "chip_deny_list.txt"
+# The canonical deny list lives under programs/tests/ (next to this program),
+# NOT PLUGIN_ROOT/tests/. (Fixed alongside the private-codename scrub: the old
+# PLUGIN_ROOT/"tests" path never existed, so the deny-list-derived rules were
+# silently dead — the private-config codename rules below now always run too.)
+_DENY_LIST_PATH = Path(__file__).resolve().parent / "tests" / "chip_deny_list.txt"
 # Codename shape: a few leading letters then a 3+ digit run (optional trailing
 # letters). Mirrors the test's _CODENAME_TOKEN_RE so the two stay in lock-step.
 _CODENAME_TOKEN_RE = re.compile(r"^[a-z]{2,5}\d{3,}[a-z]*$")
@@ -142,7 +148,7 @@ def _deny_list_codename_rules() -> list[tuple[str, str, str]]:
     try:
         raw = _DENY_LIST_PATH.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return rules
+        raw = []   # deny list missing -> still emit the private-config rules below
     seen: set[str] = set()
     for ln in raw:
         s = ln.strip()
@@ -162,6 +168,21 @@ def _deny_list_codename_rules() -> list[tuple[str, str, str]]:
                 f"Project/chip codename {s.upper()!r} (deny list) leaks "
                 f"into general-purpose docs",
             ))
+    # PRIVATE-config codenames: the real sensitive value(s) are NOT in the deny
+    # list as a literal — they come from `_commercial_pdk.project_codenames()`
+    # (empty in public). On a configured host each becomes a rule so the real
+    # codename is still flagged in general docs, without shipping the literal.
+    for cn in _cpdk.project_codenames():
+        rid = f"project_codename_{cn.lower()}"
+        if any(existing_rid == rid for existing_rid, _, _ in HARD_RULES) \
+                or any(existing_rid == rid for existing_rid, _, _ in rules):
+            continue
+        rules.append((
+            rid,
+            rf"\b{re.escape(cn)}\b",
+            f"Project codename {cn.upper()!r} (private config) leaks into "
+            f"general-purpose docs",
+        ))
     return rules
 
 
