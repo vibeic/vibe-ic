@@ -1334,6 +1334,79 @@ def _f_macro_obs_spanned(p: Path) -> None:
     _write_macro_obs_layout(p, spanning=6)
 
 
+def _f_pad_decl_partial(p: Path) -> None:
+    """A tape-out declaration whose pad-ring section was STARTED and abandoned.
+
+    Reddens the Step-15.5ic clause
+    ``pad_assignment_gen . --json reports/phase3/pad_assignment.json``,
+    wired in vibe-ic#1410/cpath as the author of
+    ``phase3/stage3/pnr/pad_assignment.json`` — a path that had two references
+    in the whole repository before that change and both were READERS.
+
+    EMPTY cannot reach it, and the reason is the program working correctly.
+    With no declaration and no operator slot file it answers NOT_ASKED at rc 2:
+
+        NOT_ASKED: no source answers any of the 8 questions of declaration
+        section 2B_pad_ring and no operator slot file pins a per-side pad list
+
+    which the flow reads as its disclosed-skip tier. That is "nobody was asked
+    for a pin-out", which is not a statement about a pad ring, and it is the
+    tier this suite refuses to count as a red. It is also the state EVERY tree
+    in this repository is in, which is exactly why the clause could be wired
+    without moving any existing verdict.
+
+    So the fixture has to make the declaration look ANSWERED and INCOMPLETE.
+    It writes a well-formed declaration — one the declaration's own validator
+    accepts, because an incomplete declaration is deliberately NOT a malformed
+    one — carrying SEVEN of section 2B's eight answers and leaving
+    ``pad_site_name`` at ``NOT_DETERMINED``. The program's split between an
+    ABSENT config and a HALF-WRITTEN one then fires.
+
+    MEASURED, verbatim:
+
+        rc 1  declaration section 2B_pad_ring was STARTED (7 of 8 question(s)
+              answered) and still owes 1 of the 13 variables `pad_ring_gen`
+              requires ... Still owed: PAD_SITE_NAME (declaration question
+              pad_site_name)
+
+    Chosen over an unreadable declaration deliberately: that branch reddens on
+    the FILE, and a program that did nothing but try to parse its input would
+    pass it. This branch is one the program has to read the CONTENT to reach,
+    and it is the exact behaviour the change exists for — a NOT_DETERMINED
+    field is NAMED, never guessed, because a pad site invented here would be
+    indistinguishable in the artefact from a real pin-out.
+
+    Chip- and PDK-AGNOSTIC: the instance, master and site names are synthetic
+    and no design, vendor or process literal appears. No oracle is consulted.
+    """
+    decl = p / "input" / "submission_template" / "tapeout_declaration.json"
+    decl.parent.mkdir(parents=True, exist_ok=True)
+    pads = [f"pad_{s}{i}" for s in "senw" for i in range(2)]
+    answers = {
+        "deliverable": "DIE",
+        "pad_order_by_side": {"south": pads[0:2], "east": pads[2:4],
+                              "north": pads[4:6], "west": pads[6:8]},
+        # "pad_site_name" is DELIBERATELY ABSENT — it is the whole fixture.
+        "pad_corner_site_name": "io_corner_site",
+        "pad_edge_spacing_um": 10,
+        "pad_rotations": {"horizontal": "R0", "vertical": "R90",
+                          "corner": "R0"},
+        "pad_corner_master": "pad_corner",
+        "pad_fillers": ["pad_fill1"],
+        "pad_signal_map": {n: n[4:] for n in pads},
+    }
+    # Built through the declaration's OWN constructor and merge, so the fixture
+    # cannot drift into a shape the module would refuse for an unrelated reason
+    # and redden this clause by accident.
+    import _tapeout_declaration as _TD
+    doc = _TD.blank_declaration()
+    doc, ignored = _TD.merge_answers(doc, answers)
+    assert not ignored, ignored
+    assert _TD.validate(doc) == [], _TD.validate(doc)
+    assert doc["answers"]["pad_site_name"] == _TD.NOT_DETERMINED
+    decl.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+
 def _f_die_unfinished(p: Path) -> None:
     """The die-finishing report claims a seal ring the run did not leave behind.
 
@@ -1496,6 +1569,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "DIE_UNFINISHED": _f_die_unfinished,
     "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
     "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
+    "PAD_DECL_PARTIAL": _f_pad_decl_partial,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1557,6 +1631,17 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # at the tree to reach.
     ("26.5ic", "die_finishing_check . --json "
                "reports/phase3/die_finishing.json"): "DIE_UNFINISHED",
+    # vibe-ic#1410/cpath wired `pad_assignment_gen` into 15.5ic as the AUTHOR
+    # of `phase3/stage3/pnr/pad_assignment.json`, which nothing had ever
+    # written. EMPTY answers NOT_ASKED at rc 2 — the disclosed-skip tier —
+    # because with no declaration and no slot file nobody has been asked for a
+    # pin-out, and that is the state every tree in this repository is in. The
+    # fixture makes the declaration look ANSWERED AND INCOMPLETE, which is the
+    # branch the change exists for: the owed field is NAMED, never guessed.
+    # See `_f_pad_decl_partial` for the measured rc and message, and for why
+    # the half-written declaration is chosen over an unreadable one.
+    ("15.5ic", "pad_assignment_gen . --json "
+               "reports/phase3/pad_assignment.json"): "PAD_DECL_PARTIAL",
     ("37.5ip", "digital_hardmacro_check . --json "
                "reports/phase3/digital_hardmacro.json"):
         "HARDMACRO_KIT_INCOMPLETE",
