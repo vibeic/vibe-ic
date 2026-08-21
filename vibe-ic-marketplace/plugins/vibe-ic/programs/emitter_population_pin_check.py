@@ -37,15 +37,40 @@ and quotes a population phrase (`... of N <tail>`) whose `<tail>` the emitter
 also states must quote one of the emitter's OWN values for that tail. A pin
 naming a number the emitter cannot produce is stale by construction.
 
-WHY DOCSTRINGS ARE EXCLUDED ON BOTH SIDES, AND WHAT IT COSTS
+WHAT IS READ: THE EMITTED SCRIPT, NOT THE FILE THAT PRINTS IT
 =============================================================
-Measured on this tree before the exclusion: 3 findings, ALL THREE false, and all
-three the same shape — a narrative sentence in a module or test docstring
+Both checks read only the strings a program EMITS — never its docstrings, and
+never its `#` comments, which do not reach the AST at all. Measured on this tree
+before that exclusion existed for the phrase half: 3 findings, ALL THREE false,
+and all three the same shape — a narrative sentence in a module or test docstring
 ("PR #862 is the subtler half. Its author reported \"4 of 4 behavioural\"")
 matched against a different narrative sentence elsewhere. Prose recounting what
 a number USED TO BE is not a pin, and a guard that reddens on the history a file
 records would make recording history expensive. After the exclusion: 0 findings
 over the same corpus.
+
+CHECK A read the RAW FILE and so had none of that protection, which was a defect
+and is fixed here: a docstring saying a repair is REMOVED and that there is no
+`incr _n` left for it contributed a phantom MEMBER, and a sentence recounting a
+retired `$_n >= 3` threshold contributed a phantom DENOMINATOR — so a truthful
+emitter was refused for disagreeing with a number nobody had stated.
+
+AND THE SCRIPT ITSELF IS ASKED FOR ITS POLARITY (vibe-ic#712)
+=============================================================
+Removing prose about the code does not remove prose: an emitted script carries
+Tcl comments and `puts` messages, and English there denies as readily as it
+declares — `# the retry path does not incr _n`, `# $_n >= 4 is no longer the
+threshold`. A reader that matches the first and not the `not` in it counts a
+DENIAL as a member. So every increment site and every literal denominator is
+asked, through the ONE vocabulary in `_prose_polarity`, whether the statement it
+sits in denies it; what that refuses is PRINTED, never quietly dropped.
+
+`phrases` is not asked the same question, and the difference is structural, not
+an oversight: it reads `of <N> <tail>`, a statement of how big a set IS. A
+message that denies something else in the same breath ("no repair applied, 0 of 3
+repairs refused") still states that population correctly, and suppressing the pin
+comparison there would disarm CHECK B — the half that catches the measured defect
+— in the silent direction.
 
 WHAT WAS TRIED AND REJECTED — matching every `assert "<literal>" in <text>` in a
 test against the verbatim source of the program it names. Measured over 1619
@@ -90,6 +115,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import _atomic_artefact as _atomic
 import _gate_usage_exit as _usage
 import _vacuous_exit as _vac
+from _prose_polarity import is_denied, sentence_scope
 
 TOOL = "emitter_population_pin_check"
 
@@ -115,66 +141,150 @@ _DEN_TEMPLATES = (
 #: Below this a literal is a presence test, not a population.
 MIN_POPULATION = 2
 
+#: What ends a RECORD in the text `counters` reads. The subject is an emitted
+#: SCRIPT, and a script is line-structured: a command and the line above it are
+#: unrelated records, and a `#` comment ends at its own newline. `_prose_polarity`
+#: owns the reach and takes this declaration, rather than this file growing a
+#: private copy of "where does a statement end" -- which is the divergence that
+#: module exists to end.
+#:
+#: WHICH WAY TO ERR, DECIDED BY WHICH FAILURE IS SILENT. Without a record break
+#: the reach runs 240 characters through unrelated commands, so one
+#: `puts "no repair applied"` retracts every denominator printed near it and this
+#: BLOCKING gate quietly stops comparing anything. With it, a denial wrapped
+#: across two emitted lines is missed and a phantom member is counted -- which is
+#: a REFUSAL a reader sees, and answers. Loud beats silent, so the break is
+#: declared. What polarity does refuse is printed on every run for the same
+#: reason.
+_RECORD_BREAKS = ("\n",)
 
-def _docstring_nodes(tree: ast.AST) -> Set[int]:
-    """``id()`` of every string node that is a docstring or a bare block string.
 
+def _emitted_strings(text: str) -> List[Tuple[int, int, str]]:
+    """``[(lineno, col, value)]`` for every string in `text` that is EMITTED,
+    in source order.
+
+    PROSE ABOUT THE CODE IS NOT THE SCRIPT, AND THIS IS WHERE THAT IS DECIDED.
     A string that is an expression STATEMENT is never emitted: it is the module,
-    class or function docstring, or a block comment written as a string. Both
-    are prose about the code, and prose recounting an old number is not a pin.
+    class or function docstring, or a block comment written as a string. A `#`
+    comment never reaches the AST at all, so it is gone by construction. Both
+    are prose recounting what the code does, or what a number USED TO BE, and
+    neither is a statement of the population the emitted script carries.
+
+    An f-string docstring's PARTS are skipped with it. `ast.walk` reaches each
+    inner `Constant` on its own, so skipping the `JoinedStr` node alone would let
+    the same prose back in through the other door.
+
+    Source order, not `ast.walk` order, because the caller joins these into one
+    text and a script read out of order is not the script.
     """
-    return {id(n.value) for n in ast.walk(tree)
-            if isinstance(n, ast.Expr)
-            and isinstance(n.value, (ast.Constant, ast.JoinedStr))}
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    skip: Set[int] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Expr) and isinstance(n.value,
+                                                  (ast.Constant, ast.JoinedStr)):
+            for part in ast.walk(n.value):
+                skip.add(id(part))
+    out: List[Tuple[int, int, str]] = []
+    for n in ast.walk(tree):
+        if id(n) in skip:
+            continue
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            out.append((n.lineno, n.col_offset, n.value))
+    out.sort()
+    return out
+
+
+def emitted_script(text: str) -> str:
+    """The emitted strings of `text` as ONE flat text, one record per line.
+
+    STILL FLAT, for the reason `counters` always gave: the emitted script is
+    assembled from many adjacent string literals, and a block-aware reader would
+    have to re-implement that assembly to answer a question the flat text already
+    answers. What changed is WHICH text -- the script, not the file that prints
+    it.
+
+    JOINED WITH A NEWLINE rather than concatenated, so two literals that are not
+    adjacent in the real script (anything assembled through a call between them)
+    cannot fuse into one statement and lend each other a polarity. Nothing that
+    was matchable stops being matchable: in the raw file those same two literals
+    were already separated by a quote, a newline and the next line's indentation,
+    so no pattern here could span the seam then either.
+    """
+    return "\n".join(v for _, _, v in _emitted_strings(text))
 
 
 def phrases(text: str) -> Dict[str, Set[Tuple[str, int]]]:
     """``{tail: {(value, lineno)}}`` from every EMITTED string in `text`."""
     out: Dict[str, Set[Tuple[str, int]]] = {}
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return out
-    skip = _docstring_nodes(tree)
-
-    def take(value: str, lineno: int) -> None:
+    for lineno, _, value in _emitted_strings(text):
         for m in PHRASE.finditer(value):
             out.setdefault(m.group(2).strip(), set()).add((m.group(1), lineno))
-
-    for n in ast.walk(tree):
-        if id(n) in skip:
-            continue
-        if isinstance(n, ast.Constant) and isinstance(n.value, str):
-            take(n.value, n.lineno)
-        elif isinstance(n, ast.JoinedStr):
-            for v in n.values:
-                if isinstance(v, ast.Constant) and isinstance(v.value, str):
-                    take(v.value, n.lineno)
     return out
 
 
-def counters(text: str) -> List[Tuple[str, int, List[Tuple[str, int]]]]:
-    """``[(name, increment_sites, [(kind, D)])]`` for counters with a literal D.
+def counters(text: str) -> Tuple[List[Tuple[str, int, List[Tuple[str, int]]]],
+                                 List[Tuple[str, str, str]]]:
+    """``([(name, increment_sites, [(kind, D)])], [(what, matched, denial)])``.
 
-    Read over the whole source rather than per emitted block: the emitted script
-    is assembled from many adjacent string literals, and a block-aware reader
-    would have to re-implement that assembly to answer a question the flat text
-    already answers.
+    THE SUBJECT IS THE EMITTED SCRIPT, not the file that prints it -- see
+    `emitted_script`. Read flat, for the reason this function always gave.
+
+    POLARITY (vibe-ic#712). The script is read for two claims -- a MEMBERSHIP
+    (`incr X`) and a THRESHOLD (`$X >= D`) -- and a script states both in English
+    as readily as it states them in Tcl:
+
+        # the retry path does not incr _n; it re-issues the command
+        # $_n >= 4 is no longer the threshold, the fourth repair was removed
+        puts "no repair could be applied"
+
+    A reader that matches the first line and not the word `not` in it counts a
+    DENIAL as a member; the population it reports is then confidently wrong, and
+    it refuses a truthful emitter for disagreeing with a number nobody stated.
+    That is #706 (`pdk_target`) in the counting direction. So every match is
+    asked, through the ONE vocabulary in `_prose_polarity`, whether the statement
+    it sits in denies it.
+
+    WHAT POLARITY REFUSED IS RETURNED, NOT DROPPED. This guard prints its reach
+    on every run; a reach that shrank because a denial was believed is part of
+    the reach, and a guard that quietly counts less than it read is the failure
+    this file is built to catch one level up.
     """
+    src = emitted_script(text)
+
+    def denial(m: "re.Match[str]") -> Optional[str]:
+        """The word by which the emitted statement around `m` DENIES it."""
+        lo, hi = sentence_scope(src, m.start(), m.end(),
+                                extra_breaks=_RECORD_BREAKS)
+        return is_denied(src[lo:hi])
+
+    refused: List[Tuple[str, str, str]] = []
     names: Dict[str, int] = {}
-    for m in INCR.finditer(text):
+    for m in INCR.finditer(src):
+        word = denial(m)
+        if word:
+            refused.append(("increment", m.group(0), word))
+            continue
         names[m.group(1)] = names.get(m.group(1), 0) + 1
     rows = []
     for name, sites in sorted(names.items()):
         dens: List[Tuple[str, int]] = []
         for kind, tmpl in _DEN_TEMPLATES:
-            for m in re.finditer(tmpl % re.escape(name), text):
+            for m in re.finditer(tmpl % re.escape(name), src):
                 value = int(m.group(1))
-                if value >= MIN_POPULATION and (kind, value) not in dens:
+                if value < MIN_POPULATION:
+                    continue
+                word = denial(m)
+                if word:
+                    refused.append((f"{kind} denominator", m.group(0), word))
+                    continue
+                if (kind, value) not in dens:
                     dens.append((kind, value))
         if dens:
             rows.append((name, sites, dens))
-    return rows
+    return rows, refused
 
 
 def named_program(text: str, stems: Set[str]) -> Optional[str]:
@@ -227,6 +337,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     sources = {p.stem: p for p in sorted(args.programs.glob("*.py"))}
     findings: List[dict] = []
+    denied: List[dict] = []
     counters_examined = 0
     pins_examined = 0
 
@@ -242,7 +353,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         src = body(stem)
         if "incr " not in src:
             continue
-        for name, sites, dens in counters(src):
+        rows, refused = counters(src)
+        for what, matched, word in refused:
+            denied.append({"program": sources[stem].name, "what": what,
+                           "matched": matched, "denial": word})
+        for name, sites, dens in rows:
             for kind, value in dens:
                 counters_examined += 1
                 if value != sites:
@@ -287,11 +402,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                     })
 
     head = (f"{counters_examined} emitted counter denominator(s) and "
-            f"{pins_examined} test pin(s) examined")
+            f"{pins_examined} test pin(s) examined; {len(denied)} match(es) "
+            f"not counted because the statement DENIES them")
     report = {"tool": TOOL, "counters_examined": counters_examined,
-              "pins_examined": pins_examined, "findings": findings}
+              "pins_examined": pins_examined, "denied_by_polarity": denied,
+              "findings": findings}
     if args.json:
         _atomic.write_json(args.json, report)
+
+    for d in denied:
+        print(f"  [POLARITY] {d['program']}: {d['what']} `{d['matched']}` sits "
+              f"in a statement that DENIES it (\"{d['denial']}\") and is NOT "
+              f"counted")
 
     if counters_examined == 0 and pins_examined == 0:
         _vac.announce_vacuous(TOOL, "no-population-stated-twice")
