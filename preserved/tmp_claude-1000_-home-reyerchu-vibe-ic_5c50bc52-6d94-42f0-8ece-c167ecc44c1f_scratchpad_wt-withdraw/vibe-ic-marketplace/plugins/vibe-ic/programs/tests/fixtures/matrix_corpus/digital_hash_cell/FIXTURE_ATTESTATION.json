@@ -1,0 +1,24 @@
+{
+  "_comment": "SYNTHESIZED MATRIX FIXTURE \u2014 not a real run artefact (vibe-ic#1028)",
+  "kind": "fixture",
+  "dimension": "63x9 matrix (D3/D4/D7)",
+  "stands_in_for": "benchmark-data/ic/sha256",
+  "withdrawn_by": "vibe-ic#1028",
+  "generated_by": "programs/tests/fixtures/matrix_corpus_gen.py",
+  "content": "synthesized, representative of artefact KIND only; never a copy of the withdrawn bytes",
+  "artefacts_written": [
+    "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+    "phase2/stage1/formal/constraints.sby",
+    "phase2/stage1/formal/results.json",
+    "phase2/stage1/sim/results.xml",
+    "phase2/stage1/sim_full_stack/results.json",
+    "phase3/stage3/pnr/spare_cells.json",
+    "phase3/stage3/sta/post_route_timing.rpt",
+    "phase3/stage3/sta/pre_pnr_timing.rpt",
+    "phase3/stage4/foundry_handoff/corner_test_vectors.json",
+    "phase3/stage4/foundry_handoff/mask_spec.json",
+    "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
+    "phase3/stage4/foundry_handoff/wat_plan.json"
+  ],
+  "disclosed_skips": []
+}

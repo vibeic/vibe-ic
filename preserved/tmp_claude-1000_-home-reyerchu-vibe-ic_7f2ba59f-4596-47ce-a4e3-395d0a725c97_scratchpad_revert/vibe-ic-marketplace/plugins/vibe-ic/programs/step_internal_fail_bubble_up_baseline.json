@@ -1,0 +1,45 @@
+{
+  "_comment": "Unacknowledged step-internal FAIL/MISSING reports across the PUBLISHED (git-tracked) run trees \u2014 a run tree being any directory that owns a tracked reports/**/*.json, which is what the gate can read, NOT a directory whose name matches a convention (vibe-ic#1223). MAY ONLY SHRINK UNDER A FIXED POPULATION \u2014 each one is a report declaring FAIL that no waiver and no orchestrator record names. The wrong repair is to loosen the matcher until the number falls (vibe-ic#693). `corpus_population` is the root this count was taken over and is part of the record: the gate refuses to ratchet a count from one population against a sweep of another.",
+  "_withdrawn_comment": "Findings that left findings_total because their run left the published corpus (or stopped carrying a reports/ tree), NOT because anyone examined them (vibe-ic#1202). Recorded so a fall in findings_total can never be read as debt paid. These reports still declare FAIL. NOT part of findings_total and not a ceiling on anything \u2014 the ratchet is over the published corpus only.",
+  "findings_total": 1,
+  "corpus_population": "benchmark-data/ic",
+  "runs_swept": 4,
+  "runs_with_reports": 4,
+  "per_run": {
+    "u_hawaii_adc/v1.9.86_sky130A": 1
+  },
+  "withdrawn_unexamined": {
+    "caravel_user_project": 1,
+    "caravel_user_project/v1.9.43_sky130A": 2,
+    "edge_llm_accel": 6,
+    "edge_llm_matmul_accel": 1,
+    "ibex": 1,
+    "ic/u_hawaii_adc/clean_run_v1422_20260715": 1,
+    "ic/u_hawaii_adc/clean_run_v1427_20260715": 1,
+    "opentitan_aes": 1,
+    "sha256/clean_run_v1422_20260715": 2,
+    "sha256/clean_run_v1427_20260715": 3,
+    "subservient": 4
+  },
+  "withdrawal_provenance": {
+    "reason": "The published corpus moved to its own repository (vibe-ic v1.10.56) and that repository's opening publish filter kept only the cells that pass and conform. Measured, not assumed: its opening snapshot 6ca1e29 reproduces this baseline exactly \u2014 16 run trees swept, 16 with a reports/ tree, 22 findings, the same per_run map \u2014 and its next commit ac2ae51 removed 12 of those 16: one cell whose own RESULT.md says FAIL and which benchmark_evidence_structure_check exits 1 on, and 11 working trees (clean_run_* directories, and loose phase/reports/sim/steps trees sitting directly under an IC) that PUBLISHING.md's layout does not permit. Nine of the 12 carried the 21 findings withdrawn here; the other three were examined and clean. NOT DELETED AS SETTLED, AND NOT EXAMINED: every one of those reports still declares FAIL and is readable in that snapshot. The two u_hawaii_adc/clean_run_* entries already on the ledger left earlier and for a different reason \u2014 inside vibe-ic, by losing their reports/ tree; see _withdrawn_provenance.",
+    "covers_runs": [
+      "caravel_user_project",
+      "caravel_user_project/v1.9.43_sky130A",
+      "edge_llm_accel",
+      "edge_llm_matmul_accel",
+      "ibex",
+      "ic/u_hawaii_adc/clean_run_v1422_20260715",
+      "ic/u_hawaii_adc/clean_run_v1427_20260715",
+      "opentitan_aes",
+      "sha256/clean_run_v1422_20260715",
+      "sha256/clean_run_v1427_20260715",
+      "subservient"
+    ],
+    "denominator_before": {
+      "runs_swept": 16,
+      "runs_with_reports": 16
+    }
+  },
+  "_withdrawn_provenance": "Re-derived from git, not re-measured: 94c7572aa moved this file 7 -> 5 and its diff shows both sha256 runs UNCHANGED (2 and 3) while both u_hawaii_adc runs left. Zero repaired, two withdrawn. Replaying that commit's parent baseline through the fixed gate against the corpus at 75776dbbb reproduces exactly these two entries."
+}
