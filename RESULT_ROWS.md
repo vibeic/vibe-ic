@@ -203,3 +203,34 @@ All five are answered. Kept as a record of who decided what, rather than deleted
 3. **`published-evidence index honest` fails on clean main when the corpus is
    bound** and passes unbound. Not mine, and it has no row: a row is true against
    a stated corpus state, and nothing on the landing path states one.
+
+## THE MEASUREMENT A LANDING WOULD ACTUALLY MAKE
+
+Completed 2026-08-22. `ci_targeted_test_select --base origin/main` selects **131
+test files** for this branch's 20 changed ones. Both arms, by TEST ID:
+
+| group | base | candidate | NEW |
+|---|---|---|---|
+| 124 non-matrix files | 43 failed, 2721 passed | 44 failed, 2753 passed | **2** |
+| 7 `test_matrix_*`, one pytest call each | 12 failed | 12 failed | **0** |
+
+The matrix arms are **identical** — same twelve ids on both — so nothing this
+branch does reaches them. They were run one file per call, which is how a family
+this repo records as killing a session under load is measured at all, and at
+load 2 rather than the 42 the first arms ran at.
+
+Of the two NEW in the larger group:
+
+* **one was real and mine** — `test_the_land_script_still_honours_the_variable`
+  pinned the literal `--summary-json "$GATEKEEPER_HYGIENE_REPORT"`, which the
+  unconditional record reshaped. Now asserts the property in three parts, with a
+  three-way mutation arm; fixed in this branch.
+* **one is not attributable** — `test_nested_validated_progress_is_relayed_to_
+  the_outer_session` asserts `elapsed > 4.5`, a wall-clock MINIMUM that fails
+  when the host is fast. Alternating arms at load 2 it failed on the BASE three
+  times (4.16, 1.88, 3.19) and passed on the candidate twice. Its sibling is the
+  single only-on-base id, which is the same timing family flipping the other
+  way — reading the pair as "one broken, one fixed" would have charged both to a
+  diff that touches neither file.
+
+So after the fix, **NEW = 0** against the selection a landing would run.
