@@ -333,3 +333,40 @@ def test_the_four_exit_codes_map_to_four_distinct_gate_readings(monkeypatch):
     assert seen[0][1] is True and seen[3][1] is False
     # a skip and a broken wiring are not the same fact
     assert seen[2] != seen[3]
+
+
+# --------------------------------------------------------------------------- #
+# this gate declares its own intent, and no program can check that for it
+# --------------------------------------------------------------------------- #
+# `flow_gate_enforcement_audit` reads `ENFORCEMENT:` declarations out of the
+# FLOW definition. This checker is not a flow gate — it judges a change-set,
+# not a design — so that audit never sees it, and the doctrine's own promotion
+# list still has "every gate declares BLOCKING vs ADVISORY" as a program that
+# does not exist yet. Found by mutation: deleting the declaration left all 16
+# tests green.
+#
+# Anchored at line start, which is the #886 rule: a declaration must OPEN its
+# line. Several gates MENTION the word in prose while declaring nothing, and an
+# unanchored pattern read each of those as a declaration.
+
+def test_the_checker_declares_its_enforcement_intent_on_its_own_line():
+    import re
+    doc = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
+    m = re.search(r"^ENFORCEMENT:\s*(blocking|advisory)\s*$", doc, re.M)
+    assert m, ("ppa_pr_scope_check declares no ENFORCEMENT intent. Silence is "
+               "not neutral: an unstated default of advisory is how 62 of 72 "
+               "gates ended up unable to stop anything.")
+    assert m.group(1) == "blocking"
+
+
+def test_the_declaration_matches_what_the_gate_actually_does(monkeypatch):
+    """A declaration nothing cross-checks is the unenforced-declaration shape
+    the doctrine tells you to refuse. Bind it to observed behaviour: it says
+    blocking, so a finding must actually block."""
+    import re
+    doc = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
+    declared = re.search(r"^ENFORCEMENT:\s*(\w+)\s*$", doc, re.M).group(1)
+    monkeypatch.setattr(G, "_run_program", lambda p, a, **kw: (3, "", "bad"))
+    blocks = G.ppa_pr_scope_gate(Path("."), "BASE", "HEAD").green is False
+    assert (declared == "blocking") == blocks, (
+        f"declares {declared!r} but blocking={blocks}")

@@ -570,3 +570,53 @@ def test_an_unterminated_block_comment_keeps_the_lines_it_swallowed():
         for strip in (S._strip_hdl_comments, S._strip_hdl_attributes):
             assert strip(text).count("\n") == text.count("\n"), (
                 f"{strip.__name__} changed the line count of {text!r}")
+
+
+# --------------------------------------------------------------------------- #
+# `always @(*)` is not an attribute, and the guard that says so was untested
+# --------------------------------------------------------------------------- #
+# Found by mutation: deleting the `!= "(*)"` guard from `_strip_hdl_attributes`
+# left all 31 tests green. It is not defensive decoration.
+#
+# An implicit sensitivity list `always @(*)` CONTAINS the attribute opener
+# `(*`. Without the guard the stripper looks for the next `*)` — which is not
+# the `)` two characters along, because the search starts past it — and finds
+# the closer of some LATER construct, deleting everything in between.
+#
+# MEASURED on a file whose first module carries `always @(*)` and whose second
+# is the top: the whole intervening region goes, `parse_top_ports` finds no
+# port list, and the program returns None -> rc 2 UNDECIDED. That is the
+# DISCLOSED-SKIP tier, so the gate does not go red — it quietly stops asking
+# the question, on a shape that is ordinary Verilog.
+
+_RTL_IMPLICIT_SENSITIVITY = """
+module helper (input wire a, output reg b);
+  always @(*) b = a;
+endmodule
+
+module chip_top (
+    input  wire clk,
+    output wire done,
+    inout  wire [7:0] io
+);
+  always @(*) done = clk;
+endmodule
+"""
+
+
+def test_an_implicit_sensitivity_list_is_not_read_as_an_attribute():
+    ports = S.parse_top_ports(_RTL_IMPLICIT_SENSITIVITY, "chip_top")
+    assert ports is not None, (
+        "the port list was swallowed: `always @(*)` was read as an attribute "
+        "opener and the stripper ran to some later `*)`")
+    assert [p["name"] for p in ports] == ["clk", "done", "io"]
+
+
+def test_that_failure_would_have_been_a_SILENT_SKIP_not_a_red_gate():
+    """Why the case above is worth a test of its own: losing the port list
+    does not fail the gate, it makes it UNDECIDED — the tier that reads as a
+    disclosed skip. A gate that stops asking is worse than one that answers
+    wrongly, because nothing looks broken."""
+    ports = S.parse_top_ports(_RTL_IMPLICIT_SENSITIVITY, "chip_top")
+    rep = S.evaluate({"slot_1x1": _slot_ingested()}, ports)
+    assert rep["rc"] in (0, 1) and rep["verdict"] != "UNDECIDED"
