@@ -72,9 +72,11 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
@@ -84,7 +86,44 @@ import yaml
 
 import matrix_mutation_ledger as L
 from matrix_63x8 import flowref as F
-from matrix_63x8.cells import DIMENSION_NAMES
+from matrix_63x8.cells import DIMENSION_NAMES, DIMENSIONS
+
+
+def _domain_progress(scope: str, completed: int, total: int) -> None:
+    plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(plugin, "domain_progress", None)
+    if callable(progress):
+        progress(scope, completed, total)
+
+# THE ONE CHANNEL WHOSE SUBJECT LEFT THIS REPOSITORY.
+#
+# `L.MUTATIONS` edits the flow yaml or the plugin tree — both are here, and
+# nothing below about them changes. `L.ARTEFACT_MUTATIONS` edits a number inside
+# a PUBLISHED REPORT, and every one of its entries names the published run
+# `ic/spm/v1.10.18_sky130A`, which now lives in
+# https://github.com/vibeic/benchmark-data. In this checkout those eight entries
+# cannot resolve, cannot replay, and cannot be spoken about at all.
+#
+# The rule this repository already applies to an absent TOOL (vibe-ic#1357)
+# applies to an absent CORPUS: a check that cannot measure must never report
+# that it measured. Where an assertion below mixes the channels, the artefact
+# half is set aside ONLY when there is no corpus to read — the aggregate is
+# byte-for-byte what it was wherever `VIBE_IC_BENCHMARK_DATA` points at a clone,
+# and the artefact channel's own LOCK 1 / LOCK 2 live in
+# `test_matrix_artefact_mutation_channel.py`, corpus-gated there.
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
+
+def _artefact_names_when_unreadable() -> frozenset:
+    """Entry names this checkout cannot speak about: empty wherever it can.
+
+    Returns the ARTEFACT_MUTATION names only while the published corpus is
+    absent. With a corpus present this is empty, so every caller's aggregate is
+    exactly the one it was before — including its ability to FAIL.
+    """
+    if corpus_root() is not None:
+        return frozenset()
+    return frozenset(m.name for m in L.ARTEFACT_MUTATIONS)
 
 TESTS_DIR = Path(__file__).resolve().parent
 DIMENSION_MODULE_GLOB = "test_matrix_d[1-8]_*.py"
@@ -127,6 +166,72 @@ CANARY_STEP_ID = "ZZ_MUTATION_LEDGER_CANARY_STEP"
 #: recorded BY NAME with the measurement above in
 #: `test_ci_harness_timeout_ceiling_check._REVIEWED_ADVISORY_RESIDUAL`.
 REPLAY_TIMEOUT = 900
+
+#: Headroom between the replay's TOTAL wall budget and the per-test bound the
+#: harness is actually enforcing.
+#:
+#: `REPLAY_TIMEOUT` above bounds ONE cell. Nothing bounded the PLAN, so the
+#: aggregate was `len(plan)` cells deep and undeclared — and the pinned
+#: `--timeout-method=thread` does not fail the TEST when that aggregate is
+#: exceeded, it takes the whole SESSION. MEASURED on clean `7c376e348`, DEFAULT
+#: `witness` mode (not the audit mode — this is the lane that really runs),
+#: whole file, under the pinned harness with `--timeout` set to a bound this
+#: plan cannot afford:
+#:
+#:     REALEXIT=1
+#:     lines matching passed|failed|error in the whole output:   0
+#:     FAILED lines:                                             0
+#:     ... waiter.acquire() / +++ Timeout +++  in replay_many's as_completed
+#:
+#: Ninety-odd tests had already reached a verdict and not one is reported. A
+#: script grepping that output for failures reads ZERO — the same zero a clean
+#: run produces. An empty result is not a zero. With a budget the same run keeps
+#: its summary line and NAMES what it could not reach.
+#:
+#: 10 s, and DELIBERATELY SMALL, because the headroom IS the regression window:
+#: every second between `bound - headroom` and `bound` is a second in which a
+#: replay that WOULD have finished is cut off instead. Below `bound - headroom`
+#: nothing changes; above `bound` the session was dying anyway; only in between
+#: does a green become a named red. Shrinking the headroom shrinks the only harm
+#: this guard can do.
+#:
+#: 10 s is what the window has to absorb, not a round number picked by feel. The
+#: deadline is checked BEFORE each pair and `replay_many` halves the per-cell
+#: clamp so one pair cannot overrun it by a whole cell, so the residue is the
+#: last wave's process teardown plus the dict-build and assertions that follow
+#: the replay inside the same test (sub-second, measured). It is deliberately
+#: NOT a proportion of the bound: the overrun it covers does not grow with the
+#: bound.
+REPLAY_BUDGET_HEADROOM = 10
+
+#: Set by :func:`_record_harness_bound` from the bound pytest is REALLY
+#: enforcing. `None` means no per-test bound is in effect — the audit lane —
+#: and the replay then runs unbounded, exactly as it did before.
+_HARNESS_BOUND: object = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _record_harness_bound(pytestconfig):
+    """Read the harness's own per-test bound instead of assuming 180.
+
+    Assuming it would make this file wrong the day the harness moves, and would
+    silently truncate the audit lane — which sets no bound at all — down to a
+    batch lane's budget.
+    """
+    global _HARNESS_BOUND
+    _HARNESS_BOUND = pytestconfig.getoption("timeout", default=None)
+
+
+def replay_budget() -> object:
+    """Total wall seconds the replay may spend, or ``None`` for unbounded."""
+    bound = _HARNESS_BOUND
+    try:
+        bound = float(bound)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if bound <= 0:
+        return None
+    return max(1.0, bound - REPLAY_BUDGET_HEADROOM)
 
 #: Bound for the two DIRECT pytest launches in this file (the growth control
 #: and the witness-address collection). NOT a round number picked by feel:
@@ -175,9 +280,32 @@ def dimension_modules() -> Dict[int, object]:
     return out
 
 
+#: A cell whose owning dimension module could not answer at all, carrying the
+#: reason. NEVER folded into ENFORCED/WAIVED/NA: an unanswerable cell is a third
+#: state, and the whole point of naming it is that "I could not look" must not
+#: read the same as "I looked and it was fine".
+UNREADABLE = "UNREADABLE: "
+
+
 @lru_cache(maxsize=1)
 def cell_states() -> Dict[Tuple[str, int], str]:
-    """``{(step, dim): state}`` — live, from the eight owning modules."""
+    """``{(step, dim): state}`` — live, from the eight owning modules.
+
+    ONE UNANSWERABLE CELL USED TO POISON ALL 552. `matrix_cell_state` raises
+    when its dimension cannot place a step — dimension 3 does exactly that for
+    a step with no record in `matrix_d3_output_manifest.json` — and the
+    exception escaped this loop, so `cell_states()` itself blew up and EVERY
+    parametrized case of `test_every_enforced_cell_carries_a_named_mutation`
+    went red. MEASURED with the growth control's own synthetic step spliced in:
+    69 of the 70 reported step ids were perfectly covered steps reporting a
+    failure about a step that is not them, and the one real cause appeared
+    only inside a traceback. A gate that reddens everything names nothing.
+
+    The failure is therefore ATTRIBUTED to the cell that produced it and every
+    other module still answers. It is not swallowed: an `UNREADABLE` cell is
+    neither ENFORCED nor covered, so the per-step test below refuses on it
+    explicitly rather than letting the census count it as "not enforced".
+    """
     mods = dimension_modules()
     assert sorted(mods) == list(range(1, 9)), (
         f"expected eight dimension modules, found {sorted(mods)}; a dimension "
@@ -186,7 +314,11 @@ def cell_states() -> Dict[Tuple[str, int], str]:
     out: Dict[Tuple[str, int], str] = {}
     for dim, mod in mods.items():
         for sid in F.step_ids():
-            out[(F.normalize_id(sid), dim)] = mod.matrix_cell_state(sid)
+            try:
+                state = mod.matrix_cell_state(sid)
+            except Exception as exc:                        # noqa: BLE001
+                state = f"{UNREADABLE}d{dim} could not place step {sid!r}: {exc}"
+            out[(F.normalize_id(sid), dim)] = state
     return out
 
 
@@ -378,6 +510,12 @@ def test_every_enforced_cell_carries_a_named_mutation(sid):
     problems: List[str] = []
     for dim in range(1, 9):
         state = states[(sid, dim)]
+        if state.startswith(UNREADABLE):
+            problems.append(
+                f"{sid}/d{dim}:{DIMENSION_NAMES[dim]} could not be READ at "
+                f"all, so its falsifiability is UNKNOWN rather than fine — "
+                f"{state[len(UNREADABLE):]}")
+            continue
         if state != "ENFORCED":
             continue
         covering = L.mutations_covering(sid, dim)
@@ -478,6 +616,19 @@ def test_a_grown_flow_arrives_with_uncovered_cells(tmp_path):
     This is the cheap half — it exercises the ledger's arithmetic against a
     grown flow without paying for a subprocess. The expensive half, which runs
     the REAL gate, is the next test.
+
+    A DELTA, NOT AN ABSOLUTE, and that is the repair this test needed. It used
+    to open with `assert not before["uncovered"]`, which made it report SOMEONE
+    ELSE'S finding and stop measuring its own: the ledger's own comment on
+    :data:`LEDGER_AS_MEASURED` says `0.5ic/d3` is honestly uncovered and must
+    stay that way, so from the day that cell arrived this control was red for a
+    reason that has nothing to do with a flow that grew. Two tests already say
+    `0.5ic/d3` — `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
+    and the aggregate above — and a third saying it in a growth control is not
+    a third finding, it is a control that stopped controlling. What this test
+    owns is the DIFFERENCE the extra step makes, so that is what it asserts:
+    exactly the canary's eight cells arrive, and no pre-existing uncovered cell
+    is lost on the way (a census that dropped one would otherwise pass here).
     """
     grown = tmp_path / "grown_flow.yaml"
     grown.write_text(yaml.safe_dump(_flow_with_an_extra_step(), sort_keys=False,
@@ -487,7 +638,6 @@ def test_a_grown_flow_arrives_with_uncovered_cells(tmp_path):
         states[(CANARY_STEP_ID, dim)] = "ENFORCED"
 
     before = L.census(cell_states())
-    assert not before["uncovered"], before["uncovered"]
 
     old = os.environ.get(L.FLOW_YAML_ENV)
     os.environ[L.FLOW_YAML_ENV] = str(grown)
@@ -500,10 +650,16 @@ def test_a_grown_flow_arrives_with_uncovered_cells(tmp_path):
             os.environ[L.FLOW_YAML_ENV] = old
 
     assert after["steps"] == before["steps"] + 1
-    assert sorted(after["uncovered"]) == sorted(
+    baseline = set(before["uncovered"])
+    grown_set = set(after["uncovered"])
+    assert baseline <= grown_set, (
+        f"growing the flow LOST uncovered cell(s) {sorted(baseline - grown_set)} "
+        f"— the census answered a smaller question about a bigger flow")
+    assert sorted(grown_set - baseline) == sorted(
         f"{CANARY_STEP_ID}/d{d}" for d in range(1, 9)), (
-        f"a 64th step must arrive with exactly its own 8 cells uncovered; "
-        f"got {after['uncovered']}")
+        f"a new step must arrive with exactly its own 8 cells uncovered; the "
+        f"grown census added {sorted(grown_set - baseline)} over a baseline of "
+        f"{sorted(baseline)}")
 
 
 def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
@@ -516,15 +672,27 @@ def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
     NAMES the step. Without this the growth claim would rest on a census
     function agreeing with itself.
 
-    The same invocation with the UNMODIFIED flow is asserted to exit 0, so the
-    control runs in both directions and a gate that reddened on everything
-    would be caught here.
+    BOTH DIRECTIONS, AS A DIFFERENCE OF FAILING CASES rather than as
+    `clean_run.returncode == 0`. The absolute form was the right control only
+    while the live census was perfectly covered; the moment one cell became
+    honestly uncovered — `0.5ic/d3`, which the ledger argues at length must
+    STAY uncovered — the clean arm exited 1, this test went red, and the growth
+    claim it exists to certify stopped being measured at all. Worse, the red it
+    reported was a restatement of a finding two other tests already name.
+
+    What the control actually needs is that the gate DISCRIMINATES: the grown
+    flow must fail for the canary and the clean flow must not. So both arms are
+    run with `-rf`, their FAILING parametrized step ids are compared, and the
+    difference must be exactly the canary. That still catches a gate red on
+    everything (the canary would then be in the clean set too) and it also
+    catches the opposite defect the old form could not see: a gate that stops
+    reddening some OTHER step keeps the exit code at 1 and would have passed.
     """
     grown = tmp_path / "grown_flow.yaml"
     grown.write_text(yaml.safe_dump(_flow_with_an_extra_step(), sort_keys=False,
                                     allow_unicode=True), encoding="utf-8")
-    node = (str(Path("programs/tests") / Path(__file__).name) +
-            "::test_every_enforced_cell_carries_a_named_mutation")
+    name = "test_every_enforced_cell_carries_a_named_mutation"
+    node = str(Path("programs/tests") / Path(__file__).name) + "::" + name
 
     def run(flow_override):
         env = dict(os.environ)
@@ -535,9 +703,14 @@ def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
             env[L.FLOW_YAML_ENV] = str(flow_override)
         return subprocess.run(
             [sys.executable, "-m", "pytest", node,
-             "-q", "-p", "no:randomly", "--no-header", "-rN"],
+             "-q", "-p", "no:randomly", "--no-header", "-rf"],
             cwd=str(L.PLUGIN_ROOT), capture_output=True, text=True,
             timeout=_PYTEST_TIMEOUT_S, env=env)
+
+    def failing_steps(proc):
+        return {m.group(1) for m in
+                re.finditer(rf"^FAILED .*::{name}\[step(.+?)\]\s*$",
+                            proc.stdout, re.MULTILINE)}
 
     grown_run = run(grown)
     assert grown_run.returncode != 0, (
@@ -548,10 +721,23 @@ def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
         f"an author cannot act on it:\n{grown_run.stdout[-3000:]}")
 
     clean_run = run(None)
-    assert clean_run.returncode == 0, (
-        f"the gate is red against the UNMODIFIED flow, so the growth control "
-        f"above proves nothing — a gate that fails on everything fails on a "
-        f"64th step too.\n{clean_run.stdout[-4000:]}")
+    grown_failed = failing_steps(grown_run)
+    clean_failed = failing_steps(clean_run)
+    assert grown_failed, (
+        "the grown run named no failing step at all; the -rf summary this "
+        f"control reads is missing:\n{grown_run.stdout[-3000:]}")
+    assert CANARY_STEP_ID not in clean_failed, (
+        f"the gate names the synthetic step even with the UNMODIFIED flow, so "
+        f"the growth control above proves nothing — a gate that fails on "
+        f"everything fails on a new step too.\n{clean_run.stdout[-4000:]}")
+    assert grown_failed - clean_failed == {CANARY_STEP_ID}, (
+        f"growing the flow by one step must change the gate's verdict by "
+        f"exactly that step. clean={sorted(clean_failed)} "
+        f"grown={sorted(grown_failed)}\n{grown_run.stdout[-3000:]}")
+    assert clean_failed <= grown_failed, (
+        f"the grown flow made the gate STOP naming "
+        f"{sorted(clean_failed - grown_failed)}; splicing in a step may add a "
+        f"finding and may never retire one")
 
 
 def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
@@ -561,7 +747,14 @@ def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
     A gate that fires on any yaml edit is not a coverage gate, it is a diff
     alarm. The dimension-5 waiver closures landed by moving A6, DT2 and DT3 in
     the declaration order; that class of change must not cost anyone a red here.
+
+    ORDER is what this measures, so the eight ARTEFACT entries are set aside
+    where their published run is not in the checkout (see
+    ``_artefact_names_when_unreadable``): they are unresolvable for a reason the
+    reordering did not cause, and letting them redden this test would blame the
+    yaml for a corpus that moved. With a corpus present nothing is set aside.
     """
+    deaf = _artefact_names_when_unreadable()
     doc = copy.deepcopy(L.load_flow())
     steps = doc["steps"]
     steps.insert(0, steps.pop())            # last step declared first
@@ -570,19 +763,32 @@ def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
     shuffled.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
                         encoding="utf-8")
 
+    baseline = L.census(cell_states())
     old = os.environ.get(L.FLOW_YAML_ENV)
     os.environ[L.FLOW_YAML_ENV] = str(shuffled)
     try:
         rep = L.census(cell_states())
-        assert not L.unresolved(), (
-            f"reordering the flow made {len(L.unresolved())} recorded edit "
-            f"site(s) unresolvable; LOCK 1 must key off step ids, not order")
+        bad = [u for u in L.unresolved() if u[0] not in deaf]
+        assert not bad, (
+            f"reordering the flow made {len(bad)} recorded edit "
+            f"site(s) unresolvable; LOCK 1 must key off step ids, not order:\n"
+            f"  - " + "\n  - ".join(f"{n} @ step {s}: {p}" for n, s, p in bad))
     finally:
         if old is None:
             os.environ.pop(L.FLOW_YAML_ENV, None)
         else:
             os.environ[L.FLOW_YAML_ENV] = old
-    assert not rep["uncovered"], rep["uncovered"]
+    # UNCHANGED, not EMPTY. `assert not rep["uncovered"]` was a statement about
+    # the live census's coverage, which is not what this test measures and not
+    # what reordering can affect: once `0.5ic/d3` became honestly uncovered it
+    # made this reverse case red for a reason the reordering did not cause —
+    # precisely the failure mode the docstring above warns about one paragraph
+    # earlier for the ARTEFACT entries. What must hold is that the SET does not
+    # move: a reorder that covered a cell would be as wrong as one that
+    # uncovered a cell, and both are caught by comparing sets.
+    assert sorted(rep["uncovered"]) == sorted(baseline["uncovered"]), (
+        f"reordering the flow changed which cells are uncovered: "
+        f"{sorted(baseline['uncovered'])} -> {sorted(rep['uncovered'])}")
     assert rep["steps"] == len(F.step_ids())
 
 
@@ -618,8 +824,18 @@ def test_lock1_every_recorded_edit_site_still_exists():
     anti-rot half: a refactor that moves the ``_STRUCTURAL_RTL_GATES`` literal
     or drops a step's ``files_exist`` key makes the recorded edit unreproducible
     and says so, instead of leaving a stale proof in place.
+
+    ``L.unresolved()`` spans all three channels. The eight ARTEFACT entries in
+    it resolve against a PUBLISHED RUN, so where the corpus is not in the
+    checkout they are set aside here and asserted — unchanged, at full strength —
+    by ``test_matrix_artefact_mutation_channel.py::
+    test_lock1_the_entry_resolves_against_the_live_tree``, which skips naming the
+    corpus in exactly the same condition. The 691 yaml/tree pairs are still
+    re-resolved on every run, and with a corpus present this line is the one that
+    was here before.
     """
-    bad = L.unresolved()
+    deaf = _artefact_names_when_unreadable()
+    bad = [u for u in L.unresolved() if u[0] not in deaf]
     pairs = sum(len(m.applies_to) for m in L.MUTATIONS)
     assert pairs > 0
     assert not bad, (
@@ -815,14 +1031,413 @@ def test_control_removing_one_entry_uncovers_the_cells_it_carried(monkeypatch):
         f"{sorted(orphaned - after)} covered")
 
 
+def test_replay_many_reports_only_finite_completed_units_in_result_order(
+        monkeypatch):
+    monkeypatch.setattr(L, "mutation", lambda name: name)
+    monkeypatch.setattr(
+        L, "replay", lambda name, step, timeout: f"{name}:{step}:{timeout}")
+    progress = []
+    result = L.replay_many(
+        [("a", "s1"), ("b", "s2"), ("c", "s3")], jobs=3, timeout=7,
+        progress_callback=lambda completed, total:
+        progress.append((completed, total)),
+    )
+    assert result == ("a:s1:7", "b:s2:7", "c:s3:7")
+    assert progress == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_replay_many_callback_failure_refuses_the_population(monkeypatch):
+    monkeypatch.setattr(L, "mutation", lambda name: name)
+    monkeypatch.setattr(L, "replay", lambda name, step, timeout: name)
+
+    def refuse(completed, total):
+        raise RuntimeError(f"relay refused {completed}/{total}")
+
+    with pytest.raises(RuntimeError, match="relay refused 1/2"):
+        L.replay_many(
+            [("a", "s1"), ("b", "s2")], jobs=2,
+            progress_callback=refuse)
+
+
+def test_a_cut_off_replay_omits_unstarted_pairs_and_never_a_verdict():
+    """BIDIRECTIONAL control on the total wall budget (vibe-ic#1410).
+
+    The budget exists because ``timeout`` bounds one cell and nothing bounded
+    the plan, so the aggregate outlives the harness and
+    ``--timeout-method=thread`` takes the SESSION — 0 lines matching
+    ``passed|failed|error`` in the whole output, which greps as zero failures.
+
+    BOTH arms are asserted, because a budget that quietly swallowed pairs would
+    be a worse bug than the one it fixes:
+
+      * BOUNDED — the plan is cut off and the pairs that were never STARTED are
+        OMITTED. Not fabricated, not scored, not skipped. The shortfall is what
+        ``test_the_replay_actually_ran_and_is_not_starved`` reads.
+      * UNBOUNDED (``budget=None``: the audit lane and every previous caller) —
+        every pair runs. THIS ARM IS WHAT PROVES THE FIX DID NOT BUY ITS GREEN
+        BY MAKING THE REPLAY DO LESS.
+
+    And the boundary between omission and the module's NOT_REPLAYABLE doctrine
+    is asserted too: a pair that WAS started keeps its result whatever that
+    result says, because omission is only ever the answer for a replay that
+    never happened.
+
+    Driven against a stub rather than the real replay: what is under test is the
+    SCHEDULING, and a real pair costs tens of seconds.
+    """
+    plan = tuple((f"M{i}", f"stub{i}") for i in range(12))
+    seen_timeouts: List[int] = []
+
+    def stub(mut, sid=None, timeout=900):
+        seen_timeouts.append(int(timeout))
+        time.sleep(0.2)
+        return L.ReplayResult(str(mut), 1, str(sid), True, 0, 1, True, "")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(L, "mutation", lambda name: name)
+        mp.setattr(L, "replay", stub)
+
+        progress: List[Tuple[int, int]] = []
+        cut = L.replay_many(plan, jobs=1, timeout=REPLAY_TIMEOUT, budget=0.7,
+                            progress_callback=lambda c, t:
+                            progress.append((c, t)))
+        clamped = list(seen_timeouts)
+        seen_timeouts.clear()
+        full = L.replay_many(plan, jobs=1, timeout=REPLAY_TIMEOUT, budget=None)
+
+        def unreadable(mut, sid=None, timeout=900):
+            return L.ReplayResult(str(mut), 1, str(sid), True, None, None,
+                                  False, "", 0.0, "REDDENED",
+                                  "mutant arm: the bound fired")
+        mp.setattr(L, "replay", unreadable)
+        started = L.replay_many(plan[:2], jobs=1, timeout=REPLAY_TIMEOUT,
+                                budget=30)
+
+    assert 0 < len(cut) < len(plan), (
+        f"a 0.7 s budget over {len(plan)} pairs of 0.2 s each returned "
+        f"{len(cut)}; the budget either never fired or ate everything")
+    assert [r.step_id for r in cut] == [p[1] for p in plan[:len(cut)]], (
+        f"the surviving pairs are out of plan order: {[r.step_id for r in cut]}")
+    assert all(r.proved for r in cut), (
+        "a pair the budget DID reach must keep its real verdict; the budget "
+        "may decide what RUNS, never what a run CONCLUDED")
+    assert clamped and all(0 < t <= REPLAY_TIMEOUT for t in clamped), (
+        f"per-cell clamp went outside (0, {REPLAY_TIMEOUT}]: {clamped}")
+    # THE DENOMINATOR MUST NOT SHRINK TO MATCH WHAT WAS ACHIEVED. A cut-off run
+    # that relayed `(3, 3)` would report itself complete.
+    assert progress and all(total == len(plan) for _, total in progress), (
+        f"progress denominator moved off the frozen plan size: {progress}")
+    assert [c for c, _ in progress] == list(range(1, len(cut) + 1)), (
+        f"progress counted pairs that produced no result: {progress}")
+    assert len(full) == len(plan), (
+        f"budget=None replayed {len(full)} of {len(plan)}; the unbounded path "
+        f"is the audit lane and must be byte-for-byte what it was")
+    assert len(started) == 2 and all(
+        r.verdict == "NOT_REPLAYABLE" for r in started), (
+        "a pair that WAS started and could not read its cell must keep its "
+        "NOT_REPLAYABLE verdict; omission is only for a pair never started")
+
+
+def test_the_replay_budget_is_below_the_harness_bound_that_would_kill_it():
+    """The budget must come from the bound pytest is REALLY enforcing.
+
+    A budget at or above the harness bound is no budget at all — the session
+    dies first and the replay never gets to stop itself. And with no bound in
+    effect (the audit lane, which is where ``all`` mode belongs) there must be
+    NO budget, or this file would silently truncate the audit it was asked for.
+    """
+    bound = _HARNESS_BOUND
+    budget = replay_budget()
+    if budget is None:
+        assert not bound, (
+            f"no replay budget was derived although pytest is enforcing "
+            f"{bound!r} per test; the replay can still kill the session")
+        return
+    assert budget < float(bound), (
+        f"replay budget {budget}s is not below the harness bound {bound}s, so "
+        f"the session is killed before the replay can report a shortfall")
+    assert budget == max(1.0, float(bound) - REPLAY_BUDGET_HEADROOM), (
+        f"budget {budget}s is not {bound}s minus the declared "
+        f"{REPLAY_BUDGET_HEADROOM}s of headroom")
+
+
+def test_no_budget_at_all_leaves_the_replay_exactly_as_it_was():
+    """The audit lane's contract, asserted where a reader will look for it.
+
+    ``all`` mode is documented as costing minutes and belongs in a lane with no
+    per-test bound. If this file derived a budget there anyway it would cut the
+    audit off and report a shortfall for a run that was given all the time it
+    asked for — which is the same conflation, pointing the other way.
+    """
+    for absent in (None, "", 0, 0.0, "none"):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(sys.modules[__name__], "_HARNESS_BOUND", absent)
+            assert replay_budget() is None, (
+                f"harness bound {absent!r} means NO bound is in effect, but a "
+                f"budget of {replay_budget()} was derived from it")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys.modules[__name__], "_HARNESS_BOUND", 180.0)
+        assert replay_budget() == 180.0 - REPLAY_BUDGET_HEADROOM
+
+
+def test_replay_results_actually_hands_the_budget_to_the_replay():
+    """The WIRING, not just the arithmetic.
+
+    `replay_budget()` deriving a correct number proves nothing if the number is
+    never passed to `replay_many` — and that one keyword is the whole fix. It is
+    the cheapest thing in this change to delete by accident, and deleting it
+    restores the session-killing behaviour with every other guard here still
+    green. So the call is asserted, not the constant.
+    """
+    replay_results.cache_clear()
+    captured = {}
+
+    def spy(plan, **kwargs):
+        captured.update(kwargs)
+        captured["plan"] = tuple(plan)
+        return ()
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(L, "replay_many", spy)
+            mp.setattr(sys.modules[__name__], "_HARNESS_BOUND", 180.0)
+            replay_results()
+    finally:
+        replay_results.cache_clear()
+
+    assert "budget" in captured, (
+        "replay_results() called replay_many WITHOUT a budget keyword; the "
+        "plan is unbounded again and the harness will kill the session instead "
+        "of the replay reporting a shortfall")
+    assert captured["budget"] == 180.0 - REPLAY_BUDGET_HEADROOM, (
+        f"replay_results() passed budget={captured['budget']!r} while the "
+        f"harness bound was 180.0; it must pass replay_budget()")
+    assert captured["timeout"] == REPLAY_TIMEOUT, (
+        "the per-cell bound must still be forwarded; the total budget REPLACES "
+        "nothing, it bounds the level that had no bound at all")
+
+
+def test_the_shortfall_note_says_NOT_MEASURED_and_never_a_lost_proof():
+    """The disclosure is the deliverable, so its WORDS are asserted.
+
+    A short population has two causes that read identically — starved upstream,
+    or cut off by this file's own budget — and they mean opposite things. If the
+    note goes missing, the reds it annotates say "the recorded proof no longer
+    holds" about pairs that were never run, which is the exact sentence that
+    sent an author hunting a regression that did not happen (vibe-ic#1410).
+    """
+    replay_results.cache_clear()
+    plan = L.replay_plan()
+    kept = plan[:2]
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(L, "replay_many", lambda p, **k: tuple(
+                L.ReplayResult(name, 1, sid, True, 0, 1, True, "")
+                for name, sid in kept))
+            mp.setattr(sys.modules[__name__], "_HARNESS_BOUND", 180.0)
+            assert len(replay_results()) == len(kept)
+            missing = replay_shortfall()
+            note = _cut_off_note()
+    finally:
+        replay_results.cache_clear()
+
+    assert missing == list(plan[2:]), (
+        f"the shortfall must be every plan pair with no result, in plan order; "
+        f"got {missing[:4]}")
+    assert "NOT HAPPEN" in note and "CUT OFF" in note, (
+        f"the note does not say the measurement did not happen: {note!r}")
+    assert f"{len(plan) - len(kept)} of {len(plan)}" in note, (
+        f"the note does not state the shortfall against the FULL plan "
+        f"denominator: {note!r}")
+    assert "do NOT re-record the ledger" in note, (
+        f"the note must refuse the evidence-deleting repair by name: {note!r}")
+    # And the reverse: a COMPLETE population must add no note at all, or every
+    # ordinary red acquires a cut-off excuse it has not earned.
+    replay_results.cache_clear()
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(L, "replay_many", lambda p, **k: tuple(
+                L.ReplayResult(name, 1, sid, True, 0, 1, True, "")
+                for name, sid in plan))
+            assert replay_shortfall() == []
+            assert _cut_off_note() == ""
+    finally:
+        replay_results.cache_clear()
+
+
+def test_a_stub_population_never_escapes_the_test_that_installed_it():
+    """The `finally` in the denominator test, driven in the failing direction.
+
+    `replay_results` is `lru_cache`d for the session, and the denominator test
+    drives it through a stub returning an empty population. Before this was in a
+    `finally`, that test failing left `()` cached and every LOCK 2
+    parametrisation after it reported `produced no replay result` — a verdict
+    about mutations no replay had touched. Measured shape on clean
+    `7c376e348` in `all` mode: 15 such parametrisations, 0 replays run.
+
+    So this drives the denominator test in EXACTLY that failing direction and
+    asserts the cache is clean afterwards. It fails if the `finally` is removed.
+    """
+    replay_results.cache_clear()
+    with pytest.MonkeyPatch.context() as mp:
+        # Make the denominator assertion legitimately false, which is what
+        # `all` mode does in the field.
+        #
+        # DERIVED FROM THE PLAN, not written down. A literal here RACES the pin
+        # in the test below, and on 2026-08-20 it lost that race: adding
+        # `D5-PHANTOM-FALLBACK` moved the frozen plan from 24 to 25, the
+        # hard-coded 25 became EQUAL to it, the inner assertion passed, and
+        # `pytest.raises(AssertionError)` reported this test as broken —
+        # i.e. a guard on the `finally` stopped driving the failing direction
+        # and said so as if the `finally` had regressed. Deriving the wrong
+        # count from the right one cannot go stale.
+        wrong_denominator = len(L.replay_plan()) + 1
+        mp.setattr(L, "replay_plan", lambda *a, **k: tuple(
+            (f"M{i}", f"s{i}") for i in range(wrong_denominator)))
+        with pytest.raises(AssertionError):
+            test_witness_replay_relays_the_exact_frozen_plan_denominator(mp)
+    assert replay_results.cache_info().currsize == 0, (
+        "the denominator test failed and left its STUB population cached; "
+        "every replay-driven test after it would read a population no replay "
+        "produced, and report it as mutations that stopped reddening")
+
+
+def test_witness_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
+    """The relayed denominator is the FROZEN plan, not what the replay achieved.
+
+    THE `finally` IS LOAD-BEARING (vibe-ic#1410). This test drives
+    `replay_results()` through a STUB that returns an empty population, and
+    `replay_results` is `lru_cache`d for the whole session. The trailing
+    `cache_clear()` used to be an ordinary last statement, so ANY assertion
+    here failing left the stub's `()` cached — and every replay-driven test
+    after it then read a population that no replay ever produced.
+
+    That is not hypothetical and it is not cosmetic. MEASURED on clean
+    `7c376e348` with `VIBE_IC_MATRIX_MUTATION_REPLAY=all`, where the plan is 707
+    pairs and the `== 24` below is legitimately false:
+
+        16 failed, 94 passed, 2 skipped in 18.78s
+        FAILED ...::test_witness_replay_relays_the_exact_frozen_plan_denominator
+        FAILED ...::test_lock2_the_mutation_really_reddens_its_witness[...]  x15
+
+    Fifteen LOCK 2 parametrisations reported `produced no replay result` — the
+    shape that reads as "the mutation stopped reddening its witness" — on a tree
+    where NO REPLAY HAD BEEN RUN AT ALL. A test's fixture leaked into the
+    instrument the rest of the file measures with, and the instrument then
+    reported verdicts about mutations it never touched. Restoring the cache in a
+    `finally` is what confines the stub to this test.
+    """
+    replay_results.cache_clear()
+    seen = []
+
+    def fake_many(plan, **kwargs):
+        frozen = tuple(plan)
+        callback = kwargs["progress_callback"]
+        for completed in range(1, len(frozen) + 1):
+            callback(completed, len(frozen))
+        return ()
+
+    monkeypatch.setattr(L, "replay_many", fake_many)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_domain_progress",
+        lambda scope, completed, total:
+        seen.append((scope, completed, total)))
+    try:
+        assert replay_results() == ()
+        # 24 -> 25: `D5-PHANTOM-FALLBACK` joined the ledger (2026-08-20). It is
+        # the first mutation to reach `closed_loop.fallback_to` — the flow's
+        # CONVERGENCE edges, 19 of which had shipped with no reader in the
+        # repository at all. Witness mode is one pair per entry, so the plan
+        # grows by exactly one. Re-stated by hand rather than derived from
+        # `len(L.MUTATIONS)`, because this pin exists to make a new entry force
+        # a human to say the number.
+        assert len(L.replay_plan()) == 25
+        assert seen == [
+            ("matrix-mutation-replays", completed, 25)
+            for completed in range(1, 26)
+        ]
+    finally:
+        replay_results.cache_clear()
+
+
 @lru_cache(maxsize=1)
 def replay_results() -> Tuple[L.ReplayResult, ...]:
     """Run the current mode's replay plan once, in parallel, and cache it."""
     plan = L.replay_plan()
-    return L.replay_many(plan, jobs=8, timeout=REPLAY_TIMEOUT)
+    return L.replay_many(
+        plan, jobs=8, timeout=REPLAY_TIMEOUT,
+        progress_callback=lambda completed, total: _domain_progress(
+            "matrix-mutation-replays", completed, total),
+        budget=replay_budget(),
+    )
 
 
-@pytest.mark.parametrize("name", [m.name for m in L.MUTATIONS])
+def replay_shortfall() -> List[Tuple[str, str]]:
+    """Plan pairs the replay never STARTED, in plan order.
+
+    Non-empty ONLY when the total budget cut the plan off. These pairs were not
+    measured, so they carry no verdict and appear in no scoring: they are
+    reported as a shortfall, never as mutations that stopped reddening.
+    """
+    ran = {(r.mutation, r.step_id) for r in replay_results()}
+    return [pair for pair in L.replay_plan() if pair not in ran]
+
+
+def _cut_off_note() -> str:
+    """Say WHICH of the two things a short population is, in the failure text.
+
+    ``len(results) < len(plan)`` has two causes that read identically and mean
+    opposite things: the replay was starved by something upstream, or the
+    replay ran out of the budget this file gave it. Only the second is a
+    measurement that did not happen, and only this function can tell them apart
+    — so the distinction is stated in the assertion rather than left for the
+    reader to guess from a count.
+    """
+    missing = replay_shortfall()
+    if not missing:
+        return ""
+    return (f"\n\nTHE REPLAY WAS CUT OFF, so this is a measurement that did "
+            f"NOT HAPPEN rather than a proof that stopped holding: "
+            f"{len(missing)} of {len(L.replay_plan())} pair(s) were never "
+            f"started under a total budget of {replay_budget()}s "
+            f"(mode {L.replay_mode()!r}, harness bound {_HARNESS_BOUND}). "
+            f"Nothing here says a mutation stopped reddening anything. Fix the "
+            f"budget or the lane — do NOT re-record the ledger to match.\n"
+            f"Unreached: {missing[:6]}{' ...' if len(missing) > 6 else ''}")
+
+
+def _lock2_params():
+    """One param per entry, corpus-gated for the ones whose WITNESS needs it.
+
+    A replay proves nothing unless the witness cell it re-runs can reach a
+    verdict. Dimension 3's cell test is answered out of the published corpus —
+    ``test_matrix_d3_outputs_produced`` skips naming the corpus where there is
+    none — so a dimension-3 entry replayed here watches a SKIP before the edit
+    and a SKIP after it. That is a statement about the corpus, not about the
+    ledger, so those entries skip for the corpus's own reason instead. Every
+    other entry's witness is answered from the flow yaml and the plugin tree,
+    both of which are here, and is left exactly as it was.
+
+    THIS MARK IS NOT WHAT KEEPS THE VERDICT HONEST, and reading it as such is
+    what vibe-ic#1421 cost. Until ``_cell_rc_from_report`` learned that a
+    skipped cell has no colour, the pair underneath this mark was being SCORED
+    ``STAYED_GREEN`` — "the recorded proof no longer holds" — and the mark only
+    hid that verdict from this one assertion. ``replay_plan`` is not
+    marker-gated: the pair still runs, still lands in ``replay_results()``, and
+    is still read by the CLI, by the starvation guard, and by anyone who prints
+    the plan. The scoring is fixed at the source now; this mark does the one job
+    its name claims, which is to keep an assertion about the LEDGER from
+    reporting a fact about the CHECKOUT.
+    """
+    out = []
+    for m in L.MUTATIONS:
+        marks = [needs_corpus] if m.dim == 3 else []
+        out.append(pytest.param(m.name, marks=marks))
+    return out
+
+
+@pytest.mark.parametrize("name", _lock2_params())
 def test_lock2_the_mutation_really_reddens_its_witness(name):
     """LOCK 2: perform the edit for real and watch the cell go PASS -> FAIL.
 
@@ -851,7 +1466,7 @@ def test_lock2_the_mutation_really_reddens_its_witness(name):
     """
     results = {(r.mutation, r.step_id): r for r in replay_results()}
     mine = [r for (n, _), r in results.items() if n == name]
-    assert mine, f"{name} produced no replay result"
+    assert mine, f"{name} produced no replay result{_cut_off_note()}"
     for r in mine:
         if r.unmeasurable:
             continue
@@ -867,6 +1482,7 @@ def test_lock2_the_mutation_really_reddens_its_witness(name):
         f"reason; fix the reds under it or the entry is carrying no proof.")
 
 
+@needs_corpus
 def test_the_replay_actually_ran_and_is_not_starved(record_property):
     """Anti-starvation guard on LOCK 2's own instrument.
 
@@ -874,6 +1490,14 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
     because its input had been emptied. A replay plan that silently produced
     zero pairs would make every assertion above vacuously true, so the plan's
     size is compared against the ledger and reported.
+
+    CORPUS-GATED as a WHOLE, unlike LOCK 1 above, because there is nothing here
+    to set aside: this is an AGGREGATE over ``L.replay_plan()``, whose expected
+    size counts ``len(L.ARTEFACT_MUTATIONS)`` and whose UNMEASURABLE ratchet is
+    a proportion of it. Eight of its members name a published run this checkout
+    does not have, so the denominator itself is unreadable and every figure
+    computed from it would be about a plan that could not be executed. Point
+    ``VIBE_IC_BENCHMARK_DATA`` at a clone and it runs, ratchet and all.
     """
     results = replay_results()
     plan = L.replay_plan()
@@ -882,7 +1506,8 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
                 ) + len(L.ARTEFACT_MUTATIONS)
     assert len(results) == len(plan) == expected > 0, (
         f"replayed {len(results)} pair(s) for a plan of {len(plan)}; mode "
-        f"{L.replay_mode()!r} should re-execute {expected}")
+        f"{L.replay_mode()!r} should re-execute {expected}"
+        f"{_cut_off_note()}")
     assert len({(r.mutation, r.step_id) for r in results}) == len(results), (
         "the replay plan contains duplicate pairs, so the count overstates "
         "what was actually re-executed")
@@ -1091,14 +1716,53 @@ def test_the_unmeasurable_count_is_disclosed_not_skipped():
 # subject of #1403, and which cost the fleet a standing brief pointed at a
 # regression that was not there. The distinction has to live in the OUTPUT.
 #
-# The bound below is ONE SECOND: small enough to fire on any cell, and far
-# under the 60 s ceiling (`180 // 3`) that `ci_harness_timeout_ceiling_check`
-# permits one blocking call. These tests cost ~1 s each; they do not replay
-# anything to completion and are not a second copy of LOCK 2.
+# The bound below is ONE SECOND: far under the 60 s ceiling (`180 // 3`) that
+# `ci_harness_timeout_ceiling_check` permits one blocking call. These tests cost
+# ~1 s each; they do not replay anything to completion and are not a second copy
+# of LOCK 2.
 _BOUND_THAT_ALWAYS_FIRES = 1
 
+#: THE SUBJECT THESE THREE TESTS KILL, and it is no longer a real matrix cell.
+#:
+#: They used to point `_run_cell` at `D3-UNDECLARED-ARTEFACT`'s witness on the
+#: argument that one second was "small enough to fire on any cell". That stopped
+#: being true when dimension 3's cell learned to SKIP where the published corpus
+#: is not in the checkout: the child now returns before the bound can fire, so
+#: the kill this file exists to measure never happens. Measured on `ee849c19e`,
+#: five consecutive runs of that exact call at a 60 s bound:
+#:
+#:     rc=0  `1 skipped in 0.65s`   child 0.89 s
+#:     rc=0  `1 skipped in 0.62s`   child 0.84 s
+#:     rc=0  `1 skipped in 0.60s`   child 0.81 s
+#:     rc=0  `1 skipped in 0.60s`   child 0.81 s
+#:     rc=0  `1 skipped in 0.62s`   child 0.83 s
+#:
+#: 0.81 s < 1 s, so all three tests were RED on an idle host and green only on a
+#: host slow enough to push pytest's own start-up past the bound — a control
+#: whose verdict is a property of the machine. A probe that sleeps for thirty
+#: seconds cannot finish inside a one-second bound on any host, which makes the
+#: kill a property of THIS FILE. Nothing about the claim under test — that a
+#: killed child returns a reason instead of raising, and is never given a
+#: colour — was ever about which cell was killed.
+_A_CELL_THAT_CANNOT_FINISH = ("import time\n\n\n"
+                              "def test_probe():\n"
+                              "    time.sleep(30)\n")
 
-def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour():
+
+@pytest.fixture()
+def unkillable_cell(tmp_path, monkeypatch):
+    """Point `cell_nodeid` at a probe that cannot answer inside the bound."""
+    root = tmp_path / "slow"
+    root.mkdir(parents=True)
+    (root / "test_probe.py").write_text(_A_CELL_THAT_CANNOT_FINISH,
+                                        encoding="utf-8")
+    (root / "conftest.py").write_text("", encoding="utf-8")
+    nodeid = f"{root / 'test_probe.py'}::test_probe"
+    monkeypatch.setattr(L, "cell_nodeid", lambda dim, sid: nodeid)
+    return root
+
+
+def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour(unkillable_cell):
     """The bound firing must RETURN a reason, not raise.
 
     `_cell_rc_from_report` already states the doctrine — "a replay that could
@@ -1112,8 +1776,7 @@ def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour():
     propagated out of `replay` -> `replay_many`'s `pool.map`, killing the test
     with a traceback and no verdict.
     """
-    mut = L.mutation("D3-UNDECLARED-ARTEFACT")
-    rc, out, why = L._run_cell(mut.dim, mut.witness, L.PLUGIN_ROOT, None,
+    rc, out, why = L._run_cell(3, "D1", unkillable_cell, None,
                                _BOUND_THAT_ALWAYS_FIRES)
     assert rc is None, (
         f"a cell killed at {_BOUND_THAT_ALWAYS_FIRES}s reported rc={rc!r}. An "
@@ -1127,7 +1790,8 @@ def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour():
     assert isinstance(out, str), f"partial output came back as {type(out)}"
 
 
-def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS():
+def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS(
+        unkillable_cell):
     """End to end: the pair scores NOT_REPLAYABLE, and that is a failure.
 
     The two directions that matter, and they pull against each other:
@@ -1136,6 +1800,11 @@ def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS():
         with no verdict at all, which is the defect;
       * it must not PASS — a bound that fired proves nothing, and a replay that
         could not run must never be scored as one that ran.
+
+    The ENTRY is still a real one — `replay` performs its real edit on a real
+    copy of the flow and checks the real blast radius — and only the CELL the
+    two arms run is the probe that cannot answer in time. FLOW_YAML, so no
+    `cp -al` mirror is built for a pair that is going to be killed anyway.
     """
     mut = L.mutation("D3-UNDECLARED-ARTEFACT")          # FLOW_YAML: no cp -al
     r = L.replay(mut, mut.witness, _BOUND_THAT_ALWAYS_FIRES)
@@ -1151,7 +1820,8 @@ def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS():
         f"the pair does not carry the reason: {r.not_replayable!r}")
 
 
-def test_the_bound_reason_refuses_BOTH_evidence_deleting_repairs():
+def test_the_bound_reason_refuses_BOTH_evidence_deleting_repairs(
+        unkillable_cell):
     """The message routes the reader, or #1403 happens again.
 
     #1403 was not a broken gate. It was a red whose text sent every reader to
@@ -1159,8 +1829,7 @@ def test_the_bound_reason_refuses_BOTH_evidence_deleting_repairs():
     same two the ALREADY_RED path refuses, for the same reason: both restore
     green by deleting the evidence rather than by measuring anything.
     """
-    mut = L.mutation("D3-UNDECLARED-ARTEFACT")
-    _, _, why = L._run_cell(mut.dim, mut.witness, L.PLUGIN_ROOT, None,
+    _, _, why = L._run_cell(3, "D1", unkillable_cell, None,
                             _BOUND_THAT_ALWAYS_FIRES)
     assert "re-record the ledger" in why, (
         f"the reason does not refuse re-recording the ledger: {why!r}")
@@ -1231,7 +1900,7 @@ def test_not_falsifiable_cells_are_published_and_specific():
             problems.append(
                 f"{nf.step_id}/d{nf.dim}: names a step the flow does not "
                 f"declare, so the finding is about nothing")
-        if nf.dim not in range(1, 9):
+        if nf.dim not in DIMENSIONS:
             problems.append(f"{nf.step_id}/d{nf.dim}: dimension out of range")
         if len(nf.tried) < 1:
             problems.append(
@@ -1262,6 +1931,55 @@ def test_not_falsifiable_cells_are_published_and_specific():
 # ══════════════════════════════════════════════════════════════════════
 # Guards on this file's own instruments
 # ══════════════════════════════════════════════════════════════════════
+#: Dimensions of the live matrix that this ledger does NOT carry cells for,
+#: each with the reason. `CELL_TESTS` is what decides the ledger's grid, and
+#: nothing required it to cover every declared dimension — so a dimension added
+#: to the matrix simply contributed no cells here and no test said a word.
+#: Silent absence is the one thing this campaign refuses, so it is named.
+LEDGER_DIMENSIONS_NOT_COVERED: Dict[int, str] = {
+    9: ("verdict_consumed, added 2026-08-21. Its cells are NOT in this ledger. "
+        "Registering them means a measured `applies_to` sweep over all 69 "
+        "steps for each mutation shape, which is a sweep this change did not "
+        "run — and an entry whose applies_to was not measured is exactly what "
+        "LOCK 1 exists to refuse. The dimension is not unguarded in the "
+        "meantime: test_matrix_d9_verdict_consumed.py carries its own mutation "
+        "arms for all three legs plus both control arms, and they RUN on every "
+        "session. What is missing is this ledger's per-cell reach, not "
+        "falsifiability evidence."),
+}
+
+
+def test_the_ledger_names_every_dimension_it_does_not_cover():
+    """A dimension outside this ledger must be DECLARED, never merely absent.
+
+    `census()` derives its grid from `CELL_TESTS`, so a dimension with no entry
+    there contributes no cells and no assertion notices. That is silent absence
+    — "a cell with no test is not covered", one level up. This test makes the
+    gap loud in both directions: a dimension that leaves the ledger must be
+    named here, and one that JOINS it must be removed from this map in the same
+    change, so the declaration cannot rot into a description of an older tree.
+    """
+    covered = set(L.CELL_TESTS)
+    declared = set(DIMENSIONS)
+    missing = declared - covered
+    assert missing == set(LEDGER_DIMENSIONS_NOT_COVERED), (
+        f"dimension(s) {sorted(missing)} of the live matrix carry no cells in "
+        f"this ledger, and the declared set is "
+        f"{sorted(LEDGER_DIMENSIONS_NOT_COVERED)}.\n"
+        f"Undeclared: {sorted(missing - set(LEDGER_DIMENSIONS_NOT_COVERED))} — "
+        f"their cells are contributing nothing to the coverage arithmetic and "
+        f"nothing said so.\n"
+        f"Stale: {sorted(set(LEDGER_DIMENSIONS_NOT_COVERED) - missing)} — now "
+        f"covered; delete the entry in the change that covered it.")
+    assert not (covered - declared), (
+        f"CELL_TESTS names dimension(s) {sorted(covered - declared)} that the "
+        f"matrix does not declare; the ledger would census cells that do not "
+        f"exist")
+    for dim, reason in LEDGER_DIMENSIONS_NOT_COVERED.items():
+        assert len(reason.strip()) >= 60, (
+            f"dimension {dim}'s exclusion reason is too short to check")
+
+
 def test_the_cell_test_addresses_are_real_pytest_nodes():
     """Every address :data:`CELL_TESTS` names must collect, or a replay would be
     measuring nothing and reporting a tidy green.

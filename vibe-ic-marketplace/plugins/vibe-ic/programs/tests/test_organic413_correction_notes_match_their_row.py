@@ -32,6 +32,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _corpus_repo_view import corpus_repo
+from _published_corpus import needs_corpus
+
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import provenance_correction_note_check as C  # noqa: E402
@@ -139,8 +142,9 @@ def test_git_refusing_to_list_is_an_ERROR_not_a_PASS(tmp_path, capsys):
     assert "NOT a clean result" in out and "[PASS]" not in out
 
 
-def test_the_published_corpus_is_clean_today():
-    """This repository's corpus: 22 tracked ledgers, 36 corrected rows, zero
+@needs_corpus
+def test_the_published_corpus_is_clean_today(tmp_path):
+    """The published corpus: 22 tracked ledgers, 36 corrected rows, zero
     notes claiming a repair their row did not receive.
 
     THE CLEANLINESS HALF HAS ALWAYS HELD. `verdict == "PASS"` with zero
@@ -176,8 +180,21 @@ def test_the_published_corpus_is_clean_today():
         7  ic/sha256/clean_run_v1427_20260715
         6  ic/sha256/clean_run_v1422_20260715
         5  ic/caravel_user_project
+
+    WHERE THE LEDGERS ARE READ FROM (the 2026-08 split). The corrected rows are
+    a property of the PUBLISHED cells, and those moved to
+    `vibeic/benchmark-data`. `C.audit` enumerates with
+    `git ls-files benchmark-data`, so it can only be aimed at a repository that
+    TRACKS the cells under that prefix — `corpus_repo` supplies one, either the
+    checkout itself when it still carries them or a zero-copy view of the clone
+    named by `$VIBE_IC_BENCHMARK_DATA`. Aiming it at this checkout after the
+    split enumerated nothing and failed on `noted_rows == 0`, which reads as
+    "the corpus lost 36 corrected rows" — a defect claim about data that was
+    simply not here to read. The floors below are unchanged, so an empty or
+    partial corpus still FAILS rather than passing vacuously; measured against
+    the published corpus today: 22 ledgers, 36 noted rows, zero findings.
     """
-    rep = C.audit(_PROGRAMS.parents[3])
+    rep = C.audit(corpus_repo(tmp_path))
     assert rep["verdict"] == "PASS", rep["findings"][:10]
     assert rep["noted_rows"] >= 36, rep["noted_rows"]
     # The ledger count is pinned too: 36 corrected rows spread over FEWER

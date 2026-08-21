@@ -45,7 +45,35 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 CHECK = PLUGIN_ROOT / "programs" / "step_internal_fail_bubble_up_check.py"
 REAL_BASELINE = (PLUGIN_ROOT / "programs" /
                  "step_internal_fail_bubble_up_baseline.json")
-CORPUS = PLUGIN_ROOT.parents[2] / "benchmark-data"
+
+
+def _reachable_corpus(root: Path) -> Path:
+    """A corpus of ONE published run tree, with one unacknowledged FAIL in it.
+
+    The corpus was never this file's subject; it was the convenient way to get a
+    NON-EMPTY population. `--write-baseline` refuses a sweep that reached
+    nothing (vibe-ic#1098), so half 3 below — "the correct spelling still aims
+    where the operator said" — needs a sweep that reaches something, and that is
+    the whole requirement.
+
+    It used to borrow the published corpus for that, which made a test about
+    ARGUMENT HANDLING depend on which cells happened to be published. When the
+    result cells moved to `vibeic/benchmark-data` the borrowed population went
+    to zero and the write was refused, so the test failed while the behaviour it
+    checks was intact. Built here instead: the population is one tree, always
+    reachable, and the number the write records is one this test chose — so the
+    docstring's "must write a REAL measurement" is now asserted rather than
+    hoped for.
+
+    Shape only, no design/PDK/vendor literal: `<corpus>/ic/<d>/<v>/reports/…`,
+    with a `verdict: FAIL` report that no waiver and no orchestrator roll-up
+    names, which is exactly one finding for the sweep to count.
+    """
+    run = root / "ic" / "design" / "v1_pdk"
+    (run / "reports" / "phase3").mkdir(parents=True)
+    (run / "reports" / "phase3" / "ir_drop.json").write_text(
+        json.dumps({"verdict": "FAIL"}))
+    return root
 
 
 def _run(*argv):
@@ -118,18 +146,36 @@ def test_PAIRED_a_project_dir_alone_is_NOT_refused(tmp_path):
 def test_PAIRED_the_correct_spelling_still_writes_the_named_file(tmp_path):
     """Half 3, and the one that keeps this a check rather than a ban on
     `--write-baseline`. `--baseline <path> --write-baseline` must still aim
-    where the operator says, and must write a REAL measurement."""
-    if not CORPUS.is_dir():
-        pytest.skip(f"no corpus at {CORPUS}")
+    where the operator says, and must write a REAL measurement.
+
+    Driven over `_reachable_corpus`, for the reason given there."""
+    corpus = _reachable_corpus(tmp_path / "corpus")
     scratch = tmp_path / "aimed.json"
     shutil.copy(REAL_BASELINE, scratch)
     before_real = _findings(REAL_BASELINE)
-    rc, out = _run("--corpus", str(CORPUS), "--baseline", str(scratch),
-                   "--write-baseline")
+    # The scratch file is a COPY of the shipped register, and this fixture's
+    # one-run corpus is smaller than the population that register describes, so
+    # the aimed write LOWERS the denominator and needs the reason vibe-ic#1704
+    # requires. That is the rule under test one file over; here it is fixture
+    # setup, so the reason simply says what this write is.
+    rc, out = _run("--corpus", str(corpus), "--baseline", str(scratch),
+                   "--write-baseline", "--shrink-reason",
+                   "aiming a copy of the shipped register at a single-run "
+                   "synthetic corpus built by this test; the drop is the "
+                   "fixture's own population, not anything measured about the "
+                   "published one.")
     assert rc == 0, out
     assert str(scratch) in out, f"did not name the file it wrote:\n{out}"
     assert _findings(REAL_BASELINE) == before_real, (
         "aiming at a scratch file still rewrote the shipped baseline")
+    # ...and what landed in the named file is the sweep's own measurement, not
+    # a zero. `rc == 0` alone would be satisfied by a write of nothing, which is
+    # the destruction #1025 refuses; the number is asserted because the fixture
+    # is what fixes it.
+    wrote = json.loads(scratch.read_text())
+    assert wrote["runs_with_reports"] == 1, wrote
+    assert wrote["findings_total"] == 1, (
+        f"the aimed write did not record the sweep's own measurement: {wrote}")
 
 
 if __name__ == "__main__":  # pragma: no cover

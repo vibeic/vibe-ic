@@ -2050,10 +2050,89 @@ def test_the_mapping_spelling_is_swept_as_well_as_the_string(tmp_path):
 def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     pop = lc.population_report(lc.FLOW_YAML)
     assert pop["unswept"] == [], pop["unswept"]
-    # 167 -> 168 as the flow gained a clause. The PIN is `swept == declared`;
-    # the literal is only there so a flow that silently SHRINKS is caught too,
-    # and it is meant to move whenever the flow does.
-    assert pop["swept"] == pop["declared"] == 168, pop
+    # 168 -> 169 -> 170 as the flow gained a clause. The PIN is
+    # `swept == declared`; the literal is only there so a flow that silently
+    # SHRINKS is caught too, and it is meant to move whenever the flow does.
+    #
+    # 169 -> 170 at 74b6abbe35 ("feat(lvs): read magic's extraction feedback
+    # channel and gate it at zero, before netgen"), which added exactly ONE
+    # clause -- `program_exit_zero: magic_illegal_overlap_check`. MEASURED over
+    # the flow YAML at each commit: 772c31dcb4 (the commit that last moved this
+    # literal) 169, 74b6abbe35^ 169, 74b6abbe35 170, HEAD 170, with the added
+    # clause set exactly {('program_exit_zero', 'magic_illegal_overlap_check')}
+    # and nothing removed. The literal did not move with it, so the calibration
+    # instrument's own control has been red on main ever since.
+    # 170 -> 175 at int/tonight. MEASURED with `liar_census.population_report`
+    # over BOTH trees rather than inferred: origin/main declared=170 swept=170
+    # (so the literal was CURRENT on main, not stale as the paragraph above
+    # records for an earlier round), int/tonight declared=175 swept=175. The
+    # five added clauses are the gates of the five half-steps the chip/IP split
+    # introduced -- 0.5ic submission_template_check, 15.5ic pad_ring_check,
+    # 26.5ic die_finishing_check, 37.5ip digital_hardmacro_check, 37.5ic
+    # tapeout_readiness_check -- one `program_exit_zero` each, and nothing was
+    # removed. The PIN `swept == declared` never broke; only the shrink-detector
+    # literal needed to follow the flow, which is what it is for.
+    # 175 -> 178. MEASURED the same way, over the flow YAML blob at each commit
+    # with `liar_census.population_report`, and the CLAUSE SET diffed rather than
+    # the count compared: 03f7b945d7 (the commit that last moved this literal)
+    # declared=175 swept=175, 46db018669 (origin/main) declared=178 swept=178.
+    # The three added clauses, attributed to the commits that added them, are
+    #   69ce9260d  program_exit_zero: tapeout_docs_gen --project . --out-dir
+    #                                 reports/phase3/docs
+    #   00d9dc261  program_exit_zero: general_precheck . --json
+    #                                 reports/phase3/general_precheck.json
+    #   00d9dc261  program_exit_zero: tapeout_declaration_check . --json
+    #                                 reports/phase1/tapeout_declaration.json
+    # and the REMOVED set is empty, so this is a grow and not a churn. `by_kind`
+    # moves 110 -> 113 `program_exit_zero` with `advisory` 37 and `optional` 28
+    # unchanged, and `unswept`/`unrecognised` stay empty on both trees.
+    #
+    # THIRD TIME THIS LITERAL HAS LAGGED THE FLOW (169->170, 170->175, 175->178).
+    # A hand-maintained number that must be remembered by an author who is
+    # editing a different file is prose wearing an assertion, and this file
+    # cannot fix that alone: making the detector derive its floor from the
+    # PREVIOUS flow blob would catch every shrink with nothing to remember, but
+    # it would also leave a DELIBERATE shrink no way to be authorised. That is a
+    # call for the flow's owner, so it is written down here rather than taken.
+    # 178 -> 180 -> 179, and the middle step is not mine. RE-DERIVED the way
+    # the block above derives its own: `discover_clauses` over the flow yaml at
+    # `03f7b945d` (the commit that last moved this literal), at `053eecd27`
+    # (main) and on this branch, CLAUSE SETS diffed rather than counts compared.
+    #
+    #   pin @03f7b945d  175      main @053eecd27  180      branch  179
+    #
+    # FIVE clauses arrived since the literal was last moved and NONE of them
+    # moved it, which is the FOURTH time this file records that happening:
+    #   + 0.5ic    program_exit_zero           tapeout_declaration_check
+    #   + 37.5ic   program_exit_zero           tapeout_docs_gen
+    #   + 37.5self program_exit_zero           general_precheck    (retired below)
+    #   + 9        program_exit_zero           area_total_vs_budget_check   (ppa-loop)
+    #   + 36       optional_program_exit_zero  ppa_head_to_head_check       (ppa-h2h)
+    # and the REMOVED set against the pin is empty. The last two landed after
+    # this literal was last touched and are the reason main itself measures 180
+    # against a literal of 178 — main is RED here right now, and that is not
+    # this change's doing.
+    #
+    # THIS CHANGE retires step `37.5self` and folds the general precheck into
+    # `37.5ic` as a second ARM, so 37.5ic's gate names ONE program that runs
+    # both ladders:
+    #   + 37.5ic   program_exit_zero  tapeout_precheck
+    #   - 37.5ic   program_exit_zero  tapeout_readiness_check
+    #   - 37.5self program_exit_zero  general_precheck
+    # 180 + 1 - 2 = 179. `by_kind` moves 114 -> 113 `program_exit_zero` with
+    # `advisory` 37 and `optional` 29 unchanged; `unswept`/`unrecognised` stay
+    # empty on both trees.
+    #
+    # A SHRINK IS EXACTLY WHAT THIS LITERAL EXISTS FOR, and the block above
+    # states the open question as "a DELIBERATE shrink has no way to be
+    # authorised". This is one, and the authorisation is written here:
+    # TWO GATES STOPPED BEING FLOW CLAUSES WITHOUT STOPPING BEING RUN. Both are
+    # now ARMS that `tapeout_precheck` dispatches, and the venue that proves
+    # they are still reached is `flow_gate_enforcement_audit`'s FOURTH venue —
+    # a transitive dispatch closure seeded only by the flow definition, added
+    # in this same change. Before it, that audit reported both of them
+    # `ORPHANED`, i.e. "reachable from nothing at all", which was false.
+    assert pop["swept"] == pop["declared"] == 179, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 

@@ -8,12 +8,18 @@ nothing declares, so nothing checks it exists, so its absence is invisible.**
 No gate goes red. A downstream checker simply reads a file that is not there
 and takes its "absent" branch, and the run reports PASS.
 
-One cell per flow step, 63 in all, each ending in exactly one of three
+One cell per flow step, 69 in all, each ending in exactly one of three
 machine-checkable states:
 
-  ENFORCED  the live predicate runs and passes            58
-  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   4
-  NA        the NA precondition is asserted LIVE           1
+  ENFORCED  the live predicate runs and passes           63
+  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason    5
+  NA        the NA precondition is asserted LIVE          1
+
+Those four numbers are DERIVED, not remembered — ``cells_for(DIM)`` against the
+live yaml, counted by ``test_every_cell_lands_in_exactly_one_state``. They read
+``63 / 58 / 4 / 1`` here for as long as it took six steps to arrive and one to
+leave without anybody restating them, which is the same defect that test's own
+pin exists to prevent one step lower down.
 
 ====================================================================
 WHAT IS MEASURED, AND FROM WHAT
@@ -128,12 +134,24 @@ file is not a produced artefact, and an untracked path is a property of one
 working tree. A record is a claim about the past; it is not evidence about
 today.
 
-MEASURED ON THIS COMMIT: **0 cells change.** No tracked
-``reports/write_ledger.json`` exists anywhere in the repository, so W2's
-oracle is the AST alone, exactly as before — and that is not silent: every
-dimension-7 failure message and every cell's ``record_property`` carries the
-:func:`matrix_d7_write_record.binding_notes` sentence saying so, and
-:data:`RECORD_BOUND_ROOTS` pins the empty population.
+MEASURED ON THIS COMMIT: no tracked ``reports/write_ledger.json`` exists
+anywhere in THIS REPOSITORY, and for a while that sentence was the whole of the
+story — the population was empty, W2's oracle was the AST alone, and this
+paragraph said :data:`RECORD_BOUND_ROOTS` "pins the empty population". Both
+halves stopped being true and the second stopped being true FIRST: the pin
+names two roots, and the records are in the PUBLISHED CORPUS —
+``benchmark-data/ic/spm/v1.10.18_sky130A`` and
+``benchmark-data/ic/spm/v1.9.96_gf180mcuD`` each carry
+``reports/write_ledger.json`` tracked at the corpus's own HEAD. Discovery could
+not see them, because it searched only this repository after the subtree had
+left it, which is exactly the shape vibe-ic#1703 named one dimension over: the
+pointer switched the skip OFF without switching discovery ON.
+:func:`matrix_d7_write_record.record_roots` now reads an EXPLICITLY OFFERED
+corpus as a second tree under the same rule, so the pin is answerable again.
+None of this is silent either way: every dimension-7 failure message and every
+cell's ``record_property`` carries the
+:func:`matrix_d7_write_record.binding_notes` sentence saying which roots
+answered and why each other one did not.
 
 MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
 ``$HOME/_sky130A_r3_run`` and
@@ -198,6 +216,20 @@ import step_write_ledger as SWL
 from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers
 from matrix_63x8.cells import cells_for
+
+# WHERE W2's OBSERVED PRODUCER ORACLE WENT.
+#
+# `matrix_d7_write_record` binds W2 to the `reports/write_ledger.json` a run
+# left behind, and every root that carries one — `RECORD_BOUND_ROOTS` below —
+# is a PUBLISHED CELL. Those moved to https://github.com/vibeic/benchmark-data,
+# so in this checkout `R.record_roots()` is empty, W2 degrades to the AST alone,
+# and the findings that only the OBSERVED half could see disappear. A waived
+# cell whose finding disappears XPASSes, and a strict xfail turns that into
+# "the waiver is stale — remove it". It is not stale; the evidence for it was
+# not readable. A check that cannot measure must never report that it measured,
+# so those cells SKIP naming the corpus (vibe-ic#1357's rule for an absent tool,
+# applied to an absent corpus) and run untouched wherever the corpus is present.
+from _published_corpus import SKIP_REASON, corpus_root, needs_corpus  # noqa: E402
 
 DIM = 7
 
@@ -331,6 +363,16 @@ def test_d7_required_outputs_list_is_complete(cell, record_property):
     )
 
     findings = G.findings_for(sid)
+    # A WAIVED cell with nothing to show, on a tree where W2's OBSERVED half
+    # observed nothing and there is no corpus to read it from, is UNMEASURABLE
+    # rather than healed: the finding its waiver names may be exactly one of the
+    # record-promoted ones that vanished with the published cells. Reporting the
+    # strict-xfail XPASS would tell an author to delete a waiver on the strength
+    # of evidence nobody read. All four conditions are required, so a cell that
+    # genuinely healed still XPASSes wherever the record binding is alive.
+    if (not findings and _waiver_for(sid) is not None
+            and not R.observed_writes() and corpus_root() is None):
+        pytest.skip(SKIP_REASON)
     assert not findings, _describe(sid, findings)
 
 
@@ -1098,14 +1140,28 @@ def test_unattributable_findings_are_surfaced_not_dropped():
 
 
 def test_every_cell_lands_in_exactly_one_state():
-    """63 cells; ENFORCED + WAIVED + NA == 63, and no cell is in two states.
+    """69 cells; ENFORCED + WAIVED + NA == 69, and no cell is in two states.
 
     The census is derived live, not written down: a step added to the yaml
     lands here as ENFORCED and this arithmetic keeps holding, while a waiver
     for a step that has stopped failing is caught by its own ``strict=True``.
     """
     cells = cells_for(DIM)
-    assert len(cells) == len(F.step_ids()) == 63
+    # 68 -> 69, and the previous number was wrong rather than stale. Two steps
+    # moved and only one of them was counted:
+    #   `1.6x` ARRIVED at v1.11.15 (ppa(phase4): wire step 1.6x to an executor)
+    #   `37.5self` was RETIRED at v1.11.18 (the general precheck was never a
+    #       third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    #       every design that reaches that step, and the operator's container
+    #       runs IN ADDITION wherever the PDK ships a precheck and its template
+    #       was fetched. A PDK with no shuttle precheck is the same step with
+    #       one fewer arm, not a different route.)
+    # v1.11.18 wrote `69 -> 68` by DECREMENTING, and the count it decremented
+    # from predated `1.6x`. That is precisely the failure this pin exists to
+    # make loud, so the number is re-derived rather than adjusted: the live
+    # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
+    # A step arriving OR leaving must force a human to say the number out loud.
+    assert len(cells) == len(F.step_ids()) == 69
 
     state = Counter()
     for cell in cells:
@@ -1118,7 +1174,21 @@ def test_every_cell_lands_in_exactly_one_state():
         )
         state["NA" if is_na else ("WAIVED" if is_waived else "ENFORCED")] += 1
 
-    assert sum(state.values()) == 63, state
+    # 68 -> 69, and the previous number was wrong rather than stale. Two steps
+    # moved and only one of them was counted:
+    #   `1.6x` ARRIVED at v1.11.15 (ppa(phase4): wire step 1.6x to an executor)
+    #   `37.5self` was RETIRED at v1.11.18 (the general precheck was never a
+    #       third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    #       every design that reaches that step, and the operator's container
+    #       runs IN ADDITION wherever the PDK ships a precheck and its template
+    #       was fetched. A PDK with no shuttle precheck is the same step with
+    #       one fewer arm, not a different route.)
+    # v1.11.18 wrote `69 -> 68` by DECREMENTING, and the count it decremented
+    # from predated `1.6x`. That is precisely the failure this pin exists to
+    # make loud, so the number is re-derived rather than adjusted: the live
+    # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
+    # A step arriving OR leaving must force a human to say the number out loud.
+    assert sum(state.values()) == 69, state
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
     # dimension has stopped enforcing anything and should be redesigned.
@@ -1172,6 +1242,14 @@ def test_waivers_meet_the_registry_standard():
         for w in dim_waivers()
         if not G.findings_for(w.step_id) and G.na_precondition(w.step_id) is None
     ]
+    # Same unmeasurable state as the cell test above, reached from the registry
+    # side: with W2's OBSERVED half empty and no corpus to read it from, a
+    # record-promoted finding is invisible and its waiver looks like dead
+    # weight. "Remove them" would be advice founded on evidence nobody read.
+    # Everything else in this test has already been asserted by the time this
+    # line is reached; only the LAST claim is the one that cannot be made.
+    if inert and not R.observed_writes() and corpus_root() is None:
+        pytest.skip(SKIP_REASON)
     assert not inert, (
         f"waivers whose step has no findings — remove them: {inert}"
     )
@@ -1769,6 +1847,7 @@ def pin_complaints(pinned, measured, observed, notes):
     return out
 
 
+@needs_corpus
 def test_d7_the_write_record_population_is_named_root_by_root():
     """Backward compatibility, stated rather than assumed.
 

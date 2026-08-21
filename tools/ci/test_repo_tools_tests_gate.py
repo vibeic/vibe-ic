@@ -18,8 +18,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
+
+import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _LAND = _ROOT / "tools" / "gatekeeper-land.sh"
@@ -34,7 +37,46 @@ def _extract_fn(name):
     return "\n".join(src[start:end + 1])
 
 
-def _run_fn_against(tmp_path, test_body, name="test_probe.py"):
+def _trusted_runtime_available() -> bool:
+    """Can the PROTECTED landing runtime actually run on this host?
+
+    `trusted_pytest_entry.py` documents its contract in its own docstring:
+    "Invoke this file with ``python3 -I``. The isolated interpreter imports
+    pytest from the digest-pinned runner image." `-I` implies `-s`, so the user
+    site-directory is off — a host whose pytest lives in `~/.local` (which is
+    what CONTRIBUTING's `pip install pytest` produces) cannot import it, and the
+    entry REFUSES with `[NORECORD] ... No module named 'pytest'`. The gate then
+    correctly reports NORECORD.
+
+    That refusal is the design working, not a defect: the whole point of the
+    protected runtime is that it will not run against an unattested toolchain.
+    But the three behavioural tests below drive that gate on the HOST, so on
+    such a host they measure the host, not the gate.
+
+    NOT_CHECKED IS NOT A PASS — the same rule this gate applies to itself. So
+    they skip with the reason named, rather than being deleted, weakened, or
+    left permanently red. Inside the pinned image (pytest in system
+    site-packages) this returns True and they run for real.
+    """
+    probe = subprocess.run(
+        [sys.executable, "-I", "-c", "import pytest"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return probe.returncode == 0
+
+
+_NEEDS_TRUSTED_RUNTIME = pytest.mark.skipif(
+    not _trusted_runtime_available(),
+    reason=(
+        "the protected landing runtime is unavailable on this host: "
+        "`python3 -I` cannot import pytest, so trusted_pytest_entry.py refuses "
+        "and the gate reports NORECORD. This is UNVERIFIED here, not verified "
+        "— run it in the digest-pinned runner image "
+        "(ghcr.io/vibeic/vibeic-eda) where pytest is in system site-packages."),
+)
+
+
+def _run_fn_against(tmp_path, test_body, name="test_probe.py", *,
+                    extra_files=None):
     """Execute the extracted gate function with ROOT=<a throwaway git repo>.
 
     Returns (FAILED, combined_output).
@@ -51,6 +93,9 @@ def _run_fn_against(tmp_path, test_body, name="test_probe.py"):
     (root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
     if test_body is not None:
         (root / "tools" / name).write_text(textwrap.dedent(test_body))
+    for extra_name, extra_body in (extra_files or {}).items():
+        (root / "tools" / extra_name).write_text(
+            textwrap.dedent(extra_body), encoding="utf-8")
     # commit so `git status --porcelain` starts clean
     subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
@@ -78,20 +123,59 @@ def _run_fn_against(tmp_path, test_body, name="test_probe.py"):
 
 # ── WIRING ────────────────────────────────────────────────────────────────
 
+def _invocation_lines(src: str, fn: str) -> list[int]:
+    """0-based line indices where `fn` is invoked, in any call shape.
+
+    Neither the definition nor a comment counts. A trailing comment on a real
+    line is stripped so that a line which BOTH calls the function and mentions
+    it in a comment is still read as a call and not the other way round.
+    """
+    hit = []
+    for index, line in enumerate(src.splitlines()):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith(f"{fn}() {{"):
+            continue
+        code = re.split(r"(?:^|\s)#", stripped, maxsplit=1)[0]
+        if re.search(rf"(?:^|[\s;&|(]){re.escape(fn)}(?:$|[\s;&|)])", code):
+            hit.append(index)
+    return hit
+
+
 def test_the_gate_function_exists_and_is_called():
     """A function nobody calls is a comment with syntax."""
     src = _LAND.read_text()
     assert f"{_FN}() {{" in src, f"{_FN} is not defined in gatekeeper-land.sh"
-    # a bare call at column 0, not merely the definition
-    assert re.search(rf"^{_FN}$", src, re.M), (
+    # ASSERT THE PROPERTY, NOT THE SPELLING. This has now been re-pinned twice
+    # by the same mistake. It first required a BARE call at column 0
+    # (`^run_repo_tools_pytest$`); the semantic-landing runtime legitimately
+    # made it `if run_repo_tools_pytest; then … fi` so the verdict could be
+    # recorded through `landing_record`, and the regex read that correct
+    # refactor as "defined but never invoked". The replacement regex enumerated
+    # PREFIXES, so it broke again the moment the concurrent full tier passed
+    # the function to a wrapper — `fn_capture "full:repo-tools-tests"
+    # run_repo_tools_pytest`, which invokes it through `"$@"`.
+    #
+    # The property is simply: the name appears, as a WORD, on a line that is
+    # neither the definition nor a comment. Every call shape bash has satisfies
+    # that, and nothing that merely talks about the function does.
+    assert _invocation_lines(src, _FN), (
         f"{_FN} is defined but never invoked — the repo tests would still "
         f"gate nothing")
 
 
 def test_the_gate_runs_before_the_verdict_is_read():
     """It must sit inside the gate body, above the FAILED verdict."""
-    src = _LAND.read_text().splitlines()
-    call = next(i for i, l in enumerate(src) if l == _FN)
+    text = _LAND.read_text()
+    src = text.splitlines()
+    # Same reason as above: match the invocation wherever it is and in whatever
+    # shape, not only as a bare line. `next(… if l == _FN)` raised
+    # StopIteration — an ERROR, not even a legible failure — the moment the
+    # call gained an `if`.
+    calls = _invocation_lines(text, _FN)
+    assert calls, f"{_FN} is never invoked"
+    call = calls[0]
     verdict = [i for i, l in enumerate(src) if re.search(r"exit .*FAILED|"
                                                          r"if .*FAILED", l)]
     assert verdict, "no FAILED verdict found to order against"
@@ -101,12 +185,14 @@ def test_the_gate_runs_before_the_verdict_is_read():
 
 # ── BEHAVIOUR: the three states ───────────────────────────────────────────
 
+@_NEEDS_TRUSTED_RUNTIME
 def test_a_passing_repo_test_is_a_pass(tmp_path):
     failed, out = _run_fn_against(tmp_path, "def test_ok():\n    assert True\n")
     assert failed == 0, out
     assert "PASS  repo tools tests" in out, out
 
 
+@_NEEDS_TRUSTED_RUNTIME
 def test_a_FAILING_repo_test_turns_the_gate_red(tmp_path):
     """The load-bearing assertion. If this passes green, the gate is decorative.
 
@@ -119,6 +205,20 @@ def test_a_FAILING_repo_test_turns_the_gate_red(tmp_path):
     assert "FAIL  repo tools tests" in out, out
 
 
+@_NEEDS_TRUSTED_RUNTIME
+def test_a_selected_empty_test_file_cannot_shrink_the_repo_tools_denominator(
+        tmp_path):
+    failed, out = _run_fn_against(
+        tmp_path, "def test_ok():\n    assert True\n",
+        extra_files={"test_empty_selected.py":
+                     "# selected by discovery but has no pytest item\n"})
+    assert failed == 1, (
+        "a selected file disappeared from aggregate JUnit and landed green:\n"
+        + out)
+    assert "FAIL  repo tools tests" in out, out
+
+
+@_NEEDS_TRUSTED_RUNTIME
 def test_an_empty_corpus_is_refused_rather_than_reported_as_a_pass(tmp_path):
     """Zero discovered files must be FAIL, not a silent green.
 
@@ -130,6 +230,7 @@ def test_an_empty_corpus_is_refused_rather_than_reported_as_a_pass(tmp_path):
     assert "empty corpus" in out or "matched NO files" in out, out
 
 
+@_NEEDS_TRUSTED_RUNTIME
 def test_a_repo_test_that_writes_to_the_tree_turns_the_gate_red(tmp_path):
     """The plugin's in-process write guard is not loaded here, so the property
     it asserts is asserted from outside — and must actually bite."""
@@ -155,6 +256,7 @@ def test_a_newly_added_repo_test_is_picked_up_without_editing_the_gate(tmp_path)
         f"list-driven, not discovery-driven:\n{out}")
 
 
+@_NEEDS_TRUSTED_RUNTIME
 def test_the_gate_names_its_denominator(tmp_path):
     """A gate that will not say how many things it checked cannot be audited."""
     failed, out = _run_fn_against(tmp_path, "def test_ok():\n    assert True\n")
@@ -163,13 +265,18 @@ def test_the_gate_names_its_denominator(tmp_path):
         f"the gate did not report its file count:\n{out}")
 
 
-def test_pytest_is_pinned_the_same_way_the_plugin_suite_is():
-    """Autoload pinning is why the plugin suite is runnable at all (#1047);
-    an unpinned second invocation reintroduces exactly that failure."""
+def test_pytest_is_progress_supervised_without_an_elapsed_verdict():
+    """Autoload pinning and semantic supervision apply to this lane too.
+
+    A fixed pytest timeout kills the session and loses its JUnit; it must never
+    be reintroduced as a quick substitute for the driver's lifecycle record.
+    """
     body = _extract_fn(_FN)
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in body
-    assert "-p pytest_timeout" in body
-    assert "--timeout-method=thread" in body
+    assert "pytest_per_file_junit.py" in body
+    assert "--aggregate-check" in body
+    assert "-p pytest_timeout" not in body
+    assert "--timeout" not in body
 
 
 def test_discovery_is_not_hardcoded():

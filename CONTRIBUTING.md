@@ -49,6 +49,28 @@ that internal shortcut is *not* part of the external contribution path.)
   first still saves you rework — wait for a maintainer to triage before sinking
   time into a large PR.
 
+> **Looking for open issues? Ask GraphQL (`gh issue list`), not the REST
+> listing and not the search index.** Measured on this repository on
+> 2026-08-15, at a moment when 33 issues were open:
+>
+> ```
+> gh issue list --repo vibeic/vibe-ic --state open --limit 200  ->  33  (GraphQL)
+> gh api 'repos/vibeic/vibe-ic/issues?state=open&per_page=100'  ->   0  (REST)
+> gh api 'search/issues?q=repo:vibeic/vibe-ic+is:issue+is:open' ->   0  (search index)
+> gh api repos/vibeic/vibe-ic --jq .open_issues_count           ->   0
+> gh api repos/vibeic/vibe-ic/issues/1645 --jq .state           -> "open"
+> gh api 'repos/vibeic/vibe-ic/pulls?state=open&per_page=100'   ->   6  (REST is fine here)
+> ```
+>
+> The REST **listings** and the search index answer HTTP 200 with an empty set
+> for a repository whose issues are intact over GraphQL and readable one at a
+> time over REST. An empty listing and an empty backlog are byte-identical:
+> anyone looking for work through `gh api .../issues` or `search/issues` sees
+> nothing to claim and cannot tell that apart from a queue that is genuinely
+> clear. See vibe-ic#1645; `skills/core-agent-loop/programs/poll.py`,
+> `programs/open_issue_claim_scan.py` and `programs/open_organic_issue_count.py`
+> all enumerate over GraphQL for this reason.
+
 ### 2. Fork + branch
 
 ```bash

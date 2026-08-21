@@ -50,6 +50,22 @@ what must not have changed.
            question A8's premise failed), and a 0-byte, symlinked or untracked
            match on A8's own glob is still refused while the identical bytes,
            once committed, are still accepted.
+
+WHEN THE PUBLISHED CELL IS NOT IN THIS CHECKOUT
+===============================================
+The two FORWARD controls read ``benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A``
+— a PUBLISHED CELL, and published cells now live in
+https://github.com/vibeic/benchmark-data. Where that corpus is not here they
+SKIP, naming it (``_published_corpus.needs_corpus``), because "the layouts are
+not in this tree" is *I could not look*, not *the layouts were never published*
+— and a failure would assert the second. Point ``VIBE_IC_BENCHMARK_DATA`` at a
+clone and they run exactly as before, red included.
+
+The claims they made that DO NOT need the cell — A8 still declares the ``.gds``,
+and dimension 3's accepted-gap registry is exactly ``{6, 39}`` — moved into
+``test_control_a8_still_declares_the_gds_and_keeps_no_waiver_for_it`` so the
+corpus's absence cannot quietly stop enforcing them. The third FORWARD control
+and both REVERSE ones build their own throwaway trees and are unaffected.
 """
 from __future__ import annotations
 
@@ -66,6 +82,8 @@ from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers as W
 
 import _plugin_tree
+
+from _published_corpus import needs_corpus
 
 import test_matrix_d3_outputs_produced as D3
 
@@ -98,6 +116,44 @@ def _tracked_matching(repo: Path, pattern: str):
 # ──────────────────────────────────────────────────────────────────────
 # FORWARD — red before the fix, green after
 # ──────────────────────────────────────────────────────────────────────
+def test_control_a8_still_declares_the_gds_and_keeps_no_waiver_for_it():
+    """The half of the FORWARD control that is about THIS repository.
+
+    Split out of ``test_control_a8_gds_is_produced_and_evidenced_from_the_commit``
+    when the published cells moved to ``vibeic/benchmark-data``. That control
+    reads a published artefact and therefore has to skip where there is none —
+    but two of its claims never read one: A8 still DECLARES the ``.gds`` entry,
+    and dimension 3's accepted-gap registry is exactly ``{6, 39}``. Both are
+    facts about ``matrix_63x8``, they are checkable in any checkout, and letting
+    them travel inside the corpus-dependent test would have made the corpus's
+    absence quietly stop enforcing them — the registry could be emptied or grown
+    and nothing here would notice.
+    """
+    assert A8_GDS in F.required_outputs("A8"), (
+        f"A8 no longer declares {A8_GDS!r}; this control is stale and must be "
+        f"re-pointed rather than deleted")
+
+    assert W.waiver_for("A8", 3) is None, (
+        "A8/d3 was closed by a published artefact, so an accepted-gap entry for "
+        "it would be a waiver for a gap that is closed — the exact rot "
+        "`strict=True` and the premise re-check exist to prevent.")
+
+    # And the registry lost EXACTLY that one entry. Stated as an equality
+    # because "A8 is gone" is also true of a registry somebody emptied.
+    # M1 REMOVED 2026-08-14. vibe-ic#1159 (`bcd444425`) unpublished the
+    # mixed-signal steps: M1's dimension-3 entry stopped being an accepted GAP
+    # and became NA_DORMANT_CONDITION -- its condition is met nowhere, so there
+    # is no gap left to disclose.
+    waived = {W.flowref.normalize_id(w.step_id) for w in W.waivers_for_dim(3)}
+    assert waived == {"6", "39"}, (
+        f"dimension 3's waived set is {sorted(waived)}; after A8's removal "
+        f"and #1159's unpublishing of M1 it must be exactly 6 and 39. A "
+        f"missing entry means an accepted gap "
+        f"stopped being disclosed; an extra one means a new gap arrived "
+        f"without review.")
+
+
+@needs_corpus
 def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
     """A8's ``.gds`` is produced, the commit proves it, and no waiver survives.
 
@@ -197,6 +253,7 @@ def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
         f"without review.")
 
 
+@needs_corpus
 def test_control_the_published_root_is_named_in_the_manifest_and_is_in_repo():
     """The new evidence root is registered, in-repo, and reachable by everyone.
 

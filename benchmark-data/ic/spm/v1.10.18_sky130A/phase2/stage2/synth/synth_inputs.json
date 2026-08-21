@@ -1,6 +1,0 @@
-{
-  "netlist": "spm_synth.v",
-  "rtl_sha256": {
-    "spm.v": "bf3945d75505636cf384394a59f6af036d4dafa5b37ded9fdb03d721de361508"
-  }
-}
