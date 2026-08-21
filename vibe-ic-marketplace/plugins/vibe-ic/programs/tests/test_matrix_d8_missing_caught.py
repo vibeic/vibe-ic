@@ -181,6 +181,7 @@ Run::
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 from fnmatch import fnmatchcase
@@ -1748,19 +1749,95 @@ CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
 #: reddens, so the pin cannot quietly rot into a description of an older tree. Neither
 #: direction can be answered by editing this set alone — the failure message says which
 #: happened and asks for the change that caused it.
-CONTENT_ARM_BLIND: Tuple[str, ...] = ("2", "28", "A1", "A4", "D1")
+#: 2026-08-21, SHRINK: "2" removed. The test below asks for the shrink to be
+#: recorded and for the change that caused it to be named, and the honest naming
+#: is NOT "a gate learned to read its artefact" — nothing about step 2's gate
+#: changed. Step 2 was never gradable. Both of its declared outputs are its own
+#: gate's `--json` destinations, so the content arm was rewriting files the gate
+#: truncates before it computes anything, and the suffix proxy in `_gradable`
+#: called that a content channel because the filenames end in `.json`. The
+#: measurement it produced was a statement about the proxy, not about step 2.
+#:
+#: The same correction is why 1.6x did NOT enter this set when it arrived.
+#:
+#: WHAT IS NO LONGER WATCHED HERE IS DISCLOSED, NOT DROPPED — see
+#: :data:`CONTENT_ARM_UNGRADABLE_SELF_WRITTEN` below, which names every step in
+#: this position and is re-derived live so it cannot rot into a description of
+#: an older tree.
+CONTENT_ARM_BLIND: Tuple[str, ...] = ("28", "A1", "A4", "D1")
+
+#: Steps the content arm CANNOT grade because every content-bearing artefact it
+#: rewrites is written by that step's own gate. Not a waiver and not a pass: it
+#: is the denominator this arm is missing, published so a reader can see the
+#: shape of what it cannot see.
+#:
+#: MEASURED over the live yaml: four steps declare a required_outputs set that
+#: is entirely their own gate's `--json` / `--out` destinations — 1.6x, 2, 8 and
+#: 36 — of which 1.6x and 2 reach the PASS tier the content arm sweeps. Closing
+#: this is a FLOW change, not a matrix one: the step would have to declare an
+#: artefact some other producer writes, and for 1.6x that is not currently
+#: possible (the step is unconditional by design and a design that ran no
+#: cross-layer search produces no upstream report).
+CONTENT_ARM_UNGRADABLE_SELF_WRITTEN: Tuple[str, ...] = ("1.6x", "2")
 
 #: Kinds the flow can read at all. Anything else is not a content channel, so a step
 #: that rewrites only those is NOT gradable and its UNMOVED means nothing about blindness.
 _CONTENT_BEARING_SUFFIXES: Tuple[str, ...] = (".json", ".jsonl")
 
 
-def _gradable(rec) -> bool:
-    """Is this row's UNMOVED/MOVED a judgement about CONTENT at all?"""
+#: Paths a step's OWN gate writes, from the `--json` / `--out` of its own gate
+#: commands. Re-derived from the live yaml, never listed.
+def _gate_written_paths(step_id) -> frozenset:
+    out = set()
+    for clause in F.gate_clauses(step_id):
+        cmd = clause.command or ""
+        for flag in ("--json", "--out"):
+            for m in re.finditer(re.escape(flag) + r"\s+(\S+)", cmd):
+                out.add(m.group(1))
+    return frozenset(out)
+
+
+def _gradable(rec, step_id=None) -> bool:
+    """Is this row's UNMOVED/MOVED a judgement about CONTENT at all?
+
+    THE SUFFIX WAS A PROXY AND IT WAS WRONG FOR A MEASURABLE CLASS.
+    This asked one question — "is at least one rewritten file of a kind the
+    flow can read" — and answered it from the filename. A `.json` passed. But a
+    declared output that is the step's OWN gate's `--json` destination is
+    truncated and rewritten by that gate BEFORE it computes anything, so no
+    content can travel from it into the verdict. MEASURED on step 1.6x, seeding
+    its one declared output with deliberately wrong content and running its own
+    gate command::
+
+        before  sha256 02998b14880f76689dc0f11b71cf4b512382d3e3fd811a96c5dc45...
+        rc=0
+        after   sha256 22bad440d577d4e24c168b4c98ce017377474622a0410e49d72d5f1...
+
+    The gate overwrote it. UNMOVED there is not "a gate that read a wrong
+    artefact and did not act"; it is "there was no channel", which is the FIRST
+    of the two cases this file's own docstring says must not be graded as
+    blindness:
+
+        "It cannot, alone, tell a row that did not move because the flow has no
+         channel to read from a row that did not move because the flow read the
+         channel and did not act. The first is a capability gap; the second is a
+         gate reporting a wrong artefact as good as a right one."
+
+    So this is the stated rule, implemented; it is not the rule relaxed. A step
+    with even ONE rewritten content-bearing file its gate does not write stays
+    gradable, and a gate that genuinely stops reading such a file still reddens.
+    """
     rels = rec.get("rels") or ()
     if not rels or rec.get("unresolved_alts"):
         return False
-    return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES) for r in rels)
+    readable = [r for r in rels
+                if str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)]
+    if not readable:
+        return False
+    if step_id is None:
+        return True
+    written = _gate_written_paths(step_id)
+    return any(str(r) not in written for r in readable)
 
 
 def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one():
@@ -1776,7 +1853,7 @@ def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one(
     sweep = _content_arm_sweep()
     assert sweep, "the content arm measured ZERO steps — a broken measurement"
 
-    gradable = {k for k, rec in sweep.items() if _gradable(rec)}
+    gradable = {k for k, rec in sweep.items() if _gradable(rec, k)}
     assert gradable, (
         "NO step is gradable: every row rewrote only kinds the flow cannot read, so "
         "the content arm is measuring nothing at all. That is a dead instrument, not "
@@ -1784,6 +1861,26 @@ def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one(
     )
     blind = {k for k in gradable if sweep[k]["state"] == _CONTENT_UNMOVED}
     pinned = set(CONTENT_ARM_BLIND)
+
+    # THE DISCLOSURE IS ASSERTED, not merely written down. Every PASS-tier step
+    # the arm dropped for rewriting only its own gate's outputs must be named in
+    # CONTENT_ARM_UNGRADABLE_SELF_WRITTEN, in both directions, so the set cannot
+    # quietly grow (a step slipping out of the arm's reach unnoticed) or rot.
+    self_written_only = sorted(
+        k for k, rec in sweep.items()
+        if not _gradable(rec, k)
+        and any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)
+                for r in (rec.get("rels") or ()))
+        and not rec.get("unresolved_alts")
+    )
+    assert self_written_only == sorted(CONTENT_ARM_UNGRADABLE_SELF_WRITTEN), (
+        f"the set of steps the content arm cannot grade changed: measured "
+        f"{self_written_only}, pinned "
+        f"{sorted(CONTENT_ARM_UNGRADABLE_SELF_WRITTEN)}. A step ENTERING this "
+        f"set has left the arm's reach and must be named; a step LEAVING it has "
+        f"gained an artefact its own gate does not write, which is the fix and "
+        f"should be recorded as one."
+    )
 
     grew = sorted(blind - pinned)
     healed = sorted(pinned - blind)
