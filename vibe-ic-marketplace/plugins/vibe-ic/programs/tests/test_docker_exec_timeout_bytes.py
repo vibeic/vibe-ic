@@ -31,7 +31,7 @@ def test_docker_exec_timeout_bytes_stdout_returns_str() -> None:
     exc.stdout = b"partial route output \xff captured before kill"
     exc.stderr = None
     with patch("subprocess.run", side_effect=exc):
-        rc, out, err = _docker_exec("iic-eda", "openroad ...", timeout=1)
+        rc, out, err = _docker_exec("vibeic-eda", "openroad ...", timeout=1)
     assert rc == 124
     assert isinstance(out, str)
     assert isinstance(err, str)
@@ -49,7 +49,7 @@ def test_docker_exec_normal_bytes_streams_decoded() -> None:
         stdout = b"ok-bytes"
         stderr = bytearray(b"warn-bytes")
     with patch("subprocess.run", return_value=_CP()):
-        rc, out, err = _docker_exec("iic-eda", "echo ok")
+        rc, out, err = _docker_exec("vibeic-eda", "echo ok")
     assert (rc, isinstance(out, str), isinstance(err, str)) == (0, True, True)
     assert out == "ok-bytes"
     assert err == "warn-bytes"
@@ -59,7 +59,7 @@ def test_docker_exec_none_streams_become_empty_str() -> None:
     exc = subprocess.TimeoutExpired(cmd="x", timeout=2)
     exc.stdout = None
     with patch("subprocess.run", side_effect=exc):
-        rc, out, err = _docker_exec("iic-eda", "x", timeout=2)
+        rc, out, err = _docker_exec("vibeic-eda", "x", timeout=2)
     assert out == ""
     assert isinstance(err, str)
 
@@ -71,6 +71,6 @@ def test_overutil_extract_consumes_docker_exec_timeout_output() -> None:
     exc = subprocess.TimeoutExpired(cmd="x", timeout=1)
     exc.stdout = b"[INFO DRT-0195] Start 2nd optimization iteration."
     with patch("subprocess.run", side_effect=exc):
-        _, out, err = _docker_exec("iic-eda", "openroad ...", timeout=1)
+        _, out, err = _docker_exec("vibeic-eda", "openroad ...", timeout=1)
     # no GPL-0301 in this output → None, but crucially: NO TypeError.
     assert _extract_overutil_pct(out + err) is None
