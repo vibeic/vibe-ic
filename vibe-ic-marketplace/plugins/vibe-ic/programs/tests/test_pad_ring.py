@@ -38,6 +38,7 @@ The fixture is synthetic on purpose — a square die, a three-master IO library,
 four pads a side — and carries no process, foundry or library name.
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -1128,3 +1129,125 @@ def test_the_declaration_parser_reads_upstreams_form_verbatim():
     assert PR.parse_pad_site_declarations("set ::env(PAD_SITE_NAME) \"x\"\n") \
         == {}
     assert PR.parse_pad_site_declarations("") == {}
+
+
+# --------------------------------------------------------------------------- #
+# REAL PDKs, not fixtures.
+#
+# Every test above this line is a fixture authored alongside the change, and a
+# suite made only of those cannot distinguish the change from its own absence
+# (`real_artefact_test_backing_check`). The artefact that actually backs this
+# change is not in the repo — no checked-in file declares a pad site — it is
+# the INSTALLED PDK. So the guard is repeated here against whatever PDKs the
+# host really has, and skipped, honestly, where there are none.
+#
+# It names no PDK, no foundry and no library: it iterates the trees that are
+# installed and asks one question of each.
+# --------------------------------------------------------------------------- #
+_REAL_PDK_ROOTS = [
+    Path("/foss/pdks"), Path("/usr/share/pdk"), Path("/opt/pdk"),
+    Path.home() / ".volare" / "volare",
+]
+
+
+def _real_pdk_trees():
+    """(root, tree) for every installed PDK tree, from the host's own roots."""
+    roots = list(_REAL_PDK_ROOTS)
+    env = os.environ.get("VIBEIC_PDK_ROOT")
+    if env:
+        roots = [Path(p) for p in env.split(os.pathsep) if p] + roots
+    out = []
+    for root in roots:
+        if root.is_dir():
+            out += [(str(root), d.name)
+                    for d in sorted(root.iterdir()) if d.is_dir()]
+    return out
+
+
+def _trees_with_an_io_library():
+    return [(r, t) for r, t in _real_pdk_trees()
+            if PR.discover_io_lefs(r, t)]
+
+
+def _library_for(root, tree):
+    """The IO library for a real tree, built through whatever site views this
+    revision of `_pad_ring` knows about.
+
+    `getattr`, deliberately. These tests are the REAL-ARTEFACT control for this
+    change, and a control that dies with `AttributeError` on the pre-fix tree
+    has observed nothing — it fails on the ABSENCE of the function the fix
+    adds, which is true of every new function ever written and grades as
+    presence-only under `control_substance_check`. Resolving the API softly
+    lets the pre-fix tree RUN the question and answer it wrongly, with a
+    measured value, which is the only kind of red that proves anything.
+    """
+    lefs = PR.discover_io_lefs(root, tree)
+    find_decls = getattr(PR, "discover_io_site_declarations", None)
+    if find_decls is None:
+        return PR.IoLibrary(lefs)
+    return PR.IoLibrary(lefs, find_decls(root, tree))
+
+
+def _pad_class_sites(lib):
+    """Every PAD-class site the library resolves, on either revision."""
+    names = getattr(lib, "pad_class_site_names", None)
+    if names is not None:
+        return names()
+    return sorted(n for n, s in lib.sites.items() if s["class"] == "PAD")
+
+
+@pytest.mark.skipif(not _trees_with_an_io_library(),
+                    reason="no installed PDK here ships an IO cell library")
+def test_no_real_pdk_that_ships_an_io_library_is_called_siteless():
+    """A PDK that ships IO cells declares the sites they sit on. If this step
+    cannot find them it is looking in the wrong place, and the refusal it
+    raises is about US.
+
+    MEASURED on the pinned image: of the trees carrying an IO cell library,
+    half declare their sites as LEF SITE records and half declare them in the
+    tech view. Reading one view called the other half siteless.
+    """
+    siteless = []
+    for root, tree in _trees_with_an_io_library():
+        lib = _library_for(root, tree)
+        if not _pad_class_sites(lib):
+            siteless.append(
+                f"{tree}: {len(lib.lefs)} IO LEF(s), "
+                f"{len(lib.sites)} LEF SITE record(s), "
+                f"{len(getattr(lib, 'declared_sites', {}))} tech-view "
+                f"declaration(s)")
+    assert not siteless, (
+        "a real PDK ships an IO cell library and this step resolved no "
+        f"PAD-class site for it: {siteless}")
+
+
+@pytest.mark.skipif(not _trees_with_an_io_library(),
+                    reason="no installed PDK here ships an IO cell library")
+def test_every_real_pdk_site_resolves_with_a_class_and_a_size():
+    """Whichever view a site comes from, it has to arrive usable: CLASS PAD
+    and a SIZE, because the spacing arithmetic rounds to that width."""
+    for root, tree in _trees_with_an_io_library():
+        lib = _library_for(root, tree)
+        for name in _pad_class_sites(lib):
+            got = lib.resolve_site(name)
+            assert got is not None, f"{tree}: {name} listed but unresolvable"
+            assert got["class"] == "PAD", f"{tree}: {name} -> {got}"
+            assert got["size"] and got["size"][0] > 0, f"{tree}: {name} -> {got}"
+
+
+@pytest.mark.skipif(not _real_pdk_trees(),
+                    reason="no installed PDK on this host")
+def test_no_real_pdk_declares_one_site_at_two_sizes():
+    """The corpus-sweep property, as a test. A tree may ship more than one IO
+    library — every one measured declares the same site identically, and
+    agreement must not be reported as a conflict, or the new refusal is a
+    false positive on real PDKs."""
+    for root, tree in _real_pdk_trees():
+        lib = _library_for(root, tree)
+        # NOT a control — pre-fix there are no declarations to conflict, so
+        # this passes trivially there. It is the criterion-2 false-positive
+        # guard: the one refusal this change ADDS must never fire on a real
+        # PDK, and every tree measured declares its sites identically across
+        # its IO libraries.
+        assert not getattr(lib, "site_declaration_conflicts", {}), (
+            f"{tree}: {lib.site_declaration_conflicts}")
