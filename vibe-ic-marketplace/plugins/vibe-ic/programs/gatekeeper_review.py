@@ -1315,7 +1315,8 @@ def repo_hygiene_gate(repo: Path,
     return _hygiene_verdict(doc, supervised.rc)
 
 
-def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
+def gate_red_since_gate(repo: Path, record: Path,
+                        base: Optional[str] = None) -> GateResult:
     """Adjudicate this run's reds against the acknowledgement ledger (#1025).
 
     A SEPARATE gate rather than a clause folded into `repo_hygiene_gates`,
@@ -1342,8 +1343,14 @@ def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
         return GateResult(name, -1,
                           "skipped — 0 gate state(s) examined: the hygiene set "
                           "produced no record to adjudicate")
-    rc, out, err = _run_program(prog, ["--record", str(record),
-                                       "--repo", str(repo)])
+    # COUNT TO THE BASE, NOT TO THE CANDIDATE. A candidate's own commits would
+    # otherwise be added to every row's age, so a large branch expires rows it
+    # never touched and a small one shelters them. Measured on a 15-commit
+    # branch: 7 expired against its head, 5 against origin/main.
+    argv = ["--record", str(record), "--repo", str(repo)]
+    if base:
+        argv += ["--head-ref", base]
+    rc, out, err = _run_program(prog, argv)
     line = (out.strip().splitlines() or [""])[-1]
     if rc == 2:
         return GateResult(name, -1, f"skipped — {line}")
@@ -1791,7 +1798,7 @@ def review(base: str, head: str, *,
             gates.append(repo_hygiene_gate(repo, script=hygiene_script,
                                            summary_out=_record,
                                            progress_out=hygiene_progress))
-        gates.append(gate_red_since_gate(repo, _record))
+        gates.append(gate_red_since_gate(repo, _record, base=base))
 
     # 5. verdict.
     blocking = [f"{g.name}: {g.summary}" for g in gates if not g.green]
