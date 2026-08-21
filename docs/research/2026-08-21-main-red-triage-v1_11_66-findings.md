@@ -1280,6 +1280,108 @@ fills fixed-size evidence windows) and OUTSIDE `$HOME` (the hermetic runner
 refuses a subject under it). `/tmp/ps` satisfies both; the descriptive path I
 used for most of this job satisfies neither.
 
+## M18 — the two-lane A/B I should have run first, and three more guards in the same family
+
+The retraction in M17 forced the measurement I had been inferring. Whole file,
+both lanes, by TEST ID.
+
+| lane | git | tier | result |
+|---|---|---|---|
+| pinned image | **2.43.0** | **merge-tree (STRONG)** | 22 failed, 112 passed |
+| host 8hd-3 | 2.34.1 | rebase-replay (degraded) | 10 failed, 124 passed |
+
+```
+BOTH        10
+IMAGE-ONLY  12
+HOST-ONLY    0
+```
+
+**The image runs the STRONG tier.** git 2.43.0 is >= 2.38, so the image performs
+the squash-vs-rebase cross-check the host cannot. Any red appearing in BOTH lanes
+therefore cannot be blamed on the degraded tier — a control I did not have before.
+
+**Seven of the ten BOTH reds are already attributed** to the single M13 defect
+(the six knob-dependent tests, plus `..._post_bootstrap_equal_corpus...` which
+M14 deliberately turned red).
+
+**The other three were unattributed, and they are the tamper guards:**
+
+```
+test_end_to_end_a_green_test_cannot_move_b1_to_another_commit
+test_end_to_end_index_flags_cannot_hide_changed_b1_bytes
+test_end_to_end_replace_refs_cannot_redefine_the_verified_tree
+```
+
+Each plants a TEST FILE which, when the landing arm runs it, tries to tamper —
+`git replace` to redefine HEAD's tree, index flags to hide changed bytes, moving
+what B1 attested — while keeping `git status` clean.
+
+**First reading, which I did not publish: "three tamper guards fail in the strong
+tier."** That would have been serious and it is wrong.
+
+**What the exit code says.** `landing_merge_verdict.py` defines:
+
+```
+RC_OK = 0        RC_REFUSE = 1        RC_CANNOT_MEASURE = 2
+```
+
+The three tests assert `r.returncode == 2` and get `1`. That is not a near miss;
+it is the repository's own rule-9 distinction. `2` means *I could not decide*;
+`1` means *I looked and it must not land*. Every OTHER test in the file honours
+the split exactly — the eight expecting `1` are measured refusals, and the
+passing ones expecting `2` are genuine unmeasurables, one of them literally named
+`..._refuses_an_unrecognised_tier_as_unmeasurable`.
+
+**And the refusal reason settles it.** The verifier's own output:
+
+```
+REFUSE  2 NEW FAILURE(S) THIS BRANCH OWNS:
+        pytest_aggregate.programs.tests.test_thing::test_redefines_head_but_stays_green
+REFUSE  1 PASSING TEST(S) WERE WEAKENED (passed -> skipped/absent)
+```
+
+**The planted tamper test FAILED.** The attack did not work. The verifier refused
+for an ordinary reason — the branch owns new failures — not because it caught a
+tamper. The candidate cannot redefine the tree, because the hermetic subject is
+read-only and object-exact, the same structural property that defeats the
+prewrite attack in M15.
+
+So `rc 2` was the PRE-HERMETIC outcome: the tamper used to succeed, and succeeding
+made the evidence unmeasurable. Now the tamper fails, which is a new-failure, which
+is `rc 1`. **The tests are stale in exactly the way their exit code advertises.**
+
+**NOT a security defect. The product got safer and the guards stopped
+demonstrating it.**
+
+### Revised: one root cause, two mechanisms, thirteen tests
+
+M13 said "one defect, six knobs, ten tests". With these three it is better stated
+as **one root cause — the migration of the landing arms to hermetic execution —
+expressed through two mechanisms**:
+
+| mechanism | how the guard is defeated | tests |
+|---|---|--:|
+| reviewed env allowlist scrubs test-only knobs | the control never reaches the arm | 10 |
+| subject is read-only and object-exact | the planted tamper cannot mutate anything | 3 |
+
+Thirteen end-to-end guards in one file, none of which exercises what it names.
+Six red loudly, three red for the wrong stated reason, one red because I made it
+so, and — the part that matters — some passing without being able to fail.
+
+I am NOT changing the three exit-code expectations. `2 -> 1` would turn them
+green while they still do not tamper anything, which is the worst of both: a
+green that cannot fail, added by hand. They belong with the other ten in the
+re-founding work already escalated.
+
+### The 12 IMAGE-ONLY reds
+
+All twelve need a Docker CLI or `merge-tree`; the image has the latter and not
+the former. Note `..._candidate_cannot_prewrite_base_wave_artifacts` is among
+them — it passes on the host (vacuously, M15) and fails in the image for want of
+docker. A test can be vacuous in one lane and absent in the other, and neither
+state is the guard working.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
