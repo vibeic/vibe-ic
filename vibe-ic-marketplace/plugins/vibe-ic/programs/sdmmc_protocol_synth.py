@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
 
 
 def _empty(v) -> bool:
@@ -762,7 +763,7 @@ def _l9(gd: Path) -> None:
         "controller IP (e.g. SDHCI) implements this protocol with a host-side "
         "register file behind a system bus (AHB/AXI/PCIe).")
     # Force-overwrite to match gold (parity target).
-    d["top_module"] = "SD_Memory_Card"
+    _ptm.apply(d, "SD_Memory_Card")
     io = _ensure_dict(d, "integration_overview")
     io.setdefault("wire_count_sd_4bit_mode", 9)
     io.setdefault("wire_count_spi_mode",     6)

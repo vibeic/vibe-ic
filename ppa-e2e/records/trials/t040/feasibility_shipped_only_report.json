@@ -1,0 +1,295 @@
+{
+  "candidates": [
+    {
+      "axes": [
+        {
+          "axis": "setup",
+          "codes": [
+            "FEAS_NOT_MEASURED",
+            "FEAS_INCOMPLETE_VIEW_SET",
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "rejected": "FEAS_NOT_MEASURED",
+              "status": "NOT_MEASURED"
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "rejected": "FEAS_NOT_MEASURED",
+              "status": "NOT_MEASURED"
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.setup.wns_ns",
+              "required_view": {
+                "process": "ss",
+                "stage": "post_route_extracted"
+              },
+              "scope": {
+                "check": "setup",
+                "clock": null,
+                "mode": "functional",
+                "process": "ss",
+                "rc_corner": null,
+                "stage": "post_route_extracted",
+                "temperature_c": 100.0,
+                "voltage_v": 1.6
+              },
+              "source": {
+                "line": 37,
+                "parser": "_ppa/backends/opensta.py",
+                "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+                "path": "phase3/stage3/sta/sta_spef_based.rpt",
+                "raw": "wns max 0.00",
+                "sha256": "sha256:6571f2b1b7d138e43d79f064498eced90aebe20bae8d3dce61e6790e8997bb2a",
+                "tool": "opensta",
+                "tool_commit": null
+              },
+              "unit": "ns",
+              "value": 0.0
+            },
+            {
+              "metric": "timing.setup.wns_ns",
+              "uncovered_views": [
+                {
+                  "process": "ff",
+                  "stage": "post_route_extracted"
+                }
+              ]
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.setup.violations"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "hold",
+          "codes": [
+            "FEAS_NOT_MEASURED",
+            "FEAS_INCOMPLETE_VIEW_SET",
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.wns_ns",
+              "rejected": "FEAS_NOT_MEASURED",
+              "status": "NOT_MEASURED"
+            },
+            {
+              "kind": "slack_nonneg",
+              "metric": "timing.hold.wns_ns",
+              "rejected": "FEAS_NOT_MEASURED",
+              "status": "NOT_MEASURED"
+            },
+            {
+              "metric": "timing.hold.wns_ns",
+              "uncovered_views": [
+                {
+                  "process": "ss",
+                  "stage": "post_route_extracted"
+                },
+                {
+                  "process": "ff",
+                  "stage": "post_route_extracted"
+                }
+              ]
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.hold.violations"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "drv",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.drv.violations"
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.drv.max_tran_violations"
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.drv.max_cap_violations"
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "timing.drv.max_fanout_violations"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "drc",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "physical.drc.violations"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "lvs",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "absent": true,
+              "kind": "verdict_in",
+              "metric": "physical.lvs.verdict"
+            },
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "physical.lvs.violations"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "antenna",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "physical.antenna.violations"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "ir",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "power.ir.violations"
+            },
+            {
+              "absent": true,
+              "kind": "limit_max",
+              "metric": "power.ir.worst_drop_v"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "em",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "absent": true,
+              "kind": "count_zero",
+              "metric": "reliability.em.violations"
+            },
+            {
+              "absent": true,
+              "kind": "limit_max",
+              "metric": "reliability.em.worst_ratio"
+            }
+          ],
+          "status": "UNDETERMINED"
+        },
+        {
+          "axis": "equivalence",
+          "codes": [
+            "FEAS_METRIC_ABSENT"
+          ],
+          "evidence": [
+            {
+              "absent": true,
+              "kind": "verdict_in",
+              "metric": "equivalence.verdict"
+            }
+          ],
+          "status": "UNDETERMINED"
+        }
+      ],
+      "candidate_id": "t040",
+      "codes": [
+        "setup:FEAS_NOT_MEASURED",
+        "setup:FEAS_INCOMPLETE_VIEW_SET",
+        "setup:FEAS_METRIC_ABSENT",
+        "hold:FEAS_NOT_MEASURED",
+        "hold:FEAS_INCOMPLETE_VIEW_SET",
+        "hold:FEAS_METRIC_ABSENT",
+        "drv:FEAS_METRIC_ABSENT",
+        "drc:FEAS_METRIC_ABSENT",
+        "lvs:FEAS_METRIC_ABSENT",
+        "antenna:FEAS_METRIC_ABSENT",
+        "ir:FEAS_METRIC_ABSENT",
+        "em:FEAS_METRIC_ABSENT",
+        "equivalence:FEAS_METRIC_ABSENT"
+      ],
+      "verdict": "UNDETERMINED",
+      "waivers": []
+    }
+  ],
+  "exit_code": 2,
+  "policy": {
+    "allow_waivers": true,
+    "axes": [
+      "setup",
+      "hold",
+      "drv",
+      "drc",
+      "lvs",
+      "antenna",
+      "ir",
+      "em",
+      "equivalence"
+    ],
+    "limits": {},
+    "required_views": [
+      {
+        "process": "ss",
+        "stage": "post_route_extracted"
+      },
+      {
+        "process": "ff",
+        "stage": "post_route_extracted"
+      }
+    ]
+  },
+  "policy_digest": "sha256:0beb5cec307f4e64702b34bf5c4cd279bd7dab9b31bf162e938c6551fc99980a",
+  "schema": "vibeic.ppa.feasibility.v1",
+  "sources": {
+    "candidates": "/home/reyerchu/_jppae2e/records/trials/t040/feasibility_shipped_only.json",
+    "contract": null
+  },
+  "verdict": "UNDETERMINED"
+}

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
 
 
 def _empty(v) -> bool:
@@ -995,7 +996,7 @@ def _l9(gd: Path) -> None:
         "Register-level + queue-pair host-controller interface for "
         "non-volatile storage attached over PCI Express (NVMe over PCIe) "
         "or a fabric transport (NVMe over Fabrics).")
-    d["top_module"] = "NVMe_Controller"
+    _ptm.apply(d, "NVMe_Controller")
     d["integration_overview"] = {
         "transport":              "PCI Express (Base 1.4 binding); NVMe controller = PCI Function.",
         "register_region_size":   "≥ 4 KB BAR0/BAR1 for the standard register set.",

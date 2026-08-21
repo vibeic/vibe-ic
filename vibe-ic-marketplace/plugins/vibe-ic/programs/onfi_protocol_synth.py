@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
 
 
 def _empty(v) -> bool:
@@ -1076,7 +1077,7 @@ def _l9(gd: Path) -> None:
         "(master) and one or more NAND Targets (slaves) within a NAND "
         "package, defining wires + cycle types + command set + status / "
         "parameter / unique-ID readback + features.")
-    d["top_module"] = "ONFI_NAND_Target"
+    _ptm.apply(d, "ONFI_NAND_Target")
     io = _ensure_dict(d, "integration_overview")
     io.setdefault("wire_count_sdr_x8_basic",  "12-14 (CE_n, CLE, ALE, WE_n, RE_n, WP_n, R/B_n, DQ[7:0], Vcc/VccQ/Vss/VssQ)")
     io.setdefault("wire_count_sdr_x16_basic", "20-22 (adds DQ[15:8])")
