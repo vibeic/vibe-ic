@@ -8,6 +8,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 - **Total programs (excluding helpers / shims):** 1155
 - **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1155)
 =======
@@ -18,6 +19,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 - **Total programs (excluding helpers / shims):** 1151
 - **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1151)
 >>>>>>> origin/jsearch2/space-and-feasibility
+=======
+- **Total programs (excluding helpers / shims):** 1151
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1151)
+>>>>>>> origin/agent/jrunner2-phase3-runner-honesty
 
 ### Per-class applicability counts
 
@@ -31,6 +36,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `unknown` | 1 |
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 | `any` | 1146 |
 =======
 | `any` | 1142 |
@@ -38,6 +44,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 =======
 | `any` | 1142 |
 >>>>>>> origin/jsearch2/space-and-feasibility
+=======
+| `any` | 1142 |
+>>>>>>> origin/agent/jrunner2-phase3-runner-honesty
 
 ## Alphabetical listing
 
@@ -348,6 +357,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `em_report_check` | any | — | EM report check — wrapper for eda_report_audit --mode em. |
 | `emit_attestation` | any | — | GATE-AS-SOLE-EMIT-PATH enforcement (shared helper). |
 | `emit_attestation_check` | any | — | score-time GATE-AS-SOLE-EMIT-PATH enforcement. |
+| `emitted_script_portability_check` | any | — | An emitted analysis script that hard-codes the directory it was emitted in is not reproducible anywhere else, which is the whole point of... |
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
 | `encoder_decoder_synth` | any | — | deterministic SOLVER for the PRIORITY-ENCODER family. |
@@ -1252,6 +1262,7 @@ _(no programs in this group)_
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 ### `any` (1146 programs)
 =======
 ### `any` (1142 programs)
@@ -1259,6 +1270,9 @@ _(no programs in this group)_
 =======
 ### `any` (1142 programs)
 >>>>>>> origin/jsearch2/space-and-feasibility
+=======
+### `any` (1142 programs)
+>>>>>>> origin/agent/jrunner2-phase3-runner-honesty
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1560,6 +1574,7 @@ _(no programs in this group)_
 - `em_report_check` — EM report check — wrapper for eda_report_audit --mode em.
 - `emit_attestation` — GATE-AS-SOLE-EMIT-PATH enforcement (shared helper).
 - `emit_attestation_check` — score-time GATE-AS-SOLE-EMIT-PATH enforcement.
+- `emitted_script_portability_check` — An emitted analysis script that hard-codes the directory it was emitted in is not reproducible anywhere else, which is the whole point of...
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
 - `encoder_decoder_synth` — deterministic SOLVER for the PRIORITY-ENCODER family.
