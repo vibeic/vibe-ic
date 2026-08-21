@@ -1816,6 +1816,18 @@ route so the next reader can see it was asked rather than skipped.
 
 ## Next
 
+**Before landing, run this — and read its exit code, not its output:**
+
+    python3 ppa-capture/verify.py            34 checks   exit 0 = every claim holds
+    python3 ppa-capture/verify.py --slow     + 2 authoritative gate-run checks
+
+That instruction is here because I learned it the expensive way in this lane: I
+once ran the verifier *after* the commit in the same command chain, and a failing
+state reached the branch for one commit. A check whose result arrives after the
+push did not run in time. Anything that edits this document — including a
+reviewer fixing a typo in a heading — can break the contents map, the STATUS
+counts, or a record-to-section link, and the command says which.
+
 **`verify.py` is UNWIRED, which is A-23 applied to this batch's own tooling.**
 Nothing invokes it — measured, not assumed — so by the standard this batch
 records, it is a check that produces no verdict. I could not wire it:
