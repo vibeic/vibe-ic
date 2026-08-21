@@ -68,6 +68,15 @@ RC_OK, RC_FAIL, RC_REFUSE = 0, 1, 2
 _FLOW_REL = "flow/phase1_phase2_phase3.yaml"
 _MANIFEST_REL = "programs/tests/fixtures/matrix_d3_output_manifest.json"
 
+#: The entry ``status`` values dimension 3 can actually decide a verdict from.
+#: These are exactly the three branches ``check_entry`` implements in
+#: ``programs/tests/test_matrix_d3_outputs_produced.py``; anything else reaches
+#: its ``unrecognised manifest status`` fall-through and is decided by nothing.
+#: Measured on this manifest 2026-08-21: PRODUCED_BY_RUN 122, UNPROVEN 40,
+#: PRODUCED_LIVE 2, and ZERO entries carrying no status at all — so requiring
+#: one costs the shipped tree nothing and closes the hole below.
+_RECOGNISED_STATUSES = ("PRODUCED_BY_RUN", "PRODUCED_LIVE", "UNPROVEN")
+
 
 def _plugin_root(start: Path) -> Path | None:
     """Nearest ancestor (inclusive) that carries both files."""
@@ -131,11 +140,48 @@ def _load_manifest_no_duplicate_keys(path: Path):
     return doc
 
 
-def audit(root: Path) -> Tuple[int, List[Tuple[str, str]], Dict[str, int]]:
-    """Return (declared_count, uncovered, per_step_declared).
+def audit(root: Path):
+    """Return (declared_count, uncovered, hollow, per_step_declared).
 
     `uncovered` is a list of (step_id, path) that the flow declares and the
-    manifest does not carry an entry for.
+    manifest does not carry an entry for. `hollow` is a list of
+    (step_id, path, reason) the manifest carries a KEY for and no usable
+    evidence — see below.
+
+    WHY PRESENCE OF THE KEY IS NOT THE PROPERTY, measured 2026-08-21
+    ================================================================
+    This gate asked only `path in entries`, and an entry is whatever JSON
+    object sits under that key. So the CHEAPEST way to clear a finding it
+    reports was to type the path back in with an empty body::
+
+        "reports/phase3/drc_signoff.json": {}
+
+    MEASURED against the gate as it stood, on synthesized one-step trees:
+
+        entry body            gate
+        {}                    rc 0   PASS
+        {"status": null}      rc 0   PASS
+        {"status": "LOOKS_FINE"}  rc 0   PASS
+
+    All three "close" the finding and none of them record that anything was
+    ever looked for. Dimension 3 then decides the cell from a status its
+    `check_entry` does not implement, which is its `unrecognised manifest
+    status` fall-through — so the parity gate goes green by handing the
+    dimension it exists to protect an entry that cannot be evaluated.
+
+    That is the shape this repository refuses on principle: a PASS obtained
+    that way is worth LESS than the failure it replaces, because the failure
+    at least said which path had never been measured. The remedy is the
+    smallest one that removes the shortcut without inventing a new vocabulary
+    — the entry must carry one of the statuses dimension 3 can actually decide
+    from (:data:`_RECOGNISED_STATUSES`). It stays a two-file, run-tree-free
+    question, so nothing about this gate's host-independence changes.
+
+    NOTE this deliberately does NOT check that the status is TRUE — that an
+    UNPROVEN entry really resolves nowhere, or that a PRODUCED_BY_RUN one
+    really resolves. Deciding that needs the run trees, which is dimension 3's
+    job and is exactly the split the module docstring above draws. This asks
+    only that the record be capable of being checked at all.
     """
     import yaml  # deferred: keeps the import cost off callers that only --help
 
@@ -145,6 +191,7 @@ def audit(root: Path) -> Tuple[int, List[Tuple[str, str]], Dict[str, int]]:
     m_steps = manifest.get("steps") or {}
     declared = 0
     uncovered: List[Tuple[str, str]] = []
+    hollow: List[Tuple[str, str, str]] = []
     per_step: Dict[str, int] = {}
 
     for step in _flow_steps(flow):
@@ -155,13 +202,27 @@ def audit(root: Path) -> Tuple[int, List[Tuple[str, str]], Dict[str, int]]:
         if not paths:
             continue
         per_step[sid] = len(paths)
-        known = set(((m_steps.get(sid) or {}).get("entries") or {}).keys())
+        entries = ((m_steps.get(sid) or {}).get("entries") or {})
         for path in paths:
             declared += 1
-            if path not in known:
+            if path not in entries:
                 uncovered.append((sid, str(path)))
+                continue
+            rec = entries[path]
+            if not isinstance(rec, dict):
+                hollow.append((sid, str(path),
+                               f"the entry is {type(rec).__name__}, not an object"))
+                continue
+            status = rec.get("status")
+            if status is None:
+                hollow.append((sid, str(path), "the entry records no `status`"))
+            elif status not in _RECOGNISED_STATUSES:
+                hollow.append((sid, str(path),
+                               f"`status` is {status!r}, which dimension 3 "
+                               f"cannot decide from (expected one of "
+                               f"{', '.join(_RECOGNISED_STATUSES)})"))
 
-    return declared, uncovered, per_step
+    return declared, uncovered, hollow, per_step
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -180,7 +241,7 @@ def main(argv: List[str] | None = None) -> int:
         return RC_REFUSE
 
     try:
-        declared, uncovered, per_step = audit(root)
+        declared, uncovered, hollow, per_step = audit(root)
     except Exception as exc:                       # noqa: BLE001 — report, never pass
         print(f"REFUSE: could not read the declaration/manifest pair: "
               f"{type(exc).__name__}: {exc}. NOT a pass.", file=sys.stderr)
@@ -196,10 +257,23 @@ def main(argv: List[str] | None = None) -> int:
 
     print(f"d3 declaration parity: {declared} declared required_outputs "
           f"path(s) across {len(per_step)} step(s) with outputs; "
-          f"{len(uncovered)} not covered by the manifest")
+          f"{len(uncovered)} not covered by the manifest, "
+          f"{len(hollow)} covered by an entry that records no usable status")
+
+    if not uncovered and not hollow:
+        return RC_OK
+
+    if hollow:
+        print("\nFAIL — the manifest carries a KEY for these declared paths and "
+              "no evidence under it. An entry dimension 3 cannot decide from "
+              "closes this gate without recording that anything was looked "
+              "for, which is why the key alone is not the property:",
+              file=sys.stderr)
+        for sid, path, why in hollow:
+            print(f"  step {sid}: {path} — {why}", file=sys.stderr)
 
     if not uncovered:
-        return RC_OK
+        return RC_FAIL
 
     print("\nFAIL — the flow declares paths the d3 evidence manifest has never "
           "measured. Re-measure the manifest in the SAME change that moves the "
