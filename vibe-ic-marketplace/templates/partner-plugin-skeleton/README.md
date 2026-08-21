@@ -39,7 +39,6 @@ partner-<vendor>-<topic>/
 
 Before contributing, read:
 - `docs/CONTRIBUTING_PARTNER_PLUGIN.md` (umbrella guide)
-- `SKILL_VS_RUNNER_DECISION.md` (how AI dispatches programs vs skills)
 
 ## Validate your plugin locally
 

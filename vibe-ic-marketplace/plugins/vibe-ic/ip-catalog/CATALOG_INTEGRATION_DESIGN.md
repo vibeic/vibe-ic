@@ -10,7 +10,7 @@ Strict-blind pilot proved Plugin can't reverse-engineer 2-3 kGE CPU from 9-docum
 
 ### Touch point 1:Phase 2 `detect_ic_class` extension
 
-When `ic_class_profile.detect_ic_class()` returns one of the registered classes(`digital_arithmetic_primitive`, `digital_cmd_driven`, ...), ALSO scan IP catalog manifests for matches against L1-L23 facts.
+When `ic_class_profile.detect_ic_class()` returns one of the registered classes(`digital_arithmetic_primitive`, `digital_cmd_driven`, ...), ALSO scan IP catalog manifests for matches against L1-L27 facts.
 
 Pseudo-code:
 ```python
@@ -36,7 +36,7 @@ def detect_ic_class_with_catalog(project):
     return profile
 ```
 
-### Touch point 2:`phase2_one_shot_runner.step_rtl_gen` enhancement
+### Touch point 2:`design_one_shot_runner.step_rtl_gen` enhancement
 
 When deterministic `rtl_gen` returns null AND catalog has matches, Plugin emits:
 ```
@@ -138,7 +138,7 @@ Each catalog IP must:
 
 ### Phase 2 (next iteration): Plugin runtime hookup
 - Add `_query_catalog(facts)` helper in `ic_class_profile.py`
-- Extend `phase2_one_shot_runner.step_rtl_gen` to emit catalog matches in WAIVED detail
+- Extend `design_one_shot_runner.step_rtl_gen` to emit catalog matches in WAIVED detail
 - Add `catalog-glue-author` skill (Markdown + YAML)
 - Add `ip_catalog_validate.py` script
 - Add `declaration.json.ip_catalog_used` field documentation

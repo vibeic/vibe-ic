@@ -15,7 +15,7 @@ prompt-intake
 phase1_doc_presence_check
 
 <!-- R_two_agent_model -->
-PM AgentxIC Expert
+IC Expert Agent
 
 <!-- R_final_gate -->
 l9_completeness_check

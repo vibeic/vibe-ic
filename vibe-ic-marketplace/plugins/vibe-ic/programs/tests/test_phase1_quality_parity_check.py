@@ -346,3 +346,64 @@ def test_generic_cable_side_class_does_not_require_named_submodules(tmp_path):
     rules = [f["rule"] for f in out["findings"]]
     # The named-submodule floor must NOT fire for the generic parent.
     assert "L6_required_submodules" not in rules
+
+
+# ---------------------------------------------------------------------------
+# UNKNOWN-CLASS fallback: a class leaf not in the KB must pull a NEUTRAL
+# generic floor, NEVER a protocol-specific (cable-side-id-ic) one.
+# Regression for the mis-scoring defect (unknown class -> SERIAL-ID-IC floors).
+# ---------------------------------------------------------------------------
+def _run_no_classpath(docs_dir: Path):
+    """Invoke WITHOUT --class-path so the program auto-resolves from L1."""
+    result = subprocess.run(
+        [sys.executable, str(PROG), str(docs_dir)],
+        capture_output=True, text=True,
+    )
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        parsed = {"_raw": result.stdout, "_stderr": result.stderr}
+    return result.returncode, parsed
+
+
+def test_unknown_class_uses_generic_not_protocol_floor(tmp_path):
+    """A made-up class leaf must NOT inherit opcode/CRC/OTP (protocol) floors;
+    it must pull the neutral generic-ic floor + surface an advisory note."""
+    layers = {
+        "L1_DATASHEET": {"class_path": "digital > accelerator > totally-made-up-xyz"},
+    }
+    docs = _write_docs(tmp_path, layers)
+    code, out = _run_no_classpath(docs)
+    assert out.get("template_used") == "generic-ic", out
+    rules = {f["rule"] for f in out.get("findings", [])}
+    # Protocol-specific floors must be ABSENT (the defect was applying these).
+    assert "L3_opcode_count_min" not in rules
+    assert "L3_crc_poly_allowed" not in rules
+    assert "L4_otp_bytes_min" not in rules
+    assert "L4_regmap_reg_count_min" not in rules
+    # The neutral class-agnostic floor IS what got applied.
+    assert "L6_submodule_count_min" in rules
+    assert "L9_top_level_port_count_min" in rules
+    # And a clear "unknown class -> generic floor" note is surfaced.
+    warn_rules = {w["rule"] for w in out.get("warnings", [])}
+    assert "unknown_class_generic_floor" in warn_rules
+
+
+def test_unknown_class_generic_floor_passes_for_reasonable_design(tmp_path):
+    """A real (if unclassified) design that meets the neutral floor PASSES —
+    the generic floor only rejects degenerate 0-submodule / 0-port output."""
+    layers = {
+        "L1_DATASHEET": {"class_path": "digital > accelerator > totally-made-up-xyz"},
+        "L6_CONTROL_LOGIC": {
+            "submodule_control_logic": {n: {} for n in ("datapath", "ctrl", "top")}
+        },
+        "L9_INTEGRATION_SPEC": {
+            "top_level_ports": [{"name": f"P{i}"} for i in range(4)],
+            "submodules": ["datapath", "ctrl", "top"],
+        },
+    }
+    docs = _write_docs(tmp_path, layers)
+    code, out = _run_no_classpath(docs)
+    assert out.get("template_used") == "generic-ic", out
+    assert out.get("pass") is True, out
+    assert code == 0

@@ -32,7 +32,7 @@ def _run_dispatcher(tmp_path: Path, *cli) -> Path:
     result = subprocess.run(
         [sys.executable, str(PROG / "phase1_one_shot_runner.py"),
          str(proj), "--mode", "docs", *cli],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stdout[-1500:] + result.stderr[-800:]
     return proj

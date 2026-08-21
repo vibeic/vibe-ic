@@ -34,6 +34,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # ---------------------------------------------------------------------------
@@ -864,7 +865,8 @@ def run(project_dir: Path,
 
     result = {
         "_meta": {
-            "comparator_version": "v1.6.604",
+            "comparator_version": _pmd.emitted_by(
+                "analog_oracle_compare"),
             "project_dir": str(project_dir),
             "oracle_path": str(oracle_path),
             "tolerance_config": str(tolerance_config) if tolerance_config else None,

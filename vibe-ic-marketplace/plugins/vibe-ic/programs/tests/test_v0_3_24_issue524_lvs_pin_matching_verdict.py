@@ -26,6 +26,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import lvs_verdict_tokens as T  # noqa: E402
 import phase3_one_shot_runner as runner  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 PIN_FAIL_RPT = """\
 Netgen 1.5.316
@@ -127,12 +128,23 @@ def _proj(tmp_path):
 def _fake_docker(netgen_transcript, lvs_rpt_body):
     import re as _re
 
-    def fake(container, cmd, timeout=0):
+    def fake(container, cmd, timeout=0, **_):
         if cmd.startswith("command -v") or cmd.startswith("test -f"):
             return (0, "", "")
         if "magic" in cmd and "SPICE_OUT=" in cmd:
             m = _re.search(r"SPICE_OUT=(\S+)", cmd)
             Path(m.group(1)).write_text(".subckt chip_top a b\n.ends\n")
+            # A REAL extraction always writes the feedback dump: the recipe ends
+            # `feedback save $env(FEEDBACK_OUT)` (phase3_one_shot_runner.py:27902,
+            # lvs_power_aware_extract_tcl.py:333) and magic writes a 0-byte file when
+            # `feedback count` is 0. Modelling the netlist but not the feedback channel
+            # made this stub an extraction that cannot happen, and
+            # magic_illegal_overlap_check correctly refused it (EXTRACTION_FEEDBACK_ABSENT:
+            # "an absent file is not a measured zero, it is an unmeasured nothing").
+            _fb = _re.search(r"FEEDBACK_OUT=(\S+)", cmd)
+            if _fb:
+                Path(_fb.group(1)).parent.mkdir(parents=True, exist_ok=True)
+                Path(_fb.group(1)).write_text("")
             ext_dir = Path(m.group(1)).parent
             ext_dir.mkdir(parents=True, exist_ok=True)
             (ext_dir / "ext2spice.log").write_text("MAGIC_EXT2SPICE_DONE\n")
@@ -252,9 +264,8 @@ def test_real_on_host_pin_fail_report_classifies_mismatch():
     # gate on CONTENT, not existence: only assert when the report currently
     # carries the #524 failing shape.
     candidates = [
-        Path("/home/reyerchu/AI_IC_design/subservient_e2e_v0323"
-             "/reports/phase3/lvs.rpt"),
-        Path("/home/reyerchu/AI_IC_design/_spm_signoff/lvs/spm_lvs5.out"),
+        require_corpus("subservient_e2e_v0323/reports/phase3/lvs.rpt"),
+        require_corpus("_spm_signoff/lvs/spm_lvs5.out"),
     ]
     blob = None
     for real in candidates:
@@ -266,3 +277,97 @@ def test_real_on_host_pin_fail_report_classifies_mismatch():
     if blob is None:
         pytest.skip("no on-host report currently in the #524 failing shape")
     assert T.classify(blob) == "MISMATCH"
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# ORGANIC (GAP-E2E-9) — mismatch_class() sub-classification.
+# The 7-IC end-to-end sweep hit `Top level cell failed pin matching` (→ MISMATCH)
+# on EVERY sky130 OSS run because the yosys gate netlist has no power ports while
+# the extracted layout carries per-cell VPWR/VGND — a benign power-unaware-netlist
+# SETUP artifact (measured: caravel + subservient LVS carry ONLY power rows).
+# mismatch_class() is TRIAGE metadata; it does NOT change the MATCH/MISMATCH
+# verdict. §4.05 NO-LEAK is the load-bearing half: anything with real signal-net
+# evidence MUST stay SIGNAL_NET_MISMATCH (measured: aes 517 + ibex 256 top-level
+# `(no pin, node is …)` rows must NOT be waved through).
+# ───────────────────────────────────────────────────────────────────────────
+
+# A power-pin-only MISMATCH (the benign OSS setup class) — caravel/subservient shape.
+_POWER_ONLY_RPT = (
+    "Subcircuit pins:\n"
+    "Circuit 1: user_project_wrapper       |Circuit 2: user_project_wrapper\n"
+    "VGND                                       |(no matching pin)\n"
+    "VNB                                        |(no matching pin)\n"
+    "VPB                                        |(no matching pin)\n"
+    "VPWR                                       |(no matching pin)\n"
+    "HI                                         |(no matching pin)\n"
+    "Cell sky130_fd_sc_hd__inv_1 (0) disconnected node: VPWR\n"
+    "Cell sky130_fd_sc_hd__inv_1 (0) disconnected node: VGND\n"
+    "Final result: Top level cell failed pin matching.\n"
+)
+
+# A power-pin-only report that ALSO has benign sub-cell PIN rows (Y/A/B), which
+# are NOT signal evidence — must still classify POWER_PIN_ONLY.
+_POWER_PLUS_CELLPIN_RPT = (
+    "VGND                                       |(no matching pin)\n"
+    "VPWR                                       |(no matching pin)\n"
+    "Y                                          |(no matching pin)\n"
+    "A                                          |(no matching pin)\n"
+    "B                                          |(no matching pin)\n"
+    "Final result: Top level cell failed pin matching.\n"
+)
+
+# NEGATIVE no-leak fixtures — REAL signal-net defects that must STAY real:
+# (1) top-level `(no pin, node is …)` signal rows (aes/ibex shape).
+_SIGNAL_NODE_RPT = (
+    "VGND                                       |(no matching pin)\n"
+    "(no pin, node is _54440_/Y)                |alert_fatal_o\n"
+    "(no pin, node is _54440_/Y)                |data_out[7]\n"
+    "Final result: Top level cell failed pin matching.\n"
+)
+# (2) a device property-error fail (real, even with a topology 'match uniquely').
+_PROPERTY_ERR_RPT = (
+    "VPWR                                       |(no matching pin)\n"
+    "Circuits match uniquely with property errors.\n"
+    "Property errors were found.\n"
+    "Final result: Circuits match uniquely.\n"
+)
+# (3) a MISMATCH with NO recognizable benign power evidence → conservative real.
+_BARE_MISMATCH_RPT = (
+    "Net NET MISMATCH between circuit 1 and circuit 2\n"
+    "Final result: Netlists do not match.\n"
+)
+
+
+def test_mismatch_class_power_pin_only_is_benign():
+    assert T.classify(_POWER_ONLY_RPT) == "MISMATCH"
+    assert T.mismatch_class(_POWER_ONLY_RPT) == "POWER_PIN_ONLY"
+
+
+def test_mismatch_class_ignores_benign_cell_pin_rows():
+    # Y/A/B `(no matching pin)` are sub-cell pins, NOT signal-port evidence.
+    assert T.mismatch_class(_POWER_PLUS_CELLPIN_RPT) == "POWER_PIN_ONLY"
+
+
+def test_mismatch_class_signal_node_rows_stay_real():
+    # §4.05 NO-LEAK: a `(no pin, node is …)` top-level signal row is NEVER benign.
+    assert T.mismatch_class(_SIGNAL_NODE_RPT) == "SIGNAL_NET_MISMATCH"
+
+
+def test_mismatch_class_property_error_stays_real():
+    assert T.mismatch_class(_PROPERTY_ERR_RPT) == "SIGNAL_NET_MISMATCH"
+
+
+def test_mismatch_class_bare_mismatch_stays_real_conservative():
+    # A mismatch with no recognizable power-setup shape must NOT be called benign.
+    assert T.mismatch_class(_BARE_MISMATCH_RPT) == "SIGNAL_NET_MISMATCH"
+
+
+def test_mismatch_class_none_on_match_and_incomplete():
+    assert T.mismatch_class(CLEAN_RPT) == "NONE"       # a clean MATCH
+    assert T.mismatch_class(TRUNCATED_RPT) == "NONE"   # an INCOMPLETE run
+
+
+def test_mismatch_class_verdict_unchanged():
+    # The authoritative verdict is NOT altered by the sub-class (no gate relaxation).
+    assert T.classify(_POWER_ONLY_RPT) == "MISMATCH"
+    assert T.classify(_SIGNAL_NODE_RPT) == "MISMATCH"

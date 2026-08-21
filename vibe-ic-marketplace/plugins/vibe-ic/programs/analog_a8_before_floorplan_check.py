@@ -37,8 +37,8 @@ ALGORITHM (chip-AGNOSTIC, deterministic)
 
 HONEST FAIL/SKIP
 ----------------
-  - Missing / garbage block list           → SKIP (no analog content).
-  - Block list present but floorplan absent → SKIP (constraint not triggered).
+  - Missing / garbage block list            → VACUOUS (no analog content).
+  - Block list present but floorplan absent → VACUOUS (not yet triggered).
   - Floorplan present, A8 LEF missing       → FAIL (real ordering defect).
   - Non-directory project                   → exit 2 (IO error).
 
@@ -47,9 +47,17 @@ Usage:
     python3 analog_a8_before_floorplan_check.py <project_dir> --json report.json
 
 Exit codes:
-    0 = PASS (or honest SKIP)
+    0 = PASS: a floorplan DEF exists AND every analog block's A8 LEF was
+        present when it was written — the ordering was actually checked
     1 = FAIL (A8 not complete before floorplan ran)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no analog block list, or no floorplan
+        DEF, so the ordering constraint was never evaluated. #521: this gate
+        was the sharpest instance of the class. It ALREADY read
+        `summary["skipped"]` and ALREADY printed `[SKIP]` — and then returned
+        `0 if result.passed else 1`, which discarded that distinction at the
+        one place a consumer can see it. Measured over the 200 tracked
+        project roots: 200 of 200 rc 0, 200 of 200 self-reporting a skip.
+        Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -61,6 +69,8 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
 import _path_layout as _pl
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -225,19 +235,28 @@ def main(argv: list = None) -> int:
 
     result = run_audit(args.project_dir)
 
+    # #521 — this gate already COMPUTED `skipped` and already PRINTED `[SKIP]`;
+    # what it never did was let that reach the exit code, which is the only
+    # channel `flow_compliance_check` reads. Same source of truth, now routed.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
     else:
-        skipped = result.summary.get("skipped")
-        status = "SKIP" if skipped else ("PASS" if result.passed else "FAIL")
-        print(f"[{status}] analog_a8_before_floorplan_check")
+        print(_vx.verdict_line("analog_a8_before_floorplan_check",
+                               result.passed, skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        # This gate's AuditResult carries no `program` field (unlike its
+        # sixteen siblings), so the name is the module's own literal.
+        _vx.announce_vacuous("analog_a8_before_floorplan_check", reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":
