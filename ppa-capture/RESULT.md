@@ -51,8 +51,8 @@ it now — checked by reading it, not by trusting the fix note.
 | F | already enforced by | general over |
 |---|---|---|
 | F-1 no owner for the excluded levers | `crosslayer_search_space.py` emits `UNOWNED` when the named owner does not resolve; `tests/test_ppa_pnr_search_space.py:340,362` has both arms | any deferral; the owner is resolved from the tree |
-| F-2 `--backend` drove nothing | the driver seam in `_ppa/backends/__init__.py` (`extract_records` / `NO_DRIVER_REASON`); `test_ppa_producer_consumer_agreement.py::test_every_backend_is_drivable_or_says_WHY_NOT` | every backend module, the day it is added |
-| F-4 producers emit envelopes the consumer refuses | `_ppa/metrics.py:963-965` registers all three carriers; `test_ppa_producer_consumer_agreement.py` §2 walks the whole envelope namespace | every registered envelope |
+| F-2 `--backend` drove nothing | the driver seam in `_ppa/backends/__init__.py` (`extract_records` / `NO_DRIVER_REASON`); `test_ppa_producer_consumer_agreement.py::test_every_backend_is_drivable_or_says_WHY_NOT` | **conditionally.** The census iterates a literal 5-tuple, not the package. `load()` imports directly, so a sixth module IS drivable — it is just invisible to the guard and to the alternatives a refusal prints. See **A-3** |
+| F-4 producers emit envelopes the consumer refuses | `_ppa/metrics.py:963-965` registers all three carriers; `test_ppa_producer_consumer_agreement.py` §2 walks the whole envelope namespace | **in one direction.** Every REGISTERED carrier is checked to read; that every PRODUCER's envelope is registered is asserted over three literals. See **A-3** |
 | F-5 declared unit vs required unit | `_ppa/area.py:188` moved to the name-derived unit; same test file §1 walks the whole area registry | every area metric, added or existing |
 | F-9 two readings of one metric under one scope | `_ppa/metrics.py:582-676` separates corroboration from conflict; `test_ppa_second_record_identity.py`, 12 tests | any second record under one identity |
 | F-10 every timing row emitted twice | `_ppa/timing.discover_reports` de-duplicates by CONTENT; `test_ppa_layer_timing_view_dedup.py` | any mirrored artefact tree; `path_ordinal` covers F-10b |
@@ -175,8 +175,19 @@ The floor was written on a night when 14 and 14 were the same number. It now
 passes over a population of 19 with 4 holes in it, and its own message still
 reads "the fourteen shipped programs".
 
-**The same defect sits on four tables in this layer, not one.** Two more,
-measured here:
+**The same defect sits on SIX tables in this layer, not one** — and two of the
+six are inside the census the repository built to fix this class, which is where
+it is hardest to see, because the file's subject is the rule it breaks. Only the
+first was known when I wrote the record; the other five came from asking the
+question once per table.
+
+    two invocation tables            15 of 19 programs declared
+    present-but-empty input table     8 of 19 programs reached
+    producer trio in the census       3 named by hand
+    backend tuple                     a literal 5-tuple; the package is importable
+    envelope-producer direction       3 literals
+
+Two of them, measured here:
 
     present-but-empty input cases declared : 8   (`range(8)`)
     programs those 8 cases reach          : 8 of 19
@@ -325,6 +336,26 @@ from a name.
 The two shipped denominator gates do not catch it and cannot: both are satisfied
 by *a* disclosed count, and this gate discloses honestly — over a population that
 was already filtered by the thing under suspicion.
+
+**A second instance, in the same layer and sharper.** The timing module selects
+sign-off reports with `sta*.rpt` under three named directories, and its own
+comment claims the consequence:
+
+> *every `sta*.rpt` under them is read, so a new corner report is picked up
+> without a change here.*
+
+True only for a report whose name starts with the token. Against the report
+names the flow's own runner writes:
+
+    timing-shaped reports the runner writes : 13
+    reached by the name pattern             :  8
+    not read: aging_sta, post_route_timing, pre_pnr_timing,
+              si_crosstalk, si_crosstalk_timing_aware
+
+and `pre_pnr_timing.rpt` is a report the **same runner deliberately stamps** with
+the basis marker this module exists to read. Some of the five may be out of scope
+on purpose; **nothing in the selector says which, and that is the defect rather
+than the count.**
 **(o)** yes. **(d)** yes — the predicate is "select on the declared schema", so
 it holds for any document class this layer gains, and the third disclosed number
 it requires (files that would not parse) is the half neither denominator gate
