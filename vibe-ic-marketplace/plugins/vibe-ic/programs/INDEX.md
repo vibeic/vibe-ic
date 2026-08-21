@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1150
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1150)
+- **Total programs (excluding helpers / shims):** 1151
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1151)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1141 |
+| `any` | 1142 |
 
 ## Alphabetical listing
 
@@ -330,6 +330,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `em_report_check` | any | — | EM report check — wrapper for eda_report_audit --mode em. |
 | `emit_attestation` | any | — | GATE-AS-SOLE-EMIT-PATH enforcement (shared helper). |
 | `emit_attestation_check` | any | — | score-time GATE-AS-SOLE-EMIT-PATH enforcement. |
+| `emitted_script_portability_check` | any | — | An emitted analysis script that hard-codes the directory it was emitted in is not reproducible anywhere else, which is the whole point of... |
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
 | `encoder_decoder_synth` | any | — | deterministic SOLVER for the PRIORITY-ENCODER family. |
@@ -1222,7 +1223,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1141 programs)
+### `any` (1142 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1524,6 +1525,7 @@ _(no programs in this group)_
 - `em_report_check` — EM report check — wrapper for eda_report_audit --mode em.
 - `emit_attestation` — GATE-AS-SOLE-EMIT-PATH enforcement (shared helper).
 - `emit_attestation_check` — score-time GATE-AS-SOLE-EMIT-PATH enforcement.
+- `emitted_script_portability_check` — An emitted analysis script that hard-codes the directory it was emitted in is not reproducible anywhere else, which is the whole point of...
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
 - `encoder_decoder_synth` — deterministic SOLVER for the PRIORITY-ENCODER family.
