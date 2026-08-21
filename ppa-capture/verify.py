@@ -252,6 +252,36 @@ check("the Bucket-A ladder split totals the Bucket-A records",
       bool(la and le) and int(la.group(1)) + int(le.group(1)) == counts["A"],
       f"{la.group(1) if la else '-'} + {le.group(1) if le else '-'} vs {counts['A']}")
 
+# 17. every artefact named as ENFORCING an already-program class must exist.
+#     Sixteen findings produced no record because "a program already covers
+#     this". Each names the program. Rename or delete one and the claim becomes
+#     false in the quietest possible way — the sentence still reads correctly
+#     and the class is no longer covered. This is A-7's shape applied to the
+#     part of the deliverable that argues something needs no work.
+def _tbl_rows(header: str) -> list:
+    lines = MD.splitlines()
+    try:
+        i = next(k for k, l in enumerate(lines) if l.strip() == header)
+    except StopIteration:
+        return []
+    out, k = [], i + 2
+    while k < len(lines) and lines[k].startswith("| "):
+        out.append(lines[k]); k += 1
+    return out
+_cells = (_tbl_rows("| F | already enforced by | general over |")
+          + _tbl_rows("| class | already enforced by |"))
+_named = set()
+for _c in _cells:
+    _named |= set(re.findall(r"`([A-Za-z0-9_./-]+\.(?:py|md|json))`", _c))
+    _named |= set(re.findall(r"\b((?:programs/|tests/)[A-Za-z0-9_./-]+\.py)", _c))
+def _exists(n: str) -> bool:
+    return any((base / n).is_file() for base in
+               (PLUG, PLUG / "programs", PLUG / "programs" / "tests", HERE.parent))
+control("enforcer-exists", not _exists("no_such_enforcer_program.py"))
+_gone = sorted(n for n in _named if not _exists(n))
+check("every program named as enforcing a class exists",
+      not _gone, f"{len(_named)} named, missing {_gone}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
