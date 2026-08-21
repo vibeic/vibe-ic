@@ -2668,6 +2668,61 @@ instrumenting the run** — the same method that settled every other real questi
 in this document, and the one I reached for last each time.
 
 
+## M44 — M43 IS WRONG, and the defect is real. I attributed a flat ledger to one step.
+
+M43 concluded the waiver plumbing works and Step 4 is "honestly vacuous". **That
+is wrong, and the error is exactly the kind this document keeps cataloguing: I
+read a FLAT LEDGER as if it were one step's membership.**
+
+The `GATE_RAN …` list in the compliance output spans **every step of the run**,
+not Step 4. `bit_level_full_stack_tb_check rc=1 FAIL` — which I flagged as "a
+FAIL inside a VACUOUS-PASS step" — belongs to **Step 5**, which correctly reports
+`[FAIL]`. There was never a gate-that-cannot-fail there. Good: that concern
+dissolves.
+
+**But the same misreading invalidated M43's headline.** Step 4's OWN reasons,
+from the dump:
+
+```
+○ [VACUOUS-PASS] Step 4: Simulation (… + Verilator coverage)
+   └─ vacuous: vacuous_testbench_check      VACUOUS_PASS
+   └─ vacuous: professional_tb_check        VACUOUS_PASS
+   └─ NOT-APPLICABLE (declared): l10_tb_conformance_check
+   └─ NOT-APPLICABLE (declared): l12_tb_coverage_check
+   └─ ADVISORY (non-blocking, #306): coverage_closure
+```
+
+**Two vacuous members, not four. And no waiver line at all.**
+
+**Now the three measured facts that matter:**
+
+1. **Step 4 DECLARES `verilator_coverage_measure`** — parsed from the flow, one
+   of its six program clauses, a `program_exit_zero` (not optional, not
+   advisory).
+2. **The run shows `verilator_coverage_measure rc=3 PASS_WITH_WAIVERS`.**
+3. **Step 4's reasons carry NO waiver line** — the two vacuous gates each got
+   one, so the printer does emit per-gate reasons.
+
+And Step 6 does **not** contain `verilator_coverage_measure` (its clauses are
+`quartus_map_audit` and `fpga_verification_audit`), so its `[WAIVED-DEFERRED]`
+comes from elsewhere and cannot account for the missing hint.
+
+**So M39's hypothesis was right after all, and M43 retired it on a misreading.**
+A `program_exit_zero` clause returning rc=3 in a step whose reasons show no
+waiver is a signal that is produced and then lost between the gate and the step.
+
+**Stated as narrowly as the evidence allows:** either the waiver hint is not
+carried into Step 4's reasons, or it is carried and not rendered. Both are
+consistent with the two reds, and both are defects — a disclosed capability gap
+that reaches nobody is indistinguishable from one that was never disclosed.
+
+**Seventh framing, and the second reversal.** I have now argued this red is a
+defect (M39), not a defect (M43), and a defect again (M44) — and only M44 rests
+on the flow declaration plus the run together. **M43's error was not a bad
+inference; it was reading the right data as the wrong thing.** A flat ledger and
+a step's membership look identical when you want one of them badly enough.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2753,7 +2808,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M43) by instrumentation.** `verilator_coverage_measure` DOES return rc=3 `PASS_WITH_WAIVERS` in the real run — the plumbing works. Step 4 is VACUOUS-PASS because it holds **four vacuous members** (plus one outright `FAIL`), and vacuity rightly outranks a waiver. **The test's expectation is too narrow; not a flow defect.** Separately flagged: `bit_level_full_stack_tb_check rc=1 FAIL` inside a VACUOUS-PASS step. | **answered** |
+| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. ~~SETTLED (M43)~~ — **M43 WAS WRONG, see M44.** I read a flat cross-step `GATE_RAN` ledger as Step 4's membership. Measured: Step 4 DECLARES `verilator_coverage_measure` as a `program_exit_zero`; the run returns it **rc=3 PASS_WITH_WAIVERS**; Step 4's reasons carry **no waiver line** (both vacuous gates got one). **The signal is produced and lost between gate and step — a real defect.** | **likely defect, evidenced** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
