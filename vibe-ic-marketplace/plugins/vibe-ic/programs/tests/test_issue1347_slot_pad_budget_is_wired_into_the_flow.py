@@ -229,13 +229,18 @@ def test_the_declaration_survives_the_docstring_growing():
     byte 4371 and the gate went UNDECLARED while every other check stayed
     green. The declaration now sits at the top of the docstring, and this test
     is the guard that keeps it there."""
+    import flow_gate_enforcement_audit as A
     src = (PROG / "slot_pad_budget_check.py").read_text(encoding="utf-8")
     idx = src.find("ENFORCEMENT:")
     assert idx >= 0, "the gate declares no enforcement intent at all"
-    assert idx < 4000, (
-        f"the ENFORCEMENT declaration sits at byte {idx}, past the 4000-byte "
-        f"window `declared_intent` reads. It is present and unread, which the "
-        f"audit reports as UNDECLARED — move it back above the prose.")
+    # The bound is IMPORTED, never re-typed: a number kept in two places is a
+    # number that will disagree, and this guard would then quietly stop
+    # guarding the thing it names.
+    assert idx < A.DECL_WINDOW_BYTES, (
+        f"the ENFORCEMENT declaration sits at byte {idx}, past the "
+        f"{A.DECL_WINDOW_BYTES}-byte window `declared_intent` reads. It is "
+        f"present and unread, which the audit reports as UNDECLARED — move it "
+        f"back above the prose.")
 
 
 def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
