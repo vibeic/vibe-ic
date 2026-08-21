@@ -1,8 +1,0 @@
-{
-  "fields": {
-    "power_domains": [
-      "1.0 V / 1.8 V I/O rail"
-    ],
-    "power_considerations": "Low-voltage source-synchronous signaling reduces sideband pin count and power vs LPC."
-  }
-}

@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import _path_layout as _pl
 import _analog_a_check_common as _acc
+import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
 
@@ -57,6 +58,34 @@ class StepResult:
     # v1.6.171 (#60 P1-6) — structured extras for deterministic-stub
     # provenance (stub_paths / extraction_strategy / low_confidence).
     extras: Dict[str, Any] = field(default_factory=dict)
+
+
+def _preflight_refusal(name: str, block: str):
+    """This runner's refusal row for `step_preflight.gate`.
+
+    `BLOCKED` carries the same meaning it does in the other three runners: the
+    step was NOT attempted because an INPUT could not support it, so NOTHING is
+    known. It is listed in `_aggregate_verdict._FAIL_STATUSES` — without that it
+    would have fallen through that function's catch-all `return "PASS"` and a
+    refusal would have produced a GREEN run, which is the defect class this
+    whole pre-flight exists to remove. Measured on this ladder specifically: a
+    refusal is neither FAIL, nor VACUOUS_PASS, nor PASS_STRUCTURE_ONLY, nor
+    WAIVED/SKIP, so every one of the four tiers above the catch-all would have
+    declined it and an all-refused analog track would have scored a clean PASS.
+
+    NOTE the shape difference from `design_one_shot_runner._preflight_refusal`:
+    this runner's `StepResult` carries a `block` as its SECOND positional field,
+    so the row is built with it rather than assuming the phase-2 signature.
+    """
+    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
+        return StepResult(name, block, _spf.REFUSAL_STATUS, 0.0, detail,
+                          extras=extras)
+    return _mk
+
+
+# Statuses that must NOT reach a green verdict. `BLOCKED` is `step_preflight`'s
+# refusal status; the rest is this runner's pre-existing FAIL tier, unchanged.
+_FAIL_STATUSES = ("FAIL", _spf.REFUSAL_STATUS)
 
 
 _AI_STEP_NAMES = (
@@ -1056,6 +1085,53 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                       f"caller should invoke skill `{skill}`")
 
 
+def _aggregate_verdict(plan: List[StepResult]) -> str:
+    """The analog track's top-level verdict.
+
+    v1.6.129 (#50 Fix 2) — VACUOUS_PASS must NOT roll up into PASS.
+    Severity ladder (highest first):
+      FAIL          — any step explicitly failed, OR was BLOCKED by the
+                      pre-flight (see `_preflight_refusal`: a refusal is not a
+                      FAIL of the step, but it is certainly not green, and this
+                      function's catch-all `return "PASS"` is exactly where an
+                      unenumerated status goes to become one).
+      VACUOUS_PASS  — at least one step was VACUOUS_PASS (gate inapplicable)
+                      AND no step actually PASSed. Top-level verdict downgraded
+                      to VACUOUS_PASS so downstream sign-off gates see it as
+                      "no real evidence" rather than confirmed PASS.
+      PASS_STRUCTURE_ONLY — see `_STRUCTURE_ONLY_SENTINEL`.
+      PASS_WITH_WAIVERS — has WAIVED/SKIP, but at least one PASS (real evidence
+                      exists for some block). VACUOUS_PASS leaves are ALSO a
+                      waiver tier in this label-honest mode.
+      PASS          — every step is a real PASS.
+
+    EXTRACTED from `main()` unchanged except for the BLOCKED tier, so a control
+    can assert the non-greenness directly instead of re-running the whole
+    runner to observe it. Chip-AGNOSTIC.
+    """
+    has_fail = any(s.status in _FAIL_STATUSES for s in plan)
+    has_vacuous = any(s.status == "VACUOUS_PASS" for s in plan)
+    has_waiver = any(s.status in ("WAIVED", "SKIP") for s in plan)
+    has_real_pass = any(s.status == "PASS" for s in plan)
+    # STRUCTURE-ONLY joins the ladder BELOW a waiver-free pass and ABOVE
+    # nothing: the step ran and produced its declared artefact from a library
+    # default. It is not a real pass (every number measured on it is a number
+    # about the default), it is not vacuous (the gate examined something), and
+    # it is not a FAIL — a run honest about its ceiling must not score below
+    # one that invented content to fill the gap, or the next run stops being
+    # honest. Counted here so the top-level verdict cannot round it up.
+    structure_only = [s for s in plan if s.status == "PASS_STRUCTURE_ONLY"]
+    if has_fail:
+        return "FAIL"
+    if has_vacuous and not has_real_pass and not structure_only:
+        return "VACUOUS_PASS"
+    if structure_only:
+        return "PASS_STRUCTURE_ONLY"
+    if has_vacuous or has_waiver:
+        return "PASS_WITH_WAIVERS"
+    return "PASS"
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
@@ -1139,49 +1215,80 @@ def main() -> int:
             + "\n", encoding="utf-8")
 
     plan: List[StepResult] = []
-    for blk in blocks:
-        for step_name in _AI_STEP_NAMES:
-            sr = step_for_block(project, blk, step_name, args=args)
-            plan.append(sr)
-            print(f"  {sr.status:6} {step_name:24} block={sr.block:16} "
-                  f"{sr.detail[:60]}")
 
-    # v1.6.129 (#50 Fix 2) — VACUOUS_PASS must NOT roll up into PASS.
-    # Severity ladder (highest first):
-    #   FAIL          — any step explicitly failed
-    #   VACUOUS_PASS  — at least one step was VACUOUS_PASS (gate
-    #                   inapplicable) AND no step actually PASSed.
-    #                   Top-level verdict downgraded to VACUOUS_PASS so
-    #                   downstream sign-off gates see it as "no real
-    #                   evidence" rather than confirmed PASS.
-    #   PASS_WITH_WAIVERS — has WAIVED/SKIP, but at least one PASS
-    #                       (real evidence exists for some block).
-    #                       VACUOUS_PASS leaves are ALSO a waiver tier
-    #                       in this label-honest mode.
-    #   PASS          — every step is a real PASS.
-    # Chip-AGNOSTIC.
-    has_fail = any(s.status == "FAIL" for s in plan)
-    has_vacuous = any(s.status == "VACUOUS_PASS" for s in plan)
-    has_waiver = any(s.status in ("WAIVED", "SKIP") for s in plan)
-    has_real_pass = any(s.status == "PASS" for s in plan)
-    # STRUCTURE-ONLY joins the ladder BELOW a waiver-free pass and ABOVE
-    # nothing: the step ran and produced its declared artefact from a library
-    # default. It is not a real pass (every number measured on it is a number
-    # about the default), it is not vacuous (the gate examined something), and
-    # it is not a FAIL — a run honest about its ceiling must not score below
-    # one that invented content to fill the gap, or the next run stops being
-    # honest. Counted here so the top-level verdict cannot round it up.
+    def _dispatched(sr: StepResult) -> None:
+        plan.append(sr)
+        print(f"  {sr.status:6} {sr.name:24} block={sr.block:16} "
+              f"{sr.detail[:60]}")
+
+    for blk in blocks:
+        _bname = blk.get("name") or blk.get("type") or "unknown"
+        # ── PRE-FLIGHT, ONE SITE PER CANONICAL A-STEP ─────────────────────
+        # Written out rather than looped, for the reason the wiring control
+        # (`test_step_preflight.test_every_declared_site_is_wired_at_a_real_
+        # call_site`) exists: a site name reached only through a loop variable
+        # is a site no reader — and no static control — can confirm is wired.
+        # The order below IS `_AI_STEP_NAMES` and IS the `RUNNER_PLANS` site
+        # order, which is what makes "has this producer already had its
+        # chance?" answerable at each site.
+        #
+        # PER-BLOCK, and honest about what that does and does not bind: the
+        # flow declares A2's input as `phase3/analog/*/topology.md`, whose `*`
+        # is the BLOCK directory. The pre-flight probes the pattern AS
+        # DECLARED, so on a MULTI-BLOCK design block 2's A2 is satisfied by
+        # block 1's topology.md. That is the wildcard-does-not-bind defect,
+        # which is not this change's to fix; `_preflight_note` puts the block
+        # in the ledger so the under-binding is visible in the record instead
+        # of being invisible in it.
+        _note = f"block={_bname}"
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A1",
+            _preflight_refusal("A1_spec_extract", _bname),
+            step_for_block, project, blk, "A1_spec_extract", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A2",
+            _preflight_refusal("A2_topology_select", _bname),
+            step_for_block, project, blk, "A2_topology_select", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A3",
+            _preflight_refusal("A3_netlist_gen", _bname),
+            step_for_block, project, blk, "A3_netlist_gen", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A4",
+            _preflight_refusal("A4_corner_sweep", _bname),
+            step_for_block, project, blk, "A4_corner_sweep", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A5",
+            _preflight_refusal("A5_layout", _bname),
+            step_for_block, project, blk, "A5_layout", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A6",
+            _preflight_refusal("A6_block_pv", _bname),
+            step_for_block, project, blk, "A6_block_pv", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A7",
+            _preflight_refusal("A7_post_layout_resim", _bname),
+            step_for_block, project, blk, "A7_post_layout_resim", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A8",
+            _preflight_refusal("A8_hardmacro_gen", _bname),
+            step_for_block, project, blk, "A8_hardmacro_gen", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A9",
+            _preflight_refusal("A9_hw_verify", _bname),
+            step_for_block, project, blk, "A9_hw_verify", args=args,
+            _preflight_note=_note))
+
+    verdict = _aggregate_verdict(plan)
     structure_only = [s for s in plan if s.status == "PASS_STRUCTURE_ONLY"]
-    if has_fail:
-        verdict = "FAIL"
-    elif has_vacuous and not has_real_pass and not structure_only:
-        verdict = "VACUOUS_PASS"
-    elif structure_only:
-        verdict = "PASS_STRUCTURE_ONLY"
-    elif has_vacuous or has_waiver:
-        verdict = "PASS_WITH_WAIVERS"
-    else:
-        verdict = "PASS"
     summary = {
         "phase": "analog",
         "project": str(project),
@@ -1192,6 +1299,12 @@ def main() -> int:
         # which step of which block produced it without opening nine records.
         "structure_only_steps": [f"{s.block}/{s.name}" for s in structure_only],
     }
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # The analog A1-A9 track is driven standalone for analog-only cells, which
+    # therefore had no steps tree at all. Best-effort, non-gating; recorded in
+    # reports/audit/steps_view.json either way.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="analog_one_shot_runner")
     out = _pl.report_path(project, "analog_one_shot.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")

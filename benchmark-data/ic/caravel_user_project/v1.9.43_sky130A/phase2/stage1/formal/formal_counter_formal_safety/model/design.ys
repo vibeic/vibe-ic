@@ -1,8 +1,0 @@
-# running in formal_counter_formal_safety/src/
-read_verilog -formal -DSPM_SAFETY_ONLY formal_counter.sv defines.v user_defines.v user_proj_example.v user_project_wrapper.v
-prep -top formal_counter
-
-hierarchy -smtcheck
-rename -witness
-write_jny -no-connections ../model/design.json
-write_rtlil ../model/design.il
