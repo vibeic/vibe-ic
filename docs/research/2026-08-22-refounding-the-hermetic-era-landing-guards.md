@@ -55,9 +55,16 @@ container-namespace process. That blocker is real but **irrelevant**, because th
 property is not "that PID is gone", it is "the arm was reaped and left nothing
 behind". Both halves are observable from the host without the pid:
 
-1. **The container is gone** — the runner labels every container
-   `ai.vibeic.hermetic-run=<nonce>`; assert
-   `docker ps -a --filter label=ai.vibeic.hermetic-run=<nonce>` is empty.
+1. **The container is gone** — CONFIRMED FROM SOURCE, and better than I first
+   wrote it. `hermetic_candidate_runner.py:1889` passes
+   `--label ai.vibeic.hermetic-run=<run_id>` on create, and `:749-751` VALIDATES
+   that label back from `container inspect` and refuses on mismatch — so the
+   label is load-bearing already, not incidental. Better still, the
+   infrastructure containers carry DISTINCT labels:
+   `ai.vibeic.hermetic-provision` (`:1086`) and `ai.vibeic.hermetic-export`
+   (`:1147`). So the assertion can name the candidate container exactly —
+   `docker ps -a --filter label=ai.vibeic.hermetic-run=<run_id>` empty — without
+   the name-substring fallback M15's test had to use.
 2. **The worktrees are gone** — already asserted today, already works.
 3. **Cleanup announced itself** — `cleanup.started/reaped/done` are written by the
    VERIFIER on the host and already work. M13 measured exactly this: those three
@@ -110,11 +117,18 @@ first, and each is separately landable.
 
 ## What I did NOT verify
 
-I have not implemented or run any of this. The channels are read from the source
-and the receipt field list is real; the assertion that a receipt-based liveness
-check is *sufficient* for what G6 wanted is my judgement, not a measurement. The
-container-label filter in B is read from the fake-docker profile
-(`Labels: {"ai.vibeic.hermetic-run": ...}`) and I have not confirmed the real
-runner sets it identically under a real daemon — **that is the first thing to
-check before building B**, and this host cannot check it (no git >= 2.38 for the
-strong tier, and the image has no docker CLI).
+**RETRACTED CAVEAT.** I first closed this document by saying the container label
+in B was read only from the fake-docker profile, that the real runner's behaviour
+was unconfirmed, and that this host could not check it. All three were wrong, and
+one grep settled them: the label is set at `hermetic_candidate_runner.py:1889`
+and validated at `:749-751`, which is a source fact requiring neither the strong
+tier nor a live daemon.
+
+**"This host cannot check it" is a claim like any other and needs testing before
+it is written down.** That is the same lesson as the retractions in the findings
+document, arrived at once more — this time while writing a caveat rather than a
+finding, which is if anything the easier place to be careless.
+
+What remains genuinely unverified, and stands: none of this is implemented or
+run, and the judgement that a receipt-based liveness check is *sufficient* for
+what G6 wanted is mine, not a measurement.
