@@ -480,3 +480,53 @@ def test_the_two_endpoints_produce_visibly_different_output(tmp_path):
     line_a = next(l for l in a.splitlines() if "clock:" in l)
     line_b = next(l for l in b.splitlines() if "clock:" in l)
     assert line_a != line_b, line_a
+
+
+# --------------------------------------------------------------------------
+# A GATE THAT DID NOT RUN IN THIS RECORD CANNOT BE ADJUDICATED.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("state", [G._LISTED, G._OTHER_SHARD])
+def test_a_gate_that_did_not_run_is_never_reported_expired(tmp_path, state):
+    """MEASURED: a real shard record carries 79 OTHER_SHARD beside 8 FAIL, and
+    every one of the 79 was counted red — so a row could be failed as EXPIRED
+    for a gate that was never executed. "I could not look" must not reach a
+    verdict as "I looked and it was bad"."""
+    r, shas = _repo(tmp_path)
+    row = {"gate": "g", "since": shas[0], "max_commits": 1}
+    findings, known, new = G.adjudicate(
+        _record({"g": state}), [row], G.git_age(r, "HEAD"))
+    assert [f.kind for f in findings] == [], [f.line() for f in findings]
+    assert "g" not in known and "g" not in new
+
+
+@pytest.mark.parametrize("state", [G._LISTED, G._OTHER_SHARD])
+def test_a_gate_that_did_not_run_is_not_counted_red(tmp_path, state):
+    _, _, new = G.adjudicate(
+        _record({"other": state}), [], G.git_age(tmp_path, "HEAD"))
+    assert new == [], new
+
+
+def test_the_mechanism_still_expires_a_gate_that_DID_run(tmp_path):
+    """The direction that keeps the exemption honest: widening what cannot be
+    adjudicated must not turn the deadline into something that never fires."""
+    r, shas = _repo(tmp_path)
+    row = {"gate": "g", "since": shas[0], "max_commits": 1}
+    findings, _, _ = G.adjudicate(
+        _record({"g": "FAIL"}), [row], G.git_age(r, "HEAD"))
+    assert any(f.kind == "expired" for f in findings), [f.line() for f in findings]
+
+
+def test_the_cli_names_the_rows_it_could_not_adjudicate(tmp_path):
+    """Skipping them silently would let a row nobody judged read as a row that
+    passed — which is the same silence this program exists to remove."""
+    r, shas = _repo(tmp_path)
+    led = tmp_path / "led.json"
+    led.write_text(json.dumps({"acknowledged": [
+        {"gate": "g", "since": shas[0], "max_commits": 1}]}), encoding="utf-8")
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps(_record({"g": G._OTHER_SHARD, "x": "PASS"})),
+                   encoding="utf-8")
+    out = _cli(r, rec, "--ledger", str(led)).stdout
+    assert "NOT ADJUDICABLE" in out, out
+    assert "g" in out

@@ -104,6 +104,25 @@ import _vacuous_exit as _vx  # noqa: E402
 #: keep an acknowledgement alive, never retire one early.
 _PASS = "PASS"
 _LISTED = "LISTED"
+#: `_gate_dispatch.sh:711` — a gate this shard does not own. Sharding
+#: (vibe-ic#1144) means a record can legitimately describe gates that did not
+#: run in it.
+_OTHER_SHARD = "OTHER_SHARD"
+
+#: STATES THAT MEAN "THIS GATE DID NOT RUN IN THIS RECORD", and which therefore
+#: cannot be adjudicated in either direction (measured 2026-08-22).
+#:
+#: Before this, anything that was not PASS and not LISTED fell through to the
+#: deadline check — so a row whose gate carried OTHER_SHARD could be reported
+#: EXPIRED for a gate that WAS NEVER EXECUTED in that record. That is the
+#: "I could not look" / "I looked and it was bad" collapse this repo removes
+#: from gates one at a time, and sharding made it reachable: a real shard
+#: record here carries 79 OTHER_SHARD beside 8 FAIL, and all 79 were counted
+#: as red.
+#:
+#: They are SKIPPED rather than failed, and reported by the CLI rather than
+#: dropped: a row nobody adjudicated must not read as a row that passed.
+_NOT_RUN = (_LISTED, _OTHER_SHARD)
 
 #: Ledger location, relative to the repository root.
 LEDGER_REL = "tools/ci/gate_red_since.json"
@@ -272,6 +291,12 @@ def adjudicate(record: Dict[str, Any],
                 "row in the commit that fixed the gate — a row that outlives "
                 "its truth is believed by the next reader"))
             continue
+        if state in _NOT_RUN:
+            # NOT ADJUDICABLE, and deliberately not a finding in either
+            # direction: this record does not say whether the gate is red, so
+            # neither "expired" nor "stale" is a thing it could honestly
+            # report. The CLI names these rows so the silence is visible.
+            continue
 
         since = str(row["since"])
         behind = age(since)
@@ -302,7 +327,8 @@ def adjudicate(record: Dict[str, Any],
                 f"bound this row set for itself was {bound}. "
                 f"{row.get('owner') or 'nobody'} owns it"))
 
-    red = sorted(l for l, s in states.items() if s not in (_PASS, _LISTED))
+    red = sorted(l for l, s in states.items()
+                 if s != _PASS and s not in _NOT_RUN)
     known = [l for l in red if l in acknowledged_gates]
     new = [l for l in red if l not in acknowledged_gates]
     return findings, known, new
@@ -518,6 +544,11 @@ def main(argv: Optional[List[str]] = None) -> int:
           + (f"{args.ledger_ref} ({_describe_ref(args.repo, args.ledger_ref)})"
              if args.ledger_ref
              else f"the working tree at {args.ledger or (args.repo / LEDGER_REL)}"))
+    _unrun = sorted({str(r.get("gate")) for r in ledger
+                     if _states(record).get(str(r.get("gate"))) in _NOT_RUN})
+    if _unrun:
+        print("  NOT ADJUDICABLE in this record (the gate did not run here, so "
+              "this run says nothing about it): " + ", ".join(_unrun))
     if new:
         # The line the doctrine was actually worried about: when the wall of
         # red is the steady state, this is what separates today's red from
