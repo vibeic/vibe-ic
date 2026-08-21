@@ -722,8 +722,14 @@ def test_a_source_that_will_not_parse_is_REPORTED_not_silently_skipped(tmp_path)
     skew that makes one, where the failure would otherwise be invisible."""
     progs, tests = _tree(tmp_path)
     src = (progs / "thing_emit.py").read_text()
-    (progs / "thing_emit.py").write_text(src + "\n\ndef newer(x)  :::\n    pass\n",
-                                         encoding="utf-8")
+    # Padded so the break is DEEP in the file: a hardcoded or off-by-one line
+    # number would still look plausible at the top and cannot hide here. The
+    # expected line is computed from the fixture, never written down twice.
+    pad = "".join(f"# filler {i}\n" for i in range(1, 21))
+    broken = pad + src + "\n\ndef newer(x)  :::\n    pass\n"
+    (progs / "thing_emit.py").write_text(broken, encoding="utf-8")
+    break_line = next(i for i, ln in enumerate(broken.splitlines(), 1)
+                      if ":::" in ln)
     r = _run(progs, tests, "--json", tmp_path / "r.json")
     out = r.stdout + r.stderr
     assert "[UNPARSED]" in r.stdout, (
@@ -731,7 +737,9 @@ def test_a_source_that_will_not_parse_is_REPORTED_not_silently_skipped(tmp_path)
     assert "thing_emit.py" in r.stdout and "could NOT read it" in r.stdout, out
     doc = json.loads((tmp_path / "r.json").read_text())
     assert len(doc["unparsed"]) == 1, doc
-    assert doc["unparsed"][0].startswith("thing_emit.py:"), doc
+    assert doc["unparsed"][0].startswith(f"thing_emit.py:{break_line}:"), (
+        "the report does not send the reader to the line that would not parse "
+        f"(expected {break_line}): {doc['unparsed']}")
     assert "source(s) NOT examined because they would not parse" in r.stdout, out
     # and nothing was invented from a file that could not be read
     assert doc["counters_examined"] == 0, doc
@@ -882,15 +890,21 @@ def test_a_TEST_that_will_not_parse_is_reported_too(tmp_path):
     pinned. An unmeasured coverage number would have been worse than none."""
     progs, tests = _tree(tmp_path)
     good = (tests / "test_thing_emit.py").read_text()
-    (tests / "test_thing_emit.py").write_text(good + "\n\ndef newer(x)  :::\n    pass\n",
-                                              encoding="utf-8")
+    broken = good + "\n\ndef newer(x)  :::\n    pass\n"
+    (tests / "test_thing_emit.py").write_text(broken, encoding="utf-8")
+    break_line = next(i for i, ln in enumerate(broken.splitlines(), 1)
+                      if ":::" in ln)
     r = _run(progs, tests, "--json", tmp_path / "r.json")
     out = r.stdout + r.stderr
     assert "[UNPARSED]" in r.stdout, (
         "an unreadable TEST left the reach in silence:\n" + out)
     assert "test_thing_emit.py" in r.stdout, out
     doc = json.loads((tmp_path / "r.json").read_text())
-    assert len(doc["unparsed"]) == 1 and "test_thing_emit.py" in doc["unparsed"][0], doc
+    assert len(doc["unparsed"]) == 1, doc
+    assert doc["unparsed"][0].endswith(f":{break_line}: invalid syntax"), (
+        "the report does not send the reader to the line that would not parse "
+        f"(expected {break_line}): {doc['unparsed']}")
+    assert "test_thing_emit.py" in doc["unparsed"][0], doc
     # the pin is gone from the reach, and says so ...
     assert doc["pins_examined"] == 0, doc
     # ... while the PROGRAM side is untouched: a broken test must not take the
