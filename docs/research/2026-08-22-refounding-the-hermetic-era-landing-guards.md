@@ -101,6 +101,23 @@ behind". Both halves are observable from the host without the pid:
    VERIFIER on the host and already work. M13 measured exactly this: those three
    markers appear, and only those.
 
+**Identifying WHICH containers to assert on — checked, and it has a trap.** The
+label value is the run id, and a test does not obviously know it: `RUN` is a
+`mktemp -d` the verifier never announces, and the verdict JSON carries no run id
+or nonce. Filtering on the label KEY alone (`--filter label=ai.vibeic.hermetic-run`
+with any value) is NOT safe on this host — a concurrent verification by another
+agent would be caught and the guard would go red for someone else's container.
+
+The reachable channel is the test's OWN repo: the verifier creates
+`refs/gk-verify/$RUN_ID/head` and `.../merge` in it (`:328-329`), and `RUN_ID` is
+the run directory's basename (`:327`).
+
+**The trap:** those refs are deleted during cleanup (`:897-898`), so a test that
+reads them AFTER the verifier exits finds nothing. That is fine here, because
+these two tests never let it exit — they interrupt it — and they already poll in
+a wait loop for the arm to appear. **Capture the run id inside that existing
+loop**, while the verifier is still alive, and use it after the interrupt.
+
 The TERM-ignoring arm still needs planting, and it can be, without any env knob:
 commit a **sentinel file into the subject tree** and guard the stub's hang on
 `[ -f /subject/<sentinel> ] && [ "$GATEKEEPER_VERIFY_ARM" = "B2" ]`. The tree
@@ -178,6 +195,15 @@ confirmed (M15, implemented and passing in both lanes). **D's is not.**
 * Thirteen tests rewritten, in a file inside the protected closure. Not small.
 * **B and D need a fixture that can supply two corpora and a sentinel commit.**
   That is new test scaffolding, not a one-line change.
+* **B carries an operational risk on a shared host, and I did not implement it
+  for that reason.** It works by making an arm hang on a TERM-ignoring
+  `while :; do sleep 30; done` and then relying on the cleanup path to kill it.
+  If cleanup is broken — which is the very thing the guard exists to detect — the
+  test leaves a hung container and a live process behind. On this machine, which
+  has been measured at load 276 with no free memory and is shared with other
+  agents, running a guard whose failure mode is "leak a container" is not a
+  decision to take unilaterally at the end of a session. It is the last item in
+  the suggested order for this reason as well as cost.
 * C partially exists already (M15).
 * A is the cheapest and closes four tests.
 
