@@ -56,6 +56,7 @@ from typing import Any, Dict, List, Mapping, Optional
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import _atomic_artefact  # noqa: E402
+import _corpus_location as _corpus  # noqa: E402  one seam for every corpus
 from _ppa import canonical_json as cj  # noqa: E402
 from _ppa import feasibility as feas  # noqa: E402
 
@@ -125,11 +126,93 @@ def _emit(out: Optional[str], doc: Dict[str, Any]) -> None:
         _atomic_artefact.write_json(out, doc, indent=2, sort_keys=True)
 
 
+#: --corpus, and the reason it exists (vibe-ic#1241, 2026-08-22).
+#:
+#: This gate was wired at an EXACT path, `$ROOT/benchmark-data/ppa/candidates.json`,
+#: in a directory that left this repository in v1.10.56. It exited 2 "candidates
+#: not found" under an exemption declaring that "no run in this repository has
+#: filed one yet". TWENTY-ONE are filed here, under
+#: `ppa-crosslayer/records/trials/*/candidates.json`.
+#:
+#: The corpus is identified by DECLARATION and never by filename, for the same
+#: reason as the contract and head-to-head corpora: a name-glob missed fifteen
+#: real head-to-head records in this tree and refused two of the checker's own
+#: reports as if they were records.
+_CANDIDATES_SCHEMA = "vibeic.ppa.candidates.v1"
+_SCANNED = "PPA candidate set(s)"
+_GATE = "PPA promotion feasibility"
+
+
+#: The filename is NOT how a candidate set is identified — it is only how an
+#: UNREADABLE one is kept from disappearing. See `corpus_candidate_sets`.
+_NAME_GLOB = "**/*candidates*.json"
+
+
+def corpus_candidate_sets(corpus: pathlib.Path) -> List[pathlib.Path]:
+    named = {x for x in corpus.glob(_NAME_GLOB) if x.is_file()}
+    out: List[pathlib.Path] = []
+    for path in sorted(x for x in corpus.glob("**/*.json") if x.is_file()):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            # UNREADABLE IS NOT ABSENT — a file that claims by its NAME to be a
+            # candidate set and cannot be parsed stays in the population and is
+            # adjudicated UNDETERMINED out loud, rather than being dropped as
+            # though it had never been filed.
+            if path in named:
+                out.append(path)
+            continue
+        if isinstance(doc, Mapping) and doc.get("schema") == _CANDIDATES_SCHEMA:
+            out.append(path)
+    return out
+
+
+def check_corpus(named: pathlib.Path, contract: Optional[str],
+                 no_waivers: bool) -> int:
+    corpus, origin = _corpus.resolve(named, gate=_GATE, announce=True)
+    if not corpus.is_dir():
+        return _corpus.refuse(_GATE, named, corpus, origin, False, _SCANNED,
+                              opt_in_flag=None)  # this gate offers no opt-in
+    paths = corpus_candidate_sets(corpus)
+    scanned = sum(1 for x in corpus.glob("**/*.json") if x.is_file())
+    print(f"ppa_feasibility_check --corpus {corpus}: {len(paths)} candidate "
+          f"set(s) found in {scanned} JSON document(s) scanned")
+    if not paths:
+        print(f"{MARK_CANNOT} VACUOUS: {corpus} carries no document declaring "
+              f"{_CANDIDATES_SCHEMA!r}, so no candidate was adjudicated. This "
+              f"is NOT a pass. rc=2.", file=sys.stderr)
+        return feas.RC_UNDETERMINED
+    argv_common: List[str] = []
+    if contract:
+        argv_common += ["--contract", contract]
+    if no_waivers:
+        argv_common += ["--no-waivers"]
+    rcs = [main(["--candidates", str(q)] + argv_common) for q in paths]
+    # A REFUSAL OUTRANKS AN UNDETERMINED OUTRANKS A PASS. `max()` would let an
+    # unadjudicated candidate set promote a refusal to "could not check", and
+    # adding a candidate set must never SUBTRACT a refusal.
+    refused = sum(1 for rc in rcs if rc == feas.RC_FAIL)
+    undet = sum(1 for rc in rcs if rc == feas.RC_UNDETERMINED)
+    worst = (feas.RC_FAIL if refused
+             else feas.RC_UNDETERMINED if undet else feas.RC_PASS)
+    print(f"ppa_feasibility_check --corpus {corpus}: {len(paths)} set(s), "
+          f"{refused} infeasible, {undet} undetermined, "
+          f"{len(paths) - refused - undet} feasible -> rc={worst}")
+    if refused:
+        print(f"REFUSED: {refused} of {len(paths)} candidate set(s) hold a "
+              f"candidate that may not be promoted.", file=sys.stderr)
+    return worst
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Hard promotion gate over the feasibility axes.")
-    ap.add_argument("--candidates", required=True,
+    ap.add_argument("--candidates",
                     help="JSON document with a `candidates` list")
+    ap.add_argument("--corpus", metavar="DIR",
+                    help="adjudicate every document declaring "
+                         f"{_CANDIDATES_SCHEMA} under DIR; exits 2 when the "
+                         "corpus is absent or carries none (vibe-ic#1241)")
     ap.add_argument("--contract", default=None,
                     help="JSON contract supplying required_views / limits")
     ap.add_argument("--json", default=None, help="report artefact path")
@@ -141,6 +224,14 @@ def main(argv=None) -> int:
         # argparse exits 2 on a usage error; the contract says a bad invocation
         # is 3, and 2 there would be indistinguishable from "not checked".
         return feas.RC_BAD_INVOCATION
+
+    if bool(args.corpus) == bool(args.candidates):
+        print(f"{MARK_CANNOT} give exactly one of --candidates or --corpus",
+              file=sys.stderr)
+        return feas.RC_BAD_INVOCATION
+    if args.corpus:
+        return check_corpus(pathlib.Path(args.corpus), args.contract,
+                            args.no_waivers)
 
     cand_doc = _load(args.candidates, "candidates")
     if isinstance(cand_doc, Mapping) and "__error__" in cand_doc:

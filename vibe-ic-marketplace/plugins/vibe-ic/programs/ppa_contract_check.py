@@ -102,6 +102,7 @@ from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
 from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import contract as C  # noqa: E402
 from _ppa import schema_validation as SV  # noqa: E402
+import _corpus_location as _corpus  # noqa: E402  one seam for every corpus (vibe-ic#1710)
 
 #: The plugin root is this file's grandparent; the schemas live beside
 #: `programs/`. Resolved from `__file__` so the program measures the tree it
@@ -195,9 +196,88 @@ def _apply(engine: Any, instance: Any, name: str,
     return rows
 
 
+#: --corpus, and the reason it exists (vibe-ic#1241, 2026-08-22).
+#:
+#: This gate was wired `--contract $ROOT/benchmark-data/ppa/contract.json` — an
+#: EXACT path, in a directory that left this repository in v1.10.56. It exited 2
+#: "absent" and examined nothing, under an exemption declaring that "no run in
+#: this repository has filed one yet". EIGHTY-TWO are filed here, under
+#: `ppa-e2e/records/**/contract.json` and `ppa-crosslayer/records/**/contract.json`.
+#: An exact path cannot find them, and one exact path could only ever have
+#: judged one of them.
+#:
+#: The corpus is identified by DECLARATION, never by filename: a document is a
+#: contract when its top-level `schema` is exactly `CONTRACT_SCHEMA`. Naming is
+#: how the head-to-head corpus walk came to miss fifteen real records and refuse
+#: two of its own reports, and that mistake is not repeated here.
+_CONTRACT_SCHEMA = C.CONTRACT_SCHEMA
+_SCANNED = "PPA contract document(s)"
+_GATE = "PPA measurement contract"
+
+
+#: The filename is NOT how a contract is identified — it is only how an
+#: UNREADABLE one is kept from disappearing. See `corpus_contracts`.
+_NAME_GLOB = "**/*contract*.json"
+
+
+def corpus_contracts(corpus: Path) -> List[Path]:
+    named = {x for x in corpus.glob(_NAME_GLOB) if x.is_file()}
+    out: List[Path] = []
+    for path in sorted(x for x in corpus.glob("**/*.json") if x.is_file()):
+        doc, reason = C.load_json(path)
+        if reason is not None:
+            # UNREADABLE IS NOT ABSENT. A file that claims by its NAME to be a
+            # contract and cannot be parsed stays in the population so this
+            # program says rc 2 about it out loud. Dropping it would be the
+            # gate deciding that a document it could not open is a document
+            # that was never there — the one substitution this whole family of
+            # checkers exists to refuse.
+            if path in named:
+                out.append(path)
+            continue
+        if isinstance(doc, dict) and doc.get("schema") == _CONTRACT_SCHEMA:
+            out.append(path)
+    return out
+
+
+def check_corpus(named: Path, schema_dir: Path) -> int:
+    corpus, origin = _corpus.resolve(named, gate=_GATE, announce=True)
+    if not corpus.is_dir():
+        return _corpus.refuse(_GATE, named, corpus, origin, False, _SCANNED,
+                              opt_in_flag=None)  # this gate offers no opt-in
+    paths = corpus_contracts(corpus)
+    scanned = sum(1 for x in corpus.glob("**/*.json") if x.is_file())
+    print(f"ppa_contract_check --corpus {corpus}: {len(paths)} contract(s) "
+          f"found in {scanned} JSON document(s) scanned")
+    if not paths:
+        print(f"[CANNOT CHECK] VACUOUS: {corpus} carries no document declaring "
+              f"{_CONTRACT_SCHEMA!r}, so nothing was validated. This is NOT a "
+              f"pass. rc=2.", file=sys.stderr)
+        return 2
+    rcs = [main(["--contract", str(q), "--schema-dir", str(schema_dir)])
+           for q in paths]
+    # A REFUSAL OUTRANKS AN UNDETERMINED OUTRANKS A PASS. `max()` would make 2
+    # the winning verdict and let one unreadable contract promote a refusal to a
+    # "could not check" — adding a document must never SUBTRACT a finding.
+    refused = sum(1 for rc in rcs if rc == 1)
+    undet = sum(1 for rc in rcs if rc == 2)
+    worst = 1 if refused else (2 if undet else 0)
+    print(f"ppa_contract_check --corpus {corpus}: {len(paths)} contract(s), "
+          f"{refused} refused, {undet} undetermined, "
+          f"{len(paths) - refused - undet} accepted -> rc={worst}")
+    if refused:
+        print(f"REFUSED: {refused} of {len(paths)} contract(s) do not hold.",
+              file=sys.stderr)
+    return worst
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    ap.add_argument("--contract", required=True)
+    ap.add_argument("--contract")
+    ap.add_argument("--corpus", metavar="DIR",
+                    help="validate every document declaring "
+                         f"{_CONTRACT_SCHEMA} under DIR; exits 2 when the "
+                         "corpus is absent or carries none (vibe-ic#1241)")
     ap.add_argument("--json", dest="json_out",
                     help="optional machine-readable report; nothing is "
                          "written unless this is given")
@@ -205,6 +285,12 @@ def main(argv=None) -> int:
     args, _rc = cli_exit.parse_or_refuse(ap, argv)
     if args is None:
         return _rc
+    if bool(args.corpus) == bool(args.contract):
+        print("[CANNOT CHECK] ppa_contract_check: give exactly one of "
+              "--contract or --corpus", file=sys.stderr)
+        return 2
+    if args.corpus:
+        return check_corpus(Path(args.corpus), Path(args.schema_dir))
 
     document, reason = C.load_json(Path(args.contract))
     if reason is not None:

@@ -1,6 +1,6 @@
 {
   "_doc": [
-    "Acknowledged reds — vibe-ic#1025. Adjudicated by",
+    "Acknowledged reds \u2014 vibe-ic#1025. Adjudicated by",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/gate_red_since_check.py.",
     "",
     "A row here grants NO leniency. The hygiene suite still exits 1 for every",
@@ -23,11 +23,19 @@
     "               and not wall time so that every reader of the same tree",
     "               computes the same age with no persisted run history.",
     "  max_commits  how many commits this red may survive before this file",
-    "               fails the landing gate. Required — an acknowledgement with",
+    "               fails the landing gate. Required \u2014 an acknowledgement with",
     "               no bound never comes due, which is the state being removed.",
     "  owner        the issue or PR that will close it.",
     "  why          why it is red, in one sentence, for the reader who finds",
     "               this file six weeks from now."
   ],
-  "acknowledged": []
+  "acknowledged": [
+    {
+      "gate": "PPA head-to-head records (cross-layer campaign)",
+      "since": "a00f53f2094812041c8aa6094f27058bc1b14ddd",
+      "max_commits": 200,
+      "owner": "vibe-ic#1241",
+      "why": "The gate now reads the 15 head-to-head records this repository actually holds and refuses one of them: ppa-crosslayer/records/h2h_F.json declares tuned_by_this_project:true on its own BASELINE, so the record behind the cross-layer lane's headline number is a within-project ranking and cannot carry a head-to-head claim. The finding is real and belongs to the ppa-crosslayer lane; it is acknowledged rather than wired around, and it closes when that record is either relabelled as a within-project comparison or re-measured against an untuned baseline."
+    }
+  ]
 }
