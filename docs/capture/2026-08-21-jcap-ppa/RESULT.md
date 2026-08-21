@@ -337,6 +337,13 @@ hand. The one it does not name emits **3 of 3 records the canonical consumer
 refuses** — `BAD_METRIC_NAME`, and `SCOPE_INCOMPLETE` and `NO_UNIT` behind it —
 on this tree, today.
 
+*Landed during this branch:* `programs/generated_test_list_min_guard.py` checks a
+generated test list against a **minimum** and a resolvable path set rather than
+against emptiness. That is a real improvement on "not empty" and it is precisely
+the floor this record says is not enough — a minimum cannot see a list that should
+hold 40 and holds 39. Build on that file: keep its resolvable-path arm and replace
+the floor with declared-versus-discovered equality.
+
 **(o)** yes. **(d)** yes, and in the direction a floor can never see — an entry
 left behind for a member since deleted.
 
@@ -1049,6 +1056,15 @@ my attempt to count quantified docstring sentences matched a pattern literal
 inside a regex and reported a "document" that does not exist. That is the tenth
 measurement-apparatus error of this batch, so the record ships with **one
 confirmed instance rather than a number I could not defend.**
+*Landed during this branch, and it narrows this record without closing it:*
+`programs/emitter_population_pin_check.py` binds a stated population to its source
+in two places — an emitted script's literal denominator against the sites that
+increment the counter, and a test's pinned ratio against the emitter. Its measured
+defect is a third repair added to a post-route block where the emitter moved to 3
+and the test stayed at 2. This record's shape, executed. It does not reach a module
+docstring, which is the text this record is about; the mechanism is now there to
+copy rather than invent.
+
 **(o)** yes. **(d)** yes — any docstring that quantifies a population it does not
 name is the same claim waiting to expire.
 
