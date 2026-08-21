@@ -1,8 +1,21 @@
 # j63b — the remaining 63x8 reds, re-enumerated, classified and three of them closed
 
-Measured tree: `origin/main` @ `a00f53f20` [v1.11.66] — RE-FETCHED at the end
-of this work and still the head, so nothing here is measured against a main that
-has since moved. Fresh `git worktree`,
+Measured tree: `origin/main` @ `a00f53f20` [v1.11.66]. **Main moved 30 commits
+during this work, to `81cd5321b`** — an earlier revision of this line claimed it
+was still the head, and that claim expired while it stood. The branch is
+REBASED onto `81cd5321b` and every load-bearing figure re-verified there:
+
+```
+d8_missing_caught                347 passed        the headline survives
+flow_manifest_declaration_parity  12 passed        reds 16/17 still closed
+d3_manifest_declaration_parity    13 passed        the second parity gate
+63x8_ledger                       52 passed
+63x8_coverage      2 failed, 28 passed             only reds 14/15, owned elsewhere
+d3_outputs_produced   6 failed, 52 passed, 61 s    unchanged
+mutation_ledger       3 failed, 121 passed         unchanged
+```
+
+Fresh `git worktree`,
 `PYTHONDONTWRITEBYTECODE=1`, corpus pointer UNSET, one pytest process per file.
 Host load recorded per run, because four of the seventeen turn on it.
 
@@ -1007,6 +1020,42 @@ the window itself, which moved the outcome immediately and settled it.
 </details>
 
 Nothing from any of the three probes was committed.
+
+## The repo's own landing gate, run against this branch — and what it still says
+
+Self-auditing found six defects in this report. Running
+`gatekeeper_review.py --base origin/main --head HEAD --role core-agent` found
+one none of them could: **main had moved 30 commits**, so this file's freshness
+claim had expired while it stood. Rebased and re-verified (above). Then squashed
+to ONE commit, which cleared two further blockers — `landing_is_one_commit` and
+`collateral_revert`, the latter being the pre-push hook correctly refusing a
+push in which one commit rewrote another's lines in this very file.
+
+**4 blockers -> 2, and both remaining are for the lander, not defects here:**
+
+* `version_bump_monotonic_check` — "version not bumped: 1.11.68 == 1.11.68".
+  Correct: the brief forbids bumping, the lander assigns at merge.
+* `repo_hygiene_gates` — first ERRORed as "no published-corpus checkout". Given
+  one at benchmark-data's PUBLISHED head (`bcf2f94`, cells withdrawn — not the
+  stale clone used elsewhere in this report), it now ERRORs differently:
+  *"15 wiring error(s) … the set certifies nothing: parallel coverage: arm A
+  shard 0: PROGRESS_PROTOCOL_INCOMPLETE: attestation progress ended before
+  assigned gates completed … outcome=stalled, rc=199"*.
+
+**That second one is not a declaration defect and is not attributable to this
+change** — measured: the diff is three files, and the only one that even
+mentions a hygiene gate is THIS REPORT, in prose. Nothing here declares a gate.
+What the error actually names is `outcome=stalled, rc=199` — **the same
+semantic-progress stall this branch spent its length characterising, appearing
+independently in the hygiene tier.** The tier starves itself the way the coverage
+file does: load went from 30 to 65 during its own run.
+
+**What that does NOT establish, stated because the distinction is the point of
+this file:** a quiet-box control was attempted twice and could not be obtained,
+precisely because the tier loads the box itself. So "not attributable" rests on
+the diff's content and the error's own wording, **not on a control run**. A
+lander with a quiet machine should re-run it; if it still ERRORs there, the
+finding is the hygiene tier's own and is older than this branch.
 
 ## Landing note — this branch is conflict-neutral, and there is ONE trap
 
