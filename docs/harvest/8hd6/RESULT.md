@@ -360,7 +360,6 @@ main's. Every sha256 is the first 16 hex of `sha256sum` over `git show <rev>:<pa
 | 6 | gitlinks cannot be hashed by `git show`, so both sides read as empty and compare equal | inventoried all 100 gitlinks and checked for populated submodule trees | a submodule-only difference called identical |
 | 7 | **verdicts go stale: this host is live** | re-ran the whole harvest end to end and diffed it against the first pass | **a DROP that had become a KEEP** — see [L] |
 | 8 | "these three trees are identical" also goes stale | re-read the tree OIDs after the churn | one tree deleted as a duplicate of two that had moved on without it |
-
 | 9 | the report's own hand-written counts drifted from its data | `bin/audit_report.sh` checks every number in the prose against the TSV | "12 of them KEEP" where the data said **11**, plus two counts stale after a re-derivation |
 | 10 | two SHIPPED scripts hardcoded the `/tmp` scratchpad a reboot clears, and would have emitted an **empty file** rather than failing | checked the handoff for durability instead of assuming it | the next agent runs `report.sh`, gets 0 rows, and reads it as "nothing to harvest" |
 | 11 | the handoff script printed a plain `DROP` for a tree whose committed content is landed but whose **index or working tree holds work on no ref** — the caveat was only a footnote | reconciled a fresh end-to-end run against the shipped derivation; the only delta was exactly those rows | the next agent deletes `_v1123`, which holds **PR-1123's entire staged tree**, on the strength of a row that says DROP |
