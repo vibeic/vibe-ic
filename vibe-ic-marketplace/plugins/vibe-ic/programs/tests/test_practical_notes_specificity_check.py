@@ -1,7 +1,7 @@
 """Tests for practical_notes_specificity_check.py.
 
 Fixture tokens (chip / vendor / SKU / project codenames) are loaded at
-runtime from ``plugins/vibe-ic/tests/chip_deny_list.txt`` so this
+runtime from ``plugins/vibe-ic/programs/tests/chip_deny_list.txt`` so this
 source file itself stays free of the private tokens it is exercising.
 
 Classification heuristic (token-agnostic):
@@ -32,6 +32,12 @@ _DENY_PATH = (
     Path(__file__).resolve().parent.parent.parent
     / "tests" / "chip_deny_list.txt"
 )
+
+# The NDA PDK/process codename is no longer plaintext in the deny list; pull it
+# (decoded, at runtime) from the encoded store so this test carries no literal.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import _commercial_pdk as _cpdk  # noqa: E402
+_PDK_SKU = next((t for t in _cpdk.nda_tokens() if t.lower().startswith("m18")), "")
 
 _CODENAME_TOKEN_RE = re.compile(r"^[a-z]{2,5}\d{3,}[a-z]*$")  # e.g. "xx3616"
 
@@ -245,7 +251,7 @@ def _build_hard_rule_matrix() -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     if PROJECT_CODENAME:
         out.append((f"Project {PROJECT_CODENAME} baseline.", "project_codename_"))
-    out.append(("PDK m18e80pm180su corner SS.", "specific_pdk_codename"))
+    out.append((f"PDK {_PDK_SKU} corner SS.", "specific_pdk_codename"))
     out.append(("Carrier ACC_ID idle high.", "chip_specific_pin"))
     out.append(("v068 fresh-agent regression.", "project_version_codename"))
     if TESTER_NAME:

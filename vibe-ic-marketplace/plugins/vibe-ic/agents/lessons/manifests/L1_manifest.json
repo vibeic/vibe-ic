@@ -101,7 +101,7 @@
     },
     {
       "path": "overview.purpose",
-      "benchmark_value": "Digital clone of BENCHMARK_IC_ reference power throttling IC. Implements single-wire ID protocol (single-wire ID protocol) single-wire protocol over ID_BUS with CRC-8 framing. Supports OTP programming (EO0128X8 macro), OCP/OVP/UVLO protection, CC line control, oscillator trim, and TestMode for production.",
+      "benchmark_value": "Digital clone of BENCHMARK_IC_ reference power throttling IC. Implements single-wire ID protocol (single-wire ID protocol) single-wire protocol over ID_BUS with CRC-8 framing. Supports OTP programming (OTP128X8 macro), OCP/OVP/UVLO protection, CC line control, oscillator trim, and TestMode for production.",
       "type": "str",
       "category": "product_brief",
       "pm_question_expert": "IC purpose / one-line description?",
