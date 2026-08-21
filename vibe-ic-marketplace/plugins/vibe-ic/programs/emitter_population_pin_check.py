@@ -559,8 +559,14 @@ def named_program(tree: ast.AST, stems: Set[str]) -> Optional[str]:
     COULD NOT READ indistinguishable from one that names no program, so an
     unparseable test left the guard's reach silently. The caller parses, reports
     what it could not parse, and passes the tree. The second is cost -- CHECK B
-    walks every test file in the tree and the parse is most of this guard's
-    runtime, so parsing twice to ask two questions is the wrong shape.
+    walks every test file in the tree and the parse is the single largest share
+    of this guard's runtime, so parsing twice to ask two questions is the wrong
+    shape.
+
+    MEASURED, because "most" is what this said until it was checked and "most"
+    means a majority: 3.88s of 9.40s CPU over 3547 calls, so 41% -- the biggest
+    single line item, not more than everything else together. The argument for
+    parsing once is unchanged at 41%; the word was.
     """
     found: Set[str] = set()
     for n in ast.walk(tree):
