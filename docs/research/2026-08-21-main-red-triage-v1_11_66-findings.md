@@ -3369,6 +3369,49 @@ than a constraint I discovered. **Named, measured, and handed over — with the 
 blocker withdrawn so the next person is not deterred by it.**
 
 
+## M60 — the "known `magic` flake" is NOT a flake. 10/10 deterministic, and the product is right.
+
+M36 declined to measure this on the grounds that *"a ratio taken now would
+describe tonight rather than the run the row refers to"*. **That reason does not
+survive M47**, where I re-ran other reds for liveness on exactly the basis that
+describing tonight is what a liveness sweep is for. The decline was inconsistent,
+and the test costs 1.31 s.
+
+**Measured, 10 repeats:**
+
+```
+10/10 failed — the SAME id every time: test_a_pinless_abstract_is_never_staged
+```
+
+**Not a flake. Deterministic.** The suspicion M47 raised from the 1.31 s runtime
+was right.
+
+**And the failure is the good kind:**
+
+```
+assert ok is False                     ← PASSES. The guard DOES reject.
+assert "NO `PIN` block" in why
+  → why == 'magic did not complete: watchdog reported launch_error after 0s'
+```
+
+`magic` cannot launch on this host. The checker **still rejects the artefact**,
+and reports **tool-absence** rather than inventing the pinless-abstract finding it
+could not reach. **That is rule 9 honoured by the product**, in the same shape as
+the CI lane's `RC_CANNOT_MEASURE`: "I could not look" is kept distinct from "I
+looked and it was clean".
+
+**So the correct disposition is neither "flake" nor "defect":** it is an
+environment-dependent deterministic red — the test asserts the substantive reason
+on a host where the tool cannot launch, so the reason path is unreachable. Same
+family as the 12 IMAGE-ONLY reds.
+
+**Two label corrections in one line.** "the known `magic` flake" is right about
+`magic` and wrong about `flake`, and the wrong half is the one that mattered: a
+flake invites re-running until it passes, while a deterministic environment red
+invites fixing the environment or the test. **I carried that label for the whole
+engagement because it sounded like an explanation.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3458,7 +3501,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — an acquisition, not engineering.** | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
-| **`magic` / 0.8 s lease** (2 reds) | the ratios this document claims to record and does not (M36). Deliberately not re-measured — load-sensitive, shared host. | **an honest gap** |
+| **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. The 0.8 s lease one is still unmeasured (72 s/run). | **mislabelled; `magic` half characterised** |
 | **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. | **wiring decision** |
 | **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M58, MEASURED: the analyser does not propagate stripped status through FOR-LOOP TARGETS.** Reassignment and subscripting are handled; iteration is not — and both sites reach the scan via `for decl in …split(',')` / `for line in …splitlines()`. The code is correct; the gate is a false positive here. Likely affects a large share of the 175, so **the 170 baseline partly counts an analyser limit**. Fix belongs in `stripped_locals` (`ast.For` targets), NOT in the subjects. | **gate false positive, mechanism measured** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
