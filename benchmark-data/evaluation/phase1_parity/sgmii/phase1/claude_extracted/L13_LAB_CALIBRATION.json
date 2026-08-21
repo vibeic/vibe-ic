@@ -1,5 +1,0 @@
-{
-  "ic_name": "Serial Gigabit Media Independent Interface (SGMII)",
-  "lab_calibration": "SerDes bring-up: TX de-emphasis / RX equalization and CDR lock; eye-diagram margin at 1.25 GBd; comma-lock verification.",
-  "applicable": true
-}

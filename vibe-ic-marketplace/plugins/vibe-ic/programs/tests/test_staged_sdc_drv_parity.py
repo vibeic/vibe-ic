@@ -17,7 +17,18 @@ of a 29.3 ns arrival on a 10 ns clock.
   1. absent limits are SUPPLIED from the ACTIVE liberty;
   2. a design-DECLARED limit is NEVER overridden or relaxed;
   3. a liberty declaring no limit yields NO fabricated constraint (§4.05);
-  4. a fanout cap is supplied only when the DESIGN's OWN L9 declares one;
+  4. a fanout cap is supplied from, in order: the DESIGN's OWN L9 declaration,
+     else the RTL replication bound, else the ACTIVE liberty's own
+     `default_max_fanout` — added 2026-08-07 (spm x ihp-sg13g2) after
+     `default_max_transition`/`default_max_capacitance` above turned out to
+     already read the liberty unconditionally while `max_fanout` did not, so
+     a PDK whose library declares a real `default_max_fanout` but whose L9
+     declares no cap (and which librelane's own shipped pdk_compat.py has no
+     default for either — that table only covers sky130*/gf180mcu*) silently
+     let CTS build a leaf buffer past the library's own characterised limit;
+     post-route sign-off then measured a REAL DRV violation nothing upstream
+     had a target to prevent. Reading the library's own declared ceiling is
+     not fabricating one (§4.05 distinguishes "invented" from "measured");
   5. the design's own clock / exceptions are preserved verbatim.
 
 Every liberty below is SYNTHETIC with DRV numbers matching no real PDK, so a
@@ -165,8 +176,10 @@ def test_pin_cap_only_liberty_supplies_cap_but_not_slew(tmp_path):
     assert info["added_max_capacitance"] == 0.11
 
 
-# ── 4. fanout cap only when the DESIGN declares one ──────────────────────────
-def test_no_fanout_cap_when_design_declares_none(tmp_path):
+# ── 4. fanout cap: design declaration wins, liberty default is the fallback ──
+def test_no_fanout_cap_when_neither_design_nor_liberty_declares_one(tmp_path):
+    """`_LIB_WITH_DRV` declares slew/cap but no `default_max_fanout` — nothing
+    real exists to fall back to, so still no fabricated cap (§4.05)."""
     lib = _lib(tmp_path, _LIB_WITH_DRV)
     project = tmp_path / "proj"
     project.mkdir()
@@ -174,6 +187,54 @@ def test_no_fanout_cap_when_design_declares_none(tmp_path):
                                          project=project)
     assert "set_max_fanout" not in out
     assert info["added_max_fanout"] is None
+
+
+def test_fanout_cap_falls_back_to_liberty_default_when_design_declares_none(
+        tmp_path):
+    """spm x ihp-sg13g2, 2026-08-07: a library that DOES declare
+    `default_max_fanout` supplies it when the design's own L9/RTL declare
+    none — the same fallback slew/cap already had. The value (17) matches no
+    real PDK, per this file's own convention."""
+    lib = _lib(tmp_path, _LIB_WITH_DRV.replace(
+        "default_max_capacitance : 0.23 ;",
+        "default_max_capacitance : 0.23 ;\n  default_max_fanout : 17 ;"))
+    project = tmp_path / "proj"
+    project.mkdir()
+    out, info = R._ensure_staged_sdc_drv(_DESIGN_SDC_NO_DRV, lib,
+                                         project=project)
+    assert "set_max_fanout 17" in out, out
+    assert info["added_max_fanout"] == 17
+
+
+def test_design_declared_fanout_still_wins_over_liberty_default(tmp_path):
+    """A design/L9-declared fanout cap must never be relaxed by the liberty's
+    own (looser or tighter) default — same non-override guarantee as slew/cap,
+    now also proven for the liberty-fallback tier specifically."""
+    lib = _lib(tmp_path, _LIB_WITH_DRV.replace(
+        "default_max_capacitance : 0.23 ;",
+        "default_max_capacitance : 0.23 ;\n  default_max_fanout : 17 ;"))
+    out, info = R._ensure_staged_sdc_drv(_DESIGN_SDC_WITH_DRV, lib)
+    assert "set_max_fanout 12" in out
+    assert "set_max_fanout 17" not in out
+    assert info["added_max_fanout"] is None
+
+
+def test_liberty_max_fanout_is_read_by_liberty_drv_limits(tmp_path):
+    """Unit-level: `_liberty_drv_limits` itself exposes the parsed value and
+    its provenance, independent of the SDC-assembly caller above."""
+    lib = _lib(tmp_path, _LIB_WITH_DRV.replace(
+        "default_max_capacitance : 0.23 ;",
+        "default_max_capacitance : 0.23 ;\n  default_max_fanout : 17 ;"))
+    drv = R._liberty_drv_limits(lib)
+    assert drv["max_fanout"] == 17
+    assert drv["fanout_source"] and "default_max_fanout" in drv["fanout_source"]
+
+
+def test_liberty_without_fanout_default_reports_none(tmp_path):
+    lib = _lib(tmp_path, _LIB_WITH_DRV)
+    drv = R._liberty_drv_limits(lib)
+    assert drv["max_fanout"] is None
+    assert drv["fanout_source"] is None
 
 
 def test_project_arg_is_optional_and_never_raises(tmp_path):
@@ -228,3 +289,47 @@ def test_step_pnr_wires_the_parity_pass_on_the_staged_branch():
         "parity pass — a design shipping its own SDC would reach PnR with no "
         "slew/cap target and repair_design would leave the slews unrepaired")
     assert "sdc_drv_parity.json" in staged_branch
+
+
+def test_step_pnr_wires_the_fanout_cap_into_cts_clustering():
+    """spm x ihp-sg13g2, 2026-08-07: `set_max_fanout` reaching the SDC is NOT
+    enough — MEASURED live (real PnR, real container): a staged SDC carrying
+    `set_max_fanout 8` still let `clock_tree_synthesis` build a leaf buffer
+    fanning out to 16, because CTS's own sink clustering is governed only by
+    `-sink_clustering_size` passed to the command, not by the loaded SDC. The
+    defect this guards is the same shape as the one above — a missing call —
+    one level further down the same flow. `cts_cluster_size=` must consult
+    `_cts_fanout_target`, and both the staged and auto-SDC branches must set
+    it; a refactor that silently drops either regresses to "the SDC number
+    exists but nothing acts on it for CTS.\""""
+    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
+    step_pnr_src = src.split("def step_pnr(", 1)[1].split("\ndef _decap_route_short_guard(", 1)[0]
+
+    assert "cts_cluster_size=(_rf_map.get(\"cts_cluster_size\")\n" in step_pnr_src \
+        or "_rf_map.get(\"cts_cluster_size\")\n                          or _cts_fanout_target)" in step_pnr_src, (
+        "step_pnr no longer falls back to _cts_fanout_target for "
+        "cts_cluster_size — a design/liberty fanout cap would stop reaching "
+        "clock_tree_synthesis's -sink_clustering_size")
+
+    staged = step_pnr_src.split(
+        "project_sdc_silicon and project_sdc_silicon.is_file()")[1]
+    staged_branch = staged.split("_auto_die_requested")[0]
+    assert "_cts_fanout_target" in staged_branch, (
+        "the staged-SDC branch no longer sets _cts_fanout_target")
+
+    assert "_build_auto_silicon_sdc(" in step_pnr_src
+    auto_region = step_pnr_src.split("_build_auto_silicon_sdc(", 1)[1][:2000]
+    assert "_cts_fanout_target" in auto_region, (
+        "the auto-SDC branch no longer sets _cts_fanout_target — a design "
+        "with no staged constraints/*.sdc would get a liberty-derived slew/"
+        "cap DRV but silently lose the equivalent fanout cap for CTS")
+
+
+def test_cts_fanout_target_is_not_fabricated_when_nothing_declares_one(tmp_path):
+    """§4.05 for the CTS-clustering fallback specifically: with no design/L9/
+    RTL declaration and a liberty declaring no default_max_fanout,
+    `_liberty_drv_limits(...)["max_fanout"]` — the value `_cts_fanout_target`
+    ultimately falls back to — must stay None, not a guessed number."""
+    lib = _lib(tmp_path, _LIB_NO_DRV)
+    drv = R._liberty_drv_limits(lib)
+    assert drv["max_fanout"] is None

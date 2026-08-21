@@ -1,0 +1,1036 @@
+{
+  "schema": "vibeic.ppa.power.v1",
+  "scenario": "diagnostic",
+  "stage": "post_route_extracted",
+  "activity": {
+    "declared_mode": "vectorless_sdc",
+    "declared_basis": "VECTORLESS",
+    "annotated_pin_activities": null,
+    "read_failures": [],
+    "evidence": [
+      {
+        "kind": "declared_mode",
+        "line": 12,
+        "text": "POWER_ANALYSIS_MODE: vectorless_sdc"
+      }
+    ],
+    "basis": "VECTORLESS",
+    "corroboration": "NO_CORROBORATION_NEEDED",
+    "reason": "vectorless is the tool default; there is nothing to read"
+  },
+  "metrics": [
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.internal_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Sequential"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.000194,
+      "value_raw": "1.94e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.switching_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Sequential"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 5.76e-05,
+      "value_raw": "5.76e-05",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.leakage_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Sequential"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 9.45e-10,
+      "value_raw": "9.45e-10",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.total_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Sequential"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.000252,
+      "value_raw": "2.52e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.internal_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Combinational"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 9.31e-05,
+      "value_raw": "9.31e-05",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.switching_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Combinational"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.000162,
+      "value_raw": "1.62e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.leakage_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Combinational"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 1.49e-09,
+      "value_raw": "1.49e-09",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.total_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Combinational"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.000255,
+      "value_raw": "2.55e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.internal_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Clock"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 9.11e-05,
+      "value_raw": "9.11e-05",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.switching_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Clock"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.000102,
+      "value_raw": "1.02e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.leakage_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Clock"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 2.2e-09,
+      "value_raw": "2.20e-09",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.total_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Clock"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.000193,
+      "value_raw": "1.93e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.internal_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Macro"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0,
+      "value_raw": "0.00e+00",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.switching_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Macro"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0,
+      "value_raw": "0.00e+00",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.leakage_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Macro"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0,
+      "value_raw": "0.00e+00",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.total_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Macro"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0,
+      "value_raw": "0.00e+00",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.internal_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Pad"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0,
+      "value_raw": "0.00e+00",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.switching_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Pad"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0,
+      "value_raw": "0.00e+00",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.leakage_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Pad"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0,
+      "value_raw": "0.00e+00",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.total_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Pad"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0,
+      "value_raw": "0.00e+00",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.internal_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Total"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.000378,
+      "value_raw": "3.78e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.switching_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Total"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.000321,
+      "value_raw": "3.21e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.leakage_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Total"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 4.64e-09,
+      "value_raw": "4.64e-09",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "power.total_w",
+      "status": "MEASURED",
+      "unit": "W",
+      "scope": {
+        "stage": "post_route_extracted",
+        "scenario": "diagnostic",
+        "activity_basis": "VECTORLESS",
+        "liberty": null,
+        "tool": "opensta",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "mode": "functional",
+        "group": "Total"
+      },
+      "source": {
+        "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+        "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+        "tool": "opensta",
+        "tool_version": "2.7.0",
+        "liberty": null,
+        "netlist": null,
+        "parser": "_ppa/power.py",
+        "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+      },
+      "value": 0.0007,
+      "value_raw": "7.00e-04",
+      "provenance": {
+        "activity_corroboration": "NO_CORROBORATION_NEEDED",
+        "activity_reason": "vectorless is the tool default; there is nothing to read",
+        "declared_mode": "vectorless_sdc",
+        "liberty_pvt_stem": null,
+        "liberty_pvt_gaps": {
+          "process": "no_liberty_path",
+          "voltage_v": "no_liberty_path",
+          "temperature_c": "no_liberty_path"
+        }
+      }
+    }
+  ],
+  "split_consistency": {
+    "status": "DERIVED",
+    "formula": "internal_w + switching_w + leakage_w",
+    "sum_w": 0.00069900464,
+    "total_w": 0.0007,
+    "relative_error": 0.0014219428571428927,
+    "tolerance": 0.02,
+    "consistent": true
+  },
+  "group_sum_consistency": {
+    "status": "DERIVED",
+    "formula": "sum(group.total_w)",
+    "sum_w": 0.0007000000000000001,
+    "total_w": 0.0007,
+    "relative_error": 1.5488602464078636e-16,
+    "tolerance": 0.02,
+    "consistent": true
+  },
+  "source": {
+    "path": "/home/reyerchu/_jxlayer/records/trials/w01/diag/power_postroute.rpt",
+    "sha256": "sha256:1363c2eadc3296b730f7a58bea79aa79bc5df631e4de89cacce0d0199a5813f0",
+    "tool": "opensta",
+    "tool_version": "2.7.0",
+    "liberty": null,
+    "netlist": null,
+    "parser": "_ppa/power.py",
+    "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+  },
+  "_authored_by": "cross-layer lane DIAGNOSTIC, not a flow artefact. The shipped phase-3 power session links phase2/stage2/synth/spm_synth.v and reads no SPEF, so its number is pre-place-and-route while its own report header says post-PnR. Same tool / liberty / SDC as that session; the only differences are the ROUTED netlist and that a SPEF is read."
+}

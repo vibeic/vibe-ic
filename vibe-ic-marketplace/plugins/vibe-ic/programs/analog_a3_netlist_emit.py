@@ -149,6 +149,18 @@ _ROLE_TOKENS = {
 # Within a role, prefer the most ordinary flavour: a plain core-voltage device
 # over a high-voltage / low-Vt / isolated variant. Deterministic and stated,
 # so the choice is auditable instead of alphabetical.
+#
+# WHERE THIS RANKING RUNS, AND WHERE IT DOES NOT (vibe-ic#903). It ranks the
+# REGISTRY's declared `device_models` — the fallback branch of
+# `resolve_role_models`. A role the deck-context resolver already elected does
+# NOT come through here, and a family whose libs are PARSED (the only kind that
+# can ship a high/low-voltage split) resolves every role that way. So until
+# #903 the sentence above described a rule that never ran for the families it
+# was written for: `"hv_"` sat in `_ROLE_AVOID` while a high-voltage device was
+# what got bound. The preference is now ALSO applied at the election site
+# (`analog_pdk_deck_context.device_flavour_rank`), structurally, so the two
+# paths agree; `test_issue903_device_flavour_election` holds them to that by
+# feeding THIS tuple to THAT ranker rather than restating either list.
 _ROLE_PREFER = {
     "nmos": ("01v8", "03v3", "lv_"),
     "pmos": ("01v8", "03v3", "lv_"),
@@ -220,6 +232,117 @@ def block_entries(project: Path) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     return ([], None)
 
 
+# ── the design's stated voltage domains (vibe-ic#903, second half) ─────────
+#
+# THE SEAM #903's SCOPE HALF NEEDED, AND WHY IT IS THIS ONE. The election was
+# chip-global because `resolve_pdk_context` had no way to tell one block from
+# another. The missing thing was never a parameter — it was a DOMAIN the design
+# states. It states one already: an A1 `spec.json` carries the block's supply
+# and terminal voltages WITH THEIR UNITS, because every other consumer needs
+# them. So the domain is DISCOVERED from the specs the design already wrote,
+# not declared a second time in a field someone has to remember to fill.
+#
+# WHAT IS READ: every spec row whose UNIT is a volt unit — under either key
+# spelling this pipeline produces, see `_UNIT_KEYS`; the block's domain is the
+# HIGHEST voltage any of them states, over every numeric field on the row.
+# Highest, because a device must survive the worst case its own block puts
+# across it — that is the question a flavour answers.
+#
+# WHAT `elevated` MEANS: above the LOWEST domain the design declares across its
+# blocks. Relative, not absolute, because "elevated" is not a property of a
+# number — 1.8 V is the core of one design and the elevated rail of the next.
+# A design whose blocks all state the same voltage has no elevated block and
+# elects exactly as it did before.
+#
+# THE UNITS ARE SI, NOT A FAMILY. This table is a unit vocabulary in the same
+# category as `_ROLE_TOKENS`' nfet/pmos — no vendor, SKU or node literal, and
+# nothing here enumerates a PDK's families: those are DISCOVERED by parsing.
+_VOLT_UNITS = {"v": 1.0, "volt": 1.0, "volts": 1.0,
+               "mv": 1e-3, "millivolt": 1e-3, "millivolts": 1e-3,
+               "kv": 1e3, "kilovolt": 1e3, "kilovolts": 1e3}
+
+
+# BOTH SPELLINGS ARE REAL, measured on this tree: `analog_a1_spec_emit` writes
+# `unit` (singular) and the `analog-spec-extract` skill writes `units`. Reading
+# one of them would have made the domain discoverable for half the pipeline and
+# invisible for the other half — the shape of gap that reads as "this design
+# states no domain" when it states one.
+_UNIT_KEYS = ("units", "unit")
+
+
+def _unit_scale(units: Any) -> Optional[float]:
+    """The volts-per-unit of a spec row's unit, or None when the row is not a
+    voltage at all."""
+    u = str(units or "").strip().lower().rstrip(".")
+    return _VOLT_UNITS.get(u)
+
+
+def _row_unit_scale(row: Dict[str, Any]) -> Optional[float]:
+    """The volts-per-unit of a spec ROW, under either key spelling."""
+    for key in _UNIT_KEYS:
+        scale = _unit_scale(row.get(key))
+        if scale is not None:
+            return scale
+    return None
+
+
+def spec_voltage(spec: Dict[str, Any]) -> Optional[float]:
+    """The HIGHEST voltage a block's spec STATES, in volts, or None when it
+    states none. Discovered from the rows' UNIT (either spelling — see
+    `_UNIT_KEYS`), never from a list of blessed spec NAMES: a design is free to
+    call its supply anything."""
+    best: Optional[float] = None
+    rows = spec.get("specs") if isinstance(spec, dict) else None
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        scale = _row_unit_scale(row)
+        if scale is None:
+            continue
+        for v in row.values():
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
+            volts = float(v) * scale
+            if best is None or volts > best:
+                best = volts
+    return best
+
+
+# The synthetic key `block_voltage_domains` reports the design's core domain
+# under. Named rather than inlined so it is greppable, and so the one way it
+# could go wrong — a block actually called this — is visible instead of latent.
+CORE_VOLTS_KEY = "_core_volts"
+
+
+def block_voltage_domains(project: Path, entries: List[Dict[str, Any]]
+                          ) -> Dict[str, Any]:
+    """{block name: VoltageDomain} for every declared block, plus the design's
+    core (lowest stated) domain under `CORE_VOLTS_KEY`. A block named that
+    would shadow it; nothing else in the tree would, and the shadowing costs a
+    reader the core value, not a block its domain.
+
+    A block whose spec states no voltage — and every block of a design that
+    states none anywhere — gets `VoltageDomain()`, which every ranker below
+    treats as "not stated" and resolves chip-globally, exactly as before."""
+    import analog_pdk_deck_context as _apdc
+    volts: Dict[str, Optional[float]] = {}
+    for entry in entries:
+        name = str(entry.get("name") or entry.get("block")
+                   or entry.get("type"))
+        spec = _read_json(project / _CANONICAL_ANALOG / name / "spec.json")
+        volts[name] = spec_voltage(spec) if isinstance(spec, dict) else None
+    stated = [v for v in volts.values() if v is not None]
+    core = min(stated) if stated else None
+    out: Dict[str, Any] = {CORE_VOLTS_KEY: core}
+    for name, v in volts.items():
+        out[name] = _apdc.VoltageDomain(
+            volts=v,
+            elevated=bool(v is not None and core is not None and v > core))
+    return out
+
+
 def spec_values(spec: Dict[str, Any]) -> Dict[str, float]:
     out: Dict[str, float] = {}
     specs = spec.get("specs")
@@ -249,20 +372,65 @@ def _registry_entry(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
     return None, {}
 
 
+# vibe-ic#903 — the two paths a role's model can be bound by. Named so the
+# artefact can say WHICH ONE bound each role instead of leaving it to be
+# inferred from which branch happened to fire.
+BOUND_BY_DECK_CONTEXT = "deck_context"
+BOUND_BY_REGISTRY = "registry"
+
+
 def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
-                        ctx_device_map: Dict[str, str]
-                        ) -> Tuple[Dict[str, str], List[str]]:
-    """{role: model name} for the resolved family, plus the roles that could
-    NOT be resolved. Prefers whatever the deck-context resolver already
-    elected, then falls back to the registry's declared device list. A role
-    that resolves to nothing is reported, never substituted."""
+                        ctx_device_map: Dict[str, str],
+                        domain: Optional[Any] = None,
+                        ) -> Tuple[Dict[str, str], List[str], Dict[str, str]]:
+    """{role: model name} for the resolved family, the roles that could NOT be
+    resolved, and {role: which path bound it} (BOUND_BY_*). Prefers whatever
+    the deck-context resolver already elected, then falls back to the
+    registry's declared device list. A role that resolves to nothing is
+    reported, never substituted.
+
+    vibe-ic#903 — WHY THE THIRD RETURN VALUE EXISTS. The `_ROLE_PREFER` /
+    `_ROLE_AVOID` ranking below runs ONLY on the registry branch. Taking the
+    deck context's election verbatim is correct — that resolver now applies the
+    same preference at its own election site, over the family's PARSED
+    candidates, which is the only place it can see them — but the split was
+    invisible in the artefact, so a comment claiming an auditable preference
+    and a binding chosen by name order were indistinguishable to a reader.
+
+    vibe-ic#903, SECOND HALF — `domain`. The deck-context branch is already
+    scoped to the block's stated domain by the time it gets here. The REGISTRY
+    branch below is not, because `_ROLE_PREFER` / `_ROLE_AVOID` are a fixed
+    polarity: they prefer the core-voltage device and avoid the elevated one,
+    which is the wrong answer for an elevated block. So when a domain IS
+    stated, the same ranker the election site uses runs FIRST here, and the
+    fixed lists become the tiebreak. When no domain is stated the key is
+    untouched — a design that declares no voltage binds what it always did."""
+    _rank_for_domain = None
+    if domain is not None:
+        try:
+            import analog_pdk_deck_context as _apdc
+            if _apdc.domain_is_stated(domain):
+                _width = _apdc.FLAVOUR_KEY_WIDTH
+
+                def _rank_for_domain(m: str) -> tuple:
+                    # ONLY the FLAVOUR components. Letting the ranker's own
+                    # length/name tiebreak through would override the stated
+                    # `_ROLE_PREFER` order for candidates the domain does not
+                    # separate at all — measured: a stated domain re-bound the
+                    # passive role from the preferred device to a shorter name
+                    # that the preference list does not mention.
+                    return _apdc.device_flavour_rank(m, domain)[:_width]
+        except Exception:                                  # pragma: no cover
+            _rank_for_domain = None
     models = [m for m in (family_entry.get("device_models") or [])
               if isinstance(m, str)]
     out: Dict[str, str] = {}
     unresolved: List[str] = []
+    bound_by: Dict[str, str] = {}
     for role in roles:
         if ctx_device_map.get(role):
             out[role] = ctx_device_map[role]
+            bound_by[role] = BOUND_BY_DECK_CONTEXT
             continue
         toks = _ROLE_TOKENS.get(role, ())
         cands = [m for m in models
@@ -277,17 +445,29 @@ def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
             exact = next((i for i, p in enumerate(pref) if p in low),
                          len(pref))
             avoid = sum(1 for a in _ROLE_AVOID if a in low)
-            return (exact, avoid, len(low), low)
+            fixed = (exact, avoid, len(low), low)
+            if _rank_for_domain is None:
+                return fixed
+            return _rank_for_domain(m) + fixed
 
         out[role] = sorted(cands, key=rank)[0]
-    return out, unresolved
+        bound_by[role] = BOUND_BY_REGISTRY
+    return out, unresolved, bound_by
 
 
 def resolve_pdk_context(project: Path, pdk: str, container: str,
-                        roles: List[str]) -> Dict[str, Any]:
+                        roles: List[str],
+                        domain: Optional[Any] = None) -> Dict[str, Any]:
     """model lib + corner section + per-role model names, through the EXISTING
     family-agnostic resolvers so a project that declares a native target never
-    gets one foundry's device tokens against another's model lib."""
+    gets one foundry's device tokens against another's model lib.
+
+    `domain` (vibe-ic#903, second half) is the `VoltageDomain` the DESIGN
+    states for the block being resolved — see `block_voltage_domains`, which
+    discovers it from the block's own A1 spec. Two blocks of one project that
+    state different domains resolve to different flavours; `domain=None` (and
+    every design that states no voltage) resolves chip-globally, exactly as
+    this function did before."""
     ctx_json: Dict[str, Any] = {}
     device_map: Dict[str, str] = {}
     model_lib: Optional[str] = None
@@ -308,10 +488,33 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
                                        container=container)
         except Exception:
             res = None
+        # vibe-ic#906 — ASK FOR EVERY ROLE THE IR ACTUALLY USES.
+        #
+        # This filtered the topology's roles down to the MOS pair before asking
+        # the resolver, so a role the IR genuinely instantiates (cap, res, ...)
+        # was never requested. `required` is not a cosmetic argument: the deck
+        # resolver re-derives `device_map` from the ELECTED PRIMARY lib and only
+        # falls back to the cross-lib union map when the primary cannot cover a
+        # REQUIRED role. Roles absent from `required` are therefore dropped from
+        # `device_map` whenever the primary happens to satisfy the MOS pair —
+        # and `resolve_role_models` then reports them unresolved, which A3
+        # surfaces as IR_NOT_RENDERABLE: "device role(s) cap, res do not
+        # resolve". Measured on a container-installed PDK: the resolver returns
+        # those very roles correctly WHEN ASKED, so the refusal described our
+        # own request, not the PDK.
+        #
+        # WHY IT HID: the fallback that rescues this for the two PDKs
+        # everything is tested against is the REGISTRY (`_registry_entry` ->
+        # `device_models`), which `resolve_role_models` consults after the
+        # context map. sky130/gf180 have a registry entry listing passives; an
+        # unknown / container-installed family resolves to `(None, {})`, so the
+        # context map is the ONLY source and the dropped roles become fatal.
+        # Same shape as the host-vs-container reader defect: only a family that
+        # is NOT one of the two tested open PDKs can reach it.
         ctx = _apdc.resolve_deck_context(pdk, res=res,
-                                         required=tuple(r for r in roles
-                                                        if r in ("nmos",
-                                                                 "pmos")))
+                                         required=tuple(roles),
+                                         container=container or "",
+                                         domain=domain)
         ctx_json = ctx.as_json()
         status = ctx_json.get("status") or "OK"
         family = ctx_json.get("family") or pdk
@@ -326,7 +529,8 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         work_items = [f"deck-context resolver unavailable: {exc}"]
 
     fam_name, fam_entry = _registry_entry(family or pdk)
-    models, unresolved = resolve_role_models(fam_entry, roles, device_map)
+    models, unresolved, bound_by = resolve_role_models(
+        fam_entry, roles, device_map, domain)
     return {
         "status": status,
         "family": family,
@@ -334,7 +538,25 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         "model_lib": model_lib,
         "typ_section": typ_section,
         "corner_sections": ctx_json.get("corner_sections") or [],
+        # vibe-ic#907 — every (lib, section) the emitted deck must load. Empty
+        # for a single-lib / known family, where the single `model_lib` line is
+        # still correct.
+        "deck_loads": [tuple(dl) for dl in (ctx_json.get("deck_loads") or [])],
         "role_models": models,
+        # vibe-ic#903 — WHICH rule bound each role, and (for a parsed family)
+        # the deck resolver's own per-role election record: the basis, the
+        # rejected candidates, and whether the family spans more than one
+        # voltage domain — in which case ONE flavour is bound for every block,
+        # because this function takes no block argument.
+        "role_model_election": {
+            "bound_by": bound_by,
+            "deck_context": dict(ctx_json.get("device_election") or {}),
+            # WHICH domain this binding is for. `None` means the design stated
+            # none, in which case the binding really is chip-global and the
+            # deck_context record above says so.
+            "domain": ({"volts": domain.volts, "elevated": domain.elevated}
+                       if domain is not None else None),
+        },
         "unresolved_roles": unresolved,
         "device_terminals": device_terminals,
         "geometry_units": geometry_units,
@@ -461,7 +683,26 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     if not metric:
         L.append(".option scale=1u")
     section = pdkctx.get("typ_section") or ""
-    L.append(f".lib {pdkctx['model_lib']} {section}".rstrip())
+    # vibe-ic#907 — LOAD EVERY LIB THIS DECK BINDS A DEVICE FROM.
+    #
+    # One `.lib` line is right only while every bound device lives in that
+    # lib's closure. A family that splits actives and passives across separate
+    # corner libs resolves its device map from the cross-lib union, so the deck
+    # bound a device the single loaded section never defined and ngspice stopped
+    # at `unknown subckt`. `deck_loads` carries each (lib, section) the resolver
+    # says is needed — each with its OWN section, because split corner libs do
+    # not share a corner vocabulary.
+    #
+    # A single-lib family (and every known-family sky130/gf180 context, which
+    # never populates `deck_loads`) falls through to the single line below, so
+    # the emitted deck is byte-identical for them.
+    deck_loads = [tuple(dl) for dl in (pdkctx.get("deck_loads") or [])
+                  if len(tuple(dl)) == 2]
+    if deck_loads:
+        for lib, sec in deck_loads:
+            L.append(f".lib {lib} {sec}".rstrip())
+    else:
+        L.append(f".lib {pdkctx['model_lib']} {section}".rstrip())
     L.append("")
     L.append(f".subckt {block} {' '.join(ir['ports'])}")
     for d in ir["devices"]:
@@ -666,8 +907,25 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
             return {"simulation_verified": False,
                     "simulation_status": "NOT_VERIFIED_NO_SIMULATOR",
                     "detail": "no ngspice in the container"}
+        # The simulator must be started through a LOGIN shell. A PDK's
+        # ngspice init file -- the one that issues the `osdi` directives
+        # registering compiled Verilog-A model types -- is located only via
+        # `SPICE_USERINIT_DIR`, and that variable is exported by the EDA
+        # image's login profile; a non-login shell never sets it. Without it
+        # ngspice ignores every `.model <name> <va-type>` line ("Unknown
+        # model type ... - ignored"), then resolves no device at all
+        # ("Unable to find definition of model ..."), aborts before any
+        # analysis ("no simulations run!") and exits 1 -- which this function
+        # recorded as DID_NOT_CONVERGE, charging a renderable netlist for a
+        # missing environment and refusing to emit it.
+        #
+        # `bash -lc`, not `sh -lc`: the image profile is bash syntax and
+        # aborts under dash, which is why the login shell was dropped here.
+        # Dropping the login shell was the wrong half of that fix.
+        # `analog_real_corner_sweep` and `analog_a6_native_pv` already invoke
+        # the container through `bash -lc` for exactly this reason.
         cp = subprocess.run(
-            ["docker", "exec", container, "sh", "-c",
+            ["docker", "exec", container, "bash", "-lc",
              f"cd {stage} && {ng} -b tb_{block}.sp 2>&1"],
             capture_output=True, text=True, timeout=900)
         out = (cp.stdout or "") + (cp.stderr or "")
@@ -750,7 +1008,8 @@ def _drop_stale(bdir: Path, block: str) -> List[str]:
 
 # ── per-block driver ──────────────────────────────────────────────────────
 def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
-                   container: str, verify_sim: bool) -> Dict[str, Any]:
+                   container: str, verify_sim: bool,
+                   domain: Optional[Any] = None) -> Dict[str, Any]:
     name = str(entry.get("name") or entry.get("block") or entry.get("type"))
     bdir = project / _CANONICAL_ANALOG / name
     sp_path = bdir / f"{name}.sp"
@@ -810,7 +1069,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
 
     sv = spec_values(spec)
     roles = sorted({d["role"] for d in ir.get("devices") or []})
-    pdkctx = resolve_pdk_context(project, pdk, container, roles)
+    pdkctx = resolve_pdk_context(project, pdk, container, roles, domain)
     if pdkctx["status"] != "OK":
         _drop_stale(bdir, name)
         gap = write_gap(bdir, project, name, btype, "NEEDS_NATIVE_TEMPLATE",
@@ -886,6 +1145,15 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         f"section={pdkctx.get('typ_section')}",
         f"_provenance: role_models={pdkctx.get('role_models')}",
     ]
+    # vibe-ic#903 — WHICH voltage domain elected those models. Emitted ONLY
+    # when the design states one: a design that states none binds chip-globally
+    # and its deck is byte-identical to before, which is the paired guard.
+    _dom = (pdkctx.get("role_model_election") or {}).get("domain")
+    if _dom and (_dom.get("volts") is not None or _dom.get("elevated")):
+        prov_lines.append(
+            f"_provenance: voltage_domain=volts={_dom.get('volts')} "
+            f"elevated={_dom.get('elevated')} (stated by this block's spec; "
+            f"the device flavour above is elected FOR IT)")
     if handoff:
         prov_lines.append(
             f"_provenance: ai_handoff=skill:{handoff.get('skill')} "
@@ -1027,9 +1295,13 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                 "spec_bound_params; every other geometry is a library "
                 "nominal, not a solution of this design's spec."),
         },
-        "pdk": {k: pdkctx[k] for k in
-                ("family", "registry_family", "model_lib", "typ_section",
-                 "corner_sections", "role_models")},
+        "pdk": dict({k: pdkctx[k] for k in
+                     ("family", "registry_family", "model_lib", "typ_section",
+                      "corner_sections", "role_models")},
+                    # vibe-ic#903 — the election and the domain it was scoped
+                    # to, so the sidecar answers "why THIS device" without a
+                    # reader re-deriving it from the lib names.
+                    role_model_election=pdkctx.get("role_model_election")),
         "testbench": {"path": (f"tb_{name}.sp" if tb_text else None),
                       "conditions": tb_notes},
         "verification": {"checkers": findings, "simulation": sim},
@@ -1058,6 +1330,7 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
         return 1, {"producer": PRODUCER, "verdict": "NO_INPUT",
                    "reason": "no analog block list and no L5 analog_blocks[]",
                    "records": []}
+    all_entries = list(entries)
     if only:
         entries = [e for e in entries
                    if (e.get("name") or e.get("block") or e.get("type"))
@@ -1066,8 +1339,16 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
             return 1, {"producer": PRODUCER, "verdict": "NO_SUCH_BLOCK",
                        "reason": f"block `{only}` is not declared in {src}",
                        "records": []}
-    records = [emit_for_block(project, e, pdk, container, verify_sim)
-               for e in entries]
+    # vibe-ic#903 (second half) — the DESIGN's stated voltage domains, read off
+    # the blocks' own A1 specs, so the per-block election below has something
+    # to scope to. Computed once over ALL declared blocks (not just `--block`
+    # ones): "elevated" is relative to the design's LOWEST domain, and a
+    # single-block invocation must not silently redefine which that is.
+    domains = block_voltage_domains(project, all_entries)
+    records = [emit_for_block(
+        project, e, pdk, container, verify_sim,
+        domains.get(str(e.get("name") or e.get("block") or e.get("type"))))
+        for e in entries]
     emitted = [r for r in records if r.get("emitted")]
     kept = [r for r in records if r.get("action") == "kept_preexisting"]
     gaps = [r for r in records if r.get("action") == "gap"]
