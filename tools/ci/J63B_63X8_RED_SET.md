@@ -138,7 +138,8 @@ So the four sort into two very different classes:
 That ordering is the opposite of the effort spent on them here — three fixture
 reds got two fixes and many measurements, and the one production-regime
 observation is the one left open. It is left open for the reason given in its own
-section (the remedy is an intra-item heartbeat, and widening 60 s is refused),
+section (the remedy is the shipped `VIBEIC_MATRIX_OUTCOME_WORKERS` cap, and
+widening 60 s is refused),
 but a reader deciding where to look next should start at 13.
 
 ## 12 — a real finding that had been filed as weather
@@ -283,8 +284,9 @@ report leaned on — "no intra-item transition exists" — is false here.**
 Three things are retracted with it:
 
 * that red 13's stall is explained by "one long item with nothing to renew";
-* that the remedy is "an intra-item heartbeat", which may already exist in some
-  form on this path;
+* that the remedy is "an intra-item heartbeat" — renewal inside items was later
+  MEASURED to exist at a 10-15 s cadence, so there is nothing to write; the
+  remedy is the shipped worker cap;
 * the framing, repeated in several sections above, that any item exceeding the
   window is indistinguishable from a hang.
 
@@ -445,9 +447,11 @@ Two alternatives were considered and are worse:
 * **build it incrementally** so progress fires during the work — pytest emits no
   transition mid-item whatever the work does, so this changes nothing.
 
-Which leaves the intra-item heartbeat as the only remedy that is not a widening,
-and closes the chain: 17.29 s irreducible, inside one item, with no intra-item
-transition available, against a 60 s window.
+So d3's cost is irreducible: 17.29 s, inside one item, against a 60 s window.
+What that does NOT imply — and an earlier revision of this file did imply it —
+is that no renewal reaches inside an item. It does: measured at a 10-15 s
+cadence further down, which is why this item is survivable at all. The remedy
+is the shipped worker cap, not a heartbeat that would have to be written.
 
 **The finding is structural, and it is the same root as red 11's.** pytest emits
 lifecycle transitions at item BOUNDARIES, never during an item, so the driver
@@ -455,12 +459,14 @@ has no way to tell "one long item making progress" from "hung". Any item whose
 runtime is a material fraction of the stall window is indistinguishable from a
 hang, and this one is a third of it before the box is even busy.
 
-That makes the honest remedy an intra-item heartbeat in the progress protocol —
-the same driver change scoped and declined under 11 above, for the same reason.
-What is NOT the remedy is widening the 60 s window until an 19 s item fits under
-a contended one; that is the relaxation this campaign exists to refuse. Red 13
-stays open, but it is now a named mechanism with numbers rather than a shrug at
-the machine.
+**The remedy sentence that stood here was retracted** — it named an intra-item
+heartbeat, and renewal inside items was subsequently MEASURED to exist at a
+10-15 s cadence, so nothing needs writing. The actual remedy is the shipped
+`VIBEIC_MATRIX_OUTCOME_WORKERS` cap, measured at 1.85x wall-clock, with its
+necessity honestly unproven. What is still NOT the remedy is widening the 60 s
+window until a contended run fits underneath; that is the relaxation this
+campaign exists to refuse. Red 13 stays open, as a measured mechanism with a
+repeatable reproduction rather than a shrug at the machine.
 
 ## 11 — one observation, never reproduced, and I should not have said "proved"
 
