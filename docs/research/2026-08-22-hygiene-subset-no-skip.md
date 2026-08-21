@@ -1176,3 +1176,71 @@ exists to stop a hang reading as slowness, so changing it needs the
 flow-change acceptance standard and a bidirectional control proving the new
 value still catches a real hang. Neither of us is taking it, and both of us have
 said so for the same reason.
+
+## 21. Two of the batch's "new reds" are measuring the TIP COMMIT, not the tree
+
+`jmeas3`'s batch-67 report lists 10 NEW_RED, two of which are
+`test_issue565_selection_discloses_what_it_dropped.py::test_opting_out_is
+_possible_and_silent` and `::test_the_report_reaches_stderr_not_stdout` — and
+notes they are two of the three ids batch 68 FIXED hours earlier, so the batch-67
+assembly appears to un-do work that just landed.
+
+**My first guess was wrong and is recorded as wrong.** I suggested to `jmeas3`
+that a lane had rewritten a file wholesale — the same shape as the collateral
+revert in §10. Checked:
+
+```
+main vs batch, the TEST file                     : byte-identical
+main vs batch, ci_targeted_test_select.py        : byte-identical
+commits touching that module in batch 68         : none
+commits touching that module in batch 67         : none
+```
+
+Neither the test nor its subject differs. No revert, wholesale or otherwise.
+
+**What they actually depend on is the tip commit.** `_cli()` runs the REAL
+selector against the REAL checkout with `--base HEAD~1`, and
+`test_the_report_reaches_stderr_not_stdout` opens with
+
+```python
+    r = _cli()
+    if "IMPORT-EDGE GAP" not in r.stderr:
+        return          # the previous commit touched no source module
+```
+
+So the verdict is a property of whatever `HEAD~1..HEAD` happens to be in the
+tree under test. Measured on the three real trees:
+
+```
+BATCH  137caae925  HEAD~1 8c409aa5a1   source modules changed: 6
+                            (_gate_usage_exit.py, attestation_preflight_check.py,
+                             doc_table_row_placement_check.py, …)
+MAIN   81cd5321b0  HEAD~1 833e8493f2   source modules changed: 0
+```
+
+`main`'s tip is a version-assign commit that touches no source module, so the
+selector reports no gap, the test takes its early `return`, and it **passes
+without asserting anything**. The batch's tip is a merge that touches six source
+modules, so the gap report exists and the test actually runs. The sibling test
+is vacuous on `main` for the same reason: with no gap to suppress,
+`--no-gap-report` trivially has nothing to leak.
+
+**So "batch 68 fixed them and batch 67 un-fixed them" is not what happened.**
+Both batches' tips touch no source modules at the moment they are measured;
+these ids go green there because they DECLINE TO MEASURE. They are red on the
+batch because the batch's tip is merge-shaped and the question finally gets
+asked.
+
+**What that does and does not license.** It does NOT say the batch is clean on
+these two: the assertions may be failing on a real import-edge gap in those six
+modules, and that would be a true finding about the batch's content. It says the
+ATTRIBUTION is unsound — a tree whose tip touches 0 source modules and one whose
+tip touches 6 are not two measurements of the same question, so the delta
+between them carries no information about what the batch changed. The honest
+handling is to exclude both ids from the differential and, separately, to ask
+whether the gap they report on the batch is real.
+
+**And it is the same defect as everything else in this document**: a green that
+is a non-measurement, indistinguishable from a green that measured and found
+nothing. `main` is not passing these tests. It is skipping them, silently, and
+the differential read the skip as a pass.
