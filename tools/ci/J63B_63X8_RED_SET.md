@@ -1226,3 +1226,24 @@ d6 64.98/66.92 = 97.10% (stated 97%)    d3 16.85/60 = 28.08%  (stated 28%)
 Every difference is rounding in the first significant place (76.77 -> 77,
 2.14 -> 2.1, 22.75 -> 23). No derived figure in this file is wrong, and the
 one number that was is named above rather than repaired in silence.
+
+**And the third class — QUOTED measurements — was checked against the logs they
+came from**, because transcription is its own failure mode and it leaves no
+trace in the arithmetic. Ten load-bearing figures, counts and timings both:
+
+```
+d8 347 passed                     log: 347 passed in 83.11s      MATCH
+d8 alone 347 in 34.73s            log: 347 passed in 34.73s      MATCH
+d3 6 failed, 52 passed, 61 skip   log: identical, 110.94s        MATCH
+coverage before 5 failed, 24      log: identical, 351.67s        MATCH
+census before 1 failed, 5         log: identical, 396.46s        MATCH
+parity before 2 failed, 10        log: identical, 0.88s          MATCH
+coverage idle-before 3 failed,26  log: identical, 168.74s        MATCH
+coverage after 2 failed, 28 x2    log: 164.14s and 166.23s       MATCH
+sweep-shape coverage 2 failed,28  log: identical, 168.88s        MATCH
+sweep-shape census 6 passed       log: identical, 153.06s        MATCH
+```
+
+Ten of ten exact. So every figure in this file is now in one of three verified
+states: **measured and quoted correctly, derived and recomputed correctly, or
+named as the one that was neither.**
