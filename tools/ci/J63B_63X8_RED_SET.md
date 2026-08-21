@@ -1207,3 +1207,22 @@ running tally kept in conversation, never measured, and it counted refinements
 that are not retractions. **A report arguing that no number should be published
 without measuring it had an unmeasured number in its last line**, which is worth
 leaving on the record rather than quietly correcting.
+
+**That miss prompted an audit of every DERIVED figure in this file** — the
+percentages, ratios and totals, which are where an unchecked number hides most
+easily because it looks like it came from somewhere. Fourteen were recomputed
+from their own inputs and all fourteen hold:
+
+```
+d6 46.06/60 = 76.77%  (stated 77%)      d7 17.28/60 = 28.80%  (stated 29%)
+d6 64.98/66.92 = 97.10% (stated 97%)    d3 16.85/60 = 28.08%  (stated 28%)
+272.9/147.8 = 1.85x   (stated 1.85x)    d8 13.65/60 = 22.75%  (stated 23%)
+60/15 = 4, 60/10 = 6  (stated 4-6x)     60/0.30 = 200 (stated 200x)
+0.30/0.14 = 2.14      (stated 2.1x)     0.30/0.05 = 6 (stated 6x)
+36*0.075 = 2.70s      (stated 2.7s)     24*0.15 = 3.60s (stated 3.6s)
+1.8/0.45 = 4          (stated 4x)
+```
+
+Every difference is rounding in the first significant place (76.77 -> 77,
+2.14 -> 2.1, 22.75 -> 23). No derived figure in this file is wrong, and the
+one number that was is named above rather than repaired in silence.
