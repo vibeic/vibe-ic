@@ -1,6 +1,8 @@
 # j63b — the remaining 63x8 reds, re-enumerated, classified and three of them closed
 
-Measured tree: `origin/main` @ `a00f53f20` [v1.11.66], fresh `git worktree`,
+Measured tree: `origin/main` @ `a00f53f20` [v1.11.66] — RE-FETCHED at the end
+of this work and still the head, so nothing here is measured against a main that
+has since moved. Fresh `git worktree`,
 `PYTHONDONTWRITEBYTECODE=1`, corpus pointer UNSET, one pytest process per file.
 Host load recorded per run, because four of the seventeen turn on it.
 
@@ -39,6 +41,29 @@ Green in the same sweep: d1 82, d2 85+2xf, d4 77, d5 81+1xf, d6 81+1xf,
 d7 97+3s+4xf, **d8 347**, d9 80, 63x8_ledger 52, figure_coverage 12,
 waiver_single_source 4, write_record_scope 7, a3, a8,
 artefact_mutation_channel, and the eight further census consumers.
+
+## Why this reports on NINE and not the brief's fourteen
+
+The brief allocated "the other fourteen" by arithmetic: 17 remaining, minus the
+three findings `jfindings-63x8` named, leaves 14. That subtraction treats a
+FINDING as a RED, and here it is not. Its three findings span seven reds:
+
+* **two needing evidence** — the d3 unanswerable citations, which is ONE cause
+  with SIX parametrized ids (steps 15, 17, 19, 20, 30, 32) across two cited run
+  roots;
+* **one needing a ruling** — `test_no_cell_is_counted_enforced_while_its_
+  predicate_is_red`, one red.
+
+Plus `test_every_na_cell_asserts_a_live_precondition`, which is already fixed on
+that branch and so is not among its three REMAINING findings, but is equally not
+work to redo here. That is eight reds accounted for elsewhere and **nine here**:
+7-13, 16 and 17. Three of the nine are closed.
+
+The allocation was checked by content, not accepted by arithmetic: the six d3
+paths were searched for across the whole corpus (absent everywhere, at every
+version), and that branch's own diff was read to confirm it adds
+`magic_illegal_overlap.json` and not `drc_signoff.json` — which is what made
+16/17 unambiguously ours to fix rather than a duplicate of its work.
 
 ## 16 + 17 — the stale pin, re-derived and not widened
 
