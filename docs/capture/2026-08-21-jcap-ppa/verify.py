@@ -536,6 +536,26 @@ check("no check sits after the verdict", not _after,
       f"{len(_after)} gating call(s) after the verdict line" if _after else "verdict is last")
 
 
+# 38 (slow). The pytest figures this report quotes are re-run and compared. One
+# of them did not reproduce: the wiring-parity file was quoted at 18 passed and
+# yields 7, from a file byte-identical to the base defining six test functions.
+# A figure written beside the command that did not produce it reads exactly like
+# a measurement.
+if SLOW:
+    import subprocess as _sp
+    _T = PLUG / "programs" / "tests"
+    _cases = [(["test_capture_routing_consistency.py", "test_enhancement_emit.py"], 69, 4),
+              (["test_issue1130_wiring_population_parity.py"], 7, 0)]
+    control("quoted-pytest", all(f"{p} passed" in MD for _, p, _s in _cases))
+    for files, exp_p, exp_s in _cases:
+        r = _sp.run([sys.executable, "-m", "pytest", *[str(_T / f) for f in files], "-q"],
+                    capture_output=True, text=True, cwd=str(PLUG), timeout=1800)
+        m = re.search(r"(\d+) passed(?:, (\d+) skipped)?", r.stdout)
+        got_p, got_s = (int(m.group(1)), int(m.group(2) or 0)) if m else (-1, -1)
+        check(f"quoted figure reproduces: {' '.join(files)}",
+              (got_p, got_s) == (exp_p, exp_s) and f"{exp_p} passed" in MD,
+              f"ran {got_p} passed/{got_s} skipped, report says {exp_p}/{exp_s}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

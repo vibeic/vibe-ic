@@ -919,14 +919,14 @@ because the record asserts the class is now covered.
 
 The tree already maintains the other half of the join:
 
-    gates 619   unwired 61 (baseline 59)   newly unwired 3
+    gates 624   unwired 61 (baseline 59)   newly unwired 3
 
 and one of the three newly unwired is a program of **this very layer**, so the
 bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            26     (22 when the rule was written)
+    Bucket-A records            28     (22 when the rule was written)
     distinct target programs    16
     targets that are unwired     0
 
@@ -1201,7 +1201,15 @@ as a placeholder.
 
 `tests/test_capture_routing_consistency.py` and `tests/test_enhancement_emit.py`
 pass (69 passed, 4 skipped), as does
-`tests/test_issue1130_wiring_population_parity.py` (18 passed).
+`tests/test_issue1130_wiring_population_parity.py` (7 passed).
+
+*That last figure read `18 passed` until it was re-run on the merged tree. The
+file is byte-identical between this lane's base and main and defines six test
+functions, so it cannot have produced eighteen from the command it is quoted
+against — the number came from a wider invocation and was written down beside
+the narrower one. It is the only quoted figure in this report that did not
+reproduce, and `verify.py --slow` now re-runs both commands and compares them to
+the text, so the next one cannot go stale unnoticed.*
 
 No gate is implemented. No version bumped. No baseline written. Nothing pushed
 to main.
@@ -1813,7 +1821,7 @@ rather than in a command line that would fail for whoever tried it.
 **STATUS**: 31 records emitted and validated — 28 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (37 fast + 2 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (37 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1992,7 +2000,7 @@ route so the next reader can see it was asked rather than skipped.
 **Before landing, run this — and read its exit code, not its output:**
 
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py            37 checks   exit 0 = every claim holds
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 2 authoritative gate-run checks
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
 once ran the verifier *after* the commit in the same command chain, and a failing
@@ -2012,7 +2020,7 @@ every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py     37 checks, exit 0 = every claim holds
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 2 authoritative gate-run checks
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other
 people's tools.** A-14 is about a documented command that does not run, and A-6
