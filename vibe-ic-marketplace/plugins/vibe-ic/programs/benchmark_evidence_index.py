@@ -693,7 +693,24 @@ def main(argv=None) -> int:
                 print("    … (truncated)")
                 break
             print("    " + line)
-        print("  Fix: re-run with --write and commit the result.")
+        # NAME THE REPOSITORY THE RESULT LANDS IN (measured 2026-08-21).
+        #
+        # "commit the result" was written when the index lived here. It now can
+        # live in the corpus clone, and this gate is run from vibe-ic — so a
+        # reader who follows the remedy commits in the wrong repository, finds
+        # nothing to commit, and is left with a red gate and a correct tree.
+        # The code twelve lines up already knows the index can be outside; only
+        # the remedy had not been told.
+        #
+        # A printed remedy is executed, not read. One that names the wrong place
+        # is the same defect as one that does not run.
+        try:
+            index_path.relative_to(repo_root)
+            where = "this repository"
+        except ValueError:
+            where = ("the corpus clone that owns it — NOT this repository, "
+                     "which does not track that file")
+        print(f"  Fix: re-run with --write, then commit {shown} in {where}.")
     return 1
 
 

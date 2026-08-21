@@ -1434,7 +1434,8 @@ def repo_hygiene_gate(repo: Path,
     return _hygiene_verdict(doc, supervised.rc)
 
 
-def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
+def gate_red_since_gate(repo: Path, record: Path,
+                        base: Optional[str] = None) -> GateResult:
     """Adjudicate this run's reds against the acknowledgement ledger (#1025).
 
     A SEPARATE gate rather than a clause folded into `repo_hygiene_gates`,
@@ -1461,8 +1462,18 @@ def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
         return GateResult(name, -1,
                           "skipped — 0 gate state(s) examined: the hygiene set "
                           "produced no record to adjudicate")
-    rc, out, err = _run_program(prog, ["--record", str(record),
-                                       "--repo", str(repo)])
+    # BOTH HALVES COME FROM THE BASE. The clock, so a candidate's own
+    # commits cannot expire a row it never touched — measured on a
+    # 15-commit branch, 7 rows read as expired against its head and 5
+    # against origin/main, and the branch touched neither of the two.
+    # AND the rows, so a candidate cannot renew its own overdue row by
+    # moving `since` forward in the very commit that needs the renewal.
+    # `landing_merge_verdict` already states the second half for its copy
+    # of this ledger; the first half had never been written down.
+    argv = ["--record", str(record), "--repo", str(repo)]
+    if base:
+        argv += ["--head-ref", base, "--ledger-ref", base]
+    rc, out, err = _run_program(prog, argv)
     line = (out.strip().splitlines() or [""])[-1]
     if rc == 2:
         return GateResult(name, -1, f"skipped — {line}")
@@ -1573,6 +1584,25 @@ def hygiene_gate_from_record(repo: Path, record: Path,
                       f"{len(declared)} declared gate(s) matched]")
 
 
+def _process_states() -> tuple:
+    """The states a gate reaches by running, from their one owner.
+
+    Loaded by path at the moment it is needed rather than at module scope: this
+    file is executed by the isolated trusted entry, and a top-level `sys.path`
+    insertion in it measurably broke two end-to-end cases once already.
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_gr_hygiene_finding_delta",
+            Path(__file__).resolve().parent / "hygiene_finding_delta.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return tuple(module.PROCESS_STATES)
+    except Exception:                     # pragma: no cover - packaging damage
+        return ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")
+
+
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     """Turn the script's own coverage record into a gate result.
 
@@ -1616,7 +1646,14 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
         expired = [str(g.get("label")) for g in gates
                    if g.get("exemption_expired")]
 
-    ran = declared - len(deferred)
+    # THE DENOMINATOR SUBTRACTS EVERY STATE THAT DID NOT RUN, not just
+    # LISTED. `_gate_dispatch.sh` records five non-process states, and this
+    # line subtracted one. On a SHARDED record — 8 FAIL beside 79
+    # OTHER_SHARD, measured — the summary read `87/87 gate(s) ran`.
+    # The set is taken from `hygiene_finding_delta.PROCESS_STATES`, which
+    # owns it and already computed `ran` from it correctly; both consumers
+    # that re-derived it by hand were wrong in the same direction.
+    ran = len([g for g in gates if g.get("state") in _process_states()])
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
     if secs is not None:
@@ -1910,7 +1947,7 @@ def review(base: str, head: str, *,
             gates.append(repo_hygiene_gate(repo, script=hygiene_script,
                                            summary_out=_record,
                                            progress_out=hygiene_progress))
-        gates.append(gate_red_since_gate(repo, _record))
+        gates.append(gate_red_since_gate(repo, _record, base=base))
 
     # 5. verdict.
     blocking = [f"{g.name}: {g.summary}" for g in gates if not g.green]

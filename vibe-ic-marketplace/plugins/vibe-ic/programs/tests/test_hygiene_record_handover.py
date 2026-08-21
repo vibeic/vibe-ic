@@ -124,3 +124,131 @@ def test_review_uses_the_handover_instead_of_running_the_set(tree, monkeypatch):
     rec = _record(tree / "r.json", DECLARED)
     g = R.hygiene_gate_from_record(tree, rec, 0)
     assert g.green and called == []
+
+
+# --------------------------------------------------------------------------
+# THE DENOMINATOR MUST BE WHAT RAN.
+# --------------------------------------------------------------------------
+
+def _doc(states):
+    return {"declared": len(states),
+            "gates": [{"label": f"g{i}", "state": s, "seconds": 1}
+                      for i, s in enumerate(states)]}
+
+
+def test_a_sharded_record_does_not_claim_every_gate_ran():
+    """MEASURED on a real shard record — 8 FAIL beside 79 OTHER_SHARD — the
+    summary read `87/87 gate(s) ran`. `gate_discloses_denominator_check`
+    demands of every gate that a PASS say how much it looked at; this is that
+    requirement applied to the line this program prints about the whole set."""
+    doc = _doc(["FAIL"] * 8 + ["OTHER_SHARD"] * 79)
+    assert "8/87 gate(s) ran" in R._hygiene_verdict(doc, 1).summary
+
+
+@pytest.mark.parametrize("state", ["LISTED", "OTHER_SHARD", "OUT_OF_SCOPE",
+                                   "QUEUED"])
+def test_every_non_process_state_is_out_of_the_denominator(state):
+    doc = _doc(["PASS", state])
+    assert "1/2 gate(s) ran" in R._hygiene_verdict(doc, 0).summary
+
+
+def test_not_checked_still_counts_as_having_run():
+    """The gate EXECUTED and refused. Dropping it from the denominator would
+    hide a refusal inside a shrinking population, which is the opposite of what
+    NOT_CHECKED exists to make visible."""
+    doc = _doc(["PASS", "NOT_CHECKED"])
+    assert "2/2 gate(s) ran" in R._hygiene_verdict(doc, 1).summary
+
+
+def test_a_full_record_is_unchanged():
+    doc = _doc(["PASS"] * 60 + ["FAIL"] * 8)
+    assert "68/68 gate(s) ran" in R._hygiene_verdict(doc, 1).summary
+
+
+def test_the_not_run_set_covers_every_state_the_dispatcher_records():
+    """Parsed from `_gate_dispatch.sh`, so a new state fails HERE rather than
+    quietly inflating a denominator in a landing summary."""
+    import re
+    repo = PROGRAMS.parents[3]
+    disp = (repo / "tools" / "ci" / "_gate_dispatch.sh").read_text(encoding="utf-8")
+    states = set(re.findall(r'GATE_STATES\+=\("([A-Z_]+)"', disp))
+    assert states
+    for s in states:
+        doc = _doc(["PASS", s])
+        summary = R._hygiene_verdict(doc, 1).summary
+        expected = "2/2" if s in ("PASS", "FAIL", "NOT_CHECKED",
+                                  "WROTE_CORPUS") else "1/2"
+        assert f"{expected} gate(s) ran" in summary, (s, summary)
+
+
+def test_all_three_consumers_agree_on_what_counts_as_having_run():
+    """One name for one thing, checked across every consumer.
+
+    `hygiene_finding_delta` owns the set and computed `ran` from it correctly
+    all along. `gatekeeper_review` and `gate_red_since_check` had each grown a
+    hand-maintained complement of it, and both were wrong in the same
+    direction — a state the dispatcher added was counted as having run, or as
+    being red. This asserts the three now share one definition.
+    """
+    import hygiene_finding_delta as H
+    import gate_red_since_check as G
+    assert tuple(R._process_states()) == tuple(H.PROCESS_STATES)
+    assert tuple(G._RAN) == tuple(H.PROCESS_STATES)
+
+
+# --------------------------------------------------------------------------
+# THE ARM THAT SHOULD BE UNCHANGED — CHECKED, NOT ASSERTED.
+# --------------------------------------------------------------------------
+
+def _drive_review(tmp_path, monkeypatch, **extra):
+    """Drive the REAL `review()` and record which hygiene path it took."""
+    import test_gatekeeper_review as B
+    repo, plugin = B._build_clean_plugin(tmp_path, version="1.0.96")
+    took = []
+    monkeypatch.setattr(R, "repo_hygiene_gate",
+                        lambda *a, **k: took.append("ran the set") or
+                        R.GateResult("repo_hygiene_gates", 0, "ran"))
+    monkeypatch.setattr(R, "hygiene_gate_from_record",
+                        lambda *a, **k: took.append("read a record") or
+                        R.GateResult("repo_hygiene_gates", 0, "adjudicated"))
+    monkeypatch.setattr(R, "gate_red_since_gate",
+                        lambda *a, **k: R.GateResult("gate_red_since", 0, "ok"))
+    R.review("BASE", "HEAD", repo=repo, plugin_root=plugin,
+             override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
+             override_cur="1.0.96", override_prev="1.0.95", **extra)
+    return took
+
+
+def test_without_a_record_the_review_still_RUNS_the_hygiene_set(tmp_path,
+                                                                monkeypatch):
+    """THE ARM I HAD NOT CHECKED. `--hygiene-record-in` is absent by default and
+    the claim has been that behaviour is then unchanged — but nothing asserted
+    that `repo_hygiene_gate` is still reached. Had the branch inverted, the
+    hygiene set would never run inside this program and MERGE_OK would mean
+    nothing, silently. That is the largest possible weakening this change could
+    have caused and it was the one arm with no test."""
+    assert _drive_review(tmp_path, monkeypatch) == ["ran the set"]
+
+
+def test_with_a_record_the_review_adjudicates_it_instead(tmp_path, monkeypatch):
+    rec = tmp_path / "rec.json"
+    rec.write_text("{}", encoding="utf-8")
+    assert _drive_review(tmp_path, monkeypatch,
+                         hygiene_record_in=rec,
+                         hygiene_record_rc=0) == ["read a record"]
+
+
+def test_exactly_one_of_the_two_paths_is_ever_taken(tmp_path, monkeypatch):
+    """Both would double-count the gate; neither would drop it entirely."""
+    for i, with_record in enumerate((False, True)):
+        # a fresh root per iteration: `_build_clean_plugin` writes a tree and
+        # refuses to write it twice, which is the builder being careful rather
+        # than anything about the branch under test
+        root = tmp_path / f"run{i}"
+        root.mkdir()
+        extra = {}
+        if with_record:
+            rec = root / "r.json"
+            rec.write_text("{}", encoding="utf-8")
+            extra = {"hygiene_record_in": rec, "hygiene_record_rc": 0}
+        assert len(_drive_review(root, monkeypatch, **extra)) == 1
