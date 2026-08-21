@@ -1469,6 +1469,53 @@ the file and exiting non-zero if the swap did not take. Logged:
 allowed to answer. "I reverted it" is not evidence that it reverted.
 
 
+## M21 — my runner-test changes, verified in the CI lane too
+
+M16 and M15 were measured on the host only. That file drives a FAKE docker
+binary, so it needs no daemon and does run in the pinned image — and the image is
+the lane I have spent this whole document arguing is the one that decides.
+Verifying a landing-runtime test fix in one lane would have been the same mistake
+I catalogued in M17.
+
+| lane | python | result |
+|---|---|---|
+| host 8hd-3 | 3.10 | **17 passed**, 12/12 runs clean |
+| pinned image | 3.12 | **16 passed, 1 skipped**, 6/6 runs clean |
+
+The flake fix holds in both. My `rw_bind` test
+(`test_a_read_write_subject_bind_refuses_before_the_candidate_starts`,
+line 545) **passes in the image**, so the read-only-bind refusal is now covered
+in the lane that gates landings, not only on a developer host. The different
+interpreter version mattered here: a race is exactly the kind of thing 3.10 and
+3.12 can time differently, and it did not.
+
+### The one skipped cell, and it is the shape this engagement began with
+
+The image's `1 skipped` is NOT mine. It is pre-existing:
+
+```
+SKIPPED tools/ci/test_hermetic_candidate_runner.py:748: Docker CLI unavailable
+```
+
+`test_live_exact_image_capability_and_profile` requests a capability the pinned
+image does not have and resolves the disagreement with `pytest.skip`.
+
+**That is precisely the pattern this engagement opened on.** The original brief
+was about 28 landing-gate reds caused by the image and the suite disagreeing
+about `pytest-timeout`, and its instruction was explicit: *"A conditional skip is
+NOT an acceptable answer here — a skipped cell has no colour, and a landing gate
+full of colourless cells is what we are trying to get rid of."* I settled that
+one on the suite side. This is the same disagreement, in the runner's own test
+file, still settled the other way.
+
+I am not changing it: unlike `pytest-timeout`, this test needs a live Docker CLI
+AND a reachable daemon, so "make the suite stop asking" would delete real
+coverage and "put it in the image" is the lane decision already escalated. But it
+belongs on that escalation with its name attached, because it is one colourless
+cell in the landing runtime's own guard, and it has been sitting there the whole
+time.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
