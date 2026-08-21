@@ -695,7 +695,14 @@ def test_the_shipped_register_is_current(tmp_path):
     argv = [sys.executable, str(_CLI)]
     if corpus_root() != _CORPUS:
         argv += [str(corpus_root()), "--baseline", str(_DEFAULT_REGISTER)]
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    # 60 s, not 120 (vibe-ic#1711). This is the only call in this file that
+    # runs over the PUBLISHED corpus rather than a tmp_path fixture, so it is
+    # the one where a generous bound looks defensible — and it is not: under
+    # `--timeout-method=thread` the 180 s session clock kills the whole run
+    # before a 120 s bound can fire, taking every other file's verdict with it.
+    # MEASURED against a real 28,166-file clone of `vibeic/benchmark-data`:
+    # 1.45 s wall, 267 published records adjudicated. 60 s is 41x that.
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

@@ -313,6 +313,57 @@ steps:
       # u_hawaii_adc/v1.9.86_sky130A), so declaring it closes the d7 finding
       # without opening a d3 one.
       - "reports/audit/phase1/expert_parse_track.json"
+      # The extraction-pattern CATALOGUE this step's own gate reads (#1348).
+      #
+      # WHY IT REACHED W2 AND THE AST COULD NOT SEE IT — the same shape as the
+      # entry above, one resolution limit further out. `phase1_doc_one_shot_
+      # runner.py` binds `canonical = _pl.phase1_extraction_patterns_file(
+      # project)` and then hands the VARIABLE to
+      # `_seed_canonical_from_backfilled_subset(project, auto, canonical)`, so
+      # no Python write POSITION in `programs/` names the literal path and the
+      # AST oracle answered "no producer, externally supplied by design". The
+      # write ledger of `benchmark-data/ic/spm/v1.10.18_sky130A` observed a run
+      # writing it, which is what made the claim decidable rather than assumed.
+      #
+      # IT IS THIS STEP'S OWN ARTEFACT, not a cross-step attribution.
+      # `extraction_coverage_check` is D1's own LL-38 gate and it LOADS this
+      # file as the denominator of the coverage it reports
+      # (`_load_explicit_patterns` -> `_pl.phase1_extraction_patterns_file`).
+      # Producer step == consumer step == D1, so declaring it charges nothing
+      # to a step that only reads it.
+      #
+      # THE FLOW ALREADY REQUIRED IT SOMEWHERE THE YAML DID NOT SAY SO.
+      # `flow_compliance_check`'s completion audit already lists
+      # `extraction_patterns.json` under `missing_required_artifacts` when it
+      # is absent — pinned, in both directions, by
+      # `test_flow_compliance_check.py::test_missing_required_hint_resolves_
+      # phase1_layout` and `::test_missing_required_hint_flags_genuinely_
+      # absent`. Declaring it here makes the yaml state an obligation the
+      # checker was already enforcing; it does not create a new one.
+      #
+      # UNCONDITIONALLY PRODUCED — MEASURED, not assumed, because
+      # `required_outputs` is unconditional and a conditional artefact must not
+      # enter it. Of the 105 project trees in this repository that carry D1's
+      # own `phase1/generated_docs/L1_DATASHEET.json`, **105** carry
+      # `phase1/extraction_patterns.json`. 105 of 105, and the population
+      # includes the four prompt-driven CVDP runs, which stage no `input/docs`
+      # of their own and are the shape most likely to skip the seeder.
+      #
+      # BLAST RADIUS, measured with `flow_compliance_check.check_step` on each
+      # of the 10 manifest run roots that resolve in this repository, with and
+      # without this entry: **0 move.** Nine of the ten already carry the
+      # artefact, so it cannot make them MISSING; the tenth
+      # (`benchmark-data/ic/u_hawaii_adc`, a container directory) is already
+      # MISSING in the control arm on other entries. Each arm is a fresh
+      # `copytree` of the run root, discarded after ONE `check_step`, for the
+      # reason stated above the previous entry: `check_step` RUNS the gate and
+      # this step's gate WRITES, so A/B over a shared tree is not an A/B when
+      # the probe is also a producer.
+      #
+      # It RESOLVES in nine admissible run roots, tracked at HEAD, non-empty
+      # and not symlinked, so declaring it closes the d7 finding without
+      # opening a d3 one.
+      - "phase1/extraction_patterns.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
@@ -562,6 +613,106 @@ steps:
         - advisory_program_exit_zero: "spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md"
     blocks_on: []
 
+  - id: 0.5ic
+    name: "Submission Template Ingest — the operator's slot geometry and fixtures (chip/IC path only)"
+    stage: stage_phase1
+    # WHY A STEP AND NOT A CALCULATION. Two independent investigations landed on
+    # the same missing input rather than a missing formula:
+    #   * docs/research/wafer_space_id_cells.md — the four gf180mcu_ws_ip__* die-id
+    #     cells are SHIPPED as pre-built hardmacros by the operator's project
+    #     template. The operator's own generate_id.py does not create them; it
+    #     places and edits cells that must already be in the layout, and the
+    #     template's src carries "Do not remove, necessary for tapeout".
+    #   * docs/research/shuttle_slot_geometry.md — die size is never pinned in this
+    #     flow (step 15 declares only a netlist and constraints; the floorplan check
+    #     tests only that DIEAREA is non-degenerate; 188 of 194 L19 documents carry
+    #     no machine-usable die budget). All 8 published GDS miss every slot in both
+    #     dimensions, the closest filling 3.15% of the smallest slot. Meanwhile all
+    #     four of the template's slot files pin DIE_AREA absolutely, to exactly the
+    #     values the operator's check_size.py computes, with CORE_AREA, FP_SIZING
+    #     and the per-slot pad lists alongside.
+    # So the geometry is not ours to compute. It is data we never went and got.
+    required_inputs:
+      - from: external
+        check: none
+        what: >-
+          the shuttle operator's published project template — the repository or
+          archive that pins the slot geometry, ships the die-identification
+          fixtures, and lists the pads for each slot. Declared as external and
+          unprobed because it is fetched, not produced, and the flow must be able
+          to say it was never fetched.
+    programs:
+      - submission_template_ingest
+      # THE OTHER HALF OF THE SAME STEP. `submission_template_ingest` records
+      # what the OPERATOR published; this records what the DESIGN declares
+      # about itself — the 18 questions of `_tapeout_declaration` (7 die size,
+      # 8 pad ring, 3 seal ring), every unanswered one `NOT_DETERMINED` and
+      # never a default. It belongs HERE, and not further down, for the reason
+      # this step has no `condition`: it is the step that decides the route, so
+      # it is the one step a design with no shuttle also passes through, and a
+      # self-tape-out has nobody else to write its numbers down for it.
+      - tapeout_declaration_gen
+    required_outputs:
+      # THE `OR` IS THE HONEST HALF. A design that targets no shuttle still has to
+      # SAY so: this flow has no `optional:` key on an input, and a step that
+      # silently produces nothing is indistinguishable from one that never ran.
+      #
+      # THE THIRD ALTERNATIVE IS NEW, AND IT CLOSES A MEASURED HOLE. Before it,
+      # this step wrote two router files for what are three routes:
+      # `slots/*.yaml` selected the operator's own container (37.5ic) and
+      # `NO_TEMPLATE.txt` selected the IP/hardmacro terminal (37.5ip). A CHIP
+      # doing its OWN tape-out has no operator template, so 37.5ic's condition
+      # excluded it, and it is a die rather than an IP, so 37.5ip was the wrong
+      # terminal for it — such a design reached tape-out having passed NO
+      # submission check of any kind. `SELF_TAPEOUT.txt` is its router, read by
+      # step 37.5self. NEITHER EXISTING CONDITION CHANGES: routing it onto
+      # `NO_TEMPLATE.txt` instead would have collided with the IP path, because
+      # `files_exist` cannot express "and not". Three files, three routes,
+      # mutually exclusive — and `tapeout_declaration_check` refuses the tree
+      # that carries two of them at once rather than resolving it by deleting
+      # one.
+      - "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt"
+      - "reports/phase1/submission_template.json"
+      # ALWAYS WRITTEN, by every run, whatever the route. `tapeout_declaration_gen`
+      # with no `--answers` at all still emits a complete, well-formed,
+      # entirely `NOT_DETERMINED` declaration — which is a legal and useful
+      # result, and is what keeps this a required output rather than a
+      # conditional one. A run that produced no declaration is a run where
+      # nobody was asked.
+      - "input/submission_template/tapeout_declaration.json"
+      - "reports/phase1/tapeout_declaration.json"
+    gate:
+      # `all_of`, NOT a bare list. MEASURED: `flow_compliance_check._evaluate_gate`
+      # handed a bare list of two gate mappings returns
+      # `(False, ['gate spec unrecognized'])` — it executes NEITHER program, so
+      # the pre-existing `submission_template_check` gate would have been taken
+      # out of service by the act of adding a second one, and the step could
+      # never pass for any tree. `all_of` is the container the enforcer already
+      # walks (`_evaluate_gate`'s `all_of` branch, and `_declared_gate_commands`
+      # recurses it), and handed the same two clauses it emits `__RAN_HINT__:
+      # submission_template_check ...` — the proof it invoked the program rather
+      # than declining to parse the shape.
+      all_of:
+        - program_exit_zero: "submission_template_check . --json reports/phase1/submission_template.json"
+        # BLOCKING, and it refuses a MALFORMED declaration — never an incomplete
+        # one. `NOT_DETERMINED` in a field is the declaration working as
+        # intended; it is reported by the CONSUMING check, in the place where
+        # the reader can see which check went without which answer. Refusing
+        # incompleteness here instead would make the step that decides the
+        # route unpassable for every design that has not yet answered all 18,
+        # and a router that cannot route is worse than an honest
+        # NOT_DETERMINED downstream. What it DOES refuse: a question absent
+        # altogether, a rectangle that is not four numbers, an enum outside its
+        # choices, and a tree carrying more than one router file at once.
+        - program_exit_zero: "tapeout_declaration_check . --json reports/phase1/tapeout_declaration.json"
+    blocks_on: []
+    notes: >-
+      Chip/IC path only: an IP is delivered as a hardmacro (37.5ip) and is never
+      submitted to a shuttle, so it has no slot and no operator fixtures. The
+      report must record WHICH slot was declared and the DIE_AREA read from it,
+      because a die that was chosen and a die that was defaulted are the same
+      number with different provenance, and only one of them can be checked.
+
   - id: 1
     name: "Spec-to-RTL"
     stage: stage1
@@ -609,6 +760,81 @@ steps:
     # edge needs no code change. The edge is transitive, so a FAIL/MISSING D1
     # now correctly reds every descendant of Step 1.
     blocks_on: [D1]
+
+  - id: 1.6x
+    name: "🔁 Cross-layer PPA search — rewrite fidelity (candidate RTL ≡ BASELINE RTL)"
+    stage: stage1
+    # WHY THIS STEP EXISTS, AND WHY IT IS NOT STEP 13.
+    #
+    # A cross-layer PPA search lets an agent REWRITE the design — pipelining,
+    # resource sharing, state encoding, arithmetic architecture, module
+    # hierarchy — to win a PPA objective. That is the one thing a place-and-route
+    # tuner structurally cannot do, and it is also the exact shape of every
+    # cheat this repository exists to prevent, so it needs a check that a
+    # rewritten candidate is still the specified chip.
+    #
+    # Step 13 cannot be that check, and this is MEASURED rather than argued.
+    # Step 13 is `RTL ≡ post-DFT netlist`: it compares each candidate against
+    # ITS OWN netlist, so a rewritten candidate passes it by construction.
+    # Three arms built from one published baseline RTL differing in a single
+    # line — the carry-save majority term of a serial multiplier — were run
+    # through the real step-13 producer and judge:
+    #
+    #   base       (m & s) | (m & c) | (s & c)   2577.47 um2   step 13 rc=0
+    #   cand_bad   (m & s)           | (s & c)   2419.82 um2   step 13 rc=0
+    #   cand_good  (m & (s | c))     | (s & c)   2603.75 um2   step 13 rc=0
+    #
+    # `cand_bad` computes a different product and is 6.12% SMALLER — it WINS
+    # the area objective — and step 13 returned exit 0 on it, 66/66 points
+    # proven. A cross-layer search gated only on step 13 would publish it.
+    #
+    # This step supplies the missing relation, candidate RTL ≡ BASELINE RTL,
+    # and NOTHING here weakens, narrows or excludes anything step 13 checks.
+    # Both relations are required; neither replaces the other.
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+    # UNCONDITIONAL, and that is a CORRECTION, not a default. The first draft
+    # made this step `condition: files_exist [reports/crosslayer/baseline_rtl]`
+    # so it applied only to designs that had actually run a search, and
+    # `flow_condition_reachability_check` refused that shape in one line:
+    #
+    #   FAIL: step 1.6x: condition ['reports/crosslayer/baseline_rtl'] —
+    #   a check disabled by exactly the situation it was written for
+    #
+    # It is right. A search that skipped the snapshot would have skipped the
+    # gate with it, which is the same hole one level up. So the step always
+    # runs, and the JUDGE decides applicability INSIDE the program where the
+    # decision is written to an artefact: a design that ran no cross-layer
+    # search gets an explicit NOT_APPLICABLE record, never a silent skip.
+    #
+    # The second draft also gated the search-space audit on that space's own
+    # existence, and the same checker named that too ("R1 self-gate: … is this
+    # step's own required_output"). The audit now lives inside the judge, so
+    # there is ONE gate command with nothing to condition.
+    closed_loop:
+      fallback_to: 1
+      trigger: >-
+        The candidate RTL is not the baseline RTL (refuted, unproven, or
+        nothing compared), or the search space that authorised the rewrite does
+        not survive its own citation audit. The candidate is DISCARDED and step
+        1's RTL stands; the check is never relaxed to admit it.
+    programs:
+      - crosslayer_search_space
+      - crosslayer_rewrite_equivalence
+      - crosslayer_rewrite_equivalence_check
+    # The judge writes its verdict on EVERY run, including the NOT_APPLICABLE
+    # one, so this artefact is always produced and a reader can always tell
+    # "not applicable" from "nobody looked".
+    required_outputs:
+      - "reports/crosslayer/rewrite_equivalence_check.json"
+    gate:
+      # The JUDGE, not the producer — the same producer/judge split step 13
+      # uses, which is what lets this command carry no design-specific
+      # argument. It FAILS when a rewrite happened and no proven-equivalent
+      # report exists, and it re-resolves the search space's citations.
+      program_exit_zero: "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"
+    blocks_on: [1]
 
   - id: 2
     name: "🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)"
@@ -679,30 +905,86 @@ steps:
         - optional_program_exit_zero:
             command: "rtl_bug_report_schema_check . --json reports/phase2/gates/rtl_bug_schema.json"
             condition_files_exist: ["reports/phase2/rtl_bugs.json"]
+            absent_condition_reason: >-
+              The subject is a CLAIM, not a result. This clause validates the
+              SCHEMA of an RTL-bug report when one is filed; a run that files
+              no bug claim has nothing to schema-check, and the failure mode
+              it exists for -- a malformed claim -- requires the claim to
+              exist. Absence is the normal case here, not the defect.
         # v0.74 Phase 1 gates — generic (any-IC) lints surfaced by the
         # BENCH-A/IC-A fresh-agent bisect. Each fires only when its
         # input document is present; silent no-op otherwise.
         - optional_program_exit_zero:
             command: "internal_vs_external_timing_check phase1/generated_docs/L8_TIMING_WAVEFORM.json --layer phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/int_vs_ext_timing.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. L8_TIMING_WAVEFORM.json is
+              authored by Phase 1 and is not produced by this step, so its
+              absence means the design declared no external timing contract to
+              reconcile against the internal one -- not that a reconciliation
+              was skipped. Whether L8 SHOULD have been authored is the D1
+              layer-completeness gate's question, not this clause's.
         - optional_program_exit_zero:
             command: "threshold_range_contiguity_check phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/threshold_contiguity.json"
             condition_files_exist: ["phase1/generated_docs/L8_RTL_CONSTANTS.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. L8_RTL_CONSTANTS.json is
+              authored by Phase 1 and is not produced by this step; with no
+              declared constant/threshold table there are no ranges whose
+              contiguity could be checked. Whether L8 SHOULD have been
+              authored is the D1 layer-completeness gate's question.
         - optional_program_exit_zero:
             command: "rsp_example_otp_consistency_check phase1/generated_docs/L3_CMD_PROTOCOL.json --otp phase1/generated_docs/L11_OTP_CONTENT.json --json reports/phase2/gates/rsp_otp_consistency.json"
             condition_files_exist: ["phase1/generated_docs/L3_CMD_PROTOCOL.json", "phase1/generated_docs/L11_OTP_CONTENT.json"]
+            absent_condition_reason: >-
+              Cross-layer consistency between two Phase-1 DECLARATIONS. The
+              clause fires when EITHER L3_CMD_PROTOCOL.json or
+              L11_OTP_CONTENT.json is present, so it is skipped only for a
+              design that declares neither a command protocol nor an OTP layer
+              -- in which case there are no two documents to hold against each
+              other.
         - optional_program_exit_zero:
             command: "spec_response_delay_check phase2/stage1/rtl --spec phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/spec_response_delay.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. This clause measures the RTL
+              against the response-delay numbers L8 declares; with no
+              L8_TIMING_WAVEFORM.json there is no declared number to measure
+              against. The RTL itself is covered by the unconditional lint
+              clauses at the head of this same gate.
         - optional_program_exit_zero:
             command: "nba_addr_read_race_check phase2/stage1/rtl --json reports/phase2/gates/nba_addr_race.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+            absent_condition_reason: >-
+              Scoped to the presence of an RTL tree. An RTL-free run cannot
+              reach a bare PASS through this clause's silence: step 2's
+              UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+              -- MEASURED on an empty project root, `rom_init_lint: missing
+              file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+              flow_compliance_check reads as a disclosed vacuity, so the step
+              reports VACUOUS_PASS and not PASS.
         - optional_program_exit_zero:
             command: "periodic_timer_vs_rx_activity_check phase2/stage1/rtl --json reports/phase2/gates/periodic_timer.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+            absent_condition_reason: >-
+              Scoped to the presence of an RTL tree. An RTL-free run cannot
+              reach a bare PASS through this clause's silence: step 2's
+              UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+              -- MEASURED on an empty project root, `rom_init_lint: missing
+              file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+              flow_compliance_check reads as a disclosed vacuity, so the step
+              reports VACUOUS_PASS and not PASS.
         - optional_program_exit_zero:
             command: "memory_read_pipeline_check phase2/stage1/rtl --json reports/phase2/gates/memory_read_pipeline.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+            absent_condition_reason: >-
+              Scoped to the presence of an RTL tree. An RTL-free run cannot
+              reach a bare PASS through this clause's silence: step 2's
+              UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+              -- MEASURED on an empty project root, `rom_init_lint: missing
+              file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+              flow_compliance_check reads as a disclosed vacuity, so the step
+              reports VACUOUS_PASS and not PASS.
         # v0.76 FPGA wrapper input-polluter check — generic across protocols.
         # Catches the sim-PASS hardware-FAIL trap where a wrapper ANDs/ORs
         # multiple inout pins to "hedge" against bench-cable uncertainty;
@@ -710,6 +992,14 @@ steps:
         - optional_program_exit_zero:
             command: "fpga_wrapper_input_polluter_check --rtl phase2/stage1/rtl --json reports/phase2/gates/fpga_input_polluter.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+            absent_condition_reason: >-
+              Scoped to the presence of an RTL tree. An RTL-free run cannot
+              reach a bare PASS through this clause's silence: step 2's
+              UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+              -- MEASURED on an empty project root, `rom_init_lint: missing
+              file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+              flow_compliance_check reads as a disclosed vacuity, so the step
+              reports VACUOUS_PASS and not PASS.
         # Slow-corner arithmetic-architecture ADVISORY (a risk predictor from
         # RTL, not a proof). A wide single-cycle ripple add/accumulate/compare
         # chain closes at TT and blows SS, forcing a carry-save / carry-select /
@@ -924,6 +1214,15 @@ steps:
         - optional_program_exit_zero:
             command: "cpu_functional_oracle_waiver_check . --json reports/phase2/gates/cpu_functional_oracle_waiver.json"
             condition_files_exist: ["phase2/stage1/sim/results.xml"]
+            absent_condition_reason: >-
+              Scoped to a run that produced simulation results. This clause
+              judges a WAIVER filed IN PLACE OF a functional PASS; with no
+              phase2/stage1/sim/results.xml there is no waiver claim to judge,
+              and a forged one is impossible because there is nothing to forge
+              it against. The absence of simulation evidence is step 4's own
+              subject and is carried by the UNCONDITIONAL
+              vacuous_testbench_check clause and the coverage clauses beside
+              this one.
         # VACUOUS-TB gate. Unconditional: the program self-reports
         # NOT_APPLICABLE (exit 0) when there is no sim tree or no testbench in
         # it, so it can never raise a false FAIL — and, being unconditional, it
@@ -937,12 +1236,24 @@ steps:
         - optional_program_exit_zero:
             command: "l10_tb_conformance_check --l10 phase1/generated_docs/L10_TEST_CASES.json --tb-dir phase2/stage1/sim/tb --out reports/phase2/gates/l10_tb_conformance.json"
             condition_files_exist: ["phase1/generated_docs/L10_TEST_CASES.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. This clause holds the testbench
+              against the L10 test-case list; a design whose Phase 1 authored
+              no L10_TEST_CASES.json has no declared case list to conform to.
+              Whether L10 SHOULD have been authored is the D1
+              layer-completeness gate's question, not this clause's.
         # L12 tb-coverage: run only when L12_BEHAVIORAL_SEQUENCES.json exists.
         # Agents pointing at a class template gain better candidate matching
         # via the optional --ic-class arg.
         - optional_program_exit_zero:
             command: "l12_tb_coverage_check . --json reports/phase2/gates/l12_tb_coverage.json"
             condition_files_exist: ["phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. This clause measures testbench
+              coverage against the L12 behavioural sequences; a design whose
+              Phase 1 authored no L12_BEHAVIORAL_SEQUENCES.json has no
+              declared sequence set to cover. Whether L12 SHOULD have been
+              authored is the D1 layer-completeness gate's question.
         # Verilator coverage: UNCONDITIONAL (vibe-ic#220).
         #
         # This gate used to fire only when the project had already produced
@@ -1175,6 +1486,15 @@ steps:
         - optional_program_exit_zero:
             command: "fpga_verification_audit --report reports/fpga_verification_report.md --summary phase2/stage1/sim/work/summary.txt --coverage reports/phase2/coverage/coverage_actual.json --out reports/phase2/gates/fpga_verification_audit.json"
             condition_files_exist: ["reports/fpga_verification_report.md"]
+            absent_condition_reason: >-
+              Scoped to a HUMAN deliverable on a hardware-bearing run. The
+              audit judges the honesty of a hand-authored FPGA verification
+              report; a headless doc-to-GDS run has no board and authors no
+              such report. The board-absent case is carried elsewhere rather
+              than here: --skip-hardware routes the FPGA-board steps to an
+              explicit WAIVED with review_required at board bring-up, and step
+              6 still hard-requires the .sof glob plus the unconditional
+              quartus_map_audit clause.
         # ── vibe-ic#693 — `fpga_led_probe_lint`, wired for the first time ────
         #
         # WHAT IT ASSERTS. The four deterministic anti-patterns of
@@ -1222,6 +1542,15 @@ steps:
         - advisory_program_exit_zero:
             command: "fpga_led_probe_lint phase2/stage1/fpga --qsf phase2/stage1/fpga/*.qsf --json reports/phase2/gates/fpga_led_probe_lint.json"
             condition_files_exist: ["phase2/stage1/fpga/*.qsf"]
+            absent_condition_reason: >-
+              Scoped to a run that Quartus actually built: with no .qsf there
+              is no FPGA top and no LED probe allocation to lint. MEASURED and
+              stated in the skill that owns the lint: over the 28 published
+              run roots this clause executes on 1 and is silent on 27, which
+              is why the silence had to become a NAMED not-applicable rather
+              than nothing at all. The clause RECORDS; it never blocks, so a
+              design with a board is judged on the finding and one without is
+              judged on nothing and says so.
     blocks_on: [2, 4, 5]
 
   - id: 7
@@ -1307,6 +1636,13 @@ steps:
         - optional_program_exit_zero:
             command: "sdc_exception_correlation_check . --json reports/phase2/gates/sdc_exceptions.json"
             condition_files_exist: ["phase2/stage2/constraints"]
+            absent_condition_reason: >-
+              Scoped to the presence of a constraints directory: with no SDC
+              there is no timing EXCEPTION to justify against the design's own
+              CDC/L8 async evidence. A constraints-free run does not pass step
+              8 through this silence -- MEASURED on an empty project root, the
+              step's UNCONDITIONAL sdc_syntax_check clause exits rc 1 and
+              FAILs the step.
         # sdc_validator_check fires only when L8 timing exists.
         # The positional is the PROJECT ROOT — the program resolves
         # `_path_layout.constraints_dir()` (= phase2/stage2/constraints) and
@@ -1327,6 +1663,15 @@ steps:
         - optional_program_exit_zero:
             command: "sdc_validator_check . --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION: the clause validates the SDC
+              against the L8 timing layer, and with no L8_TIMING_WAVEFORM.json
+              there is no declared timing intent to validate against. Once the
+              condition IS met this clause blocks -- rc 1 fails step 8's
+              all_of -- and every path in the program that reads no file
+              returns rc 2 (NOT CHECKED), which reaches the step as
+              VACUOUS-PASS rather than as a bare PASS indistinguishable from a
+              real read.
         # flow v2.3.2 (review B-1) — manual ICG / register-divided clocks
         # need a create_generated_clock in the SDC; otherwise STA
         # mis-reports every crossing path and CTS will not balance the
@@ -1334,6 +1679,14 @@ steps:
         - optional_program_exit_zero:
             command: "derived_clock_sdc_required_check phase2/stage1/rtl --sdc phase2/stage2/constraints --json reports/phase2/gates/derived_clock_sdc.json"
             condition_files_exist: ["phase2/stage1/rtl", "phase2/stage2/constraints"]
+            absent_condition_reason: >-
+              Scoped to a run that has RTL or constraints to compare: the
+              clause asserts that a manual ICG or register-divided clock in
+              the RTL has a matching create_generated_clock in the SDC, and
+              with neither tree present there is no such pair to reconcile. A
+              constraints-free run is already refused by the step's
+              UNCONDITIONAL sdc_syntax_check clause (MEASURED rc 1 on an empty
+              root).
     # `3` is a DATA dependency, not a stylistic one. `sdc_exception_correlation_check`
     # reads `reports/phase2/cdc/crossing.json` — step 3's declared required_output —
     # to build the known-async clock-pair set every `set_false_path` is justified
@@ -1349,6 +1702,23 @@ steps:
   - id: 9
     name: "Synthesis (Yosys → mapped netlist)"
     stage: stage2
+    # THE AREA AXIS HAD NEITHER A COMPARISON NOR AN EDGE — it had no metric at
+    # all. This step emitted `area.rpt` / `stats.json` and no step in the
+    # canonical flow read the number; the four steps that dominate area (9, 12,
+    # 17, 34) were all terminal.
+    #
+    # 1 is the fallback because a design's synthesised area is a property of its
+    # RTL and of the recipe THIS step runs. Step 9 IS the synthesis step, so
+    # "re-synthesise" is not an upstream move for it — a self-edge here would
+    # re-run the same recipe on the same input and spin. Step 1 is a transitive
+    # blocks_on ancestor, so the edge re-enters this step, and it is the same
+    # target steps 2/3/4/5 already fall back to for the same reason.
+    #
+    # The trigger names the DECLARED ceiling and nothing else. See the gate
+    # clause below for what happens when no design declares one.
+    closed_loop:
+      fallback_to: 1
+      trigger: "design__instance__area above the design's DECLARED ceiling (L19.die_area_budget_um); the structure has to change"
     # prose says lint/sim/formal-clean RTL; the RTL artefact is Step 1's.
     required_inputs:
       - from: 1
@@ -1445,6 +1815,36 @@ steps:
         - files_exist: ["phase2/stage2/synth/netlist.v"]
         - program_exit_zero: "synth_netlist_check --netlist phase2/stage2/synth/netlist.v --json reports/phase2/synth_netlist.json"
         - program_exit_zero: "provenance_check . --output phase2/stage2/synth/netlist.v --tool yosys,yosys-abc"
+        # THE AREA FIGURE WAS NEVER COMPARED TO ANYTHING. The clauses above
+        # establish that the netlist is a real synthesis product and that yosys
+        # produced it; none of them reads the AREA the same invocation reported.
+        # That is the identical shape `power_total_vs_budget_check` was written
+        # for one axis over, and the ledger entry that names it —
+        # ART-POWER-FIGURES-X1000, a 1000x rewrite of every power figure staying
+        # green — applies verbatim to a 1000x area figure here.
+        #
+        # This clause carries the comparison: synthesised cell area against
+        # L19's `die_area_budget_um`. The ONLY bound it applies is
+        # utilisation <= 1.0, which is what the two quantities MEAN and not a
+        # number anybody picked; it deliberately does NOT apply the 40-70% a
+        # real floorplan targets, because no design in this corpus declares one.
+        #
+        # MEASURED over the published corpus (benchmark-data @ 146d665,
+        # 2026-08-20): 177 L19 copies, ONE declaring `die_area_budget_um`, TWO
+        # runs carrying a synth `chip_area`, and ZERO overlap between them. So
+        # on today's corpus this clause REFUSES on every published run: it
+        # prints `INCOMPLETE:` naming the authority it lacks and exits 2, which
+        # `flow_compliance_check` records as VACUOUS_PASS — explicitly not a
+        # clean result. Corpus blast radius: 0 PASS->FAIL, and every run that
+        # PASSes step 9 today moves to VACUOUS_PASS, which is the honest verdict
+        # for a step whose area was never compared to anything.
+        #
+        # It refuses in THREE distinguishable ways — no declared ceiling, no
+        # readable area figure, and a figure whose producing artefact declines
+        # to name its unit as um^2 (`stats.json` says "cell-library area unit",
+        # deliberately). "I could not read it" and "I read it and it was fine"
+        # must not produce the same artefact.
+        - program_exit_zero: "area_total_vs_budget_check . --json reports/phase2/gates/area_budget.json"
     blocks_on: [2, 3, 8]
 
   - id: 10
@@ -2312,6 +2712,15 @@ steps:
         - optional_program_exit_zero:
             command: "analog_hw_spice_correlation_check . --json reports/phase2/gates/hw_spice_corr.json"
             condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+            absent_condition_reason: >-
+              Scoped to bench-hardware availability, the analog analogue of
+              --skip-hardware. The clause correlates MEASURED silicon against
+              SPICE; with no lab measurement there are not two things to
+              correlate. Simulation-only closure stays legal and is no longer
+              silent: A9 is in _ANALOG_BENCH_STEP_IDS so --skip-hardware
+              waives it the way it waives step 6, and the same gate runs
+              analog_a9_hw_verify_check, whose rc 2 surfaces a simulation-only
+              close as VACUOUS_PASS rather than PASS.
         # The DISCLOSURE half. analog_a9_hw_verify_check already existed and
         # already judges hw_measurements.json substance correctly — it was just
         # wired only into analog_one_shot_runner, never into this gate, so the
@@ -2410,9 +2819,21 @@ steps:
         - optional_program_exit_zero:
             command: "yosys_hilomap_required_check . --json reports/phase2/gates/yosys_hilomap.json"
             condition_files_exist: ["phase2/stage2/synth"]
+            absent_condition_reason: >-
+              Scoped to the presence of a synthesis directory. Step 14
+              declares phase2/stage2/synth/netlist.v as its SOLE
+              required_outputs pattern, so a run with no synth tree resolves
+              the step MISSING before this clause could hide anything -- the
+              absence is loud one level up, not swallowed here.
         - optional_program_exit_zero:
             command: "yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
             condition_files_exist: ["phase2/stage2/synth"]
+            absent_condition_reason: >-
+              Scoped to the presence of a synthesis directory. Step 14
+              declares phase2/stage2/synth/netlist.v as its SOLE
+              required_outputs pattern, so a run with no synth tree resolves
+              the step MISSING before this clause could hide anything -- the
+              absence is loud one level up, not swallowed here.
         # v1.9.62+ — the third tie-cell ordering rule pair, ADVISORY.
         # The two gates above assert hilomap PRESENCE and token presence.
         # Neither checks `setundef -zero` BEFORE hilomap, nor `opt_clean` /
@@ -2433,6 +2854,13 @@ steps:
         - advisory_program_exit_zero:
             command: "yosys_tiecell_recipe_order_check . --json reports/phase2/gates/yosys_tiecell_recipe_order.json"
             condition_files_exist: ["phase2/stage2/synth"]
+            absent_condition_reason: >-
+              Scoped to the presence of a synthesis directory: the rule is
+              about the ORDER of setundef/hilomap/opt_clean inside a yosys
+              script, and with no synth tree there is no script to order. Step
+              14 declares phase2/stage2/synth/netlist.v as its SOLE
+              required_outputs pattern, so a run with no synth tree resolves
+              the step MISSING one level up.
     blocks_on: [9, 13]
 
   - id: 15
@@ -2465,6 +2893,13 @@ steps:
         - optional_program_exit_zero:
             command: "ip_integration_check . --json reports/phase2/gates/ip_integration.json"
             condition_files_exist: ["input/pdk_local", "phase3/analog/hardmacro"]
+            absent_condition_reason: >-
+              Scoped to the presence of hard macros. Both triggers are
+              DECLARATIONS -- a user-supplied local PDK tree and the analog
+              hardmacro handoff -- and a design that integrates no macro has
+              no macro LEF/GDS/Liberty file set, no lib-corner coverage and no
+              L21 power-domain consistency to check. Nothing this step does
+              can delete a declaration that a macro exists.
         - files_exist: ["phase3/stage3/pnr/floorplan.def"]
         - program_exit_zero: "floorplan_pdn_check . --json reports/phase3/pnr/floorplan_pdn.json"
         # vibe-ic — WHAT THE LEF DECLARES vs WHAT A READER CAN LOAD.
@@ -2490,6 +2925,128 @@ steps:
         - program_exit_zero: "macro_obs_load_parity_check . --json reports/phase3/pnr/macro_obs_load_parity.json"
     blocks_on: [13, 14, A8]
 
+  # ── chip/IC path only ────────────────────────────────────────────────
+  # THE FLOW HAS ALWAYS BEEN A cell/IP FLOW AND NEVER SAID SO. Steps 1-38
+  # take RTL to a bare die: no pad ring, no seal ring, no die identification.
+  # That is exactly right for an IP handed to somebody else to place, and it
+  # is not a submittable chip. MEASURED 2026-08-19: wafer.space's own
+  # precheck container, run against our published GDS, refused at stage 3 of
+  # 16 with "Layer 'GUARD_RING_MK' is not used"; stages 4-16 have never run.
+  #
+  # Upstream draws the same line. LibreLane has TWO flows: `Classic`, whose
+  # steps write a LEF because "this is a macro", and `Chip`, which deletes
+  # `Magic.WriteLEF` with the comment "This is not a macro, there's no need
+  # to write a LEF" and adds PadRing / SealRing / Filler / Density. The `ic`
+  # suffix marks the steps that belong only to the chip path; `ip` marks the
+  # one that terminates the cell/IP path.
+  - id: 15.5ic
+    name: "Pad Ring (chip/IC path only)"
+    stage: stage3
+    condition:
+      # THE CHIP PATH, NOT THE SHUTTLE TEMPLATE — and the difference is the
+      # whole of vibe-ic#1410/cpath. This condition used to read
+      # `files_exist: [input/submission_template/slots/*.yaml]`, which is the
+      # SHUTTLE OPERATOR'S template. A chip doing its own tape-out has no
+      # operator and therefore no such file, so this step was skipped as "not
+      # applicable" and the design shipped WITH NO PAD RING. A chip with no
+      # pads cannot be bonded or probed. That is not a property of being on a
+      # shuttle; it is a property of being a DIE. The operator's template
+      # supplies the GEOMETRY this step needs, so its absence must change
+      # WHERE the geometry comes from and never WHETHER the step runs.
+      #
+      # `any_of`, not the default ALL-of, and the two entries are the SAME
+      # chip-path marker step 37.5ic already carries: they are MUTUALLY
+      # EXCLUSIVE router files and no tree ever holds both
+      # (`tapeout_declaration_check` refuses the tree that does), so an ALL-of
+      # reading would make this step unreachable for every design.
+      any_of: true
+      files_exist:
+        - "input/submission_template/slots/*.yaml"
+        - "input/submission_template/SELF_TAPEOUT.txt"
+    # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
+    # condition tests WHICH PATH the design is on, and step 0.5ic's
+    # required_outputs is the OR of exactly the three router artefacts, so on
+    # any run where 0.5ic itself passed, precisely one of them exists. The two
+    # named above are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the
+    # IP/hardmacro terminal 37.5ip owns, and an IP is delivered as a hardmacro
+    # somebody else places — it has no die edge, so no pad ring — a silent skip
+    # is the correct reading. The "someone forgot" case is NOT lost to this
+    # default: it is 0.5ic never having run, which its own gate refuses as
+    # NEVER_LOOKED rather than leaving to be inferred from a downstream skip.
+    # Stated rather than left to the default so the reading is the step's, not
+    # the consumer's fallback.
+    condition_kind: design_dependent
+    required_inputs:
+      - from: 15
+        path: "phase3/stage3/pnr/floorplan.def"
+      # WHERE THE GEOMETRY COMES FROM WHEN THERE IS NO OPERATOR. 0.5ic writes
+      # this declaration on EVERY route, including the one with no operator, so
+      # it exists wherever this step runs. Its section 2B is
+      # `_pad_ring.REQUIRED_VARS` grouped into the 8 things a human decides,
+      # and `_tapeout_declaration.py` names `pad_ring_gen` as the `consumer` of
+      # every one of those 8. Until this edge, nothing read them.
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
+    # BEFORE ROUTING, NOT AFTER. The pads are the design's BTerms once a pad
+    # ring exists, so routing must already see them. OpenROAD places its pad
+    # ring immediately after the power connections are set, for the same
+    # reason, and LibreLane's Chip flow then deletes IOPlacement outright:
+    # "No pin placement necessary -> pads are the BTerms".
+    programs:
+      # THE AUTHOR OF THIS STEP'S OWN INPUT, and it did not exist until
+      # vibe-ic#1410/cpath. `pad_ring_gen` reads
+      # `phase3/stage3/pnr/pad_assignment.json`; measured by grep over the
+      # whole repository, that path had TWO references and both were readers.
+      # Nothing wrote it, so `pad_ring_gen` took its SKIP branch on the shuttle
+      # path and on the self-tape-out path alike — a step that can only skip is
+      # not a step. `pad_assignment_gen` composes the config from the
+      # operator's slot geometry WHERE THE SLOT SPEAKS and from the design's own
+      # tape-out declaration everywhere else, derives nothing, and stamps every
+      # variable with which source it came from.
+      - pad_assignment_gen
+      - pad_ring_gen
+    required_outputs:
+      - "phase3/stage3/pnr/padring.def"
+      - "reports/phase3/padring.json"
+      # THE HONEST HALF, and unlike `padring.def` it is written on EVERY path
+      # this step takes — including the two that produce no ring. A run that
+      # was never asked for a pin-out and a run whose declaration is half
+      # written are different facts, and this is the artefact that keeps them
+      # apart where a reader can see them.
+      - "reports/phase3/pad_assignment.json"
+    gate:
+      all_of:
+        # FIRST, because it is the one that can say WHY there is no ring.
+        # Its three outcomes are the three states this step actually has:
+        #   rc 0  every one of the 13 variables resolved from a declared source
+        #   rc 2  NOT_ASKED — no slot pins a per-side pad list and section 2B
+        #         of the declaration is entirely NOT_DETERMINED. The flow reads
+        #         rc=2 as its disclosed-skip tier, which is the correct reading:
+        #         nobody was asked, `pad_assignment.json` is deliberately NOT
+        #         written, and `pad_ring_gen`'s own SKIP is left exactly as it
+        #         is today. This is the state every tree in this repository is
+        #         in, so wiring this clause changes no existing verdict.
+        #   rc 1  REFUSE — a source could not be READ, two slot files pin the
+        #         same side differently, a slot pad list names no die side, or
+        #         a source spoke and the contract is still incomplete. That
+        #         last one has two shapes and the message says which: the
+        #         DESIGN answered some of section 2B and not the rest, or the
+        #         OPERATOR's slot pinned the four per-side pad lists while the
+        #         design answered nothing — which is NOT "nobody was asked",
+        #         and a slot file can supply nothing else, so the other nine
+        #         variables are owed by the design whatever the operator
+        #         published. Either way the owed fields are NAMED. It never
+        #         guesses a pad site, an edge spacing, a rotation or a filler,
+        #         so every one of `pad_ring_gen`'s own refusals
+        #         (PAD_SITE_NOT_FOUND, PAD_SITE_CLASS_NOT_PAD,
+        #         PAD_CORNER_SPACING_NOT_SITE_MULTIPLE and the other three)
+        #         stays reachable and still fires.
+        - program_exit_zero: "pad_assignment_gen . --json reports/phase3/pad_assignment.json"
+        - program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
+    # 0.5ic writes the template this step's condition reads; without the
+    # edge the graph says the pad ring may run before the slot geometry
+    # that decides its size exists (D5-MISSING-EDGE, 2026-08-20).
+    blocks_on: [15, 0.5ic]
   - id: 16
     name: "Clock planning"
     stage: stage3
@@ -2641,6 +3198,12 @@ steps:
         - optional_program_exit_zero:
             command: "spare_cell_coverage_check . --json reports/phase2/gates/spare_cell_coverage.json"
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+            absent_condition_reason: >-
+              The same gate OPENS with a hard `files_exist:
+              [phase3/stage3/pnr/spare_cells.json]` clause, so an absent
+              spare-cell manifest FAILs step 18 at that predicate before this
+              clause is reached. The condition removes a duplicate failure; it
+              hides none.
         # d5 — `spare_cell_preservation_check` USED TO BE WIRED HERE, with the
         # comment "fires only when a final artefact exists so the gate is a
         # no-op mid-flow". It did not: its trigger was `spare_cells.json`, THIS
@@ -2849,6 +3412,18 @@ steps:
       # this entry turns it MISSING, and that is the honest reading: the
       # mirror the gate's own `--under` scopes to really was not written.
       - "reports/phase3/drc_router.rpt"
+      # DECLARED because it became LOAD-BEARING, and D7 is what noticed.
+      # `drc_report_check` has always written this JSON here — the gate below
+      # names it with `--json reports/phase3/drc_router.json` — but nothing
+      # outside step 21 read it, so an undeclared output stayed latent.
+      # `general_precheck` delegates its KLayout-DRC rung to exactly this
+      # report, and the moment it did,
+      # `test_d7_required_outputs_list_is_complete[step21]` went red with
+      # `[W1:gate_output_read_elsewhere] ... written by drc_report_check; read
+      # by program:general_precheck`. The remedy for a load-bearing artefact a
+      # step does not declare is to DECLARE it — not to stop reading it, and
+      # not to waive the dimension that caught it.
+      - "reports/phase3/drc_router.json"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/routed.def"]
@@ -3290,6 +3865,15 @@ steps:
         - optional_program_exit_zero:
             command: "post_route_signoff_corner_check . --json reports/phase3/sta/post_route_signoff_corner.json"
             condition_files_exist: ["phase3/stage3/sta/sta_spef_multicorner.rpt"]
+            absent_condition_reason: >-
+              SEMANTIC BACKSTOP, and stated as such. This condition IS the
+              self-disabling shape (#210 instance 1): an absent multicorner
+              report is exactly the defect. It was repaired not by changing
+              this predicate but by adding the UNCONDITIONAL companion
+              sta_corner_record_completeness_check to this same step, which
+              starts from the corners the FLOW declared and FAILs when the
+              record does not account for each of them. Keeping the condition
+              here only avoids a duplicate failure.
         # The timing RECORD-completeness gate. The sub-gate above is
         # `condition_files_exist`-gated on the very report whose ABSENCE is the
         # defect: when no multicorner report exists the condition is false, the
@@ -3538,6 +4122,14 @@ steps:
         - optional_program_exit_zero:
             command: "gds_antenna_deck_check . --json reports/phase2/gates/gate_oxide_geom_deck.json"
             condition_files_exist: ["signoff/gate_oxide_deck.json", "input/pdk/bridge/gate_oxide_deck.json"]
+            absent_condition_reason: >-
+              Both triggers are PDK-PROVIDED sign-off decks -- inputs to this
+              step, not results of it. Without a gate-oxide deck there is no
+              geometry target to measure against and step 26 keeps exactly its
+              previous verdict; no fill of the gap is being claimed. WITH a
+              deck the gate always reports: an unavailable KLayout or deck
+              engine exits 2 with a NAMED disclosure (VACUOUS-PASS), never a
+              bare PASS earned by a checker that did not run.
     blocks_on: [21]
 
   # ── Step 27: Signal Integrity ────────────────────────────
@@ -3545,6 +4137,86 @@ steps:
   # on extracted parasitics. Critical for high-speed designs where
   # coupling capacitance between adjacent nets causes functional
   # failures or timing degradation.
+  # ── chip/IC path only ────────────────────────────────────────────────
+  - id: 26.5ic
+    name: "Die Finishing — seal ring + die identification (chip/IC path only)"
+    stage: stage3
+    condition:
+      # THE CHIP PATH, NOT THE SHUTTLE TEMPLATE. Same change and same reason as
+      # 15.5ic above: this read `files_exist:
+      # [input/submission_template/slots/*.yaml]`, the shuttle OPERATOR'S
+      # template, so a chip doing its own tape-out skipped die finishing as
+      # "not applicable" and shipped WITH NO SEAL RING. A seal ring is what
+      # dicing damage and moisture get into a die through; it is a property of
+      # being a DIE, not of being on a shuttle. Measured by the external
+      # authority rather than by this repository's opinion: an open-MPW
+      # precheck container refused a layout this flow published at ladder step
+      # 3 of 16 with "requires a seal ring (guard ring) around the die", and
+      # stages 4-16 never executed.
+      #
+      # `any_of`, and the entries are 37.5ic's chip-path marker verbatim — two
+      # mutually exclusive router files, never both on one tree.
+      any_of: true
+      files_exist:
+        - "input/submission_template/slots/*.yaml"
+        - "input/submission_template/SELF_TAPEOUT.txt"
+    # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
+    # condition tests WHICH PATH the design is on, and step 0.5ic's
+    # required_outputs is the OR of exactly the three router artefacts, so on
+    # any run where 0.5ic itself passed, precisely one of them exists. The two
+    # named above are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the
+    # IP/hardmacro terminal 37.5ip owns, and a hardmacro is placed inside
+    # somebody else's die — it has no die edge of its own to seal — so a silent
+    # skip is the correct reading. The "someone forgot" case is NOT lost to
+    # this default: it is 0.5ic never having run, which its own gate refuses as
+    # NEVER_LOOKED rather than leaving to be inferred from a downstream skip.
+    # Stated rather than left to the default so the reading is the step's, not
+    # the consumer's fallback.
+    condition_kind: design_dependent
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
+      # WHERE THE SEAL-RING INPUTS COME FROM WHEN THERE IS NO OPERATOR. 0.5ic
+      # writes this declaration on every route. Its section 2C is the three
+      # inputs this step already takes — whether a ring is required, which PDK
+      # script builds it, and which marker layer must carry geometry — and
+      # `_tapeout_declaration.py` was written to supply exactly them. Until this
+      # edge, nothing read them: `die_finishing_gen` resolved its script and its
+      # marker layer from the PDK bridge config and the environment only, so a
+      # self-tape-out that had ANSWERED all three was driven as though it had
+      # answered none.
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
+    # AFTER THE ANTENNA CHECK AND BEFORE PHYSICAL VERIFICATION, and the order
+    # is the whole point. A seal ring is real metal. Adding it after step 31
+    # would mean the die step 31 signed off is not the die that ships — the
+    # ring would reach a foundry having passed no DRC or LVS. That is this
+    # repository's own worst failure shape: the artefact changed after the
+    # evidence. LibreLane places SealRing after Checker.KLayoutAntenna for
+    # the same reason.
+    #
+    # TWO COMPONENTS, TWO SOURCES, REPORTED SEPARATELY. The gate must never
+    # collapse them into one verdict:
+    #   seal ring  the PDK ships its own generator and this step CALLS it,
+    #              never reimplements it — sky130A, gf180mcuD and ihp-sg13g2
+    #              each carry one. A PDK with no generator SKIPS with a
+    #              stated reason (LibreLane does exactly this when
+    #              KLAYOUT_SEALRING_SCRIPT is unset).
+    #   die id     four shuttle-owned cells whose provenance is NOT YET
+    #              DETERMINED — gf180mcu_ws_ip__{qrcode_id,shuttle_id,
+    #              project_id,marker}, at coordinates their generate_id.py
+    #              pins exactly. Until the source is established this half
+    #              reports NOT DETERMINED; it must not report clean, and it
+    #              must not fail the seal ring for its own absence.
+    programs:
+      - die_finishing_gen
+    required_outputs:
+      - "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt"
+      - "reports/phase3/die_finishing.json"
+    gate:
+      program_exit_zero: "die_finishing_check . --json reports/phase3/die_finishing.json"
+    # 0.5ic writes the template this step's condition reads.
+    blocks_on: [26, 0.5ic]
   - id: 27
     name: "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)"
     stage: stage3
@@ -3673,6 +4345,12 @@ steps:
         - optional_program_exit_zero:
             command: "si_crosstalk_check . --json reports/phase2/gates/si_crosstalk.json"
             condition_files_exist: ["reports/phase3/si_crosstalk.rpt"]
+            absent_condition_reason: >-
+              The same gate OPENS with a hard any-of `files_exist` over
+              reports/phase3/si_crosstalk.rpt and .json, so a run carrying NO
+              crosstalk evidence at all FAILs step 27 at that predicate. This
+              clause is scoped to the .rpt form of the evidence that predicate
+              already requires one of.
         # MCF crosstalk-DELAY axis (complements the noise/glitch axis above):
         # the runner re-runs OpenSTA on an MCF-bounded SPEF (Cc*MCF folded per
         # the aggressor/victim timing-window overlap; setup MCF=2 / hold MCF=0)
@@ -3685,6 +4363,15 @@ steps:
         - optional_program_exit_zero:
             command: "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
             condition_files_exist: ["reports/phase3/si_mcf_sta.json"]
+            absent_condition_reason: >-
+              Step 27 declares reports/phase3/si_mcf_sta.json in its
+              required_outputs, so an absent MCF report resolves the step
+              MISSING rather than PASS -- recorded as a measured result in
+              flow_condition_reachability_check's allowlist entry for this
+              same clause. The condition therefore cannot hide the absence it
+              is conditioned on. As a GATE the MCF axis is a documented
+              ADVISORY: it is a conservative BOUND, so it validates the
+              emitted report rather than hard-failing a negative bound.
     blocks_on: [22]
 
   # ── Step 28: PERC / Reliability Sign-off ─────────────────
@@ -3871,6 +4558,95 @@ steps:
       # only under `flow_compliance_check --strict-audit-evidence`.
       - "reports/phase3/lvs.json"
       - "reports/phase2/gates/erc_density.json"
+      # A THIRD machine-readable verdict of the same shape, and the same defect
+      # one step later. `magic_illegal_overlap_check` is a BLOCKING clause of
+      # this step's gate and writes `reports/phase3/magic_illegal_overlap.json`;
+      # `phase3_one_shot_runner` then READS that path by name
+      # (phase3_one_shot_runner.py:28496) and, on a non-zero gate, writes an
+      # LVS FAIL verdict that cites the file in `illegal_overlap_report` and
+      # aborts the step before netgen runs. So it is load-bearing outside its
+      # own writer, which is exactly the class dimension 7 charges — and until
+      # now Step 31 declared it nowhere:
+      #   [W1:gate_output_read_elsewhere]
+      #   'reports/phase3/magic_illegal_overlap.json' (written by
+      #   magic_illegal_overlap_check; read by program:phase3_one_shot_runner)
+      # An extraction that never wrote the file read exactly like one that
+      # cleared the zero-illegal-overlap gate, which is the same failure mode
+      # the lvs.json / erc_density.json paragraph above records.
+      #
+      # WHAT IT DOES NOT DO: no PUBLISHED corpus cell carries this path (`find`
+      # over benchmark-data @ 146d665 returns nothing) — the gate postdates
+      # every published run — so dimension 3 records the entry UNPROVEN and
+      # will report it unevidenced on any host that offers a corpus. That is
+      # the true statement of the gap and it replaces a hidden one.
+      - "reports/phase3/magic_illegal_overlap.json"
+      # A FOURTH, and the one nothing in this repository could see until the
+      # dimension-7 write record was reconnected to the published corpus.
+      # `reports/phase3/lvs_verdict.json` is the runner's OWN machine-readable
+      # LVS verdict — `_write_lvs_verdict` emits it, `eda_report_audit`
+      # (:1308, this step's own lvs gate) reads it as the independent
+      # confirmation of PASS/FAIL, and `eco_trigger_decision` lists it in
+      # `_NON_TIMING_SIGNOFF_ARTEFACTS` beside the lvs.json and
+      # erc_density.json above. Exactly the same class as those two, and
+      # undeclared for exactly as long. It was invisible because W2's producer
+      # oracle had degraded to the AST alone; with the record consulted again
+      # it is charged by name:
+      #   [W2:produced_consumed_undeclared] 'reports/phase3/lvs_verdict.json'
+      #   (written by run-record:ambiguous; read by gate:step31)
+      # Unlike magic_illegal_overlap.json above, this one IS evidenced: all
+      # three published spm cells carry it tracked and non-empty (944-1131 B),
+      # so declaring it closes the d7 finding and costs dimension 3 nothing.
+      - "reports/phase3/lvs_verdict.json"
+      # A FIFTH, and the last one dimension 7 has to say out loud on this step.
+      # `reports/phase3/drc_signoff.json` is the machine-readable half of the
+      # DRC sign-off this step's own `--signoff` clause below produces, and the
+      # `.rpt` half three entries up has been declared all along. Three
+      # programs OTHER than its writer read it:
+      #   `signoff_ladder_run.check_tier_1_drc` discovers it by name and by
+      #       `reports/**/drc_signoff.json` and grades release-gating tier T1
+      #       on it; absent, that tier reports NOT_RUN.
+      #   `final_report_generate` echoes its verdict into the sign-off summary
+      #       a reader treats as the deliverable (see the ORGANIC-20260808
+      #       paragraph there: "nothing in this tree writes drc_signoff.json"
+      #       STOPPED BEING TRUE, and 3 committed cells carry it).
+      #   `macro_obs_geometry_intersect_check` names `passed` / `is_signoff_deck`
+      #       out of it as the geometric-DRC evidence it will not re-derive.
+      # So its absence is exactly the disease dimension 7 exists for: T1 takes
+      # its NOT_RUN branch, the summary prints "(report missing)", and no gate
+      # goes red. Same class as `reports/phase3/lvs.json` five entries up —
+      # a gate `--json` artefact with readers outside its writer — and
+      # undeclared for exactly as long.
+      #
+      # W1 charged it by name and got its NAMED consumer wrong: it reported
+      # `read by program:general_precheck`, and general_precheck does not read
+      # this file, it RE-RUNS `drc_report_check` and WRITES it (see the
+      # separate finding on that clobber). The rule's CONCLUSION is right
+      # anyway — the three readers above are real — so the entry is declared on
+      # their evidence, not on the consumer W1 quoted. It has to be: with the
+      # clobber fixed the accidental consumer is gone, W1 falls silent on this
+      # path, and the gap would go back to being invisible. MEASURED: remove
+      # this entry from a tree carrying the general_precheck fix and step 31
+      # goes GREEN with the three readers untouched.
+      #
+      # WHAT IT COSTS, measured over the published corpus the way the step-23
+      # stance withdrawal in `test_signoff_required_outputs_completeness`
+      # requires (`find` over benchmark-data, 2026-08-21, the corpus at
+      # `~/vibe-ic` — it is no longer tracked on main): 16 roots carry
+      # `drc_signoff.rpt`, 3 carry `drc_signoff.json`, so 13 would report the
+      # new entry MISSING. Those 13 are NOT runs that dropped it — the PRODUCER
+      # POSTDATES THEM. Every root carrying the JSON is dated 2026-08-03 or
+      # later (caravel_user_project/v1.9.43_sky130A 08-03, spm/v1.9.96_gf180mcuD
+      # 08-07, spm/v1.10.18_sky130A 08-09) and every root without it is
+      # 2026-07-25 or earlier, which is `final_report_generate`'s own
+      # ORGANIC-20260808 note from the other side: "nothing in this tree writes
+      # drc_signoff.json" STOPPED BEING TRUE when `eda_report_audit:drc` began
+      # staging one. So this is the `magic_illegal_overlap.json` case three
+      # entries up — the gate postdates every older published run, dimension 3
+      # records the entry UNPROVEN there, and that is the true statement of the
+      # gap replacing a hidden one. It is NOT the step-23 stance case, where the
+      # producer was contemporary with the roots that lacked the artefact and
+      # the declaration was withdrawn for that reason.
+      - "reports/phase3/drc_signoff.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.
@@ -3930,6 +4706,71 @@ steps:
         # BLAST RADIUS over the 13 published runs carrying this artefact: 0.
         # All 6 runs green on this gate today stay green.
         - program_exit_zero: "drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
+        # W2.3 — THE EXTRACTOR'S OWN ERROR CHANNEL, READ BEFORE ITS OUTPUT IS
+        # BELIEVED. Placed HERE, above the two LVS clauses, because that is the
+        # order the question has to be asked in: magic files every rectangle it
+        # refused to connect ("Illegal overlap between <a> and <b> (types do
+        # not connect)") as a FEEDBACK AREA, and the netlist it writes anyway
+        # describes a design the layout does not. netgen will compare that
+        # netlist and can answer `Circuits match uniquely`. A clean LVS
+        # certificate over an extraction that said it could not read the layout
+        # is a dead chip with a clean report, and every clause below this one
+        # is downstream of that netlist.
+        #
+        # MEASURED, and this is what was missing: on origin/main at 397b3f25f,
+        # `grep -rEil "illegal.{0,3}overlap"` over the whole plugin returns 0
+        # files and `feedback\.txt` returns 0 over the whole repo. The
+        # extraction-side program validated the commands we SENT
+        # (magic_extract_spice_emit: `extract all`, `ext2spice lvs`); the four
+        # LVS-side programs read netgen's verdict. Nothing read what magic said
+        # back.
+        #
+        # DIFFERENT FROM the runner's #477 ceiling, deliberately: that asks
+        # "did the extraction COLLAPSE", off the transcript's `N errors` line,
+        # at 1000. This asks "did the extractor REFUSE a rectangle", off the
+        # feedback areas, at 0 — LibreLane's `Checker.IllegalOverlap` threshold,
+        # and the only defensible one, since one undecidable rectangle is one
+        # place the netlist is fiction.
+        #
+        # rc 2 (no extraction under phase3/stage3/extracted at all) is a
+        # DISCLOSED vacuous pass, the same convention the two DRC clauses above
+        # use — but an extraction that RAN and left no feedback dump is rc 1,
+        # not rc 2. `feedback save` writes an EMPTY file when there are no
+        # areas, so a clean extraction leaves a 0-byte file; an absent file is
+        # therefore an unmeasured nothing and never a measured zero.
+        #
+        # BLAST RADIUS: 0 run trees in the landing base — benchmark-data moved
+        # to its own repository at v1.10.56 (#1723), and this checkout carries
+        # 0 routed.def / 0 lvs.rpt / 0 drc_signoff.rpt, so this clause re-grades
+        # nothing that lands here.
+        #
+        # WHAT IT FINDS ON REAL RUNS, measured against the last in-repo snapshot
+        # of that corpus (14 candidate roots — every directory carrying either
+        # an `extracted/` dir or `reports/phase3/lvs.rpt`; some are nested, so
+        # this over-counts distinct runs): 6 rc-2 and 8 rc-1, every rc-1 an
+        # EXTRACTION_FEEDBACK_ABSENT. SEVEN OF THE EIGHT ALREADY PUBLISH
+        # "Circuits match uniquely" — caravel_user_project (x2), sha256
+        # clean_run_v1422 and v1427, and spm on three different PDKs. The
+        # eighth (subservient) published "failed pin matching".
+        #
+        # Stated exactly: that is NOT a claim those extractions were dirty. It
+        # is the claim this gate exists to make — seven clean LVS certificates
+        # were issued while the illegal-overlap count was NOT DETERMINED,
+        # because the pre-W2.3 recipe never dumped the channel that carries it.
+        # caravel_user_project's transcript carries 0 occurrences of the marker
+        # and 0 `problems occurred` lines, which is weak evidence it was in fact
+        # clean — but weak evidence is not the measurement, and rounding it to
+        # zero is the defect, not the fix. Re-extracting with the recipe this
+        # change ships turns every one of those NOT DETERMINEDs into a number.
+        #
+        # THE GATE'S OWN --json TARGET IS DELIBERATELY NOT DECLARED in
+        # required_outputs. No producer outside this clause writes it, so
+        # declaring it would put this step in the same SELF-CERTIFIED EVIDENCE
+        # position the lvs.json / erc_density.json note above describes — the
+        # audit would re-probe after the gate and credit the copy the gate just
+        # wrote. It buys no evidence and costs a MISSING on every tree that has
+        # not re-run. The gate clause is what enforces; the report is triage.
+        - program_exit_zero: "magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
         # vibe-ic#693 — the LVS counterpart, and a DIFFERENT question from the
         # gate above: not "did netgen say match" but "could netgen's match mean
@@ -4168,11 +5009,38 @@ steps:
             condition_files_exist:
               - "phase3/stage3/eco/eco_log.json"
               - "phase3/stage3/eco/eco_trigger_decision.json"
+            absent_condition_reason: >-
+              Step 32's required_outputs is the single any-of pattern
+              `eco_log.json OR no_eco_needed.flag`, so an ECO that ran and
+              wrote no log leaves NEITHER and the step resolves MISSING,
+              loudly. The condition's false branch therefore coincides with an
+              honestly declared no-ECO run, not with a silent loss of an ECO
+              that happened.
     blocks_on: [23, 24, 25, 26, 27, 29, 30, 31]
 
   - id: 33
     name: "Power analysis (pre/post-layout)"
     stage: stage4
+    # THE POWER AXIS HAD A COMPARISON AND NO EDGE.
+    # `power_total_vs_budget_check` (below) computes the verdict and, until this
+    # declaration, handed it to nobody: 19 closed_loop edges existed in this
+    # flow and FOUR of them served timing (10->7, 20->19, 23->32, 32->32) while
+    # power had exactly ONE (24->15, IR drop) and area had NONE. Step 33
+    # measured total power and the number was recorded and then dropped.
+    #
+    # 17 is the fallback because PLACEMENT is the first lever that moves total
+    # power: switching power is dominated by the capacitance the placer decides,
+    # and 17 is a transitive blocks_on ancestor of 33, so the edge re-enters
+    # this step (`closed_loop_edge_check.CL-NOT-A-LOOP`).
+    #
+    # The trigger names the DECLARED budget and nothing else. When L19 declares
+    # no `power_budget_uw` the gate below REFUSES (rc 2, INCOMPLETE) and this
+    # edge is not taken — it is not taken on a derived ceiling either, because a
+    # threshold nobody declared is a ruler fitted to the answer
+    # (`matrix_mutation_ledger.ART-POWER-FIGURES-X1000`).
+    closed_loop:
+      fallback_to: 17
+      trigger: "power__total above the design's DECLARED budget (L19.power_budget_uw); re-place to cut switching capacitance"
     required_inputs:
       - from: 22
         path: "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
@@ -4271,6 +5139,12 @@ steps:
         - optional_program_exit_zero:
             command: "spare_cell_preservation_check . --json reports/phase2/gates/spare_preservation_postfill.json"
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+            absent_condition_reason: >-
+              Scoped to a design that inserted spares at step 18: with no
+              spare_cells.json there is no spare pool for ECO-aware fill to
+              preserve. A design that DID insert spares carries the manifest,
+              because step 18's gate hard-requires it through files_exist, so
+              this clause cannot be silenced on the runs it is about.
         # Density-targeted fill VERDICT. `--verify-only` re-reports what the
         # streamout emitter already wrote — it never re-runs the fill, so
         # auditing a finished project cannot mutate its GDS. PARTIAL (a layer
@@ -4281,6 +5155,13 @@ steps:
         - optional_program_exit_zero:
             command: "metal_fill_emit . --verify-only --json reports/phase2/gates/cmp_fill_emit.json"
             condition_files_exist: ["signoff/cmp_fill_targets.json", "input/pdk/bridge/cmp_fill_targets.json"]
+            absent_condition_reason: >-
+              Both triggers are PDK-PROVIDED fill-target decks -- opt-in
+              inputs, not results of this step: no fill config, no claim. A
+              filled design is still judged without them by the UNCONDITIONAL
+              metal_fill_density_check clause in this same gate. When the deck
+              IS present and the report is missing, this gate exits 2 with a
+              NAMED disclosure (VACUOUS-PASS), never a silent 'filled'.
     blocks_on: [32]
 
   # ── Step 35: DFM screen ──────────────────────────────────────────
@@ -4598,6 +5479,87 @@ steps:
         # measured change; it moves what the gate PASSES, not only what it
         # refuses.
         - program_exit_zero: "declared_pdk_is_the_pdk_used_check ."
+        # vibe-ic#1121 — THIS GATE WAS NEVER WIRED, and it is the third time
+        # this repo has found that shape (step 21's macro_obs geometry check,
+        # step 37.5ic's shuttle precheck, now this). Measured on 46db01866:
+        #     git grep -n "ppa_head_to_head" -- '*flow/*'   ->  ZERO lines
+        # (the pathspec matters: `-- '*/flow/'` also returns zero, and returns
+        # zero WITH the gate wired, because it matches no file in this repo at
+        # all. A zero from a probe that cannot match is not a measurement.)
+        # The program is complete and encodes #1121's four refusals, and no
+        # step invoked it, so nothing it refuses could ever fail a run.
+        #
+        # WIRED HERE because this is the step that OWNS THE CLAIM. A PPA
+        # head-to-head is not a design artefact, it is a SIGN-OFF assertion
+        # ("given an identical spec and PDK, this flow produced better PPA than
+        # theirs"), and this step is the flow's final sign-off confirmation. It
+        # is also the first step whose blocks_on transitively carries all three
+        # axes the record must declare — 31 PV, 32 post-route timing, 33 power,
+        # 34 fill/area — so the triple exists by the time it is judged. And it
+        # is UNCONDITIONAL, so it stands on both the chip and the IP path,
+        # unlike 37.5ic / 37.5ip / 38. A refusal lands BEFORE stream-out,
+        # because step 37 blocks_on 36: a false comparison never reaches a GDS.
+        #
+        # rc 2 SKIPS, AND THAT IS A DECISION, NOT AN OVERSIGHT.
+        # `__check_program_exit_zero` reads rc 2 as VACUOUS_PASS, so a gate that
+        # exits 2 on absence cannot go red — the v1.11.3 `tapeout_docs_gen`
+        # defect. Checked what THIS invocation returns: `--corpus .` walks the
+        # project for the checker's own record glob and exits 2 only when the
+        # walk succeeded and found NOTHING. That skip is deliberate. The record
+        # is a CAMPAIGN artefact, not a per-design one — nearly every design
+        # this flow signs off will never carry one — so blocking on absence
+        # would redden every ordinary tapeout to police a claim nobody made,
+        # which is the "declare an undeclared artefact and relocate the red"
+        # shape. What must NOT skip is a claim that was actually made, and after
+        # the fix that ships with this change it cannot:
+        #   * a record that EXISTS and cannot support itself is rc 1 -> FAIL;
+        #   * a refusal is no longer softened by an undetermined record beside
+        #     it (the aggregator used max(), and rc 2 is the larger integer and
+        #     the weaker verdict, so ONE unmeasured axis defused a real refusal);
+        #   * a corpus that cannot be READ is rc 1 CORPUS_ABSENT, not rc 2 —
+        #     "I could not look" and "I looked and it was empty" are now two
+        #     different answers.
+        # So the only thing that skips here is a run that made no claim, and it
+        # skips loudly: the denominator is printed on every run and the step is
+        # promoted to the VACUOUS_PASS tier, never a bare PASS.
+        #
+        # NOT `advisory_program_exit_zero`: that slot records a finding and can
+        # never fail the step, and a rigged baseline is a defect in a published
+        # claim, so its verdict has to decide this step's.
+        #
+        # `optional_program_exit_zero` AND NOT THE UNCONDITIONAL SLOT, MEASURED.
+        # Wired unconditionally, `--corpus .` returns rc 2 on every run that
+        # files no record, and `check_step` reads ONE vacuous clause beside
+        # substantive ones as "every clause was vacuous" — a substantive
+        # sub-gate appends nothing, so silence and vacuity are the same to it:
+        #     substantive ALONE       -> PASS
+        #     vacuous ALONE           -> VACUOUS_PASS
+        #     substantive + vacuous   -> VACUOUS_PASS
+        # That would demote the TAPEOUT SIGN-OFF itself to VACUOUS_PASS on every
+        # ordinary run, which is the mis-fire that withdrew v1.10.14 (step 2
+        # Lint demoted on 1 vacuous clause out of 10 that ran).
+        #
+        # This is NOT step 21's "orphan with extra steps". That ruling is about
+        # a trigger on an artefact THE FLOW ITSELF PRODUCES, where a
+        # self-disabling glob hides a real defect. The condition below IS the
+        # checker's own record glob over an artefact NO step produces, so
+        # condition-unmet and corpus-empty are the SAME SET by construction and
+        # no record can hide behind it. The skip is bought, not assumed: the
+        # engine FAILs the clause outright unless the wiring site declares why
+        # an absent input is genuinely not-applicable.
+        - optional_program_exit_zero:
+            command: "ppa_head_to_head_check --corpus ."
+            condition_files_exist: ["**/*head_to_head*.json"]
+            absent_condition_reason: >-
+              The subject is a CLAIM, not a result. A PPA head-to-head record is
+              produced by a comparison campaign against another flow -- vibe-ic
+              against LibreLane against ORFS+AutoTuner -- and not by a design
+              run, so nearly every sign-off legitimately files none. The failure
+              this clause exists for, a comparison that cannot support the claim
+              printed on it, REQUIRES the claim to exist. Absence is the normal
+              case here, not the defect. The glob is the checker's OWN record
+              glob, so a record that exists is always judged: there is no state
+              in which a claim was filed and this clause did not look at it.
     blocks_on: [31, 32, 33, 34]
 
   - id: 37
@@ -4665,6 +5627,179 @@ steps:
         - program_exit_zero: "provenance_check . --output=phase3/stage4/gds/*.gds --tool=klayout,magic,openroad"
     blocks_on: [34, 36]
 
+  # ── cell/IP path — TERMINAL ──────────────────────────────────────────
+  # Where the two paths part. An IP is delivered, not fabricated: it needs a
+  # LEF so somebody else can place it, a Liberty so they can time it, and a
+  # Verilog view so they can simulate it. It needs no pad ring, no seal ring
+  # and no die id, because it is not a die. It therefore does NOT continue to
+  # step 38 (foundry handoff) or to stage 5 (fabrication onwards).
+  #
+  # The analog path already had this terminal — A8 "Hardmacro Generation
+  # (LEF + Liberty + GDS + Verilog)" — and the digital path never did, which
+  # is why step 15 can place an analog hard macro and nothing this flow
+  # produces digitally can be placed by anyone.
+  - id: 37.5ip
+    name: "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (cell/IP path TERMINAL)"
+    stage: stage4
+    condition:
+      files_exist: ["input/submission_template/NO_TEMPLATE.txt"]
+    # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
+    # condition tests WHICH PATH the design is on, and step 0.5ic's
+    # required_outputs is the OR of exactly these two artefacts, so on any run
+    # where 0.5ic itself passed, precisely one of them exists. A chip
+    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
+    # seal ring or shuttle precheck — a silent skip is the correct reading. The
+    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
+    # having run, which its own gate refuses as NEVER_LOOKED rather than
+    # leaving to be inferred from a downstream skip. Stated rather than left to
+    # the default so the reading is the step's, not the consumer's fallback.
+    condition_kind: design_dependent
+    required_inputs:
+      - from: 37
+        path: "phase3/stage4/gds/*.gds"
+    programs:
+      - digital_hardmacro_gen
+    required_outputs:
+      - "phase3/stage4/hardmacro/*.lef"
+      - "phase3/stage4/hardmacro/*.lib"
+      - "phase3/stage4/hardmacro/*.gds"
+      - "phase3/stage4/hardmacro/*.v"
+    gate:
+      program_exit_zero: "digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json"
+    # 0.5ic writes the NO_TEMPLATE.txt this step's condition reads.
+    blocks_on: [37, 0.5ic]
+
+  # ── chip/IC path only ────────────────────────────────────────────────
+  # THE STEP WITH TWO ARMS, AND ONE OF THEM IS NOT OURS. Every other gate in
+  # this tree we wrote, and a gate we wrote can be made to pass by editing it.
+  # `tapeout_readiness_check` runs the SHUTTLE OPERATOR's own container and
+  # reports its exit code — that is the one interface where somebody else's
+  # refusal is the verdict.
+  #
+  # 2026-08-20 — `37.5self` IS RETIRED AS A STEP AND FOLDED IN HERE.
+  # It used to be a THIRD ROUTE: `general_precheck`, our own ladder, reached
+  # only by a design carrying `SELF_TAPEOUT.txt`. That made the two checks
+  # ALTERNATIVES, and a design routed to one was never shown the other. It is
+  # not an alternative. It is an ARM:
+  #
+  #   * OUR ladder (`general_precheck`) runs on EVERY design that reaches this
+  #     step — shuttle or self tape-out, always, no condition.
+  #   * The OPERATOR's container runs IN ADDITION, whenever the PDK ships a
+  #     shuttle precheck AND that operator's template was actually fetched.
+  #
+  # This is strictly MORE checking than the three-route shape: a shuttle design
+  # used to get only the operator's verdict, and now it gets two independent
+  # authorities on the same GDS. A PDK with no shuttle precheck is NOT a
+  # different route — it is this same step with one fewer arm.
+  #
+  # THE CONDITION IS `any_of`, AND THE REASON IS STRUCTURAL. `files_exist`
+  # cannot express "and not", and `NO_TEMPLATE.txt` is ALREADY 37.5ip's
+  # condition (the IP/hardmacro terminal), so this step cannot condition on
+  # "chip and not IP" directly. `slots/*.yaml` OR `SELF_TAPEOUT.txt` — the two
+  # chip-path router files 0.5ic writes — together ARE the chip-path marker.
+  # `SELF_TAPEOUT.txt` survives as a FILE and keeps its meaning; only the STEP
+  # that read it in isolation is gone.
+  #
+  # DISAGREEMENT IS THE MOST VALUABLE OUTCOME AND IT FAILS THIS STEP. When both
+  # arms judge the same ladder step and reach opposite conclusive verdicts, one
+  # of the two checks is wrong. `tapeout_precheck` records that as a finding of
+  # its own and refuses; it never resolves it by preferring an arm, because
+  # preferring one is how the wrong one survives.
+  #
+  # EVERY FINDING NAMES ITS AUTHORITY. The whole point of the operator's arm is
+  # that its verdict is NOT one we wrote. Merging the arms into one step must
+  # not blur that, so every line of the merged report carries the authority
+  # that produced it and an `authority_is_ours` boolean beside it.
+  - id: 37.5ic
+    name: "Tape-out Precheck — our general ladder, plus the operator's own refusal where the PDK ships one (chip/IC path only)"
+    stage: stage4
+    condition:
+      # `any_of`, not the default ALL-of: these are two MUTUALLY EXCLUSIVE
+      # router files and no tree ever carries both (`tapeout_declaration_check`
+      # refuses the tree that does). An ALL-of reading would make this step
+      # unreachable for every design.
+      any_of: true
+      files_exist:
+        - "input/submission_template/slots/*.yaml"
+        - "input/submission_template/SELF_TAPEOUT.txt"
+    # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
+    # condition tests WHICH PATH the design is on, and step 0.5ic's
+    # required_outputs is the OR of exactly the three router artefacts, so on
+    # any run where 0.5ic itself passed, precisely one of them exists. The two
+    # named here are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the IP
+    # terminal 37.5ip owns, and an IP legitimately has no pad ring, no seal
+    # ring and no tape-out precheck — a silent skip is the correct reading.
+    # The "someone forgot" case is NOT lost to this default: it is 0.5ic never
+    # having run, which its own gate refuses as NEVER_LOOKED rather than
+    # leaving to be inferred from a downstream skip. Stated rather than left to
+    # the default so the reading is the step's, not the consumer's fallback.
+    condition_kind: design_dependent
+    required_inputs:
+      - from: 37
+        path: "phase3/stage4/gds/*.gds"
+      # OUR arm compares the layout against what the design DECLARED about
+      # itself. 0.5ic writes that declaration on every route, including the one
+      # with no operator, so this input exists wherever this step runs.
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
+    programs:
+      - tapeout_docs_gen
+    required_outputs:
+      # THE MERGED RECORD — which arms ran, what each concluded, every finding
+      # labelled with the authority that produced it, and every disagreement
+      # between the two named rather than resolved.
+      - "reports/phase3/tapeout_precheck.json"
+      # OUR arm's own artefact, written by `general_precheck` itself. Declared
+      # separately from the merge because a summary of a verdict and the
+      # verdict are not the same document, and the arm's own report is the one
+      # that carries its per-ladder-step evidence.
+      - "reports/phase3/general_precheck.json"
+      # THE OPERATOR's arm, written by `tapeout_readiness_check` itself. It is
+      # written on EVERY path this step takes, including the paths where the
+      # operator was never asked — a run that did not ask says so in this file
+      # rather than leaving it absent, because an absent artefact and a
+      # NOT_APPLICABLE one are read identically by everything downstream.
+      - "reports/phase3/shuttle_precheck.json"
+      # THE RELEASE DOCUMENTS ARE AN OUTPUT OF THIS STEP, not a separate chore.
+      # Every fact they state -- per-checker verdict, per-corner slack, die
+      # geometry, the precheck's own stage results -- is ALREADY produced here.
+      # Leaving them as JSON in a run directory meant the only way to answer
+      # "what did we actually sign off?" was to read a metrics file, and the
+      # sign-off verdict existed nowhere as a sentence anyone could quote.
+      # The generator computes that verdict FROM the table rather than being
+      # told it, and writes NOT_MEASURED where an artefact is missing -- never
+      # a default, because a plausible number hides the gap a hole would show.
+      # Named with the glob the generator actually writes: it emits ONE pair per
+      # (design, pdk) -- `SIGNOFF_<design>_<pdk>.html` -- so that two dies built
+      # from the same tree cannot overwrite each other's sign-off. Declaring the
+      # bare `SIGNOFF.html` named a file no producer in this flow writes, and
+      # d4/criteria_match reported it as "named nowhere the gate can reach".
+      - "reports/phase3/docs/SIGNOFF_*.html"
+      - "reports/phase3/docs/BRIEF_*.html"
+    gate:
+      all_of:
+        # ONE CLAUSE FOR BOTH ARMS, on purpose. Splitting them into two
+        # `program_exit_zero` clauses was measured against the requirement and
+        # fails it twice: `tapeout_readiness_check` alone cannot tell "this PDK
+        # ships no shuttle precheck" (one fewer arm, legitimate) from "it ships
+        # one and nobody fetched it" (NOT_DETERMINED), and nothing that sees
+        # only one arm can report a disagreement between them.
+        - program_exit_zero: "tapeout_precheck . --json reports/phase3/tapeout_precheck.json"
+        - program_exit_zero: "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
+    # 0.5ic writes the router files this step's condition reads, the template
+    # the operator's arm is run against, and the declaration our arm compares
+    # the layout to.
+    blocks_on: [37, 0.5ic]
+    notes: >-
+      Three verdicts and no fourth, and the merge inherits them unchanged from
+      both arms: PASS only when every arm that ran carries passing evidence for
+      every one of its ladder steps; FAIL when either arm refuses or when the
+      two arms disagree; NOT_DETERMINED when an arm could not reach a verdict —
+      a declaration question left unanswered, a delegated checker that could not
+      run, an operator container that could not be resolved, or a PDK whose
+      shuttle precheck exists and was never fetched. NOT_DETERMINED exits 1, the
+      same as a refusal: a silence credited as a pass is the defect this step
+      exists for.
   - id: 38
     name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
     stage: stage4

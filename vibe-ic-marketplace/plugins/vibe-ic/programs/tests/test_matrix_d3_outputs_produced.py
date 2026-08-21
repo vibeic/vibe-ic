@@ -505,6 +505,7 @@ import _plugin_tree
 # #527 removed every $HOME search, env override and machine-path manifest from
 # this dimension precisely so a cell's colour could not become a property of the
 # host, and re-introducing one to make cells green again would undo that.
+import _published_corpus as _pc  # noqa: E402
 from _published_corpus import SKIP_REASON, corpus_root, needs_corpus  # noqa: E402
 
 # The flow's OWN glob resolver. Imported, never re-implemented: it carries two
@@ -706,7 +707,16 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # root before the record was written -- which is the per-path check this pin
 # exists to force (#527): an entry live-verified from an untracked working-tree
 # file would raise this number on one host and not another.
-_LIVE_ENTRY_COUNT = 133
+# 2026-08-15 (#1348): 133 -> 134. D1 `phase1/extraction_patterns.json`, the
+# LAST surviving W2 promotion, declared in the flow yaml on the step that
+# PRODUCES it. Same reading as the L21, coverage.yml and #1215 moves above: one
+# fewer entry decided by nothing, not one more artefact found. It is recorded
+# PRODUCED_BY_RUN at `benchmark-data/ic/spm/v1.9.96_gf180mcuD` (7608 B), and it
+# was checked `git ls-files`-TRACKED at HEAD, non-empty and not a symlink in
+# NINE of the ten admissible run roots before the record was written -- the
+# per-path check this pin exists to force (#527). Its verdict is therefore LIVE
+# and it adds no fixture attestation: fixture stays at 7, as it was.
+_LIVE_ENTRY_COUNT = 134
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -855,9 +865,52 @@ _ADMISSIBILITY = {
 }
 
 
+#: The directory every manifest ``rel`` for an in-repo run root is written
+#: under. It is also the name of the repository the published cells moved to
+#: (``vibeic/benchmark-data``), which is what makes the rewrite below a plain
+#: prefix swap rather than a lookup table.
+_CORPUS_DIR = "benchmark-data"
+
+
+def _offered_corpus() -> Optional[Path]:
+    """A corpus a caller EXPLICITLY offered that is not this repo's own tree.
+
+    ``corpus_root()`` answers two different questions with one path: "does this
+    checkout still carry cells" (``<repo>/benchmark-data``) and "did the
+    operator point ``VIBE_IC_BENCHMARK_DATA`` at a clone". Only the second is
+    new information for discovery — the first is already reached by the
+    in-repo candidate — so it is separated here rather than yielded twice.
+
+    It raises rather than returning ``None`` on a broken pointer, because
+    ``corpus_root()`` does; a named-but-unreadable corpus is a wrong path, not
+    an absent one (``_published_corpus.CorpusPointerBroken``).
+    """
+    corpus = corpus_root()
+    if corpus is None:
+        return None
+    repo = _plugin_tree.repo_root()
+    if repo is not None and corpus.resolve() == (repo / _CORPUS_DIR).resolve():
+        return None
+    return corpus
+
+
+def _corpus_candidate(rel: str, corpus: Path) -> Optional[Path]:
+    """Where manifest *rel* lands inside an external corpus clone, if anywhere.
+
+    Every in-repo run root is recorded ``benchmark-data/<something>``, and the
+    split moved exactly that subtree out to its own repository root. So the
+    corpus path is *rel* with the one prefix removed, and a *rel* that does not
+    carry the prefix has no corpus form at all rather than a guessed one.
+    """
+    prefix = _CORPUS_DIR + "/"
+    if not rel.startswith(prefix):
+        return None
+    return corpus / rel[len(prefix):]
+
+
 @lru_cache(maxsize=1)
 def run_roots() -> Dict[str, RunRoot]:
-    """Every IN-REPO manifest run root that resolves HERE, keyed by label.
+    """Every manifest run root READABLE HERE, keyed by label.
 
     #527: run roots recorded with any other ``kind`` name a directory on one
     particular machine. They are not searched for — not under ``$HOME``, not
@@ -870,19 +923,98 @@ def run_roots() -> Dict[str, RunRoot]:
     :func:`_is_flow_run`, ``published`` -> :func:`_is_published_cell`). Neither
     weakens the other: a ``repo`` root still has to carry a runner marker, and
     a ``published`` root still has to carry a converged verdict.
+
+    THE PUBLISHED CELLS LEFT THIS REPOSITORY, AND THE POINTER DID NOT REACH
+    HERE (vibe-ic#1703)
+    ======================================================================
+    Every one of those roots is recorded ``benchmark-data/<...>``, and that
+    subtree moved to ``vibeic/benchmark-data``. ``_published_corpus`` already
+    established the seam for that — set ``VIBE_IC_BENCHMARK_DATA`` to a clone
+    and the corpus checks run — and the skip in the cell predicate quotes it
+    verbatim: *"Point VIBE_IC_BENCHMARK_DATA at a clone to run this check
+    against them."*
+
+    This function never read it, so the pointer switched the skip OFF without
+    switching discovery ON. Measured on ``origin/main`` at ``ee849c19e`` with
+    ``VIBE_IC_BENCHMARK_DATA`` set to a clone of ``vibeic/benchmark-data``::
+
+        50 failed, 11 passed, 2 xfailed in 3.63s
+
+    and every one of the 50 read ``[0 admissible run roots searched: []]``
+    while the cells sat unread on disk. That is not a stricter answer, it is a
+    confident wrong one: "N required_outputs are NOT produced" asserted by a
+    function that opened no file. The documented remedy was worse than the
+    skip it replaced.
+
+    So an EXPLICITLY OFFERED corpus is now a second place a manifest root may
+    resolve, and #527 still holds in the direction it was written for:
+
+    * it is never SEARCHED for — the operator names it, exactly as
+      ``_published_corpus`` requires, and an unset pointer changes nothing;
+    * trackedness is still decided by ``git ls-tree -r HEAD`` in the tree that
+      holds the root (:func:`tracked_under`), so it is the CORPUS COMMIT that
+      answers, ``git clean -xdf`` still cannot move a verdict, and two clones
+      of one corpus commit still agree;
+    * a corpus that cannot answer that question is REFUSED rather than read as
+      "nothing is tracked" — see :func:`_refuse_an_unanswerable_corpus`.
+
+    What it does NOT restore is a single answer for all hosts: two different
+    corpus commits may legitimately differ. That is a property of the split,
+    not of this function, and the honest rendering of it is that the verdict
+    now names the corpus it read.
     """
     out: Dict[str, RunRoot] = {}
     repo = _plugin_tree.repo_root()
-    if repo is None:
+    corpus = _offered_corpus()
+    if corpus is not None:
+        _refuse_an_unanswerable_corpus(corpus)
+    if repo is None and corpus is None:
         return out
     for label, meta in manifest()["run_roots"].items():
         admits = _ADMISSIBILITY.get(meta["kind"])
         if admits is None:
             continue
-        cand = repo / meta["rel"]
-        if cand.is_dir() and admits(cand):
-            out[label] = RunRoot(label=label, kind=meta["kind"], path=cand)
+        candidates = []
+        if repo is not None:
+            candidates.append(repo / meta["rel"])
+        if corpus is not None:
+            cand = _corpus_candidate(meta["rel"], corpus)
+            if cand is not None:
+                candidates.append(cand)
+        for cand in candidates:
+            if cand.is_dir() and admits(cand):
+                out[label] = RunRoot(label=label, kind=meta["kind"], path=cand)
+                break
     return out
+
+
+def _refuse_an_unanswerable_corpus(corpus: Path) -> None:
+    """An offered corpus must be able to say what its own commit carries.
+
+    :func:`tracked_under` returns the EMPTY SET for a tree that is not a git
+    work tree, and every caller reads that as "not tracked at HEAD — a local
+    build product, not evidence". Inside this repository that is the right
+    answer, because the only way to be here and not be a checkout is to be a
+    flattened install cache that genuinely carries no commits.
+
+    An offered corpus can be neither: an unpacked release tarball, a `cp -r` of
+    somebody's clone, a docker COPY of the cells. Every artefact in it is real
+    and published, and reading the whole tree as untracked would report all of
+    them NOT PRODUCED — the same confident wrong answer #1348 measured from the
+    other direction, arriving through the door this change opens. So it is
+    refused here, at the seam, with the reason named.
+    """
+    if _claims_to_be_a_checkout(corpus):
+        return
+    raise AssertionError(
+        f"{_pc.CORPUS_ENV}={str(corpus)!r} is not a git checkout, so this "
+        f"module cannot ask which of its files the corpus COMMIT carries. "
+        f"Every artefact under it would read as 'not tracked at HEAD — a local "
+        f"build product, not evidence' and every cell would report its declared "
+        f"outputs NOT PRODUCED, which is a confident wrong answer, not a strict "
+        f"one (#527, #1348). Point {_pc.CORPUS_ENV} at a clone of "
+        f"vibeic/benchmark-data rather than at an unpacked copy of one."
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1953,6 +2085,105 @@ def audit_step(step_id) -> Tuple[List[str], List[str]]:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# The one class of citation the corpus skip may NOT cover
+# ──────────────────────────────────────────────────────────────────────
+# WHAT THE CORPUS SKIP PROMISES, AND WHERE THAT PROMISE IS FALSE.
+#
+# `SKIP_REASON` tells the reader the result cells live in another repository
+# and that pointing the corpus pointer at a clone runs this check against them.
+# That is true for every entry whose recorded run root is a kind this module
+# SEARCHES: those roots were `benchmark-data/<...>` here, `_corpus_candidate`
+# rewrites them into the clone, and the cell answers live again.
+#
+# It is FALSE for an entry whose recorded root is any OTHER kind. #527 removed
+# every off-repository search from this dimension, so such a root is consulted
+# on no host, with or without the pointer — and MEASURED against a clone of the
+# published-corpus repository at its own HEAD, neither those roots nor the
+# artefacts they cite resolve there under any root either. Setting the pointer
+# does not move these entries: they come back unevidenced with the corpus
+# present, exactly as they do without it.
+#
+# So for those entries the absent corpus is not the reason the answer is
+# missing, and letting the skip cover them drops them out of the denominator
+# altogether: on a fresh checkout the whole dimension reported no failure while
+# these citations went unexamined, which reads as a clean run over a population
+# nobody looked at. A check that could not look has not looked — but a citation
+# NOTHING can look at is a stronger statement than that, and it has to be made
+# here rather than deferred to a corpus that cannot settle it.
+#
+# The carve-out only ever NARROWS the skip. It adds no evidence, admits no new
+# root, and changes nothing at all when the corpus is present.
+
+
+def unanswerable_citations(step_id) -> Tuple[Tuple[str, str, str], ...]:
+    """``(entry, cited run root, the path the citation wanted)`` for the
+    declared entries of *step_id* that NO corpus can answer.
+
+    An entry is unanswerable when the run root it records is outside
+    :data:`_ADMISSIBILITY` — either the manifest gives that root a ``kind`` this
+    module never searches, or the manifest registers no such root at all. Both
+    are properties of the RECORD, decided without opening a file, which is what
+    makes the answer identical on a host that has a corpus and on one that does
+    not.
+
+    An entry that records NO root is not unanswerable: it cites nothing, so a
+    corpus carrying the artefact resolves it and the skip is the honest verdict.
+    """
+    recorded = (step_record(step_id).get("entries") or {})
+    roots = manifest()["run_roots"]
+    out: List[Tuple[str, str, str]] = []
+    for entry in F.required_outputs(step_id):
+        er = recorded.get(entry)
+        if not er:
+            continue
+        for field in ("run", "base_run"):
+            label = er.get(field)
+            if not label:
+                continue
+            meta = roots.get(label)
+            if meta is not None and meta.get("kind") in _ADMISSIBILITY:
+                continue
+            out.append((entry, label,
+                        str(er.get("path") or er.get("writes") or entry)))
+    return tuple(out)
+
+
+def _corpus_skip_would_hide(step_id, cites: Tuple[Tuple[str, str, str], ...]) -> str:
+    """The NOT DETERMINED message for citations the skip would have swallowed.
+
+    It names, per entry, the path the record wanted and the root it wanted it
+    from, because "not determined" without those two is a shrug rather than a
+    finding.
+    """
+    roots = manifest()["run_roots"]
+    lines = [
+        f"{entry!r}: NOT DETERMINED — the record wants {wanted!r} from run "
+        f"root {label!r} (kind "
+        f"{(roots.get(label) or {}).get('kind', 'NOT REGISTERED')!r}), which "
+        f"this dimension searches on no host"
+        for entry, label, wanted in cites
+    ]
+    return (
+        f"step {step_id} ({F.step_name(step_id)}): {len(cites)} declared "
+        f"output(s) cite a run root NO corpus can supply, so the corpus-absent "
+        f"skip must not cover them:\n  " + "\n  ".join(lines) + "\n\n"
+        f"The skip says the result cells live in another repository and that "
+        f"the corpus pointer reaches them. That holds for a record whose root "
+        f"is one of the kinds this module searches "
+        f"({sorted(_ADMISSIBILITY)}); it does not hold for these. Setting the "
+        f"pointer leaves them exactly as they are, so they are NOT DETERMINED "
+        f"rather than not-yet-looked-at, and they may not leave the "
+        f"denominator in silence.\n"
+        f"This is NOT a claim that the flow fails to produce these artefacts — "
+        f"nothing here measured that. It is a refusal to report a clean run "
+        f"over a citation nothing can resolve. Close it by re-pointing the "
+        f"record at a root that carries the artefact, by publishing a run tree "
+        f"that does, or by waiving the cell through the one waiver registry "
+        f"with the disclosure — never by widening the skip."
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Waivers — ONE registry, the one that is consumed
 # ──────────────────────────────────────────────────────────────────────
 # This module used to carry a `_LOCAL_WAIVERS` mirror of its four dimension-3
@@ -2068,6 +2299,13 @@ def test_d3_required_outputs_are_produced(cell):
     # emptied `run_roots()` while the corpus IS present must still redden here,
     # and `test_d3_run_root_discovery_is_live` is the test that says so.
     if not run_roots() and corpus_root() is None:
+        # ...and only over the entries an absent corpus can explain. A record
+        # citing a root this module searches on no host is not waiting on the
+        # pointer, so it is REFUSED here by name instead of leaving the
+        # denominator with the rest of the cell (see the section above
+        # `unanswerable_citations`).
+        cites = unanswerable_citations(sid)
+        assert not cites, _corpus_skip_would_hide(sid, cites)
         pytest.skip(SKIP_REASON)
 
     missing, details = audit_step(sid)
@@ -2091,38 +2329,247 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
         f"manifest/flow step-set mismatch: only in flow {sorted(live - recorded)}, "
         f"only in manifest {sorted(recorded - live)}"
     )
-    assert len(cells_for(DIM)) == len(live) == 63
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # 2026-08-21, 68 -> 69: step 1.6x. The note above is CORRECT about its own
+    # change and wrong about the base it applied it to. Measured by driving
+    # `flowref` at each revision's yaml through
+    # `VIBE_IC_MATRIX_FLOW_YAML`, the matrix population is:
+    #
+    #     ff5071caa (this pin last set)   68   no 1.6x, no 37.5self
+    #     7fcbc7397~1                     69   no 1.6x, 37.5self PRESENT
+    #     7fcbc7397 (adds 1.6x)           70
+    #     867de4289 (retires 37.5self)    69
+    #
+    # So the population moved THREE times across three commits, not once: 37.5self
+    # arrived after this pin was set and was never credited, 1.6x arrived and was
+    # never credited, and only the removal was. Subtracting one from a base that
+    # was already two behind is how a hand-moved census drifts while every
+    # individual edit to it looks careful.
+    assert len(cells_for(DIM)) == len(live) == 69
 
 
 @needs_corpus
 def test_d3_run_root_discovery_is_live():
-    """Discovery must actually find the in-repo evidence trees.
+    """Discovery must actually find the evidence trees it is offered.
 
-    Both branches assert. On the flattened install cache there is no monorepo
-    ancestor at all, so the manifest's repo-kind roots are legitimately
-    unreachable and this asserts that IS the cause — rather than skipping and
-    letting a discovery bug read as an environment.
+    Both branches assert. Where there is no tree to look in at all — the
+    flattened install cache has no monorepo ancestor, and no corpus was
+    pointed at — the manifest's repo-kind roots are legitimately unreachable
+    and this asserts that IS the cause, rather than skipping and letting a
+    discovery bug read as an environment.
+
+    vibe-ic#1703 — THE FAILURE MESSAGE HAD TO MOVE WITH THE SEARCH. It named
+    one tree, ``under {repo}``, and offered one pair of causes ("the checkout
+    is partial or a run tree was deleted"). Once :func:`run_roots` also reads
+    an operator-named corpus, both were wrong in the case that matters most:
+    the published cells left this repository, so the tree to go and look at is
+    the corpus, and the likeliest cause is neither of the two offered — it is
+    that the corpus does not publish that root. A red test that sends the
+    reader to the wrong directory costs more than it saves, so the message now
+    names every tree it searched.
     """
-    repo = _plugin_tree.repo_root()
+    sources = [(p, why) for p, why in (
+        (_plugin_tree.repo_root(), "this repository"),
+        (_offered_corpus(), f"the corpus named by {_pc.CORPUS_ENV}"),
+    ) if p is not None]
     repo_labels = [
         label for label, meta in manifest()["run_roots"].items()
         if meta["kind"] == "repo"
     ]
     resolved = run_roots()
-    if repo is None:
+    if not sources:
         assert not any(label in resolved for label in repo_labels), (
-            "no monorepo ancestor was found, yet repo-kind run roots resolved — "
-            "the two-tree detection in _plugin_tree.repo_root() disagrees with "
-            "what is on disk"
+            "no monorepo ancestor was found and no corpus was pointed at, yet "
+            "repo-kind run roots resolved — the two-tree detection in "
+            "_plugin_tree.repo_root() disagrees with what is on disk"
         )
         return
+    searched = ", ".join(f"{why} ({path})" for path, why in sources)
     unresolved = [label for label in repo_labels if label not in resolved]
     assert not unresolved, (
-        f"these in-repo run roots are recorded as evidence but do not resolve "
-        f"under {repo}: {unresolved} — either the checkout is partial or a run "
-        f"tree was deleted while this dimension still cites it"
+        f"these run roots are recorded as evidence but resolve in none of the "
+        f"trees searched — {searched}: {unresolved}. Three causes produce this "
+        f"and they are not the same repair: the checkout is partial; a run "
+        f"tree was deleted while this dimension still cites it; or the "
+        f"published corpus does not carry that root, in which case the "
+        f"manifest cites a run that is no longer published and the record — "
+        f"not the corpus — is what has to move (vibe-ic#1703)."
     )
     assert resolved, "no admissible run root resolved at all"
+
+
+#: The manifest labels the corpus-routing probe below drives, one per
+#: admissibility kind, so the new path is exercised against BOTH proofs of
+#: provenance rather than against whichever one happens to be first in the
+#: manifest. Written down here rather than picked at runtime: a probe that
+#: chooses its own subject can quietly stop covering a kind.
+_CORPUS_ROUTE_PROBES: Tuple[Tuple[str, str], ...] = (
+    ("benchmark-data/ic/spm/v1.5.58_ihp-sg13g2", _IN_REPO_KIND),
+    ("benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A", _PUBLISHED_KIND),
+)
+
+
+def _seed_corpus_root(corpus: Path, rel: str, kind: str) -> Path:
+    """Make *rel* (a manifest ``benchmark-data/...`` path) admissible in *corpus*.
+
+    Seeds the minimum each kind's own predicate demands and nothing else, so a
+    probe cannot pass by having built something richer than the rule requires.
+    """
+    root = _corpus_candidate(rel, corpus)
+    assert root is not None, f"{rel!r} has no corpus form; the probe is wrong"
+    root.mkdir(parents=True, exist_ok=True)
+    if kind == _IN_REPO_KIND:
+        (root / _RUNNER_MARKERS[0]).write_text("{}\n", encoding="utf-8")
+    elif kind == _PUBLISHED_KIND:
+        audit = root / "reports" / "audit"
+        audit.mkdir(parents=True, exist_ok=True)
+        (audit / "phase23_completion_audit.json").write_text(
+            json.dumps({"verdict": _bep._CONVERGED[0]}), encoding="utf-8")
+    else:  # pragma: no cover - a kind nobody taught this probe about
+        raise AssertionError(f"unknown admissibility kind {kind!r}")
+    return root
+
+
+def test_d3_an_offered_corpus_is_where_the_published_run_roots_are_found(
+        monkeypatch):
+    """vibe-ic#1703 — the pointer the skip message names must actually route.
+
+    The published cells moved to ``vibeic/benchmark-data``. The cell predicate
+    skips when they are absent and its reason tells the reader exactly what to
+    do about it — *"Point VIBE_IC_BENCHMARK_DATA at a clone to run this check
+    against them"* — but :func:`run_roots` did not read that pointer, so doing
+    what the message said switched the SKIP off without switching DISCOVERY on.
+
+    Measured on ``origin/main`` at ``ee849c19e``, with the pointer set to a
+    clone of ``vibeic/benchmark-data``::
+
+        $ VIBE_IC_BENCHMARK_DATA=<clone> pytest -q \\
+              test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced
+        50 failed, 11 passed, 2 xfailed in 3.63s
+
+    every one of them reading ``[0 admissible run roots searched: []]`` — 50
+    cells asserting "N required_outputs are NOT produced" from a function that
+    had opened no file, while the artefacts sat on disk one directory away.
+    That is not strictness, it is fabrication, and it is strictly worse than
+    the skip it replaced.
+
+    THIS TEST IS THE CONTROL FOR ALL THREE WAYS OF BEING WRONG, because the
+    green half alone would be satisfied by a function that returns every
+    manifest label unconditionally:
+
+    ROUTES     the root is seeded in the corpus -> it resolves, at the corpus
+               path, for BOTH admissibility kinds.
+    READS      the same root with its own proof of provenance REMOVED -> it
+               does not resolve. Discovery still measures the directory; the
+               pointer is where to look, never permission to assume.
+    IS OPT-IN  with the pointer unset, nothing resolves that did not resolve
+               before. The corpus is named, never searched for (#527).
+    """
+    declared = manifest()["run_roots"]
+    wrong = [(rel, kind) for rel, kind in _CORPUS_ROUTE_PROBES
+             if declared.get(rel, {}).get("kind") != kind]
+    assert not wrong, (
+        f"the probe drives manifest labels that are gone or have changed kind: "
+        f"{wrong}. Re-point _CORPUS_ROUTE_PROBES at one label per "
+        f"admissibility kind rather than deleting the coverage")
+    assert {kind for _rel, kind in _CORPUS_ROUTE_PROBES} == set(_ADMISSIBILITY), (
+        "a new admissibility kind exists and the corpus route is not probed "
+        "for it; every kind must be shown to route, or the untested one "
+        "silently stops resolving through the pointer")
+
+    run_roots.cache_clear()
+    try:
+        baseline = set(run_roots())
+        with _probe_run_root("d3-corpus-route-") as (corpus, commit):
+            # `_has_cells` looks for a published cell, not merely a directory.
+            # Both probe labels ARE `ic/<design>/v<version>_<PDK>` cells, so
+            # seeding them is what makes this a corpus at all.
+            seeded = {rel: _seed_corpus_root(corpus, rel, kind)
+                      for rel, kind in _CORPUS_ROUTE_PROBES}
+            commit(".")
+
+            # IS OPT-IN — the corpus exists on disk and nothing has been said
+            # about it. Discovery must not have found it.
+            run_roots.cache_clear()
+            assert set(run_roots()) == baseline, (
+                "a corpus nobody pointed at changed discovery; it must be "
+                "named, never searched for (#527)")
+
+            monkeypatch.setenv(_pc.CORPUS_ENV, str(corpus))
+
+            # ROUTES
+            run_roots.cache_clear()
+            resolved = run_roots()
+            for rel, kind in _CORPUS_ROUTE_PROBES:
+                assert rel in resolved, (
+                    f"{_pc.CORPUS_ENV} was set to a corpus carrying {rel!r} "
+                    f"({kind} kind) and discovery still did not find it — the "
+                    f"pointer switches the skip off without switching "
+                    f"discovery on, which is the #1703 defect")
+                assert resolved[rel].path == seeded[rel], (
+                    f"{rel!r} resolved to {resolved[rel].path}, not to the "
+                    f"corpus copy at {seeded[rel]}")
+
+            # READS — same pointer, same labels, provenance removed.
+            for rel, kind in _CORPUS_ROUTE_PROBES:
+                if kind == _IN_REPO_KIND:
+                    (seeded[rel] / _RUNNER_MARKERS[0]).unlink()
+                else:
+                    (seeded[rel] / "reports" / "audit"
+                     / "phase23_completion_audit.json").unlink()
+            commit(".")
+            run_roots.cache_clear()
+            still = run_roots()
+            leaked = [rel for rel, _kind in _CORPUS_ROUTE_PROBES
+                      if rel in still]
+            assert not leaked, (
+                f"these corpus roots resolved with their own proof of "
+                f"provenance deleted: {leaked}. The pointer says WHERE to "
+                f"look; the admissibility rule still has to be satisfied "
+                f"there, or a corpus is a way around the rule instead of a "
+                f"place to apply it")
+    finally:
+        run_roots.cache_clear()
+
+
+def test_d3_a_corpus_that_cannot_name_its_own_commit_is_refused(monkeypatch):
+    """An offered corpus that is not a checkout must REFUSE, not read empty.
+
+    :func:`tracked_under` returns the empty set for a tree it cannot ask git
+    about, and every caller reads that as "not tracked at HEAD — a local build
+    product, not evidence". Inside this repository that is correct. For an
+    offered corpus it is not: an unpacked tarball, a ``cp -r`` of a clone or a
+    docker ``COPY`` of the cells holds published artefacts that ARE tracked
+    somewhere, and reading the whole tree as untracked would report every one
+    of them NOT PRODUCED.
+
+    That is the same confident wrong answer #1348 measured from the other
+    direction — 16 contradictions became 54 when git could not answer inside a
+    container — so the door this change opens is closed on it at the seam.
+    """
+    run_roots.cache_clear()
+    try:
+        with tempfile.TemporaryDirectory(prefix="d3-corpus-nogit-") as td:
+            corpus = Path(td) / "corpus"
+            for rel, kind in _CORPUS_ROUTE_PROBES:
+                _seed_corpus_root(corpus, rel, kind)
+            assert not _claims_to_be_a_checkout(corpus), (
+                f"{td} is inside a git work tree, so this probe cannot show "
+                f"what a non-checkout corpus does")
+            monkeypatch.setenv(_pc.CORPUS_ENV, str(corpus))
+            run_roots.cache_clear()
+            with pytest.raises(AssertionError, match=_pc.CORPUS_ENV):
+                run_roots()
+    finally:
+        run_roots.cache_clear()
 
 
 def test_d3_every_admissible_run_root_is_a_real_flow_run():
@@ -2368,8 +2815,8 @@ def test_d3_waivers_meet_the_registry_bar():
     assert not problems, "\n".join(problems)
 
 
-def test_d3_cell_states_partition_all_63_steps():
-    """ENFORCED + WAIVED + NA == 63, computed live, with no cell in two states."""
+def test_d3_cell_states_partition_all_steps():
+    """ENFORCED + WAIVED + NA == 69, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -2384,7 +2831,31 @@ def test_d3_cell_states_partition_all_63_steps():
         else:
             enforced.append(sid)
             assert rec["verdict"] == "ENFORCED"
-    assert len(enforced) + len(waived) + len(na) == 63, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # 2026-08-21, 68 -> 69: step 1.6x. The note above is CORRECT about its own
+    # change and wrong about the base it applied it to. Measured by driving
+    # `flowref` at each revision's yaml through
+    # `VIBE_IC_MATRIX_FLOW_YAML`, the matrix population is:
+    #
+    #     ff5071caa (this pin last set)   68   no 1.6x, no 37.5self
+    #     7fcbc7397~1                     69   no 1.6x, 37.5self PRESENT
+    #     7fcbc7397 (adds 1.6x)           70
+    #     867de4289 (retires 37.5self)    69
+    #
+    # So the population moved THREE times across three commits, not once: 37.5self
+    # arrived after this pin was set and was never credited, 1.6x arrived and was
+    # never credited, and only the removal was. Subtracting one from a base that
+    # was already two behind is how a hand-moved census drifts while every
+    # individual edit to it looks careful.
+    assert len(enforced) + len(waived) + len(na) == 69, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
@@ -2397,10 +2868,11 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (50, 2, 11), (
+    assert (len(enforced), len(waived), len(na)) == (52, 2, 15), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(50, 2, 11) on 2026-08-12. A step moving between states is a real "
+        f"(52, 2, 15) at 7fcbc7397 + 867de4289. A step moving between states "
+        f"is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2435,6 +2907,101 @@ def test_d3_cell_states_partition_all_63_steps():
         "test_d3_waived_steps_still_produce_their_unwaived_entries was red on "
         "merge.json. A per-entry waiver cannot express 'this step never ran'. "
         "M1's dimension-7 waiver is untouched."
+        "\n2026-08-20: (50, 2, 11) -> (54, 2, 11). Four steps were ADDED to the "
+        "flow; none moved between states. 15.5ic, 26.5ic, 37.5ip and 37.5ic are "
+        "the path-specific steps of the cell/IP-vs-chip/IC split. Each declares "
+        "required_outputs, carries no step-level condition (so "
+        "NA_DORMANT_CONDITION is not derivable for it) and holds no waiver, "
+        "which is what ENFORCED means here. Every entry is recorded UNPROVEN: "
+        "their producer programs are not written yet, so no admissible run root "
+        "has ever produced these paths. The four cells are RED, and that is the "
+        "honest reading of a flow declaring an output nothing produces \u2014 not "
+        "a state to waive away."
+        "\n2026-08-20 (later the same day, R6): (54, 2, 11) -> (51, 2, 15), "
+        "and note the first triple sums to 67 while this one sums to 68 \u2014 "
+        "it was written before step 0.5ic existed. TWO independent movements, "
+        "both from vibe-ic#1744:"
+        "\n  (a) +1 step. 0.5ic (Submission Template Ingest) was added. It "
+        "declares required_outputs, carries no step-level condition and holds "
+        "no waiver, so it lands ENFORCED: 54 -> 55 before (b)."
+        "\n  (b) -4 ENFORCED, +4 NA. 15.5ic, 26.5ic, 37.5ip and 37.5ic each "
+        "GAINED a step-level `condition` in the same change \u2014 "
+        "`files_exist: [input/submission_template/slots/*.yaml]` on 15.5ic, "
+        "26.5ic and 37.5ic, `files_exist: "
+        "[input/submission_template/NO_TEMPLATE.txt]` on 37.5ip \u2014 each "
+        "with `condition_kind: design_dependent`. The sentence three "
+        "paragraphs up, 'carries no step-level condition (so "
+        "NA_DORMANT_CONDITION is not derivable for it)', is therefore FALSE "
+        "against the yaml in this same tree, and is kept above only as the "
+        "record of what was true that morning. 55 - 4 = 51 ENFORCED, "
+        "11 + 4 = 15 NA."
+        "\nWHAT THIS COST, STATED PLAINLY: four cells that were RED \u2014 "
+        "'a flow declaring an output nothing produces' \u2014 are now NOT "
+        "JUDGED. Nothing about their producers changed; only the reading did. "
+        "The dormancy is not self-asserted, though: the NA is guarded live by "
+        "test_d3_required_outputs_are_produced, which re-reads the yaml for the "
+        "condition and re-checks every run root for the condition file, so the "
+        "day any project ships input/submission_template/ the NA "
+        "self-invalidates and the four cells return to the denominator."
+        "\nv1.11.5: (51, 2, 15) -> (51, 2, 16), and this one is +1 STEP with "
+        "NO reclassification \u2014 the triple sums 68 -> 69. 37.5self "
+        "(General Precheck \u2014 the tape-out check for a design with NO "
+        "operator) was added: the chip/IC route for a design that has no "
+        "shuttle operator to refuse it, which until this step passed no "
+        "submission check of any kind. It arrives NA rather than ENFORCED for "
+        "exactly the reason its three siblings did, and the reading is "
+        "re-derived live rather than declared: `condition: {files_exist: "
+        "[input/submission_template/SELF_TAPEOUT.txt]}` with `condition_kind: "
+        "design_dependent`, and no admissible run root carries that marker. "
+        "ENFORCED is unmoved at 51, WAIVED unmoved at 2, NA 15 -> 16. Publish "
+        "a run tree carrying SELF_TAPEOUT.txt and this NA self-invalidates "
+        "through the same live guard, the cell returns to the denominator, "
+        "and this pin reddens naming it."
+        "\nsmrg/retire-37p5self: (51, 2, 16) -> (51, 2, 15), and it is the "
+        "MIRROR of the entry directly above \u2014 the same step, leaving. The "
+        "triple sums 69 -> 68. `37.5self` is RETIRED: the general precheck was "
+        "never a third ROUTE out of stage 4, it is a second ARM of 37.5ic, "
+        "which now runs our ladder on every design that reaches it and the "
+        "operator's container IN ADDITION wherever the PDK ships a precheck and "
+        "its template was fetched."
+        "\nWHICH CELL MOVED, AND IN WHAT STATE: `37.5self/d3`, and it was NA, "
+        "not ENFORCED \u2014 exactly the state the entry above records it "
+        "entering the grid in. So this is -1 STEP with NO reclassification, the "
+        "mirror image of that +1: ENFORCED unmoved at 51, WAIVED unmoved at 2, "
+        "NA 16 -> 15. NOTHING ELSE MOVED, and that is MEASURED rather than "
+        "assumed: the live not-ENFORCED inventory was diffed against the pinned "
+        "one on this tree and the ONLY difference is `37.5self/d3` "
+        "(`matrix_mutation_ledger.LEDGER_CELLS_NOT_ENFORCED`, moved in this "
+        "same change). A step removal that had silently reclassified a "
+        "neighbouring cell would appear there as a second difference; there is "
+        "none."
+        "\nWHY THIS IS A STALE PIN AND NOT A BROKEN DERIVATION: everything "
+        "above this assertion is recomputed live \u2014 `cells_for(DIM)` reads "
+        "the yaml, `step_record` reads the manifest, `waiver_for` reads the "
+        "registry \u2014 and all three handled a 68-step flow with no change at "
+        "all. Only the hand-restated TRIPLE is a number a human must move, "
+        "which is exactly what it is for: a step LEAVING has to force someone "
+        "to say the number as loudly as one arriving."
+        "\n2026-08-21: (51, 2, 15) -> (52, 2, 15). +1 ENFORCED, no "
+        "reclassification, and it is step 1.6x \u2014 the cross-layer "
+        "rewrite-fidelity relation, added by `7fcbc7397` FIVE COMMITS BEFORE "
+        "the entry above. It lands ENFORCED on the same three live reads its "
+        "siblings were classified by: `step_condition('1.6x')` is None, it "
+        "declares one required_output "
+        "(`reports/crosslayer/rewrite_equivalence_check.json`), and it holds no "
+        "dimension-3 waiver. Its unconditionality is deliberate and recorded in "
+        "its own yaml comment: a `files_exist` condition was tried first and "
+        "refused by `flow_condition_reachability_check` as 'a check disabled by "
+        "exactly the situation it was written for'. WAIVED and NA unmoved."
+        "\nTHE ENTRY ABOVE IS CORRECT ABOUT ITS OWN CHANGE AND WRONG ABOUT THE "
+        "BASE IT APPLIED IT TO, which is the part worth keeping. It moved the "
+        "triple 69 -> 68 for a step LEAVING, from a base that had never been "
+        "credited with this step ARRIVING. MEASURED, by driving `flowref` at "
+        "each revision's yaml through `VIBE_IC_MATRIX_FLOW_YAML` and counting "
+        "`step_ids()`: ff5071caa 68, 7fcbc7397~1 69, 7fcbc7397 70, 867de4289 "
+        "69. The population moved THREE times across three commits and only the "
+        "third was written down \u2014 so 'a human must move it' is the "
+        "mechanism AND, twice running, the failure."
     )
 
 
@@ -2571,13 +3138,29 @@ def test_d3_fixture_attested_cells_are_named_cell_by_cell():
         f"a tree the commit does not carry makes this dimension's answer "
         f"depend on the machine (#527)."
     )
+    # ...and no root may resolve anywhere except the two trees a reader can
+    # NAME: this repository, or the corpus the operator explicitly pointed at.
+    #
+    # vibe-ic#1703 — the second alternative is new and it is the whole of what
+    # changed. It is not a re-opening of the $HOME search #527 removed, and the
+    # difference is the one that mattered there: an operator-named corpus is
+    # DECLARED (``VIBE_IC_BENCHMARK_DATA``, refused when it names nothing —
+    # ``_published_corpus.corpus_root``), whereas the trees #527 removed were
+    # DISCOVERED, so a cell's colour turned on what happened to be lying around
+    # on the machine. Nothing is searched for here, and with the pointer unset
+    # this assertion is exactly what it was.
+    permitted = [p for p in (_plugin_tree.repo_root(), _offered_corpus())
+                 if p is not None]
     outside = sorted(
         f"{label} -> {rr.path}" for label, rr in resolved.items()
-        if _plugin_tree.repo_root() is not None
-        and _plugin_tree.repo_root().resolve() not in rr.path.resolve().parents
+        if permitted
+        and not any(base.resolve() in rr.path.resolve().parents
+                    for base in permitted)
     )
     assert not outside, (
-        f"these admissible run roots are not inside the repository: {outside}"
+        f"these admissible run roots are in neither the repository nor the "
+        f"corpus named by {_pc.CORPUS_ENV}: {outside}. Permitted trees: "
+        f"{[str(p) for p in permitted]}"
     )
 
 
@@ -2654,6 +3237,206 @@ def test_d3_no_record_cites_an_absent_run_this_commit_can_answer():
           "The manifest is the only record of WHERE an artefact came from, and "
           "a citation a reader cannot follow is not evidence of anything "
           "(vibe-ic#1266)."
+    )
+
+
+@dataclass(frozen=True)
+class _Cell:
+    """The one attribute the cell test reads, so the guards below can call it
+    directly instead of going through the parametrisation."""
+    step_id: str
+
+
+def _synthetic_citation_world(monkeypatch, entries: Dict[str, Dict]) -> str:
+    """Drive the cell predicate over a manifest written HERE, corpus absent.
+
+    The population this guard is about is expected to shrink as records are
+    repaired, and a guard pinned to today's records would go vacuous the moment
+    it did — passing loudest exactly when it has stopped checking anything. So
+    the substrate is synthesised: two run roots, one of a kind this module
+    searches and one of a kind it never will, and whichever entries the caller
+    wants recorded against them. Returns the synthetic step id.
+    """
+    sid = "SYNTHETIC"
+    searched, never = "root-this-module-searches", "root-on-one-machine-only"
+    monkeypatch.setattr(sys.modules[__name__], "manifest", lambda: {
+        "run_roots": {
+            searched: {"kind": _IN_REPO_KIND, "rel": "benchmark-data/probe"},
+            never: {"kind": "home", "rel": "somewhere/off/this/repository"},
+        },
+        "steps": {},
+    })
+    monkeypatch.setattr(sys.modules[__name__], "step_record",
+                        lambda _sid: {"verdict": "ENFORCED", "entries": entries})
+    monkeypatch.setattr(F, "required_outputs", lambda _sid: tuple(entries))
+    monkeypatch.setattr(F, "step_name", lambda _sid: "synthetic step")
+    # The corpus-absent world is FORCED, not inherited from the host: with a
+    # clone present the cell would never reach the skip branch at all and this
+    # guard would pass without exercising the thing it is named for.
+    monkeypatch.setattr(sys.modules[__name__], "run_roots", lambda: {})
+    monkeypatch.setattr(sys.modules[__name__], "corpus_root", lambda: None)
+    return sid
+
+
+def _cite(root: str, path: str) -> Dict:
+    return {"status": "PRODUCED_BY_RUN", "run": root, "alternative": path,
+            "path": path, "size_bytes": 1}
+
+
+def test_d3_a_citation_no_corpus_can_answer_is_not_dropped_by_the_corpus_skip(
+        monkeypatch):
+    """vibe-ic#1266 — THE CARVE-OUT, both ways, end to end.
+
+    WHAT WENT WRONG. When the result cells moved to their own repository this
+    cell test gained a corpus-absent skip, and the skip is right for what it was
+    written for: an entry whose recorded run root is one this module searches
+    lives in the corpus now, so reporting it "NOT produced" here would charge
+    the flow with a defect whose evidence is simply in another repository.
+
+    It was applied to the whole cell. Entries recording a root of a kind this
+    module searches on NO host went with it — and those are not waiting on the
+    pointer. #527 removed every off-repository search from this dimension, and
+    the published corpus does not carry those trees either, so the pointer moves
+    them not at all. Measured on a fresh checkout of this commit before the
+    carve-out: the dimension reported no failure at all while seven such
+    citations across six cells went unexamined, which is a clean run over a
+    population nobody looked at — the silent-omission shape this repository
+    exists to refuse.
+
+    BOTH DIRECTIONS, because a carve-out that fires on everything is not a
+    carve-out and would simply have deleted the skip:
+
+    * a record citing a root this module SEARCHES still SKIPS. This is the one
+      that fails if the fix over-fires, and it is why the skip's own rationale
+      survives intact.
+    * a record citing a root it never searches REFUSES, naming the path the
+      record wanted. This is the one that fails if the fix is reverted.
+
+    Both run against a manifest synthesised in the test, so neither direction
+    can go vacuous when the real records are repaired — which is the whole
+    intent of #1266.
+    """
+    SEARCHED, NEVER = "root-this-module-searches", "root-on-one-machine-only"
+    ANSWERABLE = "phase3/stage3/probe/answerable.json"
+    UNANSWERABLE = "phase3/stage3/probe/unanswerable.json"
+
+    # ---- the predicate itself, on a record carrying one of each -------
+    sid = _synthetic_citation_world(monkeypatch, {
+        ANSWERABLE: _cite(SEARCHED, ANSWERABLE),
+        UNANSWERABLE: _cite(NEVER, UNANSWERABLE),
+    })
+    cites = unanswerable_citations(sid)
+    assert [c[0] for c in cites] == [UNANSWERABLE], (
+        f"the predicate must select exactly the citation no corpus can answer, "
+        f"and it selected {[c[0] for c in cites]}. Selecting the answerable one "
+        f"too would turn the corpus skip off wholesale and report the moved "
+        f"cells as a flow defect; selecting neither is the omission this guard "
+        f"exists for.")
+    assert cites[0][1] == NEVER and cites[0][2] == UNANSWERABLE, (
+        f"the finding must carry the root it wanted and the path it wanted, or "
+        f"nobody can act on it: {cites[0]}")
+
+    # ---- REVERSE: only answerable citations, the skip is untouched ----
+    sid = _synthetic_citation_world(monkeypatch,
+                                    {ANSWERABLE: _cite(SEARCHED, ANSWERABLE)})
+    assert unanswerable_citations(sid) == ()
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        test_d3_required_outputs_are_produced(_Cell(sid))
+    assert str(skipped.value) == SKIP_REASON, (
+        f"a cell whose every citation the corpus could answer must still skip "
+        f"with the corpus reason, not refuse: {skipped.value}")
+
+    # ---- FORWARD: the unanswerable citation refuses, by name ---------
+    #
+    # NOT `pytest.raises`. The behaviour this guard exists to catch is the cell
+    # SKIPPING, and `Skipped` derives from `BaseException`, so it escapes
+    # `pytest.raises(AssertionError)` and skips this guard instead of failing
+    # it. MEASURED on the reverted tree: the guard reported `1 skipped` — a
+    # guard that answers the revert by going silent is the same silent-omission
+    # defect it was written against, one level up. So the outcome is classified
+    # here and every branch that is not a refusal is raised as one.
+    sid = _synthetic_citation_world(monkeypatch, {
+        ANSWERABLE: _cite(SEARCHED, ANSWERABLE),
+        UNANSWERABLE: _cite(NEVER, UNANSWERABLE),
+    })
+    try:
+        test_d3_required_outputs_are_produced(_Cell(sid))
+    except pytest.skip.Exception:
+        raise AssertionError(
+            f"the cell SKIPPED over a citation no corpus can answer: it "
+            f"records {UNANSWERABLE!r} against run root {NEVER!r}, which this "
+            f"module searches on no host, so the corpus pointer cannot settle "
+            f"it and the skip's reason is not true of it. The entry left the "
+            f"denominator in silence — vibe-ic#1266."
+        ) from None
+    except AssertionError as exc:
+        msg = str(exc)
+    else:
+        raise AssertionError(
+            f"the cell PASSED over a citation no corpus can answer "
+            f"({UNANSWERABLE!r} from {NEVER!r}) — a clean run over a "
+            f"population nothing looked at."
+        )
+    for want in ("NOT DETERMINED", UNANSWERABLE, NEVER):
+        assert want in msg, (
+            f"the refusal must say NOT DETERMINED and name the path and the "
+            f"root the record wanted; {want!r} is missing from:\n{msg}")
+    assert ANSWERABLE not in msg, (
+        f"the refusal named an entry the corpus CAN answer, so it is reporting "
+        f"the moved cells as a defect rather than carving out the citations "
+        f"nothing can settle:\n{msg}")
+
+
+def test_d3_the_corpus_skip_covers_exactly_the_cells_it_can_explain():
+    """The same property over the REAL manifest, as a property not a pin.
+
+    :func:`unanswerable_citations` decides from the RECORD and the cell decides
+    from the record plus the tree, so the two could drift apart without either
+    being obviously wrong. This asserts they cannot: over every live cell, a
+    non-empty finding and a refusal-instead-of-skip are the same set.
+
+    Deliberately not a pinned population. A count would have to be edited every
+    time a record is repaired, and #1266's whole direction of travel is that
+    the population shrinks — nineteen when it was filed, seven on this commit.
+    A property neither goes stale as they are repaired nor goes vacuous if they
+    all are.
+    """
+    disagree = []
+    for cell in cells_for(DIM):
+        sid = cell.step_id
+        if step_record(sid)["verdict"].startswith("NA_"):
+            continue
+        cites = unanswerable_citations(sid)
+        if cites:
+            # The message must be constructible and must name every path it
+            # found, or the refusal degrades to a bare count.
+            msg = _corpus_skip_would_hide(sid, cites)
+            for _entry, label, wanted in cites:
+                if wanted not in msg or label not in msg:
+                    disagree.append(
+                        f"step {sid}: the NOT DETERMINED message drops "
+                        f"{wanted!r} from {label!r}")
+        if run_roots() or corpus_root() is not None:
+            # The skip branch is not reached here, so there is nothing to
+            # cross-check against; the predicate half above still ran.
+            continue
+        try:
+            test_d3_required_outputs_are_produced(_Cell(sid))
+        except pytest.skip.Exception:
+            refused = False
+        except AssertionError:
+            refused = True
+        else:
+            refused = False
+        if refused != bool(cites):
+            disagree.append(
+                f"step {sid}: unanswerable_citations() found {len(cites)} but "
+                f"the cell {'refused' if refused else 'did not refuse'} — the "
+                f"predicate and the cell disagree about whether the corpus "
+                f"skip can explain this cell")
+    assert not disagree, (
+        f"{len(disagree)} disagreement(s) between the citations no corpus can "
+        f"answer and the cells that refuse for them:\n  " + "\n  ".join(disagree)
     )
 
 
@@ -3463,6 +4246,38 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # anywhere and the NA branch's own probe reddens.
     # 2026-08-12: "M1" left with M2-M4 and for the same reason — it is dormant,
     # not unpublished. It was the last mixed-signal cell here.
+    #
+    # 2026-08-17 (vibe-ic#1703) — THE SIX BELOW ARE THE SIX THE SPLIT WAS SAID
+    # TO HAVE TAKEN OUT OF SIGHT, AND THE PIN NEVER MOVED. #1703 asked for the
+    # census's 7 ENFORCED-CONTRADICTED cells to be enumerated by id "as they
+    # stood on the last commit that had the data — 772c31dcb — so they are
+    # recorded before the record scrolls away". Measured there, on a worktree
+    # of that commit, with the suite's own command:
+    #
+    #   $ pytest -q programs/tests/test_matrix_d3_outputs_produced.py -rA
+    #     FAILED ...test_d3_required_outputs_are_produced[step15]
+    #     FAILED ...[step17]  FAILED ...[step19]  FAILED ...[step20]
+    #     FAILED ...[step30]  FAILED ...[step32]
+    #     6 failed, 101 passed, 2 xfailed in 54.70s
+    #
+    #   $ pytest -q programs/tests/test_matrix_d7_outputs_list_complete.py
+    #     FAILED ...test_d7_required_outputs_list_is_complete[stepD1]
+    #     1 failed, 92 passed, 5 xfailed in 68.73s
+    #
+    # 6 + 1 = the 7. The d3 six are EXACTLY this tuple — the enumeration the
+    # issue asked to be written down was already written down, here, and
+    # survived the move unedited. The seventh is not a d3 cell at all: it is
+    # dimension 7's D1, `phase1/extraction_patterns.json` produced by the flow
+    # and read by a gate while no step's required_outputs names it, and it does
+    # not reproduce on this commit with or without a corpus.
+    #
+    # What DID change is whether anything could still ask. Six cells stopped
+    # being contradicted and started being SKIPPED, which is honest, and the
+    # remedy the skip names — point `VIBE_IC_BENCHMARK_DATA` at a clone — did
+    # not work, because `run_roots` never read it. It does now, and with the
+    # published corpus offered these six are red again, live, from this
+    # repository. So they need no second copy of this suite in benchmark-data:
+    # what they needed was the pointer to reach here.
     "15", "17", "19", "20", "30", "32",
 )
 
@@ -3904,6 +4719,12 @@ def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
         p = run / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
+    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
+    # revision it signed off against (W6); this probe needs a STAGED cell to
+    # read the contract off, so the run has to be publishable.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _pdk_revision_fixture as _pdk_fixture
+    _pdk_fixture.write_run_pdk_revision(run)
 
     dest_root = tmp_path / "benchmark-data"
     proc = subprocess.run(
@@ -5072,6 +5893,43 @@ def test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver():
 # from the current tree on every call, so a cell that changes state changes its
 # answer here without anyone editing a table.
 # ══════════════════════════════════════════════════════════════════════
+def _condition_file_present(root, pattern: str) -> bool:
+    """Is a step-level `files_exist` entry satisfied under ``root``?
+
+    A GLOB HAD TO BE ANSWERED WITH A GLOB (measured 2026-08-20)
+    ==========================================================
+    This was ``(root / pattern).is_file()``. Every `condition_files` value in
+    the manifest was a plain path, so the bug was invisible: M1-M4 name
+    `phase1/analog/analog_block_list.json`, steps 40-44 name
+    `phase3/stage5_manufacturing/silicon_received.json`, and a plain path is
+    its own glob.
+
+    The chip/IC steps (15.5ic, 26.5ic, 37.5ic) are gated on
+    `input/submission_template/slots/*.yaml` — the first WILDCARD condition in
+    the flow. `Path("a/*.yaml").is_file()` is False for every tree that has
+    ever existed, so those three cells would have reported NA_DORMANT
+    unconditionally: not "the condition is unmet" but "the question cannot be
+    asked". A cell that can only answer one way is exactly the vacuous pass
+    this dimension exists to catch, and it would have been introduced BY the
+    steps whose dormancy it was meant to measure.
+
+    Directory entries count: `files_exist` is satisfied by presence, and one
+    existing consumer (step 14, `condition_files_exist: [phase2/stage2/synth]`)
+    names a DIRECTORY. `is_file()` was wrong about that too.
+    """
+    from glob import glob as _glob
+    import os
+    if any(ch in pattern for ch in "*?["):
+        # `.exists()` on each hit, not just a non-empty glob: `glob` returns a
+        # DANGLING symlink, and the enforcer this mirrors
+        # (`flow_compliance_check._glob_first`) documents the opposite rule --
+        # "only paths that RESOLVE are returned" -- because leaving a link to
+        # nothing once scored strictly better than deleting the file.
+        return any(os.path.exists(h) for h in _glob(str(root / pattern),
+                                                    recursive=True))
+    return (root / pattern).exists()
+
+
 def matrix_na_precondition(step_id):
     """Why this cell is NA, re-derived LIVE, or ``None`` when it is answerable."""
     # Re-derived live from the flow yaml and the run trees, NOT read off the
@@ -5088,7 +5946,7 @@ def matrix_na_precondition(step_id):
     declared = [str(x) for x in (cond.get("files_exist") or [])]
     if not wanted or any(w not in declared for w in wanted):
         return None
-    if any((rr.path / w).is_file()
+    if any(_condition_file_present(rr.path, w)
            for rr in run_roots().values() for w in wanted):
         return None
     return ("a step-level condition keeps the step dormant: no admissible run "

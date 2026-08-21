@@ -280,6 +280,25 @@ def test_guard_a_new_loose_file_at_the_ic_level_is_still_refused(legacy_repo):
     assert "provenance.jsonl" in out, out
 
 
+def test_guard_a_brand_new_ic_published_with_strays_is_fully_refused(legacy_repo):
+    """An IC directory that did not exist at the baseline has NO register.
+
+    This is the case the escape would be worst in if it were scoped per IC
+    rather than per entry: a whole messy IC arriving in one commit would carry
+    its own amnesty. git returns an empty listing for a path absent at the
+    baseline, so every entry in it is ADDED and every one is refused."""
+    repo = legacy_repo
+    ic = repo / "benchmark-data" / "ic" / "ic_beta"
+    for stray in ("phase1", "phase3", "reports"):
+        (ic / stray).mkdir(parents=True)
+        (ic / stray / "out.json").write_text("{}", encoding="utf-8")
+    _make_cell(ic / "v1.2.3_pdka")
+    _commit(repo, "publish a brand-new IC with a legacy-shaped layout")
+    rc, out = _scoped(repo)
+    assert rc == 1, f"a brand-new messy IC was let through\n{out}"
+    for name in ("phase1/", "phase3/", "reports/"):
+        assert name in out, f"{name!r} was not refused on the new IC\n{out}"
+
 def test_guard_the_full_audit_shape_still_fails_every_legacy_entry(legacy_repo):
     """No `--changed-since` = the AUDIT shape, and it is untouched.
 

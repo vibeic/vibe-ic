@@ -14,17 +14,47 @@ Event kinds:
 
 Cron fire reads stdout; non-empty event list → emit PushNotification.
 
-Exit codes:
-  0  looked, and these are the events (possibly none)
-  2  could NOT look — no token, or the listing came back empty while the
-     repository declares items in it. stdout carries `error` and no `events`
-     key, so a reader cannot mistake it for a quiet fire.
-
 Why a separate snapshot file rather than diff-from-comments:
   * comments don't transition state (closing an issue can be
     button-only, no comment) — must read `state` directly
   * snapshot is durable across cron fires + manual triggers
   * o(open + recent-closed) per fire, bounded
+
+WHY THE ENUMERATION IS GraphQL AND NOT REST (vibe-ic#1645)
+==========================================================
+This program used to enumerate with the REST listing endpoint:
+
+    GET /repos/{REPO}/issues?state=open&per_page=50
+
+That endpoint returns an EMPTY ARRAY, with HTTP 200, for a repository
+that demonstrably has open issues. Measured against `vibeic/vibe-ic`:
+
+    gh api 'repos/vibeic/vibe-ic/issues?state=open&per_page=50' -> 0
+    gh api 'repos/vibeic/vibe-ic/issues?state=all&per_page=100' -> 0
+    gh api 'search/issues?q=repo:vibeic/vibe-ic+is:issue+is:open'
+                                              -> total_count 0
+    gh api repos/vibeic/vibe-ic --jq .open_issues_count           -> 0
+    gh issue list --state open --limit 200 (GraphQL)              -> 33
+
+and a single-issue REST GET of one of those 33 returns `state: open`,
+so the zero is false rather than a repository with nothing open. The
+REST listing for PULL requests on the same repository returns 6, so it
+is the ISSUE listing specifically, not auth and not the repository.
+
+An empty listing and an empty backlog are byte-identical here, and this
+program reported the second when it was handed the first: pointed at
+that repository it printed `{"events": [], "fetched": 0}` with rc 0 —
+a well-formed, successful, silent cron fire. Every new issue, reopen
+and label change would go unreported for as long as the condition
+lasts, and nothing in the output would say so.
+
+GraphQL keeps working through the same condition (that is what
+`gh issue list` uses, and it is the authority the repo's other polling
+programs already use — see `open_organic_issue_count.py` for vibe-ic#554
+and `org_open_work_poll.py` for the org-level sibling). So the
+enumeration is GraphQL, and a query that CANNOT be answered exits 2
+with an `error` on stdout instead of an empty event list, because
+"I could not look" must not arrive at the cron as "nothing changed".
 """
 from __future__ import annotations
 
@@ -34,156 +64,119 @@ import re
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 REPO = "reyerchu/AI_IC_design"
 STATE_PATH = Path.home() / ".config" / "vibe-ic-issue-state.json"
 TOKEN_PATH = Path.home() / ".config" / "github" / "token"
 
+API_ROOT = "https://api.github.com"
+GRAPHQL_URL = f"{API_ROOT}/graphql"
 
-class CannotLook(RuntimeError):
-    """The listing did not fail and did not answer. See `_fetch_recent`."""
+#: Same page sizes the REST listings used, so the tracked window does not
+#: change with the transport. GraphQL caps `first` at 100.
+OPEN_PAGE = 50
+CLOSED_PAGE = 20
+
+#: Both halves in ONE request. `repository.issues` never contains pull
+#: requests, so the PR filter below is belt-and-braces rather than load
+#: bearing. Ordered by UPDATED_AT so that, on a repository with more open
+#: issues than one page, the window holds the ones that actually moved —
+#: which is what a change notifier needs.
+_ISSUES_QUERY = """
+query($owner:String!, $name:String!, $open:Int!, $closed:Int!) {
+  repository(owner:$owner, name:$name) {
+    openIssues: issues(first:$open, states:OPEN,
+                       orderBy:{field:UPDATED_AT, direction:DESC}) {
+      nodes { number state title updatedAt labels(first:100){nodes{name}} }
+    }
+    closedIssues: issues(first:$closed, states:CLOSED,
+                         orderBy:{field:UPDATED_AT, direction:DESC}) {
+      nodes { number state title updatedAt labels(first:100){nodes{name}} }
+    }
+  }
+}
+"""
 
 
-def _gh(path: str, token: str) -> Any:
+class GitHubQueryError(RuntimeError):
+    """The enumeration could not be answered. NEVER an empty result."""
+
+
+def _http_json(url: str, token: str, payload: dict | None = None) -> Any:
+    """The one network seam in this file, so every call is fakeable."""
+    data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(
-        f"https://api.github.com{path}",
+        url,
+        data=data,
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
+            **({"Content-Type": "application/json"} if data else {}),
         },
     )
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.load(r)
 
 
-#: The witness for an empty listing. GraphQL on purpose — a DIFFERENT backend
-#: from the REST collection this file enumerates with, and on 2026-08-16 it was
-#: the half that still answered correctly.
-#:
-#: It counts BOTH issues and pull requests because that is exactly what
-#: `GET /repos/{o}/{r}/issues` enumerates: PRs come back on that endpoint too,
-#: and `_fetch_recent` drops them only AFTER the listing has arrived. Witnessing
-#: the raw listing against an issues-only count would raise a false alarm on
-#: every tick whose most-recent closed items happen to all be PRs. `closed` on
-#: the REST side spans both CLOSED and MERGED pull requests.
-#:
-#: The obvious REST alternative, `GET /repos/{o}/{r}` -> `open_issues_count`,
-#: is not usable: it is served by the same stale index as the listing and
-#: reported 0 alongside it in every measurement.
-_WITNESS_QUERY = (
-    "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){"
-    "openIssues:issues(states:OPEN){totalCount}"
-    "closedIssues:issues(states:CLOSED){totalCount}"
-    "openPrs:pullRequests(states:OPEN){totalCount}"
-    "closedPrs:pullRequests(states:CLOSED){totalCount}"
-    "mergedPrs:pullRequests(states:MERGED){totalCount}}}"
-)
+def _graphql(query: str, variables: dict, token: str) -> dict:
+    """Run a GraphQL query, or raise.
 
-
-def _declared_counts(token: str) -> Optional[dict[str, int]]:
-    """The repository's OWN count of what each listing enumerates, or None.
-
-    None is NOT zero. A witness that could not be reached has said nothing,
-    and folding it to 0 would manufacture the agreement it exists to test.
+    GitHub answers a failed GraphQL query with HTTP 200 and an `errors`
+    array, so the transport succeeding says nothing about the query
+    succeeding. A response carrying `errors`, or one whose `repository`
+    is null, is an ANSWER THAT WAS NOT GIVEN — it is raised, never
+    flattened into an empty node list.
     """
-    owner, _, name = REPO.partition("/")
-    if not owner or not name:
-        return None
-    body = json.dumps({
-        "query": _WITNESS_QUERY,
-        "variables": {"owner": owner, "name": name},
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.github.com/graphql", data=body, method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            payload = json.load(r)
-    except Exception:
-        return None
-    if not isinstance(payload, dict) or payload.get("errors"):
-        return None
-    try:
-        repo = payload["data"]["repository"]
-        return {k: int(repo[k]["totalCount"]) for k in (
-            "openIssues", "closedIssues", "openPrs", "closedPrs", "mergedPrs")}
-    except (KeyError, TypeError, ValueError):
-        return None
+    body = _http_json(GRAPHQL_URL, token,
+                      {"query": query, "variables": variables})
+    if not isinstance(body, dict):
+        raise GitHubQueryError(
+            f"GraphQL response was {type(body).__name__}, not an object")
+    if body.get("errors"):
+        msgs = "; ".join(
+            str(e.get("message", e)) for e in body["errors"][:3])
+        raise GitHubQueryError(f"GraphQL errors: {msgs}")
+    data = body.get("data") or {}
+    if data.get("repository") is None:
+        raise GitHubQueryError(
+            "GraphQL returned no `repository` object — the repo could not "
+            "be read, which is not the same as a repo with no issues")
+    return data["repository"]
 
 
-def _witness_empty_listing(state: str, token: str) -> None:
-    """Raise `CannotLook` if an empty listing contradicts the repository.
+def _normalise(node: dict) -> dict:
+    """GraphQL node -> the REST-shaped record the differ already speaks.
 
-    A listing that returns HTTP 200 and `[]` is the one failure this file could
-    not refuse: `_fetch_recent` returned nothing, `main` emitted
-    `{"events": [], "fetched": 0}` and exited 0, and the cron read that as
-    "nothing changed". MEASURED 2026-08-16 against `reyerchu/AI_IC_design`,
-    core quota healthy (`X-Ratelimit-Remaining: 4994`, so not throttling):
-
-        GET /repos/reyerchu/AI_IC_design/issues?state=closed&per_page=20  []
-        GraphQL repository.issues(states:CLOSED).totalCount              808
-
-    Asked ONLY when the listing came back empty. That is where a false zero
-    does its damage, and it keeps the cost at one extra call on the ticks that
-    would otherwise report nothing anyway.
-
-    Both directions matter. Refusing every empty listing would block a
-    genuinely quiet repository on every fire, and a check that blocks real work
-    is a check somebody switches off — so an empty listing the repository
-    AGREES is empty stays a legitimate zero and the tick proceeds.
+    `state` is LOWERCASED on purpose: snapshots written by the REST era
+    hold `open`/`closed`, and GraphQL says `OPEN`/`CLOSED`. Carrying the
+    GraphQL casing through would make the first fire after this change
+    report a state_change on every tracked issue.
     """
-    declared = _declared_counts(token)
-    if declared is None:
-        # Unreadable witness. Not grounds to halt: the listing itself
-        # succeeded. Said out loud so the zero is never mistaken for a
-        # corroborated one.
-        print(f"[UNWITNESSED] {REPO} {state} listing was empty and the "
-              f"witness could not be reached; this zero is uncorroborated.",
-              file=sys.stderr)
-        return
-    if state == "open":
-        total = declared["openIssues"] + declared["openPrs"]
-        detail = (f"{declared['openIssues']} open issue(s) + "
-                  f"{declared['openPrs']} open PR(s)")
-    else:
-        total = (declared["closedIssues"] + declared["closedPrs"]
-                 + declared["mergedPrs"])
-        detail = (f"{declared['closedIssues']} closed issue(s) + "
-                  f"{declared['closedPrs'] + declared['mergedPrs']} "
-                  f"closed/merged PR(s)")
-    if total > 0:
-        raise CannotLook(
-            f"{REPO}: the REST {state} listing returned 0 items but the "
-            f"repository declares {total} ({detail}). One of these is wrong, "
-            f"so the issue state is UNKNOWN this fire, not unchanged.")
+    labels = ((node.get("labels") or {}).get("nodes")) or []
+    return {
+        "number": node["number"],
+        "state": str(node.get("state", "")).lower(),
+        "title": node.get("title") or "",
+        "updated_at": node.get("updatedAt"),
+        "labels": [{"name": l.get("name")} for l in labels if l],
+    }
 
 
 def _fetch_recent(token: str) -> list[dict]:
-    open_issues = _gh(
-        f"/repos/{REPO}/issues?state=open&per_page=50", token)
-    closed = _gh(
-        f"/repos/{REPO}/issues?state=closed&per_page=20"
-        "&sort=updated&direction=desc",
-        token,
-    )
-    # Witness the RAW listings, before the pull-request filter below: an
-    # all-PR page is a legitimate empty result for this program, not a
-    # symptom, and only the raw page can be compared against a raw count.
-    if not open_issues:
-        _witness_empty_listing("open", token)
-    if not closed:
-        _witness_empty_listing("closed", token)
+    owner, _, name = REPO.partition("/")
+    repo = _graphql(_ISSUES_QUERY,
+                    {"owner": owner, "name": name,
+                     "open": OPEN_PAGE, "closed": CLOSED_PAGE},
+                    token)
+    open_nodes = ((repo.get("openIssues") or {}).get("nodes")) or []
+    closed_nodes = ((repo.get("closedIssues") or {}).get("nodes")) or []
+    # No PR filter: `repository.issues` never contains pull requests. The
+    # REST listing did, which is why the old code had one.
     seen = set()
     out: list[dict] = []
-    for d in (*open_issues, *closed):
-        if d.get("pull_request"):
-            continue
+    for node in (*open_nodes, *closed_nodes):
+        d = _normalise(node)
         if d["number"] in seen:
             continue
         seen.add(d["number"])
@@ -321,26 +314,79 @@ def _classify_stdin() -> int:
     return 0
 
 
-def main() -> int:
-    if '--classify-comment-stdin' in sys.argv[1:]:
+def _read_token() -> str | None:
+    """The token file, else the environment. None when neither is set.
+
+    The env fallback is what makes the failure in vibe-ic#1645
+    reproducible by anyone: `GH_TOKEN=$(gh auth token) ... --repo
+    vibeic/vibe-ic --state-path /tmp/throwaway.json`.
+    """
+    if TOKEN_PATH.exists():
+        tok = TOKEN_PATH.read_text().strip()
+        if tok:
+            return tok
+    for var in ("GH_TOKEN", "GITHUB_TOKEN"):
+        tok = (os.environ.get(var) or "").strip()
+        if tok:
+            return tok
+    return None
+
+
+def _parse_overrides(args: list[str]) -> None:
+    """`--repo OWNER/NAME` and `--state-path PATH`, both optional.
+
+    Unknown arguments are ignored, as they were before, so legacy cron
+    invocations keep working.
+    """
+    global REPO, STATE_PATH
+    repo = state_path = None
+    i = 0
+    while i < len(args):
+        flag, val = args[i], None
+        if flag in ("--repo", "--state-path") and i + 1 < len(args):
+            val = args[i + 1]
+            i += 1
+        elif flag.startswith("--repo=") or flag.startswith("--state-path="):
+            flag, val = flag.split("=", 1)
+        if val is not None:
+            if flag == "--repo":
+                repo = val
+            else:
+                state_path = val
+        i += 1
+    if state_path:
+        STATE_PATH = Path(state_path)
+    elif repo and repo != REPO:
+        # A snapshot is keyed by issue NUMBER, so pointing this program at a
+        # second repository while sharing one snapshot would read repo B's
+        # #12 as a state change on repo A's #12. Separate file, derived.
+        slug = repo.replace("/", "-")
+        STATE_PATH = STATE_PATH.with_name(f"vibe-ic-issue-state-{slug}.json")
+    if repo:
+        REPO = repo
+
+
+def main(argv=None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if '--classify-comment-stdin' in args:
         return _classify_stdin()
-    if not TOKEN_PATH.exists():
+    _parse_overrides(args)
+    token = _read_token()
+    if not token:
         print(json.dumps({"error": "no_github_token"}))
         return 2
-    token = TOKEN_PATH.read_text().strip()
 
     try:
         issues = _fetch_recent(token)
-    except CannotLook as exc:
-        # Deliberately NO "events" key, matching the no_github_token shape
-        # above. A cron that reads `out["events"]` must raise here rather than
-        # quietly find an empty list — "could not look" and "nothing changed"
-        # have to stay different answers on stdout as well as in the rc.
-        # The snapshot is left untouched: it is the only record of the last
-        # state we could actually see.
-        print(json.dumps({"error": "listing_contradicts_repository",
-                          "detail": str(exc)}))
-        print(str(exc), file=sys.stderr)
+    except (GitHubQueryError, OSError, ValueError, KeyError) as exc:
+        # A fire that could not enumerate prints an ERROR, not an empty
+        # event list. The cron reads stdout and notifies on a non-empty
+        # `events`; emitting `{"events": []}` here would make "GitHub
+        # would not answer" indistinguishable from "nothing changed" —
+        # which is the defect in vibe-ic#1645, one layer up.
+        print(json.dumps({"error": "issue_enumeration_failed",
+                          "detail": f"{type(exc).__name__}: {exc}"[:300],
+                          "repo": REPO}))
         return 2
 
     snapshot = _load_snapshot()

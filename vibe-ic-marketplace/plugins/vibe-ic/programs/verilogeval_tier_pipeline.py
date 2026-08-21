@@ -97,6 +97,10 @@ TIER_FLOOR = 5     # genuine floor: golden ref FAILS its own test under iverilog
 # drove a comparison — e.g. an elaboration that produced no stimulus) is NOT read
 # as a pass.
 _MISMATCH_RE = re.compile(r"Mismatches:\s*(\d+)\s+in\s+(\d+)\s+samples")
+# The PASS form of the same line — what the forgery gate (vibe-ic#1745) has to
+# keep a candidate from printing. Derived from _MISMATCH_RE, not a second
+# hand-maintained copy of the harness's vocabulary.
+_MISMATCH_PASS_REGEX = r"Mismatches:\s*0\s+in\s+\d+\s+samples"
 _TOPMODULE = "TopModule"
 
 
@@ -311,15 +315,32 @@ def gate_check(gate: dict, candidate_rtl: str) -> dict:
 # (3) iverilog verification — score a candidate against the official test
 # --------------------------------------------------------------------------- #
 def iverilog_score(prob: Problem, candidate_rtl: str,
-                   timeout: int = 60) -> Tuple[bool, str]:
+                   timeout: int = 60, submitted: bool = True) -> Tuple[bool, str]:
     """Compile `candidate_rtl` (renamed to TopModule) + the golden ref (RefModule)
     + the official testbench and run vvp. Return (passed, detail) where passed is
     True iff the test reports `Mismatches: 0 in N samples`. The golden ref is used
     ONLY as the test's reference instance — it is NOT fed to the solver and never
     influences classification/gate. iverilog availability is required for --verify.
+
+    vibe-ic#1745: the verdict is read off the SIMULATION's stdout, which the DUT
+    shares, so a candidate that PRINTS `Mismatches: 0 in N samples` forges its own
+    PASS (measured upstream: two submissions with identical wrong logic, the
+    second differing only by that one `$display`, scored 50%). The forgery gate
+    runs BEFORE the compile. `submitted=False` is for the floor probe, whose
+    "candidate" is the dataset's own golden rather than an answer to the question
+    — the gate has nothing to protect there and could only false-floor a sound
+    problem. The gate can only ever turn a PASS into a FAIL, never the reverse.
     """
     if not candidate_rtl or not candidate_rtl.strip():
         return False, "no candidate RTL"
+    if submitted:
+        try:
+            import harness_verdict_forgery_gate as _hvfg
+            _g = _hvfg.gate(candidate_rtl, _MISMATCH_PASS_REGEX)
+            if _g["verdict"] == _hvfg.FORGERY:
+                return False, _g["reason"]
+        except ImportError:
+            pass          # gate unavailable: never MANUFACTURE a failure
     # Defend against a candidate that named its module something other than
     # TopModule: the harness binds `TopModule`. We DO NOT rename — a Tier1 emit
     # already targets TopModule; if it doesn't, that is a real failure to surface.
@@ -397,7 +418,8 @@ def floor_evidence(prob: Problem, timeout: int = 60) -> Optional[str]:
     ref_text = prob.ref_path.read_text(errors="replace")
     # (1) structural: rename golden RefModule -> TopModule and run its own test.
     golden_as_top = re.sub(r"\bRefModule\b", "TopModule", ref_text)
-    ok, detail = iverilog_score(prob, golden_as_top, timeout=timeout)
+    ok, detail = iverilog_score(prob, golden_as_top, timeout=timeout,
+                                submitted=False)
     if not ok:
         return (f"golden _ref.sv fails its OWN _test.sv under iverilog "
                 f"(golden-as-TopModule -> {detail}); no candidate can ever score")

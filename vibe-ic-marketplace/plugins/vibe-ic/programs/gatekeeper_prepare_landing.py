@@ -129,7 +129,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -235,8 +237,27 @@ def _default_index_writer(repo: Path) -> List[str]:
     return [str(INDEX.relative_to(repo))]
 
 
-def _default_census_writer(repo: Path) -> Tuple[List[str], Optional[str]]:
+def _default_census_writer(repo: Path,
+                           timeout_s: Optional[float] = None,
+                           ) -> Tuple[List[str], Optional[str]]:
     """Re-derive the 63x8 census. Returns ``(paths written, reason it failed)``.
+
+    `timeout_s` exists because THE BOUND MUST BE ABLE TO FIRE WHERE THE CODE RUNS,
+    and this function has two callers with wall clocks an order of magnitude apart:
+
+      * `tools/gatekeeper-land.sh` — no outer clock, ~90 min gate, `CENSUS_TIMEOUT_S`
+        (600 s) is right and is sized from real runs (vibe-ic#1382: 102 s, ~250 s, 255 s).
+      * `programs/tests/test_issue1129_gatekeeper_prepare_landing.py` — driven under
+        `pytest --timeout=180`, so a 600 s bound CAN NEVER FIRE FIRST. The harness clock
+        wins every time, and with `--timeout-method=thread` pytest cannot unwind the
+        stuck thread, so it aborts the WHOLE SESSION. Measured on `ee849c19e`: the full
+        suite died at 27%, printed no `short test summary`, and left ZERO `FAILED`
+        lines — a reader grepping `^FAILED` gets 0 and reads an aborted run as a clean
+        one. One slow module cost the verdict for every module behind it.
+
+    Lowering `CENSUS_TIMEOUT_S` itself would be the wrong repair: it would guarantee the
+    production step can never succeed, which the constant's own comment warns about. The
+    bound is not wrong — it was being applied where a smaller one had to win.
 
     A REASON, not an exception, because this step is best-effort by design —
     see the module docstring. Both halves of the pair are meaningful at once:
@@ -245,24 +266,93 @@ def _default_census_writer(repo: Path) -> Tuple[List[str], Optional[str]]:
     both facts have to reach the caller. Dropping either one loses a write that
     then cannot be attributed, or hides a failure behind files that did change.
     """
+    # READ AT CALL TIME, NOT AS A DEFAULT ARGUMENT.
+    #
+    # `timeout_s: float = CENSUS_TIMEOUT_S` binds the constant ONCE, when the
+    # module is imported. Three tests in
+    # `test_issue1382_census_timeout_keeps_its_promise.py` make the bound fire by
+    # monkeypatching `CENSUS_TIMEOUT_S` to a small value; against a default
+    # argument that patch has no effect at all, the real 600 s bound applies, the
+    # timeout never fires, and all three go red. v1.10.48 shipped exactly that.
+    #
+    # A bound nobody can override in a test is a bound whose failure path is
+    # unreachable — which is the same "cannot be made to fail" defect the bound
+    # itself was added to prevent, one level up.
+    if timeout_s is None:
+        timeout_s = CENSUS_TIMEOUT_S
+
     if not GEN_CENSUS.is_file():
         return [], f"{GEN_CENSUS} is missing"
+    # What was already dirty BEFORE the census, so a timeout can undo exactly what
+    # the census wrote and nothing the earlier index step wrote.
+    before = set(dirty_paths(repo))
     with tempfile.TemporaryDirectory() as td:
         written_json = Path(td) / "written.json"
+        proc = subprocess.Popen(
+            [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
+             "--written-json", str(written_json)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=True)
+        timed_out = False
         try:
-            proc = subprocess.run(
-                [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
-                 "--written-json", str(written_json)],
-                capture_output=True, text=True, timeout=CENSUS_TIMEOUT_S)
+            stdout, stderr = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
-            # The bound FIRED. That is a statement about this host, not about
-            # the tree, and it must not be reported as either a repair or a
-            # finding. Anything written before it fired is still declared.
-            return _read_written(written_json), (
-                f"the generator did not finish within {CENSUS_TIMEOUT_S}s")
+            timed_out = True
+            # Kill the WHOLE writer group, not only its Python parent.  The
+            # census drives nested pytest processes; restoring while one of
+            # them is still alive lets an orphan write the tracked tree again
+            # after this function has reported it clean.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = proc.communicate()
+        if timed_out:
+            # THE BOUND FIRED, AND THE CHILD DOES NOT GET TO SAY WHAT IT WROTE.
+            #
+            # `subprocess.run` kills the child with SIGKILL on timeout, so the
+            # generator's own `finally: write --written-json` NEVER RUNS. This
+            # branch used to return `_read_written(written_json)` on the belief
+            # that "anything written before it fired is still declared" — that
+            # file does not exist, so the declaration came back EMPTY while the
+            # census had already rewritten anchored figures. The boundary check
+            # below then sees an undeclared dirty path and REFUSES, and
+            # `gatekeeper-land.sh` exits 1 on a refusal — so a slow host turns a
+            # best-effort convenience into a landing that cannot start.
+            #
+            # Measured: a child whose `finally` writes the declaration, timed out
+            # by `subprocess.run`, leaves `written.json` ABSENT.
+            #
+            # The module docstring promises a census that cannot run "leaves the
+            # landing exactly where it stood before this step existed". Honour
+            # that literally: restore exactly the paths that became dirty during
+            # the census, declare nothing, and report the timeout as a reason.
+            # Restoring is safe precisely because `before` was captured above —
+            # the earlier index write is untouched.
+            undone, failed = [], []
+            for rel in sorted(set(dirty_paths(repo)) - before):
+                rc, _out = _git(repo, "checkout", "--", rel)
+                (undone if rc == 0 else failed).append(rel)
+            reason = f"the generator did not finish within {timeout_s}s"
+            if undone:
+                reason += f"; reverted {len(undone)} partial write(s)"
+            if failed:
+                # Could not restore: say so and DECLARE them, so the boundary
+                # judges a real state instead of refusing on a path nobody owns.
+                reason += (f"; COULD NOT revert {len(failed)}: "
+                           + ", ".join(failed[:4]))
+                return failed, reason
+            return [], reason
         wrote = _read_written(written_json)
         if proc.returncode != 0:
-            tail = (proc.stdout + proc.stderr).strip().splitlines()
+            tail = (stdout + stderr).strip().splitlines()
             return wrote, (f"rc={proc.returncode}: "
                            + (tail[-1][:200] if tail else "no output"))
         return wrote, None
@@ -298,6 +388,7 @@ def _default_version_writer(repo: Path, plugin: Path,
 
 def prepare(repo: Path, *, do_commit: bool,
             index_writer=None, version_writer=None, census_writer=None,
+            census_timeout_s: Optional[float] = None,
             plugin_root: Optional[Path] = None) -> Tuple[int, List[str], List[str]]:
     """Run every mechanical fixer. Returns (rc, notes, declared_paths).
 
@@ -364,7 +455,15 @@ def prepare(repo: Path, *, do_commit: bool,
     # about. Whatever it wrote before dying is still declared, so the boundary
     # below judges it exactly as it judges a clean run.
     try:
-        wrote_c, census_why = (census_writer or _default_census_writer)(repo)
+        # `census_timeout_s` reaches ONLY the default writer. An injected stand-in
+        # keeps its own signature — narrowing the seam to fit a knob the caller may
+        # not know about would break every existing injection site.
+        if census_writer is not None:
+            wrote_c, census_why = census_writer(repo)
+        elif census_timeout_s is None:
+            wrote_c, census_why = _default_census_writer(repo)
+        else:
+            wrote_c, census_why = _default_census_writer(repo, census_timeout_s)
     except Exception as exc:                                 # noqa: BLE001
         wrote_c, census_why = [], f"{type(exc).__name__}: {exc}"
     declared |= set(wrote_c)

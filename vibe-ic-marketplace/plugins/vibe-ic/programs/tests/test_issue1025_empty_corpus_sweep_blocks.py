@@ -78,7 +78,16 @@ def _corpus(root, ic="an_ic", run="clean_run_v0000_20200101", reports=None):
 
 
 def _baseline(path, n):
-    path.write_text(json.dumps({"findings_total": n}) + "\n")
+    # `previous_findings_total: None` spells FIRST WRITE — the register states
+    # that it moved from nothing, which is what `--write-baseline` records the
+    # first time it runs. The key being ABSENT is a different fact (vibe-ic#1704:
+    # a register no writer that records provenance ever touched), and the gate
+    # answers NOT DETERMINED to it. These fixtures are about the sweep, so they
+    # declare the honest first-write form rather than the undecidable one.
+    path.write_text(json.dumps({"findings_total": n,
+                                "previous_findings_total": None,
+                                "previous_runs_swept": None,
+                                "previous_runs_with_reports": None}) + "\n")
     return path
 
 
