@@ -312,13 +312,21 @@ unset, on a quiet host:
 ```
 46 of 46 run
 43 files green
- 3 files carry exactly the 11 reds documented above, all classified:
-     test_matrix_d3_outputs_produced   6   (reds 1-6, owned elsewhere)
-     test_matrix_mutation_ledger       3   (reds 7-9, NOT_MEASURED)
+ 3 files carry 11 reds, all classified:
+     test_matrix_d3_outputs_produced   6   (reds 1-6,   owned elsewhere)
+     test_matrix_mutation_ledger       3   (reds 7-9,   NOT_MEASURED)
      test_matrix_63x8_coverage         2   (reds 14-15, owned elsewhere)
 ```
 
-**No red on this branch is unaccounted for, and none of the three fixes broke
+**The arithmetic, since 11 is not 17 minus 3 and a reader should not have to
+work that out.** Seventeen on clean main; three fixed here (12, 16, 17) leaves
+fourteen; this sweep observed eleven. The missing three are **10, 11 and 13** —
+the load-intermittent ones. They did not fire in this sweep, and they did not
+fire in three concurrent full-file runs at load 53 either. That is a property of
+those three, documented in their own section above, not a discrepancy: nobody
+has a rate for them and this report does not offer one.
+
+**So no red on this branch is unaccounted for, and none of the three fixes broke
 anything the selector can see.** The 22 files not previously run were all green,
 among them several this work would not have thought to check —
 `test_flow_compliance_check` (22), `test_signoff_required_outputs_completeness`
