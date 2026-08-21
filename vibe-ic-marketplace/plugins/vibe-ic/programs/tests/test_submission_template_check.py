@@ -787,9 +787,31 @@ def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
 
     MEASURED on the flow at the time this was written: `slots/*.yaml` makes the
     chip-path steps applicable and `NO_TEMPLATE.txt` makes the IP-path step
-    applicable, on `files_exist` and nothing else. Nothing blocks on this step
-    and nothing takes a required_input from it, so ITS OWN FAIL DOES NOT STOP
-    THE ROUTING — measured too, and it is why the file must not be written.
+    applicable, on `files_exist` and nothing else.
+
+    THE SENTENCE THAT USED TO SIT HERE IS NO LONGER TRUE, and it is corrected
+    rather than deleted because a reader who believes it reasons wrongly about
+    why this step matters. It said "Nothing blocks on this step and nothing
+    takes a required_input from it, so ITS OWN FAIL DOES NOT STOP THE ROUTING".
+    Both halves are now false — the 2026-08-20 D5-MISSING-EDGE change added the
+    edges. Measured on the flow this file reads:
+
+        steps that blocks_on 0.5ic:        15.5ic, 26.5ic, 37.5ic, 37.5ip
+        steps taking a required_input
+        `input/submission_template/tapeout_declaration.json` FROM 0.5ic:
+                                           15.5ic, 26.5ic, 37.5ic
+
+    So this step's FAIL now DOES stop the routing. That is not re-asserted
+    here: `test_matrix_d5_deps_correct.py::test_d5_blocks_on_covers_the_real_
+    dependency_graph` already derives the edge set from the real dependency
+    graph and pins it for every step in the flow — measured, by dropping
+    `0.5ic` from `26.5ic` and from `37.5ip` in a throwaway tree and watching D5
+    redden for each. A third copy of an invariant a broader guard already holds
+    is maintenance surface pretending to be coverage.
+
+    THE CONCLUSION IS UNCHANGED, because it never rested on that clause: the
+    router file must not be written by a run that did not look, because the
+    routers select terminals by `files_exist` and nothing else.
 
     A run that searched and found nothing and SAID SO, and a run where nobody
     looked, produce the same empty directory. If both wrote the router, both
