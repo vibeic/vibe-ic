@@ -2353,11 +2353,23 @@ def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
     than copied into this file -- a fixture copy would rot into the prose the
     delta function exists to replace. SKIPS rather than lies where the history
     is not available (a shallow clone, an exported tarball)."""
-    blob = subprocess.run(
-        ["git", "show", "867de4289:vibe-ic-marketplace/plugins/vibe-ic/flow/"
-         "phase1_phase2_phase3.yaml"],
-        cwd=Path(lc.__file__).resolve().parent.parent,
-        capture_output=True, text=True)
+    # BOUNDED AT `_T` like every other subprocess this file starts. The harness
+    # note beside this gate records that the 180 s session bound is gone and
+    # that these inner bounds are now the ONLY one, so an unbounded `git` here
+    # would be a hang with nothing above it to cut -- and `git` in this repo
+    # contends with a large worktree set, so "it is only a `git show`" is the
+    # reasoning, not the measurement. A timeout is the same class of answer as
+    # a non-zero rc -- the history could not be read -- so it SKIPS too, and
+    # says which of the two happened rather than reporting one as the other.
+    try:
+        blob = subprocess.run(
+            ["git", "show", "867de4289:vibe-ic-marketplace/plugins/vibe-ic/flow/"
+             "phase1_phase2_phase3.yaml"],
+            cwd=Path(lc.__file__).resolve().parent.parent,
+            capture_output=True, text=True, timeout=_T)
+    except subprocess.TimeoutExpired:
+        pytest.skip(f"`git show` did not answer within {_T}s — the flow blob at "
+                    "867de4289 could not be read, so nothing is claimed here")
     if blob.returncode != 0:
         pytest.skip("flow blob at 867de4289 is not in this checkout's history")
     pinned = tmp_path / "pinned.yaml"
