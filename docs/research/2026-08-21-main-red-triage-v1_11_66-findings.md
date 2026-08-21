@@ -1287,6 +1287,32 @@ fills fixed-size evidence windows) and OUTSIDE `$HOME` (the hermetic runner
 refuses a subject under it). `/tmp/ps` satisfies both; the descriptive path I
 used for most of this job satisfies neither.
 
+### The six instrument defects, consolidated
+
+That section covered one rule. By the end there were six, and **every one of them
+produced a confident, plausible, WRONG answer rather than an error.** That is the
+property worth internalising: a broken instrument almost never announces itself:
+
+| # | defect | how it presented | the guard |
+|---|---|---|---|
+| 1 | `for n in $rest` word-splits parametrised IDs — `test_x[and all 56 tools]` becomes many words | `no tests ran`, rc 4 | `mapfile` + `"${IDS[@]}"` |
+| 2 | an EMPTY pytest selector array falls back to `pytest.ini` `testpaths` | silently started the WHOLE suite and competed with my own measurements for 11 minutes | refuse loudly on an empty selector list |
+| 3 | `git stash -- <file>` returns SUCCESS when the changes are COMMITTED, so `\|\|` short-circuits and the fallback `checkout` never runs | a "pristine baseline" that was re-running my own modified file, and would have reported `0 added, 0 removed` — a clean circular confirmation | assert the control is in place before measuring; refuse to run if it is not |
+| 4 | a test-ID set-difference cannot distinguish RENAMED from FIXED | reported a renamed test as "now green" | check the collected-count invariant alongside the ID diff |
+| 5 | a verification grep written from REMEMBERED phrasing rather than the actual string | two present changes read as MISSING | check the query before believing an absence |
+| 6 | `cd X && CMD &` backgrounds the whole list, not just `CMD` | two files written into the operator's checkout | absolute paths in anything backgrounded |
+
+**The common shape:** 1 and 6 fail loudly and cost time. **2, 3, 4 and 5 fail
+QUIETLY and cost correctness** — each returned an answer of exactly the form I
+was expecting. Number 3 is the worst of them, because the answer it would have
+produced was the one I was hoping for, about my own work, and nothing downstream
+would have questioned it.
+
+The rule that covers all six, and it is the same rule this document applies to
+the code under test: **a measurement is not evidence until the apparatus has its
+own control.** "I reverted it", "I selected those IDs", "I grepped for it" and
+"the diff says fixed" are claims, not observations.
+
 ## M18 — the two-lane A/B I should have run first, and three more guards in the same family
 
 The retraction in M17 forced the measurement I had been inferring. Whole file,
