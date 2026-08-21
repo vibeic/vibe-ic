@@ -363,8 +363,19 @@ def test_the_published_total_equals_the_live_census():
         "ENFORCED": sum(1 for v in states.values() if v == "ENFORCED"),
         "CONTRADICTED": sum(
             1 for v in states.values() if v.endswith("-CONTRADICTED")),
+        # TWO WAYS A CELL LANDS IN THE NOT MEASURED COLUMN, and both count.
+        #
+        # `-SKIPPED` is a cell configured as something else whose run declined
+        # to look — a DISAGREEMENT between the axes. The bare `NOT_MEASURED`
+        # label is a cell configured NOT_MEASURED whose run agreed by declining
+        # to look, which is the fourth state added by the 2026-08-21 ruling.
+        #
+        # Counting only the first published 49 against a column the generator
+        # totalled at 55, which is this test's own subject one label later: a
+        # figure that does not reproduce. vibe-ic#1296.
         "NOT_MEASURED": sum(
-            1 for v in states.values() if v.endswith("-SKIPPED")),
+            1 for v in states.values()
+            if v.endswith("-SKIPPED") or v == "NOT_MEASURED"),
         "WAIVED": sum(1 for v in states.values() if v == "WAIVED"),
         "NA": sum(1 for v in states.values() if v == "NA"),
     }
