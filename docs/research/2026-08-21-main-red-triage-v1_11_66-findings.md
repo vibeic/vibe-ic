@@ -592,3 +592,88 @@ defects in main across this whole thread is **zero**. The image control still di
 its job — it surfaced a test that could not survive a PDK being installed — but
 what it surfaced was a fixture defect, not a program defect, and I should have
 read `_skip`'s docstring the first time instead of the fifth.
+
+# ===== WORKING THE 24 BOTH: what each cluster needs =====
+
+| n | cluster | status |
+|--:|---|---|
+| 6 | `test_matrix_d3_outputs_produced[step15/17/19/20/30/32]` | matrix family — the 54-ID agent's lane |
+| 3 | `test_matrix_mutation_ledger` incl. the `1.6x` remainder | matrix family |
+| 2 | `test_matrix_63x8_coverage` | matrix family |
+| 3 | `test_issue306`, `test_issue490`, `test_organic900_901` | **ONE cause**: they all print the same `flow gate enforcement audit` (181 clauses / 172 gates / 19 ENFORCED / 153 AUDIT_ONLY / 131 UNDECLARED). And `flow-gate enforcement audit` is ALSO one of the 6 blocking hygiene FAILs — **one defect in four places** |
+| 2 | `test_flow_manifest_declaration_parity` | **needs evidence this host does not hold** — see below |
+| 2 | `test_v0_2_96_issue460_coverage_bridge` | Step 4 prints VACUOUS-PASS where the test wants WAIVED-DEFERRED |
+| 1 | `test_pytest_per_file_junit::test_nested_collect_progress…` | the 0.8 s forward-progress lease family, characterised in run 2 as load-fragile; image `stage=collecting`, host `stage=running` |
+| 1 | `test_flow_compliance_check_gate` | `the finding itself is missing from the evidence snippet` |
+| 1 | `test_digital_hardmacro_gen` | the known `magic` flake |
+
+## `flow_manifest_declaration_parity` — ATTEMPTED, and it needs evidence this host lacks
+
+The gap is exactly one path: step `31` declares
+`reports/phase3/drc_signoff.json` and the dimension-3 manifest has no entry
+(164 declared vs 163 entries). The flow's own comment argues that declaration at
+length and NAMES this cost: *"16 roots carry `drc_signoff.rpt`, 3 carry
+`drc_signoff.json`, so 13 would report the new entry MISSING."*
+
+So the legitimate fix is to MEASURE the entry, because the manifest is an
+evidence record — *"where a real run produced it, at what path, and at what size
+in bytes"* — not a list somebody writes.
+
+**I cannot measure it here.** The manifest declares 15 run roots and
+**0 of the 15 are present on this host**. Files named
+`reports/phase3/drc_signoff.json` DO exist here (8 of them), but every one is in
+an agent scratch tree, and the manifest's own `_admissibility` excludes exactly
+that: *"A run root counts as a real flow run only if it carries
+`provenance.jsonl` or `reports/orchestrator/`. Agent scratch trees with
+hand-seeded artefacts are excluded: counting a seeded input as a produced output
+is exactly the false-pass this campaign exists to remove."*
+
+Adding an entry measured from one of those eight would be the false-pass the
+fixture was written to prevent. **NOT FIXED, and deliberately so.** What it
+needs is one of the 15 declared run roots, or a fresh admissible run that
+produces the file.
+
+## The highest-value remaining fix is the flow-gate enforcement audit
+
+It is the only cause on this list that is **one defect closing four things** —
+three of the 24 BOTH reds and one of the six blocking hygiene FAILs — and it is
+the one that stands between main and a landing rather than merely being red.
+
+## The flow-gate enforcement audit — ROOT-CAUSED TO TWO NAMES, and it is a POLICY call
+
+```
+[FAIL] 2 NEW gate(s) are AUDIT_ONLY and declare no intent at all:
+   undeclared::area_total_vs_budget_check
+   undeclared::tapeout_docs_gen
+```
+
+That is the whole refusal. Fixing it closes THREE of the 24 BOTH reds
+(`test_issue306`, `test_issue490`, `test_organic900_901`) **and one of the six
+blocking hygiene FAILs** — the best ratio on the board.
+
+The declaration is one line in each program's docstring, opening with
+`ENFORCEMENT: blocking` or `ENFORCEMENT: advisory` (`_DECL_RE`, and #886 made a
+mid-sentence mention not count).
+
+**But which one is a POLICY DECISION, and it is not mine to take.** Both gates
+are declared in the flow with `program_exit_zero:` clauses —
+
+```
+flow:1847  - program_exit_zero: "area_total_vs_budget_check . --json reports/phase2/gates/area_budget.json"
+flow:5788  - program_exit_zero: "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
+```
+
+— so the flow's own text implies BLOCKING, while the audit measures them
+AUDIT_ONLY because no runner invokes them where the status can stop a step.
+Therefore:
+
+* `ENFORCEMENT: blocking` moves them into the audit's OTHER failing shape,
+  "DECLARES blocking, wired AUDIT_ONLY", which is the `known` shrink-only
+  register — unless somebody also WIRES them;
+* `ENFORCEMENT: advisory` contradicts the flow clause that says their exit
+  status matters.
+
+Two bad options unless the wiring changes with the declaration. **NOT FIXED, and
+deliberately: the audit exists precisely to force this decision to be taken by
+someone, and taking it by guess is the failure mode it was built against.**
+Whoever owns those two gates has a two-line fix plus a wiring decision.
