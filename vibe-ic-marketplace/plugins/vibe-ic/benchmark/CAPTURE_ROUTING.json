@@ -250,6 +250,10 @@
     "ppa.record_provenance": {
       "bucket_A_program": "programs/_ppa/metrics.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "ppa.pareto": {
+      "bucket_A_program": "programs/ppa_pareto_check.py",
+      "bucket_B_skill_file": "skills/design-for-eco/SKILL.md"
     }
   },
   "default_routing": {

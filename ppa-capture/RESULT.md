@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 19 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 20 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 16 | deterministic rules — the default, and every one names its predicate |
+| **A** | 17 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -723,6 +723,33 @@ artefact class — the pattern this lane keeps finding.
 **(o)** yes. **(d)** yes — it is per producer per field, so it re-answers for the
 next producer added and for any other provenance field the record gains.
 
+### A-18 · a lever that deletes a design property must be priced, or the winner is a trade · `ppa.pareto`
+
+The published winner of the 60-arm sweep won partly by **deleting all ten of the
+design's spare ECO cells**. The report decomposes the move exactly:
+
+    default -> winner                   6594 -> 6136 um2      -6.95 %
+      of which, density 0.30 -> 0.60    6594 -> 6291          -4.60 %   real
+      of which, spare 0.02 -> 0.00      6291 -> 6136          -2.46 %   a trade
+
+So roughly a third of the headline win is paid for in metal-only ECO readiness,
+and the preserving candidate is a **different arm** — 2.4 % worse on the
+objective and whole on the property.
+
+**The ranking layer cannot express any of this.** The word for that property does
+not appear anywhere in the search or frontier modules — zero mentions. The lever
+is exposed by the runner, the objective does not price it, so the optimum sits at
+the setting that removes it, monotonically, and the ranking reports a straight
+win.
+
+**Two separate lanes computed the distinction by hand and put it in prose** — one
+naming the preserving arm as "the winner a design that wants design-for-ECO
+should read", the other making an ECO-preserving winner its own headline
+category. Two independent hand-computations of the same missing term is the
+evidence that the layer owes it.
+**(o)** yes. **(d)** yes — it is per declared property, so it covers the next
+lever whose range includes switching something off.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -906,6 +933,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
 | A-16 | — | 5 admitted, 0 counted | verified on the published document |
 | A-17 | — | 6867 / 6674 | split is perfectly per producer; all 6867 host-prefixed |
+| A-18 | — | 0 mentions | the ranking layer has no word for the property it deletes |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |

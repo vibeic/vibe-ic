@@ -1,7 +1,7 @@
 {
   "date": "2026-08-22",
   "totals": {
-    "A": 16,
+    "A": 17,
     "B": 0,
     "C": 2,
     "D": 0,
@@ -19,7 +19,8 @@
       "programs/changelog_command_reproducibility_check.py",
       "programs/lec_post_layout_check.py",
       "programs/crosslayer_search_space.py",
-      "programs/_ppa/metrics.py"
+      "programs/_ppa/metrics.py",
+      "programs/ppa_pareto_check.py"
     ],
     "bucket_T": [
       "OpenROAD"
@@ -36,7 +37,8 @@
     "ppa-capture/candidates/bucket_A_programs_changelog_command_reproducibility_check_rule_sketches.py",
     "ppa-capture/candidates/bucket_A_programs_lec_post_layout_check_rule_sketches.py",
     "ppa-capture/candidates/bucket_A_programs_crosslayer_search_space_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs__ppa_metrics_rule_sketches.py"
+    "ppa-capture/candidates/bucket_A_programs__ppa_metrics_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs_ppa_pareto_check_rule_sketches.py"
   ],
   "bucket_C_dir": "ppa-capture/candidates/bucket_C_backlogs",
   "bucket_C_files": [
