@@ -573,6 +573,18 @@ _PIN_SPELLINGS = [
     ('self.assertNotIn("of 3 repairs refused", script())', False),
     ('assert not any("of 3 repairs refused" in s for s in [script()])', False),
     ('assert script() != "of 3 repairs refused"', False),
+    # Found by testing the ENUMERATION rather than trusting the word
+    # "enumerable": these two read as PINS until `is not` and `assertFalse`
+    # were added, which put the false refusal back for those spellings.
+    ('assert "of 3 repairs refused" is not script()', False),
+    ('self.assertFalse("of 3 repairs refused" in script())', False),
+    ('self.assertIsNot(script(), "of 3 repairs refused")', False),
+    # The AFFIRMING forms, which must stay pins. `assertTrue`/`assertEqual` are
+    # deliberately not in the denial set; treating them as denials would drop
+    # real pins, which is the silent direction.
+    ('self.assertIn("of 3 repairs refused", script())', True),
+    ('self.assertTrue("of 3 repairs refused" in script())', True),
+    ('self.assertEqual(script(), "of 3 repairs refused")', True),
 ]
 
 
@@ -596,7 +608,7 @@ def test_the_pin_reader_gets_every_negation_spelling_right():
     sys.path.insert(0, str(PROGRAMS_DIR))
     import emitter_population_pin_check as E  # noqa: E402
 
-    head = "from thing_emit import script\n\n\ndef test_p():\n"
+    head = "from thing_emit import script\n\n\ndef test_p(self):\n"
     for line, is_a_pin in _PIN_SPELLINGS:
         kept, refused = E.pins(head + "    " + line + "\n")
         assert bool(kept) is is_a_pin, (

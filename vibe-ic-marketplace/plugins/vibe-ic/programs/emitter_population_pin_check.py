@@ -350,10 +350,18 @@ def denies_containment(node: ast.AST, parent: Dict[int, ast.AST]) -> Optional[st
 
     THE PIN SIDE IS NOT PROSE, and that is the whole reason this is a grammar
     walk rather than a call to `_prose_polarity`. A test denies a containment in
-    exactly the ways the LANGUAGE provides -- `not in`, `not`, `!=`,
-    `assertNotIn` -- and those are productions of Python's grammar, unambiguous
-    and enumerable, the same argument the polarity gate's own `_NOT_PROSE`
-    register makes about LEF, DEF and Liberty.
+    exactly the ways the LANGUAGE provides -- `not in`, `not`, `!=`, `is not`,
+    `assertNotIn`, `assertIsNot*`, `assertFalse` -- and those are productions of
+    Python's grammar, unambiguous and enumerable, the same argument the polarity
+    gate's own `_NOT_PROSE` register makes about LEF, DEF and Liberty.
+
+    ENUMERABLE IS A CLAIM, SO THE ENUMERATION WAS TESTED RATHER THAN TRUSTED,
+    and it was short by two. `is not` (`ast.IsNot`, which `assertIsNot` reaches
+    but the bare operator did not) and `assertFalse("..." in x)` -- a Call that
+    denies the containment inside it -- both read as PINS, which puts the false
+    refusal this function exists to stop straight back for those spellings.
+    `assertTrue` and `assertEqual` are deliberately absent: they AFFIRM, and
+    treating them as denials would drop real pins.
 
     MEASURED over six realistic assertion spellings, the prose vocabulary got
     THREE of them wrong, in both directions:
@@ -387,9 +395,12 @@ def denies_containment(node: ast.AST, parent: Dict[int, ast.AST]) -> Optional[st
                 return "not in"
             if any(isinstance(o, ast.NotEq) for o in up.ops):
                 return "!="
+            if any(isinstance(o, ast.IsNot) for o in up.ops):
+                return "is not"
         if isinstance(up, ast.Call) and isinstance(up.func, ast.Attribute) \
                 and (up.func.attr.startswith("assertNot")
-                     or up.func.attr.startswith("assertIsNot")):
+                     or up.func.attr.startswith("assertIsNot")
+                     or up.func.attr == "assertFalse"):
             return up.func.attr
         if isinstance(up, ast.stmt):
             return None
