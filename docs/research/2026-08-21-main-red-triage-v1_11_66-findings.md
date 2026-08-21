@@ -657,6 +657,12 @@ retraction: the failing thing was the fixture, not the subject.
 
 ### One defect or several
 
+**SUPERSEDED BY M18 — the count is thirteen, not ten.** M18 found three more
+guards defeated by a SECOND mechanism (the read-only object-exact subject), so the
+honest statement is one root cause through two mechanisms across thirteen tests.
+The paragraph below is left as written because its reasoning is unchanged; only
+the scope grew.
+
 **ONE defect, six unreachable knobs, ten affected tests** (7 red after M14, 1
 unproven, 2 genuine greens). G4, G5 and G6 in the
 table below collapse into this single entry; they are not three findings. The
@@ -1740,6 +1746,11 @@ relocated.
 | after A + C | **6** | **128** | 134 |
 
 Nothing newly red at any step.
+
+**QUALIFIED BY M27 — this is a HOST number and CI is unchanged.** The pinned
+image reads 22 failed / 112 passed both before and after, because all 22 die on
+the absent Docker CLI before reaching anything this branch changed. Do not quote
+`9 → 6` as an improvement to the landing lane.
 
 **Of the original 9 reds, 4 are closed** — G6 by design A, and the three tamper
 guards by design C. **5 remain, and one red was added deliberately** (M14's
