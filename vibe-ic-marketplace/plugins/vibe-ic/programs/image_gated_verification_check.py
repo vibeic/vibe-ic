@@ -68,14 +68,14 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
 import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
+import _eda_image as _img  # noqa: E402 — the one site that answers "which image"
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent
 REPO = PLUGIN.parent.parent.parent
 TESTS = HERE / "tests"
-ANCHOR_FILE = REPO / "tools" / "vibeic-eda" / "VERSION"
-IMAGE_REPO = "ghcr.io/vibeic/vibeic-eda"
+IMAGE_REPO = _img.IMAGE_REPO
 
 #: rc 2 is the NOT_CHECKED tier `run_tolerating_uncheckable` records and
 #: never folds into `passed` — the mechanism #1128 says the test tier lacks.
@@ -91,12 +91,16 @@ _IMAGE_WORDS = ("image", "container", "vibeic-eda", "reachable")
 _PROBE_PATH = "/usr/bin/env"
 
 
-def anchor() -> Optional[str]:
-    try:
-        v = ANCHOR_FILE.read_text(encoding="utf-8").strip().splitlines()[0].strip()
-    except (OSError, IndexError):
-        return None
-    return v or None
+def anchor() -> "_img.JudgedImage":
+    """The image the gated tests would read, pinned by DIGEST.
+
+    This used to read `tools/vibeic-eda/VERSION` — vibeic-eda's version number
+    kept in THIS repo, so every image release needed a PR here. The name stays
+    because the gate reports "anchor <ref>", and what an anchor has to be is an
+    identity nobody else can move; a digest is that, and a version number in our
+    tree was only ever a stand-in for it.
+    """
+    return _img.judged_image()
 
 
 def _skip_reason_text(node: ast.AST) -> str:
@@ -138,7 +142,12 @@ def image_is_readable(image: str, timeout: int = 60) -> Tuple[bool, str]:
     """THE SAME operation the gated tests perform, once."""
     try:
         r = subprocess.run(
+            # `--pull never`: `judged_image()` only ever names an image this
+            # host already holds, so this changes no reachable answer today — it
+            # is the guard for the day something else names one it does not, and
+            # a probe that silently fetches gigabytes is not a probe.
             ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+             "--pull", "never",
              "--entrypoint", "cat", image, _PROBE_PATH],
             capture_output=True, timeout=timeout)
     except FileNotFoundError:
@@ -159,7 +168,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--tests", type=Path, default=TESTS)
     ap.add_argument("--image", default=None,
-                    help="override the anchored image (testing)")
+                    help="override the resolved image (testing)")
     ap.add_argument("--timeout", type=int, default=60)
     ap.add_argument("--json", type=Path)
     args = ap.parse_args(list(argv) if argv is not None else None)
@@ -167,16 +176,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sites = image_gated_sites(args.tests)
     files = sorted({f for f, _, _ in sites})
 
-    img = args.image or (f"{IMAGE_REPO}:{anchor()}" if anchor() else None)
+    # AN EXPLICIT `--image` IS HONOURED VERBATIM, resolvable or not. This gate
+    # does not report a verdict ABOUT the image's contents — it reports whether
+    # the image the gated tests would read is READABLE — so an unresolvable ref
+    # is a thing to PROBE and disclose, not a reason to refuse before the probe.
+    # (The two gates that DO judge contents refuse instead; see
+    # `_eda_image.unidentified_reason`.) Its digest and version are recorded when
+    # they resolve, and left null with the reason when they do not.
+    judged = _img.judged_image(explicit=args.image)
+    img = judged.ref or args.image
     if img is None:
-        print("image_gated_verification_check: UNRUNNABLE — no anchor at "
-              f"{ANCHOR_FILE}; the question cannot be asked", file=sys.stderr)
+        print(f"image_gated_verification_check: UNRUNNABLE — {judged.why_not}; "
+              f"the question cannot be asked", file=sys.stderr)
         return RC_UNRUNNABLE
 
     # THE DENOMINATOR IS PRINTED WHATEVER THE VERDICT. A gate that speaks only
     # when it finds something is indistinguishable from one that is not running.
+    # It is printed BEFORE the image is probed, deliberately: an unreadable image
+    # must not also cost the reader the count.
     print(f"image_gated_verification_check: {len(sites)} image-gated skip site(s) "
           f"across {len(files)} test file(s); anchor {img}")
+    if judged.ref is None:
+        print(f"  the image could not be identified ({judged.why_not}), so this "
+              f"run records no digest and no version for it", file=sys.stderr)
     if not sites:
         print("NOTHING_SCANNED: no image-gated skip site was found — this is NOT "
               "a pass. Either the tests stopped gating on the image, or this "
@@ -184,7 +206,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return RC_UNRUNNABLE
 
     ok, why = image_is_readable(img, args.timeout)
-    report = {"anchor": img, "sites": len(sites), "files": files,
+    report = {"anchor": img, "image_digest": judged.digest,
+              "image_unidentified": judged.why_not or None,
+              "image_digest_kind": judged.digest_kind,
+              "image_source": judged.source,
+              "image_version": judged.version,
+              "image_version_source": judged.version_source,
+              "sites": len(sites), "files": files,
               "readable": ok, "detail": why,
               "verdict": "OK" if ok else "NOT_CHECKED"}
     if args.json:

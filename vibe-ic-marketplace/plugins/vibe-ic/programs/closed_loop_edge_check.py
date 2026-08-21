@@ -97,6 +97,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#1470
 
 try:
     import yaml
@@ -343,7 +344,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out,
+                          json.dumps(rep, indent=2, ensure_ascii=False) + "\n")
 
     n = rep.get("declarations", 0)
     if verdict == "NOT_MEASURED":
