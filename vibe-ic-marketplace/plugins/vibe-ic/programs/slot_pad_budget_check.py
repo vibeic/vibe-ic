@@ -316,6 +316,83 @@ _DIR_RE = re.compile(r"^(input|output|inout)\b(.*)$", re.S)
 _RANGE_RE = re.compile(r"\[\s*([^\]:]+?)\s*:\s*([^\]]+?)\s*\]")
 
 
+def _token_value(tok: str, params: Optional[Dict[str, int]]) -> Optional[int]:
+    """A dimension token's value, or None when it cannot be resolved WITHOUT
+    GUESSING. Shared by the packed-range reader and the unpacked-array reader
+    so the two cannot disagree about what `BDW-1` means."""
+    tok = tok.strip().strip("`")
+    try:
+        return int(tok, 0)
+    except ValueError:
+        pass
+    # NAME, NAME-1, NAME+1 -- resolved ONLY from caller-supplied values
+    mm = re.match(r"^`?([A-Za-z_]\w*)\s*([-+])\s*(\d+)$", tok)
+    if mm and params and mm.group(1) in params:
+        base = params[mm.group(1)]
+        return base - int(mm.group(3)) if mm.group(2) == "-" else base + int(mm.group(3))
+    if params and tok in params:
+        return params[tok]
+    return None
+
+
+#: A port INITIALISER -- `output reg rvfi_valid = 1'b0`. Legal, and it sits
+#: after the name, so a last-token read returns the literal instead.
+_PORT_INIT_RE = re.compile(r"=\s*[^=].*$", re.S)
+#: Trailing UNPACKED dimensions -- `csr_pmp_addr_i [PMPNumRegions]`. Also after
+#: the name, and unlike a packed range they MULTIPLY the port's bit count.
+_UNPACKED_RE = re.compile(r"((?:\s*\[[^\]]*\])+)\s*$")
+_DIM_RE = re.compile(r"\[([^\]]*)\]")
+
+
+def split_port_tail(tail: str) -> Tuple[str, List[str]]:
+    """`(tail_without_suffixes, unpacked_dimension_texts)`.
+
+    MEASURED over 6,760 module headers of published RTL: 174 ports came back
+    named `1'b0`, `64'd0` or `[PMPNumRegions]`. Both causes sit AFTER the port
+    name, where a last-token read finds them instead of the name.
+
+    The unpacked case is the one that moves a NUMBER, and it moves it the
+    dangerous way. `input logic [33:0] csr_pmp_addr_i [PMPNumRegions]` is
+    4 x 34 bits; reading only the packed range reports 34. A smaller interface
+    than the design has is how a design that cannot be bonded out reads as
+    FITS -- the exact verdict this program exists to refuse.
+    """
+    t = tail
+    m = _UNPACKED_RE.search(t)
+    dims: List[str] = []
+    if m and t[:m.start()].strip():          # never strip the ONLY token
+        dims = _DIM_RE.findall(m.group(1))
+        t = t[:m.start()]
+    t = _PORT_INIT_RE.sub("", t)
+    return t, dims
+
+
+def unpacked_count(dims: List[str],
+                   params: Optional[Dict[str, int]] = None) -> Optional[int]:
+    """How many elements the unpacked dimensions describe, or None.
+
+    None is the honest answer for `[PMPNumRegions]` with no supplied value,
+    and None reaches the verdict as UNDECIDED rather than as a number this
+    program invented -- the same rule `_width` already follows for a
+    parameterised packed range.
+    """
+    total = 1
+    for d in dims:
+        d = d.strip()
+        if ":" in d:
+            lo, hi = d.split(":", 1)
+            a, b = _token_value(lo, params), _token_value(hi, params)
+            if a is None or b is None:
+                return None
+            total *= abs(a - b) + 1
+        else:
+            n = _token_value(d, params)
+            if n is None:
+                return None
+            total *= n
+    return total
+
+
 def _width(rest: str, params: Optional[Dict[str, int]] = None) -> Optional[int]:
     """Declared bit width, or None when it cannot be resolved WITHOUT GUESSING.
 
@@ -338,20 +415,7 @@ def _width(rest: str, params: Optional[Dict[str, int]] = None) -> Optional[int]:
     lo, hi = m.group(1), m.group(2)
 
     def _val(tok: str) -> Optional[int]:
-        tok = tok.strip().strip("`")
-        # a bare literal
-        try:
-            return int(tok, 0)
-        except ValueError:
-            pass
-        # NAME, NAME-1, NAME+1 -- resolved ONLY from caller-supplied values
-        mm = re.match(r"^`?([A-Za-z_]\w*)\s*([-+])\s*(\d+)$", tok)
-        if mm and params and mm.group(1) in params:
-            base = params[mm.group(1)]
-            return base - int(mm.group(3)) if mm.group(2) == "-" else base + int(mm.group(3))
-        if params and tok in params:
-            return params[tok]
-        return None
+        return _token_value(tok, params)
 
     a, b = _val(lo), _val(hi)
     if a is None or b is None:
@@ -458,12 +522,22 @@ def parse_top_ports(text: str, top: str,
                 unparsed.append(decl[:60])
             continue
         direction, tail = dm.group(1), dm.group(2)
-        toks = tail.replace(")", " ").split()
+        # An initialiser and an unpacked array both sit AFTER the name, so the
+        # last token is not the name until they are removed. See
+        # `split_port_tail` for the measurement that found this.
+        head, unpacked = split_port_tail(tail)
+        toks = head.replace(")", " ").split()
         if not toks:
             continue
         name = toks[-1].strip(";,")
+        width = _width(head, params)
+        if unpacked:
+            n = unpacked_count(unpacked, params)
+            # None x anything stays None: an array whose length nobody supplied
+            # is UNDECIDED, never a guessed pad count.
+            width = None if (width is None or n is None) else width * n
         ports.append({"dir": direction, "name": name,
-                      "width": _width(tail, params),
+                      "width": width,
                       "conditional": name in conditional})
     if ports:
         ports[0]["_unparsed_chunks"] = unparsed
