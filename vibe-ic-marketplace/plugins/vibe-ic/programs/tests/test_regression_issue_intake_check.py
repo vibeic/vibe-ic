@@ -132,7 +132,7 @@ def test_validate_flags_path_in_filename():
 # ----------------------------------------------------------------------
 def test_emit_fixture_writes_snippet_and_pending(tmp_path):
     # The emitter writes under
-    # <repo_root>/vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/.
+    # <repo_root>/vibe-ic-marketplace/plugins/vibe-ic/programs/tests/phase1_fixtures/.
     parsed = mod._parse_form_issue(_GOOD_BODY)
     fixture = mod._emit_fixture(tmp_path, parsed, issue_number=5)
     assert fixture.is_file()

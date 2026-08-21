@@ -1,2 +1,0 @@
-lvs: match
-source: lvs.report (netgen batch lvs vs delta_sigma_lvs_schematic.spice, sky130A_setup.tcl)

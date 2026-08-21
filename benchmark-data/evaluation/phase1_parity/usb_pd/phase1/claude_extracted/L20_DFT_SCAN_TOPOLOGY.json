@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "scan_topology": "N/A — protocol spec, no DFT defined.",
-    "built_in_self_test": "BIST Carrier Mode + BIST Test Data on CC"
-  }
-}

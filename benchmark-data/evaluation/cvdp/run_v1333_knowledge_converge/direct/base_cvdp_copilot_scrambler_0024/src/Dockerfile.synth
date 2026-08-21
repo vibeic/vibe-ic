@@ -1,5 +1,0 @@
-FROM __OSS_PNR_IMAGE__ AS BASE
-
-ADD https://bootstrap.pypa.io/pip/3.9/get-pip.py get-pip.py
-RUN python3 ./get-pip.py
-RUN python3 -m pip install pytest==8.3.2

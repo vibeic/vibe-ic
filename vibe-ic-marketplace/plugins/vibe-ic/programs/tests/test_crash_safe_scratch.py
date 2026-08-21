@@ -205,3 +205,92 @@ def test_the_lock_is_actually_taken_and_not_merely_created(tmp_path):
         res.release()
     # And released on a clean teardown, so a tidy exit does not look live.
     assert not res.path.exists()
+
+
+# ---------------------------------------------------------------------------
+# A PEER TIDIES UP WHILE WE ARE WALKING THE LISTING.
+#
+# `iterdir()` is a snapshot. On a host running several agents against one /tmp,
+# a peer finishes between the listing and the inspection and `d.stat()` raises
+# FileNotFoundError, which escaped `reserve()` into the caller. Measured: it
+# took down two tests of an unrelated PR's verification run and did NOT
+# reproduce on a re-run of the same tree, which is how it stayed invisible.
+#
+# Three-way control, because a fix here can go wrong in two directions —
+# crashing (the bug) and swallowing everything (the over-correction):
+#   vanished        -> reported, sweep continues
+#   still reapable  -> STILL reaped in the same sweep
+#   a real error    -> NOT disguised as "it vanished"
+# ---------------------------------------------------------------------------
+def _vanishes_after_the_listing(monkeypatch, doomed, exc=None):
+    """Model the RACE, not merely a missing directory.
+
+    The listing must still SEE it — that is what makes this a race rather than
+    an absence — so `is_dir` is answered directly and only `stat` raises. A
+    naive patch of `stat` alone removes it at `iterdir()` time (pathlib's
+    `is_dir` goes through `stat`), so the candidate never enters the loop and
+    the test proves nothing.
+    """
+    exc = exc or FileNotFoundError(2, "No such file or directory", str(doomed))
+    real_stat, real_is_dir = Path.stat, Path.is_dir
+
+    def fake_is_dir(self):
+        return True if Path(self) == doomed else real_is_dir(self)
+
+    def fake_stat(self, *a, **k):
+        if Path(self) == doomed:
+            raise exc
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "is_dir", fake_is_dir)
+    monkeypatch.setattr(Path, "stat", fake_stat)
+
+
+def test_a_peer_that_vanishes_mid_sweep_is_reported_not_a_crash(tmp_path, monkeypatch):
+    doomed = tmp_path / "probe-gone"
+    doomed.mkdir()
+    _vanishes_after_the_listing(monkeypatch, doomed)
+    rep = S.reap("probe-", root=tmp_path, legacy_max_age_s=0)
+    assert rep.vanished == [str(doomed)], rep
+    assert str(doomed) not in rep.reaped, rep
+    assert [p for p, _ in rep.kept] == [], rep
+
+
+def test_the_sweep_carries_ON_past_a_vanished_peer(tmp_path, monkeypatch):
+    """The half that matters. A vanished peer must not abort the sweep, or one
+    tidy peer disables the reaper for every abandoned directory behind it."""
+    doomed = tmp_path / "probe-aaa-gone"
+    doomed.mkdir()
+    stale = tmp_path / "probe-bbb-stale"
+    stale.mkdir()
+    _vanishes_after_the_listing(monkeypatch, doomed)
+    rep = S.reap("probe-", root=tmp_path, legacy_max_age_s=0)
+    assert rep.vanished == [str(doomed)], rep
+    assert str(stale) in rep.reaped, rep
+    assert not stale.exists()
+
+
+def test_a_real_error_is_not_disguised_as_a_vanished_peer(tmp_path, monkeypatch):
+    """The over-correction guard. `except FileNotFoundError` must not become
+    `except Exception`: a PermissionError is a fact about this host and has to
+    reach the caller rather than be filed as "someone else tidied up"."""
+    doomed = tmp_path / "probe-denied"
+    doomed.mkdir()
+    _vanishes_after_the_listing(
+        monkeypatch, doomed,
+        exc=PermissionError(13, "Permission denied", str(doomed)))
+    with pytest.raises(PermissionError):
+        S.reap("probe-", root=tmp_path, legacy_max_age_s=0)
+
+
+def test_reserve_survives_a_peer_vanishing(tmp_path, monkeypatch):
+    """End to end: this is the call that actually blew up in the field."""
+    doomed = tmp_path / "probe-gone"
+    doomed.mkdir()
+    _vanishes_after_the_listing(monkeypatch, doomed)
+    res, rep = S.reserve("probe-", root=tmp_path, legacy_max_age_s=0)
+    try:
+        assert res.path.is_dir()
+        assert rep.vanished == [str(doomed)], rep
+    finally:
+        res.release()
