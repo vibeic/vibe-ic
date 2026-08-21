@@ -1,507 +1,283 @@
-#!/usr/bin/env python3
-"""Tests for package_invariants_check (W7 — per-package invariants).
+"""W7 — the rule lives next to the code it binds (package_invariants_check).
 
-Three arms, and the reason there are three is that each one alone lies:
+Two halves, and the second is the one that matters.
 
-  * THE REAL TREE must be green. A gate that is red on arrival gets routed
-    around, so this is the only arm that proves the nine shipped rules hold
-    over the population they actually claim.
-  * THE MUTATION ARM plants each rule's OWN counterexample as the whole body of
-    a file that rule applies to, and requires the checker to object. Green on
-    the real tree is not evidence of anything by itself: a `forbid` rule that
-    matches nothing is byte-identical to a typo. This arm is SELF-EXTENDING —
-    a rule added to any declaration tomorrow is proved to discriminate with no
-    test edited here.
-  * THE SYNTHETIC ARM builds throwaway repositories to reach the states the
-    real tree cannot be put into: a deleted declaration, an unregistered one,
-    a duplicate id, a shrunken registry, no git index at all.
+CORPUS SWEEP: the shipped tree passes, with zero findings, over every enrolled
+package. That is the positive control — a rule that fired on everything could
+not survive it.
 
-`REGISTERED_PACKAGES` below is the THIRD pin on the package set, after the
-registry JSON and `MIN_REGISTERED_PACKAGES` in the checker. Retiring a package
-therefore costs three visible edits, the last of which is in a test.
+DISCRIMINATION: each finding code is driven to FAIL from a synthetic repo built
+in tmp_path. VIOLATION, MISSING_FILE, EMPTY, UNENROLLED, STALE_ENROLLMENT and
+NON_DISCRIMINATING each get their own test, because each one is a different way
+this design could rot into decoration, and a code nobody has watched fire has
+not been shown to check anything.
+
+MISSING_FILE and EMPTY carry the whole weight of moving rules out of the centre:
+deleting a package's invariant file, or emptying it, must NEVER read as "this
+package has no constraints".
 """
-from __future__ import annotations
-
 import json
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-import yaml
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import package_invariants_check as G  # noqa: E402
 
-PROG = Path(__file__).resolve().parent.parent / "package_invariants_check.py"
-REPO = PROG.resolve().parents[4]
-sys.path.insert(0, str(PROG.parent))
-import package_invariants_check as M  # noqa: E402
+_REPO = Path(__file__).resolve().parents[5]
+_PROGRAMS = Path(__file__).resolve().parent.parent
 
-# The exact set, pinned by hand. Not derived from the registry — a pin computed
-# from the thing it pins cannot notice that the thing changed.
-REGISTERED_PACKAGES = {
-    "tools/ci",
-    "tools/phase1_engine",
-    "vibe-ic-marketplace/plugins/vibe-ic/_shared",
-    "vibe-ic-marketplace/plugins/vibe-ic/commands",
-    "vibe-ic-marketplace/plugins/vibe-ic/hooks",
-    "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/lib",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/gds_antenna",
+# The floor is the second memory that makes un-enrollment loud. Shrinking
+# programs/package_invariants_enrolled.json alone is not enough to get a package
+# out of the gate; this number has to be lowered too, in a different file, in
+# the same change. Raise it when packages are added. Lower it only when a
+# package is genuinely deleted, and say so in the commit.
+_ENROLLMENT_FLOOR = 6
+
+
+# ---------------------------------------------------------------- corpus sweep
+def test_shipped_tree_passes():
+    res = G.check(_REPO, _PROGRAMS)
+    assert res["findings"] == [], res["findings"]
+    assert res["verdict"] == "PASS"
+
+
+def test_enrollment_floor():
+    enrolled = G.load_enrollment(_PROGRAMS)
+    assert len(enrolled) >= _ENROLLMENT_FLOOR, (
+        f"enrollment shrank to {len(enrolled)}; a package may only leave the "
+        f"gate when its directory is genuinely gone, and lowering this floor "
+        f"is the visible half of that")
+    assert len(enrolled) == len(set(enrolled)), "duplicate enrollment entry"
+
+
+def test_every_enrolled_package_exists_and_declares_something():
+    for pkg in G.load_enrollment(_PROGRAMS):
+        d = _REPO / pkg
+        assert d.is_dir(), f"enrolled package {pkg} is not a directory"
+        f = d / G.INVARIANTS_FILENAME
+        assert f.is_file(), f"{pkg} carries no {G.INVARIANTS_FILENAME}"
+        doc = json.loads(f.read_text(encoding="utf-8"))
+        assert doc["invariants"], f"{pkg} declares zero invariants"
+
+
+def test_every_shipped_rule_rejects_every_counterexample_it_declares():
+    """The negative control, stated as its own assertion rather than inferred
+    from the overall PASS. A rule with more than one clause declares one
+    counterexample per clause, and every one of them is driven here."""
+    rules = counters = 0
+    for pkg in G.load_enrollment(_PROGRAMS):
+        doc = json.loads((_REPO / pkg / G.INVARIANTS_FILENAME)
+                         .read_text(encoding="utf-8"))
+        for inv in doc["invariants"]:
+            rules += 1
+            for ce in G.counterexamples(inv):
+                hits = G.evaluate_rule(inv["rule"],
+                                       G.counterexample_entries(ce))
+                assert hits, (f"{pkg}:{inv['id']} — counterexample "
+                              f"{ce['path']} ({ce.get('proves', '?')}) does "
+                              f"not violate the rule it is supposed to violate")
+                counters += 1
+    assert rules >= 15, f"only {rules} rules swept"
+    assert counters >= 25, f"only {counters} counterexamples swept"
+
+
+# ------------------------------------------------------------ synthetic repo
+def _mk_repo(tmp_path, packages, files=None):
+    """A repo with a programs/ dir holding the enrollment, plus packages."""
+    progs = tmp_path / "programs"
+    progs.mkdir()
+    (progs / G.ENROLLMENT_FILENAME).write_text(json.dumps(
+        {"schema": 1, "kind": "vibeic.package-invariants-enrollment",
+         "packages": sorted(packages)}) + "\n")
+    for rel, content in (files or {}).items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+    return tmp_path, progs
+
+
+_GOOD_DOC = {
+    "schema": 1,
+    "package": "pkg",
+    "invariants": [{
+        "id": "pkg.no-todo",
+        "statement": "No source file may carry a TODO.",
+        "why": "because.",
+        "rule": {"kind": "forbid_regex", "include": ["*.py"], "regex": "TODO"},
+        "counterexample": {"path": "a.py", "content": "# TODO later\n"},
+    }],
 }
 
 
-def _run(root: Path, *extra: str):
-    proc = subprocess.run(
-        [sys.executable, str(PROG), str(root), *extra],
-        capture_output=True, text=True,
-    )
-    return proc.returncode, proc.stdout + proc.stderr
+def _codes(res):
+    return sorted({f["code"] for f in res["findings"]})
 
 
-def _run_synthetic(root: Path):
-    """Synthetic repositories hold one or two packages, so the shrink ratchet
-    written for the real tree would fire on every one of them and drown the
-    finding under test. The floor itself is exercised by
-    `test_the_ratchet_refuses_a_registry_that_shrank`, and
-    `test_the_hygiene_wiring_does_not_lower_the_ratchet` pins that the GATE
-    never passes this flag."""
-    return _run(root, "--min-registered-packages", "0")
+def test_clean_synthetic_package_passes(tmp_path):
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(_GOOD_DOC),
+        "pkg/a.py": "x = 1\n"})
+    assert G.check(repo, progs)["findings"] == []
 
 
-def _rm_tracked(root: Path, rel: str):
-    """`git rm` refuses a staged-but-uncommitted file, and these repositories
-    have no HEAD; unlink + re-add is the same effect on the index."""
-    (root / rel).unlink()
-    _git(root, "add", "-A")
+def test_violation_fails(tmp_path):
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(_GOOD_DOC),
+        "pkg/a.py": "x = 1  # TODO fix\n"})
+    res = G.check(repo, progs)
+    assert _codes(res) == ["VIOLATION"], res["findings"]
+    assert "a.py" in res["findings"][0]["detail"]
 
 
-def _git(root: Path, *args):
-    return subprocess.run(["git", "-C", str(root), *args],
-                          capture_output=True, text=True, check=True)
+def test_missing_invariants_file_fails(tmp_path):
+    """DELETING the file must not read as 'no constraints'."""
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {"pkg/a.py": "x = 1\n"})
+    res = G.check(repo, progs)
+    assert _codes(res) == ["MISSING_FILE"], res["findings"]
 
 
-def _mini_repo(root: Path, packages: dict[str, str], registry: list[str],
-               extra: dict[str, str] | None = None) -> Path:
-    """A throwaway repository: declarations, a registry, and nothing else."""
-    _git_init(root)
-    for pkg, body in packages.items():
-        d = root / pkg
-        d.mkdir(parents=True, exist_ok=True)
-        (d / M.DECLARATION_NAME).write_text(body, encoding="utf-8")
-    reg = root / M.REGISTRY_REL
-    reg.parent.mkdir(parents=True, exist_ok=True)
-    reg.write_text(json.dumps({"schema": 1, "packages": registry}) + "\n")
-    for rel, body in (extra or {}).items():
-        p = root / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(body, encoding="utf-8")
-    _git(root, "add", "-A")
-    return root
+def test_empty_invariants_file_fails(tmp_path):
+    """An EMPTY file must not read as 'no constraints' either."""
+    empty = dict(_GOOD_DOC, invariants=[])
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(empty), "pkg/a.py": "x = 1\n"})
+    assert _codes(G.check(repo, progs)) == ["EMPTY"]
 
 
-def _git_init(root: Path):
-    root.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+def test_unenrolled_invariants_file_fails(tmp_path):
+    """A file in a package nobody enrolled is a file nobody would miss."""
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(_GOOD_DOC),
+        "pkg/a.py": "x = 1\n",
+        "other/INVARIANTS.json": json.dumps(dict(_GOOD_DOC, package="other")),
+    })
+    res = G.check(repo, progs)
+    assert _codes(res) == ["UNENROLLED"], res["findings"]
+    assert "other" in res["findings"][0]["package"]
 
 
-def _decl(pkg: str, rid: str, *, forbid=None, require=None, applies=("*.py",),
-          counter="BOOM\n", excludes=None) -> str:
-    inv: dict = {"id": rid, "rule": "test rule", "applies_to": list(applies),
-                 "counterexample": counter}
-    if excludes:
-        inv["excludes"] = list(excludes)
-    if forbid is not None:
-        inv["forbid"] = forbid
-    if require is not None:
-        inv["require"] = require
-    return yaml.safe_dump({"package": pkg, "invariants": [inv]}, sort_keys=False)
+def test_stale_enrollment_fails(tmp_path):
+    repo, progs = _mk_repo(tmp_path, ["pkg", "deleted_pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(_GOOD_DOC), "pkg/a.py": "x = 1\n"})
+    assert _codes(G.check(repo, progs)) == ["STALE_ENROLLMENT"]
 
 
-# --------------------------------------------------------------------------
-# ARM 1 — the real tree
-# --------------------------------------------------------------------------
+def test_non_discriminating_rule_fails(tmp_path):
+    """A rule whose counterexample does not violate it checks nothing."""
+    doc = json.loads(json.dumps(_GOOD_DOC))
+    doc["invariants"][0]["counterexample"] = {"path": "a.py",
+                                              "content": "x = 1\n"}
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(doc), "pkg/a.py": "x = 1\n"})
+    res = G.check(repo, progs)
+    assert _codes(res) == ["NON_DISCRIMINATING"], res["findings"]
 
-def _real_tree_or_skip():
-    rc, out = _run(REPO)
-    if rc == 2:
-        pytest.skip(f"no git index under {REPO}; the synthetic arms still run. {out}")
-    return rc, out
+
+def test_schema_errors_fail(tmp_path):
+    doc = json.loads(json.dumps(_GOOD_DOC))
+    del doc["invariants"][0]["why"]
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(doc), "pkg/a.py": "x = 1\n"})
+    assert _codes(G.check(repo, progs)) == ["SCHEMA"]
 
 
-def test_the_shipped_declarations_hold_over_the_real_tree():
-    rc, out = _real_tree_or_skip()
+def test_package_field_must_name_itself(tmp_path):
+    doc = json.loads(json.dumps(_GOOD_DOC))
+    doc["package"] = "somewhere/else"
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(doc), "pkg/a.py": "x = 1\n"})
+    assert _codes(G.check(repo, progs)) == ["SCHEMA"]
+
+
+# --------------------------------------------------------------- rule engine
+def _e(path, content="", is_dir=False):
+    return [G.Entry(path, is_dir, content=content)]
+
+
+def test_glob_star_does_not_cross_slash():
+    assert G.glob_match("*.md", "a.md")
+    assert not G.glob_match("*.md", "sub/a.md")
+    assert G.glob_match("**/*.md", "sub/deep/a.md")
+    assert G.glob_match("*/SKILL.md", "drc-fix/SKILL.md")
+    assert not G.glob_match("*/SKILL.md", "a/b/SKILL.md")
+
+
+def test_forbid_regex_both_directions():
+    rule = {"kind": "forbid_regex", "include": ["*.py"], "regex": "TODO"}
+    assert G.evaluate_rule(rule, _e("a.py", "# TODO\n"))
+    assert not G.evaluate_rule(rule, _e("a.py", "ok\n"))
+    assert not G.evaluate_rule(rule, _e("a.txt", "# TODO\n")), "include ignored"
+
+
+def test_forbid_regex_exclude_is_honoured():
+    rule = {"kind": "forbid_regex", "include": ["*.py"],
+            "exclude": ["test_*.py"], "regex": "TODO"}
+    assert not G.evaluate_rule(rule, _e("test_a.py", "# TODO\n"))
+    assert G.evaluate_rule(rule, _e("a.py", "# TODO\n"))
+
+
+def test_require_regex_both_directions():
+    rule = {"kind": "require_regex", "include": ["*.md"], "regex": "\\A---\\n"}
+    assert G.evaluate_rule(rule, _e("a.md", "# title\n"))
+    assert not G.evaluate_rule(rule, _e("a.md", "---\nname: a\n"))
+
+
+def test_require_companion_both_directions():
+    rule = {"kind": "require_companion", "for_each": ["*"],
+            "for_each_kind": "dir", "companion": "{path}/SKILL.md"}
+    assert G.evaluate_rule(rule, _e("s", is_dir=True))
+    entries = [G.Entry("s", True), G.Entry("s/SKILL.md", False, content="x")]
+    assert not G.evaluate_rule(rule, entries)
+
+
+def test_forbid_path_both_directions():
+    rule = {"kind": "forbid_path", "glob": ["**/*.v"]}
+    assert G.evaluate_rule(rule, _e("crypto/aes/aes.v", "module m; endmodule"))
+    assert not G.evaluate_rule(rule, _e("crypto/aes/manifest.yaml", "a: b"))
+
+
+def test_unknown_rule_kind_is_an_error_not_a_pass():
+    try:
+        G.evaluate_rule({"kind": "vibes"}, _e("a.py", "x"))
+    except ValueError as exc:
+        assert "vibes" in str(exc)
+    else:
+        raise AssertionError("an unknown rule kind must not evaluate clean")
+
+
+# ------------------------------------------------------------------ cli / read
+def test_main_exit_zero_on_shipped_tree(capsys):
+    rc = G.main(["--repo-root", str(_REPO), "--programs-dir", str(_PROGRAMS)])
+    out = capsys.readouterr().out
     assert rc == 0, out
-    assert "[PASS]" in out
+    assert out.startswith("PASS:"), out
 
 
-def test_the_pass_line_discloses_its_denominator():
-    """A PASS that does not say how much it looked at is not checkable."""
-    rc, out = _real_tree_or_skip()
-    assert rc == 0, out
-    for field in ("package(s)", "invariant(s)", "owned file(s)",
-                  "file-rule pair(s) examined", "tracked"):
-        assert field in out, f"{field!r} missing from: {out}"
+def test_touched_renders_the_rules_that_bind_the_edit():
+    text = G.render_touched(
+        _REPO, _PROGRAMS,
+        ["vibe-ic-marketplace/plugins/vibe-ic/commands/vibe-ic-phase1.md"])
+    assert "commands.command-declares-a-description" in text
+    assert G.render_touched(_REPO, _PROGRAMS, ["README.md"]) == ""
 
 
-def test_the_registry_matches_the_hand_pinned_set():
-    reg = json.loads((REPO / M.REGISTRY_REL).read_text())
-    assert set(reg["packages"]) == REGISTERED_PACKAGES
-    assert len(reg["packages"]) == len(set(reg["packages"])), "duplicate row"
+def test_a_list_counterexample_is_checked_entry_by_entry(tmp_path):
+    """One good counterexample must not cover for a bad one beside it."""
+    doc = json.loads(json.dumps(_GOOD_DOC))
+    doc["invariants"][0]["counterexample"] = [
+        {"path": "a.py", "proves": "a TODO is caught", "content": "# TODO\n"},
+        {"path": "a.py", "proves": "nothing", "content": "x = 1\n"},
+    ]
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(doc), "pkg/a.py": "x = 1\n"})
+    res = G.check(repo, progs)
+    assert _codes(res) == ["NON_DISCRIMINATING"], res["findings"]
+    assert "nothing" in res["findings"][0]["detail"]
 
 
-def test_the_ratchet_floor_matches_the_registered_set():
-    """The floor may not drift below the set it is supposed to hold up."""
-    assert M.MIN_REGISTERED_PACKAGES == len(REGISTERED_PACKAGES)
-
-
-def test_every_registered_package_has_a_tracked_declaration():
-    for pkg in REGISTERED_PACKAGES:
-        assert (REPO / pkg / M.DECLARATION_NAME).is_file(), pkg
-
-
-# --------------------------------------------------------------------------
-# ARM 2 — self-extending mutation: every shipped rule must reject its own
-#         counterexample, planted in a REAL file that rule owns.
-#
-# This arm deliberately has NO skip condition. It assembles its own throwaway
-# repository from files already on disk, so there is no environment in which it
-# can quietly report nothing — an arm that can vanish is an arm that eventually
-# does, and nine silent skips read exactly like nine passes.
-# --------------------------------------------------------------------------
-
-def _shipped_rules():
-    out = []
-    for pkg in sorted(REGISTERED_PACKAGES):
-        doc = yaml.safe_load((REPO / pkg / M.DECLARATION_NAME).read_text())
-        for rule in doc["invariants"]:
-            out.append((pkg, rule))
-    return out
-
-
-@pytest.mark.parametrize("pkg,rule", _shipped_rules(),
-                         ids=[f"{p}:{r['id']}" for p, r in _shipped_rules()])
-def test_each_shipped_rule_goes_red_when_a_file_it_owns_is_mutated(
-        pkg, rule, tmp_path):
-    """Plant the rule's own counterexample as a whole file it applies to.
-
-    Uniform across both polarities: a `forbid` counterexample CONTAINS the
-    banned text, and a `require` counterexample LACKS the required text, so
-    "the counterexample is the entire file" is a violation either way.
-
-    The subject is a SLICE of the real tree — every declaration, the registry,
-    and one real file per rule — assembled in `tmp_path` and `git init`ed, so
-    the real checkout is never written to and the slice is green before the
-    mutation. Both halves are asserted; the clean half is what makes the red
-    half attributable to the mutation and not to the slice.
-    """
-    root = tmp_path / "subject"
-    _git_init(root)
-    # Only what this one rule needs: its declaration, the registry, and one
-    # real file from its population.
-    for other in sorted(REGISTERED_PACKAGES):
-        d = root / other
-        d.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REPO / other / M.DECLARATION_NAME, d / M.DECLARATION_NAME)
-    reg = root / M.REGISTRY_REL
-    reg.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(REPO / M.REGISTRY_REL, reg)
-
-    inc = [M._glob_to_regex(g) for g in rule["applies_to"]]
-    exc = [M._glob_to_regex(g) for g in (rule.get("excludes") or [])]
-    victim = None
-    for cand in sorted((REPO / pkg).rglob("*")):
-        if not cand.is_file():
-            continue
-        sub = cand.relative_to(REPO / pkg).as_posix()
-        if sub == M.DECLARATION_NAME:
-            continue
-        if any(r.match(sub) for r in inc) and not any(r.match(sub) for r in exc):
-            victim = sub
-            break
-    assert victim, f"{rule['id']}: no real file in its population to mutate"
-
-    # Every OTHER package keeps one clean population file so its own rules stay
-    # non-vacuous; the whole run must go red for exactly one reason.
-    for other_pkg, other_rule in _shipped_rules():
-        oinc = [M._glob_to_regex(g) for g in other_rule["applies_to"]]
-        oexc = [M._glob_to_regex(g) for g in (other_rule.get("excludes") or [])]
-        for cand in sorted((REPO / other_pkg).rglob("*")):
-            if not cand.is_file():
-                continue
-            osub = cand.relative_to(REPO / other_pkg).as_posix()
-            if osub == M.DECLARATION_NAME:
-                continue
-            if any(r.match(osub) for r in oinc) and not any(
-                    r.match(osub) for r in oexc):
-                dst = root / other_pkg / osub
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                if not dst.exists():
-                    shutil.copy2(cand, dst)
-                break
-
-    _git(root, "add", "-A")
-    rc_clean, out_clean = _run_synthetic(root)
-    assert rc_clean == 0, f"the unmutated slice is not green: {out_clean}"
-
-    (root / pkg / victim).write_text(rule["counterexample"], encoding="utf-8")
-    _git(root, "add", "-A")
-    rc, out = _run_synthetic(root)
-    assert rc == 1, f"{rule['id']} did NOT fire on its own counterexample: {out}"
-    assert rule["id"] in out
-    assert victim in out
-
-
-# --------------------------------------------------------------------------
-# ARM 3 — synthetic states the real tree cannot be put into
-# --------------------------------------------------------------------------
-
-def test_a_violation_is_attributed_to_the_owning_package(tmp_path):
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-no-boom", forbid="BOOM")},
-        ["pkg/a"],
-        {"pkg/a/x.py": "print('BOOM')\n"},
-    )
-    rc, out = _run_synthetic(root)
-    assert rc == 1
-    assert "pkg/a: aaa-no-boom" in out and "pkg/a/x.py:1" in out
-
-
-def test_a_deleted_declaration_is_a_refusal_not_an_absence_of_rules(tmp_path):
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-no-boom", forbid="BOOM"),
-         "pkg/b": _decl("pkg/b", "bbb-no-boom", forbid="BOOM")},
-        ["pkg/a", "pkg/b"],
-        {"pkg/a/x.py": "ok\n", "pkg/b/y.py": "ok\n"},
-    )
-    assert _run_synthetic(root)[0] == 0
-    _rm_tracked(root, "pkg/b/INVARIANTS.yaml")
-    rc, out = _run_synthetic(root)
-    assert rc == 1
-    assert "MISSING" in out and "pkg/b" in out
-
-
-def test_an_unregistered_declaration_is_a_refusal(tmp_path):
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-no-boom", forbid="BOOM"),
-         "pkg/b": _decl("pkg/b", "bbb-no-boom", forbid="BOOM")},
-        ["pkg/a"],
-        {"pkg/a/x.py": "ok\n", "pkg/b/y.py": "ok\n"},
-    )
-    rc, out = _run_synthetic(root)
-    assert rc == 1 and "UNREGISTERED" in out and "pkg/b" in out
-
-
-def test_the_ratchet_refuses_a_registry_that_shrank(tmp_path):
-    """Deleting a declaration AND its registry row still does not read clean."""
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-no-boom", forbid="BOOM"),
-         "pkg/b": _decl("pkg/b", "bbb-no-boom", forbid="BOOM")},
-        ["pkg/a", "pkg/b"],
-        {"pkg/a/x.py": "ok\n", "pkg/b/y.py": "ok\n"},
-    )
-    assert _run(root, "--min-registered-packages", "2")[0] == 0
-    _rm_tracked(root, "pkg/b/INVARIANTS.yaml")
-    reg = root / M.REGISTRY_REL
-    reg.write_text(json.dumps({"schema": 1, "packages": ["pkg/a"]}) + "\n")
-    _git(root, "add", "-A")
-    rc, out = _run(root, "--min-registered-packages", "2")
-    assert rc == 1 and "RATCHET" in out, out
-
-
-def test_the_hygiene_wiring_does_not_lower_the_ratchet():
-    """The override exists for the synthetic arms. If the GATE ever starts
-    passing it, the floor is decoration."""
-    wiring = (REPO / "tools" / "ci" / "repo_hygiene_gates.sh").read_text()
-    line = [l for l in wiring.splitlines()
-            if "package_invariants_check.py" in l and not l.lstrip().startswith("#")]
-    assert line, "the checker is not wired into the hygiene gate list at all"
-    for l in line:
-        assert "--min-registered-packages" not in l, l
-
-
-def test_a_toothless_rule_is_refused(tmp_path):
-    """A forbid pattern that cannot match its own counterexample is a typo."""
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-typo", forbid="BOOOM")},
-        ["pkg/a"],
-        {"pkg/a/x.py": "print('BOOM')\n"},
-    )
-    rc, out = _run_synthetic(root)
-    assert rc == 1 and "TOOTHLESS" in out
-
-
-def test_a_rule_that_selects_no_file_is_refused_as_vacuous(tmp_path):
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-no-boom", forbid="BOOM",
-                        applies=("*.rs",))},
-        ["pkg/a"],
-        {"pkg/a/x.py": "ok\n"},
-    )
-    rc, out = _run_synthetic(root)
-    assert rc == 1 and "VACUOUS" in out
-
-
-def test_a_star_glob_does_not_reach_into_a_subdirectory(tmp_path):
-    """`*.py` must not silently claim files a deeper package owns."""
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-no-boom", forbid="BOOM")},
-        ["pkg/a"],
-        {"pkg/a/x.py": "ok\n", "pkg/a/deep/y.py": "print('BOOM')\n"},
-    )
-    assert _run_synthetic(root)[0] == 0
-    # ... and `**/` opts back in, so the miss above is scope, not blindness.
-    (root / "pkg/a" / M.DECLARATION_NAME).write_text(
-        _decl("pkg/a", "aaa-no-boom", forbid="BOOM", applies=("**/*.py",)))
-    _git(root, "add", "-A")
-    rc, out = _run_synthetic(root)
-    assert rc == 1 and "pkg/a/deep/y.py:1" in out
-
-
-def test_a_nested_package_takes_ownership_from_its_ancestor(tmp_path):
-    """Nearest-ancestor: the deeper declaration owns the file, alone."""
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg": _decl("pkg", "outer-no-boom", forbid="BOOM",
-                      applies=("**/*.py",)),
-         "pkg/inner": _decl("pkg/inner", "inner-no-bang", forbid="BANG")},
-        ["pkg", "pkg/inner"],
-        {"pkg/x.py": "ok\n", "pkg/inner/y.py": "print('BOOM')\n"},
-    )
-    rc, out = _run(root)
-    assert rc == 1, out
-    # The outer rule never saw the inner file; the inner rule has no *.py left
-    # to judge but its own, so the finding is the inner package's vacuity —
-    # not a BOOM the outer rule was silently allowed to miss.
-    assert "outer-no-boom" not in out
-    assert "inner-no-bang" in out
-
-
-def test_a_duplicate_id_is_refused(tmp_path):
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "shared-id", forbid="BOOM"),
-         "pkg/b": _decl("pkg/b", "shared-id", forbid="BOOM")},
-        ["pkg/a", "pkg/b"],
-        {"pkg/a/x.py": "ok\n", "pkg/b/y.py": "ok\n"},
-    )
-    rc, out = _run_synthetic(root)
-    assert rc == 1 and "already owned by" in out
-
-
-def test_a_declaration_that_misstates_its_own_directory_is_refused(tmp_path):
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/elsewhere", "aaa-no-boom", forbid="BOOM")},
-        ["pkg/a"],
-        {"pkg/a/x.py": "ok\n"},
-    )
-    rc, out = _run_synthetic(root)
-    assert rc == 1 and "disagrees with its own directory" in out
-
-
-def test_both_polarities_at_once_is_refused(tmp_path):
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-both", forbid="BOOM", require="OK")},
-        ["pkg/a"],
-        {"pkg/a/x.py": "ok\n"},
-    )
-    rc, out = _run_synthetic(root)
-    assert rc == 1 and "exactly one of" in out
-
-
-def test_a_require_rule_fires_when_the_pattern_is_absent(tmp_path):
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-needs-header", require=r"(?m)^HEADER",
-                        counter="no header here\n")},
-        ["pkg/a"],
-        {"pkg/a/x.py": "HEADER\nok\n", "pkg/a/y.py": "ok\n"},
-    )
-    rc, out = _run_synthetic(root)
-    assert rc == 1 and "pkg/a/y.py" in out and "required pattern absent" in out
-    assert "pkg/a/x.py" not in out
-
-
-# --- rc 2: could not look is not the same as looked and found nothing ------
-
-def test_no_git_index_is_not_checked_never_pass(tmp_path):
-    plain = tmp_path / "plain"
-    (plain / "pkg/a").mkdir(parents=True)
-    (plain / "pkg/a" / M.DECLARATION_NAME).write_text(
-        _decl("pkg/a", "aaa-no-boom", forbid="BOOM"))
-    rc, out = _run_synthetic(plain)
-    assert rc == 2, out
-    assert "NOT CHECKED" in out
-
-
-def test_zero_declarations_is_not_checked_never_pass(tmp_path):
-    """Their `verify-package-invariants.ts` prints 0 conform and exits 0."""
-    root = tmp_path / "r"
-    _git_init(root)
-    reg = root / M.REGISTRY_REL
-    reg.parent.mkdir(parents=True, exist_ok=True)
-    reg.write_text(json.dumps({"schema": 1, "packages": []}) + "\n")
-    _git(root, "add", "-A")
-    rc, out = _run_synthetic(root)
-    assert rc == 2 and "NOT CHECKED" in out
-
-
-def test_an_unreadable_registry_is_not_checked_never_pass(tmp_path):
-    root = tmp_path / "r"
-    _git_init(root)
-    (root / "pkg/a").mkdir(parents=True)
-    (root / "pkg/a" / M.DECLARATION_NAME).write_text(
-        _decl("pkg/a", "aaa-no-boom", forbid="BOOM"))
-    _git(root, "add", "-A")
-    rc, out = _run_synthetic(root)
-    assert rc == 2 and "registry unreadable" in out
-
-
-def test_the_machine_record_carries_the_verdict_and_the_denominator(tmp_path):
-    """`--json` is written through the atomic helper (vibe-ic#1082), so a
-    reader never sees a half-written record."""
-    root = _mini_repo(
-        tmp_path / "r",
-        {"pkg/a": _decl("pkg/a", "aaa-no-boom", forbid="BOOM")},
-        ["pkg/a"],
-        {"pkg/a/x.py": "print('BOOM')\n"},
-    )
-    out_json = tmp_path / "rec.json"
-    rc, _ = _run(root, "--min-registered-packages", "0", "--json", str(out_json))
-    assert rc == 1
-    rec = json.loads(out_json.read_text())
-    assert rec["verdict"] == "FAIL"
-    assert rec["packages"] == 1 and rec["invariants"] == 1
-    assert rec["files_examined"] == 1 and rec["tracked_files"] >= 2
-    assert any("aaa-no-boom" in f for f in rec["findings"])
-
-    (root / "pkg/a/x.py").write_text("ok\n")
-    _git(root, "add", "-A")
-    rc, _ = _run(root, "--min-registered-packages", "0", "--json", str(out_json))
-    assert rc == 0
-    rec = json.loads(out_json.read_text())
-    assert rec["verdict"] == "PASS" and rec["findings"] == []
-
-
-def test_the_refusal_record_says_not_checked_rather_than_an_empty_pass(tmp_path):
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    out_json = tmp_path / "rec.json"
-    rc, _ = _run(plain, "--json", str(out_json))
-    assert rc == 2
-    rec = json.loads(out_json.read_text())
-    assert rec["verdict"] == "NOT_CHECKED" and rec["reason"]
-    assert "findings" not in rec, "a refusal must not present an empty finding set"
-
-
-def test_a_broken_git_producer_is_not_reported_as_an_empty_corpus(tmp_path):
-    """`git ls-files` failing must not read as 'the corpus is clean'."""
-    with pytest.raises(M.Refusal):
-        M._tracked_files(tmp_path / "does-not-exist")
+def test_empty_counterexample_list_is_a_schema_error(tmp_path):
+    doc = json.loads(json.dumps(_GOOD_DOC))
+    doc["invariants"][0]["counterexample"] = []
+    repo, progs = _mk_repo(tmp_path, ["pkg"], {
+        "pkg/INVARIANTS.json": json.dumps(doc), "pkg/a.py": "x = 1\n"})
+    assert _codes(G.check(repo, progs)) == ["SCHEMA"]

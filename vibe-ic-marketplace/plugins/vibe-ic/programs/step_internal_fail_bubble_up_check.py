@@ -158,16 +158,44 @@ What is still checkable with no corpus is the register's own arithmetic:
 buy headroom contradicts the map printed beside it. Under NO_CORPUS:
 
     register absent / unparseable / malformed        -> UNDETERMINED (rc 2)
+    records no `previous_*` count at all             -> UNDETERMINED (rc 2)
     `findings_total` != sum(`per_run`)               -> FAIL (rc 1)
+    a recorded count FELL with no `shrink_reason`    -> FAIL (rc 1)
+    a `shrink_reason` on a register that fell nowhere -> FAIL (rc 1)
     consistent                                       -> rc 0, printing what it
                                                         holds and stating that
                                                         nothing was re-measured
+
+AND THE CEILING MAY NOT FALL WHILE NOBODY IS ON RECORD (vibe-ic#1704)
+---------------------------------------------------------------------
+The ratchet's rule is MAY ONLY SHRINK, and until #1704 the shrink direction was
+the unguarded one. Every guard over the register compares it against a fresh
+sweep, and the prescribed repair — `--write-baseline` — re-derives the register
+FROM that same sweep, so the two agree by construction the moment anyone runs
+it. MEASURED against the published corpus at v1.10.69: one argument-free command
+moved `findings_total` 22 -> 1 and the denominator 16/16 -> 4/4, and every test
+over this file went green.
+
+So the writer now records `previous_findings_total`, `previous_runs_swept`,
+`previous_runs_with_reports` and the `shrink_reason` that authorised the fall,
+and refuses to lower any of the three without one. The reader re-checks the
+writer's own rule against the recorded numbers — a register is a plain JSON
+file, so the writer was never the only way to change it (the #922 lesson, one
+register over).
+
+AND ONE SMALLER INTEGER HAS THREE CAUSES. Findings somebody examined and
+repaired, run trees that stopped publishing reports, and run trees that are not
+in the swept corpus at all are three different facts, and `_decompose_shrink`
+separates the two it can observe from each other and from the one it cannot —
+see there. What a sweep of ONE corpus cannot tell apart, it does not name; the
+operator names it in `shrink_reason`.
 
 Usage:
     python3 step_internal_fail_bubble_up_check.py <project_dir>
                                                    [--json <out>] [--strict]
     python3 step_internal_fail_bubble_up_check.py --corpus benchmark-data/ic
                                                    [--baseline <f>] [--write-baseline]
+                                                   [--shrink-reason <why>]
                                                    [--corpus-may-be-absent]
 
 Exit codes:
@@ -175,7 +203,8 @@ Exit codes:
        acknowledged; also a report-only run, or a corpus at-or-below baseline,
        or NO_CORPUS (opted in, and it says 0 run trees were swept)
     1  FAIL — an unacknowledged FAIL in PROJECT mode (or under --strict), or
-       corpus GROWTH, or a register whose own numbers contradict each other
+       corpus GROWTH, or a register whose own numbers contradict each other, or
+       a register whose counts fell with no written reason (vibe-ic#1704)
     2  NOT EXAMINED (nothing to look at), UNDETERMINED (the corpus could not be
        resolved, or a corpus pointer that is set and wrong), or argument / I/O
        error
@@ -695,9 +724,23 @@ def _load_baseline(p: Path) -> Optional[Dict[str, Any]]:
         return None
     if not isinstance(d, dict) or not isinstance(d.get("findings_total"), int):
         return None
-    for key in ("per_run", "withdrawn_unexamined"):
+    for key in ("per_run", "withdrawn_unexamined", "absent_from_corpus"):
         d[key] = d[key] if isinstance(d.get(key), dict) else {}
     return d
+
+
+def _prev_int(prev: Optional[Dict[str, Any]], key: str) -> Optional[int]:
+    """A recorded count from the register being replaced, or None.
+
+    None means "the register did not state this", which is not the same as zero
+    and must never ratchet as one: a missing `runs_swept` on an older document
+    is an absence of a statement, and :func:`_shrink_provenance_defects` skips a
+    None rather than reading it as a fall from nothing.
+    """
+    if not prev:
+        return None
+    v = prev.get(key)
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
 def _population_key(corpus: Path, origin: str = _cloc.NAMED) -> str:
@@ -774,9 +817,49 @@ def _run_key(rel: str) -> str:
     return "/".join(parts)
 
 
+#: What counts as a WRITTEN reason for LOWERING this register (vibe-ic#1704).
+#: The writer demands it of `--shrink-reason` and the reader re-checks the
+#: recorded `shrink_reason` against the same constant, so the two sides cannot
+#: drift into disagreeing about what a written reason is — the coupling
+#: `published_record_staleness_check.SCOPE_REASON_MIN_CHARS` already holds for
+#: that register's growth (vibe-ic#922).
+#:
+#: LONGER THAN THAT ONE, DELIBERATELY. A growth reason names a rule that newly
+#: adjudicates. A shrink reason has to name WHICH of three facts moved the
+#: number — findings that were examined and repaired, run trees that stopped
+#: being published, or a population that was never in the swept corpus — and no
+#: 30-character string says that.
+#:
+#: AND THIS MEASURES THAT A REASON WAS WRITTEN, NOT THAT IT IS TRUE. A length is
+#: the only property of free prose a program can check; what it buys is that the
+#: number cannot fall while nobody is on record. That is the whole claim, and it
+#: is the claim the message prints.
+SHRINK_REASON_MIN_CHARS = 60
+
+
+def _run_tree_is_in(corpus: Path, run: str) -> bool:
+    """Can THIS sweep open the run tree the register names?
+
+    `_run_key` has already dropped a leading `ic/`, and a caller may name either
+    the cell tree or its parent as `--corpus`, so both spellings are tried — the
+    same both-ways match `test_issue1025_baseline_names_runs_that_exist` makes
+    against the tree.
+
+    A directory that is present but carries no `reports/` is still IN the
+    corpus: the sweep opened it and can state that it publishes nothing this
+    gate reads. A directory that is not there at all was not opened, and the
+    difference is the whole of :func:`_decompose_shrink`'s fourth bucket.
+    """
+    rel = str(run).strip("/")
+    if not rel:
+        return False
+    return (corpus / rel).is_dir() or (corpus / "ic" / rel).is_dir()
+
+
 def _decompose_shrink(base: Dict[str, Any],
-                      rep: Dict[str, Any]) -> Dict[str, Any]:
-    """Split a fall in the count into REPAIRED and WITHDRAWN.
+                      rep: Dict[str, Any],
+                      corpus: Optional[Path] = None) -> Dict[str, Any]:
+    """Split a fall in the count into REPAIRED, WITHDRAWN and NOT-IN-CORPUS.
 
     THE DEFECT THIS EXISTS TO REMOVE (vibe-ic#1202). The ratchet's doctrine is
     "the number MAY ONLY SHRINK", and on any shrink it says
@@ -813,9 +896,29 @@ def _decompose_shrink(base: Dict[str, Any],
 
         in `examined_runs`, count fell   -> REPAIRED. Somebody looked and it
                                             is better. That is debt paid.
-        not in `examined_runs`           -> WITHDRAWN. Nobody looked. The
-                                            reports, wherever they are, still
-                                            say FAIL.
+        not in `examined_runs`,          -> WITHDRAWN. The sweep opened the run
+        tree still under the corpus         tree and it no longer publishes a
+                                            reports/ file this gate reads.
+        not under the corpus at all      -> NOT IN CORPUS. The sweep never
+                                            opened it, and it cannot say why.
+
+    AND THE FOURTH BUCKET IS THE ONE vibe-ic#1704 IS ABOUT. Until it existed,
+    every run absent from `examined_runs` was called WITHDRAWN and filed under
+    `withdrawn_unexamined`, whose own `_withdrawn_comment` asserts "These
+    reports still declare FAIL." That is a present-tense claim about documents
+    the sweep did not open — the instrument measured "this key is not in my
+    result" and the record reported "this run left the corpus carrying an
+    unexamined failure".
+
+    The two are not the same fact, and #1704 says so in the case that forced
+    it: a denominator that falls from 16 to 4 because cells were never
+    published into the swept corpus is a different fact from one that falls
+    because cells were deleted from it, "and the record should say which". A
+    sweep of ONE corpus cannot tell those apart — that needs history the gate
+    does not have — so it must not pick one. What it CAN measure is whether the
+    run tree is there to be opened, and that is the line drawn here. Which of
+    removal and never-published actually happened is stated by the operator in
+    `shrink_reason`, where a claim beyond the instrument belongs.
 
     A baseline recorded before `examined_runs` existed has no such list. That
     is UNKNOWN, not "repaired": absent evidence of examination is not evidence
@@ -831,9 +934,14 @@ def _decompose_shrink(base: Dict[str, Any],
     examined = rep.get("examined_runs")
     examined_keys = ({_run_key(k) for k in examined}
                      if isinstance(examined, list) else None)
+    # The root that was actually swept, preferred from the report the sweep
+    # wrote so a caller cannot decompose one corpus against a probe of another.
+    if corpus is None and isinstance(rep.get("corpus"), str):
+        corpus = Path(rep["corpus"])
 
     repaired: Dict[str, Any] = {}
     withdrawn: Dict[str, int] = {}
+    absent: Dict[str, int] = {}
     unknown: Dict[str, int] = {}
     for run, was in base_runs.items():
         now = now_runs.get(run, 0)
@@ -843,16 +951,115 @@ def _decompose_shrink(base: Dict[str, Any],
             unknown[run] = was - now
         elif run in examined_keys:
             repaired[run] = (was, now)
+        elif corpus is not None and not _run_tree_is_in(corpus, run):
+            absent[run] = was - now
         else:
+            # Either the tree IS there without a reports/ file this gate reads,
+            # or no corpus root was available to ask. The second is the caller's
+            # omission and keeps the pre-#1704 reading, which never over-claims
+            # in the direction of "repaired".
             withdrawn[run] = was - now
     return {
         "repaired": repaired,
         "withdrawn": withdrawn,
+        "absent": absent,
         "unknown": unknown,
         "repaired_total": sum(was - now for was, now in repaired.values()),
         "withdrawn_total": sum(withdrawn.values()),
+        "absent_total": sum(absent.values()),
         "unknown_total": sum(unknown.values()),
     }
+
+
+def _shrink_provenance_defects(doc: Dict[str, Any]) -> List[str]:
+    """Could `--write-baseline` have produced these numbers? (vibe-ic#1704)
+
+    THE RATCHET LIVED ENTIRELY INSIDE THE COMPARISON, and the comparison is the
+    record against itself. `findings_total`, `runs_swept` and
+    `runs_with_reports` were re-derivable at any time by one command with no
+    argument, and every guard over this file then measured that the new numbers
+    agree with the new sweep — which they do by construction. Nothing anywhere
+    asked why the number moved, so "MAY ONLY SHRINK UNDER A FIXED POPULATION"
+    was enforced only in the direction that grows.
+
+    That is the same hole `published_record_staleness_check` closed for its own
+    register in vibe-ic#922, entered from the other side: there the writer
+    refused unjustified GROWTH while the reader took the file as given; here
+    both directions of a SHRINK were free.
+
+    So the writer now records the counts it moved FROM beside the counts it
+    wrote, plus the reason it was allowed to lower them, and this re-checks the
+    writer's own rule against those recorded numbers on the read path. A number
+    lowered by hand leaves `previous_*` behind and is caught; lowering
+    `previous_*` too requires forging coupled counts AND writing a reason, which
+    is a deliberate false statement rather than an omission nothing measures.
+
+    Returns the sentences of a DEFINITE defect (rc 1). "This register predates
+    the fields" is a different answer and is :func:`_register_predates_shrink_ledger`.
+    """
+    out: List[str] = []
+    reason = doc.get("shrink_reason")
+    reason_ok = (isinstance(reason, str)
+                 and len(reason.strip()) >= SHRINK_REASON_MIN_CHARS)
+    if reason is not None and not reason_ok:
+        out.append(
+            f"records a `shrink_reason` that is not a written reason "
+            f"(>= {SHRINK_REASON_MIN_CHARS} chars): {reason!r}. The writer "
+            f"refuses one this short.")
+
+    fell: List[str] = []
+    for now_key, prev_key in (("findings_total", "previous_findings_total"),
+                              ("runs_swept", "previous_runs_swept"),
+                              ("runs_with_reports",
+                               "previous_runs_with_reports")):
+        prev = doc.get(prev_key)
+        if prev is None:
+            continue                      # the first write records no "from"
+        if not isinstance(prev, int) or isinstance(prev, bool):
+            out.append(f"has a non-integer `{prev_key}` ({prev!r}).")
+            continue
+        cur = doc.get(now_key)
+        if not isinstance(cur, int) or isinstance(cur, bool):
+            out.append(f"has a non-integer `{now_key}` ({cur!r}).")
+            continue
+        if cur < prev:
+            fell.append(f"{now_key} {prev} -> {cur}")
+
+    if fell and not reason_ok:
+        out.append(
+            f"lowered {', '.join(fell)} with no written `shrink_reason`. A "
+            f"shrink-only register makes every drop irreversible here, so the "
+            f"number may not fall while nobody is on record for WHY — "
+            f"findings examined and repaired, run trees that stopped being "
+            f"published, and a population never in the swept corpus are three "
+            f"different facts behind the same smaller integer "
+            f"(vibe-ic#1704). --write-baseline exits 1 on exactly this, so a "
+            f"register in this state did not come from it.")
+    # A REASON IS SPENT BY THE WRITE THAT USED IT (the #922 rule, same words).
+    # Left standing on a write that lowered nothing it becomes a permanent
+    # authorisation for whatever drop comes next, reducing the forgery to a
+    # single number.
+    if reason is not None and not fell:
+        out.append(
+            "records a `shrink_reason` on a register whose recorded numbers "
+            "did not fall. The writer records the reason only for the write it "
+            "authorised; one kept past that write is a standing authorisation "
+            "for a drop nobody has justified yet.")
+    return out
+
+
+def _register_predates_shrink_ledger(doc: Dict[str, Any]) -> bool:
+    """True when the register carries none of the counts it moved FROM.
+
+    NOT waved through as "nothing to check": that is exactly the state a hand
+    edit produces once someone notices the fields, so reading it as clean would
+    reopen the hole one key over. It is also not a FAIL — the register may
+    simply be older than #1704 — so callers answer NOT DETERMINED and name the
+    repair, which is `--write-baseline` over a corpus that reaches.
+    """
+    return all(k not in doc for k in ("previous_findings_total",
+                                      "previous_runs_swept",
+                                      "previous_runs_with_reports"))
 
 
 def _adjudicate_register_without_a_corpus(bl: Path) -> int:
@@ -906,11 +1113,33 @@ def _adjudicate_register_without_a_corpus(bl: Path) -> int:
               f"measured; re-record {bl} with --write-baseline over a corpus "
               f"that reaches.", file=sys.stderr)
         return 1
+    # THE SHRINK LEDGER IS CHECKABLE WITH NO CORPUS TOO (vibe-ic#1704), and for
+    # the same reason the sum is: the writer produces `previous_*`,
+    # `shrink_reason` and the counts together, so a document it could not have
+    # written is visible without opening a single cell. Lowering the ceiling by
+    # hand is the widening of #1015 spelled the other way round, and NO_CORPUS
+    # excuses the sweep, never the register.
+    if _register_predates_shrink_ledger(doc):
+        print(f"[NOT CHECKED] {GATE}: no corpus was swept, and {bl} records "
+              f"none of `previous_findings_total`, `previous_runs_swept`, "
+              f"`previous_runs_with_reports`, so there is no statement of what "
+              f"these numbers moved FROM and no way to tell a re-derivation "
+              f"from a hand-lowered ceiling. Re-record with --write-baseline "
+              f"over a corpus that reaches (vibe-ic#1704).", file=sys.stderr)
+        return 2
+    defects = _shrink_provenance_defects(doc)
+    if defects:
+        for d in defects:
+            print(f"[FAIL] {GATE}: the register at {bl} {d}", file=sys.stderr)
+        return 1
     carried = sum(v for v in doc["withdrawn_unexamined"].values()
                   if isinstance(v, int))
+    stranded = sum(v for v in doc["absent_from_corpus"].values()
+                   if isinstance(v, int))
     print(f"[{GATE}] register: findings_total={total} over "
           f"'{pop}' ({len(per_run)} run(s) named, sum agrees), plus "
-          f"{carried} withdrawn_unexamined still declaring FAIL.",
+          f"{carried} withdrawn_unexamined still declaring FAIL and "
+          f"{stranded} in absent_from_corpus that no sweep has opened.",
           file=sys.stderr)
     print(f"[{GATE}] NO_CORPUS: 0 published run tree(s) swept, 0 report(s) "
           f"examined. The register's numbers were NOT RE-MEASURED and nothing "
@@ -939,6 +1168,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "count may shrink freely, growth is rc 1.")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--write-baseline", action="store_true")
+    ap.add_argument("--shrink-reason", default=None, metavar="WHY",
+                    help="the written reason this write is allowed to LOWER "
+                         "findings_total, runs_swept or runs_with_reports. "
+                         "Required for such a write and recorded beside the "
+                         "new numbers, because a shrink-only register makes "
+                         "every drop irreversible and the three facts that "
+                         "produce a smaller integer — findings repaired, run "
+                         "trees withdrawn, a population never in the swept "
+                         "corpus — are not the same fact (vibe-ic#1704).")
     ap.add_argument("--corpus-may-be-absent", action="store_true",
                     help="the caller asserts this repo need not carry the "
                          "published corpus. Turns 'no corpus discoverable "
@@ -957,7 +1195,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if (args.project_dir is None or args.json is not None
                         or args.strict or args.corpus is not None
                         or args.baseline is not None or args.write_baseline
-                        or args.corpus_may_be_absent):
+                        or args.corpus_may_be_absent
+                        or args.shrink_reason is not None):
                     raise _semantic_progress.ProgressProtocolError(
                         "routed parent progress covers the positional project "
                         "audit only")
@@ -1017,6 +1256,18 @@ def _main_parsed(args) -> int:
               f"exclusive modes. If you meant to aim the baseline write, that "
               f"is --baseline <path> --write-baseline (--write-baseline is a "
               f"flag and takes no path).", file=sys.stderr)
+        return 2
+
+    # A REASON WITH NO WRITE AUTHORISES NOTHING, AND SAYING SO IS THE POINT.
+    # Accepted silently it reads as "the shrink was justified" to whoever typed
+    # it, while the register on disk is untouched — a statement believed to be
+    # in force that never was, which is the ambiguity `_corpus_location` refuses
+    # in the other direction. rc 2: the request was not understood.
+    if args.shrink_reason is not None and not args.write_baseline:
+        print(f"[REFUSED] {GATE}: --shrink-reason is the justification carried "
+              f"by a --write-baseline that LOWERS a recorded count. Given "
+              f"without it, nothing is written and nothing is authorised "
+              f"(vibe-ic#1704).", file=sys.stderr)
         return 2
 
     if args.corpus:
@@ -1134,13 +1385,98 @@ def _main_parsed(args) -> int:
             # and would otherwise be carried in both registers at once.
             prev = _load_baseline(bl)
             withdrawn = dict(prev["withdrawn_unexamined"]) if prev else {}
+            # THE SECOND LEDGER, and it is second because it is a DIFFERENT
+            # claim (vibe-ic#1704). `withdrawn_unexamined` says the run tree is
+            # in the corpus and stopped publishing reports this gate reads —
+            # something the sweep opened the directory and saw. A run tree that
+            # is not under the swept corpus at all was never opened, so no
+            # sentence about what its reports say today is a measurement. Both
+            # are "not repaired"; only one of them is observed.
+            absent = dict(prev["absent_from_corpus"]) if prev else {}
+            # Decomposed ONCE. Both ledgers and the refusal message below read
+            # the same split, so the tree is walked once and the sentence the
+            # operator sees cannot describe a different attribution from the one
+            # a successful write would record.
+            split = _decompose_shrink(prev, rep, corpus) if prev else {}
             if prev:
-                split = _decompose_shrink(prev, rep)
                 for run, n in split["withdrawn"].items():
                     withdrawn[run] = withdrawn.get(run, 0) + n
+                for run, n in split["absent"].items():
+                    absent[run] = absent.get(run, 0) + n
             live = {_run_key(k) for k in rep["per_run"]}
             withdrawn = {k: v for k, v in sorted(withdrawn.items())
                          if _run_key(k) not in live}
+            # DISJOINT BY CONSTRUCTION. A run can only ever leave `per_run`
+            # once per write, so the decomposition cannot file it in both — but
+            # a run that left, came back and left again by the OTHER route
+            # could accumulate in both across writes, and one finding counted
+            # twice is exactly the double-attribution these ledgers exist to
+            # prevent. `withdrawn_unexamined` wins because it is the observed
+            # one; a run whose tree the sweep can still open is not absent.
+            absent = {k: v for k, v in sorted(absent.items())
+                      if _run_key(k) not in live
+                      and k not in withdrawn}
+            # THE NUMBER MAY NOT FALL WHILE NOBODY IS ON RECORD (vibe-ic#1704).
+            #
+            # `--write-baseline` is what the shrink branch below TELLS the
+            # operator to run, and until now it silently re-derived every count
+            # from the current sweep. Measured against the published corpus at
+            # v1.10.69 the one command lowered findings_total 22 -> 1 and the
+            # denominator 16/16 -> 4/4, and every guard over this file then
+            # passed, because each one compares the new record against the same
+            # new sweep. A ratchet whose ceiling can be lowered by an
+            # argument-free command is a ratchet in one direction only.
+            #
+            # The DENOMINATOR is ratcheted beside the numerator deliberately.
+            # `findings_total` alone cannot tell "the failures were fixed" from
+            # "the runs carrying them are no longer swept", which is precisely
+            # what #1015 pinned and what a 16 -> 4 population change does to
+            # this register.
+            #
+            # No `--force`, for the reason the zero-reach refusal above gives:
+            # an escape hatch makes the refusal advisory. The way to lower this
+            # register is to say why.
+            lowered = []
+            for label, cur, was in (
+                    ("findings_total", now, _prev_int(prev, "findings_total")),
+                    ("runs_swept", rep["runs_swept"],
+                     _prev_int(prev, "runs_swept")),
+                    ("runs_with_reports", rep["runs_with_reports"],
+                     _prev_int(prev, "runs_with_reports"))):
+                if was is not None and cur < was:
+                    lowered.append(f"{label} {was} -> {cur}")
+            reason = args.shrink_reason
+            if lowered and not (isinstance(reason, str)
+                                and len(reason.strip())
+                                >= SHRINK_REASON_MIN_CHARS):
+                for run, n in sorted(split.get("withdrawn", {}).items()):
+                    print(f"  (withdrawn, tree still in the corpus without a "
+                          f"reports/ file this gate reads) {run}: {n}",
+                          file=sys.stderr)
+                for run, n in sorted(split.get("absent", {}).items()):
+                    print(f"  (not under the swept corpus at all, never "
+                          f"opened) {run}: {n}", file=sys.stderr)
+                print(f"[FAIL] {GATE}: refusing to LOWER the register "
+                      f"({'; '.join(lowered)}) with no --shrink-reason. This "
+                      f"register MAY ONLY SHRINK, so every drop it records is "
+                      f"irreversible here, and three different facts produce a "
+                      f"smaller integer: findings somebody examined and "
+                      f"repaired, run trees that stopped being published, and "
+                      f"a population that was never in the swept corpus. The "
+                      f"record must say which. Re-run with --shrink-reason "
+                      f"'<why>' (>= {SHRINK_REASON_MIN_CHARS} chars), which is "
+                      f"written into the register beside the new numbers "
+                      f"(vibe-ic#1704).", file=sys.stderr)
+                return 1
+            if reason is not None and not lowered:
+                print(f"[FAIL] {GATE}: --shrink-reason was given but this "
+                      f"write lowers nothing (findings_total {now}, "
+                      f"{rep['runs_swept']} swept, "
+                      f"{rep['runs_with_reports']} with reports/). Recording "
+                      f"it anyway would leave a standing authorisation for the "
+                      f"next drop, which is the shape vibe-ic#922 refuses one "
+                      f"register over.", file=sys.stderr)
+                return 1
             doc = {
                 "_comment": (
                     "Unacknowledged step-internal FAIL/MISSING reports across "
@@ -1163,14 +1499,40 @@ def _main_parsed(args) -> int:
                     "debt paid. These reports still declare FAIL. NOT part of "
                     "findings_total and not a ceiling on anything — the "
                     "ratchet is over the published corpus only."),
+                "_absent_comment": (
+                    "Findings whose run tree is NOT UNDER THE SWEPT CORPUS at "
+                    "all, so this gate never opened it (vibe-ic#1704). "
+                    "Separate from withdrawn_unexamined, which names run trees "
+                    "the sweep DID open and found publishing no reports/ file "
+                    "it reads. Whether these were removed from publication or "
+                    "were never published into this corpus is not something a "
+                    "sweep of one corpus can tell; `shrink_reason` is where "
+                    "that is stated by whoever looked. NOT part of "
+                    "findings_total and not a ceiling on anything."),
                 "findings_total": now,
                 # vibe-ic#1223 — WHICH population produced this count. Without
                 # it the integer below is comparable to anything.
                 "corpus_population": _population_key(corpus, origin),
                 "runs_swept": rep["runs_swept"],
                 "runs_with_reports": rep["runs_with_reports"],
+                # WHAT THIS WRITE MOVED THE NUMBERS FROM (vibe-ic#1704). The
+                # numerator alone was re-derivable by one argument-free command
+                # and every guard then compared the new record against the new
+                # sweep, which agree by construction. Recorded here so the read
+                # path can ask whether the writer could have produced this
+                # document — see `_shrink_provenance_defects`.
+                "previous_findings_total": prev["findings_total"] if prev else None,
+                "previous_runs_swept": _prev_int(prev, "runs_swept"),
+                "previous_runs_with_reports": _prev_int(prev,
+                                                        "runs_with_reports"),
+                # Recorded ONLY for the write it authorised. Carried past that
+                # write it would be a standing permission for the NEXT drop,
+                # which is the defect this ratchet exists to refuse (the #922
+                # rule, applied to the direction #1704 found open).
+                "shrink_reason": args.shrink_reason if lowered else None,
                 "per_run": rep["per_run"],
                 "withdrawn_unexamined": withdrawn,
+                "absent_from_corpus": absent,
             }
             # A HAND-WRITTEN PROVENANCE NOTE IS PART OF THE RECORD TOO
             # (vibe-ic#1202, same rule as the ledger above). The shipped
@@ -1220,6 +1582,24 @@ def _main_parsed(args) -> int:
                   f"Sweep the recorded population, or re-record with "
                   f"--corpus <root> --write-baseline (vibe-ic#1223).")
             return 2
+        # THE REGISTER'S OWN PROVENANCE, BEFORE ANY COMPARISON AGAINST IT
+        # (vibe-ic#1704). A ceiling that was lowered with nobody on record is
+        # not a line to hold, whichever side of it today's sweep lands on — so
+        # this is asked before the count is, exactly as the population check
+        # above is.
+        if _register_predates_shrink_ledger(base_doc):
+            print(f"[NOT CHECKED] the baseline at {bl} records none of "
+                  f"`previous_findings_total`, `previous_runs_swept`, "
+                  f"`previous_runs_with_reports`, so there is no statement of "
+                  f"what its numbers moved FROM and no way to tell a "
+                  f"re-derivation from a hand-lowered ceiling. Re-record with "
+                  f"--corpus <root> --write-baseline (vibe-ic#1704).")
+            return 2
+        prov = _shrink_provenance_defects(base_doc)
+        if prov:
+            for d in prov:
+                print(f"[FAIL] the baseline at {bl} {d}")
+            return 1
         for run, n in sorted(rep["per_run"].items()):
             print(f"   {run}: {n}")
         # DISCLOSE THE LEDGER ON EVERY SWEEP (vibe-ic#1202). A register only
@@ -1234,6 +1614,14 @@ def _main_parsed(args) -> int:
                   f"still declaring FAIL)")
             for run, n in sorted(carried.items()):
                 print(f"      withdrawn {run}: {n}")
+        stranded = base_doc["absent_from_corpus"]
+        if stranded:
+            print(f"   (plus {sum(stranded.values())} finding(s) in "
+                  f"absent_from_corpus across {len(stranded)} run(s) whose "
+                  f"run tree is not under this corpus at all; never opened by "
+                  f"any sweep, so nothing here claims what they say today)")
+            for run, n in sorted(stranded.items()):
+                print(f"      not in corpus {run}: {n}")
         if now > base:
             print(f"[FAIL] unacknowledged step-internal FAILs GREW "
                   f"{base} -> {now}: a step shipped a verdict=FAIL report that "
@@ -1267,26 +1655,52 @@ def _main_parsed(args) -> int:
             # permission for the number to grow back. What changes is that the
             # re-record now WRITES THE WITHDRAWAL DOWN instead of erasing it,
             # and this text stops calling it work.
-            split = _decompose_shrink(base_doc, rep)
+            split = _decompose_shrink(base_doc, rep, corpus)
             for run, (was, is_now) in sorted(split["repaired"].items()):
                 print(f"   REPAIRED  {run}: {was} -> {is_now}")
             for run, n in sorted(split["withdrawn"].items()):
                 print(f"   WITHDRAWN {run}: {n} finding(s) left the count "
-                      f"without being examined — the run is no longer swept "
-                      f"with a reports/ tree")
+                      f"without being examined — the run tree is still under "
+                      f"the corpus and no longer publishes a reports/ file "
+                      f"this gate reads")
+            for run, n in sorted(split["absent"].items()):
+                print(f"   NOT IN CORPUS {run}: {n} finding(s) left the count "
+                      f"without being examined — the run tree is not under the "
+                      f"swept corpus at all, so this sweep cannot tell a run "
+                      f"removed from publication from one never published into "
+                      f"it, and neither of those is repair")
             for run, n in sorted(split["unknown"].items()):
                 print(f"   UNKNOWN   {run}: {n} finding(s); this baseline "
                       f"predates examined_runs, so the fall cannot be "
                       f"attributed")
-            if split["withdrawn_total"] and not split["repaired_total"]:
-                head = (f"NONE of it is repair: {split['withdrawn_total']} "
-                        f"finding(s) left because their run stopped being "
-                        f"swept with a reports/ tree, not because anyone "
-                        f"examined them")
-            elif split["withdrawn_total"]:
+            # THE HEADLINE NAMES ONLY THE BUCKETS THAT ARE NON-EMPTY, because a
+            # "0 finding(s) left because ..." clause reads as a measured
+            # population that happened to be empty rather than as a bucket
+            # nothing landed in. Where only the observed bucket is populated the
+            # sentence is the #1202 one, verbatim, because that case has not
+            # changed; the #1704 bucket is named BESIDE it, never folded into it.
+            unread = split["withdrawn_total"] + split["absent_total"]
+            why = []
+            if split["withdrawn_total"]:
+                why.append(f"{split['withdrawn_total']} finding(s) left "
+                           f"because their run stopped being swept with a "
+                           f"reports/ tree")
+            if split["absent_total"]:
+                why.append(f"{split['absent_total']} finding(s) left because "
+                           f"their run tree is not in the swept corpus at all")
+            short = []
+            if split["withdrawn_total"]:
+                short.append(f"{split['withdrawn_total']} withdrawn without "
+                             f"being examined")
+            if split["absent_total"]:
+                short.append(f"{split['absent_total']} whose run tree is not "
+                             f"in the swept corpus at all")
+            if unread and not split["repaired_total"]:
+                head = ("NONE of it is repair: " + " and ".join(why) +
+                        ", not because anyone examined them")
+            elif unread:
                 head = (f"{split['repaired_total']} repaired and "
-                        f"{split['withdrawn_total']} withdrawn without being "
-                        f"examined; only the first is debt paid")
+                        + " and ".join(short) + "; only the first is debt paid")
             else:
                 head = f"{base - now} of them are PAID and still on the register"
             print(f"[FAIL] the recorded baseline claims {base} unacknowledged "

@@ -1,470 +1,499 @@
 #!/usr/bin/env python3
-"""package_invariants_check.py — the rule lives in the directory it binds.
-
-THIS GATE BLOCKS (rc=1) on a violated, vacuous, toothless, missing or
-unregistered package invariant, and REFUSES (rc=2) rather than passing when it
-could not establish a population.
+"""package_invariants_check.py — the rule lives NEXT TO the code it binds.
 
 WHY THIS EXISTS
 ---------------
-The deepseek-harness source study measured that harness at 99f6f02fe -- 54
-top-level packages, 226 leaf packages, 219 `invariant.ts` files, one beside
-each package -- and split the verdict on us in two. (The study itself is
-`docs/research/2026-08-19-deepseek-harness-source-study.md`, authored in a
-sibling change; every upstream file:line cited here was re-read in the clone
-at that revision and stands on its own.)
-We are AHEAD on enforcement and BEHIND on LOCALITY: our rules live centrally,
-in `programs/*_check.py` and in `tools/ci/repo_hygiene_gates.sh` and in skill
-documents, so a contributor editing `mcp-eda/src/lib/pnr_antenna.mjs` cannot
-see the rule that binds it without going somewhere else and knowing to look.
+Measured 2026-08-19 against the deepseek-harness tree at 99f6f02fe (counted in a
+clone, not read off a summary): 54 top-level packages, 226 leaf packages, and
+219 `invariant.ts` files — one per package, next to the code. Our own verdict
+against that tree: we are AHEAD on enforcement (our gates are adversarially
+tested and they block landing) and BEHIND on LOCALITY. Every rule we enforce
+lives centrally, so a contributor editing `commands/` or `ip-catalog/` cannot
+see the rule that binds what they are editing without going somewhere else to
+look for it — and mostly does not go.
 
-This checker closes the locality half WITHOUT moving a single checker. The
-flat `programs/*.py` namespace stays flat -- and it is what D1/D2/D3,
-`gate_discloses_denominator_check` and `checker_execution_wiring_audit` all
-grep. What moves next to the code is the DECLARATION.
+This program closes the locality half WITHOUT giving up the enforcement half.
 
-Design note, with the measurements and the rejected candidates:
-`docs/PER_PACKAGE_INVARIANTS.md`.
+NOTE ON THE FIVE FILES THAT ALREADY MATCH "invariant" IN THIS REPO
+(`cross_constant_invariant_check.py`, `fsm_error_invariant.py`, and three tests):
+those are UNRELATED single checks about DESIGN invariants inside a chip. They
+are not this pattern, they are not per-package, and they must not be counted as
+adoption of it.
 
-THE UNIT, AND WHY OWNERSHIP IS NEAREST-ANCESTOR
-------------------------------------------------
-A package is a directory holding an `INVARIANTS.yaml`. A tracked file is owned
-by the NEAREST declaring ancestor directory. Nearest-ancestor is single-valued
-by construction, so "two packages claim one file" -- the case their
-`invariants/src/index.ts:140-142` has to throw on -- cannot be expressed here.
-An explicit `owns:` list would restate what `applies_to` already says and give
-the two of them somewhere to disagree.
+THE SHAPE, AND WHY IT IS THIS SHAPE
+-----------------------------------
+WHAT A PACKAGE DECLARES
+    One `INVARIANTS.json` at the package root. Each entry carries
+      * `id`         — stable handle, quoted by the gate when it fails;
+      * `statement`  — the rule in one sentence, for the human;
+      * `why`        — what went wrong, or would go wrong, without it;
+      * `rule`       — the machine form (one of four kinds, below);
+      * `counterexample` — a file the rule MUST reject; a LIST of them when
+                       the rule has more than one clause, one per clause, each
+                       carrying a `proves` note. One counterexample against a
+                       two-clause rule shows only that one clause
+                       discriminates, and leaves the other half a claim nobody
+                       has tested.
+    Prose and machine form sit in the same object on purpose: a statement with
+    no rule is decoration, and a rule with no statement is unreadable.
 
-WHY `counterexample` IS MANDATORY
-----------------------------------
-A `require` rule that passes has matched its regex in EVERY file of a non-empty
-population, so the population itself proves the regex matches real code. A
-`forbid` rule that passes has matched NOTHING -- and zero matches is both the
-healthy state of a prohibition and byte-identical to a typo in the regex.
-Nothing in the population can tell those apart.
+WHO READS IT
+    1. This gate, on every landing run, via
+       `programs/tests/test_package_invariants_check.py`. The rules are
+       evaluated against the package's own files.
+    2. This gate again, differently: every counterexample a rule declares is
+       evaluated in isolation and MUST be rejected by that rule. A rule nothing
+       can violate is not a rule, and this is what stops a per-package file from
+       decaying into per-package decoration — the single biggest risk of moving
+       rules out of the centre.
+    3. The contributor, at the moment it matters: `--touched` prints the
+       invariants binding every package a diff touches, and
+       `tools/ci/pre_commit_check.sh` calls it on the staged file list.
 
-So every rule ships text it MUST reject, and that is re-proved on every run.
-A rule that does not reject its own counterexample is TOOTHLESS and refused.
-This is "an unmeasured thing reads as a measured zero" one level up: a check
-that found nothing must show it was capable of finding something.
+WHAT FAILS WHEN IT IS VIOLATED — OR MISSING
+    VIOLATION            a package file breaks a rule its own package declares.
+    NON_DISCRIMINATING   a rule did not reject its own counterexample.
+    MISSING_FILE         an ENROLLED package directory exists with no
+                         INVARIANTS.json. A deleted invariant file must never
+                         read as "this package has no constraints" — that is the
+                         failure mode this whole design would otherwise create,
+                         so it is a hard FAIL, not a skip.
+    EMPTY                the file exists and declares zero invariants. Same
+                         reasoning: empty is not "unconstrained".
+    UNENROLLED           an INVARIANTS.json exists in a package the enrollment
+                         does not name. An unenrolled file is a file the gate
+                         would not have missed if it vanished, i.e. exactly the
+                         "nobody reads it" artefact.
+    STALE_ENROLLMENT     an enrolled path is no longer a directory. Legitimate
+                         when a package is genuinely deleted; the entry must
+                         then be pruned in the same change, which is a visible
+                         edit rather than a silent one.
 
-WHY EVERY SHIPPED REGEX IS COMMENT-ANCHORED
---------------------------------------------
-Measured while selecting rules: `execSync(` occurs in
-`mcp-eda/src/lib/shell_safety.mjs:5` -- inside the `//` block that explains the
-injection bug it exists to prevent, and `git status --porcelain` occurs in
-`tools/ci/*.py` only inside a `#` comment. A rule that fires on the
-DOCUMENTATION of a hazard is a rule people delete, and scoping the population
-to dodge those files would be shaping the rule to fit its own population. The
-declarations therefore anchor with `(?m)^(?![ \t]*(?:#|//))`, which is plain
-`re` and needs no language awareness in this file.
+ENROLLMENT, AND WHY IT IS NOT DERIVED
+    `programs/package_invariants_enrolled.json` names the enrolled packages.
+    Enrollment cannot be derived from "has an INVARIANTS.json", because then
+    deleting the file would delete the obligation — the gate would go green on
+    the exact act it exists to catch. So enrollment is a separate memory:
+    the file is required BECAUSE the package is enrolled, not because the file
+    is there. The enrollment list is deliberately additive; shrinking it is a
+    second edit, in a second file, and the floor pinned in
+    `test_package_invariants_check.py::test_enrollment_floor` fails when it
+    shrinks. Two loud edits, never one silent one.
 
-WHAT A MISSING DECLARATION MEANS
----------------------------------
-Not "no constraints". `package_invariants_registry.json` lives OUTSIDE every
-declared package, so deleting a package's directory cannot delete the record
-that it owes a declaration; a registered package with no file is rc 1 MISSING,
-and a declaration the registry does not name is rc 1 UNREGISTERED (exact-set
-equality, both directions). `MIN_REGISTERED_PACKAGES` below makes SHRINKING the
-registry a refusal until someone edits this file, and the test pins the exact
-set. The residual is stated in the design note rather than implied: an author
-willing to make all three edits can still retire a package.
+RULE KINDS (deliberately four — a rule language is a maintenance surface)
+    forbid_regex       no file matching `include` may contain `regex`.
+    require_regex      every file matching `include` must contain `regex`.
+    require_companion  every entry matching `for_each` must have the file named
+                       by `companion` (template over `{path}`, `{dir}`,
+                       `{stem}`, `{name}`).
+    forbid_path        no entry may match `glob`.
 
-WHAT ZERO MEANS
----------------
-Their `scripts/package-invariants.ts:38` discovers owners with a hardcoded
-depth-2 glob; an empty root yields 0 owners, the loop body never runs, and
-`verify-package-invariants.ts:21` prints `0 hand-owned package companion(s)
-conform.` and exits 0. Here, no git index / an unreadable registry / zero
-declarations discovered is rc 2 NOT CHECKED, and the gate is wired with plain
-`run`, not `run_tolerating_uncheckable`, so rc 2 fails the suite. A run that
-could not run is not a pass.
+Usage:
+    python3 package_invariants_check.py [--repo-root R] [--json OUT]
+    python3 package_invariants_check.py --touched <repo-relative path>...
 
-EXIT CODES
-----------
-    0   every declared invariant held over a disclosed, non-empty population
-    1   a real finding (see the table in the design note)
-    2   NOT CHECKED -- no git index, unreadable registry, or zero declarations
+Exit: 0 = every enrolled package present, non-empty, obeyed, and discriminating
+      1 = at least one finding
+      2 = operational (repo root or enrollment file not found)
 """
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import subprocess
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
-from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082 (helper from PR #1094)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082
 
-# Imported here rather than at first use so a host without it says NOT CHECKED
-# with a reason, instead of raising a traceback out of the middle of a walk and
-# arriving at the caller as rc 1 -- "the toolchain is missing" and "a package
-# broke its own rule" are different answers and must not share an exit code.
-try:
-    import yaml
-    _YAML_IMPORT_ERROR = None
-except ImportError as _exc:                                  # pragma: no cover
-    yaml = None
-    _YAML_IMPORT_ERROR = str(_exc)
+INVARIANTS_FILENAME = "INVARIANTS.json"
+ENROLLMENT_FILENAME = "package_invariants_enrolled.json"
+SCHEMA = 1
 
-DECLARATION_NAME = "INVARIANTS.yaml"
-REGISTRY_REL = (
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_registry.json"
-)
+# Directories never walked when collecting a package's own files.
+_SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", ".mypy_cache"}
 
-# The RATCHET. Shrinking the registry below this is a refusal, so retiring a
-# package costs an edit to enforcement code -- which is also what makes
-# `ci_targeted_test_select` select this checker's test. Raise it when a package
-# is added; lowering it is the visible, reviewable act it should be.
-#
-# `--min-registered-packages` overrides it, and exists for ONE caller: the test
-# suite, whose synthetic repositories hold one or two packages and would
-# otherwise trip a floor written for this tree. The gate wiring in
-# `tools/ci/repo_hygiene_gates.sh` passes no such flag, and
-# `test_the_hygiene_wiring_does_not_lower_the_ratchet` asserts it never starts
-# to -- an escape hatch nobody checks is the hatch that gets used.
-MIN_REGISTERED_PACKAGES = 7
-
-MAX_DECLARATION_BYTES = 64 * 1024
-MAX_SUBJECT_BYTES = 4 * 1024 * 1024
-
-_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{2,79}\Z")
-_REQUIRED_KEYS = ("id", "rule", "applies_to", "counterexample")
+_RULE_KINDS = ("forbid_regex", "require_regex", "require_companion", "forbid_path")
 
 
-class Refusal(Exception):
-    """Nothing could be certified -- rc 2, never a verdict."""
-
-
-def _glob_to_regex(glob: str) -> re.Pattern:
-    """Translate a package-relative glob. `*` does NOT cross `/`; `**/` does.
-
-    `fnmatch` is not used because its `*` matches `/`, which would silently
-    make `*.py` recursive and hand a package files a deeper package owns.
-    """
-    out = ["\\A"]
-    i = 0
-    while i < len(glob):
-        if glob.startswith("**/", i):
-            out.append("(?:[^/]+/)*")
-            i += 3
-        elif glob[i] == "*":
-            out.append("[^/]*")
-            i += 1
-        elif glob[i] == "?":
-            out.append("[^/]")
-            i += 1
+# --------------------------------------------------------------------------
+# glob matching: `*` and `?` do NOT cross `/`; `**` does.
+# --------------------------------------------------------------------------
+def _glob_to_regex(pattern: str) -> re.Pattern:
+    out, i, n = [], 0, len(pattern)
+    while i < n:
+        c = pattern[i]
+        if c == "*":
+            if pattern[i:i + 3] == "**/":
+                out.append(r"(?:.*/)?")
+                i += 3
+                continue
+            if pattern[i:i + 2] == "**":
+                out.append(r".*")
+                i += 2
+                continue
+            out.append(r"[^/]*")
+        elif c == "?":
+            out.append(r"[^/]")
         else:
-            out.append(re.escape(glob[i]))
-            i += 1
-    out.append("\\Z")
-    return re.compile("".join(out))
+            out.append(re.escape(c))
+        i += 1
+    return re.compile("".join(out) + r"\Z")
 
 
-def _tracked_files(root: Path) -> list[str]:
-    """The population is the git INDEX, not the filesystem.
-
-    A filesystem walk would sweep in untracked scratch -- the class measured at
-    1078 leftovers in `_gate_dispatch.sh:69-71` -- and turn a dirty developer
-    tree into a gate finding. A producer that BROKE must not reach the caller
-    as "the corpus is empty", so a failed `git ls-files` is a Refusal (rc 2).
-    """
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z"],
-            capture_output=True, check=False,
-        )
-    except OSError as exc:                                   # pragma: no cover
-        raise Refusal(f"could not run git ls-files under {root}: {exc}")
-    if proc.returncode != 0:
-        err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
-        raise Refusal(
-            f"git ls-files failed under {root} (rc {proc.returncode})"
-            + (f": {err[-1]}" if err else "")
-        )
-    files = [p for p in proc.stdout.decode("utf-8", "replace").split("\0") if p]
-    if not files:
-        raise Refusal(f"git ls-files listed no tracked file under {root}")
-    return files
+def glob_match(pattern: str, relpath: str) -> bool:
+    return _glob_to_regex(pattern).match(relpath) is not None
 
 
-def _read_registry(root: Path) -> list[str]:
-    path = root / REGISTRY_REL
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise Refusal(f"registry unreadable at {REGISTRY_REL}: {exc}")
-    try:
-        doc = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise Refusal(f"registry is not valid JSON at {REGISTRY_REL}: {exc}")
-    if not isinstance(doc, dict) or not isinstance(doc.get("packages"), list):
-        raise Refusal(f"registry has no `packages` array at {REGISTRY_REL}")
-    packages = doc["packages"]
-    if not all(isinstance(p, str) and p for p in packages):
-        raise Refusal(f"registry `packages` holds a non-string at {REGISTRY_REL}")
-    return packages
+def _matches_any(patterns, relpath: str) -> bool:
+    return any(glob_match(p, relpath) for p in patterns)
 
 
-def _load_declaration(root: Path, decl_rel: str, findings: list[str]) -> dict | None:
-    path = root / decl_rel
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        findings.append(f"{decl_rel}: unreadable ({exc})")
-        return None
-    if len(raw) > MAX_DECLARATION_BYTES:
-        findings.append(
-            f"{decl_rel}: {len(raw)} bytes exceeds the {MAX_DECLARATION_BYTES} "
-            "byte declaration ceiling"
-        )
-        return None
-    try:
-        doc = yaml.safe_load(raw.decode("utf-8"))
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        findings.append(f"{decl_rel}: not parseable as YAML ({exc})")
-        return None
+# --------------------------------------------------------------------------
+# Package entry model. An "entry" is a path inside the package, with the file
+# body when it is a file. `content` is a callable so the real walk only reads
+# what a rule actually asks for.
+# --------------------------------------------------------------------------
+class Entry:
+    __slots__ = ("relpath", "is_dir", "_read", "_cache")
+
+    def __init__(self, relpath: str, is_dir: bool, read=None, content=None):
+        self.relpath = relpath
+        self.is_dir = is_dir
+        self._read = read
+        self._cache = content
+
+    @property
+    def content(self) -> str:
+        if self._cache is None:
+            self._cache = self._read() if self._read else ""
+        return self._cache
+
+
+def collect_entries(pkg_dir: Path) -> list[Entry]:
+    entries: list[Entry] = []
+    for p in sorted(pkg_dir.rglob("*")):
+        rel_parts = p.relative_to(pkg_dir).parts
+        if any(part in _SKIP_DIRS for part in rel_parts):
+            continue
+        rel = "/".join(rel_parts)
+        if p.is_dir():
+            entries.append(Entry(rel, True))
+        else:
+            entries.append(
+                Entry(rel, False,
+                      read=lambda q=p: q.read_text(encoding="utf-8", errors="ignore")))
+    return entries
+
+
+# --------------------------------------------------------------------------
+# Rule evaluation. Returns a list of human-readable violations.
+# --------------------------------------------------------------------------
+def _compile(rule: dict, key: str) -> re.Pattern:
+    flags = 0
+    for f in rule.get("flags", []):
+        flags |= {"IGNORECASE": re.I, "MULTILINE": re.M, "DOTALL": re.S}[f]
+    return re.compile(rule[key], flags)
+
+
+def _selected(rule: dict, entries, include_key: str, want_dir=None):
+    include = rule.get(include_key) or []
+    exclude = rule.get("exclude") or []
+    for e in entries:
+        if want_dir is not None and e.is_dir != want_dir:
+            continue
+        if not _matches_any(include, e.relpath):
+            continue
+        if exclude and _matches_any(exclude, e.relpath):
+            continue
+        yield e
+
+
+def evaluate_rule(rule: dict, entries: list[Entry]) -> list[str]:
+    kind = rule.get("kind")
+    if kind == "forbid_regex":
+        rx = _compile(rule, "regex")
+        return [f"{e.relpath}: matches forbidden pattern {rule['regex']!r}"
+                for e in _selected(rule, entries, "include", want_dir=False)
+                if rx.search(e.content)]
+    if kind == "require_regex":
+        rx = _compile(rule, "regex")
+        return [f"{e.relpath}: does not contain required pattern {rule['regex']!r}"
+                for e in _selected(rule, entries, "include", want_dir=False)
+                if not rx.search(e.content)]
+    if kind == "require_companion":
+        want_dir = {"dir": True, "file": False}.get(rule.get("for_each_kind", "file"))
+        present = {e.relpath for e in entries}
+        out = []
+        for e in _selected(rule, entries, "for_each", want_dir=want_dir):
+            name = e.relpath.rsplit("/", 1)[-1]
+            stem = name[:name.rfind(".")] if "." in name else name
+            parent = e.relpath.rsplit("/", 1)[0] if "/" in e.relpath else ""
+            companion = rule["companion"].format(
+                path=e.relpath, dir=parent, stem=stem, name=name).lstrip("/")
+            if companion not in present:
+                out.append(f"{e.relpath}: required companion {companion!r} is absent")
+        return out
+    if kind == "forbid_path":
+        return [f"{e.relpath}: path is forbidden by {rule['glob']!r}"
+                for e in _selected(rule, entries, "glob")]
+    raise ValueError(f"unknown rule kind {kind!r} (known: {_RULE_KINDS})")
+
+
+def counterexamples(inv: dict) -> list[dict]:
+    """`counterexample` is one object, or a list when a rule has more than one
+    clause. A two-clause rule proved by a single counterexample has only been
+    shown to check one of its clauses, so each clause gets its own."""
+    ce = inv["counterexample"]
+    return list(ce) if isinstance(ce, list) else [ce]
+
+
+def counterexample_entries(ce: dict) -> list[Entry]:
+    """One counterexample as a one-entry virtual package."""
+    return [Entry(ce["path"], bool(ce.get("is_dir", False)),
+                  content=ce.get("content", ""))]
+
+
+# --------------------------------------------------------------------------
+# Schema validation of one INVARIANTS.json
+# --------------------------------------------------------------------------
+def validate_document(doc, pkg: str) -> list[str]:
+    errs = []
     if not isinstance(doc, dict):
-        findings.append(f"{decl_rel}: top level is not a mapping")
-        return None
-    return doc
-
-
-def _violating_lines(pattern: re.Pattern, text: str, forbid: bool) -> list[int]:
-    """Line numbers a rule objects to. A `require` miss is reported as line 0."""
-    if forbid:
-        return sorted({text[: m.start()].count("\n") + 1
-                       for m in pattern.finditer(text)})
-    return [] if pattern.search(text) else [0]
-
-
-def _check(root: Path, min_packages: int | None = None
-           ) -> tuple[int, list[str], dict[str, int]]:
-    if yaml is None:                                         # pragma: no cover
-        raise Refusal(
-            f"PyYAML is not importable ({_YAML_IMPORT_ERROR}); the declarations "
-            "could not be read at all")
-    floor = MIN_REGISTERED_PACKAGES if min_packages is None else min_packages
-    findings: list[str] = []
-    tracked = _tracked_files(root)
-    registered = _read_registry(root)
-
-    declared: dict[str, str] = {}          # package dir -> declaration path
-    for rel in tracked:
-        p = PurePosixPath(rel)
-        if p.name == DECLARATION_NAME:
-            declared[str(p.parent)] = rel
-    if not declared:
-        raise Refusal(
-            f"no {DECLARATION_NAME} is tracked under {root}: the population is "
-            "empty, which is NOT the same as clean"
-        )
-
-    # --- the register, both directions -------------------------------------
-    if len(registered) < floor:
-        findings.append(
-            f"RATCHET: the registry names {len(registered)} package(s); "
-            f"the floor is {floor}. Retiring a "
-            "package is a deliberate edit to package_invariants_check.py, not a "
-            "deletion that reads as 'no constraints'."
-        )
-    for pkg in sorted(set(registered)):
-        if pkg not in declared:
-            findings.append(
-                f"MISSING: registry names `{pkg}` but {pkg}/{DECLARATION_NAME} "
-                "is not tracked -- a package that owes a declaration and has "
-                "none is a refusal, not an absence of constraints"
-            )
-    for pkg in sorted(declared):
-        if pkg not in registered:
-            findings.append(
-                f"UNREGISTERED: {declared[pkg]} exists but `{pkg}` is absent "
-                f"from {REGISTRY_REL}"
-            )
-
-    # --- ownership: nearest declaring ancestor ------------------------------
-    owner_of: dict[str, str] = {}
-    for rel in tracked:
-        if PurePosixPath(rel).name == DECLARATION_NAME:
+        return [f"{pkg}: {INVARIANTS_FILENAME} is not a JSON object"]
+    if doc.get("schema") != SCHEMA:
+        errs.append(f"{pkg}: schema must be {SCHEMA}, got {doc.get('schema')!r}")
+    if doc.get("package") != pkg:
+        errs.append(f"{pkg}: 'package' must be the package's own repo-relative "
+                    f"path, got {doc.get('package')!r}")
+    invs = doc.get("invariants")
+    if not isinstance(invs, list):
+        errs.append(f"{pkg}: 'invariants' must be a list")
+        return errs
+    seen = set()
+    for i, inv in enumerate(invs):
+        at = f"{pkg}: invariants[{i}]"
+        if not isinstance(inv, dict):
+            errs.append(f"{at}: not an object")
             continue
-        best = ""
-        for pkg in declared:
-            if rel.startswith(pkg + "/") and len(pkg) > len(best):
-                best = pkg
-        if best:
-            owner_of[rel] = best
-    owned_by: dict[str, list[str]] = {pkg: [] for pkg in declared}
-    for rel, pkg in owner_of.items():
-        owned_by[pkg].append(rel)
+        for field in ("id", "statement", "why", "rule", "counterexample"):
+            if not inv.get(field):
+                errs.append(f"{at}: missing required field {field!r}")
+        rid = inv.get("id")
+        if rid in seen:
+            errs.append(f"{at}: duplicate invariant id {rid!r}")
+        seen.add(rid)
+        rule = inv.get("rule")
+        if isinstance(rule, dict) and rule.get("kind") not in _RULE_KINDS:
+            errs.append(f"{at}: unknown rule kind {rule.get('kind')!r}")
+        ce = inv.get("counterexample")
+        ces = ce if isinstance(ce, list) else [ce]
+        if isinstance(ce, list) and not ce:
+            errs.append(f"{at}: counterexample list is empty")
+        for j, one in enumerate(ces):
+            if not isinstance(one, dict) or not one.get("path"):
+                errs.append(f"{at}: counterexample[{j}] needs a 'path'")
+    return errs
 
-    seen_ids: dict[str, str] = {}
-    n_rules = 0
-    n_examined = 0
 
-    for pkg in sorted(declared):
-        decl_rel = declared[pkg]
-        doc = _load_declaration(root, decl_rel, findings)
-        if doc is None:
+# --------------------------------------------------------------------------
+# The gate
+# --------------------------------------------------------------------------
+def load_enrollment(programs_dir: Path) -> list[str]:
+    f = programs_dir / ENROLLMENT_FILENAME
+    doc = json.loads(f.read_text(encoding="utf-8"))
+    return list(doc.get("packages", []))
+
+
+def find_stray_invariant_files(repo: Path, enrolled: set[str]) -> list[str]:
+    """Any INVARIANTS.json in a package the enrollment does not name."""
+    stray = []
+    for p in repo.rglob(INVARIANTS_FILENAME):
+        rel_parts = p.relative_to(repo).parts
+        if any(part in _SKIP_DIRS for part in rel_parts):
             continue
-        stated = doc.get("package")
-        if stated != pkg:
-            findings.append(
-                f"{decl_rel}: `package: {stated!r}` disagrees with its own "
-                f"directory `{pkg}`"
-            )
-        rules = doc.get("invariants")
-        if not isinstance(rules, list) or not rules:
-            findings.append(f"{decl_rel}: `invariants` is missing or empty")
-            continue
-        for idx, rule in enumerate(rules):
-            n_rules += 1
-            where = f"{decl_rel}[{idx}]"
-            if not isinstance(rule, dict):
-                findings.append(f"{where}: invariant is not a mapping")
-                continue
-            missing = [k for k in _REQUIRED_KEYS if not rule.get(k)]
-            if missing:
-                findings.append(f"{where}: missing {', '.join(missing)}")
-                continue
-            rid = rule["id"]
-            if not isinstance(rid, str) or not _ID_RE.fullmatch(rid):
-                findings.append(
-                    f"{where}: id {rid!r} is not lower-kebab, 3-80 chars")
-                continue
-            where = f"{pkg}: {rid}"
-            if rid in seen_ids:
-                findings.append(
-                    f"{where}: id already owned by {seen_ids[rid]} -- an id "
-                    "names one rule, and two owners cannot be attributed")
-                continue
-            seen_ids[rid] = pkg
+        pkg = "/".join(rel_parts[:-1])
+        if pkg not in enrolled:
+            stray.append(pkg)
+    return sorted(stray)
 
-            has_forbid, has_require = "forbid" in rule, "require" in rule
-            if has_forbid == has_require:
-                findings.append(
-                    f"{where}: declare exactly one of `forbid:` / `require:` "
-                    f"(got forbid={has_forbid}, require={has_require})")
-                continue
-            forbid = has_forbid
-            raw_pat = rule["forbid"] if forbid else rule["require"]
-            if not isinstance(raw_pat, str) or not raw_pat:
-                findings.append(f"{where}: the pattern is empty")
-                continue
+
+def check(repo: Path, programs_dir: Path) -> dict:
+    enrolled = load_enrollment(programs_dir)
+    findings: list[dict] = []
+    packages: list[dict] = []
+
+    for pkg in enrolled:
+        pkg_dir = repo / pkg
+        if not pkg_dir.is_dir():
+            findings.append({
+                "code": "STALE_ENROLLMENT", "package": pkg,
+                "detail": f"enrolled package directory {pkg} does not exist; "
+                          f"prune the entry from {ENROLLMENT_FILENAME} in the "
+                          f"same change that removed the package"})
+            continue
+        inv_file = pkg_dir / INVARIANTS_FILENAME
+        if not inv_file.is_file():
+            findings.append({
+                "code": "MISSING_FILE", "package": pkg,
+                "detail": f"{pkg}/{INVARIANTS_FILENAME} is absent. An enrolled "
+                          f"package with no invariant file is NOT a package "
+                          f"with no constraints — restore the file, or remove "
+                          f"the package and prune its enrollment."})
+            continue
+        try:
+            doc = json.loads(inv_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            findings.append({"code": "SCHEMA", "package": pkg,
+                             "detail": f"{pkg}/{INVARIANTS_FILENAME}: {exc}"})
+            continue
+        schema_errs = validate_document(doc, pkg)
+        if schema_errs:
+            findings += [{"code": "SCHEMA", "package": pkg, "detail": e}
+                         for e in schema_errs]
+            continue
+        invs = doc["invariants"]
+        if not invs:
+            findings.append({
+                "code": "EMPTY", "package": pkg,
+                "detail": f"{pkg}/{INVARIANTS_FILENAME} declares zero "
+                          f"invariants. An empty invariant file is not a "
+                          f"package without constraints; it is a package whose "
+                          f"constraints were never written down."})
+            continue
+
+        entries = collect_entries(pkg_dir)
+        for inv in invs:
+            rule, rid = inv["rule"], inv["id"]
             try:
-                pattern = re.compile(raw_pat)
-            except re.error as exc:
-                findings.append(f"{where}: pattern does not compile ({exc})")
+                violations = evaluate_rule(rule, entries)
+            except (ValueError, KeyError, re.error) as exc:
+                findings.append({"code": "SCHEMA", "package": pkg, "id": rid,
+                                 "detail": f"{pkg}:{rid}: rule is not "
+                                           f"evaluable: {exc}"})
                 continue
-
-            counter = rule["counterexample"]
-            if not isinstance(counter, str) or not counter.strip():
-                findings.append(f"{where}: counterexample is empty")
-                continue
-            if not _violating_lines(pattern, counter, forbid):
-                findings.append(
-                    f"{where}: TOOTHLESS -- the rule ACCEPTS its own "
-                    "counterexample, so a passing population is no evidence "
-                    "the pattern discriminates")
-                continue
-
-            applies = rule["applies_to"]
-            if not isinstance(applies, list) or not all(
-                    isinstance(g, str) and g for g in applies):
-                findings.append(f"{where}: `applies_to` is not a list of globs")
-                continue
-            excludes = rule.get("excludes") or []
-            if not isinstance(excludes, list) or not all(
-                    isinstance(g, str) and g for g in excludes):
-                findings.append(f"{where}: `excludes` is not a list of globs")
-                continue
-            inc = [_glob_to_regex(g) for g in applies]
-            exc = [_glob_to_regex(g) for g in excludes]
-
-            population = []
-            for rel in sorted(owned_by[pkg]):
-                sub = rel[len(pkg) + 1:]
-                if any(r.match(sub) for r in inc) and not any(
-                        r.match(sub) for r in exc):
-                    population.append(rel)
-            if not population:
-                findings.append(
-                    f"{where}: VACUOUS -- applies_to {applies} selects ZERO of "
-                    f"the {len(owned_by[pkg])} file(s) this package owns")
-                continue
-
-            for rel in population:
-                n_examined += 1
+            for v in violations:
+                findings.append({
+                    "code": "VIOLATION", "package": pkg, "id": rid,
+                    "detail": f"{pkg}:{rid} — {inv['statement']} :: {v}"})
+            # The counterexamples are the negative control, run every time.
+            for ce in counterexamples(inv):
                 try:
-                    blob = (root / rel).read_bytes()
-                except OSError as exc:
-                    findings.append(f"{where}: {rel} unreadable ({exc})")
+                    ce_hits = evaluate_rule(rule, counterexample_entries(ce))
+                except (ValueError, KeyError, re.error) as exc:
+                    findings.append({"code": "SCHEMA", "package": pkg,
+                                     "id": rid,
+                                     "detail": f"{pkg}:{rid}: counterexample "
+                                               f"is not evaluable: {exc}"})
                     continue
-                if len(blob) > MAX_SUBJECT_BYTES:
-                    findings.append(
-                        f"{where}: {rel} is {len(blob)} bytes, over the "
-                        f"{MAX_SUBJECT_BYTES} byte ceiling -- NOT examined")
-                    continue
-                text = blob.decode("utf-8", "replace")
-                for line in _violating_lines(pattern, text, forbid):
-                    findings.append(
-                        f"{where}: {rel}:{line} violates -- {rule['rule'].strip()}"
-                        if line else
-                        f"{where}: {rel} violates (required pattern absent) -- "
-                        f"{rule['rule'].strip()}")
+                if not ce_hits:
+                    proves = ce.get("proves", "the rule")
+                    findings.append({
+                        "code": "NON_DISCRIMINATING", "package": pkg, "id": rid,
+                        "detail": f"{pkg}:{rid} — the declared counterexample "
+                                  f"{ce['path']!r}, which is supposed to prove "
+                                  f"{proves}, does NOT violate this rule. A "
+                                  f"rule that cannot reject its own "
+                                  f"counterexample checks nothing."})
+        packages.append({"package": pkg, "invariants": len(invs),
+                         "counterexamples": sum(len(counterexamples(i))
+                                                for i in invs),
+                         "files": sum(1 for e in entries if not e.is_dir)})
 
-    counts = {
-        "packages": len(declared),
-        "registered": len(set(registered)),
-        "invariants": n_rules,
-        "owned_files": sum(len(v) for v in owned_by.values()),
-        "files_examined": n_examined,
-        "tracked_files": len(tracked),
-    }
-    return (1 if findings else 0), findings, counts
+    for pkg in find_stray_invariant_files(repo, set(enrolled)):
+        findings.append({
+            "code": "UNENROLLED", "package": pkg,
+            "detail": f"{pkg}/{INVARIANTS_FILENAME} exists but {pkg} is not "
+                      f"named in {ENROLLMENT_FILENAME}. An unenrolled invariant "
+                      f"file is one nobody would miss — enroll it."})
+
+    return {"gate": "package_invariants_check",
+            "verdict": "PASS" if not findings else "FAIL",
+            "enrolled": len(enrolled), "packages": packages,
+            "findings": findings}
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("root", nargs="?", default=".",
-                    help="repository root to check (default: cwd)")
-    ap.add_argument("--json", dest="json_out",
-                    help="also write the machine record here")
-    ap.add_argument("--min-registered-packages", type=int, default=None,
-                    dest="min_packages",
-                    help="override the shrink ratchet; for the test suite's "
-                         "synthetic repositories only, never for the gate")
-    args = ap.parse_args(argv)
-    root = Path(args.root).resolve()
+# --------------------------------------------------------------------------
+# --touched: the human-facing half. Print the rules that bind what you edited.
+# --------------------------------------------------------------------------
+def render_touched(repo: Path, programs_dir: Path, paths: list[str]) -> str:
+    enrolled = load_enrollment(programs_dir)
+    hit = []
+    for pkg in enrolled:
+        if any(p == pkg or p.startswith(pkg + "/") for p in paths):
+            hit.append(pkg)
+    if not hit:
+        return ""
+    out = []
+    for pkg in hit:
+        f = repo / pkg / INVARIANTS_FILENAME
+        if not f.is_file():
+            out.append(f"  {pkg}: {INVARIANTS_FILENAME} MISSING (enrolled)")
+            continue
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            out.append(f"  {pkg}: {INVARIANTS_FILENAME} unreadable: {exc}")
+            continue
+        out.append(f"  {pkg}/{INVARIANTS_FILENAME}")
+        for inv in doc.get("invariants", []):
+            out.append(f"    [{inv.get('id')}] {inv.get('statement')}")
+    return "\n".join(out)
 
-    try:
-        rc, findings, counts = _check(root, args.min_packages)
-    except Refusal as exc:
-        print(f"package_invariants: NOT CHECKED -- {exc}", file=sys.stderr)
-        print("package_invariants: rc 2 -- nothing was certified. A run that "
-              "could not run is not a pass.", file=sys.stderr)
-        if args.json_out:
-            atomic_write_json(args.json_out,
-                              {"verdict": "NOT_CHECKED", "reason": str(exc)})
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--repo-root", default=None)
+    ap.add_argument("--programs-dir", default=None,
+                    help="directory holding " + ENROLLMENT_FILENAME)
+    ap.add_argument("--json", default=None)
+    ap.add_argument("--touched", nargs="*", default=None,
+                    help="repo-relative changed paths; print the invariants "
+                         "binding the packages they belong to")
+    a = ap.parse_args(argv)
+
+    here = Path(__file__).resolve().parent
+    programs_dir = Path(a.programs_dir).resolve() if a.programs_dir else here
+    repo = Path(a.repo_root).resolve() if a.repo_root else here.parents[3]
+
+    if not repo.is_dir():
+        print(f"NORECORD: repo root {repo} is not a directory", file=sys.stderr)
+        return 2
+    if not (programs_dir / ENROLLMENT_FILENAME).is_file():
+        print(f"NORECORD: {programs_dir / ENROLLMENT_FILENAME} not found",
+              file=sys.stderr)
         return 2
 
-    disclosure = (
-        "package_invariants: {packages} package(s), {invariants} invariant(s), "
-        "{owned_files} owned file(s), {files_examined} file-rule pair(s) "
-        "examined, out of {tracked_files} tracked".format(**counts)
-    )
-    if findings:
-        for f in findings:
-            print(f"  FAIL {f}")
-        print(f"[FAIL] {len(findings)} finding(s). {disclosure}")
-    else:
-        print(f"[PASS] every declared invariant held. {disclosure}")
-    if args.json_out:
-        atomic_write_json(args.json_out,
-                          {"verdict": "FAIL" if findings else "PASS",
-                           "findings": findings, **counts})
-    return rc
+    if a.touched is not None:
+        text = render_touched(repo, programs_dir, list(a.touched))
+        if text:
+            print("Invariants binding the packages you touched:")
+            print(text)
+        else:
+            print("  (no enrolled package touched)")
+        return 0
+
+    res = check(repo, programs_dir)
+    if a.json:
+        Path(a.json).parent.mkdir(parents=True, exist_ok=True)
+        # vibe-ic#1082 — the report appears under its final name only once it
+        # is complete, so a reader cannot mistake a half-written verdict for a
+        # finished one.
+        write_json(a.json, res)
+
+    if res["findings"]:
+        print(f"FAIL: {len(res['findings'])} finding(s) across "
+              f"{res['enrolled']} enrolled package(s):")
+        for f in res["findings"]:
+            print(f"  [{f['code']}] {f['detail']}")
+        return 1
+    total = sum(p["invariants"] for p in res["packages"])
+    ces = sum(p["counterexamples"] for p in res["packages"])
+    print(f"PASS: {total} invariant(s) declared by {res['enrolled']} enrolled "
+          f"package(s); every rule obeyed by its own package, and all {ces} "
+          f"declared counterexample(s) rejected.")
+    return 0
 
 
 if __name__ == "__main__":

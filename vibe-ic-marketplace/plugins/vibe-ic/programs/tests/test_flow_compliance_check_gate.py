@@ -73,8 +73,18 @@ def test_v029_phase_2_limits_step_set(tmp_path):
     r = _run(str(tmp_path), "--phase", "2")
     # Empty project always FAILs Step 1 etc; what we test is that
     # Phase-3 step names are NOT in the report.
-    assert "tapeout" not in r.stdout.lower(), \
-        f"--phase 2 must not include tapeout step in output: {r.stdout}"
+    # THE STEP, not the substring. A bare `"tapeout" not in stdout.lower()` was a
+    # proxy for "no Phase-3-only step appears", and it stopped measuring that the
+    # moment a PHASE-AGNOSTIC step acquired an artefact whose NAME contains the
+    # word: step 0.5ic (in scope for both phases, as this command's own NOTE says)
+    # declares `input/submission_template/tapeout_declaration.json` and gates on
+    # `tapeout_declaration_check`, so the proxy fired on a report that contained
+    # no Phase-3-only step at all. The phase-3-only step it was really guarding is
+    # 36, `Tapeout checklist`; asserting that name keeps the property and drops
+    # the false positive. Its sibling below already asserts on a step NAME
+    # (`Spec-to-RTL`) for the symmetric direction — this is the same rule.
+    assert "Tapeout checklist" not in r.stdout, \
+        f"--phase 2 must not include the Phase-3-only step 36: {r.stdout}"
     assert "phase 2" in r.stdout.lower() or "phase=2" in r.stdout.lower() \
         or r.returncode in (1, 2), r.stdout
 

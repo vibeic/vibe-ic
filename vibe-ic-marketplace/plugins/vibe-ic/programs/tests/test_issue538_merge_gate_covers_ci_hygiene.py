@@ -179,6 +179,12 @@ _EMPTY_CORPUS_LABEL_RE = re.compile(
     r'\Acorpus "(?P<name>.+)" is EMPTY — nothing was checked over it\Z')
 
 
+#: Leading shell environment assignments on a command line, e.g. the
+#: `GATE_DISPATCH_ATTEST_POPULATION=1 ` in front of a `gate_dispatch_over` call.
+_ENV_ASSIGN_PREFIX = re.compile(
+    r'^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|\'[^\']*\'|\S*)\s+)+')
+
+
 def declared_corpora(script: Path):
     """Every corpus name the script hands to `gate_dispatch_over`, by PARSING.
 
@@ -189,7 +195,14 @@ def declared_corpora(script: Path):
     """
     out = []
     for _lineno, line in GD._logical_lines(script.read_text(errors="replace")):
-        stripped = line.strip()
+        # A leading `NAME=value` assignment is part of the COMMAND, not a
+        # different command: `VAR=1 cmd args` runs `cmd` with VAR in its
+        # environment. 7c376e348 (v1.10.69) declared the routed-DEF corpus as
+        # `GATE_DISPATCH_ATTEST_POPULATION=1 gate_dispatch_over ...`, and a
+        # prefix match alone stopped seeing it — so its dispatcher row looked
+        # fabricated, which is the one thing this test is meant to catch for
+        # real. Strip the assignments, then match the command.
+        stripped = _ENV_ASSIGN_PREFIX.sub("", line.strip())
         if not stripped.startswith("gate_dispatch_over"):
             continue
         got = GD._read_quoted(stripped[len("gate_dispatch_over"):].strip())

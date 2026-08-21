@@ -228,12 +228,23 @@ _PYTEST_RE = re.compile(r"(?<![\w.-])pytest(?![\w.-])")
 _TIMEOUT_RE = re.compile(r"--timeout[= ](\d+)")
 _ELAPSED_WRAPPER_RE = re.compile(r"(?<![\w.-])timeout(?![\w.-])")
 _DRIVER_COMMAND_RE = {
+    # `PYTHONDONTWRITEBYTECODE=1` IS REQUIRED OF ALL THREE, NOT TWO.
+    # `run_unselectable_pytest` has always required it here. The other two
+    # gained it when the tier's independent stages started running at the same
+    # time: `python3 -I` does not imply `-B`, so a lane that writes bytecode
+    # into $ROOT changes `gate_host_independence_check`'s untracked+ignored
+    # stimulus set — and under concurrency it changes it WHILE another lane is
+    # measuring it. Requiring the token rather than merely tolerating it means
+    # deleting it again is a policy change with a red test, not a silent
+    # reintroduction of an ordering hazard.
     "run_pytest": re.compile(
         r'^\s*if\s+out="\$\(\s*cd\s+"\$PLUGIN"\s+&&\s+'
+        r'PYTHONDONTWRITEBYTECODE=1\s+'
         r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
         r'programs/pytest_per_file_junit\.py(?=\s)'),
     "run_repo_tools_pytest": re.compile(
         r'^\s*out="\$\(\s*cd\s+"\$ROOT"\s+&&\s+'
+        r'PYTHONDONTWRITEBYTECODE=1\s+'
         r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
         r'"\$PROGRAMS/pytest_per_file_junit\.py"(?=\s)'),
     "run_unselectable_pytest": re.compile(
@@ -250,9 +261,9 @@ _DRIVER_COMMAND_RE = {
 # permissive "looks command-like" fallback.
 _LANDING_LANE_SHA256 = {
     "run_pytest":
-        "88d7a00a065528196475254f8dff69d9b9277a37d4208a2e15887ca347217366",
+        "1063d696b31fb72b8826c02e965a677c4974a96a68f7c0c12f9dcdf7c3458ab9",
     "run_repo_tools_pytest":
-        "22768a936c40f31a2167849423f2945c4904962bd7a1b0cf956075a89890e2ea",
+        "e8575843eb88d9b1ba49c84127dd4237892a4d9d09816c50b2da2b152c2fc58e",
     "run_unselectable_pytest":
         "70d7764ca0c83843f0b66a4e768c0ca5b874589894f1c688cb2d831b17863e78",
 }
@@ -260,10 +271,30 @@ _LANDING_LANE_SHA256 = {
 # Hashing only the three function definitions is insufficient: their exact
 # bodies can remain present while a top-level ``exit``, ``false && call``, or a
 # later function redefinition makes every call a no-op.  This prefix ends at
-# the third and final required invocation, so any executable rewrite that can
-# affect reachability must be reviewed together with a new digest.
+# the point by which every required invocation has been reached, so any
+# executable rewrite that can affect reachability must be reviewed together
+# with a new digest.
+#: WHERE THAT PREFIX ENDS, now that the three lanes are not column-zero calls.
+#:
+#: It used to end at the bare `run_unselectable_pytest` line — the last of the
+#: three populations, invoked at top level, so "everything up to here" was
+#: exactly the control flow that decides whether all three run. The full tier's
+#: independent stages now run AT THE SAME TIME: `lane_run_window` launches the
+#: lanes and `lane_emit_window` joins every one of them and prints its verdict,
+#: so the populations are reached through the lane bodies and no population is
+#: a top-level call any more. Anchoring on the old shape did not weaken the
+#: rule, it ABOLISHED it: no line matched, the prefix was never computed, and
+#: the only thing printed was "must invoke … at its reviewed top-level call
+#: site".
+#:
+#: `lane_emit_window` is the replacement and it is not a weaker anchor. It is
+#: the single top-level line by which every lane has been both dispatched AND
+#: joined, so a prefix ending there still contains every byte that decides
+#: whether the three populations run: their bodies, the lane bodies that call
+#: them, the launcher, the window, and everything before them.
+_LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "3d844dc8404dd2391fa597a2ad0ecc913e274fb4ba11a00e5e0c8fd742198bf6"
+    "8cbd45a1e6382e5e3a1c25bb377e8238f977784a15cb655c14f89761a853e70b"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -279,14 +310,37 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # later rewrite cannot erase their verdict (for example ``FAILED=0`` or an
 # early successful exit after the third call).  Gate control-flow changes are
 # intentionally an explicit policy migration, never a heuristic match.
+#
+# RE-PINNED AGAIN at v1.11.5, and this migration is a RATCHET THAT WAS LEFT
+# UNTURNED rather than a new policy. The three pins here had been stale since
+# 0060d835 and kept SIX tests in `test_ci_harness_timeout_ceiling_check.py` red
+# on `main`, plus the hygiene gate "inner timeouts fit the harness" — across six
+# landings, none of which the drift was about. A permanently-red contract check
+# is a contract check nobody reads.
+#
+# WHAT MOVED, reviewed rather than absorbed:
+#   * `tools/gatekeeper-land.sh` (both digests above and below): ONE commit,
+#     eda53573 (v1.11.2), which inserts `landing_tier_checkout_preflight.py`
+#     and a fatal `exit 2` AHEAD of the arms so a full tier refuses to start in
+#     a checkout a third party can unregister mid-run. It adds a refusal in
+#     front of the lanes; it removes, reorders and rewrites none of them — and
+#     the three `_LANDING_LANE_SHA256` bodies did NOT move, which is this
+#     file's own independent witness that the lane bodies are byte-identical.
+#   * the semantic driver: five landed fixes to `pytest_per_file_junit.py`
+#     (3e6c1bfc, f96494b8, 732e0ee3, fe132795, 2b93d872) plus the progress-scan
+#     rewind that ships with this commit. Each was reviewed at its own landing;
+#     what nobody did afterwards was turn this ratchet.
+#
+# Every digest here is DERIVED — this file run over the reviewed tree, and the
+# sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "d07a2e1c46ca82b2fd90e7931e298c8d3302f1a7b6c41f3facf2cf4ff0801497"
+    "6f771cc98d2a907b6b6fe81070cbaace2def23aea8e91b323465eb69a3c4c2a9"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
 # whose functional tests prove selection -> aggregate JUnit coverage.
 _SEMANTIC_DRIVER_SHA256 = (
-    "a0cd7227628f340a63c14bb8df39dde54ab66f253a52fd895a3cda6a7993e625"
+    "392d077fcbe629d1fde9e715224d44b84fe93f2a40cad17f47597d317a02ec16"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
@@ -540,11 +594,11 @@ def landing_semantic_progress_contract(repo_root: Path) -> Dict:
     populations = ("run_pytest", "run_repo_tools_pytest",
                    "run_unselectable_pytest")
     final_calls = [i for i, line in enumerate(source_lines, 1)
-                   if line in {"run_unselectable_pytest",
-                               "if run_unselectable_pytest; then"}]
+                   if line in {_LANDING_WINDOW_ANCHOR,
+                               f"if {_LANDING_WINDOW_ANCHOR}; then"}]
     if len(final_calls) != 1:
         errors.append(
-            "gatekeeper-land.sh must invoke run_unselectable_pytest exactly "
+            f"gatekeeper-land.sh must invoke {_LANDING_WINDOW_ANCHOR} exactly "
             "once at its reviewed top-level call site")
     else:
         prefix_bytes = ("\n".join(source_lines[:final_calls[0]]) +
@@ -581,7 +635,16 @@ def landing_semantic_progress_contract(repo_root: Path) -> Dict:
                 "reviewed executable body "
                 f"(sha256={observed_digest}, expected="
                 f"{_LANDING_LANE_SHA256[population]})")
-        if any("<<" in source_lines[i - 1]
+        # A HERE-STRING IS NOT A HEREDOC, and the difference is the whole
+        # reason this rule exists. The concern is a literal block of
+        # command-SHAPED DATA sitting in the file where a reader — and the
+        # canonical-command regex above — might take it for an executed
+        # command. `<<<"$out"` carries the value of a variable, so there is no
+        # literal in the file to mistake for anything; it is also the form the
+        # lane shells were deliberately moved TO, because `printf … | grep -q`
+        # asks its question in a subshell whose exit status is the pipeline's,
+        # not the probe's. Matching `<<` naively forbade the safer form.
+        if any(re.search(r"(?<!<)<<(?!<)", source_lines[i - 1])
                for i in range(start + 1, ends[0])):
             errors.append(
                 f"gatekeeper-land.sh function {population} contains a "
@@ -598,6 +661,34 @@ def landing_semantic_progress_contract(repo_root: Path) -> Dict:
         ranges[population] = (start, ends[0])
         depths[population] = _shell_control_depths(
             source_lines, start, ends[0])
+
+    # EACH POPULATION IS INVOKED EXACTLY ONCE, WHEREVER IT IS INVOKED FROM.
+    #
+    # The old top-level-call-site rule carried two properties at once: an
+    # anchor for the execution prefix, and "this population is actually
+    # called". Splitting them is what lets the anchor move to the lane window
+    # without losing the second: a population that is defined, digest-matched
+    # and never called still proves nothing, and a population called twice is
+    # two lanes where the record expects one. Shape-independent on purpose —
+    # `fn_capture "full:targeted-tests" run_pytest` inside a lane body is a
+    # call, and so is a bare top-level line; pinning the SHAPE is what made
+    # three separate tests in this repo stop discriminating at once.
+    for population in populations:
+        span = ranges.get(population)
+        if span is None:
+            continue
+        start, end = span
+        callers = [
+            lineno for lineno, command in _logical_lines(land_text)
+            if command.strip()
+            and not command.lstrip().startswith("#")
+            and not (start <= lineno <= end)
+            and re.search(rf"(?<![\w./-]){re.escape(population)}(?![\w(])",
+                          command)]
+        if len(callers) != 1:
+            errors.append(
+                f"gatekeeper-land.sh must invoke {population} exactly once "
+                f"outside its own definition (found {len(callers)})")
 
     for lineno, command in _logical_lines(land_text):
         stripped = command.lstrip()

@@ -431,7 +431,16 @@ new_progress_nonce() {
 }
 
 validated_arm_exit() {
-  PYTHONDONTWRITEBYTECODE=1 python3 -I - "$1" "$2" <<'PY'
+  # `-B` IS LOAD-BEARING, and `PYTHONDONTWRITEBYTECODE=1` alone is not: `-I`
+  # implies `-E`, so it IGNORES every PYTHON* variable including that one.  The
+  # helper below imports the arm-receipt module OUT OF `$RUNTIME_SNAPSHOT`, so
+  # without `-B` the first call byte-compiles it and leaves
+  # `tools/ci/__pycache__/` inside the runtime tree.  The runtime tree digest is
+  # exactly what every LATER arm's receipt is re-checked against, so the B1 call
+  # made the very next validation refuse with "receipt runtime digest differs
+  # from the current input" -> "B2 arm receipt is NORECORD", on every run, for
+  # every branch.  Measured: runtime files 57 -> 58 across one B1 validation.
+  PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "$1" "$2" <<'PY'
 import importlib.util, pathlib, sys
 helper_path = pathlib.Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location("_trusted_arm_record_exit", helper_path)
@@ -441,6 +450,34 @@ spec.loader.exec_module(module)
 record = module.strict_load_record(pathlib.Path(sys.argv[2]))
 print(record["payload"]["result_exit_code"])
 PY
+}
+
+# WHY THE VALIDATOR'S OWN LOG IS NOT ENOUGH.
+#
+# When the arm never wrote a receipt, the validator can only report the SYMPTOM
+# -- "cannot resolve runner receipt: [Errno 2] No such file or directory" -- and
+# that one line is what a reader sees for every distinct cause. MEASURED, three
+# different causes reduced to that same sentence in one evening:
+#
+#   * "subject would expose the host HOME to the candidate"  (TMPDIR under $HOME)
+#   * "cannot start Docker CLI: ..."                          (no engine here)
+#   * "candidate ended without the exact semantic terminal record"
+#
+# The runner writes its refusal to `$RUN/<arm>-runner.log` and then exits; that
+# file is deleted with the run directory, so unless it is quoted HERE the cause
+# is gone. "I could not run it" and "I ran it and it failed" must not read the
+# same. The launchers above own that pathname, so it is derived from the arm id
+# rather than threaded through this function's already-long parameter list.
+arm_norecord_diagnosis() {
+  local arm="$1" record_log="$2" runner_log
+  runner_log="$RUN/$(printf '%s' "$arm" | tr 'A-Z' 'a-z')-runner.log"
+  if [ -s "$runner_log" ]; then
+    echo "      --- $arm runner said (this is the CAUSE; the lines below are the symptom):" >&2
+    tail -n 20 -- "$runner_log" | sed 's/^/      /' >&2
+  else
+    echo "      --- $arm runner left no log at $runner_log — the arm did not even start" >&2
+  fi
+  sed 's/^/      /' "$record_log" >&2
 }
 
 validate_hermetic_arm_record() {
@@ -459,7 +496,8 @@ validate_hermetic_arm_record() {
            --head "$expected_head" --hygiene hygiene.json)
   fi
   python3 -B "$helper" "${args[@]}" >"$record.log" 2>&1 \
-    || { sed 's/^/      /' "$record.log" >&2; die "$arm arm receipt is NORECORD"; }
+    || { arm_norecord_diagnosis "$arm" "$record.log"
+         die "$arm arm receipt is NORECORD"; }
   receipt_rc="$(validated_arm_exit "$helper" "$record")" \
     || die "$arm validation record cannot be re-read"
   case "$runner_rc:$receipt_rc" in
