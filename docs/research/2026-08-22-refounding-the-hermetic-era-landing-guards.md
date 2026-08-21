@@ -1,7 +1,7 @@
 # Re-founding the thirteen hermetic-era landing guards — a PROPOSAL
 
-**Status: DESIGN ONLY. Nothing here is implemented and no protected path is
-touched by this document.** It exists so the policy call in
+**Status: design A is now IMPLEMENTED on this branch (see the tail of this
+document). B, C and D remain design only.** It exists so the policy call in
 `2026-08-21-main-red-triage-v1_11_66-findings.md` (escalation 3) can be decided
 against a concrete alternative instead of in the abstract.
 
@@ -69,8 +69,14 @@ So all four arms are observable from the object `_verify()` already returns:
 | B1 | `candidate_total > 0` | `:405` |
 
 No receipts, no temp directory, no env knob, and **no new plumbing of any kind** —
-the data already crosses and one test already reads it. This is now the cheapest
-item by a wide margin, and it stays first in the suggested order.
+the data already crosses and one test already reads it.
+
+**Second correction: A closes ONE test, not four.** I wrote "G6 + 3 others"
+without checking. Only G6 asserts `.started` markers; the other `.started`
+reference is inside the planted stub, and `cleanup.started` is a different,
+host-written, working channel. A is still first in the order — it is now nearly
+free — but it is worth one test, not four, and the escalation should be read
+with that number.
 
 ### B. The interrupt/cleanup guarantee (G4, both tests)
 
@@ -165,3 +171,32 @@ sentence — the thing I should have checked was not whether receipts were
 What remains genuinely unverified, and stands: **none of this is implemented or
 run.** B and D still need new fixture scaffolding (a sentinel commit; a two-corpus
 fixture), and neither is sketched here beyond the mechanism.
+
+
+# ===== A: IMPLEMENTED =====
+
+`test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave` is
+re-founded and **renamed** to `test_end_to_end_every_arm_of_both_waves_actually_ran`.
+
+It now asserts all four arms from the verdict document — `base_land` (A2),
+`land` (B2), `base_total > 0` (A1), `candidate_total > 0` (B1) — and no longer
+touches the probe directory. **RED before, GREEN after**, and the green is
+earned: it is stronger than what it replaces, because a marker proved an arm
+STARTED and a record proves it COMPLETED.
+
+**The assertions discriminate** — this is not a green that cannot fail.
+`base_total == 0` is an explicitly guarded and disclosed condition
+(`landing_merge_verdict.py:121`, `:848`), and `base_land is None` is a real
+branch (`:1213`) that the document emits as `null` (`:1838`). All four read
+values that genuinely take the failing value.
+
+**What I did NOT restore, and said so in the docstring:** ordering. The old name
+promised "B1/B2 finish before A artifacts exist; A1/A2 then run in parallel", and
+**marker existence never showed that either** — the markers were liveness, and
+the verdict document carries no timestamps. So the test was mis-named relative to
+its own assertions before the hermetic migration, not because of it. I renamed it
+to what it actually checks rather than leave a name that over-promises. A real
+ordering guard needs per-arm completion times, which `landing_completion_record.py`
+could carry but does not surface to the verdict today. **That is a genuine
+reduction in claimed coverage and it should be read as one** — the coverage was
+never there; only the claim was.

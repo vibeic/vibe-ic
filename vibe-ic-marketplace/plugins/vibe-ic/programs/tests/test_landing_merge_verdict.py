@@ -2352,20 +2352,40 @@ def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(
     assert not list(cache.glob("*"))
 
 
-def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
-        sandbox, tmp_path):
-    """B1/B2 finish before A artifacts exist; A1/A2 then run in parallel."""
-    probe = tmp_path / "parallel-arms"
-    r, doc = _verify(
-        sandbox, "innocuous_green", tmp_path,
-        env_extra={"GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)},
-    )
+def test_end_to_end_every_arm_of_both_waves_actually_ran(sandbox, tmp_path):
+    """All four arms produce their record. NOT an ordering guard — see below.
+
+    This used to assert `A2.started`/`B1.started`/`B2.started` in a probe
+    directory the stub wrote from inside the arm. Since the arms became
+    hermetic that could never work: `GATEKEEPER_CONCURRENCY_PROBE_DIR` is not
+    on `_LAND_REVIEWED_ENV_NAMES`, so the arm never saw it, and the directory
+    is a host path no arm can write to anyway. The probe held exactly the three
+    `cleanup.*` files the VERIFIER writes on the host, and nothing else.
+
+    The verdict document already carries per-arm evidence, and the line below
+    was already asserting one of them. Use it for all four. This is stronger
+    than the marker it replaces: a marker proved an arm STARTED, a record
+    proves it COMPLETED.
+
+    NOT GUARDED, and it was not guarded before either: the old name promised
+    "B1/B2 finish before A artifacts exist; A1/A2 then run in parallel", but
+    marker existence never showed ordering, and the verdict document carries no
+    timestamps. Renamed to what is actually asserted rather than leaving a name
+    that over-promises. A real ordering guard needs a per-arm completion record
+    with times, which `landing_completion_record.py` could carry but does not
+    surface to the verdict today.
+    """
+    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
-    assert {p.name for p in probe.iterdir()} >= {
-        "A2.started", "B1.started", "B2.started"}
-    assert doc["base_land"] is not None
-    assert doc["delta"]["new_failures"] == []
+    # A2 (base gate arm) and B2 (candidate gate arm) each produced a record.
+    assert doc["base_land"] is not None, "arm A2 produced no landing record"
+    assert doc["land"] is not None, "arm B2 produced no landing record"
+    # A1/B1 (the aggregate test arms) each measured a non-zero suite.
+    delta = doc["delta"]
+    assert delta["base_total"] > 0, f"arm A1 measured nothing: {delta}"
+    assert delta["candidate_total"] > 0, f"arm B1 measured nothing: {delta}"
+    assert delta["new_failures"] == []
 
 
 def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
