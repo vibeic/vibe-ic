@@ -342,3 +342,39 @@ this repo distrusts most. 1800 s is not a chosen number either: it is
 which this `timeout` would kill runs the gate itself still considers alive.
 The half of the ruling that carries the weight is untouched and was driven
 above: a review that did not decide arrives as rc 2 and BLOCKS, never rc 0.
+
+### The differential: two reds removed, none added
+
+The claim "neither property is weakened and nothing else broke" is only worth
+what its DENOMINATOR is, so the denominator is named. Every test file in the
+repo that mentions any token this branch touches — `GK_HYG`, `GK_REVIEW`,
+`hygiene_record`, `GATEKEEPER_HYGIENE_REPORT`, `GATEKEEPER_REVIEW_BUDGET`,
+`_LANDING_LANE_SHA256`, `hygiene_gate_from_record`, `summary-json` — which is
+17 files under `programs/tests/`, plus the three repo-root `tools/` files that
+no plugin-scoped selection reaches. Both arms run sequentially on an idle
+host, both worktrees under `$HOME`, `PYTHONDONTWRITEBYTECODE=1`.
+
+```
+BASE  546487a8a (batch, unfixed) : 12 failed, 461 passed, 5 skipped
+FIX   bb6543a85                  : 10 failed, 463 passed, 5 skipped
+```
+
+Compared BY NAME SET rather than by count, the fix arm is the base arm minus
+exactly:
+
+```
+- test_issue1498_hygiene_subset_rule_is_wired.py::test_the_land_script_still_honours_the_variable
+- test_issue538_merge_gate_covers_ci_hygiene.py::test_the_cli_offers_no_way_to_skip_the_hygiene_set
+```
+
+and plus NOTHING. The other ten — nine in `test_landing_merge_verdict.py` and
+`test_three_orphan_checkers_have_a_machine_runner.py::test_the_audit_returns
+_a_clean_verdict` — are byte-identical on both arms and are properties of the
+batch this branch sits on, not of this change. The last of those is
+`checker_execution_wiring_audit` reporting 630 checker-shaped programs of 1234
+in `programs/`, which is also one of the nine hygiene gates the bound review
+above reported red; it is the repo's state and it is named here so that a
+reader of the fix arm alone does not charge it to the fix.
+
+The three repo-root files are counted separately because they are outside
+every plugin-scoped selection: 32 passed, on the fix.
