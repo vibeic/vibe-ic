@@ -378,3 +378,66 @@ hypothetical; `ppa_head_to_head_check`'s `_SEVERITY` comment records it happenin
   both would then have gone green. Neither was, because a denominator written after
   the run and a frontier checked against its own recomputation are the two shapes
   those gates exist to refuse.
+
+---
+
+# Part 3 — the whole hygiene suite, before and after, on clean trees
+
+Both runs: separate worktrees, `git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`,
+nothing else touching the tree while the run was in flight.
+
+|  | `origin/main` a00f53f20 | this branch |
+|---|---|---|
+| gates declared | 85 | 90 |
+| decided (PASS or FAIL) | 75 | **80** |
+| passed | 69 | **73** |
+| failed | 6 | **7** |
+| NOT CHECKED | 10 | 10 |
+
+**The failure sets differ by exactly one row**, and it is the intended one:
+
+    comm -13 base_failures mine_failures  ->  PPA head-to-head records (cross-layer campaign)
+    comm -23 base_failures mine_failures  ->  (empty)
+
+The six pre-existing failures are unchanged and untouched by this lane:
+`checker execution wiring`, `d3 declaration/manifest parity`, `declaration scans
+strip comments`, `flow-gate enforcement audit`, `gates are wired to something`,
+`liar census controls still fire`.
+
+The ledger row adjudicates:
+
+    gate_red_since: 90 gate(s) declared, 17 red (1 acknowledged, 16 NEW), 1 ledger row(s)
+      acknowledged red: PPA head-to-head records (cross-layer campaign)
+    [PASS] gate_red_since: every red is NEW or owned by a live, unexpired acknowledgement
+    rc=0
+
+## The NOT CHECKED count did not move, and that is the honest number
+
+Ten before, ten after. What changed is what is behind it. Before, six of those
+ten rows opened nothing: `benchmark-data/ppa/contract.json: absent`,
+`no such bundle`, `candidates not found`, each in zero seconds. After, the six
+PPA rows that still report NOT CHECKED are:
+
+  - **2 rows** whose subject genuinely lives in another repository — the published
+    corpus, reachable only through `$VIBE_IC_BENCHMARK_DATA`. Their declarations no
+    longer claim that no record exists.
+  - **1 row** over 2 real records that cannot be decided because both declare a
+    timing `rc_corner` key with no value.
+  - **1 row** over 21 real candidate sets, 7 of 9 axes SATISFIED on every one.
+  - **1 row** over a real 148-row record set with no declared denominator.
+  - **1 row** over a real candidate set with no declared objective.
+
+A row that reads 148 metric records and says "nothing told me what should have
+been measured" and a row that says "that file is not there" are both rc 2, and
+they are not the same fact. Only the second one can be fixed by looking somewhere
+else.
+
+## A note on measuring
+
+The first attempt at the "after" run was **void as a measurement**: this report was
+being appended to while the suite was in flight, and `policy_direction_pin_check`
+— which creates isolated mutation workers from HEAD and needs a clean tracked
+checkout — reported UNDETERMINED and the row failed. It does not fail on a tree
+nobody is editing. The numbers above are from a re-run on a committed, untouched
+tree. The failing row is recorded here rather than quietly dropped, because a
+reader comparing two runs deserves to know which one was the measurement.
