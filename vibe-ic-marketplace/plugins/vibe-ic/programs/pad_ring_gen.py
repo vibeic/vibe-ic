@@ -39,6 +39,46 @@ touching. So this program computes every gap in the ring walk and refuses a
 ring whose gaps the declared filler cells cannot close, and records the gaps
 so the later filler step has its input.
 
+A MEASURED DIVERGENCE FROM UPSTREAM, RECORDED AND NOT RESOLVED
+==============================================================
+`_place` takes each pad's along-the-row extent from the master's ORIENTED
+footprint, so a side whose declared rotation does not swap the axes sums the
+master's HEIGHT. Upstream does not do that, and neither does the tool.
+
+    upstream `pad_cfg.tcl`, in BOTH places it measures a cell, for all four
+    sides including the vertical ones:
+        set width [expr [[$inst getMaster] getWidth] / $units]
+        incr sum_of_cell_widths $width
+        ...
+        set cur_pos [expr $cur_pos + $space_between_pads_min_filler + $width]
+    There is no `getHeight` anywhere in its side arithmetic.
+
+    MEASURED 2026-08-22, four SEPARATE OpenROAD processes (26Q3-1165), one per
+    `PAD_ROTATION_VERTICAL` value so no row from an earlier pass is reused:
+        ROTV = R0 / R90 / R180 / MX
+        WEST pad  ->  orient MXR90, 75 um along the row, 350 um into the die
+        EAST pad  ->  orient R90,   75 um along the row, 350 um into the die
+    identical in all four. A vertical-side pad is placed rotated whatever is
+    declared, and neither its orientation nor its extents are a function of
+    `PAD_ROTATION_VERTICAL`.
+
+CONSEQUENCE, and it is reachable: on a PDK that declares no `PAD_ROTATION_*`
+(so upstream's `R0` default applies) a ring that upstream places is refused
+here with `PAD_RING_DOES_NOT_FIT`, because a 75-by-350 pad is summed as 350 on
+the vertical sides. Measured on a real 77-pad ring: 19 x 350 = 6650 um against
+a 1500 um side.
+
+WHY IT IS NOT FIXED HERE. The extent and the DEF orientation this step writes
+are one decision, and every way to correct the extent forces a second choice
+this program has no authority to make: adopt the tool's measured MXR90 / R90
+convention for the vertical sides, and `PAD_ROTATION_VERTICAL` — a variable of
+the borrowed config contract — becomes silently inert; or leave the declared
+orientation in the DEF beside a footprint that contradicts it. Changing the
+geometry so a refused ring passes is also precisely the move that turns a red
+into a green without earning it. So the divergence is DATA here rather than a
+patch: named, measured, reproducible from
+`evidence/rotation_probe/`, and left for the flow owner to decide.
+
 WHAT THIS PROGRAM WILL NOT DO
 =============================
 It will not invent the config. The variables in `_pad_ring.REQUIRED_VARS` are
