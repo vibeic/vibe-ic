@@ -488,3 +488,85 @@ def test_no_real_in_repo_module_gains_or_loses_a_port_from_the_comment_fix():
             assert ka == kb, f"{f.name}::{top}: {ka} != {kb}"
             checked += 1
     assert checked > 0
+
+
+# --------------------------------------------------------------------------- #
+# the site-level strip is a DATAFLOW guarantee, and it needs its own test
+# --------------------------------------------------------------------------- #
+# Found by a mutation run, and it is the honest reason this test exists:
+# deleting either site-level `_strip_hdl_comments(...)` call changed NO
+# observable behaviour and every test above still passed. The whole-text pass
+# had already cleared the text, so the local calls were doing nothing a fixture
+# could see — a guarantee no test defended.
+#
+# They are not decoration. `decl` and `s` are `for`-loop targets, so no
+# assignment carries the whole-text strip to them, and a later change to where
+# `rest` or `raw_no_comment` comes from would re-open the hole silently. That
+# is a property of the DATAFLOW, not of any input, so it is pinned with the
+# repo gate's own scanner rather than with another Verilog fixture — this is
+# `hdl_declaration_scan_strips_comments_check`'s question, asked locally
+# instead of only in a 300-second suite.
+
+def test_no_declaration_regex_in_this_file_scans_unstripped_text():
+    import hdl_declaration_scan_strips_comments_check as H
+    src = Path(S.__file__).read_text(encoding="utf-8")
+    findings = H.scan_source(src, "slot_pad_budget_check")
+    assert findings == [], (
+        "a declaration regex here scans a local no stripper touched: "
+        f"{findings}. Strip on the value that REACHES the scan — stripping a "
+        "sibling does not make this one safe.")
+
+
+# --------------------------------------------------------------------------- #
+# line geometry is load-bearing, and a mutation run is what proved it
+# --------------------------------------------------------------------------- #
+# Both strippers replace a multi-line region with the NEWLINES IT SPANNED. The
+# two tests further up assert conditional attribution survives, and a mutation
+# run showed neither of them dies when the newlines are dropped — their
+# comments and attributes sit on their own lines, so fusing changes nothing.
+#
+# The case that bites is a region spanning FROM the `ifdef line INTO the port
+# line. Collapse its newlines and the two fuse; the fused line now begins with
+# `ifdef, which is exactly what the directive-removal regex is anchored to
+# (`^[ \t]*`(?:ifdef|...)\b[^\n]*$`), so the whole line is deleted — REAL PORT
+# INCLUDED. Measured: `vdda1` disappears from the port list entirely, not
+# merely from the conditional set. A dropped port is a smaller interface, and a
+# smaller interface is a false FITS.
+
+def test_a_comment_spanning_from_the_ifdef_line_into_a_port_line_keeps_the_port():
+    rtl = ("module chip_top (\n"
+           "`ifdef USE_PWR /* a note that\n"
+           "   spans lines */ inout wire vdda1,\n"
+           "`endif\n"
+           "    input wire clk\n"
+           ");\nendmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["vdda1", "clk"]
+    assert [p["name"] for p in ports if p["conditional"]] == ["vdda1"]
+
+
+def test_an_attribute_spanning_from_the_ifdef_line_into_a_port_line_keeps_the_port():
+    """Same geometry rule, the attribute stripper's copy of it."""
+    rtl = ("module chip_top (\n"
+           "`ifdef USE_PWR (* mark_debug = \"true\",\n"
+           "   keep = \"true\" *) inout wire vdda1,\n"
+           "`endif\n"
+           "    input wire clk\n"
+           ");\nendmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["vdda1", "clk"]
+    assert [p["name"] for p in ports if p["conditional"]] == ["vdda1"]
+
+
+def test_an_unterminated_block_comment_keeps_the_lines_it_swallowed():
+    """The unterminated branch preserves geometry too. Everything after the
+    opener is comment body, so no port survives it — but the lines it spanned
+    must still be there, or a directive on a LATER line fuses with the text
+    before it."""
+    for text in ("a\n/* x\ny\nz\n",            # unterminated block comment
+                 "a\n/* x\ny */\nz\n",         # terminated, multi-line
+                 "a\n(* x\ny *)\nb\n",         # attribute, multi-line
+                 "a\n// x\nb\n"):               # line comment keeps its own
+        for strip in (S._strip_hdl_comments, S._strip_hdl_attributes):
+            assert strip(text).count("\n") == text.count("\n"), (
+                f"{strip.__name__} changed the line count of {text!r}")
