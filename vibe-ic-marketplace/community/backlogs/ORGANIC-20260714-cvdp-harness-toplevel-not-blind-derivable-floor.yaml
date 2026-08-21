@@ -1,0 +1,70 @@
+type: measurement-floor
+severity: P3
+component: benchmark:cvdp + program:cvdp_harness_toplevel_alias
+plugin_version: "1.4.14"
+title: >-
+  CVDP measurement floor — a band of problems fix the scorer's cocotb TOPLEVEL to
+  a module name that is NOT derivable from input.prompt (either the prompt names a
+  DIFFERENT module, or names none, or the harness top is an unrelated golden name),
+  so a blind (§4.05) author cannot expose it and every test fails on iverilog
+  `-s <top>` root-bind, NOT on logic. Renaming to match would require reading the
+  hidden harness `.env` (oracle) — forbidden — so these are an ACCEPTED floor, not
+  a recoverable fail.
+pattern: |
+  cvdp_gate.py already aliases the author's top to the PROMPT-skeleton module name
+  (skeleton_module_name_from_prompt — the verbatim ```verilog module <X>( fence,
+  a legitimate input.prompt fact) via maybe_alias_completion. That correctly
+  recovers the case where the prompt DOES name the top and the author declared a
+  different one. It CANNOT recover the case where the harness top is not a prompt
+  fact. Measured on the v1.4.14 clean-run (302), the following fail purely on
+  top-name (harness `-s <top>` cannot bind), with the honest blind cause:
+
+    id                                    harness_top                     prompt says            class
+    bus_arbiter_0001                      cvdp_copilot_bus_arbiter        (no module name)       design-id convention, prompt-silent
+    ethernet_packet_parser_0001           field_extract                   (no module name)       golden name, prompt-silent
+    hebbian_rule_0017                     hebb_gates                      module `hebbian_rule`  PROMPT CONTRADICTS harness
+    sequencial_..._decoder_0001           ..._sequential                  ..._sequencial (typo)  PROMPT TYPO vs harness spelling
+    sync_serial_communication_0001        sync_serial_communication_tx_rx module `..._top`       PROMPT CONTRADICTS harness
+    binary_search_tree_sorting_0014       binary_search_tree_sort         module `search_bst`    PROMPT CONTRADICTS harness
+
+  In every row the blind author followed the prompt (or the prompt was silent);
+  the harness top is oracle-only. cvdp_gate.py's own comment names this exactly:
+  "when the prompt under-determines the name (a dataset typo vs the hidden top)
+  that is an ACCEPTED under-specification floor, NOT something to repair by reading
+  the harness."
+
+  A SEPARATE, related structural class (word_reducer_0008): a functional_modification
+  whose completion adds a NEW top (Bit_Difference_Counter) that INSTANTIATES the
+  context module (Data_Reduction), but the expected file IS rtl/Data_Reduction.sv —
+  so the completion, written into that file, CLOBBERS the context Data_Reduction
+  module it depends on → "Unknown module type: Data_Reduction" at scoring. The
+  completion must carry BOTH the (unchanged) context module AND the new top when
+  the deliverable file is the context module's own file.
+
+impact: |
+  ~6 problems (~2% of 302) lost to non-blind-derivable toplevel; NOT recoverable
+  without an oracle read. This bounds the achievable blind score — the v1.4.14
+  clean-run's 202/302 = 66.9% is honest against this floor.
+
+suggested_fix: |
+  DO NOT "fix" by reading the harness .env (that is the forbidden oracle). Options:
+    1. ACCEPT + DOCUMENT: keep this as a named measurement floor in the CVDP
+       methodology so the published blind number is not mistaken for a logic ceiling.
+    2. For the DESIGN-ID-CONVENTION sub-case only (bus_arbiter → cvdp_copilot_<stem>):
+       the stem is derivable from the record ID (an INPUT, not oracle), so
+       maybe_alias_completion could ALSO alias to `cvdp_copilot_<stem>` from the id
+       when the prompt names no top. Chip-agnostic, no oracle read. (Verify against
+       the alias-compliance structural guard before landing.)
+    3. For the file-clobber sub-case (word_reducer): the completion-packaging step
+       should, for a func_mod whose expected file == a context file that the new top
+       instantiates, PRESERVE the context module alongside the new top in that file
+       (extend the empty-sibling-clobber / expected_files_map handling).
+  The prompt-contradiction rows (hebbian/sequential/tx_rx/bst) are a DATASET defect
+  (prompt module name != harness top) and are genuinely unrecoverable blind — floor.
+
+integrity_note: |
+  Surfaced by the v1.4.14 CVDP clean-run. NO draft was renamed to match a harness
+  `-s <top>` string scraped from scoring logs — doing so would be an oracle read
+  that inflates the number. Score left at the honest 202/302. Measure-only; NO-MIX.
+
+github_issue: https://github.com/vibeic/vibe-ic/issues/139

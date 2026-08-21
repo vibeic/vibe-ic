@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "Block guide does not specify confidentiality / integrity / authentication requirements for the SPI peripheral. Any access-control (e.g. privileged-mode register access) is deferred to SoC integration."
-  }
-}

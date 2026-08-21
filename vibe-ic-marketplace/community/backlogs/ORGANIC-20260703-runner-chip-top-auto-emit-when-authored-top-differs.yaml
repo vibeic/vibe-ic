@@ -1,0 +1,67 @@
+type: enhancement
+severity: P2
+component: program:design_one_shot_runner
+
+title: >-
+  When the spec-to-rtl author names the top module something other than L9's
+  `chip_top`, the runner does not auto-emit a chip_top pass-through wrapper, so
+  the auto-generated tb_chip_top_full.v (which instantiates chip_top and
+  1-bit-flattens the real ports) fails to elaborate → reference_tb FAIL
+
+plugin_version: "1.2.96"
+
+pattern: |
+  Reproduced via the UNIFIED-ENTRY CVDP canary (RULE 0 path): for problems whose
+  prompt states a real module name (e.g. `encoder`, `encoder_64b66b`) that is NOT
+  `chip_top`, the runner's L9 still carries top_module='chip_top' (sentinel, no
+  top_ports). step_rtl_gen WAIVEs to spec-to-rtl; the author correctly writes
+  `phase2/stage1/rtl/<realname>.sv`. But the runner's full-stack TB step emits
+  `tb_chip_top_full.v` that (a) instantiates a `chip_top` that was never authored
+  and (b) flattens the DUT's multi-bit ports to 1-bit generic wires — so
+  reference_tb FAILs to elaborate even though yosys_synth + determinism_gates +
+  the author's own worked-example mini-TB all PASS on the real module.
+  MEASURED: 2 independent spec-to-rtl authors (64b66b_encoder_0001, _0009) both
+  hit this and both hand-authored a `chip_top.sv` pass-through wrapper to make the
+  runner's stale TB elaborate — a workaround the runner should perform itself.
+
+suggested_fix: |
+  In the runner's chip_top handling (the chip_top auto-emit step that already
+  exists for the chip_top==top case): when the sole/parent authored module name
+  != L9 top_module ('chip_top'), AUTO-EMIT a thin pass-through wrapper
+  `module chip_top(<same ports>); <authored_top> u(.*); endmodule` into
+  phase2/stage1/rtl/ (reuse the same wrapper synthesis the cvdp_gate
+  alias_wrapper / phase2 chip_top_gate_wrapper_gen already implement), AND derive
+  the full-stack TB's port widths from the AUTHORED module's real ports rather
+  than 1-bit-flattening. Then reference_tb elaborates against the real DUT with no
+  hand-authoring. Chip-AGNOSTIC: pure module-name/port bridging, no oracle.
+
+evidence:
+  run: benchmark_external/cvdp/run_unified_canary_20260703
+  confirmations: 2 (64b66b_encoder_0001, 64b66b_encoder_0009 spec-to-rtl authors)
+  filed_by: benchmark-agent (unified-entry CVDP canary on v1.2.96, RULE 0 path)
+
+resolution:
+  status: fix-landed
+  landed_by: repo-gatekeeper (core-agent role)
+  fix: |
+    Resolved on current main by the combination of two mechanisms — verified by
+    end-to-end reproduction on v1.3.4:
+      * design_one_shot_runner._autoemit_chip_top_if_needed (v0.1.62, already
+        shipped) — when L9's synth_top (`chip_top` sentinel) names no file and a
+        single differently-named authored module exists in rtl/, it AUTO-EMITs
+        `module chip_top(<real ports>); <authored_top> u_dut(<connects>);
+        endmodule`. Confirmed it PRESERVES the DUT's real multi-bit port widths
+        (`[63:0] data_in`, `[65:0] data_out`) — NOT 1-bit-flattened, the v1.2.96
+        symptom — and iverilog `-s chip_top` elaborates cleanly.
+      * the sibling ORGANIC-20260703 L9 fix (this batch) — a real `module
+        <name>(...)` header in the prompt/context is now authoritative, so
+        L9.top_module resolves the real authored name (e.g. `encoder_64b66b`) and
+        in the common case synth + full-stack TB target the real module directly,
+        no wrapper needed.
+    Regression pinning BOTH paths:
+    programs/tests/test_organic_20260703_chip_top_autoemit_authored_top_differs.py
+    (3 tests: wrapper preserves widths + iverilog elaborates + L9 resolves real
+    name). No new runner code required — the auto-emit + real-width extraction was
+    already present; the L9 fix removes the remaining trigger.
+  annotated_at: "2026-07-04 (core-agent fix, post-#97)"
+  triage_2026_07_06: verified — _autoemit_chip_top_if_needed + 20260703 L9 fix; test_organic_20260703_chip_top_autoemit green
