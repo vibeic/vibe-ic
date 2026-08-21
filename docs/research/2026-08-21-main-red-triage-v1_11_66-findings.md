@@ -3639,6 +3639,52 @@ the list was also the cheapest, and it read as expensive because I never asked
 where the artefact lived.**
 
 
+## M67 — why the template was cheap and the matrix family is not: PROVENANCE vs a NAME
+
+M66 asked where an artefact lives and found the template is a public repo at a
+pinned commit. **Asking the same question of the matrix family gives the opposite
+answer, and the contrast is the finding.**
+
+The six `d3_outputs_produced` reds cite run roots this dimension cannot search.
+Their entries in the manifest are, in full:
+
+```json
+"AI_IC_design/4th_benchmark/cv32e40p_e2e": {"kind": "home",
+                                            "rel": "AI_IC_design/4th_benchmark/cv32e40p_e2e"}
+```
+
+**A kind and a relative path. No URL, no commit, no digest, no recipe.** And
+nothing else in `docs/` records these campaigns — `pdk_portability` and
+`cv32e40p_e2e` appear in no research document but my own.
+
+| | the template (`0.5ic`) | the matrix roots |
+|---|---|---|
+| recorded as | public repo + pinned commit + clone recipe | `kind` + relative path |
+| reproducible by a stranger | **yes, two commands** | **no** |
+| present on this host | no | no |
+| cost of the blocker | ~a minute | unbounded |
+
+**So "a published run tree" is not a chore, it is a re-derivation of evidence
+whose original is unreachable.** You cannot re-point a record at a root you
+cannot obtain, which is precisely why the gate's three remedies are *re-point*,
+*publish a run tree*, or *waive* — and why the first is already ruled out (M34
+measured no `published`/`repo` root carrying those artefacts).
+
+**The structural observation, which outlives this branch.** The D3 manifest is an
+evidence record: *"where a real run produced it, at what path, and at what size in
+bytes"*. For `published`/`repo` roots that is checkable by anyone. **For
+`kind: home` roots it is a path on somebody's machine**, and when that machine is
+gone the evidence is not merely absent — it is **unreproducible**, with nothing
+recorded that would let a stranger rebuild it. Seven of the fifteen declared roots
+are `home`-kind.
+
+**That is a different failure from `0.5ic`'s.** `0.5ic` is *"data we never went and
+got"* — cheap, because the getting is documented. This is data somebody DID get,
+recorded by path alone. **An evidence record that cites unreproducible evidence
+degrades into a certificate**, which is the phrase this repository already uses
+for the same disease one layer down.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
