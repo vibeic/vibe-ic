@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 20 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 21 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 17 | deterministic rules — the default, and every one names its predicate |
+| **A** | 18 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -750,6 +750,36 @@ evidence that the layer owes it.
 **(o)** yes. **(d)** yes — it is per declared property, so it covers the next
 lever whose range includes switching something off.
 
+### A-19 · a cheap fidelity rung may not rank until its rank agreement is measured · `ppa.search`
+
+The search ships an ordered fidelity ladder, *cheapest first*, so candidates can
+be screened early. Nothing requires the cheap rung to order candidates the same
+way the deciding rung does — and measured on the rewrite candidates, **it does
+not**:
+
+    candidate      cheap rung      deciding rung
+    nr_csel16       -21.3 %   1st     -3.3 %   3rd
+    csa_mux          -6.7 %   2nd     -4.3 %   1st
+    csa_alt_maj      -2.6 %   3rd     -1.3 %   2nd
+
+This is an **order inversion**, not a loose fit. The candidate that wins by a
+factor of three on the cheap rung places **third** on the one that decides, and
+the true winner is second-best cheaply. **A screen keeping the cheap top
+candidate discards the answer** — and the run looks efficient while doing it:
+budget respected, every survivor properly evaluated, the winner simply absent
+with no trace it was dropped.
+
+The cause is physical and general. The cheap rung cannot see that the winning
+candidate was *buying away* a structure the later stage charges for: **+580 µm²
+of added buffering against 628 µm² saved** by the removed registers.
+
+**The plugin already ships this idea for another track** — a bench measurement
+must be shown to correlate with its simulated prediction before the prediction is
+trusted. The digital search layer has the ladder and not the gate, which is the
+same rule at a different artefact class, again.
+**(o)** yes. **(d)** yes — it is per rung pair, so it re-answers for any ladder
+the layer gains.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -934,6 +964,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-16 | — | 5 admitted, 0 counted | verified on the published document |
 | A-17 | — | 6867 / 6674 | split is perfectly per producer; all 6867 host-prefixed |
 | A-18 | — | 0 mentions | the ranking layer has no word for the property it deletes |
+| A-19 | — | order INVERTED | the cheap rung's top candidate places third |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
