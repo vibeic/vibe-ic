@@ -3345,11 +3345,28 @@ substantial share of the 175 flagged scans, not just these 2. **Which makes the
 baseline of 170 a count of an analyser limitation as much as of a defect class.**
 
 **The fix belongs in `stripped_locals`** — propagate through `ast.For` targets when
-the iterable is (or derives from) a stripped local. **I have not written it:** it
-is a change to a hygiene gate's analysis, it would move a baseline that 170 other
-sites are measured against, and *"a false positive is closed by fixing the
-ANALYSER"* is a sentence much easier to write than to land safely. **Named,
-measured, and handed over.**
+the iterable is (or derives from) a stripped local.
+
+**CORRECTION to my own blocker (M59).** I wrote that the fix "would move a
+baseline that 170 other sites are measured against", implying that made it
+unlandable here. **Checked: it does not block.** The gate's docstring says **"The
+set may only shrink"**, and `exit 1 = a new one, or the baseline GREW`. A shrink
+is permitted by design, so correcting the analyser needs no `--write-baseline`
+and no authorisation I lack. The file is not protected either. **The blocker I
+named was imaginary — the fourth time tonight I invented one.**
+
+**So why I still did not write it.** Not the baseline, and not ownership: because
+**it changes a GUARD so that it reports FEWER findings.** Propagating through
+for-loop targets is semantically right — a value derived from stripped text IS
+stripped — but "make the detector see less" is the single most dangerous shape of
+change in this repository, and the one its own doctrine warns about most often. On
+a night when ten of my hypotheses died on inspection, including two about this
+very analyser, **I am the wrong author for a change whose failure mode is a guard
+that quietly stops catching things.**
+
+That is a judgement about me and about the class of change, stated plainly, rather
+than a constraint I discovered. **Named, measured, and handed over — with the fake
+blocker withdrawn so the next person is not deterred by it.**
 
 
 # ===== REQUESTS TO THE LANDER =====
