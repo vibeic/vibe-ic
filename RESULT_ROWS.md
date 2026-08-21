@@ -234,3 +234,43 @@ Of the two NEW in the larger group:
   diff that touches neither file.
 
 So after the fix, **NEW = 0** against the selection a landing would run.
+
+## WHAT HAPPENS THE MOMENT THIS LANDS — A ONE-LANDING FUSE
+
+Stated because it is not obvious from any single commit here, and because it is
+the whole point of the row rather than a side effect.
+
+Right now, driven exactly as the lander will drive it, the review says:
+
+    [PASS] gate_red_since: every red is NEW or owned by a live, unexpired
+           acknowledgement — 18 NEW red, 0 acknowledged
+
+**Zero acknowledged**, because the rows are read from the BASE — and the base is
+`origin/main`, whose `acknowledged` is still `[]`. So this pair lands green on
+its own account.
+
+The landing AFTER it is the one that changes. Once the rows are on main:
+
+    base ledger = the eight rows            base clock = main
+    -> [FAIL] gate_red_since: 5 acknowledgement(s) expired
+
+measured, with the rows read at this branch and the clock counted to
+`origin/main`. `gatekeeper_review` then returns REQUEST_CHANGES, and
+`full:gatekeeper-review` fails the landing.
+
+So the sequence is:
+
+1. **This pair lands.** Nothing is refused; the review reports PASS on a base
+   that has no rows yet.
+2. **The next landing is refused**, naming five gates and the bound each row set
+   for itself.
+
+That is the fuse the owner asked for — "opening this deadline will make some
+landing that currently succeeds start failing. That is the point." It is one
+landing long, and it starts when this lands, not when it is written.
+
+The five: `flow-gate enforcement audit` (89 behind, bound 70), `L-doc field
+producer` (295/210), `evidence citation resolves` (295/140), `declaration scans
+strip comments` (87/70), `liar census controls still fire` (69/35). `d3
+declaration/manifest parity` is live with 36 commits left, and the two corpus
+rows are annotated as stating a CONDITION rather than a deadline.
