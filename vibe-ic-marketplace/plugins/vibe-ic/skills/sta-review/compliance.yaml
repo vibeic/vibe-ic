@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Compliance spec for skill 'sta-review' (vibe-ic-d v0.35)
+# Compliance spec for skill 'sta-review' (v0.35)
 # Enhanced: multi-corner signoff required (SS/FF, not just TT)
 skill: sta-review
 

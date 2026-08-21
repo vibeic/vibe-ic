@@ -3,7 +3,7 @@
 # E-marker chips, accessory-identification ICs in proprietary connectors.
 # This template encodes hardware-floor invariants common to the class;
 # specific opcode lists / payload bytes / vendor packages remain in the
-# user-supplied L1-L9 layer documents (no vendor copy is bundled here).
+# user-supplied L1-L27 layer documents (no vendor copy is bundled here).
 class: cable-side-id-ic
 parent: protocol-ic
 
@@ -73,7 +73,7 @@ spec_floor:
   # All numbers are floor-only minimums — actual designs typically exceed
   # them. Numbers chosen as the median observed across trained protocol-ic
   # corpus, not against any single vendor IC.
-  # ----- Phase 2a extended layers (v0.50) -----
+  # ----- Phase 1 extended layers (v0.50) -----
   L10_test_cases_min: 8               # cmd_response cases the spec defines + ≥1 error + ≥1 state_transition
   L10_cmd_response_min: 4             # at minimum: ID/wake, status read, write, error
   L11_calibration_tables_min: 2       # decoder windows + response timing
@@ -81,7 +81,7 @@ spec_floor:
   L12_required_sequence_categories:   # by category, not by vendor-specific id
     - validation_chain
     - host_stimulus_sequence
-  # ----- original L1-L9 floors -----
+  # ----- original L1-L23 floors -----
   L3_opcode_count_min: 8              # median across protocol-ic class
   # L3_crc_poly_allowed is a SOFT whitelist — the gate only enforces it
   # when L3 actually declares a crc poly. Cable-plug ID protocols vary;

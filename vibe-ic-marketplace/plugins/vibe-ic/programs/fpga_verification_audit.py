@@ -46,7 +46,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 # Default location of the estimation-keywords YAML, shipped under
-# plugins/vibe-ic-d/data/. Users can pass --keywords-yaml to override
+# plugins/vibe-ic/data/. Users can pass --keywords-yaml to override
 # (e.g. to add domain-specific Chinese / Japanese vocabulary without
 # editing this program).
 _DEFAULT_KEYWORDS_YAML = (
@@ -329,7 +329,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--out", default="reports/gates/fpga_verification_audit.json")
     p.add_argument("--keywords-yaml", default=None,
                    help="Override estimation-keywords list "
-                        "(default: plugins/vibe-ic-d/data/estimation_keywords.yaml). "
+                        "(default: plugins/vibe-ic/data/estimation_keywords.yaml). "
                         "Useful for adding domain-specific or per-language vocabulary.")
     p.add_argument("--warn-only", action="store_true")
     args = p.parse_args(argv)

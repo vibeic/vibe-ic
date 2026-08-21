@@ -118,3 +118,37 @@ endmodule
     findings = crc_chk.analyze_tree([p])
     errors = [f for f in findings if f.severity == "error"]
     assert not errors
+
+
+# --- the exit code is what the caller reads, and no test drove main()
+
+def test_main_exits_non_zero_on_a_defect(tmp_path, monkeypatch):
+    """`gate_cli_mutation_probe` reported this gate SILENT.
+
+    Every test above calls `analyze_tree()` and asserts the FINDINGS. The caller
+    reads the EXIT CODE, and nothing joined the two — so the gate could have
+    started answering 0 to every zero-on-init CRC with the suite green.
+    """
+    import crc_residual_check as C
+
+    # The module's OWN Finding type, not a hand-rolled stand-in. My first
+    # version invented one and it lacked `.file`, which `main()` reads when it
+    # prints — a stub that does not match the real shape tests a different
+    # program.
+    f = C.Finding(severity="error", rule="zero-on-init-ff", file="x.v",
+                  line=1, message="m")
+    monkeypatch.setattr(C, "analyze_tree", lambda paths: [f])
+    # A real file under the project. `analyze_tree` is stubbed, but
+    # `files_scanned` is counted separately, and since v1.8.90 a zero count
+    # returns 2 BEFORE the verdict is reached (#564) — so an empty tmp_path
+    # would test the refusal path instead of the verdict this test is about.
+    (tmp_path / "x.v").write_text("module x; endmodule\n", encoding="utf-8")
+    assert C.main([str(tmp_path)]) == 1
+
+
+def test_main_exits_zero_when_clean(tmp_path, monkeypatch):
+    """The other direction, or the test above is met by always failing."""
+    import crc_residual_check as C
+    monkeypatch.setattr(C, "analyze_tree", lambda paths: [])
+    (tmp_path / "x.v").write_text("module x; endmodule\n", encoding="utf-8")
+    assert C.main([str(tmp_path)]) == 0

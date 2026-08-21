@@ -27,9 +27,10 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import ic_class_profile as icp  # noqa: E402
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 import flow_compliance_check as fcc  # noqa: E402
 import analog_content_detected_must_emit_l5_check as acd  # noqa: E402
+import _vacuous_exit as _vx  # noqa: E402
 
 NBA_GATE = PROGRAMS / "nba_shift_register_same_cycle_read_check.py"
 
@@ -133,14 +134,27 @@ def test_generic_class_reference_tb_runs_full_stack_tb(tmp_path):
            f"output data_out); assign data_out = data_in; endmodule\n")
     proj = _make_project_with_l9(tmp_path, rtl, top)
     # Emit the generic full-stack TB skeleton like the runner does.
+    # ORGANIC-20260528: with no concrete L3 golden, the TB-gen now
+    # honestly returns SKIP (connectivity-only, functional UNVERIFIED)
+    # rather than a fabricated functional PASS. The TB file is still
+    # emitted, which is all step_reference_tb needs.
     gen = p2.step_full_stack_tb_gen(proj, top)
-    assert gen.status == "PASS"
+    assert gen.status in ("PASS", "SKIP")
+    tb = (proj / "phase2" / "stage1" / "sim_full_stack"
+          / f"tb_{top}_full.v")
+    assert tb.is_file()
     sr = p2.step_reference_tb(proj, top, "processor_cpu")
-    # PASS (iverilog present + compiles) or PASS (results.json fallback)
-    # — never an AID-TB false FAIL.
-    assert sr.status in ("PASS", "SKIP")
+    # ORGANIC-20260606 #439: a skeleton TB running to completion is
+    # CONNECTIVITY evidence only — WAIVED with the testbench-author
+    # fallback direction, never a functional PASS (and never an AID-TB
+    # false FAIL). PASS is reserved for a real per-IC oracle TB with
+    # golden compares.
+    assert sr.status in ("WAIVED", "SKIP")
     assert sr.extras.get("verification_track") == "generic_full_stack"
     assert "aid" in sr.detail.lower()
+    if sr.status == "WAIVED":
+        assert sr.extras.get("functional_verified") is False
+        assert sr.extras.get("fallback_skill") == "testbench-author"
 
 
 def test_generic_class_real_compile_failure_still_fails(tmp_path):
@@ -156,10 +170,36 @@ def test_generic_class_real_compile_failure_still_fails(tmp_path):
            f"output data_out); assign data_out = $$$ data_in endmodule\n")
     proj = _make_project_with_l9(tmp_path, rtl, top)
     gen = p2.step_full_stack_tb_gen(proj, top)
-    assert gen.status == "PASS"
+    # ORGANIC-20260528: TB-gen verdict is honest (SKIP without a golden),
+    # but the TB file is still emitted so step_reference_tb can compile it.
+    assert gen.status in ("PASS", "SKIP")
     sr = p2.step_reference_tb(proj, top, "processor_cpu")
     assert sr.status == "FAIL"
     assert "defect" in sr.detail.lower() or "compile" in sr.detail.lower()
+
+
+def test_absent_compiler_is_distinguished_from_a_rejected_source():
+    """vibe-ic#1394 — the predicate that separates "could not measure" from
+    "measured and found a defect". Host-independent: no simulator needed.
+
+    The NEGATIVE direction is the load-bearing half. A genuine compile error
+    over a missing `include` also says "No such file or directory", so a
+    predicate that matched on that phrase would convert real structural
+    defects into skips — the inverse of the bug, and strictly worse than it.
+    """
+    # Failed to EXECUTE: our own wrappers' marker, and the shell's own rc.
+    assert p2._compiler_was_not_found(
+        127, "", "COMMAND_NOT_FOUND: [Errno 2] No such file or "
+                 "directory: 'iverilog'")
+    assert p2._compiler_was_not_found(
+        127, "", "bash: line 1: : command not found")
+    # RAN and rejected the source -> must NOT read as not-found, even when the
+    # message carries the very phrase a missing binary produces.
+    assert not p2._compiler_was_not_found(
+        1, "", "core_top.v:3: Include file foo.vh not found: "
+               "No such file or directory")
+    assert not p2._compiler_was_not_found(1, "", "syntax error near '$$$'")
+    assert not p2._compiler_was_not_found(0, "", "")
 
 
 def test_qsf_gen_skips_for_generic_class_without_board_top(tmp_path):
@@ -225,7 +265,14 @@ def test_class_skipped_gates_for_arithmetic_primitive(tmp_path):
               "analog_block_coverage_check",
               "analog_hardmacro_check",
               "mixed_signal_cosim_check",
-              "analog_content_detected_must_emit_l5_check"):
+              "analog_content_detected_must_emit_l5_check",
+              # v1.6.553 — post-layout SPICE correlation is an analog /
+              # mixed-signal signoff deliverable; a pure-digital class
+              # signs off the critical path with STA + SPEF + Liberty, so
+              # the SPICE-correlation gate is N/A and must SKIP (not FAIL
+              # NO_SPICE_VERIFICATION once Phase 3 emits SPEF + STA).
+              "spice_correlation_check",
+              "analog_hw_spice_correlation_check"):
         assert g in skipped, g
         assert "N/A for class" in skipped[g]
     # Core functional/structural gates are NOT skipped.
@@ -254,6 +301,71 @@ def test_structural_gates_skip_protocol_for_generic_class(tmp_path):
     fail_blob = " ".join(fails)
     assert "l3_opcode_argument_constraints_check" not in fail_blob
     assert "analog_block_coverage_check" not in fail_blob
+
+
+# ---------------------------------------------------------------------
+# v1.6.553 — post-layout SPICE correlation is an analog-track gate.
+# Digital-only protocol ICs (analog_applicable=False) that complete
+# Phase 3 emit phase3/stage3/extracted/*.spef + phase3/stage3/sta/*.rpt,
+# which previously tripped spice_correlation_check's NO_SPICE_VERIFICATION
+# FAIL even though such ICs have no transistor-level SPICE deck and never
+# should. Under --skip-analog this surfaced as a spurious phase2 FAIL on
+# espi / usb_pd / sgmii while interlaken (no Phase-3 SPEF/STA) "passed".
+# The gate is now class-skipped for analog_applicable=False classes.
+# HONESTY: a genuinely-analog class still RUNS the gate (so a missing /
+# uncorrelated SPICE deck on a real analog IC still FAILs).
+# ---------------------------------------------------------------------
+def test_spice_correlation_in_analog_skippable_set():
+    assert "spice_correlation_check" in fcc._CLASS_SKIPPABLE_ANALOG_GATES
+    assert ("analog_hw_spice_correlation_check"
+            in fcc._CLASS_SKIPPABLE_ANALOG_GATES)
+
+
+def test_spice_gate_skipped_for_each_digital_class():
+    """Every registry-matched class with analog_applicable=False marks
+    the SPICE-correlation gate N/A (covers digital_cmd_driven /
+    serial_peripheral_protocol / digital_arithmetic_primitive — the
+    espi / lpc / sgmii classes — plus processor_cpu / bare_fpga /
+    bus_interconnect_protocol)."""
+    import json as _json
+    reg = _json.loads((PROGRAMS / "ic_class_registry.json").read_text())
+    digital = [c["name"] for c in reg["classes"]
+               if c.get("analog_applicable") is False]
+    assert "digital_cmd_driven" in digital            # espi / usb_pd / interlaken
+    assert "serial_peripheral_protocol" in digital     # lpc
+    assert "digital_arithmetic_primitive" in digital   # sgmii
+    for cls in digital:
+        flags = icp.class_verification_flags(cls)
+        assert flags["registry_matched"] is True, cls
+        assert flags["analog_applicable"] is False, cls
+
+
+def test_spice_gate_NOT_skipped_for_analog_class(tmp_path):
+    """HONESTY: an analog-applicable class (pure_analog / mixed_signal_otp)
+    does NOT skip the SPICE-correlation gate, so a real analog IC that
+    completed Phase 3 without a SPICE deck still FAILs the gate."""
+    for analog_cls in ("pure_analog", "mixed_signal_otp"):
+        flags = icp.class_verification_flags(analog_cls)
+        assert flags["registry_matched"] is True, analog_cls
+        # analog_applicable is True (or not-False) → _class_skipped_gates
+        # never adds the analog gate set for this class.
+        assert flags.get("analog_applicable") is not False, analog_cls
+
+
+def test_spice_gate_skip_is_class_driven_not_skip_analog_flag(tmp_path):
+    """The skip is keyed on the detected IC class, NOT on a --skip-analog
+    flag or a benchmark name — so it is general (fires for any digital-only
+    class) and honest (never special-cased to espi/usb_pd)."""
+    # digital_arithmetic_primitive project → gate skipped.
+    proj = _make_class_project(tmp_path, {})
+    skipped = fcc._class_skipped_gates(proj)
+    assert "spice_correlation_check" in skipped
+    assert "N/A for class 'digital_arithmetic_primitive'" \
+        in skipped["spice_correlation_check"]
+    # Unknown class (no L docs) → fail-closed → gate NOT skipped (still runs).
+    empty = tmp_path / "empty_proj"
+    (empty / "phase2" / "stage1" / "rtl").mkdir(parents=True)
+    assert "spice_correlation_check" not in fcc._class_skipped_gates(empty)
 
 
 # ---------------------------------------------------------------------
@@ -297,8 +409,15 @@ def test_mixed_line_negation_is_per_hit():
 
 
 def test_negated_analog_gate_skips_full_run(tmp_path):
-    """End-to-end: docs that ONLY negate analog content → gate SKIPs
-    (no analog keywords counted)."""
+    """End-to-end: docs that ONLY negate analog content → gate SKIPs.
+
+    The SUBJECT of this test — negation suppresses the keyword hit, so no
+    analog class is claimed — is unchanged. What changed in #833 is the rc
+    that "no analog class was claimed" leaves behind: it used to be 0, which
+    the P0 structural umbrella credited as an executed PASS for a gate that
+    had compared no doc evidence against any L5 record. It is now
+    `_vx.RC_VACUOUS`, so this file no longer pins the vacuous credit.
+    """
     proj = tmp_path
     docs = proj / "input" / "docs"
     docs.mkdir(parents=True)
@@ -310,7 +429,7 @@ def test_negated_analog_gate_skips_full_run(tmp_path):
     gate = PROGRAMS / "analog_content_detected_must_emit_l5_check.py"
     r = subprocess.run([sys.executable, str(gate), str(proj)],
                        capture_output=True, text=True)
-    assert r.returncode == 0
+    assert r.returncode == _vx.RC_VACUOUS, r.stdout + r.stderr
     assert "SKIP" in r.stdout
 
 

@@ -15,9 +15,9 @@ body:
       label: Kind
       options:
         - "New skill"
-        - "New MCP tool wrapper (mcp-eda-server)"
+        - "New MCP tool wrapper (bundled MCP server)"
         - "New deterministic check / gate (programs/)"
-        - "New device driver (mcp-eda-server/src/devices/)"
+        - "New device driver (mcp-eda/src/devices/)"
         - "New benchmark fixture"
         - "Documentation improvement"
         - "Other"
