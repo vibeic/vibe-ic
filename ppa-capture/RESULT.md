@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 27 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 28 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 24 | deterministic rules — the default, and every one names its predicate |
+| **A** | 25 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -958,6 +958,31 @@ describable first, which reframes them as symptoms and puts the repair here.
 **(o)** yes. **(d)** yes — and in the reverse direction too: a schema for a type
 nothing emits is a document class that went away and left its contract behind.
 
+### A-26 · a docstring stating a measured fact must be bound to the measurement · `repo.test_population`
+
+A lane flagged two docstrings as having gone stale and left them for their owner.
+One is confirmed against the tree:
+
+    _ppa/backends/opensta.py:39   "...the only dialect that stamps its own basis"
+    the runner today             TWO distinct stamping sites
+
+and the second site was added by the very change that made the sentence false.
+The behaviour the paragraph justifies is still right — the stage is read from the
+stamp, never inferred — so nothing misbehaves and no test fails. **Only the
+stated fact expired.**
+
+The tree does check stated counts, and it binds **2 prose documents and no
+docstring** — so the most-read explanation of a module is the least-checked text
+in the repository.
+
+**I did not estimate the at-risk population, and the reason is worth recording:**
+my attempt to count quantified docstring sentences matched a pattern literal
+inside a regex and reported a "document" that does not exist. That is the tenth
+measurement-apparatus error of this batch, so the record ships with **one
+confirmed instance rather than a number I could not defend.**
+**(o)** yes. **(d)** yes — any docstring that quantifies a population it does not
+name is the same claim waiting to expire.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1169,6 +1194,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-23 | — | 0 of 21 | **this batch passes its own new check** |
 | A-24 | 37 gates | 98 consumers | the consumed tree is outside every one of them |
 | A-25 | 29 types | **17 unschema'd** | upstream cause of A-15 and A-17 |
+| A-26 | 2 docs bound | 0 docstrings | 1 expired claim confirmed; population NOT estimated |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
