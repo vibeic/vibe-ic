@@ -90,3 +90,65 @@ The chain for (2), every hop:
     records the same gate red on the base at `e4880703b` on 2026-08-12.
     Between those two measured endpoints: 704 commits, 96 version bumps, 9 days,
     every landing successful.
+
+---
+
+# WHY IT HAS NEVER BEEN OPENED: any enforcement inside the suite SUBTRACTS ITSELF
+
+Published second, and before the fix, because it rules out the cheap placement
+and three lanes are about to try it.
+
+The obvious home for "an unacknowledged red must fail" is
+`gate_red_since_check.py` itself — it already reads the dispatcher's record, it
+already owns the deadline, and it is NOT a protected path. Turning its `new`
+partition (`:253`) from a report into a `Finding` is a few lines.
+
+**That does not work, and the reason is the mechanism itself.**
+
+If the refusal lives in a gate INSIDE `repo_hygiene_gates.sh`, then that gate's
+own verdict is subject to the same subtraction as every other gate in the suite:
+
+    base arm      : inherited red R has no row -> gate_red_since_check FAILS
+    candidate arm : inherited red R has no row -> gate_red_since_check FAILS
+    landing_merge_verdict: FAIL on both arms -> `carried`
+                           "…{len(carried)} carried (which do NOT block)"
+
+So the refusal is inherited on the very first landing after it is wired, and is
+subtracted from then on. The gate that exists to stop a permanently-red gate
+becomes a permanently-red gate.
+
+The mirror case is no better. If a branch DID add the row, the candidate's check
+passes while the base's fails; the verdict classifies that as `cleared`, which is
+reported and never required. So neither adding the row nor omitting it changes a
+landing's outcome, in either direction.
+
+## THEREFORE
+
+The forcing function has to sit where the subtraction is DECIDED, not where it is
+applied — `landing_merge_verdict.py:1183-1185` for the gate-label tier, and the
+`carried` list at `:1231-1235` for the finding tier. Both are inside
+`landing_merge_verdict.py`, which is `["authority"]` in
+`tools/ci/protected_landing_transition.json`.
+
+    not protected : gate_red_since_check.py, gatekeeper_review.py
+    PROTECTED     : landing_merge_verdict.py, hygiene_finding_delta.py,
+                    repo_hygiene_gates.sh, _gate_dispatch.sh,
+                    gatekeeper-land.sh, gatekeeper-verify-merge.sh
+
+and `gatekeeper_review.py` — the only caller of `gate_red_since_check` — is not
+on the landing path at all (`gatekeeper-land.sh` names it once, in a comment at
+`:262`).
+
+So opening this deadline REQUIRES one change inside the protected authority set,
+which means a PREPARE/ACTIVATE pair. That is the whole reason it has stayed shut:
+the cheap placement is self-defeating and the correct placement costs a protected
+transition.
+
+## WHAT CAN BE BUILT WITHOUT ONE
+
+Everything except the two-line call. The adjudication is already a pure function
+(`gate_red_since_check.adjudicate(record, ledger, age) -> (findings, known, new)`,
+`:183`), with `age` injected precisely so every branch is reachable from a test
+without building a git history. The verdict change is then a call into tested
+code, not new logic in a protected file — which is the smallest protected diff
+this can be reduced to.
