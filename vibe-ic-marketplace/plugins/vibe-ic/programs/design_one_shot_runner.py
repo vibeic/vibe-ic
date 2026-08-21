@@ -80,11 +80,18 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import contextlib
+import ctypes
+import errno
+import hashlib
 import json
 import os
 import re
+import secrets
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -148,6 +155,7 @@ _FORCE_RTL_REGEN = False
 # not be mistaken for a human author's.
 _RTL_SESSION_OWNED = False
 _RTL_SESSION_PROJECT: Optional[Path] = None
+_RTL_SESSION_BINDING: Optional["_Phase1ProjectBinding"] = None
 
 def _find_protocol_tb() -> Path:
     """Walk up from PROGRAMS_DIR looking for tools/protocol_tb/aid_class_reference_tb.v."""
@@ -551,6 +559,32 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
         return 124, partial or "", f"TIMEOUT after {timeout}s: {e}"
     except FileNotFoundError as e:
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
+
+
+def _compiler_was_not_found(rc: int, out: str, err: str) -> bool:
+    """Did the tool fail to EXECUTE, rather than run and reject the source?
+
+    vibe-ic#1394. The distinction is the whole difference between "could not
+    measure" and "measured and found a defect", and it has to be read off the
+    same two signals the runners above emit:
+
+      * `COMMAND_NOT_FOUND:` — written ONLY by the `except FileNotFoundError`
+        arms of `_run` / `_docker_exec_raw` (this file, two sites), so it is
+        never produced by a tool that started.
+      * rc 127 — POSIX / shell "command not found". Deliberately safe here:
+        `iverilog` exits 1 on a compile or elaboration error and reserves no
+        meaning for 127, and a container dispatch whose inner command is
+        missing returns bash's own 127.
+
+    Kept NARROW on purpose. A bare "No such file or directory" is NOT accepted
+    as a signal, because a genuine compile failure over a missing `include`
+    says exactly that — and treating that as "could not run" would convert a
+    real structural defect into a skip, which is the inverse of the bug this
+    predicate exists to fix and strictly worse than it.
+    """
+    if "COMMAND_NOT_FOUND:" in f"{out or ''}\n{err or ''}":
+        return True
+    return rc == 127
 
 
 def _docker_exec(container: str, cmd: str, timeout: int = 600, *,
@@ -1105,7 +1139,7 @@ def _find_host_quartus_sh() -> Optional[str]:
                 cand2 = child / "bin" / "quartus_sh"
                 if cand2.is_file():
                     candidates.append(cand2)
-        except OSError:
+        except (OSError, RuntimeError):
             pass
 
     for c in candidates:
@@ -1531,6 +1565,7 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
 
     Spec is looked for at the conventional locations below; its ``module`` field
     names the emitted ``rtl/<module>.sv``."""
+    _phase1_project_checkpoint(project)
     spec = None
     for cand in ("phase2/stage1/rtl_spec.json", "phase2/rtl_spec.json",
                  "input/rtl_spec.json", "phase2/stage1/rtl_spec.yaml",
@@ -1541,6 +1576,7 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
             break
     if spec is None:
         return None
+    _phase1_project_checkpoint(project)
 
     # ── ORGANIC #403 — the design's OWN implementation outranks a generator.
     #
@@ -1606,31 +1642,59 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
     except Exception:
         pass
     rtl_dir = _pl.rtl_dir(project)
-    rtl_dir.mkdir(parents=True, exist_ok=True)
     out = rtl_dir / f"{module}.sv"
     try:
-        r = subprocess.run([sys.executable, str(dispatcher), str(spec), "-o", str(out)],
-                           capture_output=True, text=True, timeout=120)
+        # The dispatcher writes outside the project first.  Only verified text
+        # is later linked through the held-root publisher, so a root swap in or
+        # around the subprocess cannot redirect its output into a replacement.
+        with tempfile.TemporaryDirectory(prefix="vibeic-rtl-dispatch-") as td:
+            staged_out = Path(td) / out.name
+            _phase1_project_checkpoint(project)
+            r = subprocess.run(
+                [sys.executable, str(dispatcher), str(spec),
+                 "-o", str(staged_out)],
+                capture_output=True, text=True, timeout=120)
+            _phase1_project_checkpoint(project)
+            if r.returncode == 3:
+                return None
+            if r.returncode != 0:
+                return StepResult(
+                    "rtl_gen", "FAIL", time.time() - t0,
+                    f"deterministic_rtl_dispatcher rejected {spec.name}: "
+                    f"{(r.stderr or r.stdout)[-300:]}")
+            rtl = staged_out.read_text(encoding="utf-8")
+    except _Phase1RtlOutputRefused:
+        raise
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
                           f"deterministic_rtl_dispatcher crashed on {spec.name}: {e}")
-    if r.returncode == 3:
-        return None  # not mechanically derivable → fall through to class/AI path
-    if r.returncode != 0:
-        return StepResult("rtl_gen", "FAIL", time.time() - t0,
-                          f"deterministic_rtl_dispatcher rejected {spec.name}: "
-                          f"{(r.stderr or r.stdout)[-300:]}")
     blob = (r.stdout or "") + (r.stderr or "")
     m = re.search(r"route . (\w+)", blob) or re.search(r":\s*([\w-]+)\s*. wrote", blob)
     gen = m.group(1) if m else "deterministic"
-    return StepResult(
-        "rtl_gen", "PASS", time.time() - t0,
-        f"deterministic RTL via {gen} (program-first; no LLM) → "
-        f"{out.relative_to(project)}",
-        output_files=[str(out)],
-        extras={"deterministic_generator": gen,
-                "rtl_spec": str(spec.relative_to(project)),
-                "program_first": True})
+    publication = None
+    try:
+        publication = _publish_phase1_rtl_no_clobber(project, out, rtl)
+        publication.require_current_chain()
+        result = StepResult(
+            "rtl_gen", "PASS", time.time() - t0,
+            f"deterministic RTL via {gen} (program-first; no LLM) → "
+            f"{out.relative_to(project)}",
+            output_files=[str(out)],
+            extras={"deterministic_generator": gen,
+                    "rtl_spec": str(spec.relative_to(project)),
+                    "program_first": True})
+        publication.require_current_chain()
+        return result
+    except Exception:
+        if publication is not None:
+            try:
+                publication.rollback()
+            except OSError:
+                pass
+        raise
+    finally:
+        if publication is not None:
+            publication.close()
 
 
 def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
@@ -1648,6 +1712,7 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
     arithmetic, or when RTL already exists (author guard) — so every
     non-matching design keeps today's behaviour byte-for-byte.
     """
+    _phase1_project_checkpoint(project)
     arith = {"digital_arithmetic_primitive", "digital_datapath",
              "arithmetic_primitive", "pure_datapath"}
     if ic_class not in arith:
@@ -1660,8 +1725,10 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
                              any(rtl_dir.rglob("*.sv"))):
         return None  # author/generator guard — never overwrite existing RTL
     try:
+        _phase1_project_checkpoint(project)
         r = subprocess.run([sys.executable, str(solver), str(project), "--emit"],
                            capture_output=True, text=True, timeout=60)
+        _phase1_project_checkpoint(project)
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
                           f"serial_parallel_mul_synth crashed: {e}")
@@ -1687,7 +1754,9 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
                 "spec": out.get("spec")})
 
 
-def _try_canonical_primitive_rtl(project: Path, t0: float) -> Optional[StepResult]:
+def _try_canonical_primitive_rtl(
+        project: Path, t0: float,
+        phase1_plain_text: Optional[str] = None) -> Optional[StepResult]:
     """Program-first RTL for CANONICAL single-function primitive shapes whose
     STRUCTURE the design description states unambiguously — clock dividers
     (odd / 3.5x fractional), a 0->1->0 pulse detector, a serial->parallel byte
@@ -1703,6 +1772,7 @@ def _try_canonical_primitive_rtl(project: Path, t0: float) -> Optional[StepResul
     own implementation), or when the solver is unavailable. A wrong emit is worse
     than an honest DEFER, so every non-matching design keeps today's behaviour.
     chip-AGNOSTIC: keyed on stated structure, never on a design's leaf name."""
+    _phase1_project_checkpoint(project)
     rtl_dir = _pl.rtl_dir(project)
     if rtl_dir.is_dir() and (any(rtl_dir.rglob("*.v")) or
                              any(rtl_dir.rglob("*.sv"))):
@@ -1714,7 +1784,8 @@ def _try_canonical_primitive_rtl(project: Path, t0: float) -> Optional[StepResul
         import canonical_primitive_synth as _cps  # noqa: E402
     except Exception:
         return None
-    desc = _gather_spec_text(project)
+    desc = _gather_spec_text(project, phase1_plain_text=phase1_plain_text)
+    _phase1_project_checkpoint(project)
     if not desc:
         return None
     try:
@@ -1729,16 +1800,2129 @@ def _try_canonical_primitive_rtl(project: Path, t0: float) -> Optional[StepResul
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
                           f"canonical_primitive_synth emit failed for {shape}: {e}")
-    rtl_dir.mkdir(parents=True, exist_ok=True)
+    _phase1_project_checkpoint(project)
     out = rtl_dir / f"{module}.v"
-    out.write_text(rtl)
+    publication = None
+    try:
+        # Use the same held-root, fd-bound no-clobber publisher as behavioral
+        # flow-back.  Canonical emission must not return to Path.write_text at
+        # the exact point where a replacement project could be adopted.
+        publication = _publish_phase1_rtl_no_clobber(project, out, rtl)
+        publication.require_current_chain()
+        result = StepResult(
+            "rtl_gen", "PASS", time.time() - t0,
+            f"deterministic RTL via canonical_primitive_synth[{shape}] "
+            f"(program-first; no LLM) -> {out.relative_to(project)}",
+            output_files=[str(out)],
+            extras={"deterministic_generator": "canonical_primitive_synth",
+                    "shape": shape, "module": module,
+                    "program_first": True})
+        publication.require_current_chain()
+        return result
+    except Exception:
+        if publication is not None:
+            try:
+                publication.rollback()
+            except OSError:
+                pass
+        raise
+    finally:
+        if publication is not None:
+            publication.close()
+
+
+def _phase1_declared_module_name(spec_text: str) -> Optional[str]:
+    """Return the ONE explicitly declared Phase-1 top name, else ``None``.
+
+    Plain input docs occur in both VerilogEval's module-header dialect and the
+    RTLLM ``Module name:`` dialect. Multiple identical declarations are harmless,
+    but conflicting names are an interface ambiguity and therefore an honest
+    SKIP (never guess ``chip_top``).
+    """
+    candidates = set()
+    patterns = (
+        r"(?im)^\s*module\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()",
+        r"(?i)\bmodule\s+(?:is\s+)?named\s+([A-Za-z_]\w*)\b",
+        r"(?im)^\s*module\s+name\s*:\s*(?:\n\s*)?([A-Za-z_]\w*)\b",
+        r'(?i)"(?:top_module|module_name)"\s*:\s*"([A-Za-z_]\w*)"',
+    )
+    for pattern in patterns:
+        candidates.update(m.group(1) for m in re.finditer(pattern, spec_text))
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+_PHASE1_PROSE_PROVENANCE_REFUSED = (
+    "PHASE1_OPERATOR_PROSE_PROVENANCE_REFUSED")
+_PHASE1_PROSE_PARSE_REFUSED = "PHASE1_OPERATOR_PROSE_PARSE_REFUSED"
+_PHASE1_PROSE_READ_REFUSED = "PHASE1_OPERATOR_PROSE_READ_REFUSED"
+_PHASE1_RTL_OUTPUT_REFUSED = "PHASE1_RTL_OUTPUT_PROVENANCE_REFUSED"
+
+
+@dataclass(frozen=True)
+class _Phase1PlainSpecGather:
+    """Total result of gathering operator-owned Phase-1 prose.
+
+    ``refusal`` is retained separately from empty text so a trust-boundary or
+    read failure cannot masquerade as an ordinary grammar nonmatch.
+    """
+    text: str
+    sources: Tuple[str, ...]
+    refusal: Optional[Dict[str, str]] = None
+
+
+def _phase1_plain_spec_gather_refusal(
+        project: Path, path: Path, finding: str, reason: str,
+        detail: str) -> _Phase1PlainSpecGather:
+    try:
+        path_label = str(path.relative_to(project))
+    except (TypeError, ValueError):
+        path_label = str(path)
+    return _Phase1PlainSpecGather(
+        "", (), {"finding": finding, "reason": reason,
+                 "path": path_label, "detail": detail})
+
+
+def _gather_phase1_plain_spec_text(
+        project: Path,
+        project_binding: Optional["_Phase1ProjectBinding"] = None,
+        ) -> _Phase1PlainSpecGather:
+    """Read only operator-supplied Phase-1 prose, never generated L-docs.
+
+    A generated L*.json may contain an LLM interpretation that is absent from
+    the source.  Letting it complete this deterministic parser would relabel an
+    AI-derived table as ``program-first; no LLM``.  Restricting the bridge to
+    input_prompt/input_doc keeps that provenance claim mechanically true.
+
+    Symlinks are not source provenance: an apparently allowed ``design.md`` can
+    otherwise point at generated_docs/L9 (or anywhere else) and cross this trust
+    boundary.  Any symlink entry fails the whole gather closed.  Every regular
+    source must also resolve beneath the resolved allowed root; a resolution or
+    traversal error is a refusal, never a silently skipped file.
+    """
+    project = Path(project)
+    chunks: List[str] = []
+    sources: List[str] = []
+    if project_binding is not None:
+        project_binding.require_current()
+    try:
+        # The caller-supplied project is the provenance boundary.  A symlinked
+        # boundary makes the lexical ``phase1/input_*`` claim unverifiable.
+        if project.is_symlink():
+            return _phase1_plain_spec_gather_refusal(
+                project, project, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                "PROJECT_BOUNDARY_SYMLINK",
+                "the project provenance boundary is a symlink")
+        project_root = project.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return _phase1_plain_spec_gather_refusal(
+            project, project, _PHASE1_PROSE_PROVENANCE_REFUSED,
+            "PROJECT_BOUNDARY_UNRESOLVED",
+            f"the project provenance boundary could not be resolved: {exc}")
+    if project_binding is not None:
+        project_binding.require_current()
+    for directory in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
+        if project_binding is not None:
+            project_binding.require_current()
+        try:
+            source_rel = directory.relative_to(project)
+            # ``Path.is_symlink`` examines only the final component.  Inspect
+            # every component below the project boundary so ``phase1 -> L9``
+            # cannot make a regular-looking ``phase1/input_doc`` trustworthy.
+            cursor = project
+            for component in source_rel.parts:
+                cursor /= component
+                if cursor.is_symlink():
+                    return _phase1_plain_spec_gather_refusal(
+                        project, cursor, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                        "SOURCE_ANCESTOR_SYMLINK",
+                        "an operator-prose source ancestor is a symlink")
+            if not directory.exists():
+                continue
+            if not directory.is_dir():
+                return _phase1_plain_spec_gather_refusal(
+                    project, directory, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                    "SOURCE_ROOT_NOT_DIRECTORY",
+                    "the operator-prose source root is not a directory")
+            allowed_root = directory.resolve(strict=True)
+            allowed_root.relative_to(project_root)
+            entries = sorted(allowed_root.rglob("*"))
+        except ValueError as exc:
+            return _phase1_plain_spec_gather_refusal(
+                project, directory, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                "SOURCE_OUT_OF_ROOT",
+                f"the operator-prose source root escaped the project: {exc}")
+        except (OSError, RuntimeError) as exc:
+            return _phase1_plain_spec_gather_refusal(
+                project, directory, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                "SOURCE_TRAVERSAL_FAILED",
+                f"the operator-prose source tree could not be traversed: {exc}")
+        for path in entries:
+            # Resolve symlinks only to NAME the exact refusal.  No symlink is
+            # ever read, even when its target remains within allowed_root.
+            if path.is_symlink():
+                try:
+                    target = path.resolve(strict=True)
+                except FileNotFoundError as exc:
+                    return _phase1_plain_spec_gather_refusal(
+                        project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                        "SOURCE_BROKEN_LINK",
+                        f"an operator-prose source is a broken link: {exc}")
+                except (OSError, RuntimeError) as exc:
+                    return _phase1_plain_spec_gather_refusal(
+                        project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                        "SOURCE_LINK_RESOLUTION_FAILED",
+                        f"an operator-prose source link could not be resolved: {exc}")
+                try:
+                    target.relative_to(allowed_root)
+                except ValueError:
+                    return _phase1_plain_spec_gather_refusal(
+                        project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                        "SOURCE_OUT_OF_ROOT",
+                        "an operator-prose source link points outside its "
+                        "allowed root")
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                    "SOURCE_ENTRY_SYMLINK",
+                    "an operator-prose source entry is a symlink")
+            try:
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(allowed_root)
+                if (not resolved.is_file()
+                        or path.suffix.lower() not in (".md", ".txt")):
+                    continue
+            except ValueError as exc:
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                    "SOURCE_OUT_OF_ROOT",
+                    f"an operator-prose source escaped its allowed root: {exc}")
+            except (OSError, RuntimeError) as exc:
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                    "SOURCE_ENTRY_RESOLUTION_FAILED",
+                    f"an operator-prose source could not be resolved: {exc}")
+            try:
+                # Operator prose is a UTF-8 contract.  Replacement characters
+                # would silently change the grammar the deterministic parser sees.
+                if project_binding is not None:
+                    project_binding.require_current()
+                chunks.append(resolved.read_text(encoding="utf-8"))
+                if project_binding is not None:
+                    project_binding.require_current()
+            except UnicodeError as exc:
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_PARSE_REFUSED,
+                    "SOURCE_TEXT_PARSE_FAILED",
+                    f"operator prose is not valid UTF-8: {exc}")
+            except OSError as exc:
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_READ_REFUSED,
+                    "SOURCE_READ_FAILED",
+                    f"operator prose could not be read: {exc}")
+            sources.append(str(source_rel / path.relative_to(allowed_root)))
+        if project_binding is not None:
+            project_binding.require_current()
+    if project_binding is not None:
+        project_binding.require_current()
+    return _Phase1PlainSpecGather("\n\n".join(chunks), tuple(sources))
+
+
+def _phase1_plain_spec_refusal_result(
+        t0: float, refusal: Dict[str, str]) -> StepResult:
+    """Retain a BLOCKING input-provenance refusal in the Phase-2 record.
+
+    BLOCKING is intentional: allowing a tainted/unreadable operator source to
+    fall through would make the authoring path look like an ordinary grammar
+    nonmatch.  This function writes nothing.
+    """
+    finding = refusal.get("finding", _PHASE1_PROSE_PROVENANCE_REFUSED)
+    reason = refusal.get("reason", "SOURCE_PROVENANCE_REFUSED")
+    detail = refusal.get("detail", "operator prose provenance was refused")
     return StepResult(
-        "rtl_gen", "PASS", time.time() - t0,
-        f"deterministic RTL via canonical_primitive_synth[{shape}] "
-        f"(program-first; no LLM) -> {out.relative_to(project)}",
-        output_files=[str(out)],
-        extras={"deterministic_generator": "canonical_primitive_synth",
-                "shape": shape, "module": module, "program_first": True})
+        "rtl_gen", _spf.REFUSAL_STATUS, time.time() - t0,
+        f"{finding}: BLOCKING deterministic Phase-1 prose flow-back; "
+        f"{reason}: {detail}. No RTL was written.",
+        extras={"finding": finding, "source_provenance": "refused",
+                "source_refusal": dict(refusal), "write_performed": False})
+
+
+class _Phase1RtlOutputRefused(RuntimeError):
+    """A fail-closed output-path condition, distinct from an I/O failure."""
+
+    def __init__(self, reason: str, path: Path, detail: str):
+        super().__init__(detail)
+        self.reason = reason
+        self.path = Path(path)
+        self.detail = detail
+
+
+def _phase1_rtl_output_refusal(
+        project: Path, path: Path, reason: str,
+        detail: str) -> Dict[str, str]:
+    try:
+        path_label = str(path.relative_to(project))
+    except (TypeError, ValueError):
+        path_label = str(path)
+    return {"finding": _PHASE1_RTL_OUTPUT_REFUSED, "reason": reason,
+            "path": path_label, "detail": detail}
+
+
+def _phase1_rtl_output_refusal_result(
+        t0: float, refusal: Dict[str, str]) -> StepResult:
+    reason = refusal.get("reason", "RTL_OUTPUT_PROVENANCE_REFUSED")
+    detail = refusal.get("detail", "the RTL output path was refused")
+    return StepResult(
+        "rtl_gen", _spf.REFUSAL_STATUS, time.time() - t0,
+        f"{_PHASE1_RTL_OUTPUT_REFUSED}: BLOCKING deterministic Phase-1 "
+        f"flow-back output; {reason}: {detail}. No RTL was written.",
+        extras={"finding": _PHASE1_RTL_OUTPUT_REFUSED,
+                "output_provenance": "refused",
+                "output_refusal": dict(refusal), "write_performed": False})
+
+
+def _validate_phase1_rtl_output_path(
+        project: Path, out: Path) -> Optional[Dict[str, str]]:
+    """Reject every static symlink/non-directory in the output ancestry.
+
+    This check produces an actionable refusal before classification reads an
+    existing target.  The publisher below repeats the boundary with directory
+    file descriptors so a check/use race still cannot redirect the write.
+    """
+    project = Path(project)
+    rtl_dir = _pl.rtl_dir(project)
+    if out.parent != rtl_dir or out.name in ("", ".", ".."):
+        return _phase1_rtl_output_refusal(
+            project, out, "RTL_OUTPUT_OUT_OF_ROOT",
+            "the deterministic output is not a direct child of canonical rtl/")
+    try:
+        if project.is_symlink():
+            return _phase1_rtl_output_refusal(
+                project, project, "PROJECT_BOUNDARY_SYMLINK",
+                "the project output boundary is a symlink")
+        project_root = project.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return _phase1_rtl_output_refusal(
+            project, project, "PROJECT_BOUNDARY_UNRESOLVED",
+            f"the project output boundary could not be resolved: {exc}")
+
+    ancestors = (project / "phase2", project / "phase2" / "stage1", rtl_dir)
+    for path in (*ancestors, out):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return _phase1_rtl_output_refusal(
+                project, path, "RTL_OUTPUT_PATH_INSPECTION_FAILED",
+                f"the RTL output path could not be inspected: {exc}")
+        if stat.S_ISLNK(info.st_mode):
+            broken = not path.exists()
+            reason = ("RTL_OUTPUT_BROKEN_SYMLINK" if path == out and broken
+                      else "RTL_OUTPUT_SYMLINK" if path == out
+                      else "RTL_ANCESTOR_BROKEN_SYMLINK" if broken
+                      else "RTL_ANCESTOR_SYMLINK")
+            return _phase1_rtl_output_refusal(
+                project, path, reason,
+                "the RTL output path must not contain a symlink")
+        if path in ancestors and not stat.S_ISDIR(info.st_mode):
+            return _phase1_rtl_output_refusal(
+                project, path, "RTL_ANCESTOR_NOT_DIRECTORY",
+                "an RTL output ancestor is not a directory")
+        try:
+            path.resolve(strict=True).relative_to(project_root)
+        except ValueError as exc:
+            return _phase1_rtl_output_refusal(
+                project, path, "RTL_OUTPUT_OUT_OF_ROOT",
+                f"the RTL output path escaped the project: {exc}")
+        except (OSError, RuntimeError) as exc:
+            return _phase1_rtl_output_refusal(
+                project, path, "RTL_OUTPUT_PATH_UNRESOLVED",
+                f"the RTL output path could not be resolved: {exc}")
+    return None
+
+
+def _phase1_fd_digest(fd: int) -> str:
+    """SHA-256 the inode held by ``fd`` without consuming its file offset."""
+    position = os.lseek(fd, 0, os.SEEK_CUR)
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return digest.hexdigest()
+            digest.update(chunk)
+    finally:
+        os.lseek(fd, position, os.SEEK_SET)
+
+
+def _phase1_read_fd(fd: int) -> bytes:
+    position = os.lseek(fd, 0, os.SEEK_CUR)
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.lseek(fd, position, os.SEEK_SET)
+
+
+def _phase1_same_inode(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _phase1_open_publication_inode(
+        directory_fd: int, label: str) -> Tuple[int, Optional[str]]:
+    """Create a new inode in ``directory_fd`` and keep its fd open.
+
+    Linux ``O_TMPFILE`` gives the strongest shape: the inode has no mutable
+    pathname at all.  The named fallback is still published through
+    ``/proc/self/fd/<fd>`` while the descriptor remains open; its pathname is
+    cleanup-only and is never the publication authority.
+    """
+    tmpfile_flag = getattr(os, "O_TMPFILE", 0)
+    if tmpfile_flag:
+        try:
+            return os.open(
+                ".", os.O_RDWR | tmpfile_flag, 0o666,
+                dir_fd=directory_fd), None
+        except OSError as exc:
+            if exc.errno not in (errno.EINVAL, errno.EISDIR, errno.ENOENT,
+                                 errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM):
+                raise
+    for _attempt in range(64):
+        name = (f".{label}.tmp.{os.getpid()}."
+                f"{secrets.token_hex(16)}")
+        try:
+            fd = os.open(
+                name,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o666, dir_fd=directory_fd)
+        except FileExistsError:
+            continue
+        return fd, name
+    raise OSError("could not reserve a unique publication inode")
+
+
+def _phase1_remove_inode_aliases(
+        directory_fd: int, inode_fd: int,
+        keep: Optional[str] = None) -> None:
+    """Remove only names that still bind the newly-created held inode."""
+    held = os.fstat(inode_fd)
+    for name in os.listdir(directory_fd):
+        if name == keep:
+            continue
+        try:
+            current = os.stat(
+                name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if _phase1_same_inode(held, current):
+            os.unlink(name, dir_fd=directory_fd)
+
+
+def _phase1_write_held_inode(fd: int, payload: bytes) -> str:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write while preparing publication inode")
+        view = view[written:]
+    os.fsync(fd)
+    digest = _phase1_fd_digest(fd)
+    expected = hashlib.sha256(payload).hexdigest()
+    if digest != expected:
+        raise OSError(
+            f"publication inode digest mismatch: {digest} != {expected}")
+    return digest
+
+
+def _phase1_link_held_inode(
+        inode_fd: int, directory_fd: int, destination: str) -> None:
+    """Atomically no-clobber link the exact inode bound by ``inode_fd``."""
+    try:
+        os.link(
+            f"/proc/self/fd/{inode_fd}", destination,
+            dst_dir_fd=directory_fd, follow_symlinks=True)
+    except FileExistsError as exc:
+        raise _Phase1RtlOutputRefused(
+            "RTL_OUTPUT_ALREADY_EXISTS", Path(destination),
+            "the publication destination appeared during no-clobber link") from exc
+
+
+@dataclass
+class _Phase1ProjectBinding:
+    """Held identity for the lexical project root used by one RTL step."""
+    project: Path
+    parent_fd: int
+    name: str
+    project_fd: int
+
+    @classmethod
+    def open(cls, project: Path) -> "_Phase1ProjectBinding":
+        project = Path(project)
+        flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+        name = project.name
+        if name in ("", ".", ".."):
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_OPEN_REFUSED", project,
+                "the project path has no safe basename")
+        try:
+            parent_fd = os.open(project.parent, flags)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_OPEN_REFUSED", project,
+                "the project output boundary parent could not be opened "
+                f"safely: {exc}") from exc
+        try:
+            project_fd = os.open(name, flags, dir_fd=parent_fd)
+        except OSError as exc:
+            os.close(parent_fd)
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_OPEN_REFUSED", project,
+                f"the project output boundary could not be opened safely: {exc}") from exc
+        binding = cls(project, parent_fd, name, project_fd)
+        try:
+            binding.require_current()
+        except Exception:
+            binding.close()
+            raise
+        return binding
+
+    def require_current(self) -> None:
+        flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            live_fd = os.open(self.name, flags, dir_fd=self.parent_fd)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_REPLACED_DURING_PUBLICATION", self.project,
+                "the canonical project directory could not be reopened "
+                f"without following links: {exc}") from exc
+        try:
+            if not _phase1_same_inode(
+                    os.fstat(live_fd), os.fstat(self.project_fd)):
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_BOUNDARY_REPLACED_DURING_PUBLICATION",
+                    self.project,
+                    "the canonical project basename no longer names the "
+                    "held project directory")
+        finally:
+            os.close(live_fd)
+
+    def duplicate(self) -> "_Phase1ProjectBinding":
+        self.require_current()
+        parent_fd = os.dup(self.parent_fd)
+        try:
+            project_fd = os.dup(self.project_fd)
+        except OSError:
+            os.close(parent_fd)
+            raise
+        duplicate = _Phase1ProjectBinding(
+            self.project, parent_fd, self.name, project_fd)
+        try:
+            duplicate.require_current()
+        except Exception:
+            duplicate.close()
+            raise
+        return duplicate
+
+    def close(self) -> None:
+        for fd in (self.project_fd, self.parent_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+_PHASE1_ACTIVE_PROJECT_BINDING: Optional[_Phase1ProjectBinding] = None
+
+
+def _phase1_project_checkpoint(project: Path) -> None:
+    """Revalidate the step-entry binding when a deterministic stage uses it."""
+    binding = _PHASE1_ACTIVE_PROJECT_BINDING
+    if binding is not None and Path(project) == binding.project:
+        binding.require_current()
+
+
+def _phase1_replace_session_binding(
+        binding: Optional[_Phase1ProjectBinding]) -> None:
+    global _RTL_SESSION_BINDING
+    prior = _RTL_SESSION_BINDING
+    _RTL_SESSION_BINDING = binding
+    if prior is not None and prior is not binding:
+        prior.close()
+
+
+@dataclass(frozen=True)
+class _Phase1TreeEntry:
+    kind: str
+    mode: int
+    digest: str = ""
+    target: str = ""
+
+
+def _phase1_tree_manifest_fd(
+        root_fd: int, project_label: Path,
+        ignore_top: Optional[set] = None) -> Dict[str, _Phase1TreeEntry]:
+    """Describe a tree without resolving any pathname above ``root_fd``."""
+    manifest: Dict[str, _Phase1TreeEntry] = {}
+    ignored = ignore_top or set()
+    dir_flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+
+    def _walk(directory_fd: int, prefix: str) -> None:
+        for name in sorted(os.listdir(directory_fd)):
+            if not prefix and name in ignored:
+                continue
+            rel = f"{prefix}/{name}" if prefix else name
+            try:
+                info = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_SNAPSHOT_INSPECTION_REFUSED",
+                    project_label / rel,
+                    f"a project entry could not be inspected safely: {exc}")
+            mode = stat.S_IMODE(info.st_mode)
+            if stat.S_ISDIR(info.st_mode):
+                manifest[rel] = _Phase1TreeEntry("dir", mode)
+                try:
+                    child_fd = os.open(name, dir_flags, dir_fd=directory_fd)
+                except OSError as exc:
+                    raise _Phase1RtlOutputRefused(
+                        "PROJECT_SNAPSHOT_OPEN_REFUSED", project_label / rel,
+                        f"a project directory could not be opened safely: {exc}")
+                try:
+                    if not _phase1_same_inode(info, os.fstat(child_fd)):
+                        raise _Phase1RtlOutputRefused(
+                            "PROJECT_ENTRY_REPLACED_DURING_SNAPSHOT",
+                            project_label / rel,
+                            "a project directory changed identity while opening")
+                    _walk(child_fd, rel)
+                finally:
+                    os.close(child_fd)
+            elif stat.S_ISREG(info.st_mode):
+                try:
+                    file_fd = os.open(
+                        name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd)
+                except OSError as exc:
+                    raise _Phase1RtlOutputRefused(
+                        "PROJECT_SNAPSHOT_OPEN_REFUSED", project_label / rel,
+                        f"a project file could not be opened safely: {exc}")
+                try:
+                    held = os.fstat(file_fd)
+                    if not _phase1_same_inode(info, held):
+                        raise _Phase1RtlOutputRefused(
+                            "PROJECT_ENTRY_REPLACED_DURING_SNAPSHOT",
+                            project_label / rel,
+                            "a project file changed identity while opening")
+                    digest = _phase1_fd_digest(file_fd)
+                    after = os.fstat(file_fd)
+                    if (held.st_size != after.st_size
+                            or held.st_mtime_ns != after.st_mtime_ns
+                            or held.st_ctime_ns != after.st_ctime_ns):
+                        raise _Phase1RtlOutputRefused(
+                            "PROJECT_ENTRY_CHANGED_DURING_SNAPSHOT",
+                            project_label / rel,
+                            "a project file changed while it was read")
+                finally:
+                    os.close(file_fd)
+                manifest[rel] = _Phase1TreeEntry("file", mode, digest=digest)
+            elif stat.S_ISLNK(info.st_mode):
+                try:
+                    target = os.readlink(name, dir_fd=directory_fd)
+                except OSError as exc:
+                    raise _Phase1RtlOutputRefused(
+                        "PROJECT_SNAPSHOT_READLINK_REFUSED",
+                        project_label / rel,
+                        f"a project symlink could not be read safely: {exc}")
+                manifest[rel] = _Phase1TreeEntry(
+                    "symlink", mode, target=target)
+            else:
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_SPECIAL_ENTRY_REFUSED", project_label / rel,
+                    "the RTL transaction does not copy device/socket/FIFO entries")
+
+    _walk(root_fd, "")
+    return manifest
+
+
+def _phase1_copy_entry_fd(
+        src_parent_fd: int, src_name: str,
+        dst_parent_fd: int, dst_name: str,
+        project_label: Path) -> None:
+    """Copy one entry recursively between held directories, never following links."""
+    try:
+        info = os.stat(
+            src_name, dir_fd=src_parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise _Phase1RtlOutputRefused(
+            "PROJECT_SNAPSHOT_INSPECTION_REFUSED",
+            project_label / src_name,
+            f"a project entry could not be inspected safely: {exc}") from exc
+    mode = stat.S_IMODE(info.st_mode)
+    dir_flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+    if stat.S_ISDIR(info.st_mode):
+        # Populate first, then apply the source mode.  Creating a read-only
+        # source directory with its final mode would make its own children
+        # impossible to snapshot.
+        src_fd: Optional[int] = None
+        dst_fd: Optional[int] = None
+        try:
+            os.mkdir(dst_name, mode=0o700, dir_fd=dst_parent_fd)
+            src_fd = os.open(src_name, dir_flags, dir_fd=src_parent_fd)
+            dst_fd = os.open(dst_name, dir_flags, dir_fd=dst_parent_fd)
+            if not _phase1_same_inode(info, os.fstat(src_fd)):
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_ENTRY_REPLACED_DURING_SNAPSHOT",
+                    project_label / src_name,
+                    "a copied project directory changed identity while opening")
+            for child in sorted(os.listdir(src_fd)):
+                _phase1_copy_entry_fd(
+                    src_fd, child, dst_fd, child, project_label / src_name)
+            os.fchmod(dst_fd, mode)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_OPEN_REFUSED",
+                project_label / src_name,
+                f"a project directory could not be copied safely: {exc}") from exc
+        finally:
+            if dst_fd is not None:
+                os.close(dst_fd)
+            if src_fd is not None:
+                os.close(src_fd)
+        return
+    if stat.S_ISREG(info.st_mode):
+        try:
+            src_fd = os.open(
+                src_name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=src_parent_fd)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_OPEN_REFUSED",
+                project_label / src_name,
+                f"a project file could not be copied safely: {exc}") from exc
+        dst_fd: Optional[int] = None
+        published = False
+        try:
+            if not _phase1_same_inode(info, os.fstat(src_fd)):
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_ENTRY_REPLACED_DURING_SNAPSHOT",
+                    project_label / src_name,
+                    "a copied project file changed identity while opening")
+            payload = _phase1_read_fd(src_fd)
+            after = os.fstat(src_fd)
+            if (info.st_size != after.st_size
+                    or info.st_mtime_ns != after.st_mtime_ns
+                    or info.st_ctime_ns != after.st_ctime_ns):
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_ENTRY_CHANGED_DURING_SNAPSHOT",
+                    project_label / src_name,
+                    "a copied project file changed while it was read")
+            dst_fd, _tmp = _phase1_open_publication_inode(
+                dst_parent_fd, dst_name)
+            os.fchmod(dst_fd, mode)
+            _phase1_write_held_inode(dst_fd, payload)
+            _phase1_link_held_inode(dst_fd, dst_parent_fd, dst_name)
+            published = True
+            _phase1_remove_inode_aliases(
+                dst_parent_fd, dst_fd, keep=dst_name)
+        except OSError as exc:
+            # PARITY WITH THE DIRECTORY BRANCH ABOVE.  That branch contains
+            # every OSError of the whole copy as a named refusal; this one
+            # contained only the `open()`.  So a WRITE-side failure — ENOSPC,
+            # EDQUOT, EROFS, a mode revoked between stat and fchmod — escaped
+            # `step_rtl_gen` as a raw OSError instead of the BLOCKED StepResult
+            # every other snapshot failure returns.  `step_rtl_gen` catches
+            # `_Phase1RtlOutputRefused` and nothing else, so the caller got an
+            # exception where the contract promises a result.
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_COPY_REFUSED",
+                project_label / src_name,
+                f"a project file could not be copied safely: {exc}") from exc
+        finally:
+            if dst_fd is not None:
+                # The fallback publication inode initially has a hidden alias.
+                # A failed copy must not strand that alias in the held tree;
+                # after success retain only the requested destination name.
+                try:
+                    _phase1_remove_inode_aliases(
+                        dst_parent_fd, dst_fd,
+                        keep=dst_name if published else None)
+                finally:
+                    os.close(dst_fd)
+            os.close(src_fd)
+        return
+    if stat.S_ISLNK(info.st_mode):
+        try:
+            os.symlink(
+                os.readlink(src_name, dir_fd=src_parent_fd), dst_name,
+                dir_fd=dst_parent_fd)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_READLINK_REFUSED",
+                project_label / src_name,
+                f"a project symlink could not be copied safely: {exc}") from exc
+        return
+    raise _Phase1RtlOutputRefused(
+        "PROJECT_SPECIAL_ENTRY_REFUSED", project_label / src_name,
+        "the RTL transaction does not copy device/socket/FIFO entries")
+
+
+def _phase1_snapshot_to_stage(
+        binding: _Phase1ProjectBinding,
+        stage_project: Path) -> Dict[str, _Phase1TreeEntry]:
+    """Copy the exact held project inode to an isolated working project."""
+    binding.require_current()
+    stage_project.mkdir(mode=0o700)
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    stage_fd = os.open(stage_project, flags)
+    try:
+        for name in sorted(os.listdir(binding.project_fd)):
+            _phase1_copy_entry_fd(
+                binding.project_fd, name, stage_fd, name, binding.project)
+        baseline = _phase1_tree_manifest_fd(
+            stage_fd, binding.project)
+    finally:
+        os.close(stage_fd)
+    binding.require_current()
+    live = _phase1_tree_manifest_fd(binding.project_fd, binding.project)
+    if live != baseline:
+        raise _Phase1RtlOutputRefused(
+            "PROJECT_CHANGED_DURING_SNAPSHOT", binding.project,
+            "the held project changed while the isolated RTL snapshot was built")
+    return baseline
+
+
+def _phase1_open_mode_adjustable_directory(
+        parent_fd: int, name: str, reason: str) -> Tuple[int, int]:
+    """Bind/open a directory even when its preserved mode denies traversal."""
+    info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(info.st_mode):
+        raise _Phase1RtlOutputRefused(
+            reason, Path(name), "the transaction entry is not a directory")
+    path_flags = (getattr(os, "O_PATH", 0) | os.O_DIRECTORY
+                  | getattr(os, "O_NOFOLLOW", 0))
+    anchor_fd = os.open(name, path_flags, dir_fd=parent_fd)
+    directory_fd: Optional[int] = None
+    mode = stat.S_IMODE(info.st_mode)
+    changed_mode = False
+    try:
+        held = os.fstat(anchor_fd)
+        if not _phase1_same_inode(info, held):
+            raise _Phase1RtlOutputRefused(
+                reason, Path(name),
+                "a transaction directory changed identity while opening")
+        if mode & 0o700 != 0o700:
+            # The runner already requires Linux renameat2. /proc/self/fd names
+            # the held inode rather than following the mutable project entry.
+            os.chmod(f"/proc/self/fd/{anchor_fd}", mode | 0o700)
+            changed_mode = True
+        flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+        directory_fd = os.open(".", flags, dir_fd=anchor_fd)
+        if not _phase1_same_inode(held, os.fstat(directory_fd)):
+            raise _Phase1RtlOutputRefused(
+                reason, Path(name),
+                "a transaction directory changed identity after mode setup")
+        return directory_fd, mode
+    except Exception:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        if changed_mode:
+            try:
+                os.chmod(f"/proc/self/fd/{anchor_fd}", mode)
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(anchor_fd)
+
+
+def _phase1_remove_owned_entry_fd(parent_fd: int, name: str) -> None:
+    """Remove a transaction-owned entry despite preserved read-only modes.
+
+    Only private transaction-container entries may reach this helper.  It opens
+    every directory without following links, verifies the opened inode, then
+    grants owner traversal/write permission immediately before recursively
+    deleting it.  Canonical project entries never pass through this path.
+    """
+    info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if stat.S_ISDIR(info.st_mode):
+        child_fd, _mode = _phase1_open_mode_adjustable_directory(
+            parent_fd, name, "RTL_TRANSACTION_CLEANUP_ENTRY_REPLACED")
+        try:
+            if not _phase1_same_inode(info, os.fstat(child_fd)):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_CLEANUP_ENTRY_REPLACED", Path(name),
+                    "a transaction-owned directory changed identity")
+            for child in os.listdir(child_fd):
+                _phase1_remove_owned_entry_fd(child_fd, child)
+        finally:
+            os.close(child_fd)
+        os.rmdir(name, dir_fd=parent_fd)
+    else:
+        os.unlink(name, dir_fd=parent_fd)
+
+
+def _phase1_remove_owned_contents_fd(directory_fd: int) -> None:
+    """Drain one held private transaction directory."""
+    os.fchmod(
+        directory_fd,
+        stat.S_IMODE(os.fstat(directory_fd).st_mode) | 0o700)
+    for name in list(os.listdir(directory_fd)):
+        _phase1_remove_owned_entry_fd(directory_fd, name)
+
+
+def _phase1_cleanup_isolated_stage(
+        stage_binding: _Phase1ProjectBinding,
+        stage_temp: tempfile.TemporaryDirectory) -> None:
+    """Delete an isolated stage while rollback authority is still live."""
+    _phase1_remove_owned_contents_fd(stage_binding.project_fd)
+    try:
+        os.rmdir(stage_binding.name, dir_fd=stage_binding.parent_fd)
+    except FileNotFoundError:
+        pass
+    stage_temp.cleanup()
+
+
+def _phase1_rename_noreplace(
+        src_fd: int, src: str, dst_fd: int, dst: str) -> None:
+    """Linux renameat2(RENAME_NOREPLACE), anchored at held directories."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOSYS, "renameat2 is unavailable")
+    renameat2.argtypes = (
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        ctypes.c_uint)
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+            src_fd, os.fsencode(src), dst_fd, os.fsencode(dst), 1) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), dst)
+
+
+class _Phase1WritableRenameSource:
+    """Temporarily permit a directory's cross-parent ``..`` update."""
+
+    def __init__(self, parent_fd: int, name: str):
+        self.parent_fd = parent_fd
+        self.name = name
+        self.fd: Optional[int] = None
+        self.mode: Optional[int] = None
+
+    def __enter__(self) -> "_Phase1WritableRenameSource":
+        info = os.stat(
+            self.name, dir_fd=self.parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            return self
+        self.fd, self.mode = _phase1_open_mode_adjustable_directory(
+            self.parent_fd, self.name,
+            "RTL_TRANSACTION_RENAME_SOURCE_REPLACED")
+        held = os.fstat(self.fd)
+        if not _phase1_same_inode(info, held):
+            try:
+                if self.mode is not None:
+                    os.fchmod(self.fd, self.mode)
+            finally:
+                os.close(self.fd)
+                self.fd = None
+            raise _Phase1RtlOutputRefused(
+                "RTL_TRANSACTION_RENAME_SOURCE_REPLACED", Path(self.name),
+                "a directory changed identity before transactional rename")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        if self.fd is not None:
+            try:
+                if self.mode is not None:
+                    os.fchmod(self.fd, self.mode)
+            finally:
+                os.close(self.fd)
+                self.fd = None
+        return False
+
+
+def _phase1_top_names_changed(
+        baseline: Dict[str, _Phase1TreeEntry],
+        final: Dict[str, _Phase1TreeEntry]) -> List[str]:
+    changed = set()
+    for rel in set(baseline) | set(final):
+        if baseline.get(rel) != final.get(rel):
+            changed.add(rel.split("/", 1)[0])
+    return sorted(changed)
+
+
+def _phase1_manifest_slice(
+        manifest: Dict[str, _Phase1TreeEntry],
+        top: str) -> Dict[str, _Phase1TreeEntry]:
+    """Return one top-level subtree with its root normalized to ``""``."""
+    prefix = top + "/"
+    return {
+        ("" if rel == top else rel[len(prefix):]): entry
+        for rel, entry in manifest.items()
+        if rel == top or rel.startswith(prefix)
+    }
+
+
+@dataclass
+class _Phase1StagedTreeTransaction:
+    """Published tree whose old subtrees remain available until acceptance."""
+
+    binding: _Phase1ProjectBinding
+    container_name: str
+    container_fd: int
+    baseline: Dict[str, _Phase1TreeEntry]
+    final: Dict[str, _Phase1TreeEntry]
+    records: List[Dict[str, Any]]
+    closed: bool = False
+
+    def _remove_entry(self, name: str) -> Optional[str]:
+        """Retry permission-normalizing cleanup; partial attempts are resumable."""
+        last: Optional[Exception] = None
+        for _attempt in range(3):
+            try:
+                _phase1_remove_owned_entry_fd(self.container_fd, name)
+                return None
+            except FileNotFoundError:
+                return None
+            except Exception as exc:
+                last = exc
+        return str(last)
+
+    def _drain(self) -> Optional[str]:
+        last: Optional[Exception] = None
+        for _attempt in range(3):
+            try:
+                _phase1_remove_owned_contents_fd(self.container_fd)
+                if not os.listdir(self.container_fd):
+                    return None
+            except Exception as exc:
+                last = exc
+        return str(last or "transaction container remained non-empty")
+
+    def _container_aliases(self, held: os.stat_result) -> List[str]:
+        """Project-root names currently bound to the held container inode."""
+        aliases: List[str] = []
+        for name in os.listdir(self.binding.project_fd):
+            try:
+                current = os.stat(
+                    name, dir_fd=self.binding.project_fd,
+                    follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if _phase1_same_inode(held, current):
+                aliases.append(name)
+        return aliases
+
+    def _remove_container_aliases(self) -> Optional[str]:
+        """Remove only project-root names still bound to the held container."""
+        held = os.fstat(self.container_fd)
+        last: Optional[Exception] = None
+        for _attempt in range(3):
+            aliases = self._container_aliases(held)
+            if not aliases:
+                return None
+            for name in aliases:
+                try:
+                    os.rmdir(name, dir_fd=self.binding.project_fd)
+                except Exception as exc:
+                    last = exc
+        # THE FINAL PASS WAS NEVER RE-READ.  The loop only re-scans at the TOP
+        # of an attempt, so a third attempt that actually removed every alias
+        # still fell through and reported `last` — an exception raised on an
+        # EARLIER pass, about a name that no longer exists.  That turned a
+        # cleanup which fully succeeded into ALIAS_CLEANUP_FAILED, i.e. a
+        # warning on a transaction with nothing left to warn about.
+        try:
+            if not self._container_aliases(held):
+                return None
+        except Exception as exc:  # the re-read itself is best-effort
+            last = last or exc
+        return str(last or "transaction container alias remained")
+
+    def _close(self) -> None:
+        if self.container_fd >= 0:
+            try:
+                os.close(self.container_fd)
+            except OSError:
+                pass
+            self.container_fd = -1
+        self.closed = True
+
+    def finalize(self) -> Optional[str]:
+        """Destroy rollback authority after the caller accepts the result.
+
+        The caller performs every failure-capable live-root/result check before
+        entering this method. Once backup deletion starts, cleanup residue can
+        no longer turn an accepted commit into a refusal: doing so would report
+        BLOCKED while leaving the already-accepted output published.
+        """
+        if self.closed:
+            return None
+        warnings: List[str] = []
+        try:
+            try:
+                drain_error = self._drain()
+            except Exception as exc:
+                drain_error = str(exc)
+            if drain_error is not None:
+                warnings.append(
+                    "RTL_TRANSACTION_DRAIN_CLEANUP_FAILED: " + drain_error)
+
+            # Even after an imperfect drain, make the best possible alias
+            # cleanup attempt.  ENOTEMPTY or an injected directory error is a
+            # warning now: rollback authority may already have been deleted.
+            try:
+                alias_error = self._remove_container_aliases()
+            except Exception as exc:
+                alias_error = str(exc)
+            if alias_error is not None:
+                warnings.append(
+                    "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: " + alias_error)
+        finally:
+            # Finalization is exception-total once irreversible cleanup starts.
+            # In particular, never strand a held descriptor in the caller.
+            self._close()
+        return "; ".join(warnings) or None
+
+    def rollback(self) -> List[str]:
+        """Restore every old canonical subtree before deleting staged-new work."""
+        if self.closed:
+            return []
+        errors: List[str] = []
+        blocked_old = False
+        for record in reversed(self.records):
+            top = record["top"]
+            new_name = record["new"]
+            rolled_new = False
+
+            # First remove the published new subtree from the canonical name,
+            # but retain it in the held container until the old tree is back.
+            if record["new_published"]:
+                try:
+                    try:
+                        os.stat(
+                            top, dir_fd=self.binding.project_fd,
+                            follow_symlinks=False)
+                        top_exists = True
+                    except FileNotFoundError:
+                        top_exists = False
+                    if top_exists:
+                        with _Phase1WritableRenameSource(
+                                self.binding.project_fd, top):
+                            _phase1_rename_noreplace(
+                                self.binding.project_fd, top,
+                                self.container_fd, new_name)
+                            rolled_new = True
+                            record["new_published"] = False
+                        tree = _phase1_tree_manifest_fd(
+                            self.container_fd, self.binding.project)
+                        if (_phase1_manifest_slice(tree, new_name)
+                                != _phase1_manifest_slice(self.final, top)):
+                            with _Phase1WritableRenameSource(
+                                    self.container_fd, new_name):
+                                _phase1_rename_noreplace(
+                                    self.container_fd, new_name,
+                                    self.binding.project_fd, top)
+                                rolled_new = False
+                                record["new_published"] = True
+                            raise _Phase1RtlOutputRefused(
+                                "RTL_TRANSACTION_PUBLISHED_TREE_CHANGED",
+                                self.binding.project / top,
+                                "a published subtree changed concurrently; "
+                                "it was retained without clobbering the old backup")
+                except Exception as exc:
+                    errors.append(str(exc))
+
+            # Restoration is deliberately independent of rolled-new cleanup.
+            # A 0555 staged subtree or injected cleanup error cannot skip this.
+            if record["old_moved"]:
+                try:
+                    with _Phase1WritableRenameSource(
+                            self.container_fd, record["old"]):
+                        _phase1_rename_noreplace(
+                            self.container_fd, record["old"],
+                            self.binding.project_fd, top)
+                        record["old_moved"] = False
+                except Exception as exc:
+                    blocked_old = True
+                    errors.append(str(exc))
+
+            # Only after canonical old state is secured may staged-new bytes go.
+            if rolled_new and not record["old_moved"] and new_name is not None:
+                cleanup_error = self._remove_entry(new_name)
+                if cleanup_error is not None:
+                    errors.append(cleanup_error)
+
+        # This also catches prepared partial copies that failed before their
+        # per-top record reached publication.
+        try:
+            if not blocked_old:
+                try:
+                    drain_error = self._drain()
+                except Exception as exc:
+                    drain_error = str(exc)
+                if drain_error is not None:
+                    errors.append(
+                        "RTL_TRANSACTION_DRAIN_CLEANUP_FAILED: " + drain_error)
+                try:
+                    alias_error = self._remove_container_aliases()
+                except Exception as exc:
+                    alias_error = str(exc)
+                if alias_error is not None:
+                    errors.append(
+                        "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: " + alias_error)
+        finally:
+            # PARITY WITH finalize().  finalize() was made exception-total
+            # because destroying rollback authority and THEN raising reports a
+            # committed success as BLOCKED.  rollback() is the other half of
+            # that same irreversible pair and was left unhardened: a raising
+            # _drain()/_remove_container_aliases() skipped _close(), leaked the
+            # held container fd, and escaped as a raw exception from a caller
+            # whose only contract is to RETURN the list of rollback errors.
+            # Worse, it escaped from inside an `except` block, so step_rtl_gen's
+            # `finally` then re-entered rollback() on the same half-rolled-back,
+            # still-open transaction.  Cleanup failure is reported, never
+            # raised, and the descriptor is released on every path.
+            self._close()
+        return errors
+
+
+def _phase1_finalize_accepted_transaction(
+        transaction: _Phase1StagedTreeTransaction) -> Optional[str]:
+    """Contain any unexpected finalizer defect after acceptance is irreversible."""
+    try:
+        return transaction.finalize()
+    except Exception as exc:
+        transaction._close()
+        return "RTL_TRANSACTION_FINALIZE_UNEXPECTED: " + str(exc)
+
+
+def _phase1_commit_staged_tree(
+        binding: _Phase1ProjectBinding,
+        stage_binding: _Phase1ProjectBinding,
+        baseline: Dict[str, _Phase1TreeEntry],
+        final: Dict[str, _Phase1TreeEntry],
+        ) -> _Phase1StagedTreeTransaction:
+    """Publish changed subtrees but retain rollback authority for the caller."""
+    tops = _phase1_top_names_changed(baseline, final)
+    binding.require_current()
+    live = _phase1_tree_manifest_fd(binding.project_fd, binding.project)
+    if live != baseline:
+        raise _Phase1RtlOutputRefused(
+            "PROJECT_CHANGED_BEFORE_RTL_COMMIT", binding.project,
+            "the held project no longer matches the snapshot used by RTL dispatch")
+    if not tops:
+        return _Phase1StagedTreeTransaction(
+            binding, "", -1, baseline, final, [], closed=True)
+
+    token = secrets.token_hex(20)
+    container_name = f".vibeic-rtl-txn.{token}"
+    os.mkdir(container_name, mode=0o700, dir_fd=binding.project_fd)
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    container_fd: Optional[int] = None
+    try:
+        container_info = os.stat(
+            container_name, dir_fd=binding.project_fd,
+            follow_symlinks=False)
+        container_fd = os.open(
+            container_name, flags, dir_fd=binding.project_fd)
+        if not _phase1_same_inode(container_info, os.fstat(container_fd)):
+            raise _Phase1RtlOutputRefused(
+                "RTL_TRANSACTION_CONTAINER_REPLACED",
+                binding.project / container_name,
+                "the private transaction container changed identity while opening")
+    except Exception:
+        if container_fd is not None:
+            os.close(container_fd)
+        try:
+            os.rmdir(container_name, dir_fd=binding.project_fd)
+        except OSError:
+            pass
+        raise
+
+    records: List[Dict[str, Any]] = []
+    for index, top in enumerate(tops):
+        records.append({
+            "top": top,
+            "new": f"new.{index}" if top in final else None,
+            "old": f"old.{index}" if top in baseline else None,
+            "old_moved": False,
+            "new_published": False,
+        })
+    transaction = _Phase1StagedTreeTransaction(
+        binding, container_name, container_fd, baseline, final, records)
+
+    try:
+        # The held private container is registered before any copy starts, so a
+        # partial copy and then an exception still has one cleanup authority.
+        for record in records:
+            top = record["top"]
+            new_name = record["new"]
+            if new_name is None:
+                continue
+            _phase1_copy_entry_fd(
+                stage_binding.project_fd, top,
+                container_fd, new_name, binding.project)
+            prepared_tree = _phase1_tree_manifest_fd(
+                container_fd, binding.project)
+            if (_phase1_manifest_slice(prepared_tree, new_name)
+                    != _phase1_manifest_slice(final, top)):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_PREPARED_VERIFY_FAILED",
+                    binding.project / top,
+                    "a prepared output subtree does not match staging")
+
+        binding.require_current()
+        if (_phase1_tree_manifest_fd(
+                binding.project_fd, binding.project,
+                ignore_top={container_name}) != baseline):
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_CHANGED_DURING_RTL_PREPARE", binding.project,
+                "the held project changed while final RTL subtrees were prepared")
+
+        for record in records:
+            top = record["top"]
+            old_name = record["old"]
+            new_name = record["new"]
+            if old_name is not None:
+                with _Phase1WritableRenameSource(
+                        binding.project_fd, top):
+                    _phase1_rename_noreplace(
+                        binding.project_fd, top,
+                        container_fd, old_name)
+                    record["old_moved"] = True
+                moved_tree = _phase1_tree_manifest_fd(
+                    container_fd, binding.project)
+                if (_phase1_manifest_slice(moved_tree, old_name)
+                        != _phase1_manifest_slice(baseline, top)):
+                    raise _Phase1RtlOutputRefused(
+                        "PROJECT_CHANGED_AT_RTL_COMMIT",
+                        binding.project / top,
+                        "the canonical subtree changed before its atomic "
+                        "compare-and-swap")
+            if new_name is not None:
+                prepared_tree = _phase1_tree_manifest_fd(
+                    container_fd, binding.project)
+                if (_phase1_manifest_slice(prepared_tree, new_name)
+                        != _phase1_manifest_slice(final, top)):
+                    raise _Phase1RtlOutputRefused(
+                        "RTL_TRANSACTION_PREPARED_REPLACED",
+                        binding.project / top,
+                        "a prepared output subtree changed before publication")
+                with _Phase1WritableRenameSource(
+                        container_fd, new_name):
+                    _phase1_rename_noreplace(
+                        container_fd, new_name,
+                        binding.project_fd, top)
+                    record["new_published"] = True
+
+        # Every fallible validation remains before backup destruction. The
+        # caller performs one more live-root/result acceptance check while this
+        # returned handle still owns all old subtrees.
+        binding.require_current()
+        if (_phase1_tree_manifest_fd(
+                binding.project_fd, binding.project,
+                ignore_top={container_name}) != final):
+            raise _Phase1RtlOutputRefused(
+                "RTL_TRANSACTION_FINAL_VERIFY_FAILED", binding.project,
+                "the published project tree does not match staged outputs")
+        backup_tree = _phase1_tree_manifest_fd(
+            container_fd, binding.project)
+        for record in records:
+            if record["old"] is not None:
+                if (_phase1_manifest_slice(backup_tree, record["old"])
+                        != _phase1_manifest_slice(
+                            baseline, record["top"])):
+                    raise _Phase1RtlOutputRefused(
+                        "RTL_TRANSACTION_BACKUP_CHANGED",
+                        binding.project / container_name / record["old"],
+                        "a transaction backup changed before acceptance")
+        binding.require_current()
+        return transaction
+    except Exception as exc:
+        rollback_errors = transaction.rollback()
+        if isinstance(exc, _Phase1RtlOutputRefused) and not rollback_errors:
+            raise
+        detail = f"RTL transaction failed and was rolled back: {exc}"
+        if rollback_errors:
+            detail += f"; rollback errors: {rollback_errors}"
+        raise _Phase1RtlOutputRefused(
+            "RTL_TRANSACTION_COMMIT_REFUSED", binding.project, detail) from exc
+def _phase1_remap_stage_value(
+        value: Any, stage_project: Path, project: Path) -> Any:
+    if isinstance(value, str):
+        stage_text = str(stage_project)
+        if value == stage_text or value.startswith(stage_text + os.sep):
+            return str(project) + value[len(stage_text):]
+        return value.replace(stage_text + os.sep, str(project) + os.sep)
+    if isinstance(value, list):
+        return [_phase1_remap_stage_value(v, stage_project, project)
+                for v in value]
+    if isinstance(value, tuple):
+        return tuple(_phase1_remap_stage_value(v, stage_project, project)
+                     for v in value)
+    if isinstance(value, dict):
+        return {k: _phase1_remap_stage_value(v, stage_project, project)
+                for k, v in value.items()}
+    return value
+
+
+def _phase1_stamp_held_session(
+        binding: _Phase1ProjectBinding, generator: str) -> None:
+    """Finish deferred provenance through isolation + held-dirfd commit."""
+    global _PHASE1_ACTIVE_PROJECT_BINDING
+    prior = _PHASE1_ACTIVE_PROJECT_BINDING
+    stage_binding: Optional[_Phase1ProjectBinding] = None
+    transaction: Optional[_Phase1StagedTreeTransaction] = None
+    stage_temp: Optional[tempfile.TemporaryDirectory] = None
+    try:
+        stage_temp = tempfile.TemporaryDirectory(prefix="vibeic-rtl-stamp-")
+        with contextlib.nullcontext(stage_temp.name) as td:
+            stage_project = Path(td) / binding.project.name
+            baseline = _phase1_snapshot_to_stage(binding, stage_project)
+            baseline_link = next(
+                (rel for rel, entry in baseline.items()
+                 if entry.kind == "symlink"), None)
+            if baseline_link is not None:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_PROVENANCE_SYMLINK_REFUSED",
+                    binding.project / baseline_link,
+                    "deferred provenance will not read through a symlink in "
+                    "the isolated project snapshot")
+            stage_binding = _Phase1ProjectBinding.open(stage_project)
+            _PHASE1_ACTIVE_PROJECT_BINDING = stage_binding
+            _rtl_prov.stamp(stage_project, generator=generator)
+            stage_binding.require_current()
+            final = _phase1_tree_manifest_fd(
+                stage_binding.project_fd, binding.project)
+            final_link = next(
+                (rel for rel, entry in final.items()
+                 if entry.kind == "symlink"), None)
+            if final_link is not None:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_PROVENANCE_SYMLINK_REFUSED",
+                    binding.project / final_link,
+                    "deferred provenance left a symlink in its isolated "
+                    "transaction")
+            _PHASE1_ACTIVE_PROJECT_BINDING = binding
+            transaction = _phase1_commit_staged_tree(
+                binding, stage_binding, baseline, final)
+            try:
+                binding.require_current()
+                _phase1_cleanup_isolated_stage(stage_binding, stage_temp)
+            except Exception as exc:
+                # RELEASE OWNERSHIP BEFORE ROLLING BACK, not after.  The
+                # `finally` below rolls back whatever `transaction` still
+                # names; if rollback() itself failed mid-way the old order
+                # left it named and rolled the SAME transaction back twice.
+                rolling_back = transaction
+                transaction = None
+                rollback_errors = rolling_back.rollback()
+                if rollback_errors:
+                    raise _Phase1RtlOutputRefused(
+                        "RTL_TRANSACTION_ROLLBACK_REFUSED", binding.project,
+                        f"deferred-stamp acceptance failed: {exc}; "
+                        f"rollback errors: {rollback_errors}") from exc
+                if isinstance(exc, _Phase1RtlOutputRefused):
+                    raise
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_STAGE_CLEANUP_REFUSED", binding.project,
+                    f"deferred-stamp stage cleanup failed: {exc}") from exc
+            accepted = transaction
+            transaction = None
+            _phase1_finalize_accepted_transaction(accepted)
+    finally:
+        if transaction is not None:
+            transaction.rollback()
+        _PHASE1_ACTIVE_PROJECT_BINDING = prior
+        if stage_binding is not None:
+            stage_binding.close()
+        if stage_temp is not None:
+            try:
+                stage_temp.cleanup()
+            except OSError:
+                pass
+
+
+@dataclass
+class _Phase1RtlPublication:
+    project: Path
+    out: Path
+    project_parent_fd: int
+    project_name: str
+    project_fd: int
+    phase2_fd: int
+    stage1_fd: int
+    rtl_fd: int
+    output_fd: int
+    output_digest: str
+    ledger_fd: Optional[int] = None
+    ledger_digest: Optional[str] = None
+    ledger_prior: Optional[bytes] = None
+    ledger_was_present: bool = False
+    ledger_written: bool = False
+
+    def _entry_matches_fd(self, parent_fd: int, name: str, fd: int) -> bool:
+        try:
+            entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError:
+            return False
+        return _phase1_same_inode(entry, os.fstat(fd))
+
+    def require_project_binding(self) -> None:
+        """Require the live project basename to remain the held directory."""
+        _Phase1ProjectBinding(
+            self.project, self.project_parent_fd, self.project_name,
+            self.project_fd).require_current()
+
+    def require_current_chain(self) -> None:
+        self.require_project_binding()
+        links = (
+            (self.project_fd, "phase2", self.phase2_fd),
+            (self.phase2_fd, "stage1", self.stage1_fd),
+            (self.stage1_fd, "rtl", self.rtl_fd),
+        )
+        if not all(self._entry_matches_fd(parent, name, child)
+                   for parent, name, child in links):
+            raise _Phase1RtlOutputRefused(
+                "RTL_ANCESTOR_REPLACED_DURING_PUBLICATION", self.out.parent,
+                "the canonical output ancestry changed while output and "
+                "provenance were being published")
+        if not self._entry_matches_fd(self.rtl_fd, self.out.name,
+                                      self.output_fd):
+            raise _Phase1RtlOutputRefused(
+                "RTL_OUTPUT_REPLACED_DURING_PUBLICATION", self.out,
+                "the published RTL entry no longer names the held output inode")
+        if _phase1_fd_digest(self.output_fd) != self.output_digest:
+            raise _Phase1RtlOutputRefused(
+                "RTL_OUTPUT_DIGEST_CHANGED_DURING_PUBLICATION", self.out,
+                "the held RTL output bytes changed during publication")
+        if self.ledger_fd is not None:
+            ledger_path = (
+                self.project / "phase2" / "stage1" / _rtl_prov.LEDGER_NAME)
+            if not self._entry_matches_fd(
+                    self.stage1_fd, _rtl_prov.LEDGER_NAME, self.ledger_fd):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_LEDGER_REPLACED_DURING_PUBLICATION", ledger_path,
+                    "the provenance entry no longer names the held ledger inode")
+            if (self.ledger_digest is not None
+                    and _phase1_fd_digest(self.ledger_fd)
+                    != self.ledger_digest):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_LEDGER_DIGEST_CHANGED_DURING_PUBLICATION", ledger_path,
+                    "the held provenance bytes changed during publication")
+
+    def require_existing_ledger_digest(
+            self, relative_name: str, expected_digest: str) -> None:
+        try:
+            ledger_fd = os.open(
+                _rtl_prov.LEDGER_NAME,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=self.stage1_fd)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_OPEN_REFUSED",
+                self.project / "phase2" / "stage1" / _rtl_prov.LEDGER_NAME,
+                f"the digest authority could not be opened safely: {exc}")
+        try:
+            parsed = json.loads(_phase1_read_fd(ledger_fd).decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            os.close(ledger_fd)
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_PARSE_REFUSED",
+                self.project / "phase2" / "stage1" / _rtl_prov.LEDGER_NAME,
+                f"the digest authority could not be parsed: {exc}")
+        files = parsed.get("files") if isinstance(parsed, dict) else None
+        if (not isinstance(files, dict)
+                or files.get(relative_name) != expected_digest):
+            os.close(ledger_fd)
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_DIGEST_CHANGED_DURING_PUBLICATION",
+                self.project / "phase2" / "stage1" / _rtl_prov.LEDGER_NAME,
+                "the held-chain ledger no longer carries the classified "
+                "primary digest")
+        self.ledger_fd = ledger_fd
+        self.ledger_digest = _phase1_fd_digest(ledger_fd)
+
+    def stamp(self, generator: str) -> Dict[str, Any]:
+        # The ledger must never be emitted into a project tree whose canonical
+        # root pathname has been renamed or replaced after output publication.
+        self.require_current_chain()
+        payload: Dict[str, Any] = {
+            "schema": _rtl_prov.SCHEMA_VERSION,
+            "generator": generator,
+            "stamped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "files": {self.out.name: self.output_digest},
+        }
+        encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8")
+        ledger_name = _rtl_prov.LEDGER_NAME
+        try:
+            old_fd = os.open(
+                ledger_name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=self.stage1_fd)
+        except FileNotFoundError:
+            old_fd = None
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_OPEN_REFUSED",
+                self.project / "phase2" / "stage1" / ledger_name,
+                f"the prior ledger could not be opened safely: {exc}")
+        if old_fd is not None:
+            try:
+                prior = _phase1_read_fd(old_fd)
+            finally:
+                os.close(old_fd)
+            self.ledger_prior = prior
+            self.ledger_was_present = True
+
+        ledger_fd, _tmp_name = _phase1_open_publication_inode(
+            self.stage1_fd, "rtl-provenance")
+        published = False
+        try:
+            expected_digest = _phase1_write_held_inode(ledger_fd, encoded)
+            if self.ledger_was_present:
+                staging = f".rtl-provenance.publish.{secrets.token_hex(24)}"
+                _phase1_link_held_inode(ledger_fd, self.stage1_fd, staging)
+                os.replace(
+                    staging, ledger_name,
+                    src_dir_fd=self.stage1_fd, dst_dir_fd=self.stage1_fd)
+            else:
+                _phase1_link_held_inode(
+                    ledger_fd, self.stage1_fd, ledger_name)
+            published = True
+            self.ledger_fd = ledger_fd
+            self.ledger_digest = expected_digest
+            self.ledger_written = True
+            _phase1_remove_inode_aliases(
+                self.stage1_fd, ledger_fd, keep=ledger_name)
+            if not self._entry_matches_fd(
+                    self.stage1_fd, ledger_name, ledger_fd):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_LEDGER_REPLACED_DURING_PUBLICATION",
+                    self.project / "phase2" / "stage1" / ledger_name,
+                    "the provenance entry does not name the held ledger inode")
+            if (_phase1_fd_digest(ledger_fd) != expected_digest
+                    or json.loads(_phase1_read_fd(ledger_fd)) != payload):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_LEDGER_DIGEST_CHANGED_DURING_PUBLICATION",
+                    self.project / "phase2" / "stage1" / ledger_name,
+                    "the published ledger bytes do not match the exact output "
+                    "digest payload")
+            self.require_current_chain()
+        except Exception:
+            if published:
+                try:
+                    self.rollback()
+                except OSError:
+                    pass
+            else:
+                _phase1_remove_inode_aliases(self.stage1_fd, ledger_fd)
+            os.close(ledger_fd)
+            if self.ledger_fd == ledger_fd:
+                self.ledger_fd = None
+                self.ledger_digest = None
+                self.ledger_written = False
+            raise
+        return payload
+
+    def rollback(self) -> None:
+        # Recheck the public root binding as required, but always clean through
+        # the already-held descriptors even when that binding was displaced.
+        # Aborting cleanup on a missing/replaced basename would strand our
+        # output and ledger in the renamed old tree.
+        try:
+            self.require_project_binding()
+        except _Phase1RtlOutputRefused:
+            pass
+        if self._entry_matches_fd(self.rtl_fd, self.out.name, self.output_fd):
+            os.unlink(self.out.name, dir_fd=self.rtl_fd)
+        if self.ledger_written and self.ledger_fd is not None:
+            ledger_name = _rtl_prov.LEDGER_NAME
+            if self._entry_matches_fd(
+                    self.stage1_fd, ledger_name, self.ledger_fd):
+                if self.ledger_was_present and self.ledger_prior is not None:
+                    restore_fd, _tmp = _phase1_open_publication_inode(
+                        self.stage1_fd, "rtl-provenance-rollback")
+                    try:
+                        _phase1_write_held_inode(restore_fd, self.ledger_prior)
+                        staging = (
+                            f".rtl-provenance.rollback."
+                            f"{secrets.token_hex(24)}")
+                        _phase1_link_held_inode(
+                            restore_fd, self.stage1_fd, staging)
+                        os.replace(
+                            staging, ledger_name,
+                            src_dir_fd=self.stage1_fd,
+                            dst_dir_fd=self.stage1_fd)
+                        _phase1_remove_inode_aliases(
+                            self.stage1_fd, restore_fd, keep=ledger_name)
+                    finally:
+                        os.close(restore_fd)
+                else:
+                    os.unlink(ledger_name, dir_fd=self.stage1_fd)
+
+    def close(self) -> None:
+        closed = set()
+        for fd in (self.ledger_fd, self.output_fd, self.rtl_fd,
+                   self.stage1_fd, self.phase2_fd, self.project_fd,
+                   self.project_parent_fd):
+            if fd is not None and fd not in closed:
+                closed.add(fd)
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
+def _publish_phase1_rtl_no_clobber(
+        project: Path, out: Path, rtl: str,
+        project_binding: Optional[_Phase1ProjectBinding] = None,
+        ) -> _Phase1RtlPublication:
+    """Publish fd-bound RTL and retain the trusted directory chain.
+
+    The returned object MUST stay open through ledger publication and result
+    construction.  Neither output nor provenance returns to a mutable ancestor
+    pathname during that interval.
+    """
+    project = Path(project)
+    open_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    fds: List[int] = []
+    output_fd: Optional[int] = None
+    root_binding: Optional[_Phase1ProjectBinding] = None
+    try:
+        if (project_binding is None
+                and _PHASE1_ACTIVE_PROJECT_BINDING is not None
+                and _PHASE1_ACTIVE_PROJECT_BINDING.project == project):
+            project_binding = _PHASE1_ACTIVE_PROJECT_BINDING
+        if project_binding is not None:
+            if project_binding.project != project:
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_BOUNDARY_BINDING_MISMATCH", project,
+                    "the publisher was given a different project-root binding")
+            root_binding = project_binding.duplicate()
+        else:
+            root_binding = _Phase1ProjectBinding.open(project)
+        root_binding.require_current()
+        project_name = root_binding.name
+        project_parent_fd = root_binding.parent_fd
+        project_fd = root_binding.project_fd
+        current_fd = project_fd
+        for component in ("phase2", "stage1", "rtl"):
+            root_binding.require_current()
+            try:
+                os.mkdir(component, mode=0o755, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            try:
+                info = os.stat(
+                    component, dir_fd=current_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_ANCESTOR_UNRESOLVED", out.parent,
+                    f"an RTL output ancestor could not be inspected: {exc}")
+            if stat.S_ISLNK(info.st_mode):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_ANCESTOR_SYMLINK", out.parent,
+                    "the RTL output ancestry changed to a symlink")
+            if not stat.S_ISDIR(info.st_mode):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_ANCESTOR_NOT_DIRECTORY", out.parent,
+                    "an RTL output ancestor is not a directory")
+            try:
+                current_fd = os.open(component, open_flags, dir_fd=current_fd)
+            except OSError as exc:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_ANCESTOR_OPEN_REFUSED", out.parent,
+                    f"an RTL output ancestor could not be opened safely: {exc}")
+            fds.append(current_fd)
+        phase2_fd, stage1_fd, rtl_fd = fds
+
+        root_binding.require_current()
+        try:
+            os.stat(out.name, dir_fd=rtl_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "RTL_OUTPUT_PATH_INSPECTION_FAILED", out,
+                f"the RTL output entry could not be inspected: {exc}")
+        else:
+            raise _Phase1RtlOutputRefused(
+                "RTL_OUTPUT_ALREADY_EXISTS", out,
+                "the RTL output entry appeared before no-clobber publication")
+
+        root_binding.require_current()
+        output_fd, _tmp_name = _phase1_open_publication_inode(
+            rtl_fd, out.name)
+        output_digest = _phase1_write_held_inode(
+            output_fd, rtl.encode("utf-8"))
+        publication = _Phase1RtlPublication(
+            project, out, project_parent_fd, project_name, project_fd,
+            phase2_fd, stage1_fd, rtl_fd, output_fd, output_digest)
+        # Re-open the exact project basename through its held parent before the
+        # first public link.  A root rename/recreate therefore cannot make the
+        # old tree look like a successful canonical publication.
+        publication.require_project_binding()
+        _phase1_link_held_inode(output_fd, rtl_fd, out.name)
+        _phase1_remove_inode_aliases(rtl_fd, output_fd, keep=out.name)
+        publication.require_current_chain()
+        # Publication owns the duplicated/opened root descriptors from here.
+        root_binding = None
+        return publication
+    except Exception:
+        if output_fd is not None:
+            if fds:
+                try:
+                    _phase1_remove_inode_aliases(fds[-1], output_fd)
+                except OSError:
+                    pass
+            try:
+                os.close(output_fd)
+            except OSError:
+                pass
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if root_binding is not None:
+            root_binding.close()
+        raise
+
+
+def _stamp_phase1_rtl_publication(
+        publication: _Phase1RtlPublication,
+        generator: str) -> Dict[str, Any]:
+    """Named seam for the held-dirfd output+ledger transaction."""
+    return publication.stamp(generator)
+
+
+def _claim_rtl_session(project: Path) -> None:
+    """Record that this runner owns ``rtl/`` for the rest of the process.
+
+    Generation is not the last writer: alias, wrapper, and hygiene steps may add
+    or repair files later in the same run.  The exit callback re-stamps that
+    final runner-owned tree.  Without this claim, the next run calls those later
+    files ``authored`` and refuses to regenerate a tree the runner itself made.
+    The callback reads the module globals at exit; it does not capture a project
+    path in an uninspectable closure.
+    """
+    global _RTL_SESSION_OWNED, _RTL_SESSION_PROJECT
+    if not _RTL_SESSION_OWNED:
+        atexit.register(_finalize_rtl_provenance)
+    _RTL_SESSION_OWNED = True
+    _RTL_SESSION_PROJECT = project
+
+
+def _try_phase1_behavioral_fsm_rtl(
+        project: Path, t0: float, force_regen: bool = False,
+        gathered: Optional[_Phase1PlainSpecGather] = None,
+        project_binding: Optional[_Phase1ProjectBinding] = None,
+        ) -> Optional[StepResult]:
+    """Run flow-back under one root identity from gather through publish."""
+    project = Path(project)
+    if not _RTL_SESSION_OWNED and _RTL_SESSION_BINDING is not None:
+        # Tests and embedders may reset the ownership token without running the
+        # process-exit callback.  Do not retain a stale held root into a later
+        # independent dispatch.
+        _phase1_replace_session_binding(None)
+    owned_binding = project_binding is None
+    # A caller may reuse gathered bytes only when it also supplies the binding
+    # that was already held while those bytes were gathered.  Otherwise gather
+    # again after opening the root so stale pre-open prose cannot cross trees.
+    if owned_binding and gathered is not None:
+        gathered = None
+    binding: Optional[_Phase1ProjectBinding] = project_binding
+    global _PHASE1_ACTIVE_PROJECT_BINDING
+    prior_binding = _PHASE1_ACTIVE_PROJECT_BINDING
+    try:
+        if binding is None:
+            binding = _Phase1ProjectBinding.open(project)
+        elif binding.project != project:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_BINDING_MISMATCH", project,
+                "flow-back was given a different project-root binding")
+        _PHASE1_ACTIVE_PROJECT_BINDING = binding
+        binding.require_current()
+        if gathered is None:
+            gathered = _gather_phase1_plain_spec_text(
+                project, project_binding=binding)
+        binding.require_current()
+        result = _try_phase1_behavioral_fsm_rtl_bound(
+            project, t0, force_regen, gathered, binding)
+        binding.require_current()
+        if (_RTL_SESSION_OWNED and _RTL_SESSION_PROJECT == project):
+            _phase1_replace_session_binding(binding.duplicate())
+        return result
+    except _Phase1RtlOutputRefused as exc:
+        return _phase1_rtl_output_refusal_result(
+            t0, _phase1_rtl_output_refusal(
+                project, exc.path, exc.reason, exc.detail))
+    finally:
+        _PHASE1_ACTIVE_PROJECT_BINDING = prior_binding
+        if owned_binding and binding is not None:
+            binding.close()
+
+
+def _try_phase1_behavioral_fsm_rtl_bound(
+        project: Path, t0: float, force_regen: bool,
+        gathered: _Phase1PlainSpecGather,
+        project_binding: _Phase1ProjectBinding,
+        ) -> Optional[StepResult]:
+    """Flow plain Phase-1 prose through the deterministic artifact registry.
+
+    This bridge is deliberately narrow: only the registry's fail-closed
+    ``behavioral_fsm`` family is accepted.  Every other artifact keeps its
+    existing structured-spec / canonical / authoring path.  The registry owns
+    semantic recognition; this helper owns only raw-source gathering, an explicit
+    unambiguous top name, the authored-RTL guard/provenance ledger, and staging.
+    """
+    project_binding.require_current()
+    if gathered.refusal is not None:
+        return _phase1_plain_spec_refusal_result(t0, gathered.refusal)
+    desc = gathered.text
+    sources = list(gathered.sources)
+    if not desc:
+        return None
+    module = _phase1_declared_module_name(desc)
+    if module is None:
+        return None
+    try:
+        import spec_artifact_registry as _reg  # noqa: E402
+        kind, rtl = _reg.generate(desc, module)
+    except Exception:
+        return None
+    if kind != "behavioral_fsm" or not rtl:
+        return None
+    # The top argument is part of the registry contract, but verify it before
+    # touching the project so a future generator regression remains a DEFER.
+    if not re.search(r"(?m)^\s*module\s+" + re.escape(module) + r"\b", rtl):
+        return None
+    rtl_dir = _pl.rtl_dir(project)
+    out = rtl_dir / f"{module}.v"
+    project_binding.require_current()
+    output_refusal = _validate_phase1_rtl_output_path(project, out)
+    project_binding.require_current()
+    if output_refusal is not None:
+        return _phase1_rtl_output_refusal_result(t0, output_refusal)
+    if (_RTL_SESSION_OWNED and _RTL_SESSION_PROJECT == project
+            and out.is_file()
+            and out.read_text(errors="replace") == rtl):
+        # An ECO-loop re-entry occurs before the exit stamp, after alias/wrapper
+        # steps may have added runner-owned files.  The on-disk ledger is
+        # intentionally stale until process exit, so classifying here would call
+        # those additions "authored" and abandon this deterministic path.  The
+        # in-process ownership token is the stronger evidence for this interval.
+        project_binding.require_current()
+        return StepResult(
+            "rtl_gen", "PASS", time.time() - t0,
+            f"existing session-owned behavioral FSM RTL is byte-identical "
+            f"to spec_artifact_registry[{kind}] -> {out.relative_to(project)}",
+            output_files=[str(out)],
+            extras={"deterministic_generator": "spec_artifact_registry",
+                    "artifact_type": kind, "module": module,
+                    "program_first": True,
+                    "spec_source": "phase1_plain_prose",
+                    "spec_sources": sources, "idempotent": True,
+                    "rtl_provenance": "session_owned"})
+    project_binding.require_current()
+    verdict, why, evidence = _rtl_prov.classify(project)
+    project_binding.require_current()
+    if verdict in _rtl_prov.PRESERVE_VERDICTS and not force_regen:
+        return None  # authored/unknown RTL — never overwrite or certify it
+    if verdict == _rtl_prov.GENERATED:
+        # Idempotent second run: accept only if the previously stamped file is
+        # byte-identical to what this version would emit.  A changed generator
+        # safely DEFERs instead of silently replacing a prior generated tree.
+        if out.is_file() and out.read_text(errors="replace") == rtl:
+            project_binding.require_current()
+            _claim_rtl_session(project)
+            return StepResult(
+                "rtl_gen", "PASS", time.time() - t0,
+                f"existing provenance-stamped behavioral FSM RTL is byte-identical "
+                f"to spec_artifact_registry[{kind}] -> {out.relative_to(project)}",
+                output_files=[str(out)],
+                extras={"deterministic_generator": "spec_artifact_registry",
+                        "artifact_type": kind, "module": module,
+                        "program_first": True,
+                        "spec_source": "phase1_plain_prose",
+                        "spec_sources": sources, "idempotent": True,
+                        "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+        # The provenance ledger's deletion contract says removal alone is not
+        # authorship: regeneration may restore the file.  When a later
+        # runner-owned alias remains, classify() still returns GENERATED and
+        # names the missing primary in ``removed``.  Restore ONLY when the
+        # current deterministic bytes match that primary's recorded digest;
+        # this proves both that the path belonged to this generated tree and
+        # that neither the source nor generator has gone stale.  Other
+        # runner-owned aliases stay byte-for-byte untouched.
+        primary_rel = out.relative_to(rtl_dir).as_posix()
+        # ``classify`` exposes the removed digest from the SAME validated ledger
+        # snapshot that produced this verdict.  Re-reading the authority here
+        # would create a ledger-swap TOCTOU between classification and restore.
+        recorded_digest = (evidence.get("removed_digests") or {}).get(
+            primary_rel)
+        if (not out.exists() and not out.is_symlink()
+                and primary_rel in (evidence.get("removed") or [])
+                and isinstance(recorded_digest, str)):
+            deterministic_digest = hashlib.sha256(
+                rtl.encode("utf-8")).hexdigest()
+            if deterministic_digest == recorded_digest:
+                publication = None
+                try:
+                    publication = _publish_phase1_rtl_no_clobber(
+                        project, out, rtl)
+                    publication.require_existing_ledger_digest(
+                        primary_rel, recorded_digest)
+                    publication.require_current_chain()
+                    result = StepResult(
+                        "rtl_gen", "PASS", time.time() - t0,
+                        f"restored missing provenance-stamped behavioral FSM "
+                        f"primary from spec_artifact_registry[{kind}] -> "
+                        f"{out.relative_to(project)}; remaining runner-owned "
+                        f"RTL was retained unchanged",
+                        output_files=[str(out)],
+                        extras={"deterministic_generator":
+                                "spec_artifact_registry",
+                                "artifact_type": kind, "module": module,
+                                "program_first": True,
+                                "spec_source": "phase1_plain_prose",
+                                "spec_sources": sources,
+                                "restored_missing_primary": True,
+                                "rtl_provenance": verdict,
+                                "rtl_provenance_evidence": evidence})
+                    # Construct the complete result while the same trusted fds
+                    # still bind output and ledger, then make the final namespace
+                    # identity/digest check immediately before accepting it.
+                    publication.require_current_chain()
+                    _claim_rtl_session(project)
+                    return result
+                except _Phase1RtlOutputRefused as exc:
+                    if publication is not None:
+                        try:
+                            publication.rollback()
+                        except OSError:
+                            pass
+                    return _phase1_rtl_output_refusal_result(
+                        t0, _phase1_rtl_output_refusal(
+                            project, exc.path, exc.reason, exc.detail))
+                except OSError as exc:
+                    if publication is not None:
+                        try:
+                            publication.rollback()
+                        except OSError:
+                            pass
+                    return StepResult(
+                        "rtl_gen", "FAIL", time.time() - t0,
+                        f"could not restore provenance-stamped missing "
+                        f"behavioral FSM primary {out.relative_to(project)}: "
+                        f"{exc!r}",
+                        extras={"deterministic_generator":
+                                "spec_artifact_registry",
+                                "artifact_type": kind, "module": module,
+                                "program_first": True,
+                                "spec_source": "phase1_plain_prose",
+                                "spec_sources": sources,
+                                "restored_missing_primary": False,
+                                "rtl_provenance": verdict,
+                                "rtl_provenance_evidence": evidence})
+                finally:
+                    if publication is not None:
+                        publication.close()
+        if not force_regen:
+            return StepResult(
+                "rtl_gen", "WAIVED", time.time() - t0,
+                f"PRESERVED generator-owned RTL because current deterministic output "
+                f"differs; re-run with --force-rtl-regen to replace it ({why})",
+                extras={"deterministic_generator": "spec_artifact_registry",
+                        "artifact_type": kind, "module": module,
+                        "program_first": True, "preserved": True,
+                        "override_flag": "--force-rtl-regen",
+                        "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+    preserved_note = ""
+    if verdict != _rtl_prov.EMPTY:
+        # Explicit regeneration is destructive but recoverable: preserve the
+        # entire old RTL tree first, then clear it so a renamed top cannot leave
+        # stale sibling modules behind.
+        try:
+            project_binding.require_current()
+            kept = _rtl_prov.preserve(project)
+            project_binding.require_current()
+        except OSError as exc:
+            return StepResult(
+                "rtl_gen", "FAIL", time.time() - t0,
+                f"--force-rtl-regen could not preserve existing RTL: {exc!r}; "
+                "refusing to replace it",
+                extras={"preserved": False, "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+        import shutil
+        shutil.rmtree(rtl_dir)
+        preserved_note = f"; prior RTL preserved to {kept.name}/"
+    publication = None
+    try:
+        project_binding.require_current()
+        publication = _publish_phase1_rtl_no_clobber(
+            project, out, rtl)
+        generator = "spec_artifact_registry[behavioral_fsm]"
+        _stamp_phase1_rtl_publication(publication, generator)
+        publication.require_current_chain()
+        result = StepResult(
+            "rtl_gen", "PASS", time.time() - t0,
+            f"deterministic RTL via spec_artifact_registry[{kind}] from "
+            f"Phase-1 prose (program-first; no LLM) -> "
+            f"{out.relative_to(project)}{preserved_note}",
+            output_files=[str(out)],
+            extras={"deterministic_generator": "spec_artifact_registry",
+                    "artifact_type": kind, "module": module,
+                    "program_first": True,
+                    "spec_source": "phase1_plain_prose",
+                    "spec_sources": sources,
+                    "rtl_provenance": _rtl_prov.GENERATED})
+        publication.require_current_chain()
+        _claim_rtl_session(project)
+        return result
+    except _Phase1RtlOutputRefused as exc:
+        if publication is not None:
+            try:
+                publication.rollback()
+            except OSError:
+                pass
+        return _phase1_rtl_output_refusal_result(
+            t0, _phase1_rtl_output_refusal(
+                project, exc.path, exc.reason, exc.detail))
+    except OSError as exc:
+        if publication is not None:
+            try:
+                publication.rollback()
+            except OSError:
+                pass
+        return StepResult(
+            "rtl_gen", "FAIL", time.time() - t0,
+            f"could not publish deterministic behavioral FSM RTL "
+            f"{out.relative_to(project)} without clobbering: {exc!r}",
+            extras={"deterministic_generator": "spec_artifact_registry",
+                    "artifact_type": kind, "module": module,
+                    "program_first": True,
+                    "spec_source": "phase1_plain_prose",
+                    "spec_sources": sources, "write_performed": False,
+                    "rtl_provenance": verdict,
+                    "rtl_provenance_evidence": evidence})
+    finally:
+        if publication is not None:
+            publication.close()
 
 
 def _enforce_power_up_determinism(rtl_dir: Path) -> int:
@@ -1769,20 +3953,31 @@ def _enforce_power_up_determinism(rtl_dir: Path) -> int:
     return 0
 
 
-def _gather_spec_text(project: Path) -> str:
+def _gather_spec_text(
+        project: Path, phase1_plain_text: Optional[str] = None) -> str:
     """Concatenate the design's natural-language spec sources (input prompt,
     input docs, and the generated L-doc JSON) so a spec-PROSE gate (e.g. the
     worked-example oracle) can read the SAME worked-example prose the author
-    saw. Best-effort + bounded; returns "" when no text source exists."""
+    saw. Best-effort + bounded; returns "" when no text source exists.
+
+    ``phase1_plain_text`` is the immutable result of the strict pre-write gather
+    in ``step_rtl_gen``.  When supplied (including an honestly empty string), do
+    not re-read operator prose after that provenance check; only append generated
+    L-docs, which live on the separate structured-spec side of the boundary.
+    """
     chunks: List[str] = []
-    for d in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
-        if d.is_dir():
-            for f in sorted(d.rglob("*")):
-                if f.is_file() and f.suffix.lower() in (".md", ".txt"):
-                    try:
-                        chunks.append(f.read_text(errors="replace"))
-                    except OSError:
-                        pass
+    if phase1_plain_text is not None:
+        if phase1_plain_text:
+            chunks.append(phase1_plain_text)
+    else:
+        for d in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
+            if d.is_dir():
+                for f in sorted(d.rglob("*")):
+                    if f.is_file() and f.suffix.lower() in (".md", ".txt"):
+                        try:
+                            chunks.append(f.read_text(errors="replace"))
+                        except OSError:
+                            pass
     gd = _pl.generated_docs_dir(project)
     if gd.is_dir():
         for f in sorted(gd.glob("L*.json")):
@@ -3266,17 +5461,205 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
 
 def step_rtl_gen(project: Path, ic_class: str,
                  force_regen: Optional[bool] = None) -> StepResult:
+    """Run RTL dispatch in isolation, then CAS-publish its complete delta."""
+    t0 = time.time()
+    project = Path(project)
+    binding: Optional[_Phase1ProjectBinding] = None
+    stage_binding: Optional[_Phase1ProjectBinding] = None
+    transaction: Optional[_Phase1StagedTreeTransaction] = None
+    replacement_binding: Optional[_Phase1ProjectBinding] = None
+    stage_temp: Optional[tempfile.TemporaryDirectory] = None
+    global _PHASE1_ACTIVE_PROJECT_BINDING
+    global _RTL_SESSION_OWNED, _RTL_SESSION_PROJECT, _RTL_SESSION_BINDING
+    prior_binding = _PHASE1_ACTIVE_PROJECT_BINDING
+    prior_owned = _RTL_SESSION_OWNED
+    prior_project = _RTL_SESSION_PROJECT
+    prior_session_binding = _RTL_SESSION_BINDING
+    if not prior_owned and prior_session_binding is not None:
+        prior_session_binding.close()
+        prior_session_binding = None
+        _RTL_SESSION_BINDING = None
+    committed = False
+    try:
+        binding = _Phase1ProjectBinding.open(project)
+        stage_temp = tempfile.TemporaryDirectory(prefix="vibeic-rtl-step-")
+        with contextlib.nullcontext(stage_temp.name) as td:
+            stage_project = Path(td) / project.name
+            baseline = _phase1_snapshot_to_stage(binding, stage_project)
+            stage_binding = _Phase1ProjectBinding.open(stage_project)
+            _PHASE1_ACTIVE_PROJECT_BINDING = stage_binding
+            # A staged claim may hold its own duplicate, but it must never
+            # replace/close the prior live-project handle until commit wins.
+            _RTL_SESSION_BINDING = None
+            if prior_owned and prior_project == project:
+                _RTL_SESSION_PROJECT = stage_project
+            result = _step_rtl_gen_bound(
+                stage_project, ic_class, force_regen, t0, stage_binding,
+                snapshot_manifest=baseline)
+            stage_binding.require_current()
+            final = _phase1_tree_manifest_fd(
+                stage_binding.project_fd, project)
+            # PASS and WAIVED branches intentionally publish deterministic RTL
+            # or author-handoff artifacts.  A failed/refused branch has no
+            # authority to leak a generator's partial staging writes into the
+            # canonical project; its complete transaction is the baseline.
+            publish_changes = result.status in ("PASS", "WAIVED")
+            commit_manifest = final if publish_changes else baseline
+            final_link = None
+            if publish_changes:
+                final_link = next(
+                    (rel for rel, entry in final.items()
+                     if entry.kind == "symlink"
+                     and baseline.get(rel) != entry), None)
+            if final_link is not None:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_OUTPUT_SYMLINK_REFUSED",
+                    project / final_link,
+                    "an RTL reader or generator left a symlink in the isolated "
+                    "transaction; it cannot be published into the held project")
+
+            # No helper above ever received the mutable live pathname.  Only
+            # this held-dirfd transaction can make its validated staged delta
+            # visible, and it can roll every changed top-level subtree back.
+            _PHASE1_ACTIVE_PROJECT_BINDING = binding
+            transaction = _phase1_commit_staged_tree(
+                binding, stage_binding, baseline, commit_manifest)
+            session_claimed = (
+                _RTL_SESSION_OWNED
+                and _RTL_SESSION_PROJECT == stage_project)
+            try:
+                # All failure-capable result acceptance stays on this side of
+                # finalize(), while the old canonical subtrees still exist.
+                binding.require_current()
+                result.detail = _phase1_remap_stage_value(
+                    result.detail, stage_project, project)
+                result.output_files = _phase1_remap_stage_value(
+                    result.output_files, stage_project, project)
+                result.extras = _phase1_remap_stage_value(
+                    result.extras, stage_project, project)
+                if session_claimed:
+                    replacement_binding = binding.duplicate()
+                # TemporaryDirectory cleanup is deliberately completed while
+                # old canonical subtrees are still held. Its __exit__ must not
+                # become a new post-finalize failure seam.
+                _phase1_cleanup_isolated_stage(stage_binding, stage_temp)
+            except Exception as exc:
+                # Same ordering rule as the deferred-stamp path above: the
+                # `finally` rolls back whatever `transaction` still names, so
+                # ownership is released BEFORE the rollback is attempted.
+                rolling_back = transaction
+                transaction = None
+                rollback_errors = rolling_back.rollback()
+                if replacement_binding is not None:
+                    replacement_binding.close()
+                    replacement_binding = None
+                if rollback_errors:
+                    raise _Phase1RtlOutputRefused(
+                        "RTL_TRANSACTION_ROLLBACK_REFUSED", project,
+                        f"result acceptance failed: {exc}; rollback errors: "
+                        f"{rollback_errors}") from exc
+                if isinstance(exc, _Phase1RtlOutputRefused):
+                    raise
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_STAGE_CLEANUP_REFUSED", project,
+                    f"isolated RTL stage cleanup failed: {exc}") from exc
+
+            accepted = transaction
+            transaction = None
+            cleanup_warning = _phase1_finalize_accepted_transaction(accepted)
+            if cleanup_warning is not None:
+                result.extras["transaction_cleanup_warning"] = cleanup_warning
+
+            # No fallible project/path check may follow finalize(): rollback
+            # authority has now intentionally been destroyed.
+            if session_claimed:
+                staged_session_binding = _RTL_SESSION_BINDING
+                _RTL_SESSION_PROJECT = project
+                _RTL_SESSION_BINDING = replacement_binding
+                if staged_session_binding is not None:
+                    staged_session_binding.close()
+                if (prior_session_binding is not None
+                        and prior_session_binding is not replacement_binding):
+                    prior_session_binding.close()
+            else:
+                staged_session_binding = _RTL_SESSION_BINDING
+                _RTL_SESSION_OWNED = prior_owned
+                _RTL_SESSION_PROJECT = prior_project
+                _RTL_SESSION_BINDING = prior_session_binding
+                if staged_session_binding is not None:
+                    staged_session_binding.close()
+            committed = True
+            return result
+    except _Phase1RtlOutputRefused as exc:
+        return _phase1_rtl_output_refusal_result(
+            t0, _phase1_rtl_output_refusal(
+                project, exc.path, exc.reason, exc.detail))
+    finally:
+        if transaction is not None:
+            transaction.rollback()
+        if not committed:
+            if replacement_binding is not None:
+                replacement_binding.close()
+            if (_RTL_SESSION_BINDING is not None
+                    and _RTL_SESSION_BINDING is not prior_session_binding):
+                _RTL_SESSION_BINDING.close()
+            _RTL_SESSION_OWNED = prior_owned
+            _RTL_SESSION_PROJECT = prior_project
+            _RTL_SESSION_BINDING = prior_session_binding
+        _PHASE1_ACTIVE_PROJECT_BINDING = prior_binding
+        if stage_binding is not None:
+            stage_binding.close()
+        if stage_temp is not None:
+            try:
+                stage_temp.cleanup()
+            except OSError:
+                pass
+        if binding is not None:
+            binding.close()
+
+
+def _step_rtl_gen_bound(
+        project: Path, ic_class: str, force_regen: Optional[bool],
+        t0: float, project_binding: _Phase1ProjectBinding,
+        snapshot_manifest: Dict[str, _Phase1TreeEntry],
+        ) -> StepResult:
     """Emit RTL for ``ic_class``.
 
     ``force_regen`` overrides the authored-RTL guard for this call. When
     None (the default) the process-wide setting from ``--force-rtl-regen``
     applies. See ``rtl_provenance`` for what the guard protects.
     """
-    t0 = time.time()
+    project_binding.require_current()
+    # Operator-prose provenance is a pre-write boundary for the WHOLE dispatch,
+    # not merely the behavioral-FSM branch.  Several earlier deterministic
+    # emitters also read Phase-1 prose.  Letting one of them run first would let
+    # a symlinked, unreadable, or malformed source write RTL and bypass the named
+    # refusal below entirely.
+    _phase1_plain = _gather_phase1_plain_spec_text(
+        project, project_binding=project_binding)
+    project_binding.require_current()
+    if _phase1_plain.refusal is not None:
+        return _phase1_plain_spec_refusal_result(t0, _phase1_plain.refusal)
+    # The isolated project must not retain a portal back to a mutable external
+    # namespace.  Operator-prose links have already received their more precise
+    # named refusal above; any remaining symlink could be followed by one of the
+    # legacy readers or third-party generators that intentionally receive only
+    # this private snapshot.
+    staged_link = next(
+        (rel for rel, entry in snapshot_manifest.items()
+         if entry.kind == "symlink"), None)
+    if staged_link is not None:
+        raise _Phase1RtlOutputRefused(
+            "PROJECT_SYMLINK_NOT_ISOLATABLE",
+            project / staged_link,
+            "the isolated RTL dispatch snapshot contains a symlink that a "
+            "reader or generator could follow outside the held project tree")
     # v0.1.10: program-FIRST. If a structured RTL spec is present and is
     # mechanically derivable (FSM table / truth table / gate netlist / vector op),
     # emit RTL deterministically with NO LLM before any class-registry / AI path.
+    project_binding.require_current()
     _det = _try_deterministic_rtl_dispatch(project, t0)
+    project_binding.require_current()
     if _det is not None:
         return _det
     # Capture (spm x sky130A): the SERIAL-PARALLEL MULTIPLIER subset of the
@@ -3284,7 +5667,9 @@ def step_rtl_gen(project: Path, ic_class: str,
     # calibrates, so emit it deterministically from the L docs BEFORE WAIVE-ing
     # to spec-to-rtl. DEFERs (returns None) on every other shape/class, so all
     # non-matching designs keep the existing class-registry / AI-fallback path.
+    project_binding.require_current()
     _sp = _try_serial_parallel_mul_rtl(project, ic_class, t0)
+    project_binding.require_current()
     if _sp is not None:
         return _sp
     # Canonical single-function primitive shapes (clock dividers, pulse detector,
@@ -3292,9 +5677,24 @@ def step_rtl_gen(project: Path, ic_class: str,
     # IEEE-754 multiplier, async gray FIFO): when the description STATES the
     # structure unambiguously, emit verified-correct RTL deterministically BEFORE
     # deferring to spec-to-rtl. DEFERs (returns None) on every non-matching shape.
-    _cp = _try_canonical_primitive_rtl(project, t0)
+    project_binding.require_current()
+    _cp = _try_canonical_primitive_rtl(
+        project, t0, phase1_plain_text=_phase1_plain.text)
+    project_binding.require_current()
     if _cp is not None:
         return _cp
+    # A strictly recognized behavioral Moore FSM may live only in the original
+    # Phase-1 prompt/doc (before an L-doc extractor has materialized a structured
+    # rtl_spec).  Give that prose the same registry-backed deterministic path,
+    # while accepting only the behavioral_fsm family and otherwise DEFERring.
+    _behavior_force = (_FORCE_RTL_REGEN
+                       if force_regen is None else force_regen)
+    _bf = _try_phase1_behavioral_fsm_rtl(
+        project, t0, force_regen=_behavior_force, gathered=_phase1_plain,
+        project_binding=project_binding)
+    project_binding.require_current()
+    if _bf is not None:
+        return _bf
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
@@ -3520,7 +5920,9 @@ def step_rtl_gen(project: Path, ic_class: str,
     _force = _FORCE_RTL_REGEN if force_regen is None else force_regen
     preserved_note = ""
     if not _RTL_SESSION_OWNED:
+        project_binding.require_current()
         _verdict, _why, _ev = _rtl_prov.classify(project)
+        project_binding.require_current()
         if _verdict in _rtl_prov.PRESERVE_VERDICTS:
             _skill = config.get("fallback_skill") or "spec-to-rtl"
             if not _force:
@@ -3550,7 +5952,9 @@ def step_rtl_gen(project: Path, ic_class: str,
             # RECOVERABLE. Copy to a uniquely-named sibling that no
             # later run reclaims, and name it in the result.
             try:
+                project_binding.require_current()
                 _kept = _rtl_prov.preserve(project)
+                project_binding.require_current()
                 preserved_note = (f", authored RTL preserved to "
                                   f"{_kept.name}/")
             except OSError as _e:
@@ -3574,18 +5978,25 @@ def step_rtl_gen(project: Path, ic_class: str,
     # above has established that rtl/ is generator-produced (or that an
     # explicit override already preserved it elsewhere), so the bytes
     # being dropped are reproducible by re-running the generator.
+    project_binding.require_current()
     backup_dir.parent.mkdir(parents=True, exist_ok=True)
+    project_binding.require_current()
     had_prior_rtl = rtl_dir.is_dir() and any(rtl_dir.iterdir())
     if had_prior_rtl:
+        project_binding.require_current()
         if backup_dir.exists():
             shutil.rmtree(backup_dir, ignore_errors=True)
         # Atomic move: prior rtl/ becomes rtl.pre_gen_backup/.
         rtl_dir.rename(backup_dir)
+        project_binding.require_current()
     rtl_dir.mkdir(parents=True, exist_ok=True)
+    project_binding.require_current()
 
     cmd = ["python3", str(gen), str(project)] + list(
         config.get("rtl_gen_args") or [])
+    project_binding.require_current()
     rc, out, err = _run(cmd)
+    project_binding.require_current()
     emitted_any = rtl_dir.is_dir() and any(
         p.is_file() for p in rtl_dir.iterdir())
     if rc == 0 and emitted_any:
@@ -3606,7 +6017,9 @@ def step_rtl_gen(project: Path, ic_class: str,
             atexit.register(_finalize_rtl_provenance)
         _RTL_SESSION_OWNED = True
         _RTL_SESSION_PROJECT = project
+        project_binding.require_current()
         _rtl_prov.stamp(project, generator=gen_name)
+        project_binding.require_current()
         # Generation succeeded — keep backup_dir as a safety mirror.
         # (Not deleted: lets a fresh agent diff prior-vs-new on demand.)
         return StepResult("rtl_gen", "PASS",
@@ -6022,6 +8435,47 @@ def _stamp_gate_report_dirs(project: Path) -> List[str]:
     return stamped
 
 
+def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
+    """Flow step 1.6x — a candidate RTL produced by a cross-layer PPA search
+    must still be the design the specification describes.
+
+    Runs the JUDGE (`crosslayer_rewrite_equivalence_check`), never the tool, so
+    this costs a file read on every ordinary design and nothing else. The judge
+    writes `reports/crosslayer/rewrite_equivalence_check.json` on EVERY run,
+    including the NOT_APPLICABLE one — which is the point: a design that ran no
+    cross-layer search must produce a RECORD saying so, not an absence a reader
+    has to interpret.
+
+    It is called UNCONDITIONALLY for the reason
+    `flow_condition_reachability_check` gave when step 1.6x was first written
+    conditional: "a check disabled by exactly the situation it was written
+    for". A search that rewrote the RTL and skipped its own snapshot would have
+    skipped the gate with it."""
+    t0 = time.time()
+    out_rel = "reports/crosslayer/rewrite_equivalence_check.json"
+    cmd = [sys.executable, str(Path(__file__).resolve().parent
+                               / "crosslayer_rewrite_equivalence_check.py"),
+           str(project),
+           "--report", "reports/crosslayer/rewrite_equivalence.json",
+           "--baseline-marker", "reports/crosslayer/baseline_rtl",
+           "--search-space", "reports/crosslayer/search_space.json",
+           "--json", out_rel]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        rc = r.returncode
+        detail = (r.stdout or r.stderr or "").strip().splitlines()
+        detail = detail[-1] if detail else f"rc={rc}"
+    except (subprocess.SubprocessError, OSError) as e:  # noqa: BLE001
+        return StepResult("crosslayer_rewrite_fidelity", "FAIL",
+                          time.time() - t0,
+                          f"the rewrite-fidelity judge could not run ({e}); "
+                          f"a check that could not look is not a clean check")
+    status = "PASS" if rc == 0 else "FAIL"
+    return StepResult("crosslayer_rewrite_fidelity", status,
+                      time.time() - t0, detail, [out_rel],
+                      extras={"exit_code": rc})
+
+
 def step_stamp_gate_reports(project: Path) -> StepResult:
     """ORGANIC-20260606 #497 ROUND-2: caller-side identity stamp of every
     gate/lint JSON the gate-audit step produced. Runs AFTER step_final_audit
@@ -6201,6 +8655,24 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
            str(tb_path)] + [str(p) for p in rtl_files]
     rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
         cmd, rtl_files, tb_path, run_dir, container, top_name)
+    if rc != 0 and _compiler_was_not_found(rc, out, err):
+        # vibe-ic#1394 residual — the SAME absent-compiler defect #1398 fixed
+        # at the generic full-stack site, still live here. This site is
+        # reached FIRST (the oracle TB is tried before the skeleton), so on a
+        # project that has an oracle TB the guarded site below is never
+        # consulted and the run still ends in
+        #
+        #   FAIL "per-IC oracle TB (...) failed to compile against rtl/ —
+        #         real structural defect (#439). iverilog rc=127
+        #         stderr=COMMAND_NOT_FOUND: ... 'iverilog'"
+        #
+        # MEASURED on 8HD-9 against a DUT that is `assign data_out = data_in;`
+        # with iverilog only inside the container and the tree outside its
+        # bind mounts. Returning None is this helper's OWN documented contract
+        # for "no simulator available" — the caller falls through to the
+        # skeleton path, which is what `_iverilog_available` would have caused
+        # had it known where the dispatch would land.
+        return None
     if rc != 0:
         # ORGANIC (GAP-E2E-5) — an SV construct beyond the iverilog/sv2v OSS-sim
         # SUBSET (e.g. OpenTitan's cross-package `pkg::PARAM` in a param default,
@@ -6428,9 +8900,62 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         # the SV frontend also rejects still FAILs.
         rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
             cmd, rtl_files, tb_path, run_dir, container, top_name)
+        if rc != 0 and _compiler_was_not_found(rc, out, err):
+            # vibe-ic#1394 — THE COMPILER WAS ABSENT, which is not a defect
+            # in the DUT. `_iverilog_available(container)` above answers "is
+            # iverilog reachable SOMEWHERE"; the dispatch can still land
+            # somewhere it is not — the canonical case being a run_dir that
+            # is outside the container's bind mounts, which falls back to the
+            # HOST and finds no iverilog there. The runner already discloses
+            # that divergence (#902 sim-toolchain DIVERGED), so the
+            # information was present and only the VERDICT was wrong:
+            #
+            #   status FAIL, "real structural defect.
+            #                 iverilog rc=127 stderr=COMMAND_NOT_FOUND"
+            #
+            # A verdict that cites rc=127 as evidence of a structural defect
+            # contradicts itself in its own detail string. Route it to the
+            # same honest outcome the both-absent path below already reaches:
+            # nothing SIMULATED, so never a PASS, and never a FAIL either.
+            #
+            # MEASURED: this is why `test_phase2_class_aware_gating.py::
+            # test_generic_class_reference_tb_runs_full_stack_tb` FAILS from a
+            # /tmp checkout and PASSES from a mounted one on the same host and
+            # commit — a red inside main's quoted count that is not a defect.
+            _absent = (f"the simulator was NOT FOUND where the compile was "
+                       f"dispatched (rc={rc}) — no sim ran, so this is not "
+                       f"evidence about the DUT. Reachability, not the "
+                       f"design: a run_dir outside the container's bind "
+                       f"mounts falls back to the host. "
+                       f"stderr={(err or out)[-600:]}")
+            if results_path.is_file():
+                return StepResult(
+                    "reference_tb", "WAIVED",
+                    time.time() - t0,
+                    (f"AID reference TB SKIPPED ({track_reason}); {_absent} "
+                     f"Generic full-stack TB skeleton ({tb_path.name}) + "
+                     f"results.json present but NO sim ran (#439)."),
+                    [str(tb_path), str(results_path)],
+                    extras={"verification_track": "generic_full_stack",
+                            "aid_tb_skipped_reason": track_reason,
+                            "functional_verified": False,
+                            "fallback_skill": "testbench-author",
+                            "iverilog_available": False,
+                            "tb_frontend": tb_frontend})
+            return StepResult(
+                "reference_tb", "SKIP",
+                time.time() - t0,
+                (f"AID reference TB SKIPPED: {track_reason}. {_absent}"),
+                extras={"verification_track": "generic_full_stack",
+                        "aid_tb_skipped_reason": track_reason,
+                        "functional_verified": False,
+                        "iverilog_available": False,
+                        "tb_frontend": tb_frontend})
         if rc != 0:
             # A genuine compile/elaboration failure of the DUT is a REAL
-            # functional/structural defect — FAIL (honesty preserved).
+            # functional/structural defect — FAIL (honesty preserved). Only
+            # reached when the compiler RAN and rejected the source; the
+            # not-found case is routed above (#1394).
             return StepResult(
                 "reference_tb", "FAIL",
                 time.time() - t0,
@@ -7306,6 +9831,23 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     # frontend also rejects still FAILs.
     rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
         cmd, rtl_files, PROTOCOL_TB, sim_dir, container, bound_top)
+    if rc != 0 and _compiler_was_not_found(rc, out, err):
+        # vibe-ic#1394 residual — the AID track had no availability probe at
+        # all, so an absent compiler went straight to a bare
+        # FAIL "iverilog rc=127 stderr=COMMAND_NOT_FOUND", which names the
+        # DUT for a fact about where the tree sits. Nothing was compiled, so
+        # this step has no verdict on the design: SKIP and say why.
+        return StepResult(
+            "reference_tb", "SKIP",
+            time.time() - t0,
+            (f"AID reference TB NOT RUN — the simulator was NOT FOUND where "
+             f"the compile was dispatched (rc={rc}); no sim ran, so this is "
+             f"not evidence about the DUT. Reachability, not the design: a "
+             f"run_dir outside the container's bind mounts falls back to the "
+             f"host. stderr={(err or out)[-600:]}"),
+            extras={"tb_frontend": tb_frontend,
+                    "functional_verified": False,
+                    "iverilog_available": False})
     if rc != 0:
         return StepResult("reference_tb", "FAIL",
                           time.time() - t0,
@@ -12952,15 +15494,26 @@ def _finalize_rtl_provenance() -> None:
     additions as authored and PRESERVES the tree: the failure mode is
     "refuses to regenerate", never "destroys work".
     """
-    if not _RTL_SESSION_OWNED or _RTL_SESSION_PROJECT is None:
+    global _RTL_SESSION_BINDING
+    if (not _RTL_SESSION_OWNED or _RTL_SESSION_PROJECT is None
+            or _RTL_SESSION_BINDING is None):
         return
+    binding = _RTL_SESSION_BINDING
     try:
-        _rtl_prov.stamp(_RTL_SESSION_PROJECT, generator="design_one_shot_runner")
-    except OSError:
+        _phase1_stamp_held_session(
+            binding, generator="design_one_shot_runner")
+    except (OSError, _Phase1RtlOutputRefused):
         # Best-effort: a failed stamp must never change the run verdict.
         # It fails SAFE — an absent/stale ledger makes the next run treat
         # the tree as unprovable and preserve it.
         pass
+    finally:
+        # Finalization is the end of this held transaction.  Release the two
+        # descriptors even when stamping fails; the stale/absent ledger is the
+        # fail-safe state for the next run.
+        if _RTL_SESSION_BINDING is binding:
+            _RTL_SESSION_BINDING = None
+        binding.close()
 
 
 
@@ -13129,6 +15682,12 @@ def main() -> int:
     # Both gates are §4.05-self-skip (fire ONLY on their exact anti-pattern),
     # so a clean / not-applicable design always passes.
     plan.append(step_determinism_gates(project, args.top_name))
+
+    # Flow step 1.6x — cross-layer rewrite fidelity. Unconditional:
+    # the judge itself decides applicability and WRITES the verdict,
+    # so a design that ran no cross-layer search leaves a
+    # NOT_APPLICABLE record rather than a silence.
+    plan.append(step_crosslayer_rewrite_fidelity(project))
 
     # Step 2a — design-complexity advisory (ADVISORY-ONLY, NON-GATING).
     # Runs right after RTL is available so the estimator can scan it.

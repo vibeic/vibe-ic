@@ -82,10 +82,26 @@ def test_a_new_root_fails(tmp_path):
 
 def test_a_declared_root_that_gained_dependencies_forces_the_list_to_shrink(tmp_path):
     """The half people forget — and the half that caught a stale-tree baseline
-    on this check's first real run."""
-    assert len(_ROOTS) >= 2, f"premise: need two declared roots, got {_ROOTS}"
-    first, rest = _ROOTS[0], _ROOTS[1:]
-    steps = [_s(first, [rest[0]])] + [_s(r) for r in rest]
+    on this check's first real run.
+
+    Constructed from ONE declared root plus a synthetic ordinary step, rather
+    than from two declared roots. The old form asserted `len(_ROOTS) >= 2` as
+    an explicit premise, and vibe-ic#1070 retired that premise by removing A1
+    from the register — A1 was baselined as an entry point while its own
+    `required_inputs` declared two reads from D1, so declaring that edge
+    required the register to shrink to `{"D1"}`.
+
+    The assertion is unchanged (rc 1, "must shrink"); only the fixture is, and
+    it is now more general: it holds for any register with at least one root
+    instead of at least two, so the next legitimate shrink cannot break it
+    again for a reason that has nothing to do with what it measures.
+    """
+    assert _ROOTS, f"premise: need at least one declared root, got {_ROOTS}"
+    root = _ROOTS[0]
+    #: `999` is an ordinary step, deliberately NOT in the register — the
+    #: subject is a DECLARED root that acquired a dependency, so the thing it
+    #: depends on must not itself be a declared root.
+    steps = [_s(root, [999]), _s(999)]
     rc, out = _run(_flow(tmp_path, steps))
     assert rc == 1, out
     assert "must shrink" in out

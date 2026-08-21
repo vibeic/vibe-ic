@@ -194,6 +194,46 @@ record could be adjudicated at all — a disclosed skip, never a sign-off).
 chip-AGNOSTIC: keyed on gate names and record field paths only. No design, PDK
 or vendor name appears here, and a rule cannot introduce one because a rule
 never sees anything but a record's own fields.
+
+WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (vibe-ic#1710's treatment)
+=======================================================================
+The default corpus root was ``<repo>/benchmark-data``. v1.10.56 moved the
+published trees into their own repositories, and this program then answered
+
+    ERROR: not a directory: <repo>/benchmark-data                        rc 1
+
+A CRASH IS NOT A VERDICT, and rc 1 is worse than the wrong number here: in this
+program rc 1 MEANS "a published record carries a verdict its gate would not
+issue today". There was no such record. The gate reported a defect it had not
+measured, which is the same false certificate as a pass it had not measured,
+pointed the other way. (The rc was chosen deliberately — "rc 2 is the
+disclosed-skip tier and a run that never started must not be credited as one" —
+and that reasoning is right about rc 2 and wrong about rc 1: the honest answer
+was neither, it was a corpus that had moved.)
+
+``_corpus_location`` resolves the root now, the override is ANNOUNCED, and the
+four outcomes stay distinct (see that module). ``$VIBE_IC_BENCHMARK_DATA``
+names the CLONE ROOT, which is what ``benchmark-data/`` was, so record keys
+(``ic/<design>/reports/...``) are unchanged and the DEFAULT register still
+describes the corpus the pointer reaches.
+
+A CORPUS THAT IS NOT A CHECKOUT IS REFUSED, NOT WALKED
+------------------------------------------------------
+``_tracked_paths`` asks ``git ls-files`` and FALLS BACK to ``rglob("*.json")``
+when git cannot answer, disclosing which it used. That fallback is right for a
+run tree handed over on its own and wrong for a corpus reached through the
+pointer: a tarball fetch, an archive export or a dead clone would be walked from
+the DISK, which admits untracked scratch output and adjudicates records nobody
+published. So a pointer-supplied root that is not a git checkout is
+UNDETERMINED (rc 2), never a population swap nothing announced.
+
+AND THE REGISTER IS NOT EXCUSED WITH THE SCAN
+----------------------------------------------
+``published_record_staleness_baseline.json`` lives beside this program and did
+not move with the corpus. Under NO_CORPUS the SCAN is excused and the register
+is still put through :func:`_register_defects` — the #922 question "could
+``_write_baseline`` have produced this document?" needs no corpus to ask, and
+an rc 0 that never asked it would hand back the hole that check closed.
 """
 from __future__ import annotations
 
@@ -207,10 +247,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import _corpus_location as _cloc
 import _gate_denominator as _gd
 import _record_adjudication as _ra
 
 _HERE = Path(__file__).resolve().parent
+
+GATE = "published_record_staleness_check"
 
 #: A gate record is small. A multi-megabyte JSON is a data blob that happens to
 #: live in the corpus, and parsing the whole tree's worth of them would make
@@ -714,6 +757,70 @@ def _print_recorded_debt(recorded: List[Dict[str, Any]]) -> None:
                   f"is still superseded. The entry stays.", file=sys.stderr)
 
 
+def _adjudicate_register_without_a_corpus(bl_path: Optional[Path]) -> int:
+    """NO_CORPUS has been decided; now answer for the debt register itself.
+
+    The corpus moved to its own repository; this register did not. Every
+    recorded entry is a published record this program is FORBIDDEN to correct,
+    so the register is the only thing standing between "two records are known
+    stale" and "nobody is counting" — and #922 established that a register is a
+    plain JSON file, so `--write-baseline` was never the only way to add an
+    entry to it.
+
+    That question needs no corpus: :func:`_register_defects` asks whether
+    `_write_baseline` COULD have produced this document, from the numbers the
+    document itself records. Asking it here is what keeps the rc 0 from
+    covering a register nobody looked at.
+
+    WHAT THIS DOES NOT CLAIM. It says nothing about whether the recorded
+    entries are still superseded, or whether new ones appeared — both need the
+    records, and this run did not have them. The printed verdict says so.
+    """
+    if bl_path is None:
+        print(f"[NOT CHECKED] {GATE}: no corpus was scanned and no register "
+              f"was resolved (a non-default corpus suppresses the default "
+              f"register), so this run adjudicated NOTHING — neither a record "
+              f"nor the register. That is not a pass.", file=sys.stderr)
+        return 2
+    entries = _read_register(bl_path)
+    if entries is None:
+        # `_read_register` returns None for BOTH absent and unreadable. With a
+        # corpus that is harmless — every recorded finding re-surfaces as NEW
+        # and the run FAILs loudly on its own. With no corpus there is nothing
+        # to re-surface, so the two must be refused here instead.
+        state = ("does not exist" if not bl_path.is_file()
+                 else "could not be read as a register")
+        print(f"[NOT CHECKED] {GATE}: no corpus was scanned, so the debt "
+              f"register is the only thing left to adjudicate, and {bl_path} "
+              f"{state}. With no corpus nothing re-derives the entries it "
+              f"should hold, so this run has judged NOTHING.", file=sys.stderr)
+        return 2
+    defects = _register_defects(bl_path)
+    if defects:
+        for d in defects:
+            print(f"  (register) {d}", file=sys.stderr)
+        print(f"[FAIL] {GATE}: no corpus was scanned, and {bl_path.name} is "
+              f"not a state --write-baseline could have produced, so the "
+              f"MAY-ONLY-SHRINK ratchet cannot be shown to have run over it. "
+              f"Recorded debt read out of an unratcheted register is standing "
+              f"permission wearing a register's name (vibe-ic#922). Re-write "
+              f"it with --write-baseline (and --scope-expanded '<why>' if the "
+              f"growth is genuinely newly-adjudicated scope).", file=sys.stderr)
+        return 1
+    print(f"[{GATE}] register: {len(entries)} recorded superseded record(s), "
+          f"and {bl_path.name} is a document --write-baseline could have "
+          f"produced.", file=sys.stderr)
+    for e in entries:
+        print(f"   recorded {e}", file=sys.stderr)
+    print(f"[{GATE}] NO_CORPUS: 0 published gate record(s) found, 0 "
+          f"adjudicated. NOTHING was re-adjudicated by this run — the entries "
+          f"above are neither confirmed still stale nor shown to be paid, and "
+          f"no NEW superseded record is ruled out. Point "
+          f"${_cloc.CORPUS_ENV} at a clone to make this gate check the "
+          f"records themselves.", file=sys.stderr)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="GATE: published gate records still say what their gate "
@@ -746,6 +853,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--print-decision-digest", dest="digest_of", default=None,
                     help="print the current decision fingerprint for one gate "
                          "and exit; use it to refresh a declaration")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the "
+                         "published corpus. Turns 'no corpus discoverable "
+                         "anywhere' from UNDETERMINED into NO_CORPUS (rc 0), "
+                         "which STATES that 0 published records were "
+                         f"adjudicated. It does NOT excuse a ${_cloc.CORPUS_ENV} "
+                         "that is set and broken, and it does NOT excuse the "
+                         "debt register: that lives in this repo and is still "
+                         "put through the may-only-shrink checks.")
     a = ap.parse_args(argv)
 
     programs_dir = (Path(a.programs_dir).resolve() if a.programs_dir else _HERE)
@@ -769,15 +885,58 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if a.corpus_root:
-        root = Path(a.corpus_root).resolve()
+        named = Path(a.corpus_root).resolve()
     else:
         # programs -> vibe-ic -> plugins -> vibe-ic-marketplace -> repo root
-        root = programs_dir.parents[3] / "benchmark-data"
+        named = programs_dir.parents[3] / "benchmark-data"
+    # The pointer names a clone whose ROOT is what `benchmark-data/` was, so no
+    # subdir is appended here — unlike the gates that sweep `<corpus>/ic`.
+    root, origin = _cloc.resolve(named, gate=GATE, announce=True)
+
+    # The register is resolved BEFORE the corpus, because it has to be
+    # adjudicated on the NO_CORPUS path too and that path returns early.
+    #
+    # THE DEFAULT REGISTER BELONGS TO THE DEFAULT CORPUS AND NOTHING ELSE.
+    # It records specific records of this repo's published tree; applying it to
+    # some other tree would report every recorded entry as debt that was PAID
+    # merely because a different corpus was handed in. Point the check
+    # elsewhere and the register must be named explicitly. `$VIBE_IC_BENCHMARK_DATA`
+    # is NOT "some other tree": it names the clone the default corpus BECAME,
+    # with the same record keys, so it keeps the default register.
+    bl_path = (Path(a.baseline) if a.baseline
+               else (None if a.corpus_root else _HERE / DEFAULT_BASELINE))
+
     if not root.is_dir():
-        # rc 1, not 2: rc 2 is the disclosed-skip tier and a run that never
-        # started must not be credited as one.
-        print(f"ERROR: not a directory: {root}", file=sys.stderr)
-        return 1
+        # WAS: `ERROR: not a directory` at rc 1 — the code this program uses
+        # for "a published record carries a verdict its gate would not issue".
+        # It reported a finding against records it never opened. A crash is not
+        # a verdict; see the module docstring.
+        rc = _cloc.refuse(GATE, named, root, origin, a.corpus_may_be_absent,
+                          "published gate record(s)")
+        if rc != 0:
+            return rc
+        if a.write_baseline:
+            # `now` would be [] over a scan that did not happen, and the writer
+            # would silently shrink the register to nothing — a MAY-ONLY-SHRINK
+            # rule satisfied by proving the opposite of what it exists to prove.
+            print(f"[REFUSED] {GATE}: --write-baseline with no corpus would "
+                  f"record 0 superseded records as a measurement and drop "
+                  f"every recorded entry. NOTHING WAS SCANNED.",
+                  file=sys.stderr)
+            return 2
+        return _adjudicate_register_without_a_corpus(bl_path)
+
+    if origin == _cloc.ENV:
+        # `_tracked_paths` falls back to a filesystem walk when git cannot
+        # answer, and over a pointer-supplied tree that silently swaps the
+        # population for one that includes untracked scratch output.
+        why = _cloc.not_a_checkout_reason(root, "published gate records")
+        if why:
+            print(f"[{GATE}] UNDETERMINED: {why} `_tracked_paths` would fall "
+                  f"back to a filesystem walk and adjudicate records nobody "
+                  f"published, against a register keyed on the tracked ones.",
+                  file=sys.stderr)
+            return 2
 
     disc = discover(root)
     report = adjudicate(disc, programs_dir)
@@ -795,13 +954,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     s = report["summary"]
     now = sorted(debt_key(f) for f in report["findings"]
                  if f["kind"] == STALE)
-    # THE DEFAULT REGISTER BELONGS TO THE DEFAULT CORPUS AND NOTHING ELSE.
-    # It records specific records of this repo's published tree; applying it to
-    # some other tree would report every recorded entry as debt that was PAID
-    # merely because a different corpus was handed in. Point the check
-    # elsewhere and the register must be named explicitly.
-    bl_path = (Path(a.baseline) if a.baseline
-               else (None if a.corpus_root else _HERE / DEFAULT_BASELINE))
+    # `bl_path` was resolved above, before the corpus, because the NO_CORPUS
+    # path adjudicates the register and returns before reaching here.
     on_disk = _read_register(bl_path)
     prev: Optional[List[str]] = None if a.ignore_baseline else on_disk
 

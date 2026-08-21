@@ -201,3 +201,131 @@ def test_THIS_repository_accounts_for_everything_it_bundles(capsys):
     rc = bc.main([str(repo)])
     out = capsys.readouterr().out
     assert rc == 0, out
+
+
+# --------------------------------------------------------------------------
+# POLARITY (vibe-ic#1241, the #712 vocabulary).
+#
+# `scan` read a value out of a sentence and wrote it as a declaration without
+# asking whether the sentence DENIES it. Every test below is PAIRED: the
+# denial case, and the assertion case that must still fire — because a gate
+# made "robust" by reading less is the silent failure `_prose_polarity` names,
+# and it would be worse here than the blindness it replaces.
+# --------------------------------------------------------------------------
+
+#: SPDX specifies this literal for "there is no copyright holder".
+_SPDX_NONE_RTL = """// SPDX-FileCopyrightText: NONE
+// SPDX-License-Identifier: Apache-2.0
+module public_domain_ip; endmodule
+"""
+
+_DENIED_SENTENCE_RTL = """// This file is not copyrighted by Acme Corp.
+// SPDX-License-Identifier: Apache-2.0
+module unowned; endmodule
+"""
+
+#: A REAL holder whose name contains the denial token `non-`.
+_NON_PROFIT_RTL = """// Copyright (c) 2020 Non-Profit Foundation
+// SPDX-License-Identifier: Apache-2.0
+module donated; endmodule
+"""
+
+_DENY_THEN_ASSERT_RTL = """// No copyright is claimed for the testbench stubs.
+// Copyright (c) 2019 Olof Kindgren
+// SPDX-License-Identifier: Apache-2.0
+module wb_intercon; endmodule
+"""
+
+
+def test_an_SPDX_NONE_sentinel_is_not_a_bundled_holder(tmp_path, capsys):
+    """`SPDX-FileCopyrightText: NONE` means there is NO holder. Read blind it
+    became a third-party holder named "NONE" that NOTICE had to account for."""
+    root = _tree(tmp_path, _OURS, {"vendor/pd.sv": _SPDX_NONE_RTL})
+    # Assert on the census, not on stdout: pytest puts this test's own name —
+    # which contains "NONE" — into `tmp_path`, so a substring check on output
+    # that happens to print the path passes or fails for the wrong reason.
+    assert bc.scan(root) == {}, bc.scan(root)
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    # rc 2 = REFUSE: the only SPDX file carried no holder, so nothing was
+    # established. That is the honest answer and it is NOT a pass.
+    assert rc == 2, out
+
+
+def test_the_NONE_sentinel_guard_still_reports_a_REAL_holder(tmp_path, capsys):
+    """PAIRED GUARD. Same tree plus one genuinely attributed file: suppressing
+    the sentinel must not suppress the assertion beside it."""
+    root = _tree(tmp_path, _OURS, {"vendor/pd.sv": _SPDX_NONE_RTL,
+                                   "vendor/aes.sv": _THIRD_PARTY_RTL})
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "lowRISC" in out, out
+
+
+def test_a_denied_sentence_does_not_fabricate_a_holder(tmp_path, capsys):
+    """"is not copyrighted by Acme Corp" was read as the holder `ed by Acme
+    Corp`, because `[Cc]opyright` matches inside *copyrighted*. Its distinctive
+    token is `ed`, which NOTICE contains as ordinary English — so the fabricated
+    holder was silently accounted for and the gate went green on a lie."""
+    root = _tree(tmp_path, _OURS, {"vendor/unowned.sv": _DENIED_SENTENCE_RTL})
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert "Acme" not in out, out
+
+
+def test_a_holder_whose_NAME_carries_a_denial_word_is_STILL_read(tmp_path, capsys):
+    """PAIRED GUARD, and the one that decides the scope. `Non-Profit Foundation`
+    has `_distinctive` "Non-Profit", which matches `\\bnon-?\\b`. A denial read
+    off the NAME would drop a real holder and take the gate quietly green — the
+    direction `_prose_polarity` calls the silent one. The scope therefore stops
+    at the captured name."""
+    root = _tree(tmp_path, _OURS, {"vendor/donated.sv": _NON_PROFIT_RTL})
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "Non-Profit Foundation" in out, out
+
+
+def test_a_denial_does_not_suppress_the_assertion_on_the_NEXT_line(tmp_path, capsys):
+    """A header may deny in one line and attribute in the next. Stopping at the
+    denial would report an attributed file as carrying no holder at all."""
+    root = _tree(tmp_path, _OURS, {"vendor/wb.sv": _DENY_THEN_ASSERT_RTL})
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "Olof Kindgren" in out, out
+
+
+def test_scan_reaches_the_shared_polarity_vocabulary(tmp_path):
+    """The consult is the property, so assert it structurally rather than only
+    through outcomes: a future refactor that drops it must go red here and not
+    only in `prose_polarity_consulted_check`."""
+    import ast
+    src = (_PROGRAMS / "bundled_attribution_notice_check.py").read_text()
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "scan")
+    names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+    assert {"is_denied", "sentence_scope"} & names, sorted(names)
+
+
+#: The canonical real-world denial, from #1249's independent fix of this row —
+#: US-government sources carry it verbatim and they DO get vendored.
+_US_GOV_RTL = """// No copyright is claimed in the United States under Title 17, U.S. Code.
+// SPDX-License-Identifier: Apache-2.0
+module usgov; endmodule
+"""
+
+
+def test_a_US_government_notice_is_not_a_rightsholder(tmp_path, capsys):
+    """Read blind this yields the holder "is claimed in the United States under
+    Title 17, U.S. Code." — a fabricated party in a gate whose whole output is
+    the list of people this repo owes attribution to. Getting it wrong invents
+    a legal obligation rather than missing one."""
+    root = _tree(tmp_path, _OURS, {"vendor/usgov.sv": _US_GOV_RTL})
+    assert bc.scan(root) == {}, bc.scan(root)
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert "Title 17" not in out, out

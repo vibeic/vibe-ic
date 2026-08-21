@@ -32,8 +32,9 @@ import importlib.util
 import pathlib
 import sys
 
+from _published_corpus import corpus_root, needs_corpus
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
-_REPO = _PROGRAMS.parents[3]
 
 
 def _load(name):
@@ -120,13 +121,19 @@ def test_the_shared_list_actually_contains_the_full_stack_location():
 
 
 # ── the corpus ──────────────────────────────────────────────────────────────
+@needs_corpus
 def test_the_corpus_flip_is_the_measured_one():
     """Not a golden number — a bound. If this drops to zero the resolver has
-    stopped finding anything; if it jumps, it is matching things it should not."""
-    root = _REPO / "benchmark-data"
-    if not root.is_dir():
-        import pytest
-        pytest.skip("corpus absent")
+    stopped finding anything; if it jumps, it is matching things it should not.
+
+    `phase2/stage1` is a RUN tree, and run trees are published cells now, in
+    vibeic/benchmark-data. The `root.is_dir()` guard that used to stand here
+    was true of a checkout holding only the design input — 0 projects, 0
+    resolved — so the bound below reported "the resolver stopped finding
+    anything" about a tree that never had anything to find. That is the one
+    reading this assertion must never be made to carry.
+    """
+    root = corpus_root()
     projects = {d.parents[1] for d in root.rglob("phase2/stage1") if d.is_dir()}
     legacy = {p for p in projects
               if PL._holds_testbench(p / "phase2/stage1/sim/tb")}

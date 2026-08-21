@@ -243,6 +243,37 @@ ARTIFACT_SUFFIXES: FrozenSet[str] = frozenset(
 #: ``open()`` modes that write. ``r`` alone never matches; ``r+`` does.
 _WRITE_MODE_RE = re.compile(r"[waxWAX+]")
 
+#: Atomic-write helpers whose FIRST positional argument is the destination.
+#: Matched by function name only — never by the module reached through — so
+#: that `_atomic_output.atomic_write_text(p, ...)`,
+#: `_atomic_artefact.atomic_write_text(p, ...)` and a bare imported
+#: `atomic_write_text(p, ...)` all read as the write they are. `atomic_output`
+#: is the context-manager form (`with atomic_output(p) as tmp:`); its
+#: destination is likewise the first argument, and the inner `tmp.write_text`
+#: names a TEMP path that no declared-artefact walk should follow.
+_ATOMIC_WRITERS: FrozenSet[str] = frozenset(
+    {"atomic_write_text", "atomic_write_json", "atomic_output"})
+
+#: Atomic writers that KEEP the name of the ``Path`` method they replace and
+#: move the destination to the first argument, because they are drop-in
+#: substitutes for it — ``_atomic_artefact.write_text(p, data)`` is
+#: ``p.write_text(data)`` with the final name appearing only when the write is
+#: complete, and its docstring says "signature-compatible on purpose".
+#:
+#: These CANNOT be matched by name the way :data:`_ATOMIC_WRITERS` is, and the
+#: difference is the whole reason they are a separate set: ``write_text`` also
+#: names the ``Path`` METHOD, where the destination is the RECEIVER, not
+#: ``args[0]``. Counting ``args[0]`` for every ``write_text`` would charge a
+#: program with writing whatever it happens to pass as CONTENT.
+#:
+#: They are told apart STRUCTURALLY, by :func:`_shadowed_write_target`: the
+#: destination is whichever of the receiver and the first argument resolves to
+#: a path. That keeps the rule module-agnostic for the same reason the set
+#: above is — ``_aa`` / ``_atomic_artefact`` / any future alias all read the
+#: same, and none of them has to be enumerated here (vibe-ic#1452).
+_SHADOWING_ATOMIC_WRITERS: FrozenSet[str] = frozenset(
+    {"write_text", "write_bytes", "write_json"})
+
 #: Classification of an undeclared artefact.
 LOAD_BEARING = "LOAD_BEARING"
 EVIDENCE = "EVIDENCE"
@@ -259,11 +290,6 @@ W4 = "W4:no_required_outputs_but_gate_writes"
 
 #: The REPORTED (never enforced) class for a flow-declared-optional producer.
 C1 = "C1:conditional_producer_output"
-
-#: The REPORTED (never enforced) class for a path whose ONLY role in every gate
-#: that reads it is to BE an ``optional_program_exit_zero`` clause's
-#: ``condition_files_exist``. See :func:`condition_sentinels`.
-C2 = "C2:conditional_sentinel_consumed"
 
 #: What this module provably CANNOT see. Quoted verbatim into `known_gap`.
 RESOLUTION_LIMITS: Tuple[str, ...] = (
@@ -443,6 +469,56 @@ class _PathResolver:
         return tuple(segs)
 
 
+def _module_aliases(tree: ast.AST) -> FrozenSet[str]:
+    """Names bound by an ``import`` in this module — modules, never paths.
+
+    This is the discriminator :func:`_shadowed_write_target` needs, and it is
+    structural: it asks whether the RECEIVER of the call is a module, not which
+    module it is. No helper module is enumerated, so ``_atomic_output``,
+    ``_atomic_artefact`` and any future alias all read the same — the property
+    :data:`_ATOMIC_WRITERS` is careful about, reached a different way because
+    a name that collides with a ``Path`` method cannot be matched by name.
+    """
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                out.add(a.asname or a.name.split(".")[0])
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                out.add(a.asname or a.name)
+    return frozenset(out)
+
+
+def _shadowed_write_target(aliases: FrozenSet[str], fn: ast.Attribute,
+                           call: ast.Call) -> ast.AST:
+    """Destination node of a call named in :data:`_SHADOWING_ATOMIC_WRITERS`.
+
+    ``p.write_text(data)`` and ``_aa.write_text(p, data)`` are the same NAME
+    with the destination in two different places, so the position cannot be
+    read off the name. It is read off the RECEIVER: a receiver that is an
+    imported module is the drop-in helper and its destination is ``args[0]``;
+    anything else is the ``Path`` method and its destination is the receiver.
+
+    WHY NOT "whichever of the two resolves to a path". That was the first
+    version and it was WRONG in the delegate walk, measurably: with no literal
+    path to resolve there, a receiver that happened not to resolve handed the
+    verdict to ``args[0]``, and ``fpga_verification_audit --report`` — a
+    markdown report the program AUDITS — started reading as a report the
+    program WRITES. ``test_input_shaped_output_flags_are_still_detected_as_
+    inputs`` caught it, which is the whole reason that guard exists: it is the
+    check against measuring a flag's NAME instead of the program's behaviour.
+
+    The rule here cannot do that, because it never consults the argument at all
+    unless the receiver is a module. A `Path`-shaped call behaves exactly as it
+    did before this function existed.
+    """
+    if (isinstance(fn.value, ast.Name) and fn.value.id in aliases
+            and call.args):
+        return call.args[0]
+    return fn.value
+
+
 def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
     """Tail segments of every path this module WRITES.
 
@@ -450,10 +526,24 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
       * ``open(p, "w"|"a"|"wb"|...)`` and ``p.open("w")``
       * ``p.write_text(...)`` / ``p.write_bytes(...)``
       * ``shutil.copy/copy2/copyfile/move(src, DEST)`` — the DEST argument
+      * the ATOMIC writers, ``atomic_write_text(p, ...)``,
+        ``atomic_write_json(p, ...)`` and ``with atomic_output(p) as tmp``,
+        each of which takes its destination FIRST (vibe-ic#1265)
       * ``json.dump(obj, fh)`` is NOT a path write: ``fh`` is a handle, and
         the handle's path was already captured at its ``open()``.
+
+    The atomic writers are matched by FUNCTION NAME and never by the module
+    they are reached through. That is deliberate: the same call arrives as
+    ``_atomic_output.atomic_write_text(p, ...)``, as
+    ``_atomic_artefact.atomic_write_text(p, ...)``, or bare after a
+    ``from ... import``, and which helper module wins is an open question
+    across #1265 / #1110 / #1138 / #1210. A detector keyed on the module would
+    have to be edited again the day that is settled, and until then it would
+    silently report NO WRITE for every program converted through the other
+    name — which is exactly the failure being fixed here, one module over.
     """
     resolver = _PathResolver(tree)
+    _module_names = _module_aliases(tree)
     out: Set[Tuple[str, ...]] = set()
 
     def add(node: ast.AST) -> None:
@@ -465,6 +555,9 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         if not isinstance(n, ast.Call):
             continue
         fn = n.func
+        if isinstance(fn, ast.Name) and fn.id in _ATOMIC_WRITERS and n.args:
+            add(n.args[0])
+            continue
         if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
@@ -474,8 +567,10 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
                 add(n.args[0])
             continue
         if isinstance(fn, ast.Attribute):
-            if fn.attr in ("write_text", "write_bytes"):
-                add(fn.value)
+            if fn.attr in _ATOMIC_WRITERS and n.args:
+                add(n.args[0])
+            elif fn.attr in _SHADOWING_ATOMIC_WRITERS:
+                add(_shadowed_write_target(_module_names, fn, n))
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
@@ -523,16 +618,50 @@ def _collect_path_literals(tree: ast.AST) -> Set[str]:
 # ──────────────────────────────────────────────────────────────────────
 # Whole-tree indices (parsed once per process)
 # ──────────────────────────────────────────────────────────────────────
+@lru_cache(maxsize=None)
+def _tree(program: str) -> Optional[ast.AST]:
+    """The parsed AST of ONE ``programs/<program>.py``, or ``None``.
+
+    EXACTLY equivalent to ``_trees().get(program)`` — same three ways to be
+    absent (not a program in the tree, does not parse, name is not a plain
+    stem) — but it parses one file instead of all of them.
+
+    That distinction is the whole point. ``_trees()`` parses every program in
+    ``programs/`` eagerly, and MEASURED on ab5a23a28 that is 1165 files and
+    ~46 s of `builtins.compile` in one call. Three of its callers
+    (`program_literals`, `_local_modules`, `flag_value_is_written`) want a
+    SINGLE named tree, so each of them was paying for 1164 parses it never
+    looked at. `write_index` and `literal_index` genuinely iterate everything
+    and still use `_trees()`.
+
+    The cost was not theoretical: `flag_value_is_written` is on the path from
+    `na_precondition` -> `matrix_cell_state` -> `cell_states()`, so the whole
+    parse landed inside `test_the_gate_itself_reddens_on_a_grown_flow`, whose
+    inner bound is `_PYTEST_TIMEOUT_S = 60` and CANNOT be raised (the harness
+    ceiling is `180 // 3`). See vibe-ic#1391 thread on #1412.
+
+    Like `_trees`, this memo is a function of ``programs/*.py`` and is NOT
+    dropped by :func:`clear_flow_caches` — a yaml swap cannot change it.
+    """
+    if not program or "/" in program or "\\" in program or "." in program:
+        return None
+    path = F.PROGRAMS_DIR / f"{program}.py"
+    if not path.is_file():
+        return None
+    try:
+        return ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:  # pragma: no cover - a program that will not parse
+        return None      # is dimension 2's problem, not this module's
+
+
 @lru_cache(maxsize=1)
 def _trees() -> Dict[str, ast.AST]:
+    """Every parsed program. Use :func:`_tree` when you want ONE."""
     out: Dict[str, ast.AST] = {}
     for path in sorted(F.PROGRAMS_DIR.glob("*.py")):
-        try:
-            out[path.stem] = ast.parse(
-                path.read_text(encoding="utf-8", errors="replace")
-            )
-        except SyntaxError:  # pragma: no cover - a program that will not parse
-            continue          # is dimension 2's problem, not this module's
+        tree = _tree(path.stem)
+        if tree is not None:
+            out[path.stem] = tree
     return out
 
 
@@ -558,7 +687,7 @@ def literal_index() -> Dict[str, FrozenSet[str]]:
 
 @lru_cache(maxsize=None)
 def program_literals(basename: str) -> FrozenSet[str]:
-    tree = _trees().get(basename)
+    tree = _tree(basename)
     return frozenset(_collect_path_literals(tree)) if tree is not None else frozenset()
 
 
@@ -614,20 +743,21 @@ def _local_modules(program: str) -> Tuple[str, ...]:
     "this program never writes its --json" and be wrong for a whole family of
     steps — the same shape of mistake as the grep in PR #460.
     """
-    tree = _trees().get(program)
+    tree = _tree(program)
     if tree is None:
         return ()
-    known = _trees()
     acc: List[str] = []
     for n in ast.walk(tree):
         if isinstance(n, ast.Import):
             for a in n.names:
                 root = a.name.split(".")[0]
-                if root in known and root != program and root not in acc:
+                if (root != program and root not in acc
+                        and _tree(root) is not None):
                     acc.append(root)
         elif isinstance(n, ast.ImportFrom) and n.module:
             root = n.module.split(".")[0]
-            if root in known and root != program and root not in acc:
+            if (root != program and root not in acc
+                        and _tree(root) is not None):
                 acc.append(root)
     return tuple(acc)
 
@@ -652,7 +782,7 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
     is actually an input — measuring something adjacent and reporting it as
     the answer.
     """
-    tree = _trees().get(program)
+    tree = _tree(program)
     if tree is None:
         return None
     dest = _arg_dest(flag)
@@ -676,6 +806,7 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
         if verdicts and all(v is False for v in verdicts):
             return False
         return None
+    _module_names = _module_aliases(tree)
     aliases: Set[str] = set()
     for _ in range(3):
         grew = False
@@ -697,7 +828,9 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
             continue
         fn = n.func
         target: Optional[ast.AST] = None
-        if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
+        if isinstance(fn, ast.Name) and fn.id in _ATOMIC_WRITERS and n.args:
+            target = n.args[0]
+        elif isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
                 if kw.arg == "mode":
@@ -705,8 +838,17 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
             if mode and _WRITE_MODE_RE.search(mode):
                 target = n.args[0]
         elif isinstance(fn, ast.Attribute):
-            if fn.attr in ("write_text", "write_bytes"):
-                target = fn.value
+            # vibe-ic#1265. This walk is a SECOND copy of the write shapes in
+            # `_collect_written_paths`; both had to learn the atomic writers,
+            # and they share only `_ATOMIC_WRITERS` so the vocabulary cannot
+            # drift even though the traversals still can.
+            if fn.attr in _ATOMIC_WRITERS and n.args:
+                target = n.args[0]
+            elif fn.attr in _SHADOWING_ATOMIC_WRITERS:
+                # The SAME rule `_collect_writes` applies, through the same
+                # function, so the two traversals cannot disagree about where a
+                # drop-in helper's destination is.
+                target = _shadowed_write_target(_module_names, fn, n)
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
@@ -1029,75 +1171,6 @@ def _step_condition_basenames() -> FrozenSet[str]:
 
 
 @lru_cache(maxsize=1)
-def condition_sentinels() -> Dict[str, FrozenSet[str]]:
-    """``{path: {steps}}`` read ONLY as an optional clause's own condition.
-
-    #537's argument, applied to the CONDITION side of the same clause::
-
-        - optional_program_exit_zero:
-            command: "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
-            condition_files_exist: ["reports/phase3/si_mcf_sta.json"]
-
-    ``condition_files_exist`` is the flow saying, in its own vocabulary, what
-    to do when the path is ABSENT: skip the clause. A step whose gate touches a
-    path ONLY there is therefore stating that the artefact legitimately may not
-    be produced. ``required_outputs`` is ALL-of-N and unconditional
-    (``flow_compliance_check`` returns MISSING the moment a declared entry is
-    absent), so moving such a path into it would assert a production the very
-    clause below it is written to survive the absence of — and it would make
-    the ``optional_`` spelling dead, because the condition could never fail.
-    W1 and W4 have refused that inference since #537; W2 charged it anyway, and
-    the promotion of ``reports/phase3/si_mcf_sta.json`` onto step 27 by the
-    2026-08-06 run-record oracle is the first time the gap had a live subject.
-
-    UNANIMOUS PER PATH, ACROSS THE WHOLE FLOW — the same guard
-    :func:`conditional_output_targets` applies to the output side, so the
-    exemption cannot launder a real omission. A path is disqualified by ANY of:
-
-      * a gate PROGRAM naming it as a literal (it is read by code, not merely
-        existence-tested by the clause);
-      * any clause reading it as a command input, a ``files_exist`` probe or a
-        ``json_field_true`` file;
-      * any clause DESIGNATING it as a written output (W1/W4 own it);
-      * a STEP-level ``condition.files_exist`` naming it (that is an upstream
-        applicability input, already handled by
-        :func:`_step_condition_basenames`);
-      * membership in the ``condition_files_exist`` of any clause that is NOT
-        ``optional_program_exit_zero``, or of an ``optional_`` clause with an
-        EMPTY condition list — such a clause runs on every project and its
-        condition is not an optionality statement at all.
-    """
-    cand: Dict[str, Set[str]] = {}
-    disqualified: Set[str] = set()
-    for sid in F.step_ids():
-        key = F.normalize_id(sid)
-        for prog in F.gate_programs(sid):
-            disqualified.update(program_literals(prog))
-        cond = F.step_condition(sid)
-        if cond:
-            disqualified.update(
-                str(f).lstrip("./") for f in cond.get("files_exist") or [])
-        for clause in F.gate_clauses(sid):
-            if clause.command is not None:
-                _outs, ins = split_command(clause.command)
-                disqualified.update(ins)
-            disqualified.update(f.lstrip("./") for f in clause.files)
-            if clause.json_file:
-                disqualified.add(clause.json_file.lstrip("./"))
-            for path, _prog in clause_output_targets(clause):
-                disqualified.add(path)
-            files = [str(f).lstrip("./") for f in clause.condition_files]
-            if clause.kind != F.K_OPTIONAL or not files:
-                # A condition on a clause that runs anyway says nothing about
-                # optionality; treat those paths as ordinary consumptions.
-                disqualified.update(files)
-                continue
-            for cf in files:
-                cand.setdefault(cf, set()).add(key)
-    return {p: frozenset(s) for p, s in cand.items() if p not in disqualified}
-
-
-@lru_cache(maxsize=1)
 def _same_dir_declarers() -> Dict[str, FrozenSet[str]]:
     """``{directory: {steps declaring a required_output in it}}``."""
     acc: Dict[str, Set[str]] = {}
@@ -1131,7 +1204,6 @@ def _w2_population() -> Tuple[Tuple[str, Optional[str], FrozenSet[str], FrozenSe
     same_dir = _same_dir_declarers()
     consumers = _gate_consumers()
     skip_basenames = _step_condition_basenames()
-    sentinels = condition_sentinels()
 
     out: List[Tuple[str, Optional[str], FrozenSet[str], FrozenSet[str]]] = []
     for path in sorted(consumers):
@@ -1142,11 +1214,6 @@ def _w2_population() -> Tuple[Tuple[str, Optional[str], FrozenSet[str], FrozenSe
         if os.path.basename(path) in skip_basenames:
             continue
         if declaring_entry(path):
-            continue
-        if path in sentinels:
-            # The flow's OWN optionality, on the condition side — see
-            # condition_sentinels(). Not dropped: REPORTED by
-            # conditional_sentinel_findings() and graded there.
             continue
         producers = writers_of(path)
         if not producers:
@@ -1356,55 +1423,6 @@ def conditional_findings(step_id) -> Tuple[Finding, ...]:
 
 
 @lru_cache(maxsize=None)
-def conditional_sentinel_findings(step_id) -> Tuple[Finding, ...]:
-    """Undeclared paths W2 SKIPS because the flow's own gate marks them optional.
-
-    Reported, never enforced — and reported for the same reason
-    :func:`conditional_findings` is: "not enforced" must never be able to mean
-    "not written down". This is the population W2 would have charged, exempted
-    by :func:`condition_sentinels`.
-
-    Kept SEPARATE from :func:`conditional_findings` on purpose. That list is
-    graded by ``test_conditional_class_is_earned_from_the_flows_own_gate``,
-    which re-derives from the yaml that every member is a gate-DESIGNATED
-    OUTPUT. A condition sentinel is an INPUT the clause existence-tests, so
-    folding it in would have silently widened what that test believes it is
-    grading. It gets its own grader instead.
-
-    ``detail`` quotes the flow's own condition clause, so the exemption can be
-    checked against the yaml without trusting this module.
-    """
-    key = F.normalize_id(step_id)
-    out: List[Finding] = []
-    for path, steps in sorted(condition_sentinels().items()):
-        if key not in steps:
-            continue
-        if declaring_entry(path):
-            continue
-        producers = writers_of(path) or frozenset(
-            _record.observed_producers_of(path))
-        if not producers:
-            continue  # nothing produces it — not a d7 question at all
-        out.append(
-            Finding(
-                step_id=key,
-                rule=C2,
-                path=path,
-                klass=CONDITIONAL,
-                producer=",".join(sorted(producers)[:3]),
-                consumers=tuple(f"gate:step{s}" for s in sorted(steps)),
-                detail=(
-                    "every gate that reads this path reads it ONLY as an "
-                    "optional_program_exit_zero clause's condition_files_exist, "
-                    "so the flow itself states the artefact may legitimately be "
-                    "absent; required_outputs is unconditional and cannot say it"
-                ),
-            )
-        )
-    return tuple(out)
-
-
-@lru_cache(maxsize=None)
 def evidence_findings(step_id) -> Tuple[Finding, ...]:
     """Undeclared gate outputs whose ONLY reader is their own writer.
 
@@ -1484,13 +1502,11 @@ def clear_flow_caches() -> None:
         _all_declared,
         _all_declared_basenames,
         _step_condition_basenames,
-        condition_sentinels,
         _same_dir_declarers,
         _gate_consumers,
         _w2_population,
         findings_for,
         conditional_findings,
-        conditional_sentinel_findings,
         evidence_findings,
     ):
         fn.cache_clear()
@@ -1509,7 +1525,6 @@ __all__ = [
     "W3",
     "W4",
     "C1",
-    "C2",
     "Finding",
     "is_artifact_path",
     "split_command",
@@ -1526,8 +1541,6 @@ __all__ = [
     "writers_of",
     "findings_for",
     "conditional_findings",
-    "condition_sentinels",
-    "conditional_sentinel_findings",
     "evidence_findings",
     "unattributable_findings",
     "flag_value_is_written",

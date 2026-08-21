@@ -251,6 +251,29 @@ from pathlib import Path
 _LOADER_NAME_RE = re.compile(
     r"spec_from_file_location\(\s*[\"\']([A-Za-z_]\w*)[\"\']")
 
+#: The SAME call, read for the file it actually loads rather than for the alias
+#: it binds it under (vibe-ic#1176). `_LOADER_NAME_RE` keys the edge on argument
+#: one, so a test that renames the module on the way in carries an edge under a
+#: name no source stem matches, and the edge is dropped:
+#:
+#:     spec_from_file_location("fcc_i492_conv", PROGRAMS / "flow_compliance_check.py")
+#:
+#: MEASURED on `75776dbbb`: `test_issue492_gate_argv_conversions.py` and
+#: `test_issue492_umbrella_gate_invocation.py` both load
+#: `flow_compliance_check.py` under a private alias, and neither appears in
+#: `_build_import_edge_index`'s entry for that stem — the two tests state the
+#: strongest dependency the tree has on that module and were invisible to it.
+#:
+#: The call's argument list is captured whole (one level of nested parens, which
+#: covers the `Path(...) / "x.py"` and `parents[1] / "x.py"` forms this tree
+#: uses) and every `.py` string literal inside it contributes its stem. The path
+#: arithmetic still cannot be followed — but the FINAL segment is a literal in
+#: every occurrence in this tree, and the stem is all this index needs.
+_LOADER_CALL_RE = re.compile(
+    r"spec_from_file_location\((?P<args>[^()]*(?:\([^()]*\)[^()]*)*)\)", re.S)
+#: A `.py` string literal inside such an argument list.
+_LOADER_PY_LITERAL_RE = re.compile(r"[\"\']([^\"\']+\.py)[\"\']")
+
 # Selection modes. `ownership` is the DEFAULT and the shipped behaviour; the
 # other two are opt-in and measured in the module docstring (vibe-ic#452).
 MODE_OWNERSHIP = "ownership"
@@ -349,16 +372,37 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # among them. The PR that neuters the gate is precisely the PR whose
     # changed-file set cannot reach the test that guards it. ~2 s for 7 tests.
     "test_issue1025_empty_corpus_sweep_blocks.py",
-    # vibe-ic#1025 follow-up — the same reachability argument, arriving through
-    # a SHELL file again. What this guard pins is a property of
-    # `tools/ci/_gate_dispatch.sh`: that a sweep which DECIDED NOTHING refuses
-    # rather than exiting 0. That file is outside `_SOURCE_DIRS` and no test is
-    # NAMED after it, so MEASURED with the selector itself on the one-token
-    # diff that neuters the refusal (`if [ "$decided" -eq 0 ]` -> `if false`):
-    # the guard is NOT selected. The diff that turns the sweep back into a
-    # thing that cannot report its own vacuity is precisely the diff whose
-    # changed-file set cannot reach the test that guards it. ~10 s for 14.
-    "test_issue1025_sweep_reports_its_own_vacuity.py",
+    # vibe-ic#1025 — same reachability argument, arriving through a JSON
+    # file. What this guard pins is partly a property of
+    # `tools/ci/gate_red_since.json`: that no acknowledgement has an
+    # unreachable deadline. That path is outside `_SOURCE_DIRS` and no test
+    # is NAMED after it, so MEASURED with the selector on exactly the
+    # one-file diff that switches the mechanism off (`max_commits:
+    # 9999999`): 16 tests selected, this guard NOT among them. ~3 s.
+    "test_gate_red_since_check.py",
+    # vibe-ic#1734 — same reachability argument, MEASURED twice on this tree
+    # with the real selector, at 7c376e348, one throwaway commit each:
+    #
+    #   adding `pytestmark = pytest.mark.timeout(2700)` to ONE test file
+    #     -> 18 files selected, this guard NOT among them
+    #   raising `DEFAULT_STALL_AFTER` in `programs/pytest_per_file_junit.py`
+    #     -> 43 files selected, this guard NOT among them
+    #
+    # The first is the defect itself: `ci_harness_timeout_ceiling_check.py`
+    # exists to stop a test declaring a bound it can outlive, and the PR that
+    # reintroduces an exemption is a one-line edit to a test file, which
+    # selects the test named after that file and not this one. The second is
+    # the ceiling's own input — the stall window is resolved from the driver,
+    # so a diff that raises it moves this gate's verdict without selecting it.
+    #
+    # For completeness, because the negative matters as much: a diff touching
+    # `tools/gatekeeper-land.sh` DOES select it (72 files), via
+    # `_REPO_TOOL_DIRS` below. That lane was already covered; these two were
+    # not. The program additionally self-checks before every scan, so the two
+    # layers are independent — this roster entry covers the case where the
+    # program's own test is what must run, and the self-check covers the case
+    # where the program runs at all.
+    "test_ci_harness_timeout_ceiling_check.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
@@ -415,6 +459,28 @@ _REPO_TOOL_DIRS: tuple[str, ...] = ("tools",)
 # selects the tests that name that key. `tools/` now flows through this rule;
 # `_REPO_TOOL_DIRS` is retained only because rule 6's tests pin it as the
 # narrower case that must keep working.
+#
+# vibe-ic#1176 — rule 7 resolves its key in THREE hops, not one. The key names a
+# file; what has to be found is the tests that can break when that file changes,
+# and the tree binds them three different ways:
+#
+#   hop 1  a TEST names the key            glob `test_*.py`          (#1068)
+#   hop 2  a tests/ HELPER names it        glob `programs/tests/**`  (#1178)
+#   hop 3  a PROGRAM opens it              glob `programs|benchmark/*.py`
+#
+# Each hop was measured against the flow yaml, and each was the whole gap for
+# the tests below it. After hop 2, a flow-yaml change selected 160 files and
+# still missed all seven tests that reach the flow through
+# `flow_compliance_check.py` / `flow_dashboard_data.py` — programs, so neither
+# earlier hop can see them. Hop 3 resolves the naming source module through the
+# SAME rules a direct edit of that module takes, so it can never select more
+# than editing the module itself would.
+#
+# Hop 3 alone is LEXICAL and that is not affordable: 66 source modules mention
+# the flow yaml (537 dependent tests) but only 23 can open it (159). Programs
+# are prose-heavy where helpers are not, so hop 3 keys on a LIVE string literal
+# — `ast`, docstrings excluded — and the three giant runners that merely cite
+# the yaml drop out. See `_names_key_as_live_literal`.
 #
 # Uniqueness is what makes the rule safe to apply to everything. `README.md`
 # exists 41 times and `SKILL.md` 64 times: their basenames identify no file, so
@@ -540,6 +606,14 @@ def _build_import_edge_index(
         for m in _LOADER_NAME_RE.finditer(text):
             if m.group(1) in source_stems:
                 names.add(m.group(1))
+        # …and the same call read for the file it LOADS, so an alias cannot hide
+        # the edge (vibe-ic#1176). Additive: a call whose alias already matched
+        # contributes the same stem twice and the set absorbs it.
+        for m in _LOADER_CALL_RE.finditer(text):
+            for lit in _LOADER_PY_LITERAL_RE.finditer(m.group("args")):
+                stem = Path(_norm(lit.group(1))).stem
+                if stem in source_stems:
+                    names.add(stem)
 
         for n in names:
             idx.setdefault(n, set()).add(rel)
@@ -696,6 +770,160 @@ def _build_tool_reference_index(
 # LAZILY: nothing here runs unless a changed path is a helper module, so the
 # common case (a source or test file changed) pays exactly nothing.
 # ---------------------------------------------------------------------------
+
+
+def _build_key_helper_index(
+    plugin_root: Path, keys: set[str],
+) -> dict[str, set[str]]:
+    """Map key -> set of plugin-rel HELPER modules that NAME it.
+
+    THE SECOND HOP, and rule 7 is incomplete without it. #1068 made an
+    unmapped path reach `_build_tool_reference_index`, which globs
+    ``test_*.py`` — so a data file is found only when a TEST names it
+    literally. MEASURED on `a38902d1`: a change to
+    ``flow/phase1_phase2_phase3.yaml`` selects 128 files and
+    ``test_matrix_d4_criteria_match.py`` is NOT among them, because that test
+    names the yaml zero times. It reaches the flow through
+    ``from matrix_63x8 import flowref``, and the path lives in
+    ``programs/tests/matrix_63x8/flowref.py`` (3 occurrences).
+
+    d4 recomputes itself from that yaml on every run, so the dimension that
+    measures flow-yaml correctness was the one a flow-yaml change did not run.
+
+    This index finds the HELPERS; the caller hands them to `_helper_consumers`
+    (rule 4), which already owns helper -> importing-test resolution. Composing
+    rather than re-deriving means this hop cannot drift from rule 4.
+
+    Same whole-token matching as `_build_tool_reference_index`, so
+    ``flow.yaml`` cannot match inside ``subflow.yaml``. Built LAZILY by its
+    only caller, which runs solely when an unmapped path is in the diff.
+    """
+    index: dict[str, set[str]] = {}
+    if not keys:
+        return index
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return index
+    pats = {k: _tool_ref_pattern(k) for k in keys}
+    for pyf in sorted(tests_dir.rglob("*.py")):
+        if pyf.name.startswith("test_"):
+            continue          # tests are rule 7's first hop, already covered
+        try:
+            text = pyf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f"{_TESTS_REL}/{pyf.relative_to(tests_dir).as_posix()}"
+        if not _is_test_helper(rel):
+            continue
+        for k, pat in pats.items():
+            if pat.search(text):
+                index.setdefault(k, set()).add(rel)
+    return index
+
+
+def _names_key_as_live_literal(text: str, pat: re.Pattern[str]) -> bool:
+    """Does ``text`` hold the key in a string literal that is not a docstring?
+
+    THE DISCRIMINATOR that makes the third hop affordable, and the reason it is
+    `ast` rather than another `pat.search(text)`. A source module is prose-heavy
+    in a way a test helper is not: this tree's runners cite the flow yaml in
+    their module docstrings while never opening it, and a lexical scan cannot
+    tell that citation from a path constant.
+
+    MEASURED on `75776dbbb` for key ``phase1_phase2_phase3.yaml``:
+
+        source modules that MENTION it            66   -> 537 dependent tests
+        source modules holding it as a LIVE literal 23 ->  159 dependent tests
+
+    The 43 that drop out are docstring and comment citations — `phase3_one_shot_
+    runner` (214 dependents, 3 mentions, all prose), `design_one_shot_runner`
+    (106), `_path_layout` (51) and this module itself, which names the yaml in
+    its own rule-7 docstring. None of them can read the file, so none of their
+    dependents can break when it changes; keeping them would have tripled the
+    selection for a change none of them can see.
+
+    A comment needs no handling: comments are not in the AST at all.
+
+    Fail-CLOSED on a syntax error, unlike the read paths around it: an
+    unparseable source module contributes no key edge rather than falling back
+    to the lexical scan this function exists to replace. The fallback would
+    re-admit exactly the prose citations, and it would do so silently.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return False
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docstrings.add(id(body[0].value))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings and pat.search(node.value)):
+            return True
+    return False
+
+
+def _build_key_source_index(
+    plugin_root: Path, keys: set[str], source_stems: set[str],
+) -> dict[str, set[str]]:
+    """Map key -> set of SOURCE STEMS that hold it as a live string literal.
+
+    THE THIRD HOP (vibe-ic#1176). Hop one globs ``test_*.py`` and hop two
+    (#1178) globs the helpers under ``programs/tests/``. Neither looks at
+    ``programs/*.py``, so a data file that only a PROGRAM opens reaches no test
+    at all — and the tests that exercise that program through it are the ones a
+    change to the data file is most likely to break.
+
+    MEASURED on `75776dbbb`, a one-line edit to ``flow/phase1_phase2_phase3.
+    yaml`` after #1178: 160 files selected, and all seven of the residual
+    flow-readers #1176 stayed open for are absent. Every one of them reaches the
+    flow through ``flow_compliance_check.py`` or ``flow_dashboard_data.py`` —
+    programs, not helpers — either by importing the module or by loading it with
+    ``spec_from_file_location``:
+
+        test_flow_dashboard_data.py                     D._load_flow()
+        test_issue492_gate_argv_conversions.py          local _load_flow()
+        test_issue492_umbrella_gate_invocation.py       local _load_flow()
+        test_issue559_not_a_project_gate.py             local _load_flow()
+        test_issue559_polluter_conversion.py            local _load_flow()
+        test_issue559_semantic_argv_gates.py            local _load_flow()
+        test_si_mcf_not_run_is_not_a_design_failure.py  F.DEFAULT_FLOW_DEF
+
+    This index finds the STEMS; the caller resolves them through the very rules
+    a changed source module already goes through, so the third hop cannot select
+    anything a direct edit of that module would not have selected, and cannot
+    drift from the mode the caller was asked for.
+
+    Built LAZILY by its only caller, which runs solely when an unmapped path is
+    in the diff.
+    """
+    index: dict[str, set[str]] = {}
+    if not keys:
+        return index
+    pats = {k: _tool_ref_pattern(k) for k in keys}
+    for src_dir in _SOURCE_DIRS:
+        d = plugin_root / src_dir
+        if not d.is_dir():
+            continue
+        for pyf in sorted(d.glob("*.py")):
+            if pyf.stem not in source_stems:
+                continue
+            try:
+                text = pyf.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for k, pat in pats.items():
+                if not pat.search(text):
+                    continue          # cheap lexical reject before the parse
+                if _names_key_as_live_literal(text, pat):
+                    index.setdefault(k, set()).add(pyf.stem)
+    return index
 
 
 def _is_test_helper(rel: str) -> bool:
@@ -1211,6 +1439,36 @@ def select_tests(
             key_index = _build_tool_reference_index(plugin_root, keys)
             for k in keys:
                 selected |= key_index.get(k, set())
+            # SECOND HOP. The index above globs `test_*.py`, so a data file that
+            # only a HELPER names is found by nothing — which is why a flow-yaml
+            # change still missed `test_matrix_d4_criteria_match.py` (0 mentions;
+            # it reads the flow via `matrix_63x8/flowref.py`). Resolve those
+            # helpers through rule 4, which already owns helper -> test.
+            helper_index = _build_key_helper_index(plugin_root, keys)
+            named_helpers = sorted({h for k in keys
+                                    for h in helper_index.get(k, set())})
+            if named_helpers:
+                selected |= _helper_consumers(
+                    plugin_root, named_helpers, source_stems)
+            # THIRD HOP (vibe-ic#1176). Hops one and two between them see only
+            # `test_*.py` and the helpers under `programs/tests/`, so a data
+            # file that only a PROGRAM opens still reaches nothing. Resolve the
+            # naming source modules through the SAME rules a direct edit of
+            # those modules would take — rule 1's ownership always, plus
+            # whatever the requested `--mode` adds — so this hop can never
+            # select more than editing the module itself would, and never
+            # diverges from the mode it was asked for.
+            source_index = _build_key_source_index(
+                plugin_root, keys, source_stems)
+            for k in keys:
+                for stem in source_index.get(k, set()):
+                    selected |= index.get(stem, set())
+                    if mode in (MODE_REFERENCE, MODE_REFERENCE_CAPPED):
+                        refs = ref_index.get(stem, set())
+                        if mode == MODE_REFERENCE or len(refs) <= ref_max_tests:
+                            selected |= refs
+                    elif mode == MODE_IMPORT_EDGE:
+                        selected |= edge_index.get(stem, set())
 
     # Only emit tests that exist on disk (robust against a stale index entry).
     return sorted(t for t in selected if (plugin_root / t).is_file())
