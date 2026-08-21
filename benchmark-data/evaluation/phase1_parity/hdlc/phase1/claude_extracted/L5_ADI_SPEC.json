@@ -1,5 +1,0 @@
-{
-  "ic_name": "HDLC / SDLC (ISO/IEC 13239)",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "HDLC / SDLC is a logical / data-link protocol specification — physical signal levels are intentionally not defined to allow implementation flexibility (V.24/RS-232, V.35, V.42, X.21, RS-422, fiber, etc.). On synchronous links bits are typically NRZI-encoded (a 0-bit causes a signal-level change; a 1-bit no change), providing clock recovery via signal transitions enforced by bit stuffing. On asynchronous links (RS-232 style), the protocol uses NRZ encoding with the byte stream surrounded by start/stop bits per octet, and octet stuffing replaces in-frame escaping. Idle line is signalled by continuous 1-bits or continuous 0x7E flag bytes."
-}

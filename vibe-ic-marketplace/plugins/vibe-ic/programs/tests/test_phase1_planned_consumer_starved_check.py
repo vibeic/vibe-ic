@@ -73,6 +73,17 @@ _SIBLING_WITH_CONTENT = {
     "parameters": [{"name": "WIDTH", "default": 8}],
 }
 
+#: The same layer as `_EMPTY_SKELETON`, one property changed: it carries
+#: content, so the gate genuinely examines it.
+_LAYER_WITH_CONTENT = {
+    "schema_version": "1",
+    "doc_class": "timing_waveform",
+    "timing_windows": [{"name": "t_setup", "min_ns": 5}],
+    "timing_constants": [],
+    "waveforms": [],
+    "extraction_evidence": {},
+}
+
 
 def _mkproject(tmp_path: Path, docs: dict) -> Path:
     proj = tmp_path / "proj"
@@ -86,7 +97,7 @@ def _mkproject(tmp_path: Path, docs: dict) -> Path:
 def _run(project: Path):
     return subprocess.run(
         [sys.executable, str(_PROG), str(project)],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=60,
     )
 
 
@@ -291,6 +302,85 @@ def test_condition_only_references_count_as_consumption():
     cond_only = [c for c in consumers if not c["named_in_command"]]
     assert cond_only, ("the shipped flow has at least one consumer admitted "
                        "purely by a layer's existence; none was found")
+
+
+# ---------------------------------------------------------------------------
+# UNEXAMINED IS NOT CLEAN
+#
+# Three layer states — LAYER_ABSENT, UNPARSEABLE, NO_CONTENT_SCHEMA — are
+# states in which this gate reads NOTHING about emptiness. Before the
+# disclosure they printed the same unqualified `[PASS]` as a layer that was
+# read and found healthy, and the summary counted them among the clean reads.
+# The pair below differs in exactly ONE property: whether the planned layer
+# parses. Both return 0 — the point is not the exit code, it is that the two
+# verdicts must not read the same.
+# ---------------------------------------------------------------------------
+def test_an_unexaminable_planned_layer_is_disclosed_not_counted_as_clean(
+        tmp_path):
+    proj = _mkproject(tmp_path, {_SIBLING: _SIBLING_WITH_CONTENT})
+    (proj / "phase1" / "generated_docs" / _LAYER).write_text("not json {")
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "NOT EXAMINED" in r.stdout, (
+        "an unparseable planned layer was never read for emptiness; a verdict "
+        "that does not say so passes an unexamined layer off as a clean one\n"
+        + r.stdout)
+    assert "DID examine" in r.stdout, (
+        "the [PASS] line must be qualified, not merely footnoted\n" + r.stdout)
+    report = json.loads(
+        (proj / "reports" / "phase1"
+         / "phase1_planned_consumer_starved_check.json").read_text())
+    blind = P.unexamined_planned(report)
+    assert blind, report["examined"]
+    assert {e["layer_state"] for e in blind} == {"UNPARSEABLE"}
+    # the count is SUBTRACTED from the clean ones, not added alongside them
+    planned = [e for e in report["examined"] if e["planned"]]
+    line = P.summary_line(report)
+    assert f"{len(planned) - len(blind)} examined" in line, line
+    assert f"{len(blind)} NOT EXAMINED" in line, line
+
+
+def test_a_fully_examined_project_says_nothing_about_unexamined_layers(
+        tmp_path):
+    """REVERSE of the above, one property changed: the same layer PARSES.
+
+    Without this the disclosure could be an unconditional string and the file
+    would still be green."""
+    proj = _mkproject(tmp_path, {_LAYER: _LAYER_WITH_CONTENT,
+                                 _SIBLING: _SIBLING_WITH_CONTENT})
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "NOT EXAMINED" not in r.stdout, (
+        "every planned read WAS examined; inventing a disclosure here would "
+        "make the clause noise the reader learns to skip\n" + r.stdout)
+    assert "DID examine" not in r.stdout, r.stdout
+    report = json.loads(
+        (proj / "reports" / "phase1"
+         / "phase1_planned_consumer_starved_check.json").read_text())
+    assert P.unexamined_planned(report) == []
+    planned = [e for e in report["examined"] if e["planned"]]
+    assert f"{len(planned)} examined and 0 starved" in P.summary_line(report)
+
+
+def test_a_layer_with_no_recognisable_collection_is_unexamined_too(tmp_path):
+    """NO_CONTENT_SCHEMA is the state the corpus actually carries: the doc
+    parses, but nothing in it is a collection this gate can size, so 'not
+    empty' was never established. Same disclosure, different state."""
+    proj = _mkproject(tmp_path, {_LAYER: {"schema_version": "1",
+                                          "doc_class": "timing_waveform",
+                                          "note": "a scalar-only payload"},
+                                 _SIBLING: _SIBLING_WITH_CONTENT})
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    # stdout FIRST, deliberately: on a tree without the change `P` carries no
+    # `unexamined_planned` at all, and a test that dies of AttributeError
+    # proves only that a symbol is new. This assertion fails on the OUTPUT.
+    assert "NOT EXAMINED" in r.stdout, r.stdout
+    report = json.loads(
+        (proj / "reports" / "phase1"
+         / "phase1_planned_consumer_starved_check.json").read_text())
+    blind = P.unexamined_planned(report)
+    assert {e["layer_state"] for e in blind} == {"NO_CONTENT_SCHEMA"}, report
 
 
 # ---------------------------------------------------------------------------

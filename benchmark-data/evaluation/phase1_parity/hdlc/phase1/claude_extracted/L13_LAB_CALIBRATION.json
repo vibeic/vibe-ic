@@ -1,5 +1,0 @@
-{
-  "ic_name": "HDLC / SDLC (ISO/IEC 13239)",
-  "lab_calibration_present": false,
-  "notes": "HDLC / SDLC is a wire-level data link protocol; no analog reference / trim / calibration loop. Bit-rate accuracy is a system-integration concern (typical ±100 ppm crystal); NRZI bit-stuffing transition guarantees and per-octet start/stop bits (asynchronous variant) substitute for any calibration loop at the protocol level."
-}
