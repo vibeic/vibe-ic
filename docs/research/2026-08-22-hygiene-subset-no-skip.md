@@ -892,3 +892,102 @@ result read as a pending one. The fix in the re-run was to (a) assert the
 variables really were unset by printing them from inside the interpreter before
 launching, and (b) poll the LOG as well as the file, so a dead run announces
 itself instead of looking patient.
+
+## 17. §16 was too tidy: binding is a cause, not THE cause — and the counts should have been names
+
+`jmeas3` falsified the part of §16 that mattered, with the one fact I could not
+see from here: **its runs were already bound.** The wrapper that produced its 15
+and 19 wiring errors exported
+`VIBE_IC_BENCHMARK_DATA=/home/reyerchu/_matrix_benchmark_data`, a real shallow
+clone with 114 published cells. So "bound" and "0 wiring errors" are not the
+same thing, and §16's control — which is still valid as far as it goes — does not
+explain their numbers.
+
+§16 hedged correctly (*"does NOT prove that is the only cause"*), and the hedge
+is now cashed rather than quietly dropped: **it is not the only cause.**
+
+### Everything I have, tabulated, with the variables I did not control named
+
+| run | corpus | host | hygiene time | wiring errors | verdicts |
+| --- | --- | --- | --- | --- | --- |
+| review, this session (§7) | bound | load ~54 | 193 s | **0** | 89/89 ran, 9 FAIL, 11 NC |
+| direct, this session (§16) | bound | quiet | 188 s | **0** | 78/89 decided, 9 FAIL, 11 NC |
+| direct, this session (§16) | UNBOUND | quiet | 258 s | **7** | ERROR, incomplete |
+| review, prior session (§6) | bound | unknown | 551 s | **10** | stalled shard rc 199, 13 NC |
+| `jmeas3` base | bound | 2 pytest arms | 302 s | **15** | incomplete |
+| `jmeas3` head | bound | 2 pytest arms | 604 s | **19** | incomplete |
+
+Two things fall out, and neither is the clean story §16 told.
+
+1. **Load ~54 on this host did NOT reproduce it.** The §7 review ran while the
+   host carried a load average of 54 and its hygiene verdict is byte-for-byte
+   the quiet run's: 89/89, 9 FAIL, 11 NOT CHECKED, zero wiring errors. So "busy
+   host" is not sufficient either, at least not at that level.
+2. **One BOUND run of mine did produce them** — §6, 10 wiring errors and a shard
+   whose watchdog ended `stalled rc=199`, at 551 s against 193 s for the same
+   set. That run was not a control: it was a different session on an earlier
+   commit of this branch, and I do not know its load. It is listed because
+   omitting the one datapoint that contradicts the tidy story would be the
+   defect this whole document is about.
+
+**Honest verdict: UNRESOLVED, and the missing input is named.** The correlation
+that survives all six rows is with DURATION, not with binding or with load
+directly — every run at 258 s or more shows wiring errors and every run at
+193 s or less shows none. That is consistent with a progress-watchdog timing
+sensitivity, and it is a hypothesis, not a finding: six rows with three
+uncontrolled variables cannot separate cause from symptom.
+
+**The control that separates them is `jmeas3`'s to run, and it is already
+planned** — bound-and-quiet on ITS tree and ITS corpus. I am deliberately NOT
+running the complementary bound-and-loaded arm here: generating load on 8HD-9
+would corrupt the measurements of the four pytest arms other agents currently
+have in flight on this host, and a peer's in-flight run is not mine to spend.
+That is a real experiment left undone, named rather than skipped.
+
+### The declared-count claim, redone as a NAME diff
+
+`jmeas3` recommended diffing hygiene records by gate NAME rather than by count,
+because counts are not comparable when the set can move. Applied to §16's own
+table, which was making exactly that mistake — it reported `86 -> 89` and
+explained it as "a loop corpus expands over corpus items", which is vague enough
+to be unfalsifiable:
+
+```
+gates ONLY in bound (4):  DRC PASS is not vacuous (spm)          PASS
+                          inner FAILs reach the verdict (spm)    PASS
+                          macro OBS not crossed (spm)            NOT_CHECKED
+                          new tool diagnostic id (spm)           NOT_CHECKED
+gates ONLY in unbound (1): corpus "published cells carrying a routed DEF"
+                           is EMPTY — nothing was checked over it  NOT_CHECKED
+
+SHARED gates whose verdict MOVED (2):
+  gates are host-independent        unbound=NOT_CHECKED -> bound=PASS
+  published-evidence index honest   unbound=PASS        -> bound=FAIL
+
+FAIL name symmetric difference: exactly one — published-evidence index honest
+```
+
+That is the whole 86 -> 89: four named gates appear and one named placeholder
+disappears, net +3. The corpus here holds exactly ONE routed DEF, which is why
+the loop expands to 4 gates and not more — a corpus with 114 cells would expand
+differently, so `jmeas3`'s 85/87 and this tree's 86/89 are not comparable
+numbers even in principle. **The name diff says which gate moved as well as how
+many; the count says neither.** §16's table should be read through this block.
+
+### And two grep errors of my own, made while writing this section
+
+Both are the same defect as the `env -u` one in §16, so they are recorded rather
+than quietly fixed:
+
+* `grep -oE "stalled"` over the quiet run reported **20 matches** and I briefly
+  read them as stall events. They are the substring inside **in-stalled** —
+  `input-doc claims vs in***stalled*** PDK`. Zero stall events actually occurred.
+* `grep -cE '\bwiring error'` over the unbound run's LOG reported **0**, while
+  that run's summary JSON carries **7**. The log phrases them as
+  `parallel coverage: …`. I was grepping for my own guess at the wording.
+
+The rule both violate: **read the machine-readable record, not the prose.** The
+runner writes `--summary-json` with a `wiring_errors` array precisely so nobody
+has to pattern-match its console output, and I pattern-matched it twice in one
+section while writing a document about instruments that answer the wrong
+question.
