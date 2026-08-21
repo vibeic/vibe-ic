@@ -153,3 +153,45 @@ Those rows belong to `jharvest-triage` and `jharv2`. I have not edited their
 verdict files. The measurement, the rescue and what the owners should change are
 in `FALSE_LANDED_shards_a_b.md`. All four are shard A rows; shard B came through
 clean.
+
+## The anchors this file cites were themselves untested
+
+`jharv2` reported a defect worth more than the rows it cost: **a verification
+that dereferences while the action does not**. `%(objectname)` on an annotated
+tag is the *tag* object; `rev-parse -q --verify $h^{commit}` dereferences it and
+passes, while `commit-tree -p <tag>` fails — so a check said yes for a reason the
+action could not use, six rescue anchors were never created, and the loop moved
+on without a word.
+
+Every RECOVER row here that says *"the commit is on NO live origin branch"* backs
+that with an anchor: *Preserved as `<ref>` … `git checkout <sha>`*. Those are
+claims about refs I had not tested, made in a night when anchor creation is now
+known to have failed silently. So they were tested:
+
+- **86 anchor claims, 13 distinct refs.**
+- **13 of 13 live on `origin`** — by `git ls-remote --heads`, not the
+  `refs/remotes` cache, which outlives branches origin has deleted.
+- Every anchor tip is a **`commit` object, undereferenced** — `cat-file -t` on
+  the raw tip, which is the test the tag defect defeats. None is a tag.
+- **86 of 86 claimed shas are reachable** from the anchor named for them.
+
+My own six rescue refs were audited the same way and from the recovering party's
+side: fetched fresh from `origin` rather than read out of the local object store,
+tip asserted to be a commit, and all 15 named files re-hashed *through the ref*.
+15 of 15 match. The tag defect does not touch this rescue path — every parent
+came from `rev-parse HEAD` in a working tree, so every one was already a commit.
+
+**One caveat, because the alarm was mine.** The first run flagged
+`harvest/rescue-112-untracked-caravel-handoffs` as not containing
+`b2c404a99d448…`. That was my parser, not the file: the `drv2` row carries two
+independent claims — one anchor holding the *commit*
+(`harvest/rescue-112-localonly-vibe-ic-repo`, and `b2c404a99d448…` **is**
+reachable from it) and one holding the *untracked file*, recovered with
+`git show FETCH_HEAD:<path>` and never with a checkout. Cross-joining every ref
+in a row against every sha in it manufactured a pairing the row never asserted.
+
+That is the same shape as jharv2's coverage checker reporting
+`covered=0 uncovered=163` from a hardcoded path: **a broken checker reads exactly
+like the disaster it is checking for.** A red from a verifier earns the same
+suspicion as a green — the first question is whether the checker asked the
+question the file actually answers.
