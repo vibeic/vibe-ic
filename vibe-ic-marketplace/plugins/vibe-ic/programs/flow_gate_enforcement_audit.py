@@ -143,16 +143,10 @@ Exit codes:
                                             printed PASS.
        — or a recorded entry that no longer holds, which must be paid down out
        of its register rather than left standing as permission.
-    2  NOT_CHECKED — this program could not LOOK, so it declines to report a
-       verdict. Three ways in, all the same class: no flow definition, a flow
-       definition the parser could not read, or (#1705) a ratchet baseline that
-       EXISTS and could not be read — unreadable, not JSON, not an object, or
-       carrying a register of a type whose membership cannot be read. An
-       unreadable baseline used to collapse to `{}` and be reported as "no debt
-       recorded", which passed a tree against a register this program never
-       read and let `--write-baseline` overwrite the recorded debt it had just
-       failed to open. An ABSENT baseline is a different state and still exits
-       0/1: nothing was ever recorded, which the registers report as UNRECORDED.
+    2  NOT CHECKED: I/O error, the flow definition could not be parsed, or the
+       residual baseline states no readable measurement (absent, unreadable,
+       truncated). An explicitly empty register is still a measurement and
+       the first offender against it still exits 1.
 """
 from __future__ import annotations
 
@@ -1564,6 +1558,91 @@ def declared_intent(programs: Path, gate: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# THE FOURTH VENUE — a gate the flow names DISPATCHES another gate (2026-08-20)
+#
+# The three venues above answer "is this program named by the flow, by the CI
+# shell suite, or by a repo-gate runner". A program can be reachable by a fourth
+# route that none of them can see: a gate the flow DOES name runs it as a
+# subprocess. Step 37.5ic is the case that surfaced it — its gate names
+# `tapeout_precheck`, which runs `general_precheck` and `tapeout_readiness_check`
+# as its two ARMS. Both were reported ORPHANED ("reachable from nothing at all")
+# while being dispatched on every evaluation of that step, which is a FALSE
+# claim of the exact kind #886 added `repo_gate_source` to stop making.
+#
+# CLOSURE, NOT ONE HOP. A delegate of a delegate is still reached; stopping at
+# one hop would answer a question adjacent to the one being asked. The closure
+# is seeded ONLY by programs already reachable through another venue, so a
+# cluster of programs that reference each other and are named by nothing cannot
+# bootstrap itself into being wired — the seed is what makes the claim true, and
+# an unseeded component contributes nothing.
+#
+# IT USES `_invoked`, THE SAME PREDICATE THE OTHER VENUES USE: a bare mention in
+# a comment does not count; the program has to be named as a `<stem>.py`
+# subprocess argument or called as `<stem>.main(...)`. A weaker rule here would
+# excuse orphans by prose, and "widening the population without widening what
+# counts as wired" is the failure this file already records twice.
+# ---------------------------------------------------------------------------
+def dispatched_by_reachable_gates(programs: Path,
+                                  seeds: "set[str]") -> "set[str]":
+    """Every program stem transitively DISPATCHED by an already-reachable one.
+
+    Returns the closure MINUS the seeds, so a caller can tell "reached only via
+    this venue" from "was already reachable". An unreadable source file is
+    skipped rather than treated as empty: a file we could not read is a file we
+    did not look in, and crediting it with naming nothing would be this repo's
+    recurring "could not read == read and empty" defect.
+    """
+    stems = {f.stem for f in programs.glob("*.py")}
+    reached = set(seeds) & stems
+    frontier = set(reached)
+    while frontier:
+        nxt: "set[str]" = set()
+        for stem in frontier:
+            f = programs / f"{stem}.py"
+            try:
+                src = f.read_text(errors="replace")
+            except OSError:
+                # A FILE WE COULD NOT READ IS A FILE WE DID NOT LOOK IN. It
+                # contributes nothing, which is the strict direction: the worst
+                # this can do is fail to clear an orphan, never invent a wiring.
+                continue
+            # CANDIDATES FIRST, `_invoked` SECOND. Asking `_invoked` about all
+            # ~1100 stems per source is ~1.2M regex searches over the whole
+            # directory and does not finish in a usable time — measured, the
+            # audit ran past 900 s. So the names are EXTRACTED in two linear
+            # passes over the same regions `_invoked` looks at, and every
+            # candidate is then confirmed with `_invoked` itself. The predicate
+            # that decides is unchanged; only the number of times it is asked.
+            for cand in _dispatch_candidates(src) & (stems - reached):
+                if _invoked(src, cand):
+                    nxt.add(cand)
+        reached |= nxt
+        frontier = nxt
+    return reached - set(seeds)
+
+
+#: One quoted string region, exactly the span `_invoked`'s first rule searches
+#: (an opening quote up to the next quote or newline).
+_QUOTED_REGION_RE = re.compile(r"[\"'][^\"'\n]*")
+_DOT_PY_RE = re.compile(r"\b(\w+)\.py\b")
+_ENTRY_CALL_RE = re.compile(r"\b(\w+)\s*\.\s*(?:main|check|audit)\s*\(")
+
+
+def _dispatch_candidates(src: str) -> "set[str]":
+    """Every program stem this source could possibly be naming.
+
+    A SUPERSET by construction — it is a cheap pre-filter, and `_invoked` is
+    what actually decides. Under-collecting here would silently create orphans,
+    so the two rules mirror `_invoked`'s two rules and nothing narrower.
+    """
+    out: "set[str]" = set(_ENTRY_CALL_RE.findall(src))
+    for region in _QUOTED_REGION_RE.findall(src):
+        out.update(_DOT_PY_RE.findall(region))
+    return out
+
+
+
 def audit(flow: Path, programs: Path) -> dict:
     clauses = clauses_in_flow(flow)
     # A clause the walk reached but could not name is NOT dropped. Silently
@@ -1631,9 +1710,16 @@ def audit(flow: Path, programs: Path) -> dict:
     # where it looked cannot be checked by the person it accuses.
     src_ci = repo_gate_source(programs)
     src_gate_runner = repo_gate_runner_source(programs)
+    # The fourth venue. Seeded by the flow definition ONLY, so the closure
+    # cannot be bootstrapped by a cluster of programs nothing else names.
+    dispatched = dispatched_by_reachable_gates(
+        programs, {r["gate"] for r in rows}
+        | {r["gate"][:-3] for r in rows if r["gate"].endswith(".py")})
     for f in sorted(programs.glob("*.py")):
         stem = f.stem
         if stem in in_flow or f"{stem}.py" in in_flow:
+            continue
+        if stem in dispatched:
             continue
         if _invoked_by_suite(src_ci, stem):
             continue
@@ -1662,6 +1748,11 @@ def audit(flow: Path, programs: Path) -> dict:
         {"venue": "tools/ci/*.sh", "present": bool(src_ci.strip())},
         {"venue": "/".join(_REPO_GATE_RUNNERS),
          "present": bool(src_gate_runner.strip())},
+        # PRESENT is the count, not a boolean, because "no gate dispatches
+        # another" and "we never computed the closure" are different facts and
+        # a bare False would read as both.
+        {"venue": "dispatched by a gate the flow names (transitive)",
+         "present": bool(dispatched), "reached": sorted(dispatched)},
     ]
     return {
         "orphan_venues": orphan_venues,
@@ -1690,6 +1781,38 @@ def audit(flow: Path, programs: Path) -> dict:
     }
 
 
+def _load_baseline_doc(path: Path) -> Optional[dict]:
+    """A readable baseline document, or ``None`` when none was measured.
+
+    ``None`` and an explicit empty list are intentionally different values.
+    This audit attributes findings with ``current - baseline``; treating an
+    absent or truncated artefact as ``{}`` turns every inherited finding into
+    a regression, while treating the same state on a clean tree fabricates a
+    PASS.  A partial older document may still carry one measured register, so
+    it remains readable and the existing UNRECORDED-register logic below owns
+    the missing key.
+    """
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    registers = ("known", "undeclared_known")
+    if not any(key in loaded for key in registers):
+        return None
+    if any(key in loaded and not isinstance(loaded[key], list)
+           for key in registers):
+        return None
+    if any(not isinstance(entry, str)
+           for key in registers
+           for entry in loaded.get(key, [])):
+        return None
+    return loaded
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Audit which flow gates can actually stop a run.")
@@ -1713,6 +1836,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not flow.is_file():
         print(f"IO_ERROR: no flow definition at {flow}", file=sys.stderr)
         return 2
+    bl_path = Path(a.baseline) if a.baseline else (
+        _HERE / "flow_gate_enforcement_baseline.json")
+    doc = _load_baseline_doc(bl_path)
+    if doc is None:
+        # ``--write-baseline`` is the one operation that CREATES the missing
+        # measurement.  It may bootstrap an absent path, but it must not
+        # overwrite an existing unreadable/truncated artefact as though the
+        # previous measurement had been empty.
+        bootstrapping = (a.write_baseline and not bl_path.exists()
+                         and not bl_path.is_symlink())
+        if not bootstrapping:
+            print(
+                "NOT CHECKED: no flow-gate enforcement baseline states a "
+                f"readable measurement at {bl_path} — absent, unreadable, or "
+                "truncated is not a measurement of zero, so no current "
+                "finding can be called NEW. Measure this tree and record the "
+                "baseline before asking this audit to attribute anything. "
+                "See vibe-ic#1705.",
+                file=sys.stderr)
+            return 2
+        doc = {}
     try:
         rep = audit(flow, programs)
     except FlowGrammarError as exc:
@@ -1780,101 +1924,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                  + [f"orphan::{o['gate']}" for o in (rep.get("orphaned") or [])])
     now_u = sorted(f"undeclared::{u['gate']}"
                    for u in (rep.get("undeclared_audit_only") or []))
-    bl_path = Path(a.baseline) if a.baseline else (
-        _HERE / "flow_gate_enforcement_baseline.json")
-    # AN UNREADABLE BASELINE IS NOT AN EMPTY ONE (#1705).
-    #
-    # This block used to collapse every failure to read the file into `doc =
-    # {}`. There are three distinct states here and the collapse merged two of
-    # them that mean opposite things:
-    #
-    #     the file is ABSENT          -> nothing was ever recorded. Legitimate
-    #                                    on a first run; `_recorded` returns
-    #                                    None and the registers report
-    #                                    UNRECORDED, which is what that means.
-    #     the file is PRESENT and
-    #     could not be read           -> the debt owed is UNKNOWN. Reporting it
-    #                                    as `{}` states "nothing was owed",
-    #                                    which is a MEASUREMENT this program did
-    #                                    not take.
-    #
-    # What that cost, in both directions:
-    #
-    #   * IT PASSED WHAT IT NEVER READ. On a tree with no findings the read
-    #     path went prev=None / now=[] -> rc 0 and printed "[PASS] no NEW
-    #     enforcement contradiction (0 recorded as debt)" over a baseline it had
-    #     just failed to open. The register could hold 113 entries and the
-    #     verdict line would say 0.
-    #   * IT REDDENED WITH THE WRONG REASON. With findings it printed
-    #     "`known` is UNRECORDED in flow_gate_enforcement_baseline.json" — false
-    #     about a file that is sitting right there — and told the operator to
-    #     run `--write-baseline`, which is
-    #   * THE REMEDY THAT DESTROYS THE EVIDENCE. `--write-baseline` on the same
-    #     unreadable file takes prev=None, so the shrink-only ratchet has
-    #     nothing to compare against and the recorded debt is OVERWRITTEN by
-    #     whatever today's tree happens to show. A ratchet that a truncated
-    #     write can silently reset is not a ratchet.
-    #
-    # So: refuse, rc 2. That is this file's OWN convention for "I could not
-    # look", used twice already in this function for an absent flow definition
-    # and for a flow the parser could not read ("NEVER degrade to a partial
-    # read"), and it is `_gate_dispatch.sh`'s NOT_CHECKED tier. This gate is
-    # wired with plain `run`, which makes rc 2 a loud FAIL rather than a
-    # tolerated non-verdict — correct, because a corrupt ratchet baseline is a
-    # thing to fix, not a thing to skip.
-    doc: dict = {}
-    if bl_path.is_file():
-        try:
-            raw = bl_path.read_text()
-        except OSError as exc:
-            print(f"IO_ERROR: the ratchet baseline {bl_path} EXISTS and could "
-                  f"not be read ({exc}). What debt it records is unknown, and "
-                  f"an unknown debt is not a zero debt — refusing rather than "
-                  f"reporting a register this run never read. Nothing was "
-                  f"written; the file is intact.", file=sys.stderr)
-            return 2
-        try:
-            loaded = json.loads(raw)
-        except ValueError as exc:
-            print(f"IO_ERROR: the ratchet baseline {bl_path} EXISTS and is not "
-                  f"readable JSON ({exc}). Treating that as an empty register "
-                  f"would report every entry it records as `paid` and would let "
-                  f"--write-baseline overwrite it with today's set, resetting "
-                  f"the ratchet. Restore or repair the file.", file=sys.stderr)
-            return 2
-        if not isinstance(loaded, dict):
-            print(f"IO_ERROR: the ratchet baseline {bl_path} parses as "
-                  f"{type(loaded).__name__}, not an object, so it carries no "
-                  f"`known` / `undeclared_known` register this program can "
-                  f"read. Refusing rather than reading the absence of a "
-                  f"register as the absence of debt.", file=sys.stderr)
-            return 2
-        doc = loaded
-        # A REGISTER OF THE WRONG TYPE IS ALSO UNREADABLE, and silently so:
-        # `sorted(str(x) for x in "orphan::foo")` iterates CHARACTERS, so a
-        # register corrupted from a list to a string became a 12-entry register
-        # of single letters — every real entry reported `paid`, and 12 invented
-        # ones reported NEW. The read has to reject the shape it cannot honour
-        # at the same place it rejects the file it cannot parse.
-        for key in ("known", "undeclared_known"):
-            if key in doc and not isinstance(doc[key], (list, tuple, type(None))):
-                print(f"IO_ERROR: the ratchet baseline {bl_path} records "
-                      f"`{key}` as {type(doc[key]).__name__}, not a list. Its "
-                      f"membership cannot be read, and a register that cannot "
-                      f"be read is not an empty one.", file=sys.stderr)
-                return 2
-
     def _recorded(key: str) -> Optional[List[str]]:
         """A register that is ABSENT is UNRECORDED, not empty. The two differ:
         an empty register asserts "no debt", an absent one asserts nothing at
         all, and reading absence as emptiness would report every pre-existing
         entry as `paid` the first time a baseline written by an older version
-        of this program is read.
-
-        A register that is present but UNREADABLE is a third state, and it is
-        refused above with rc 2 rather than reaching here — this function can
-        only ever be asked about a register whose membership was actually
-        read."""
+        of this program is read."""
         if key not in doc:
             return None
         return sorted(str(x) for x in (doc.get(key) or []))

@@ -287,8 +287,10 @@ def test_the_control_a_genuinely_undeclared_new_gate_is_still_reported(
     rep = mod.audit(flow, progs)
     assert [u["gate"] for u in rep["undeclared_audit_only"]] == [
         "brand_new_quiet_check"], rep
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"known": [], "undeclared_known": []}))
     assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(tmp_path / "absent.json")]) == 1
+                     "--baseline", str(baseline)]) == 1
 
 
 def test_the_control_a_declared_gate_beside_it_stays_green(tmp_path):
@@ -302,8 +304,10 @@ def test_the_control_a_declared_gate_beside_it_stays_green(tmp_path):
     rep = mod.audit(flow, progs)
     assert rep["undeclared_audit_only"] == [], rep
     assert rep["contradictions"] == [], rep
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"known": [], "undeclared_known": []}))
     assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(tmp_path / "absent.json")]) == 0
+                     "--baseline", str(baseline)]) == 0
 
 
 def test_the_control_declaring_blocking_without_the_wiring_still_fails(
@@ -324,8 +328,10 @@ def test_the_control_declaring_blocking_without_the_wiring_still_fails(
     rep = mod.audit(flow, progs)
     assert [c["gate"] for c in rep["contradictions"]] == [
         "overclaiming_check"], rep
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"known": [], "undeclared_known": []}))
     assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(tmp_path / "absent.json")]) == 1
+                     "--baseline", str(baseline)]) == 1
 
 
 if __name__ == "__main__":

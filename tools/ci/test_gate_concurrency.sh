@@ -33,9 +33,21 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 # THROUGH `gate_dispatch_finish`, which is the only thing that drains the pool.
 # Writes stdout, stderr and the summary record to files named for the arm, so a
 # case can compare arms byte for byte rather than pattern-match prose.
+#
+# THE CORPUS ROOT IS PINNED TO THE SCRATCH TREE, and that is not tidiness. The
+# dispatcher runs its gates ONE AT A TIME whenever the corpus-write guard is
+# ACTIVE, because a per-gate before/after snapshot of a shared tree cannot be
+# attributed to a gate that did not run alone inside it. Left to fall back on
+# `$ROOT`/`BASH_SOURCE`, every case below would inherit THIS CHECKOUT's answer to
+# "is there a `benchmark-data/` here" — so the whole harness would silently stop
+# exercising the pool on a machine that has cloned the corpus back in-tree, and
+# case 8 ("JOBS=8 did queue gates") would fail for a reason that is not about
+# concurrency at all. `$T` holds no corpus, so these cases keep asking their own
+# question; case 20 points it at a real one on purpose.
 drive() {                       # -> rc; leaves $T/<tag>.{out,err,json}
   local tag="$1" jobs="$2" script="$3"; shift 3
-  GATEKEEPER_HYGIENE_JOBS="$jobs" bash "$script" \
+  GATEKEEPER_HYGIENE_JOBS="$jobs" \
+  GATE_DISPATCH_CORPUS_ROOT="${DRIVE_CORPUS_ROOT:-$T}" bash "$script" \
       --summary-json "$T/$tag.json" "$@" \
       > "$T/$tag.out" 2> "$T/$tag.err"
 }
@@ -437,6 +449,80 @@ if diff <(pairs "$T/corpseq.json") <(pairs "$T/corppar.json") > /dev/null 2>&1; 
 else
   bad "the empty-corpus row differs between arms" \
       "$(diff <(pairs "$T/corpseq.json") <(pairs "$T/corppar.json"))"
+fi
+
+# ── 20. A CORPUS WRITE IS ATTRIBUTED TO THE GATE THAT MADE IT, IN BOTH ARMS ──
+#    THE CASE THAT WAS MISSING, and its absence is why #P4 landed green over a
+#    broken guard. Every gate above is corpus-blind, so nothing here ever drove
+#    the one part of `_gate_execute` whose verdict depends on WHAT ELSE IS
+#    RUNNING: the before/after snapshot of `benchmark-data/`.
+#
+#    MEASURED at v1.10.55 with one writer and one reader declared —
+#
+#        JOBS=1   wrote_corpus 1   passed 1   writer WROTE_CORPUS, reader PASS
+#        JOBS=8   wrote_corpus 2   passed 0   BOTH recorded WROTE_CORPUS
+#
+#    — i.e. the oracle at the top of this file, violated: the reader wrote
+#    nothing and the concurrent arm said it did. `git status` is a fact about
+#    the TREE and both brackets span the same instant, so it cannot tell the two
+#    apart; the dispatcher now runs the watched gates one at a time and says so.
+#
+#    A FRESH CORPUS PER ARM, deliberately. The writer writes the SAME bytes both
+#    times, so a second run over a tree that already carries `stray.json` moves
+#    nothing `git status` can see and the writer would come back PASS — a case
+#    that agreed with itself while measuring nothing.
+fresh_corpus() {                # <dir>
+  rm -rf "$1"; mkdir -p "$1/benchmark-data/ic/cell"
+  printf 'x\n' > "$1/benchmark-data/ic/cell/kept.txt"
+  git init -q "$1"
+  git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  git -C "$1" add -A; git -C "$1" commit -qm base
+  printf 'import pathlib\np = pathlib.Path(%s) / "benchmark-data/ic/cell/stray.json"\np.write_text("leftover\\n")\nprint("wrote")\n' \
+    "\"$1\"" > "$1/w.py"
+  printf 'print("read nothing")\n' > "$1/r.py"
+}
+cat > "$T/corpuswrite.sh" <<'EOF'
+set -euo pipefail
+. "${HERE:?}/_gate_dispatch.sh"
+gate_dispatch_init "$@"
+run "a corpus writer" "${CORPUS_REPO:?}" python3 "${CORPUS_REPO}/w.py"
+run "a corpus reader" "${CORPUS_REPO:?}" python3 "${CORPUS_REPO}/r.py"
+gate_dispatch_finish
+EOF
+export CORPUS_REPO="$T/corpusrepo"
+fresh_corpus "$CORPUS_REPO"
+DRIVE_CORPUS_ROOT="$CORPUS_REPO" drive cwseq 1 "$T/corpuswrite.sh"; RC_CWSEQ=$?
+fresh_corpus "$CORPUS_REPO"
+DRIVE_CORPUS_ROOT="$CORPUS_REPO" drive cwpar 8 "$T/corpuswrite.sh"; RC_CWPAR=$?
+
+if diff <(pairs "$T/cwseq.json") <(pairs "$T/cwpar.json") > "$T/cw.diff" 2>&1; then
+  ok "a corpus write is recorded against the SAME gate in both arms"
+else
+  bad "the concurrent arm attributed the corpus write differently — a gate that
+     wrote nothing is being named as a writer" "$(cat "$T/cw.diff")"
+fi
+# ...AND THE PAIR IS THE RIGHT ONE. Two arms can agree by being wrong the same
+# way (both marking every gate WROTE_CORPUS), which the diff above cannot see.
+for arm in cwseq cwpar; do
+  got="$(pairs "$T/$arm.json")"
+  if [ "$got" = "$(printf 'WROTE_CORPUS\ta corpus writer\nPASS\ta corpus reader')" ]
+  then
+    ok "[$arm] the writer is named and the reader is still a PASS"
+  else
+    bad "[$arm] the corpus-write verdicts are wrong" "$got"
+  fi
+done
+if [ "$RC_CWSEQ" -eq "$RC_CWPAR" ] && [ "$RC_CWSEQ" -ne 0 ]; then
+  ok "a corpus write fails the run in both arms (rc $RC_CWSEQ)"
+else
+  bad "a corpus write did not fail both arms identically" \
+      "sequential rc $RC_CWSEQ, concurrent rc $RC_CWPAR"
+fi
+if grep -q "run ONE AT A TIME" "$T/cwpar.err"; then
+  ok "the run SAYS it dropped to one gate at a time, rather than merely doing it"
+else
+  bad "the exclusive window was taken silently — a run that took six times as
+     long for a reason nobody printed is its own defect" "$(cat "$T/cwpar.err")"
 fi
 
 printf '\n  %d passed, %d failed\n' "$PASS" "$FAIL"
