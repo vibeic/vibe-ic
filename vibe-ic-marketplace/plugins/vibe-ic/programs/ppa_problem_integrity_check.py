@@ -63,6 +63,7 @@ from typing import Any, Dict, List, Mapping
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import contract as C, identity as ident  # noqa: E402
 
 #: The three that must MATCH for a comparison to mean anything.
@@ -186,7 +187,9 @@ def main(argv=None) -> int:
     ap.add_argument("--require-implementation-differs", action="store_true",
                     help="promote an identical implementation from "
                          "UNDETERMINED to a refusal")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     docs = {}
     for label, path in (("baseline", args.baseline), ("candidate", args.candidate)):
