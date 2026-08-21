@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "MODBUS Application Protocol V1.1b3 (2012) predates the standardization of MODBUS security extensions and contains no confidentiality, integrity, authentication, or access-control mechanisms. Specifically: (a) PDUs travel in cleartext on the wire — anyone with bus / wire / wire-tap access can sniff and decode every transaction; (b) no per-transaction or per-session signing — a man-in-the-middle can alter Function Codes, Data Addresses, Register Values, or Coil States undetectably; (c) no authentication of the client identity — any device that can reach the bus (serial) or the TCP socket on port 502 (network) is implicitly trusted; (d) no replay protection — an attacker can record a write command and replay it later. Practical deployments mitigate these gaps externally via network segmentation (industrial DMZ, VLAN), VPN tunnels, IPsec, application-layer firewalls, or vendor-proprietary wrappers. The dedicated 'MODBUS/TCP Security' specification (post-2018) introduces TLS encapsulation on a separate TCP port (802 by convention) but is a separate document outside V1.1b3 scope."
-  }
-}

@@ -34,7 +34,14 @@ PROG = Path(__file__).resolve().parent.parent / \
     "design_one_shot_runner.py"
 
 
-def _run(args: list, timeout: int = 90) -> subprocess.CompletedProcess:
+#: 60 s, not 90: the harness runs this file at `--timeout=180
+#: --timeout-method=thread`, so a 90 s inner bound cannot fire before the
+#: session is killed and every other file in the subset loses its verdict.
+#: MEASURED over this file's 7 launches (9 passed in 1.55 s): worst single call
+#: 0.139 s, so 60 s is ~430x the worst case and constrains nothing.
+#: Was invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277 —
+#: the bound is a parameter default, which the gate could not read.
+def _run(args: list, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(PROG)] + args,
         capture_output=True, text=True, timeout=timeout,

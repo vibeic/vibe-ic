@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """The two obstruction gates must be RUN by the flow, not merely exist.
 
-`macro_obs_geometry_intersect_check` declares itself BLOCKING and its own header
-said what it was worth: "It is not registered in flow/phase1_phase2_phase3.yaml
-and no runner invokes it; its only caller is tools/ci/repo_hygiene_gates.sh".
+`macro_obs_geometry_intersect_check` returns a blocking verdict (rc=1) and its
+own header said what that was worth: "It is not registered in
+flow/phase1_phase2_phase3.yaml and no runner invokes it; its only caller is
+tools/ci/repo_hygiene_gates.sh".
 It reproduces the defect in seconds on a routed DEF and nothing ever asked it
 to. A gate no step runs enforces nothing on a real design.
 
@@ -94,8 +95,11 @@ def test_the_gate_is_wired_into_a_gate_leg(step_id, program):
         f"{program} is not in any gate leg of step {step_id} — it would run "
         f"nowhere, which is the defect this pins")
     assert key != "advisory_program_exit_zero", (
-        f"{program} declares itself BLOCKING; the advisory slot is for gates "
-        f"that declare themselves advisory")
+        f"{program} returns rc=1 on a real defect and that verdict must decide "
+        f"step {step_id}'s; the advisory slot RECORDS a finding and never "
+        f"fails the step. The gate's own `ENFORCEMENT:` line is a DIFFERENT "
+        f"axis — it answers whether a runner spawns it inline — so an "
+        f"`advisory` declaration there is not a licence to move it here")
 
 
 @pytest.mark.parametrize("step_id,program", [

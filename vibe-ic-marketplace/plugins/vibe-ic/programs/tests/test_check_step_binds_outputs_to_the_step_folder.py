@@ -20,14 +20,14 @@ SOMEWHERE under the project". A 0-byte file matches. `_evidence_integrity_scan`
 exactly `PASS`; a step whose gate returns the rc=2 VACUOUS_PASS convention
 skips that scan entirely, so its 0-byte declared output was credited in full.
 Both of the real-run steps this change reddens (D1 and step 5 of
-/home/reyerchu/_sky130A_r3_run under a named single-file mutation) are exactly
+$HOME/_sky130A_r3_run under a named single-file mutation) are exactly
 that shape.
 
 The reverse cases are as load-bearing as the forward one. A run with no
 `steps/` tree — every published cell, every phase-driven run — must get the
 pre-change verdict UNCHANGED, and a step folder that CLAIMS an artefact which
 is not on disk must not be able to manufacture a green. That second one is not
-hypothetical: on the converged run /home/reyerchu/_car15_evidence the step
+hypothetical: on the converged run $HOME/_car15_evidence the step
 folders record 90 outputs and 7 of them (steps 15, 17, 19, 20, 21, 22, 34 —
 every one of those folders carrying `"status": "pass"`) name a path that does
 not exist in the run directory at all.
@@ -227,7 +227,7 @@ def test_a_run_with_no_steps_tree_keeps_the_pre_change_verdict(project):
 def test_a_step_folder_claiming_an_absent_artefact_cannot_make_it_green(project):
     """ANTI-WEAKENING, taken from a real converged run.
 
-    `/home/reyerchu/_car15_evidence` has 7 step folders whose `outputs.json`
+    `$HOME/_car15_evidence` has 7 step folders whose `outputs.json`
     records a produced artefact — with a byte size — for a path that does not
     exist in the run directory, every one of them under `"status": "pass"`.
     Had this change read the collector's VIEW instead of the write LEDGER, or

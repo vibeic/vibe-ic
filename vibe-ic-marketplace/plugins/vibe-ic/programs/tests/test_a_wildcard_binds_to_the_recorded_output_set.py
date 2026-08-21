@@ -5,7 +5,7 @@ BIDIRECTIONAL CONTROL for the "wildcard output resolution" change.
 THE DEFECT, MEASURED
 ====================
 Step 1 declares `phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v`. On the real
-run /home/reyerchu/_sky130A_r3_run (ledger generated with
+run $HOME/_sky130A_r3_run (ledger generated with
 `step_write_ledger.emit`), rename the recorded `phase2/stage1/rtl/spm.v` to
 `spm_copy.v` and the audit still returned:
 
@@ -56,7 +56,7 @@ found them.
 
 BLAST RADIUS, MEASURED BEFORE WRITING THE RULE
 ==============================================
-Three real ledger-bearing runs (/home/reyerchu/_sky130A_r3_run,
+Three real ledger-bearing runs ($HOME/_sky130A_r3_run,
 campaign_v1544/spm/converge_1.5.44_gf180mcuD,
 campaign_v1574/spm/converge_1.5.74_sky130A): 24 wildcard specs each, 6-7
 carrying a write record, ZERO in the M-of-N state and ZERO credited to an
@@ -153,7 +153,7 @@ def test_a_renamed_recorded_output_does_not_keep_the_wildcard_green(project):
     the same shape is present, and the pre-change resolver credited it —
     `spm_copy.v` proves that A file matching `rtl/*.v` exists under the
     project, which is exactly what a file some OTHER step wrote also proves.
-    Reproduced verbatim on the real run /home/reyerchu/_sky130A_r3_run:
+    Reproduced verbatim on the real run $HOME/_sky130A_r3_run:
     PASS before, and the only trace was `mode: "mixed"` plus a sentence.
     """
     (project / "rtl" / "spm.v").rename(project / "rtl" / "spm_copy.v")
@@ -275,7 +275,7 @@ def test_a_literal_or_alternative_still_counts_when_the_recorded_path_is_gone(
     `phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef`
     — the run wrote `spm.spef`, the record names it, and renaming it to the
     CANONICAL name the spec itself declares is a normalisation, not a loss.
-    Measured on /home/reyerchu/_sky130A_r3_run: step 22 stays green on both
+    Measured on $HOME/_sky130A_r3_run: step 22 stays green on both
     sides of this change. Only the wildcard alternative loses the right to be
     discharged by an unrecorded file.
     """

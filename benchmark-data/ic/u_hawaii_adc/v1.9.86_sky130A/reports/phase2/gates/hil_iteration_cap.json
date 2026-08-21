@@ -1,7 +1,0 @@
-{
-  "gate": "analog_hil_iteration_cap_check",
-  "verdict": "SKIP",
-  "reason": "no hw_tuning_report.json under analog/",
-  "max_iters": 3,
-  "blocks": []
-}

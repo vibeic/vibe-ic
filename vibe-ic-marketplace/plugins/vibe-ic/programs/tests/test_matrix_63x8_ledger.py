@@ -4,17 +4,17 @@ This file guards the substrate that all eight dimension modules import. It
 proves three things, and deliberately nothing else:
 
   1. The ledger really is the live cross product of the flow yaml's step list
-     and dimensions 1-8 — 504 cells, each coordinate exactly once. Not 504
-     because 504 is written down somewhere; 504 because
-     ``len(step_ids()) * len(DIMENSIONS)`` is 504 *right now*. Add or delete a
+     and dimensions 1-9 — 621 cells, each coordinate exactly once. Not 544
+     because 544 is written down somewhere; 544 because
+     ``len(step_ids()) * len(DIMENSIONS)`` is 621 *right now*. Add or delete a
      step and this file goes red, which is the whole point: a ledger that
-     silently kept saying 504 while the flow drifted would be exactly the
+     silently kept saying 544 while the flow drifted would be exactly the
      "measure something adjacent and report it as the answer" disease the
      campaign exists to remove.
 
   2. The `flowref` accessors agree with the yaml about which steps declare
      what — including the two places where the circulating numbers are subtly
-     wrong (see `test_blocks_on_presence_is_62_but_non_empty_is_60`).
+     wrong (see `test_blocks_on_presence_is_not_the_same_set_as_non_empty`).
 
   3. The waiver registry cannot carry a placeholder. Every waiver needs a
      reason AND evidence, both non-empty and both substantive.
@@ -37,6 +37,7 @@ suite*, so the proof does not rot.
 """
 from __future__ import annotations
 
+import importlib
 import os
 from collections import Counter
 
@@ -47,15 +48,101 @@ from matrix_63x8 import cells as C
 from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers as W
 
-EXPECTED_CELLS = 504
-EXPECTED_STEPS = 63
-EXPECTED_DIMS = 8
+# ──────────────────────────────────────────────────────────────────────
+# 2026-08-20, R6/R3 — EVERY TRIPWIRE BELOW MOVED, ON ONE CAUSE.
+#
+# vibe-ic#1744 added FIVE steps to the flow: 0.5ic (Submission Template
+# Ingest) and the four path-specific steps of the cell/IP-vs-chip/IC split,
+# 15.5ic 26.5ic 37.5ip 37.5ic. Measured live off the yaml in this tree, not
+# re-typed from the change:
+#
+#   EXPECTED_STEPS               63 -> 68   +5, one per new step
+#   EXPECTED_CELLS              504 -> 544   68 x 8
+#   CENSUS_GATE_PRESENT          62 -> 67   +5, every new step declares a gate
+#   CENSUS_REQUIRED_OUTPUTS_...  61 -> 66   +5, every new step declares outputs
+#   CENSUS_BLOCKS_ON_PRESENT     63 -> 68   +5, presence stays TOTAL
+#   CENSUS_BLOCKS_ON_NON_EMPTY   62 -> 66   +4, NOT +5 -- see below
+#   CENSUS_GATE_PROGRAMS_NON_... 61 -> 66   +5, every new gate names a program
+#
+# THE +4 IS THE ONE WORTH READING. 0.5ic declares `blocks_on: []`: it is a
+# genuine graph ROOT, the step that fetches the shuttle operator's template
+# before anything else can test which path the design is on. So presence moves
+# by 5 and non-empty by 4, and the `roots` set below moves from {D1} to
+# {0.5ic, D1}. That set is NOT re-typed here -- it is read out of
+# `flow_dependency_graph_check.DECLARED_ROOTS`, which #1744 moved in the same
+# commit, and the two agree on this tree: ['0.5ic', 'D1'].
+#
+# Also note A1 is no longer a root. #1258 gave it `blocks_on: [D1]` and the
+# note on CENSUS_BLOCKS_ON_NON_EMPTY below records that; the count that note
+# left at 62 is the one this change moves to 66.
+# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────
+# 2026-08-21 — EVERY TRIPWIRE BELOW MOVES BY EXACTLY ONE, ON ONE CAUSE.
+#
+# `7fcbc7397` ("ppa(phase4): step 13 passes on a rewritten candidate") added
+# step 1.6x — the cross-layer rewrite-fidelity relation — to the flow yaml and
+# regenerated NONE of the 63x8 pins. `git show --stat 7fcbc7397` names eight
+# files: the yaml, INDEX.md, three new programs and their three tests. No
+# matrix, ledger, waiver or census file among them.
+#
+# Measured live off the yaml in this tree, not re-typed from the change:
+#
+#   EXPECTED_STEPS                68 -> 69   1.6x
+#   EXPECTED_CELLS               544 -> 552   69 x 8
+#   CENSUS_GATE_PRESENT           67 -> 68   1.6x declares a gate
+#   CENSUS_REQUIRED_OUTPUTS_...   66 -> 67   1.6x declares required_outputs
+#   CENSUS_BLOCKS_ON_PRESENT      68 -> 69   1.6x declares the key
+#   CENSUS_BLOCKS_ON_NON_EMPTY    66 -> 67   `blocks_on: [1]`, non-empty
+#   CENSUS_GATE_PROGRAMS_NON_...  66 -> 67   its gate names a program
+#
+# ALL SEVEN MOVE BY ONE AND IT IS THE SAME STEP. The raw yaml step count did
+# NOT change across this span — 77 before and 77 after — because `867de4289`
+# retired 37.5self in the same window. 37.5self was never in the matrix
+# population, so the matrix moved +1 while the file moved +1 -1. A reader who
+# checks `grep -c '^  - id:'` and sees no change has not checked this.
+#
+# THIS IS THE THIRD TIME. The notes below record the tripwire firing on a
+# legitimate flow change and then sitting red on main instead of being moved —
+# P0 (`332b9985`) and A1 (`73dfb68dd`). Measured on why nothing caught it this
+# time: the repository's own selector DOES reach here. Run against the culprit
+# diff, `ci_targeted_test_select.py --base 7fcbc7397~1` selects 325 tests
+# including 16 `test_matrix_*` files, this one among them. The tests were
+# selected and the red was not acted on, so the hole is not selection.
+#
+# THEY ARE NOT AUTO-DERIVED, AND THAT IS THE POINT. Deriving these from the
+# yaml would make every assertion below tautological and the ledger could then
+# drift in silence — which is the disease this file was written against. They
+# stay typed, in ONE place, so a flow change forces a reviewer to look.
+# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────
+# AND MOVED AGAIN 2026-08-21, WITH THE NINTH DIMENSION. The paragraph above is
+# about the STEP axis and is unchanged by this; what moves here is the DIMENSION
+# axis, and the two are independent:
+#
+#   len(F.step_ids())   -> 69      (the axis the note above accounts for)
+#   len(C.DIMENSIONS)   ->  9      (was 8; dimension 9 asks whether a step's
+#                                   FAIL reaches the exit code)
+#   69 * 9              -> 621
+#
+# BOTH NOTES ARE KEPT ON PURPOSE. Two lanes moved this constant in the same
+# batch — one the step population, one the dimension count — and a merged pin
+# that keeps only the later note loses the reason the earlier number moved.
+# Re-measured on the merged tree rather than multiplied out from either.
+# ──────────────────────────────────────────────────────────────────────
+EXPECTED_CELLS = 621
+EXPECTED_STEPS = 69
+EXPECTED_DIMS = 9
 
 # Pinned census of the yaml as measured on 2026-07-27. These are TRIPWIRES, not
 # the definition: every structural assertion below derives its expectation live
 # from the yaml. If the flow legitimately changes, these numbers change with it
 # in ONE place and the reviewer is forced to look.
-CENSUS_GATE_PRESENT = 62
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
+CENSUS_GATE_PRESENT = 68
 # UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
 # was WITHDRAWN the same day: the only thing that made the declaration
 # satisfiable was `check_step` standing its early MISSING down so FS1's own
@@ -64,13 +151,63 @@ CENSUS_GATE_PRESENT = 62
 # artefacts have no producer outside its own gate, so dimension 7's W4 rule
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
-CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
+CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
+# 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
+# P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
+# P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
+# its own inputs had always implied was missing, and without it a FAILED Phase 1
+# could not red the pre-flight. The tripwire fired on a LEGITIMATE flow change
+# and then stayed red on main instead of being moved, which is how a tripwire
+# stops being read. Both counts move by exactly one, and it is the same step.
+# `332b9985` also edited `flow_dependency_graph_check.py` and its test in the
+# SAME commit, which is why the roots are read out of that program below rather
+# than re-typed here: the two copies moved together once and can drift apart.
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
+CENSUS_BLOCKS_ON_PRESENT = 69
+# 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
+# gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
+# D1 while carrying `blocks_on: []`, so the ordering edge its own inputs
+# had always implied was simply missing; declaring it is the same shape of
+# fix as P0's above, and `DECLARED_ROOTS` shrank to {"D1"} in that very
+# commit to match.
+#
+# ONLY the non-empty count moves, unlike P0. P0 had no `blocks_on` key at
+# all, so it moved presence AND non-empty together; A1 already declared the
+# key as an empty list, so presence was always 63 and is untouched here.
+#
+# This is the SECOND time this tripwire fired on a legitimate flow change
+# and then sat red on main instead of being moved -- the exact failure the
+# P0 note above describes as "how a tripwire stops being read". #1258 moved
+# nine files, including the yaml, `flow_dependency_graph_check.DECLARED_ROOTS`,
+# `flowref.py` and three new tests; this constant is the one thing it missed.
+# The comment at the `roots` assertion below predicted that "a landing that
+# gives A1 an ordering edge moves BOTH sides together instead of reddening
+# this cell". Both sides DID move together. The cell reddened anyway, because
+# this count is a THIRD copy that neither side is tied to.
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
+CENSUS_BLOCKS_ON_NON_EMPTY = 67
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
-CENSUS_GATE_PROGRAMS_NON_EMPTY = 61
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
+CENSUS_GATE_PROGRAMS_NON_EMPTY = 67
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -94,8 +231,8 @@ def test_flow_yaml_override_is_not_set():
 # ──────────────────────────────────────────────────────────────────────
 # 1. Ledger shape
 # ──────────────────────────────────────────────────────────────────────
-def test_dimension_table_is_1_through_8_with_a_name_each():
-    assert C.DIMENSIONS == (1, 2, 3, 4, 5, 6, 7, 8)
+def test_dimension_table_is_1_through_9_with_a_name_each():
+    assert C.DIMENSIONS == (1, 2, 3, 4, 5, 6, 7, 8, 9)
     assert set(C.DIMENSION_NAMES) == set(C.DIMENSIONS)
     assert C.DIMENSION_NAMES == {
         1: "wiring",
@@ -106,12 +243,24 @@ def test_dimension_table_is_1_through_8_with_a_name_each():
         6: "skip_discipline",
         7: "outputs_list_complete",
         8: "missing_caught",
+        9: "verdict_consumed",
     }
-    # Every dimension carries a one-line question; dimension 8 is the CATCHER
-    # question and must stay last.
+    # Every dimension carries a one-line question.
     assert set(C.DIMENSION_QUESTIONS) == set(C.DIMENSIONS)
     assert all(C.DIMENSION_QUESTIONS[d].strip() for d in C.DIMENSIONS)
-    assert C.DIMENSIONS[-1] == C.PROSE_ONLY_DIM == 8
+    # PROSE_ONLY_DIM is a fact about `.audit_63x8.json` — dimension 8 is the one
+    # whose audit record is prose rather than {"verdict": ...}. It USED to be
+    # asserted as `DIMENSIONS[-1] == PROSE_ONLY_DIM == 8`, conflating "the
+    # prose-only dimension" with "the last dimension". Those coincided for as
+    # long as the matrix had eight dimensions and stopped coinciding the moment
+    # it had nine: dimension 9 is last, dimension 8 is still the prose-only one.
+    # Asserted apart so neither can drift behind the other.
+    assert C.PROSE_ONLY_DIM == 8
+    assert C.PROSE_ONLY_DIM in C.DIMENSIONS
+    assert C.DIMENSIONS[-1] == 9
+    # A dimension added after the audit has no field in it, so AUDIT_FIELDS is
+    # SHORTER than DIMENSIONS and that is the intended shape, not an omission.
+    assert len(C.AUDIT_FIELDS) == 8 < len(C.DIMENSIONS)
 
 
 def test_ledger_is_the_live_cross_product():
@@ -166,8 +315,11 @@ def test_cells_for_returns_one_row_per_step(dim):
     ]
 
 
-def test_cells_for_rejects_a_dimension_outside_1_8():
-    for bad in (0, 9, -1):
+def test_cells_for_rejects_a_dimension_outside_the_declared_range():
+    # Derived from C.DIMENSIONS, not spelled 1..8: the day a tenth dimension is
+    # added this must reject 11, and a literal here would go on rejecting 9 —
+    # which by then would be a VALID dimension whose cells nobody could fetch.
+    for bad in (0, max(C.DIMENSIONS) + 1, -1):
         with pytest.raises(ValueError):
             C.cells_for(bad)
 
@@ -180,7 +332,7 @@ def test_cell_lookup_accepts_both_id_spellings():
         C.cell("NO_SUCH_STEP", 1)
 
 
-def test_cells_for_step_returns_all_eight_dimensions():
+def test_cells_for_step_returns_every_dimension():
     for sid in F.step_ids():
         row = C.cells_for_step(sid)
         assert [c.dim for c in row] == list(C.DIMENSIONS)
@@ -276,21 +428,56 @@ def test_gate_presence_matches_the_yaml(raw_steps):
             assert F.gate_programs(sid) == ()
 
 
-def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
+def test_blocks_on_presence_is_not_the_same_set_as_non_empty(raw_steps):
     """The two are NOT the same set, and conflating them is a real error.
 
-    `blocks_on` is DECLARED on 62 steps but declared EMPTY on D1 and A1 — the
-    flow's two genuine roots. "62 steps have blocks_on" is a presence count; a
-    test that reads it as "62 steps have upstream dependencies" would demand an
-    edge from a root and be wrong twice over.
+    `blocks_on` is DECLARED on every step and declared EMPTY on the flow's
+    genuine roots. "N steps have blocks_on" is a presence count; a test that
+    reads it as "N steps have upstream dependencies" would demand an edge from
+    a root and be wrong twice over.
+
+    The counts are TRIPWIRES (see the module header). WHICH steps are roots is
+    not — it is a fact `flow_dependency_graph_check` already owns, so it is
+    read out of that program rather than re-typed here.
+
+    Presence is additionally asserted as a SET, so a step added later without
+    `blocks_on` fails by NAME rather than as an arithmetic mismatch the reader
+    has to resolve against the yaml.
     """
     present = {F.normalize_id(s["id"]) for s in raw_steps if "blocks_on" in s}
     non_empty = {
         F.normalize_id(s["id"]) for s in raw_steps if s.get("blocks_on")
     }
+    # Presence is TOTAL as of `332b9985`, which is stronger than the count and
+    # is asserted FIRST because it is the assertion that can name what changed.
+    # A bare `62 == 63` sends the reader back to the yaml to work out which step
+    # moved; that lookup is the work this message exists to save. (from #1264)
+    all_ids = {F.normalize_id(s["id"]) for s in raw_steps}
+    assert present == all_ids, (
+        f"every step must declare `blocks_on`, even as an empty list — "
+        f"missing on {sorted(all_ids - present)}")
     assert len(present) == CENSUS_BLOCKS_ON_PRESENT
     assert len(non_empty) == CENSUS_BLOCKS_ON_NON_EMPTY
-    assert present - non_empty == {"D1", "A1"}
+
+    # ANTI-VACUITY. If these two sets ever coincide, the distinction this test
+    # exists to defend is gone and the assertion below would hold trivially.
+    assert present, "no step declares blocks_on — nothing here means anything"
+    roots = present - non_empty
+    assert roots, (
+        "presence and non-empty are the SAME set, so this test no longer "
+        "demonstrates that conflating them is an error — re-derive the flow's "
+        "roots before editing this assertion away")
+
+    # The roots are NOT re-typed here. `flow_dependency_graph_check` owns that
+    # register and fails when the yaml and the register disagree; a hand-typed
+    # copy in this file would be a second source that can drift from both.
+    # It already drifted once: vibe-ic#923 removed P0 from the root set and the
+    # hand-typed copies in test_flow_dependency_graph_check went stale in the
+    # same commit, which is why that file reads it out of the program too
+    # (see its line 25). This also means a landing that gives A1 an ordering
+    # edge moves BOTH sides together instead of reddening this cell.
+    assert roots == set(
+        importlib.import_module("flow_dependency_graph_check").DECLARED_ROOTS)
 
     assert {
         F.normalize_id(sid) for sid in F.step_ids() if F.declares_blocks_on(sid)
@@ -421,10 +608,181 @@ def test_output_entries_classify_into_the_four_kinds():
     # artefacts were part of this count for one day and are NOT here: no
     # producer outside FS1's own gate writes them, so declaring them could only
     # be satisfied by the auditor's own output.
-    assert sum(seen.values()) == 133, seen
-    assert seen[F.FILE] == 99
-    assert seen[F.GLOB] == 12
-    assert seen[F.ANY_OF] == 22
+    #
+    # 2026-08-11: 133 -> 134, FILE 99 -> 100 (vibe-ic#983 ruling 2). The ONE new
+    # entry is step 29's `reports/phase2/gates/post_layout_sim.json`, the
+    # BLOCKING "Substance gate" report its own gate clause already wrote while
+    # no entry named it. GLOB and ANY_OF are untouched.
+    #
+    # And FS1's two FMEDA artefacts are STILL not here. #983 asked for them
+    # again in the same breath as step 29's; the difference is measured, not
+    # stylistic. Step 29 already declares a run-produced entry, so its gate
+    # keeps running and the declaration re-grades nothing (0 of 6 published
+    # trees move). FS1 declares nothing else, so declaring its gate paths trips
+    # the "every declared entry absent -> MISSING before the gate runs" early
+    # return and the producer never runs at all: MEASURED on this tree,
+    # VACUOUS_PASS with both reports written becomes MISSING with none.
+    # test_flow_declaration_does_not_silence_its_producer.py holds that
+    # distinction live for both steps.
+    # 2026-08-12: 134 -> 135, FILE 100 -> 101 (vibe-ic#1241-adjacent, d7 W2).
+    # The ONE new entry is D1's `phase1/generated_docs/L21_POWER_INTENT.json`.
+    # Dimension 7 was reporting it produced-by-the-flow / read-by-a-gate /
+    # declared-by-nobody and charging the finding to stepM2 — the CONSUMER —
+    # because there was no declared producer to charge it to. D1 is the
+    # producer: this flow's own name for it is "Phase 1 Doc Extraction (17
+    # skills + dialogue entry -> L1-L27)" and it declared L1-L13 only.
+    #
+    # It is a plain FILE, so GLOB (12) and ANY_OF (22) are untouched, which is
+    # what the per-kind assertions below re-check independently of this total.
+    #
+    # Recorded in the dimension-3 manifest with the run root, path and byte
+    # size it was MEASURED at (benchmark-data/ic/caravel_user_project, 531 B) —
+    #
+    # 2026-08-12 (same change): 135 -> 136, FILE 101 -> 102. Step 11's
+    # `phase2/stage2/dft/coverage.yml`, the same d7 W2 shape: written by
+    # dft_atpg_coverage_check / fault_atpg_run, read by step 11's own gate,
+    # declared by nobody. Present in 2 of the 2 roots where step 11 actually
+    # ran, and resolves at spm/v1.9.96_gf180mcuD (28797 B).
+    # declaring an artefact d3 cannot then evidence would move the finding from
+    # d7 to d3 rather than close it.
+    # 2026-08-14 (#1215): 136 -> 140, FILE 102 -> 106. The four write-record
+    # promotions disposed of by DECLARING them on the step that produces them
+    # — D1 `reports/audit/phase1/expert_parse_track.json`, 23
+    # `reports/phase3/sta/post_route_signoff_corner.json`, 24
+    # `reports/phase3/dynamic_ir.json`, 27 `reports/phase3/si_mcf_sta.json`.
+    # All four are plain FILEs, so GLOB (12) and ANY_OF (22) are untouched and
+    # the whole delta lands on FILE — which is what makes this total a real
+    # check rather than a restatement of the sum. Each is recorded in the
+    # dimension-3 manifest at the run root and byte size it was MEASURED at,
+    # for the reason the 2026-08-12 entries above give: declaring an artefact
+    # d3 cannot then evidence moves the finding from d7 to d3 instead of
+    # closing it. The fifth promotion (step 34) is WAIVED, not declared, so it
+    # adds no entry here.
+    # 2026-08-15 (#1348): 140 -> 141, FILE 106 -> 107. The LAST write-record
+    # promotion, disposed of the same way — D1
+    # `phase1/extraction_patterns.json`, seeded by
+    # `phase1_doc_one_shot_runner` through a variable so no AST write position
+    # names it, read by D1's own `extraction_coverage_check` gate, declared by
+    # nobody. It is a plain FILE, so GLOB (12) and ANY_OF (22) are again
+    # untouched and the whole delta lands on FILE. Recorded in the dimension-3
+    # manifest at the run root and byte size it was MEASURED at
+    # (`spm/v1.9.96_gf180mcuD`, 7608 B), and it resolves in 9 of the 10
+    # admissible run roots — declaring an artefact d3 cannot then evidence
+    # would move the finding from d7 to d3 instead of closing it.
+    # 2026-08-20 (#1744, R3): 141 -> 152, and the delta is spread across all
+    # three kinds for the first time, which is why each is asserted separately
+    # rather than only the sum. Measured per step off this tree:
+    #   0.5ic  +2  1 ANY_OF (slots/*.yaml OR NO_TEMPLATE.txt) + 1 FILE
+    #   15.5ic +2  2 FILE   (padring.def, padring.json)
+    #   26.5ic +2  1 ANY_OF (die_finished.def OR die_finishing.SKIPPED.txt)
+    #                       + 1 FILE
+    #   37.5ip +4  4 GLOB   (hardmacro/*.lef *.lib *.gds *.v -- the four views
+    #                        an IP is delivered as; a GLOB because the macro
+    #                        name is the design's, not the flow's)
+    #   37.5ic +1  1 FILE   (shuttle_precheck.json)
+    # = FILE +5 (107 -> 112), GLOB +4 (12 -> 16), ANY_OF +2 (22 -> 24).
+    # 2026-08-20 (R9): 152 -> 153, one FILE, and it is a DECLARATION rather than
+    # a new step. Step 31 gained `reports/phase3/magic_illegal_overlap.json` to
+    # close the dimension-7 finding W1:gate_output_read_elsewhere — the gate
+    # program writes it and `phase3_one_shot_runner` reads it by name, so it was
+    # load-bearing and undeclared. Unlike `extraction_patterns.json` above, it
+    # does NOT resolve in any admissible run root (the gate postdates every
+    # published cell), so this one DOES move the finding from d7 to d3: the d3
+    # manifest records it UNPROVEN and the cell reports it unevidenced wherever
+    # a corpus is offered. That is the true statement of the gap, and it is
+    # stated here rather than left for a reader to discover from a red cell.
+    # = FILE +1 (112 -> 113), GLOB and ANY_OF untouched.
+    # 2026-08-20 (R12): 153 -> 154, one FILE, step 31 again and for the same
+    # dimension-7 rule — `reports/phase3/lvs_verdict.json`, charged
+    # W2:produced_consumed_undeclared the moment the write-record oracle was
+    # reconnected to the published corpus (R11). This one goes the other way
+    # from R9: all three published spm cells carry it tracked and non-empty, so
+    # the d3 manifest records it PRODUCED_BY_RUN and dimension 3 pays nothing.
+    # = FILE +1 (113 -> 114), GLOB and ANY_OF untouched.
+    # 2026-08-20: 154 -> 156, two GLOB, and FILE does not move at all. Step
+    # 37.5ic became the producer of the release documents, and the pair it emits
+    # is per (design, pdk) -- `SIGNOFF_<design>_<pdk>.html`,
+    # `BRIEF_<design>_<pdk>.html` -- so that two dies built out of one tree
+    # cannot overwrite each other's sign-off. They arrived declared as the bare
+    # `SIGNOFF.html` / `BRIEF.html`, i.e. as two FILEs naming files no producer
+    # in this flow writes, which is how d4/criteria_match reported them: "named
+    # nowhere the gate can reach". Declaring the glob the generator actually
+    # writes is what makes the entry true, and it moves the pair FILE -> GLOB.
+    # Same shape as 37.5ip's four hardmacro views above and for the same reason:
+    # a GLOB because the identifying half of the name is the design's, not the
+    # flow's.
+    # = GLOB +2 (16 -> 18), FILE 114 unchanged, ANY_OF 24 unchanged.
+    # 2026-08-20 (smrg): 156 -> 161, five FILE, and the accounting is
+    # RE-DERIVED rather than incremented — measured by classifying the yaml at
+    # `ff5071caa` (the commit that last set this constant) and at the tip, and
+    # diffing per step. FOUR of the five predate this change and had left the
+    # tripwire sitting red on main, which is the third time this file records
+    # that happening:
+    #   0.5ic  +2  `input/submission_template/tapeout_declaration.json` and
+    #             `reports/phase1/tapeout_declaration.json` — the declaration
+    #             the route-deciding step writes on every route.
+    #   21     +1  `reports/phase3/drc_router.json`.
+    # The FIFTH is this change's, and it is a NET +1 over the tip because it
+    # both adds and removes:
+    #   37.5self  -1  the step is RETIRED. Its `reports/phase3/
+    #                 general_precheck.json` is not deleted — it moves.
+    #   37.5ic    +2  `reports/phase3/tapeout_precheck.json` (the merged, per-
+    #                 line-authority record) and `reports/phase3/
+    #                 general_precheck.json` (our arm's own report, which the
+    #                 merge quotes rather than replaces).
+    # `reports/phase3/shuttle_precheck.json` does NOT move: 37.5ic already
+    # declared it and still does — what changed is that it is now written on
+    # every path, including the paths where the operator was never asked.
+    # = FILE 114 + 2 + 1 + 2 = 119; GLOB and ANY_OF untouched.
+    # 2026-08-21: 161 -> 164, FILE 119 -> 122, THREE entries with three owners.
+    # RE-DERIVED on the merged tree, as the note this replaces instructed, and
+    # the re-derivation is why the number moved again: that note pinned 163/121
+    # while the live tree already answered 164/122. A merged pin that is added
+    # up from two lanes' notes is stale the moment a third lane lands.
+    #
+    #   +1  step 1.6x  `reports/crosslayer/rewrite_equivalence_check.json`
+    #       (lane jmatrix/63x8-main-reds, from `7fcbc7397`).
+    #   +1  step 15.5ic `reports/phase3/pad_assignment.json`, the report of
+    #       `pad_assignment_gen` — the new AUTHOR of
+    #       `phase3/stage3/pnr/pad_assignment.json`. That path had two
+    #       references before and BOTH were readers, so 15.5ic could only ever
+    #       take `pad_ring_gen`'s SKIP branch (lane
+    #       cpath/pad-and-seal-ring-chip-path, vibe-ic#1410).
+    #   +1  step 31   `reports/phase3/drc_signoff.json`, written by
+    #       `drc_report_check` and read by `general_precheck` while no step
+    #       declared it — dimension 7's W1 finding, closed by declaring it.
+    #
+    # MEASURED, by diffing the (step, entry) SET between the v1.11.18 yaml and
+    # this tree: exactly those two paths were added since, none removed,
+    # 162 -> 164. The 1.6x entry is older than that window and is measured
+    # below.
+    #
+    # THE ATTRIBUTION DISPUTE IS SETTLED, AND BOTH LANES WERE RIGHT — about
+    # DIFFERENT increments. Driving `flowref` at each revision's yaml through
+    # `VIBE_IC_MATRIX_FLOW_YAML` and counting entries:
+    #
+    #     ff5071caa    steps 68  entries 154  FILE 114   no 1.6x, no 37.5self
+    #     7fcbc7397~1  steps 69  entries 160  FILE 118   no 1.6x, 37.5self YES
+    #     7fcbc7397    steps 70  entries 161  FILE 119   1.6x ARRIVES
+    #     867de4289    steps 69  entries 162  FILE 120   37.5self RETIRED
+    #
+    # There are TWO +1s in that span, one per commit. `7fcbc7397` moved
+    # 160 -> 161 and that is step 1.6x; `867de4289` moved 161 -> 162 and that is
+    # the 37.5self/37.5ic swap. Neither lane was wrong; each attributed the
+    # increment it had measured, and the disagreement was that both were
+    # describing "the first +1" when there were two.
+    #
+    # All three entries are plain FILE — no glob, no OR — so GLOB and ANY_OF are
+    # untouched, which is what makes the attribution checkable rather than
+    # asserted.
+    #
+    # `padring.def` does NOT gain an `OR ...SKIPPED.txt` alternative and stays a
+    # plain FILE: a seal ring can legitimately not apply, a pad ring on a die
+    # cannot, so a skipped pad ring must stay MISSING.
+    assert sum(seen.values()) == 164, seen
+    assert seen[F.FILE] == 122
+    assert seen[F.GLOB] == 18
+    assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
     # does NOT exist in required_outputs. It lives only in `gate` clauses. The
     # classifier still returns it for forward-compat, but a sibling branching on
@@ -591,15 +949,15 @@ def test_waiver_validator_actually_rejects_a_placeholder():
             "run of the other branch into MISSING."
         ),
         evidence=(
-            "programs/mixed_signal_top_lvs_run.py:917 — "
-            "(rpt_dir / 'top_lvs.json').write_text(...)"
+            'programs/mixed_signal_top_lvs_run.py::`(rpt_dir / "top_lvs.json").write_text(`'
         ),
     )
     assert W.validate(good) == ()
     # ...and the docstring says the same thing. Pinned, because the example a
     # reader copies is the one that decides how the next waiver is written, and
     # the old one pointed at `programs/rtl_dispatch.py`, which does not exist.
-    assert "programs/mixed_signal_top_lvs_run.py:917" in (W.__doc__ or ""), (
+    assert ('programs/mixed_signal_top_lvs_run.py::`(rpt_dir / '
+            '"top_lvs.json").write_text(`') in (W.__doc__ or ""), (
         "the waivers module docstring no longer carries the GOOD example this "
         "probe validates; if the cited line moved, update BOTH"
     )
@@ -836,14 +1194,14 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
 
     This is the anti-fake-pass proof for the whole substrate. If the ledger
     were sourced from `.audit_63x8.json` — or from any frozen list — it would
-    keep reporting 63 steps / 504 cells here and this test would fail.
+    keep reporting 68 steps / 544 cells here and this test would fail.
 
     The real yaml is never touched: eight agents share this worktree.
     """
     original = F.FLOW_YAML
     doc = yaml.safe_load(original.read_text(encoding="utf-8"))
 
-    # (a) ADD a step -> 64 steps, 512 cells, new cells ABSENT_FROM_AUDIT.
+    # (a) ADD a step -> 69 steps, 552 cells, new cells ABSENT_FROM_AUDIT.
     doc["steps"].append(
         {
             "id": "ZZ_MUTANT",
@@ -862,7 +1220,7 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
         C.rebuild()
 
         assert len(F.step_ids()) == EXPECTED_STEPS + 1
-        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 512
+        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 630
         assert len(C.cells_for(1)) == EXPECTED_STEPS + 1
 
         # The added step has no audit history at all — surfaced, not swallowed.
@@ -915,3 +1273,102 @@ def test_accessors_track_a_removed_field(tmp_path):
 
     assert F.required_outputs(victim)
     assert F.declares_required_outputs(victim)
+
+
+# ===========================================================================
+# CONTENT CITATIONS (vibe-ic#1289)
+#
+# `path:LINE` rots on every edit ABOVE the line it names, and it rots the bad
+# way: it still resolves to a line, so it still READS as evidence while
+# pointing at unrelated code. Measured on `a38902d1`,
+# `flow_compliance_check.py:2439-2441` had come to read `return result` and
+# `phase3_one_shot_runner.py:30288` an EMPTY LINE.
+#
+# The form this replaces it with is only an improvement if a DELETED construct
+# still fails — an anchor loose enough to always match is a waiver that can
+# never be re-examined, which is worse than drift because drift at least fails
+# loudly. Both halves are asserted below.
+# ===========================================================================
+def _waiver_citing(evidence: str):
+    """A throwaway waiver carrying one evidence string, nothing else."""
+    return W.Waiver(step_id="1", dim=2, reason="probe", evidence=evidence)
+
+
+def test_a_content_citation_that_resolves_once_is_clean():
+    """`passed = len(found) > 0` occurs exactly once in the cited file."""
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/flow_compliance_check.py::`passed = len(found) > 0`"))
+    assert problems == (), problems
+
+
+def test_PAIRED_a_DELETED_construct_still_fails():
+    """THE GUARD the whole form rests on.
+
+    If this ever passes, the citation has stopped being evidence: it would
+    mean an anchor naming nothing is accepted, which is exactly the "can never
+    be re-examined" failure that would make this worse than a line number.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/flow_compliance_check.py::"
+        "`passed = len(this_construct_was_deleted) > 0`"))
+    assert len(problems) == 1, problems
+    assert "resolves to NOTHING" in problems[0], problems[0]
+    assert "re-examined" in problems[0], problems[0]
+
+
+def test_an_AMBIGUOUS_anchor_is_refused_and_says_how_many():
+    """MEASURED: `len(corners) < 2` occurs 3 times in that file.
+
+    An anchor matching in several places cannot show WHICH construct the
+    waiver rests on, so accepting it would let a vague gesture stand in for
+    evidence.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/phase3_one_shot_runner.py::`len(corners) < 2`"))
+    assert len(problems) == 1, problems
+    assert "AMBIGUOUS" in problems[0], problems[0]
+
+
+def test_the_tighter_anchor_for_that_same_construct_IS_accepted():
+    """The other half of the pair: the rule is satisfiable, not merely strict.
+
+    Without this, "refuse ambiguous anchors" could be met by refusing
+    everything, and the form would be unusable rather than disciplined.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        'programs/phase3_one_shot_runner.py::'
+        '`stance_path = rpt_phase3 / "single_corner_stance.json"`'))
+    assert problems == (), problems
+
+
+def test_a_pytest_node_id_is_not_read_as_a_content_citation():
+    """`tests/test_x.py::test_name` carries no quote, and several already
+    appear in this registry. Promoting one into an evidence claim would
+    invent a claim the waiver never made."""
+    problems = W.content_citation_problems(_waiver_citing(
+        "re-executed by programs/tests/test_matrix_d2_falsifiable.py"
+        "::test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file"))
+    assert problems == (), problems
+
+
+def test_the_registry_itself_has_no_broken_content_citation():
+    """The live registry, not a fixture — the converted entries must resolve."""
+    bad = {}
+    for w in W.WAIVERS:
+        problems = W.content_citation_problems(w)
+        if problems:
+            bad[f"{w.step_id}/d{w.dim}"] = problems
+    assert not bad, bad
+
+
+def test_the_content_form_is_ACTUALLY_USED_by_the_registry():
+    """NON-VACUITY. A grammar nothing writes is a grammar nothing checks.
+
+    Counts entries carrying the form, so the four tests above cannot be
+    passing over an empty population.
+    """
+    used = [f"{w.step_id}/d{w.dim}" for w in W.WAIVERS
+            if any(True for _ in W._iter_content_citations(
+                f"{w.reason or ''}\n{w.evidence or ''}"))]
+    assert len(used) >= 2, (
+        f"only {len(used)} waiver(s) use the content form: {used}")

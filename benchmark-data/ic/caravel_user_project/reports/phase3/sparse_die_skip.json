@@ -1,9 +1,0 @@
-{
-  "tapcell_skipped": true,
-  "fill_skipped": true,
-  "tapcell_core_util_pct": 0.022015207255854704,
-  "fill_core_util_pct": 0.03443213182204461,
-  "threshold_pct": 5.0,
-  "program": "sparse_die_skip_attestation",
-  "reason": "post-place CORE utilization below the sparse-die threshold on a fixed-area wrapper; full-die tapcell/decap/fill tiling was bounded to avoid flooding empty silicon (see #684). The skip is an attested engineering decision, not a flow break."
-}
