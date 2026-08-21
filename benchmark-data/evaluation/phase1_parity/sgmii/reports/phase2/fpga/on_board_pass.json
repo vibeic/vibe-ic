@@ -1,4 +1,0 @@
-{
-  "verdict": "SKIP",
-  "evidence": "<half-duplex-tester> board verify SKIPPED: class 'digital_arithmetic_primitive' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family. A memory-bus/data core has no DE10 board-pin contract and speaks no single-wire half-duplex protocol on board pins, so the host connect_test cannot bind it. Supply a *de10*.{v,sv} board-harness top to enable hardware verification; otherwise gate-level synth + Phase 3 is the verification path."
-}

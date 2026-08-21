@@ -131,7 +131,7 @@ def _check_block(project: Path, block_dir: Path
     corners_doc = _load_json(block_dir / "corner_results.json")
     corners = (corners_doc or {}).get("corners")
     if not isinstance(corners, list) or not corners:
-        return "SKIP", {"block": block_dir.name, "reason": "no_corner_data",
+        return "UNMEASURED", {"block": block_dir.name, "reason": "no_corner_data",
                         "enob_target": target}
 
     measured: List[dict] = []
@@ -150,7 +150,7 @@ def _check_block(project: Path, block_dir: Path
             failing.append(rec)
 
     if not measured:
-        return "SKIP", {"block": block_dir.name, "reason": "no_sndr_or_enob",
+        return "UNMEASURED", {"block": block_dir.name, "reason": "no_sndr_or_enob",
                         "enob_target": target,
                         "corners_seen": len(corners)}
 
@@ -175,6 +175,11 @@ def run_audit(project: Path) -> dict:
     verdict = "SKIP"
     for bdir in sorted(d for d in analog.iterdir() if d.is_dir()):
         status, detail = _check_block(project, bdir)
+        if status == "UNMEASURED":
+            verdict = "UNMEASURED" if verdict != "FAIL" else verdict
+            if detail:
+                results.append({"status": "UNMEASURED", **detail})
+            continue
         if status == "SKIP":
             if detail is not None:
                 results.append({"status": "SKIP", **detail})
@@ -222,7 +227,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"  FAIL {b['block']} @ {fc['corner']}: ENOB "
                       f"{fc['enob']} < target {b['enob_target']} "
                       f"(short {fc.get('shortfall_bits')} bits)")
-    return 1 if verdict == "FAIL" else 0
+    # UNMEASURED IS NOT NOT-APPLICABLE (vibe-ic#693 family). Two different
+    # situations shared the SKIP status and therefore shared rc 0:
+    #
+    #   no target/OSR in the spec  -> the formula genuinely does not apply to
+    #                                 this block. Not a finding.
+    #   target/OSR DECLARED but no corner data -> the block IS graded on this
+    #                                 axis and nobody measured it. That is an
+    #                                 absence, and it was reported as a pass.
+    #
+    # Found by RUNNING the gate on the published corpus, which nothing had done:
+    # it prints `[SKIP]` and exits 0, so a wired flow counts it among the gates
+    # that passed. The second case is now UNMEASURED and exits 2.
+    if verdict == "FAIL":
+        return 1
+    if verdict == "UNMEASURED":
+        print(f"[UNMEASURED] {GATE}: a block declares this axis and no data "
+              f"measures it — not a pass.", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

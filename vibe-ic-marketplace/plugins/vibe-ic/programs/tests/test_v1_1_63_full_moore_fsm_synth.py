@@ -9,6 +9,7 @@ Prob138_2012_q2fsm program-generated RTL both PASS the hidden host scorer.
 §4.05 load-bearing half: the solver must SKIP (return None) on any under-specified
 reset (state / polarity / sync-vs-async), never guessing reset behavior.
 """
+import shutil
 import re
 import subprocess
 import sys
@@ -19,6 +20,13 @@ PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import full_moore_fsm_synth as F  # noqa: E402
+
+import pytest
+
+#: The repo's existing tool gate (197 files use this shape). Without
+#: it this module raises FileNotFoundError on a host that lacks the
+#: tool, instead of disclosing a skip.
+_HAVE_TOOLS = bool(shutil.which("iverilog"))
 
 _HDR = (
     "I would like you to implement a module named TopModule with the following\n"
@@ -47,6 +55,8 @@ UNDERSPEC = _HDR + (
 
 
 def _compiles(rtl, tmp_path):
+    if not _HAVE_TOOLS:
+        pytest.skip("iverilog not installed on this host")
     f = tmp_path / "m.sv"
     f.write_text(rtl)
     cp = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "a.out"), str(f)],
