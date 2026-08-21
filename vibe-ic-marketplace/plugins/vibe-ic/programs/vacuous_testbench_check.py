@@ -444,7 +444,27 @@ def main(argv=None) -> int:
         a.json.write_text(txt + "\n")
     print(txt)
     verdict = res.get("verdict")
-    if verdict in ("PASS", "NOT_APPLICABLE"):
+    # NOT_APPLICABLE IS NOT A PASS, AND USED TO PRINT AS ONE (vibe-ic#1115).
+    #
+    # This gate already knew: it writes `"reason": "no sim tree (step did not
+    # run)"` into its own JSON and then exits 0 with nothing on the channel any
+    # consumer reads. `flow_compliance_check` reads the EXIT CODE, so the step
+    # was recorded as a plain PASS — the producer emitted nothing and the
+    # checker read the absence as consent, which is LibreLane's
+    # `klayout.py:486-490` shape (`return {}` -> `Checker.KLayoutDRC` finds
+    # nothing, warns, passes) in our own tree.
+    #
+    # The repair is the channel this repo already owns, not a new exit code:
+    # `flow_compliance_check._stdout_signals_vacuous` promotes the step to the
+    # VACUOUS_PASS tier ON THE PASSING PATH when it sees this prefix. So rc
+    # stays 0 — flipping it would fail every legitimately-analog-free or
+    # sim-free project — and the flow stops recording "checked, fine" for a
+    # thing nobody checked.
+    if verdict == "NOT_APPLICABLE":
+        print(f"VACUOUS_PASS: vacuous_testbench examined 0 testbench(es) — "
+              f"{res.get('reason', 'the producing step left nothing to check')}")
+        return 0
+    if verdict == "PASS":
         return 0
     if verdict == "IO_ERROR":
         return 2
