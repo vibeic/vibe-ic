@@ -625,3 +625,57 @@ Third hygiene run, committed and untouched tree, after the guard was added:
 Each of the six pre-existing failures was diffed line by line between the two
 runs and is byte-identical in content. Nothing in this lane made any of them
 worse, and none of them was touched.
+
+---
+
+# Part 6 — a defect this lane introduced, found by reading its own output
+
+`_corpus_location.refuse` is the one seam every corpus gate refuses through, and
+it named `--corpus-may-be-absent` unconditionally:
+
+    ... Point VIBE_IC_BENCHMARK_DATA at a clone of the published-corpus
+    repository, or pass --corpus-may-be-absent if this repo need not carry one.
+
+That is true for the three callers that offer the flag. The two `--corpus` modes
+added by this lane deliberately do **not** offer it — the rc 0 `NO_CORPUS`
+outcome the flag buys is a gate printing a pass over a population it never
+opened, which is exactly what these gates are wired through this channel to
+avoid — so passing it exits 2 as an argparse usage error.
+
+    ppa_contract_check.py    tells the reader to pass --corpus-may-be-absent
+                             and its --help does not offer it
+    ppa_feasibility_check.py tells the reader to pass --corpus-may-be-absent
+                             and its --help does not offer it
+
+An instruction the reader cannot follow is worse than no instruction: it sends
+them to debug their own invocation instead of the corpus. `refuse` now takes the
+flag its caller actually offers, defaulting to the existing string so all three
+pre-existing callers are byte-identical, and the two new ones say *"This gate
+offers no way to call an absent corpus a pass."*
+
+**One direction only, and the other is deliberately not asserted.** A gate that
+offers the flag and does not mention it may simply have it already in effect:
+`l_doc_field_producer_check` and `evidence_citation_resolves_check` both take the
+rc 0 branch on an absent corpus, a different sentence that correctly names no
+flag. The first draft of the test asserted the converse and failed both of them
+for behaving correctly. The clause was deleted rather than the programs being
+"fixed" to satisfy a test that was wrong.
+
+Negative control against the pre-fix seam: **4 failed, 2 passed**, including the
+behavioural assertion above. A positive control keeps it from passing vacuously —
+`ppa_head_to_head_check` offers the flag, does not default it on, and must still
+name it, so a repair that merely deleted the sentence everywhere goes red. And
+`test_dropping_the_flag_never_changes_the_verdict` pins rc 2 across all three
+origins with and without the parameter, so this cannot be a behaviour change
+wearing a wording change's clothes.
+
+## Fourth hygiene run, after the seam change
+
+    declared 90  decided 80  passed 73  failed 7  NOT CHECKED 10   (321s)
+
+    failures on the branch and not the pristine baseline:
+      PPA head-to-head records (cross-layer campaign)
+    failures on the baseline and not the branch:
+      (none)
+
+Identical to the third run. The seam change disturbed nothing.
