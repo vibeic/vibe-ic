@@ -342,6 +342,35 @@ def test_the_area_gate_itself_is_not_vacuous():
     assert "--area-unit-um2" in cp.stdout, cp.stdout
 
 
+def test_the_wiring_the_area_declaration_names_is_still_a_real_place():
+    """The promotion path has to be a place that EXISTS, or the declaration is
+    an instruction nobody can follow.
+
+    Anchored on the FUNCTION and on the CALL, never on a line number: a
+    line-anchored citation rots silently the first time anything above it moves,
+    and this file is the only thing standing between the declaration and that.
+    """
+    src = (_PROGRAMS / "design_one_shot_runner.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "step_yosys_synth"),
+              None)
+    assert fn is not None, (
+        "design_one_shot_runner.step_yosys_synth is gone; the wiring "
+        "area_total_vs_budget_check's ENFORCEMENT block names no longer "
+        "exists and the promotion path must be re-derived")
+    calls = {c.func.attr for c in ast.walk(fn)
+             if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
+    assert "emit_stats_json" in calls, (
+        "step_yosys_synth no longer calls emit_stats_json, so the point the "
+        "declaration names — 'immediately after the call that writes the "
+        "figure this gate reads' — is not there any more")
+    # And the FAIL shape the declaration says to copy is still in that function.
+    body = ast.get_source_segment(src, fn) or ""
+    assert "synth_netlist_check" in body, (
+        "the `synth_netlist_check` call site the area declaration points at as "
+        "the model for the rc-1 branch has left step_yosys_synth")
+
+
 # ═══════════════════════════════ THE REASON, RE-MEASURED — `tapeout_docs_gen`
 
 def test_the_document_generator_carries_a_verdict_not_only_documents(tmp_path):

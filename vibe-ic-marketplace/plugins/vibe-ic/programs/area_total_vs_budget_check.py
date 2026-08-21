@@ -48,8 +48,8 @@ moment this gate reaches rc 0 and rc 1 on real runs and has a verdict worth
 carrying inline, and the wiring belongs in `design_one_shot_runner.
 step_yosys_synth` immediately after the `_ystat.emit_stats_json(...)` call that
 writes the figure this gate reads: rc 1 returning `StepResult(..., "FAIL", ...)`
-the way the `synth_netlist_check` call site four lines further on already does,
-rc 2 disclosed and non-green rather than silently dropped.
+the way that same function's `synth_netlist_check` call site already does, rc 2
+disclosed and non-green rather than silently dropped.
 
 That precondition is not left as prose. `test_two_gates_declare_where_their_
 verdict_is_consumed.py` re-measures it and FAILS when it stops holding, so this
