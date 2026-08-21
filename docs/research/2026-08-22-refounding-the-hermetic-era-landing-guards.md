@@ -1,7 +1,14 @@
 # Re-founding the thirteen hermetic-era landing guards — a PROPOSAL
 
-**Status: design A is now IMPLEMENTED on this branch (see the tail of this
-document). B, C and D remain design only.** It exists so the policy call in
+**Status: A and C are IMPLEMENTED and verified on this branch. B is fully
+specified — both channels confirmed from source, with a safety bound — and
+deliberately NOT built. D's mechanism is fully described and NOT built, for a
+doctrinal reason stated with it.**
+
+**Effect, measured in both lanes:** host `9 failed -> 6 failed` (134 collected,
+nothing newly red); pinned image `22 failed -> 22 failed`, unchanged. **The
+repair is invisible to CI**, because all 22 die on the absent Docker CLI before
+reaching any re-founded assertion (M27). It exists so the policy call in
 `2026-08-21-main-red-triage-v1_11_66-findings.md` (escalation 3) can be decided
 against a concrete alternative instead of in the abstract.
 
@@ -38,7 +45,7 @@ expressed as an env flag does not.
 
 ## The four re-foundings
 
-### A. "Did arm X actually run?" — replaces the `.started` markers (G6 + 3 others)
+### A. "Did arm X actually run?" — replaces the `.started` markers (G6 only)
 
 Today: the stub writes `$PROBE_DIR/${ARM}.started` to an unmounted host path.
 
