@@ -99,7 +99,7 @@ def _derive_size_param(rtl_text: str) -> int | None:
 
 def _derive_multiplier_algorithm(rtl_text: str) -> str | None:
     """Extract algorithm description from RTL header comment."""
-    m = re.search(r'[Aa]lgorithm\s*[:\-–]\s*(.+)', rtl_text)
+    m = re.search(r'[Aa]lgorithm\s*[:\-–=]\s*(.+)', rtl_text)
     if m:
         raw = m.group(1).strip().rstrip(".")
         # Normalise to identifier-safe string (lowercase, spaces -> underscores)
@@ -262,7 +262,8 @@ def main(argv: list[str] | None = None) -> int:
     # --- multiplier_algorithm (informational) ---
     multiplier_algorithm = _derive_multiplier_algorithm(rtl_text)
     if multiplier_algorithm is None:
-        errors.append("multiplier_algorithm: Algorithm: line not found in RTL header")
+        errors.append("multiplier_algorithm: no `algorithm <:|-|=> <value>` "
+                      "line found in RTL header")
 
     # --- integer_encoding ---
     integer_encoding = _derive_integer_encoding(run_dir)
