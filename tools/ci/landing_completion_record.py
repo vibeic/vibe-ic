@@ -54,6 +54,7 @@ LANDING_PROGRESS_UNITS = (
     "full:unselectable-census",
     "full:repo-hygiene",
     "full:plugin-audit",
+    "full:gatekeeper-review",
     "full:write-guard-final",
     "full:worktree-fingerprint-final",
     "full:completion-record",

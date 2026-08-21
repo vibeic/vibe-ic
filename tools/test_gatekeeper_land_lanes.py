@@ -71,6 +71,12 @@ _WINDOW = (
     "full:plugin-audit",
 )
 
+#: Sequential, after the window and before the closing write-guard
+#: bracket. `full:gatekeeper-review` runs the review the landing path had
+#: no other caller for; it needs the hygiene record the window produced,
+#: so it cannot be inside the window.
+_AFTER_WINDOW = ("full:gatekeeper-review", "full:write-guard-final")
+
 
 def _extract(name: str, text: str) -> str:
     match = re.search(
@@ -398,7 +404,7 @@ def test_landing_record_is_never_called_from_a_lane_body(land_text):
 
     `landing_completion_record.py:200` refuses any label that is not
     `LANDING_PROGRESS_UNITS[len(gates)]`, and `:261` refuses unless the emitted
-    labels equal the complete 24-entry tuple. A lane that recorded from its own
+    labels equal the complete 25-entry tuple. A lane that recorded from its own
     subshell would append out of order AND lose concurrent updates.
     """
     for name in ("lane_targeted", "lane_corpus", "lane_hygiene", "lane_audit",
@@ -426,7 +432,17 @@ def test_the_window_is_exactly_the_six_contiguous_units(land_text):
     assert tuple(order[start:start + len(_WINDOW)]) == _WINDOW
     # The brackets stay outside it, on both sides.
     assert order[start - 1] == "full:write-guard-baseline"
-    assert order[start + len(_WINDOW)] == "full:write-guard-final"
+    # AND the sequential tail between the window and the closing bracket is
+    # pinned exactly, rather than only asserting which unit comes next. The
+    # review was added at this position on 2026-08-21 — after the hygiene run
+    # whose record it adjudicates, and still INSIDE the write-guard brackets so
+    # its own writes are attributed to it rather than to an overlap. Naming the
+    # whole tail keeps what the single assertion caught (a unit inserted into
+    # the bracketed region without anybody deciding it belonged there) while
+    # saying which units are deliberately there.
+    assert tuple(order[start + len(_WINDOW):
+                       start + len(_WINDOW) + len(_AFTER_WINDOW)]) \
+        == _AFTER_WINDOW
 
 
 def test_no_marker_probe_asks_its_question_through_a_pipe(land_text):
