@@ -16,7 +16,7 @@ or had its direction mismatched (e.g., `id_bus_tx_en` declared `output`
 in L9 but `inout` in RTL because the agent chose to merge tristate).
 
 Mid-flow consequences:
-  - QSF/SDC generators (`aid_class_qsf_gen` / `aid_class_sdc_gen`) read
+  - QSF/SDC generators (`qsf_gen` / `sdc_gen`) read
     L9 and emit pin assignments for pins that don't exist in synth →
     Quartus warns, agent ignores, hardware silently floats.
   - Reverse case: an RTL port not in L9 means no pin assignment → the
@@ -1124,6 +1124,46 @@ def _resolve_compile_defines(project: Path) -> set:
     return {define}
 
 
+def _rtl_power_pin_face(rtl_path: Path,
+                        top_name: Optional[str] = None) -> set:
+    """ORGANIC-20260722 #784 — return the set of port names declared inside the
+    RTL top module's ```ifdef USE_POWER_PINS`` arm (empty when the top has no
+    such arm, or on ANY parse/import error so the gate degrades to its
+    historical exact-name diff).
+
+    Reuses the SAME comment-mask / port-block / power-gate helpers the
+    auto-emitted chip_top wrapper uses (`design_one_shot_runner._chip_top_*`),
+    so the emitter and this gate can never disagree about which pins are the
+    power face. chip-AGNOSTIC: keyed on the universal ``USE_POWER_PINS`` macro
+    name only."""
+    try:
+        import design_one_shot_runner as _d
+        text = _d._chip_top_mask_comments(
+            rtl_path.read_text(errors="ignore"))
+        anchor = None
+        if isinstance(top_name, str) and top_name.strip():
+            anchor = re.search(
+                r"\bmodule\s+%s\s*[(#]" % re.escape(top_name.strip()), text)
+        if anchor is None:
+            anchor = re.search(r"\bmodule\s+\w+\s*[(#]", text)
+        if anchor is None:
+            return set()
+        _params, port_block = _d._chip_top_extract_param_and_ports(
+            text, anchor.end() - 1)
+        if not port_block:
+            return set()
+        # `_chip_top_power_pin_gated_names` yields every IDENTIFIER inside the
+        # guarded arm — including the `inout`/`wire` declaration keywords, which
+        # is harmless where it is used as a membership filter over an
+        # already-extracted name list, but would put non-ports into a set we
+        # SUBTRACT from both sides here. Intersect with the block's real port
+        # names so the face is exactly "ports declared in the power arm".
+        return (_d._chip_top_power_pin_gated_names(port_block)
+                & _d._chip_top_port_names(port_block))
+    except Exception:  # pragma: no cover — defensive
+        return set()
+
+
 def parse_rtl_top_ports(rtl_path: Path,
                         top_name: Optional[str] = None,
                         defines: Optional[set] = None) -> list[dict]:
@@ -1350,6 +1390,31 @@ def main(argv: list[str]) -> int:
     # the strip and false-FAILs.
     l9_names = {n for n in l9_names if not _is_implicit_pin(n)}
     rtl_names = {n for n in rtl_names if not _is_implicit_pin(n)}
+
+    # ORGANIC-20260722 #784 — strip the RTL top's OWN `ifdef USE_POWER_PINS
+    # face from BOTH sides. #704 made the parser preprocessor-aware and blanks
+    # not-taken arms; USE_POWER_PINS is in NEITHER the SIMULATION nor the
+    # SYNTHESIS define-set, so a supply pin declared behind that guard vanished
+    # from `rtl_names` while L9 still declares it (every PDK datasheet lists the
+    # supplies) → a permanent false "L9 declares pins missing from RTL top:
+    # ['vccd1','vssd1']" on any design using the universal USE_POWER_PINS
+    # convention. Simply TAKING the arm is not the fix either: the hardened
+    # face legitimately carries supplies the functional pin table never lists
+    # (unused-domain rails), which would flip the false-missing into an equally
+    # false "RTL has ports not in L9".
+    #
+    # Supply pins are owned by the power-intent / PDN layer (L21), not by this
+    # gate — whose stated purpose is QSF/SDC pin ASSIGNMENT correctness, and a
+    # supply rail is never pin-assigned. The exemption is therefore SYMMETRIC
+    # and derived from the DUT's own source: only names literally declared
+    # inside that module's USE_POWER_PINS arm are exempt, so a dropped
+    # FUNCTIONAL pin can never hide behind it. A top with no USE_POWER_PINS arm
+    # yields an empty set → byte-identical behaviour. chip-AGNOSTIC: the
+    # USE_POWER_PINS macro name only; no chip/vendor/rail literal.
+    power_face = _rtl_power_pin_face(rtl_top, top_name)
+    if power_face:
+        l9_names = l9_names - power_face
+        rtl_names = rtl_names - power_face
 
     only_l9_all = sorted(l9_names - rtl_names)
     only_rtl_all = sorted(rtl_names - l9_names)

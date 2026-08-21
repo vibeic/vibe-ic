@@ -49,21 +49,24 @@ def _run(project: Path):
 
 
 def test_a_symbolic_width_port_is_reported(tmp_path):
+    """Round 3 changed the ARM, never the verdict. The consumer no longer
+    coerces to 1, so the outcome branch is the refusal one — still ERROR,
+    still rc 1, still naming the port."""
     rc, out = _run(_project(tmp_path, [
         {"name": "acc_o", "direction": "output",
          "width": "ACC_W-1:0", "width_symbolic": "ACC_W-1:0"}]))
     assert rc == 1
-    assert "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" in out
+    assert "PORT_WIDTH_UNRESOLVED_BY_CONSUMER" in out
     assert "acc_o" in out
 
 
 def test_a_non_numeric_width_string_is_reported(tmp_path):
     """The other carrier: L1 sometimes lands a whole prose sentence in
-    `width`. That coerces to 1 exactly the same way."""
+    `width`. It reaches the same rail."""
     rc, out = _run(_project(tmp_path, [
         {"name": "d_o", "direction": "output",
          "width": "the accumulator is 48 bits in this configuration"}]))
-    assert rc == 1 and "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" in out
+    assert rc == 1 and "PORT_WIDTH_UNRESOLVED_BY_CONSUMER" in out
 
 
 def test_a_genuine_one_bit_port_is_not_reported(tmp_path):
@@ -158,7 +161,13 @@ def _increment2(l9_unused=None):
                     by_name.setdefault(
                         consumer._sanitize_id(str(entry["name"])), entry)
         for sig in signals:
-            if sig.get("width") != 1:
+            # A resolver acts wherever the consumer has NO resolved width.
+            # Round 3 gave that state a second spelling: `width is None`, the
+            # honest refusal, alongside the 1-bit coercion it replaced. If
+            # this guard still read `!= 1` the simulated resolver would
+            # quietly stop resolving anything and the discriminator below
+            # would pass for the wrong reason.
+            if sig.get("width") not in (None, 1):
                 continue
             src = by_name.get(sig.get("name"))
             if not isinstance(src, dict):
@@ -229,15 +238,17 @@ def test_a_contradicted_resolution_is_reported_not_trusted(
     assert rows[0].evidence["ports"][0]["consumer_width"] == 4
 
 
-def test_the_collapsed_rail_is_unchanged_when_nothing_resolves(tmp_path):
-    """No weakening. With the stock consumer the same fixture must still
-    report the ORIGINAL finding, and must not also report the new one — the
-    two rails are the two branches of one condition, never both."""
+def test_the_unresolved_rail_is_the_one_that_fires_when_nothing_resolves(
+        tmp_path):
+    """No weakening. With the real (unpatched) consumer the same fixture must
+    report EXACTLY ONE of the three arms — they are branches of one condition,
+    never two at once."""
     project = _symbolic_project(tmp_path, default="16",
                                 prose="the accumulator is 16 bits")
     cats = _categories(project)
-    assert "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" in cats, cats
+    assert "PORT_WIDTH_UNRESOLVED_BY_CONSUMER" in cats, cats
     assert "PORT_WIDTH_SYMBOL_UNCORROBORATED" not in cats, cats
+    assert "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" not in cats, cats
 
 
 def test_a_declared_integer_width_never_reaches_the_new_rail(

@@ -374,7 +374,16 @@ def test_generate_scores_documented_registers_on_a_clean_design(tmp_path):
     # write-only port: no read golden; free-running counter: no stable golden
     assert by_id["FIFO"]["expected_bytes"] is None
     assert by_id["UPCNT"]["expected_bytes"] is None
-    assert info["scored_with_golden"] == 3
+    # v1.7.2 reclassified the `ro_write_ignore` oracle out of
+    # `scored_with_golden`: ID's golden is the DESIGN'S OWN baseline read, so
+    # it is a self-consistency check, not a document-derived one. Pinning both
+    # halves — the count that moved AND where it moved to — so this records the
+    # reclassification instead of merely tolerating it.
+    assert info["scored_with_golden"] == 2
+    assert info["scored_self_referential"] == 1
+    assert by_id["ID"]["kind"] == "ro_write_ignore"
+    assert by_id["ID"]["self_referential_golden"] is True
+    assert by_id["CFG"]["self_referential_golden"] is False
 
 
 @_needs_sim
@@ -416,15 +425,22 @@ def test_full_stack_step_publishes_real_scored_vectors(tmp_path):
     res = R.step_full_stack_tb_gen(proj, "dut")
     rj = json.loads((proj / "phase2/stage1/sim_full_stack/results.json"
                      ).read_text())
-    assert rj["functional_coverage"]["scored_with_golden"] == 3
+    # THE TWO BLOCKS MUST AGREE. Before this was fixed the same file stated
+    # `functional_coverage.scored_with_golden = 3` beside
+    # `register_map_coverage.scored_with_golden = 2`, and the first is the one
+    # `benchmark_verify_report` reads as the headline honesty number.
+    assert rj["functional_coverage"]["scored_with_golden"] == 2
+    assert rj["functional_coverage"]["self_referential"] == 1
     rmc = rj["register_map_coverage"]
+    assert rmc["scored_with_golden"] == rj["functional_coverage"][
+        "scored_with_golden"]
     assert (rmc["registers_documented"], rmc["registers_readable"]) == (5, 4)
-    assert rmc["scored_passed"] == 3 and rmc["scored_failed"] == 0
+    assert rmc["scored_passed"] == 2 and rmc["scored_failed"] == 0
     # the algorithmic RESULT oracle is still deferred -> no blanket PASS
     assert rj["functional_verified"] is False
     assert rmc["result_oracle_deferred"] is True
     assert res.status == "SKIP"
-    assert "golden-scored 3 of 4" in res.detail
+    assert "golden-scored 2 of 4" in res.detail
 
 
 @_needs_sim
@@ -435,7 +451,11 @@ def test_full_stack_step_fails_when_a_golden_mismatches(tmp_path):
     assert res.status == "FAIL"
     rj = json.loads((proj / "phase2/stage1/sim_full_stack/results.json"
                      ).read_text())
-    assert rj["register_map_coverage"]["scored_failed"] == 1
+    # The RO-leak is caught by the `ro_write_ignore` oracle, which v1.7.2
+    # moved to its own counter. The DETECTION is unchanged — the step still
+    # FAILs — only the name of the counter it lands in.
+    assert rj["register_map_coverage"]["self_referential_failed"] == 1
+    assert rj["register_map_coverage"]["scored_failed"] == 0
 
 
 @_needs_sim
@@ -464,7 +484,10 @@ def test_step_is_unchanged_when_the_driver_declines(tmp_path, monkeypatch):
     res = R.step_full_stack_tb_gen(proj, "dut")
     rj = json.loads((proj / "phase2/stage1/sim_full_stack/results.json"
                      ).read_text())
+    # `self_referential` is emitted even at zero — a count that appears only
+    # when non-zero cannot be used to show there were none.
     assert rj["functional_coverage"] == {"scored_with_golden": 0,
+                                         "self_referential": 0,
                                          "placeholder": 8}
     assert rj["vectors_total"] == 8
     assert "register_map_coverage" not in rj

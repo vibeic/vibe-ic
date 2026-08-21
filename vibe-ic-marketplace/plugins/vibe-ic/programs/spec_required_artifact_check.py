@@ -49,10 +49,31 @@ from pathlib import Path
 # Clause extraction
 # ---------------------------------------------------------------------------
 
+# Markdown emphasis around the imperative. Specs BOLD the requirement word —
+# that is what bold is for — so `**MUST**` and `**必須**` are the ordinary
+# forms, not exotic ones.
+#
+# This fragment is SHARED by both patterns below on purpose. It was previously
+# spelled out inline in the Chinese pattern only, and the two drifted: the
+# Chinese half tolerated `**必須**` while the English half did not tolerate
+# `**MUST**`. MEASURED on this program, same clause, same table, three forms:
+#
+#   `**必須**於 \`p/declaration.json\` 聲明`   -> clauses_found=1  FAIL
+#   `**MUST** emit \`p/declaration.json\``     -> clauses_found=0  VACUOUS_PASS
+#   `MUST emit \`p/declaration.json\``         -> clauses_found=1  FAIL
+#
+# So an English spec that bolds MUST declared a required artifact this gate
+# then reported as "nothing to assert" — a silent false negative in the one
+# gate whose job is to notice a required artifact is missing. Sharing the
+# fragment is the fix for the DRIFT, not just for the bold case.
+_MD_EMPH = r'[*_]{0,2}'
+
 # English: "MUST emit/produce/declare `some/path.json`"
 # Also covers "shall emit", "is required to emit" etc.
 _EN_PATTERN = re.compile(
-    r'(?:MUST|shall|required\s+to)\s+(?:emit|produce|declare|generate|write|output)\s+[`\'""]([^\s`\'"">]+)[`\'""]]?',
+    rf'{_MD_EMPH}(?:MUST|shall|required\s+to){_MD_EMPH}\s+'
+    rf'{_MD_EMPH}(?:emit|produce|declare|generate|write|output){_MD_EMPH}\s+'
+    r'[`\'""]([^\s`\'"">]+)[`\'""]]?',
     re.IGNORECASE,
 )
 
@@ -60,9 +81,11 @@ _EN_PATTERN = re.compile(
 # "**必須**於 `plugin_output/declaration.json` 聲明" or
 # "必須 emit `path`" or "必須產出 `path`"
 _ZH_PATTERN = re.compile(
-    r'(?:\*\*)?必須(?:\*\*)?\s*(?:於\s*)?[`\'""]([^\s`\'"">]+)[`\'""]]?\s*(?:聲明|宣告|emit|產出|寫出|輸出)?'
+    rf'{_MD_EMPH}必須{_MD_EMPH}\s*(?:於\s*)?'
+    r'[`\'""]([^\s`\'"">]+)[`\'""]]?\s*(?:聲明|宣告|emit|產出|寫出|輸出)?'
     r'|'
-    r'(?:\*\*)?必須(?:\*\*)?\s*(?:emit|produce|declare|generate|write|output)\s+[`\'""]([^\s`\'"">]+)[`\'""]]?',
+    rf'{_MD_EMPH}必須{_MD_EMPH}\s*'
+    r'(?:emit|produce|declare|generate|write|output)\s+[`\'""]([^\s`\'"">]+)[`\'""]]?',
     re.IGNORECASE,
 )
 
@@ -278,12 +301,58 @@ def _check_artifact(run_dir: Path, artifact_path: str) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
+def _emit_preflight(results: list[dict]) -> int:
+    """Print the author-facing OUTSTANDING list. ALWAYS returns 0.
+
+    Advisory by construction: at handoff the artifacts are legitimately absent
+    (nobody has authored them yet), so a non-zero exit here would block every
+    correct run. The blocking assertion stays in the normal end-of-phase mode.
+    """
+    outstanding = [r for r in results if r["status"] != "PASS"]
+    if not results:
+        print("spec_required_artifact_preflight: NONE — the input docs declare "
+              "no path-shaped mandatory artifact.")
+        return 0
+    if not outstanding:
+        print("spec_required_artifact_preflight: ALL %d spec-declared artifact(s) "
+              "already present." % len(results))
+        return 0
+    print("spec_required_artifact_preflight: %d spec-declared artifact(s) "
+          "OUTSTANDING — author these as well as the RTL, or final_audit will "
+          "FAIL after the full Phase-2 pipeline has run:" % len(outstanding))
+    for r in outstanding:
+        print("  - %s" % r["artifact_path"])
+        print("      required by: %s" % r.get("source", "<unknown input doc>"))
+        print("      clause     : %s" % (r.get("clause_text", "") or "").strip())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Check spec-declared required artifacts exist and are non-empty."
     )
     parser.add_argument("run_dir", nargs="?", default=".",
                         help="Run directory (default: cwd)")
+    # ------------------------------------------------------------------ #
+    # PREFLIGHT (advisory) — the SAME extraction, surfaced at HANDOFF time
+    # instead of only at the end-of-Phase-2 audit.
+    #
+    # Every input this gate reads (`phase1/input_doc/`, `input/docs/`) already
+    # exists BEFORE the rtl_gen step waives to the AI author. But the gate is
+    # only invoked from the flow-compliance sweep, so an author who was told
+    # "write the RTL here" and nothing else discovers that the spec ALSO made
+    # e.g. `plugin_output/declaration.json` mandatory only after synthesis, DFT
+    # and a multi-minute LEC have run and final_audit FAILs. Measured on a real
+    # sign-off run: an entire Phase-2 pipeline was spent to report one missing
+    # file that takes seconds to write and was fully knowable at handoff.
+    #
+    # --preflight lists the artifacts still OUTSTANDING and always exits 0, so
+    # it can be printed in the handoff message without ever blocking a run.
+    # ------------------------------------------------------------------ #
+    parser.add_argument("--preflight", action="store_true",
+                        help="ADVISORY: list spec-declared artifacts still "
+                             "outstanding and exit 0 (never blocks). For the "
+                             "authoring handoff, before RTL is written.")
     args = parser.parse_args(argv)
 
     run_dir = Path(args.run_dir).resolve()
@@ -297,6 +366,9 @@ def main(argv: list[str] | None = None) -> int:
     for c in clauses:
         check = _check_artifact(run_dir, c["artifact_path"])
         results.append({**c, **check})
+
+    if args.preflight:
+        return _emit_preflight(results)
 
     # Determine overall verdict
     fails = [r for r in results if r["status"] != "PASS"]

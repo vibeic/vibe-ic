@@ -142,6 +142,10 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 DEFAULT_LABEL = "artefact-defect"
 DEFAULT_DATA_ROOT = "benchmark-data"
+# The vacuous outcome, named so a reader can never mistake it for a verdict.
+NO_CITATION = "NOT_APPLICABLE_NO_CITATION"
+
+
 UNCHANGED_MARKER = "ARTEFACT-UNCHANGED:"
 UNCHANGED_MIN_REASON = 30
 
@@ -300,6 +304,30 @@ def has_unchanged_declaration(text: str) -> bool:
     return False
 
 
+def _titled_checker(issue: Dict) -> Optional[str]:
+    """The program name an issue's TITLE names, or None.
+
+    Word-bounded against the actual `programs/*.py` stems, so it recognises
+    only programs this tree really ships. Private helpers (`_`-prefixed) are
+    excluded — they are not the subject of an issue.
+    """
+    title = str(issue.get("title") or "")
+    if not title:
+        return None
+    try:
+        stems = sorted(
+            p.stem for p in (Path(__file__).resolve().parent).glob("*.py")
+            if not p.name.startswith("_"))
+    except OSError:
+        return None
+    for stem in stems:
+        if len(stem) < 8:
+            continue          # too short to be an unambiguous subject
+        if re.search(r"\b" + re.escape(stem) + r"\b", title):
+            return stem
+    return None
+
+
 def classify(issue: Dict, changed: Set[str], tracked: Set[str],
              close_text: str, label: str, data_root: str) -> Dict:
     """The whole rule. Pure: no git, no network — so a test can drive it."""
@@ -345,9 +373,50 @@ def classify(issue: Dict, changed: Set[str], tracked: Set[str],
         return out
 
     # Tier B — advisory inference.
-    if not cited or hit:
-        out["reason"] = ("no tracked artefact cited" if not cited
-                         else "the cited artefact changed in the range")
+    #
+    # An issue whose TITLE names a checker is an issue about the CHECKER, and
+    # for those "the range changed only checker code" is the CORRECT shape of
+    # a fix, not a symptom. Inferring on them inverts the gate's meaning.
+    #
+    # MEASURED before adding this: over the 40 most recently closed issues, 6
+    # carry a program name in the title and all 6 are genuinely checker
+    # defects (#441 VACUOUS, #418/#417/#412 formal_proof_evidence_check,
+    # #416 nda_tracked_tree_scan, #399 final_report_generate). The gate was
+    # emitting ADVISORY on #441 because that issue QUOTES an artefact path
+    # while explaining that a DIFFERENT issue cites it — a citation of a
+    # citation, which no path regex can tell from a defect report.
+    #
+    # NEGATIVE CONTROL, which is what makes this narrow rather than a
+    # loophole: #366 — the artefact-defect close this whole gate exists
+    # because of — is titled "formal_evidence.json PASS in ... references a
+    # .sby that does not exist". That names an ARTEFACT, not a program, so it
+    # stays in scope and still fires. Tier A is untouched: an explicitly
+    # LABELLED artefact-defect issue is never inferred away by a title.
+    subject = _titled_checker(issue)
+    if subject is not None:
+        out["reason"] = ("the title names the checker %r, so this is a defect "
+                         "IN a checker — a checker-only change is the correct "
+                         "fix, not a symptom" % subject)
+        return out
+    if not cited:
+        # NOT a PASS. "I found nothing to check" and "I checked and it is
+        # clean" are different statements, and this gate spent its first
+        # landing reporting them with the same word — including on vibe-ic#365,
+        # one of the two issues it exists because of, whose body names its
+        # subject in prose and carries no repo-relative path at all. So the
+        # gate covered 1 of its 2 motivating instances while reading as if it
+        # covered both. Widening the path regex to parse prose is refused
+        # separately: measured 33 of 35 false positives on the corpus.
+        # Non-fatal, exactly as before — only the WORD changes, because the
+        # word was the false part.
+        out["verdict"] = NO_CITATION
+        out["reason"] = ("no tracked artefact cited — this issue's body names "
+                         "no repo-relative path under %s/, so there is nothing "
+                         "to compare; this is NOT a verified clean close"
+                         % data_root.rstrip("/"))
+        return out
+    if hit:
+        out["reason"] = "the cited artefact changed in the range"
         return out
     code_only, outside = is_code_only(changed, data_root)
     if not code_only:
@@ -558,9 +627,11 @@ def run_sweep(args, root: Path) -> Tuple[int, List[Dict], List[str]]:
             if res["verdict"] in ("FAIL", "ADVISORY"):
                 lines.append(render(res, rng, slug))
         results.append(res)
+    n_vac = sum(1 for r in results if r["verdict"] == NO_CITATION)
     print("swept %d closed issue(s) with an attributable range; %d cited a "
-          "tracked artefact" % (len(results),
-                                sum(1 for r in results if r["cited_artefacts"])))
+          "tracked artefact; %d cited NONE and were not checkable (%s)"
+          % (len(results), sum(1 for r in results if r["cited_artefacts"]),
+             n_vac, NO_CITATION))
     return 0, results, lines
 
 

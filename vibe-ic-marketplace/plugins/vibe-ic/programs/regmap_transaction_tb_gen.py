@@ -11,9 +11,21 @@ was 0 by construction no matter how correct the RTL was.
 
 WHAT IS SCORED — AND WHY IT IS NOT A WEAKENED "FUNCTIONAL VECTOR"
 -----------------------------------------------------------------
-Every scored vector here compares a REAL simulated `read_data` against a
-golden that comes from the DESIGN DOCUMENTS, and can genuinely FAIL on a
-buggy design.  Two oracle classes qualify; a third is deliberately REFUSED.
+Every scored vector here compares a REAL simulated `read_data` and can
+genuinely FAIL on a buggy design.  But the two qualifying oracle classes do
+NOT draw their expected value from the same place, and that difference is
+load-bearing enough to be counted separately (see `scored_with_golden` vs
+`scored_self_referential` below):
+
+  * `rw_storage_fixed_point` compares against a value derived from the DESIGN
+    DOCUMENTS — golden-scored evidence.
+  * `ro_write_ignore` compares against the DESIGN'S OWN baseline read. It is a
+    SELF-CONSISTENCY oracle. MEASURED on a published design: forcing all nine
+    `read_data` assignments to one constant left it at 12 of 12 PASS, i.e. a
+    completely dead read path scored exactly as a correct one. It is real
+    evidence of one specific property and it is NOT golden-scored coverage.
+
+A third class is deliberately REFUSED.
 
   (1) ``ro_write_ignore`` — the docs declare the register READ-ONLY.  Golden:
       a write must not change what the register reads back.  Sequence:
@@ -69,6 +81,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import _watchdog
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -665,16 +679,25 @@ def generate(project: Path, top_module: str,
     work = out_dir / "_regmap_work"
     work.mkdir(parents=True, exist_ok=True)
     vvp_out = work / "regmap.vvp"
+    # Supervised by FORWARD PROGRESS rather than a wall-clock ceiling: a big
+    # register map is a legitimately long elaboration, and `timeout=300` kills
+    # it for making progress. `loop_watchdog_compliance_check` flags this call
+    # site (and only this one — `vvp` is not on the long-tool list) and it was
+    # RED on main before this change.
     try:
-        comp = subprocess.run(
-            ["iverilog", "-g2012", "-o", str(vvp_out), str(tb_path), *srcs],
-            capture_output=True, text=True, timeout=300)
+        comp = _watchdog.run_supervised(
+            ["iverilog", "-g2012", "-o", str(vvp_out), str(tb_path), *srcs])
     except (OSError, subprocess.SubprocessError) as e:
         info["reason"] = f"iverilog invocation failed: {e}"
         return info
-    if comp.returncode != 0:
+    if comp.outcome != "natural":
+        info["reason"] = (f"iverilog did not finish on its own "
+                          f"({comp.outcome}) after {comp.elapsed_s:.0f}s")
+        info["compile_log"] = (comp.err or "")[-2000:]
+        return info
+    if comp.rc != 0:
         info["reason"] = "TB did not elaborate against rtl/"
-        info["compile_log"] = (comp.stderr or "")[-2000:]
+        info["compile_log"] = (comp.err or "")[-2000:]
         return info
     try:
         sim = subprocess.run(["vvp", str(vvp_out)],
@@ -695,13 +718,63 @@ def generate(project: Path, top_module: str,
     obs = parse_transcript(transcript)
     per_vector = score_transcript(registers, obs, int(bus["data_width"]))
     scored = [v for v in per_vector if v.get("expected_bytes") is not None]
+    # `scored_with_golden` is consumed by `benchmark_verify_report` and
+    # `bit_level_full_stack_tb_check`, which document it as vectors "compared
+    # against a CONCRETE golden" and as "the ONLY honest measure" of functional
+    # coverage. `ro_write_ignore` does NOT meet that description: its expected
+    # value is the design's OWN baseline read (`exp = o["r0"]`), so it is a
+    # SELF-CONSISTENCY oracle, not a document-derived one.
+    #
+    # MEASURED, which is why this is split rather than argued: forcing all 9
+    # `read_data` assignments in a published design to one constant left the
+    # score at 12 of 12 PASS. A read path that is entirely dead scored the same
+    # as a correct one, and that 12 was flowing into the benchmark's headline
+    # honesty number.
+    #
+    # The oracle is NOT worthless and is NOT removed — "a write must not change
+    # a read-only register's read-back" is a real property and still FAILs when
+    # writes leak into read-only address space. It is counted under its own
+    # name so a reader can see how much of a coverage figure is self-referential.
+    # THE SPLIT ABOVE WAS NOT ENOUGH, and the gap is this file's to close.
+    # It corrected THIS program's counters, but `functional_coverage` is
+    # produced by a DIFFERENT walker (`bit_level_full_stack_tb_oracle_check`)
+    # that classifies a vector by whether `expected_bytes` LOOKS concrete —
+    # and a self-referential golden looks exactly as concrete as a documented
+    # one, because it IS a concrete number, just the design's own. So the
+    # published results.json carried `register_map_coverage.scored_with_golden
+    # = 2` beside `functional_coverage.scored_with_golden = 3`, and the second
+    # is the one `benchmark_verify_report` reads.
+    #
+    # A private constant in this module cannot be consulted by that walker, so
+    # the VECTOR carries the fact. Any counter can now tell the two apart
+    # without knowing this program's kind names, and the flag is derived from
+    # `_SELF_REF_KINDS` in one place so the two cannot drift.
+    _SELF_REF_KINDS = ("ro_write_ignore",)
+    for _v in per_vector:
+        if isinstance(_v, dict):
+            _v["self_referential_golden"] = (
+                _v.get("kind") in _SELF_REF_KINDS)
+    golden = [v for v in scored if v.get("kind") not in _SELF_REF_KINDS]
+    selfref = [v for v in scored if v.get("kind") in _SELF_REF_KINDS]
+    # When every self-referential baseline is the SAME value, the class cannot
+    # discriminate a working read path from a stuck-at-constant one. That is
+    # not a FAIL — nothing observed is wrong — but it must be visible, because
+    # it is exactly the state in which a perfect score means nothing.
+    _baselines = {v.get("expected_bytes") for v in selfref}
     info.update({
         "status": "scored" if scored else "emitted",
         "per_vector": per_vector,
         "addresses_probed": len(obs),
-        "scored_with_golden": len(scored),
-        "scored_passed": sum(1 for v in scored if v["verdict"] == "PASS"),
-        "scored_failed": sum(1 for v in scored if v["verdict"] == "FAIL"),
+        "scored_with_golden": len(golden),
+        "scored_passed": sum(1 for v in golden if v["verdict"] == "PASS"),
+        "scored_failed": sum(1 for v in golden if v["verdict"] == "FAIL"),
+        "scored_self_referential": len(selfref),
+        "self_referential_passed": sum(
+            1 for v in selfref if v["verdict"] == "PASS"),
+        "self_referential_failed": sum(
+            1 for v in selfref if v["verdict"] == "FAIL"),
+        "self_referential_undiscriminating": (
+            len(selfref) > 1 and len(_baselines) == 1),
         "log": str(work / "regmap.log"),
     })
     return info

@@ -15,10 +15,20 @@ carrying zero enforceable targets. An asserted "implicit" verification
 plan with no measurable target cannot be falsified by anything
 downstream.
 
-The only consumer today is ``programs/phase2_scaffold_gen.py``, which
-greps L22 for text and appends a truncated ``L22: <120 chars>`` line
-into ``compliance_vectors.txt``. Truncated prose is not a target. No
-coverage gate reads L22's goals.
+L22 HAS NO CONSUMER IN THE SHIPPING FLOW AT ALL (#509). The only program
+that reads it is ``programs/phase2_scaffold_gen.py``, which greps L22 for
+text and would append a truncated ``L22: <120 chars>`` line into
+``compliance_vectors.txt`` — and that program is a CONTRACT ORACLE, not a
+flow step: no runner and no step of ``flow/phase1_phase2_phase3.yaml``
+calls it, at any version. Earlier wording here called it "the only
+consumer today", which read as a live reader and it is not one.
+
+That makes the case for this gate STRONGER, not weaker. Truncated prose
+would not be a target even if something did consume it, no coverage gate
+reads L22's goals, and a layer whose every reader is hypothetical is a
+layer nothing downstream can falsify — which is precisely why the
+measurable-target requirement has to be enforced HERE, at the layer,
+rather than deferred to a consumer that would catch it later.
 
 CONSUMER CONTRACT
 =================
@@ -41,8 +51,8 @@ MIXED, and each half is justified separately:
       The design's OWN inputs state a measurable verification target —
       a percentage next to coverage vocabulary, with requirement
       framing ("goal", "must", "at least", ">=") in the surrounding
-      window — but L22, the layer a coverage gate consumes, carries no
-      numeric goal. This is the L21 defect verbatim, one layer over.
+      window — but L22, the layer a coverage gate would consume, carries
+      no numeric goal. This is the L21 defect verbatim, one layer over.
       It BLOCKS because the L21 post-mortem's third compounding fault
       was that the gate's verdict was FAIL and the flow continued
       anyway. A layer gate that fails must be able to stop the flow.
@@ -334,12 +344,12 @@ def inspect(project: Path) -> Dict[str, Any]:
                 f"The design's own inputs state a MEASURABLE "
                 f"verification target in {len(doc_hits)} input-doc "
                 f"location(s) and {len(sib_hits)} sibling-L-doc "
-                f"location(s), but L22 — the layer a coverage gate "
-                f"consumes — carries {len(measurable_goals)} measurable "
+                f"location(s), but L22 — the layer a coverage gate would "
+                f"consume — carries {len(measurable_goals)} measurable "
                 f"coverage_goals[] (of {len(goals)} total). The target "
                 f"is present somewhere and absent from the layer that "
-                f"consumes it: nothing downstream can compare a measured "
-                f"number against it."),
+                f"would consume it: nothing downstream could compare a "
+                f"measured number against it."),
             "evidence": (doc_hits + sib_hits)[:4],
         })
 

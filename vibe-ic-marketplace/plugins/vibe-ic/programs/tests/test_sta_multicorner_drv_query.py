@@ -35,9 +35,16 @@ def _code_lines(src: str) -> str:
 
 def test_multicorner_stanza_guards_report_checks_and_queries_drv():
     code = _code_lines(_stanza_source())
-    # The report_checks call is catch-guarded and uses the current flag.
-    assert "catch {report_checks" in code.replace("{{", "{")
-    assert "-group_path_count" in code
+    # ORGANIC #540 — the report_checks call moved into the shared
+    # `_report_worst_paths_tcl` helper (the flag needed translating, and the
+    # same bug was at both corner emitters). Assert on the helper's real
+    # OUTPUT, not on the emitter's source text: the previous form of this
+    # assertion matched a `catch {report_checks {flag} ...}` that OpenSTA
+    # rejected on every run, so the stanza it was guarding never executed.
+    assert "_report_worst_paths_tcl" in code
+    tcl = P._report_worst_paths_tcl("/x/out.rpt", "-max")
+    assert "catch {report_checks" in tcl
+    assert "-group_path_count" in tcl
     # The DRV sign-off query still follows.
     assert "report_check_types" in code
 
@@ -46,3 +53,4 @@ def test_multicorner_stanza_has_no_unguarded_removed_group_count_flag():
     code = _code_lines(_stanza_source())
     # The removed flag must not appear as an emitted report_checks argument.
     assert "-group_count" not in code
+    assert "-group_count" not in P._report_worst_paths_tcl("/x/out.rpt", "-max")

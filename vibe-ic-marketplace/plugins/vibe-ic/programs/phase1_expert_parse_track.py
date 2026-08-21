@@ -61,20 +61,102 @@ Two sub-tracks, because knowledge splits into two kinds
     `vibe-ic:ic-expert-agent` subagent through `ic_expert_backup_pack`, which
     is the assembler this doctrine already built for exactly this hand-off.
 
+The AI sub-track's answer is CONVERGED, not filed (#312, second landing)
+------------------------------------------------------------------------
+The first landing of this track wired the AI half as far as reading the
+subagent's answer back — and stopped there. Two measured defects made that
+half inert, and between them they reproduced, one nesting level in, the exact
+shape #312 was filed about:
+
+  1. THE HAND-OFF WAS GATED ON A BACKEND IT DOES NOT USE. `ai_subtrack`
+     returned early unless `llm_semantic_confirm.backend_available()` — the
+     probe for an in-process `anthropic` SDK plus `ANTHROPIC_API_KEY`. Nothing
+     downstream of that probe uses either: `ic_expert_backup_pack.assemble` is
+     pure deterministic assembly (retrieve, render two digests, write a
+     descriptor), and the answer is authored by the `vibe-ic:ic-expert-agent`
+     SUBAGENT, which is a Claude Code agent and imports nothing. So on every
+     host without that SDK the track (a) never wrote the pack, so no
+     orchestrator could invoke the agent on it, and (b) returned BEFORE the
+     `answer.is_file()` check, so an answer sitting on disk was never read.
+     A self-sealing loop: the state could never be left, and the reason it
+     could never be left was a probe for a backend the path does not touch.
+     MEASURED: all 8 published fleet designs reported SKIPPED-CONDITION.
+
+  2. A CONSUMED ANSWER WAS DEAD DATA. Even with the probe forced true and an
+     answer present, `evaluate` built findings from `DETERMINISTIC_RULES`
+     ALONE. `ai["expectations"]` was serialised into the report and read by
+     nothing — `phase1_expert_track_evidence_check` reads only `.status`.
+     MEASURED on a published design: an expectation naming a field no L-doc
+     contains produced `verdict: PASS`, `findings: 0`, which the evidence
+     check then reports as RAN_EMPTY — "the track ran and named NO findings —
+     a real zero". The AI's disagreement was rendered as an agreement.
+
+So the fix is the CONVERGE step this doctrine's name already promises:
+
+  * the hand-off and the read-back are unconditional — an `inline_llm_backend`
+    fact is RECORDED, and never again allowed to veto a path that does not
+    use it;
+  * every consumed expectation is checked against the program track's own
+    L-docs by `converge_ai_expectation`, DETERMINISTICALLY;
+  * every disagreement becomes a named finding of its own, in the same list,
+    with the same shape and the same `about: "design"` classification as a
+    deterministic one — so it reaches the printed run output and flips the
+    evidence check from RAN_EMPTY to RAN.
+
+The comparator is deterministic ON PURPOSE, and it IGNORES any `met` the
+answer supplies. An AI half that scored itself would agree with itself, and
+"a consumer that reads the file and always agrees" is not a second track — it
+is the first track with a witness.
+
 A track that cannot fail silently
 ---------------------------------
 This repo has just measured that 62 of its 72 gates cannot block anything
 (#306). A second track that quietly does nothing would be the same disease in
 a new place, so the failure modes are pinned:
 
-  * NO LLM AVAILABLE — the AI sub-track reports `SKIPPED-CONDITION` and emits
-    a NAMED FINDING saying so. It is in the findings list, printed, and in the
-    report. It is never absent, and never mistaken for "nothing to report".
+  * THE AI HALF HAS NOT READ — the sub-track reports `HANDOFF_EMITTED` (the
+    pack is written, the subagent has not answered) and emits a NAMED FINDING
+    saying so. It is in the findings list, printed, and in the report. It is
+    never absent, and never mistaken for "nothing to report".
+    This state replaced `SKIPPED-CONDITION`, which named the wrong fact: the
+    obstacle was never a missing LLM, it was that nobody had invoked the agent
+    — and the old wording pointed a reader at a host capability instead of at
+    the one action that advances the track.
   * THE TRACK ITSELF FAILS — exit 1. The report is a MANDATORY output: the
     runner treats a missing or unparseable report as a Phase-1 failure. So the
     findings are advisory, but running is not optional.
-  * NOTHING APPLIES — exit 2 (VACUOUS_PASS) with the reason stated per rule.
-    A vacuous pass is a stated verdict, not silence.
+  * THE AI HALF ANSWERED IN A SHAPE THIS CONSUMER CANNOT READ — verdict
+    REFUSED, exit 2, a named finding, and the printed `INCOMPLETE:` sentinel.
+    NOT `CONSUMED`, and under no combination of the other half's results a
+    `PASS`. This state was previously invisible: `data.get("expectations")`
+    followed by `exps if isinstance(exps, list) else []` mapped every
+    unexpected shape onto the empty list, and the record then read `CONSUMED —
+    read 0 expectation(s)`, which is verbatim what an agent with nothing to
+    say produces. MEASURED on a real run: an expert review that named two
+    cross-layer defects in its own schema was flattened to `[]` and published
+    as `verdict PASS, blocking False, 0 findings`. The answer existed and was
+    discarded — worse than an ordinary silent pass, because the work was done.
+    The refusal NAMES the top-level keys that did arrive, so a reader sees a
+    schema mismatch and not an empty answer.
+  * NOTHING WAS DECIDED — exit 2 (VACUOUS_PASS) with the reason stated per
+    rule. Decided on the DENOMINATOR (`examined_expectations` — deterministic
+    expectations from applicable rules plus every converged AI one), not on
+    "did a rule apply": a rule can apply and produce no expectation, and the
+    AI half can answer with an empty list. Both are zero denominators, and a
+    zero denominator refuses rather than passes — this repo's own
+    `gate_zero_denominator_refuses_check`. A vacuous pass is a stated verdict,
+    not silence, and every verdict prints its denominator
+    (`gate_discloses_denominator_check`).
+
+WHAT IS DELIBERATELY *NOT* CHANGED HERE
+---------------------------------------
+REFUSED exits 2, not 1. `phase1_one_shot_runner._run_expert_track` treats any
+rc outside {0, 2} as "the track did not complete" and FAILS Phase 1 — so rc 1
+would abort the whole run on a malformed sidecar answer, which is a separate
+enforcement decision with its own blast radius, of the kind this file already
+records under `deferred_enforcement`. The track DID complete; what it refused
+is the answer. rc 2 keeps the runner contract and the `INCOMPLETE:` roll-up
+tier while making the verdict word impossible to read as a pass.
 
 On NOT writing the AI-patch sidecar
 -----------------------------------
@@ -99,6 +181,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -117,6 +200,95 @@ _EXPERT_DB = (_HERE.parent / "agents" / "ic_expert_db" / "ic_expert_db.json")
 
 RULE_UNMET = "EXPERT_TRACK_EXPECTATION_UNMET"
 RULE_AI_SKIPPED = "EXPERT_TRACK_AI_SUBTRACK_SKIPPED"
+# A disagreement the AI half named and the comparator confirmed. Deliberately a
+# SEPARATE rule id from the deterministic `RULE_UNMET`: a reader must be able to
+# tell which track raised a finding, or the two tracks stop being two.
+RULE_AI_UNMET = "EXPERT_TRACK_AI_EXPECTATION_UNMET"
+# An answer entry the comparator cannot decide either way. It is a finding
+# about the TRACK, never silence: an undecidable expectation that vanished
+# would make the AI half look like it agreed.
+RULE_AI_UNUSABLE = "EXPERT_TRACK_AI_EXPECTATION_UNUSABLE"
+# An answer file that PARSES but is not the shape this consumer reads. Its own
+# rule id, because the remedy is different from every other one here: nothing
+# about the DESIGN is in question, an answer exists and this consumer could not
+# read it. Naming it `SKIPPED` would say the agent never answered, which is the
+# opposite of what happened.
+RULE_AI_ANSWER_SCHEMA_MISMATCH = "EXPERT_TRACK_AI_ANSWER_SCHEMA_MISMATCH"
+# The agent answered, and its `expectations` list was genuinely empty. A real
+# reading, and a real zero — reported so it can never be read as coverage.
+RULE_AI_ANSWER_EMPTY = "EXPERT_TRACK_AI_ANSWER_EMPTY"
+
+# ── the AI sub-track's status vocabulary ────────────────────────────────────
+#
+# FIVE tokens, not three, because the three collapsed two pairs of genuinely
+# different outcomes into one word each — and the report's ONLY downstream
+# consumer (`phase1_expert_track_evidence_check`) reads the token and nothing
+# else, so a collapsed token is a fact that no longer exists anywhere.
+#
+#   CONSUMED         an answer was read AND it carried expectations
+#   CONSUMED_EMPTY   an answer was read and its `expectations` list was EMPTY.
+#                    A real answer and a real zero. Split from CONSUMED because
+#                    "the expert had nothing to add" is a legitimate result
+#                    that a reader must be able to see AS a zero — under one
+#                    token it is indistinguishable from a full reading, and
+#                    that is the whole disease this track was built to cure.
+#   SCHEMA_MISMATCH  the answer parses as JSON but is not `{"expectations":
+#                    [...]}`. NOT a reading, NOT consumed, and never a PASS.
+#                    The refusal NAMES the top-level keys that did arrive, so
+#                    the reader sees a schema mismatch rather than an empty
+#                    answer. MEASURED: one real expert review (verdict "gaps",
+#                    complete false, two named cross-layer defects) used its own
+#                    schema with no `expectations` key, was coerced to `[]` by
+#                    `exps if isinstance(exps, list) else []`, recorded as
+#                    "CONSUMED — read 0 expectation(s)", and published as
+#                    verdict PASS / 0 findings. The answer existed and was
+#                    discarded; a zero denominator passed instead of refusing.
+AI_HANDOFF_EMITTED = "HANDOFF_EMITTED"
+AI_CONSUMED = "CONSUMED"
+AI_CONSUMED_EMPTY = "CONSUMED_EMPTY"
+AI_SCHEMA_MISMATCH = "ANSWER_SCHEMA_MISMATCH"
+AI_ERROR = "ERROR"
+#: The states in which the AI half actually DELIVERED A READING. Everything
+#: else — a refused answer, an error, a pack nobody answered — is not one.
+AI_READ_STATES = frozenset({AI_CONSUMED, AI_CONSUMED_EMPTY})
+
+_JSON_TYPE_NAMES = {
+    dict: "object", list: "array", str: "string",
+    bool: "boolean", int: "number", float: "number", type(None): "null",
+}
+
+
+def json_type_name(value: Any) -> str:
+    """What a reader of the answer file would call this value's type."""
+    return _JSON_TYPE_NAMES.get(type(value), type(value).__name__)
+
+
+def answer_schema_mismatch(data: Any) -> Optional[Dict[str, Any]]:
+    """`None` if the answer is the shape this consumer reads; otherwise a
+    STATED description of what arrived instead.
+
+    The description names the TOP-LEVEL KEYS PRESENT, never only the key that
+    was wanted. "no expectations key" and "no expectations key, but here are
+    the ten keys it does carry, including `cross_layer_inconsistencies`" send a
+    reader to two completely different places, and only the second one is where
+    the answer actually is.
+    """
+    if not isinstance(data, dict):
+        return {
+            "json_type": json_type_name(data),
+            "top_level_keys": [],
+            "why": (f"the answer's top level is a JSON "
+                    f"{json_type_name(data)}, not an object"),
+        }
+    keys = sorted(str(k) for k in data)
+    if "expectations" not in data:
+        return {"json_type": "object", "top_level_keys": keys,
+                "why": "the answer object carries no `expectations` key"}
+    if not isinstance(data["expectations"], list):
+        return {"json_type": "object", "top_level_keys": keys,
+                "why": (f"`expectations` is a "
+                        f"{json_type_name(data['expectations'])}, not a list")}
+    return None
 
 # Text extensions that count as design INPUT for expert retrieval.
 _INPUT_TEXT_EXTS = (".md", ".txt", ".rst", ".adoc", ".yaml", ".yml", ".json")
@@ -291,6 +463,184 @@ def rule_nvm_program_supply(project: Path) -> Dict[str, Any]:
 DETERMINISTIC_RULES = (rule_nvm_program_supply,)
 
 
+# ── converge: the AI half's expectations vs the program track's L-docs ──────
+#
+# This is the half of "dual-track convergence" that the doctrine's name
+# promises and the first landing did not have. It is DELIBERATELY deterministic
+# and it deliberately recomputes `met` rather than trusting the answer, so the
+# AI half cannot mark its own homework.
+
+# The same relative-path family `hardmacro_supply_intent.load_l21` walks, kept
+# as one list so a project layout that one of them can read is readable by
+# both. A layer the program track wrote where only one of the two looks is a
+# disagreement manufactured by path drift, not by the design.
+_L_DOC_DIRS = ("generated_docs", "phase1/generated_docs",
+               "input/generated_docs")
+
+
+def _norm(text: Any) -> str:
+    """Lower-case, with every run of non-alphanumerics collapsed to one space.
+
+    Not `hardmacro_supply_intent._rail_token_match`: that answers "does this
+    ONE pin name equal one of these rail strings", and this answers "does this
+    possibly-multi-word phrase occur in this whole document". Reusing a matcher
+    across two different questions is how a matcher ends up wrong for both.
+    """
+    return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
+
+
+def phrase_present(phrase: str, haystack: str) -> bool:
+    """Is a phrase present in the text, ANCHORED AT TOKEN BOUNDARIES?
+
+    Both sides are reduced to alphanumeric tokens; the phrase matches iff some
+    CONTIGUOUS run of haystack tokens concatenates to the phrase's tokens
+    concatenated. Two properties follow, and both are load-bearing:
+
+      * a phrase can never match INSIDE a token — `VDD` does not match
+        `AVDD_REF`, and `REF` does not match `REFHI`. That is the #309
+        mis-binding bug, and a comparator that made it would report agreement
+        on the strength of a substring, which is a false CLEAN;
+      * a separator difference is not a disagreement — `1.8 V` matches
+        `1.8V`, `TRIM_SEL` matches `trim sel`. Spec prose and JSON field names
+        spell the same fact both ways constantly, and scoring that as a gap
+        would fill an advisory channel with noise until nobody read it, which
+        is its own way of becoming a report nobody opens.
+
+    The run length is bounded by the phrase's own length (every token
+    contributes at least one character), so this stays linear in the document.
+    """
+    want = _norm(phrase).split()
+    if not want:
+        return False
+    target = "".join(want)
+    toks = _norm(haystack).split()
+    for i in range(len(toks)):
+        acc = ""
+        for j in range(i, len(toks)):
+            acc += toks[j]
+            if len(acc) > len(target):
+                break
+            if acc == target:
+                return True
+    return False
+
+
+def _layer_haystack(blob: Any) -> str:
+    """Every key and every scalar of an L-doc, flattened to searchable text.
+
+    Keys count: a layer can carry a fact as a field NAME as legitimately as it
+    can carry it as a value, and a comparator blind to one half of the document
+    would report a gap the design does not have."""
+    out: List[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                out.append(str(k))
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+        elif node is not None:
+            out.append(str(node))
+
+    walk(blob)
+    return " ".join(out)
+
+
+def resolve_layer_file(project: Path, layer: str) -> Optional[Path]:
+    """The L-doc the AI half named, tolerating how it spelled the layer.
+
+    An expert naming `L21` and one naming `L21_POWER_INTENT` mean the same
+    layer. Matching on the leading `L<number>` token rather than the full file
+    stem keeps a spelling difference from being scored as a design gap — while
+    still refusing a layer that does not exist at all."""
+    want = (layer or "").strip()
+    if not want:
+        return None
+    m = re.match(r"^\s*(l\s*\d+)", want.lower())
+    key = re.sub(r"\s+", "", m.group(1)) if m else None
+    for rel in _L_DOC_DIRS:
+        d = project / rel
+        if not d.is_dir():
+            continue
+        exact = d / f"{want}.json"
+        if exact.is_file():
+            return exact
+        if not key:
+            continue
+        for p in sorted(d.glob("*.json")):
+            stem = p.stem.lower()
+            if stem == key or stem.startswith(key + "_"):
+                return p
+    return None
+
+
+def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
+    """Decide ONE AI expectation against what the program track actually wrote.
+
+    Returns the expectation enriched with `met` / `observed` / `usable`. Any
+    `met` the answer carried is DISCARDED before the decision — see the module
+    docstring on why the AI half must not score itself.
+    """
+    base: Dict[str, Any] = {
+        "id": None, "layer": None, "field_path": None, "requirement": None,
+        "evidence": [], "expected_tokens": [],
+        "usable": False, "met": False, "observed": "",
+    }
+    if not isinstance(exp, dict):
+        base["observed"] = ("the answer contained an entry that is not an "
+                            "object, so nothing about it can be checked")
+        return base
+
+    base.update({
+        "id": exp.get("id") or exp.get("expectation_id"),
+        "layer": exp.get("layer"),
+        "field_path": exp.get("field_path"),
+        "requirement": exp.get("requirement"),
+        "evidence": exp.get("evidence") or [],
+        "expert_source": exp.get("expert_source"),
+        "expected_tokens": [t for t in (exp.get("expected_tokens") or [])
+                            if isinstance(t, str) and t.strip()],
+    })
+
+    if not base["id"] or not base["layer"]:
+        base["observed"] = ("the expectation names no id and/or no layer, so "
+                            "there is nothing to compare it against")
+        return base
+    if not base["expected_tokens"]:
+        base["observed"] = (
+            "the expectation carries no `expected_tokens`, so it states a "
+            "requirement in prose only. A prose-only expectation cannot be "
+            "decided by a program and must not be counted as agreed")
+        return base
+
+    base["usable"] = True
+    path = resolve_layer_file(project, base["layer"])
+    if path is None:
+        base["observed"] = (f"the program track produced no "
+                            f"{base['layer']} layer at all")
+        return base
+    try:
+        blob = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        base["observed"] = (f"{base['layer']} exists but does not parse "
+                            f"({exc.__class__.__name__}); unreadable content "
+                            f"is not content")
+        return base
+
+    hay = _layer_haystack(blob)
+    missing = [t for t in base["expected_tokens"] if not phrase_present(t, hay)]
+    base["met"] = not missing
+    base["missing_tokens"] = missing
+    base["observed"] = (
+        f"{base['layer']} carries all of {base['expected_tokens']}"
+        if not missing else
+        f"{base['layer']} does not carry {missing} "
+        f"(checked {len(base['expected_tokens'])} expected token(s))")
+    return base
+
+
 # ── the AI sub-track ────────────────────────────────────────────────────────
 
 def ai_subtrack(project: Path, prompt: str, out_dir: Path) -> Dict[str, Any]:
@@ -306,30 +656,31 @@ def ai_subtrack(project: Path, prompt: str, out_dir: Path) -> Dict[str, Any]:
     agent's answer if a previous invocation left one. Every outcome is a
     STATED status:
 
-        SKIPPED-CONDITION  no LLM backend on this host
-        HANDOFF_EMITTED    pack ready, agent has not answered yet
-        CONSUMED           an agent answer was read back and merged
-        ERROR              assembly failed, with the reason
+        HANDOFF_EMITTED         pack ready, agent has not answered yet
+        CONSUMED                an answer was read back, carrying expectations
+        CONSUMED_EMPTY          an answer was read back and its `expectations`
+                                list was empty — a reading, and a real zero
+        ANSWER_SCHEMA_MISMATCH  an answer exists and PARSES, but is not this
+                                consumer's schema. REFUSED, and the refusal
+                                names the top-level keys that did arrive
+        ERROR                   assembly failed, or the answer does not parse
+
+    NOTHING HERE IS CONDITIONAL ON AN LLM BACKEND. Assembly is deterministic
+    and the author is a SUBAGENT, so the in-process `anthropic` SDK is
+    irrelevant to both. It is still probed and RECORDED as
+    `inline_llm_backend`, because losing a fact is its own defect — but it can
+    no longer veto a path that never used it. That veto is what kept this half
+    at SKIPPED-CONDITION on all 8 published designs while making the pack no
+    agent could answer and ignoring an answer already on disk (#312).
     """
     status: Dict[str, Any] = {"status": "ERROR", "reason": "",
                               "expectations": [], "pack_dir": str(out_dir)}
 
     try:
         import llm_semantic_confirm as _llm
-        available = _llm.backend_available()
+        status["inline_llm_backend"] = bool(_llm.backend_available())
     except Exception:  # noqa: BLE001
-        available = False
-
-    if not available:
-        status.update(
-            status="SKIPPED-CONDITION",
-            reason=("no LLM backend on this host (no ANTHROPIC_API_KEY / "
-                    "anthropic SDK, or VIBE_IC_DISABLE_LLM_CONFIRM set). The "
-                    "deterministic sub-track still ran; the open-ended reading "
-                    "did NOT. This is disclosed, not skipped quietly — an "
-                    "expert-track run without it has covered less ground than "
-                    "one with it."))
-        return status
+        status["inline_llm_backend"] = False
 
     try:
         import ic_expert_backup_pack as _pack
@@ -348,19 +699,43 @@ def ai_subtrack(project: Path, prompt: str, out_dir: Path) -> Dict[str, Any]:
         try:
             data = json.loads(answer.read_text(errors="replace"))
         except (OSError, ValueError) as exc:
-            status.update(status="ERROR",
+            status.update(status=AI_ERROR,
                           reason=f"agent answer does not parse: {exc}")
             return status
-        exps = data.get("expectations")
+        # PARSING IS NOT UNDERSTANDING. An answer that is valid JSON and not
+        # this consumer's schema is REFUSED, never consumed: `data.get(...)`
+        # followed by `if isinstance(x, list) else []` turns every unexpected
+        # shape into the same empty list, and an empty list is exactly what an
+        # agent with nothing to say produces. The two must not share a record.
+        mismatch = answer_schema_mismatch(data)
+        if mismatch is not None:
+            keys = mismatch["top_level_keys"]
+            status.update(
+                status=AI_SCHEMA_MISMATCH,
+                reason=(
+                    f"the agent answered, and the answer is not the shape this "
+                    f"consumer reads: {mismatch['why']}. Top-level key(s) "
+                    f"present: {keys if keys else '(none)'}. The answer was "
+                    f"NOT read and NOT counted — an answer this consumer "
+                    f"cannot read is a refusal, never a reading of zero"),
+                answer_path=str(answer),
+                answer_json_type=mismatch["json_type"],
+                answer_schema_why=mismatch["why"],
+                answer_top_level_keys=keys)
+            return status
+        exps = data["expectations"]
         status.update(
-            status="CONSUMED",
-            reason=f"read {len(exps) if isinstance(exps, list) else 0} "
-                   f"expectation(s) from a prior agent invocation",
-            expectations=exps if isinstance(exps, list) else [])
+            status=AI_CONSUMED if exps else AI_CONSUMED_EMPTY,
+            reason=(f"read {len(exps)} expectation(s) from a prior agent "
+                    f"invocation" if exps else
+                    "the agent answered and its `expectations` list was empty "
+                    "— a real reading of zero, not a missing answer"),
+            answer_path=str(answer),
+            expectations=exps)
         return status
 
     status.update(
-        status="HANDOFF_EMITTED",
+        status=AI_HANDOFF_EMITTED,
         reason=(f"pack written to {out_dir}; invoke subagent "
                 f"{_pack.SUBAGENT_TYPE} on "
                 f"{out_dir / 'ic_expert_agent_handoff.json'} and re-run to "
@@ -404,19 +779,110 @@ def evaluate(project: Path) -> Dict[str, Any]:
                 "expert_source": e["expert_source"],
             })
 
-    if ai["status"] == "SKIPPED-CONDITION":
+    # ── CONVERGE: the AI half's answer becomes findings, not a file ─────────
+    converged = [converge_ai_expectation(project, e)
+                 for e in (ai.get("expectations") or [])]
+    ai["converged"] = converged
+    for c in converged:
+        if not c["usable"]:
+            findings.append({
+                "severity": "REVIEW",
+                # About the TRACK: an entry the comparator could not decide
+                # says nothing about the design, and counting it as a design
+                # finding would inflate what the AI half found.
+                "about": "track",
+                "rule": f"{RULE_AI_UNUSABLE}::{c['id'] or '<unnamed>'}",
+                "layer": c["layer"],
+                "message": (
+                    f"The AI sub-track returned an expectation this track "
+                    f"cannot converge: {c['observed']}. It is reported rather "
+                    f"than dropped — an undecidable expectation that vanished "
+                    f"would make the AI half look like it agreed."),
+            })
+            continue
+        if c["met"]:
+            continue
+        findings.append({
+            "severity": "REVIEW",
+            "about": "design",
+            "rule": f"{RULE_AI_UNMET}::{c['id']}",
+            "layer": c["layer"],
+            "field_path": c["field_path"],
+            "message": (
+                f"The AI sub-track, reading the same design input "
+                f"independently, expected {c['layer']}"
+                f"{'.' + c['field_path'] if c['field_path'] else ''} to carry: "
+                f"{c['requirement']}. The program track produced: "
+                f"{c['observed']}."
+                + (f" Grounds: {'; '.join(str(e) for e in c['evidence'])}."
+                   if c["evidence"] else "")),
+            "expert_source": c.get("expert_source"),
+        })
+
+    if ai["status"] == AI_SCHEMA_MISMATCH:
+        keys = ai.get("answer_top_level_keys") or []
+        findings.append({
+            "severity": "REVIEW",
+            # About the TRACK: the design is not what is in question. An answer
+            # arrived and this consumer could not read it.
+            "about": "track",
+            "rule": RULE_AI_ANSWER_SCHEMA_MISMATCH,
+            "message": (
+                f"The AI sub-track's answer file EXISTS and parses, and is not "
+                f"the shape this consumer reads: "
+                f"{ai.get('answer_schema_why')}. It carries "
+                f"{len(keys)} top-level key(s): {keys if keys else '(none)'}. "
+                f"It is REFUSED rather than coerced to an empty list — an "
+                f"answer flattened to zero expectations is recorded in the "
+                f"identical words as an agent that had nothing to say, and one "
+                f"of those two is a discarded answer. Answer file: "
+                f"{ai.get('answer_path')}. Findings below come from the "
+                f"deterministic sub-track ALONE — read them as a floor, not as "
+                f"coverage."),
+        })
+    elif ai["status"] == AI_CONSUMED_EMPTY:
+        findings.append({
+            "severity": "REVIEW",
+            # About the TRACK: a reading that named nothing is not a statement
+            # about the design, it is a statement about how much was covered.
+            "about": "track",
+            "rule": RULE_AI_ANSWER_EMPTY,
+            "message": (
+                f"The AI sub-track answered and named NO expectations "
+                f"({ai['status']}): {ai['reason']} This is a real zero and it "
+                f"is reported rather than left silent, because an empty "
+                f"reading and a full one produce the same zero findings and "
+                f"only one of them is coverage."),
+        })
+    elif ai["status"] not in AI_READ_STATES:
         findings.append({
             "severity": "REVIEW",
             "about": "track",
             "rule": RULE_AI_SKIPPED,
             "message": (
-                f"The AI sub-track of the Phase-1 expert track did not run: "
-                f"{ai['reason']} Findings below come from the deterministic "
-                f"sub-track ALONE — read them as a floor, not as coverage."),
+                f"The AI sub-track of the Phase-1 expert track did not deliver "
+                f"a reading ({ai['status']}): {ai['reason']} Findings below "
+                f"come from the deterministic sub-track ALONE — read them as a "
+                f"floor, not as coverage."),
         })
 
     applicable = [r for r in rules if r["applicable"]]
-    if not applicable and ai["status"] == "SKIPPED-CONDITION":
+    # THE DENOMINATOR — how many expectations this run actually DECIDED, from
+    # both halves. The verdict is taken from it rather than from "did any rule
+    # apply", because those are different questions: a rule can apply and
+    # yield no expectation, and the AI half can answer and yield none either.
+    # A run that decided nothing has measured nothing, and this repo's own
+    # `gate_zero_denominator_refuses_check` exists to stop that from exiting 0.
+    det_examined = sum(len(r["expectations"]) for r in applicable)
+    examined = det_examined + len(converged)
+    if ai["status"] == AI_SCHEMA_MISMATCH:
+        # REFUSED OUTRANKS EVERYTHING, including a clean deterministic half.
+        # Half of a dual track refused to read an answer that exists; no
+        # top-line word on this run may imply it was examined. The
+        # deterministic findings are still listed and still printed — the
+        # refusal replaces the CLAIM of coverage, never the evidence.
+        verdict, rc = "REFUSED", 2
+    elif not examined:
         verdict, rc = "VACUOUS_PASS", 2
     elif findings:
         verdict, rc = "FINDINGS", 0
@@ -430,8 +896,29 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "blocking": False,
         "enforcement": "advisory (findings) / mandatory (execution)",
         "retrieved_expert_classes": retrieved_classes(prompt),
+        # A PASS must say how much it looked at. This is that number, split by
+        # half so a reader can see WHICH half contributed it — a total of 4
+        # means something different when the AI half supplied 0 of it.
+        "examined_expectations": examined,
+        "denominator": {
+            "deterministic": det_examined,
+            "ai": len(converged),
+            "total": examined,
+            "ai_status": ai["status"],
+        },
         "deterministic_subtrack": rules,
         "ai_subtrack": ai,
+        # The convergence LEDGER. Agreements are counted, not just
+        # disagreements, because "the second track always agrees" and "the
+        # second track works" are different states that a disagreement-only
+        # report renders identical — and the first one is worth knowing about.
+        "ai_convergence": {
+            "consumed": len(converged),
+            "agreed": len([c for c in converged if c["usable"] and c["met"]]),
+            "disagreed": len([c for c in converged
+                              if c["usable"] and not c["met"]]),
+            "undecidable": len([c for c in converged if not c["usable"]]),
+        },
         "findings": findings,
         # #312's own rule turned on this landing's scope decision. The
         # deterministic rule below has a real payload and REPORTS every
@@ -499,12 +986,39 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 1
 
+    if rep["verdict"] == "REFUSED":
+        # The `INCOMPLETE:` sentinel is the house mechanism (#599) for "not
+        # audited, and someone must come back" — deliberately reused rather
+        # than inventing a token the roll-up would not recognise. It must never
+        # print `PASS`: an answer that exists and was not read is the one state
+        # where a passing word would be a lie about work that was actually done.
+        keys = rep["ai_subtrack"].get("answer_top_level_keys") or []
+        print(f"INCOMPLETE: {PROGRAM} — REFUSED: the AI sub-track's answer "
+              f"file exists and parses but is not this consumer's schema "
+              f"(top-level key(s) present: {keys if keys else '(none)'}); it "
+              f"was NOT read, so the expert expectation it carries was NOT "
+              f"examined")
     if rep["verdict"] == "VACUOUS_PASS":
-        print(f"VACUOUS_PASS: {PROGRAM} — no expert expectation applies to "
-              f"this design and the AI sub-track is unavailable")
-    print(f"{PROGRAM}: {rep['verdict']} "
-          f"({len(rep['findings'])} finding(s); AI sub-track "
-          f"{rep['ai_subtrack']['status']})")
+        # vibe-ic#599 D1. Two different things reached this line. No expert
+        # expectation applying is vacuous — nobody needs to come back to it.
+        # The AI sub-track never delivering a reading is NOT: the input was
+        # applicable, the gate wrote a handoff pack, and it said in writing
+        # that its own findings are "a floor, not coverage". Reporting that as
+        # "input not applicable" is the step being credited for work nobody did.
+        if rep["ai_subtrack"]["status"] != "CONSUMED":
+            print(f"INCOMPLETE: {PROGRAM} — the AI sub-track did not deliver a "
+                  f"reading ({rep['ai_subtrack']['status']}), so the expert "
+                  f"expectation was NOT examined; the deterministic findings "
+                  f"are a floor, not coverage")
+        else:
+            print(f"VACUOUS_PASS: {PROGRAM} — no expert expectation applies to "
+                  f"this design")
+    den = rep["denominator"]
+    print(f"{PROGRAM}: {rep['verdict']} — examined "
+          f"{den['total']} expectation(s) "
+          f"({den['deterministic']} deterministic + {den['ai']} from the AI "
+          f"sub-track); {len(rep['findings'])} finding(s); AI sub-track "
+          f"{rep['ai_subtrack']['status']}")
     for f in rep["findings"]:
         print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
     print(f"  report: {target}")

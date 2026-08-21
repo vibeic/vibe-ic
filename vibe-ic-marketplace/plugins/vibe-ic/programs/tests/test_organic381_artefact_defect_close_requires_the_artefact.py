@@ -109,7 +109,9 @@ def test_an_untracked_path_is_not_a_shipped_artefact():
     assert res["verdict"] == "FAIL"        # unverifiable, per the rule above
     assert res["cited_artefacts"] == []
     unlabelled = _classify(_issue(), [CHECKER], tracked=())
-    assert unlabelled["verdict"] == "PASS"  # tier B stays quiet, by design
+    # tier B stays QUIET by design — but no longer says "PASS", because it
+    # compared nothing (#441). Quiet and verified-clean are different claims.
+    assert unlabelled["verdict"] == M.NO_CITATION
 
 
 # --------------------------------------------------------------------------
@@ -185,7 +187,7 @@ def test_every_finding_names_the_issue_and_the_range():
 # --------------------------------------------------------------------------
 def _git(root, *args):
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                          text=True, timeout=120)
+                          text=True, timeout=60)
 
 
 def _seed_repo(root: Path) -> str:
@@ -221,7 +223,7 @@ def _run(root: Path, issue_file: Path, rng: str, extra=()):
         [sys.executable, str(PROG), "--issue-number", "366", "--range", rng,
          "--offline", "--repo-root", str(root), "--issue-file", str(issue_file),
          *extra],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def test_mutation_control_the_verdict_flips_when_the_artefact_is_repaired(tmp_path):
@@ -303,7 +305,7 @@ def test_a_sweep_without_an_issue_corpus_says_skipped_not_pass(tmp_path):
     _seed_repo(root)
     r = subprocess.run([sys.executable, str(PROG), "--recent", "5", "--offline",
                         "--repo-root", str(root)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0
     assert "[SKIPPED]" in r.stdout and "NOT a PASS" in r.stdout
     assert "[PASS]" not in r.stdout
@@ -411,6 +413,108 @@ def test_real_history_the_sweep_is_quiet_on_this_repo(tmp_path):
     out = subprocess.run(
         [sys.executable, str(PROG), "--recent", "400", "--offline",
          "--repo-root", str(_REPO_ROOT), "--issues-json", str(corpus)],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stdout + out.stderr
     assert "[FAIL]" not in out.stdout
+
+
+# ── #441: the vacuous outcome must not wear the word PASS ──────────────────
+def test_an_issue_citing_no_artefact_is_NOT_a_PASS():
+    """MEASURED at land time and far worse than the two-instance framing: of
+    the 56 closed issues the CI invocation sweeps, only 3 cite a tracked
+    artefact. The other 53 were reported PASS while nothing was compared.
+
+    The trigger was vibe-ic#365 — one of the TWO issues this gate exists
+    because of — whose body names its subject in prose ("the 3 spm PDK-cell
+    folders") and carries no repo-relative path, so the gate covered 1 of its
+    2 motivating instances while reading as though it covered both.
+
+    Widening the path regex to parse prose is refused separately: 33 of 35
+    false positives on the corpus. So the repair is to stop over-claiming, not
+    to guess. Non-fatal exactly as before — only the WORD changes, because the
+    word was the false part.
+    """
+    res = _classify(_issue(body="the 3 spm PDK-cell folders are wrong"),
+                    [CHECKER])
+    assert res["cited_artefacts"] == []
+    assert res["verdict"] == M.NO_CITATION
+    assert res["verdict"] != "PASS"
+    assert "NOT a verified clean close" in res["reason"]
+
+
+def test_a_cited_artefact_that_changed_is_still_a_PASS():
+    """The paired half: renaming every quiet outcome would destroy the
+    distinction this change exists to create."""
+    res = _classify(_issue(), [ART])
+    assert res["verdict"] == "PASS", res
+    assert "changed in the range" in res["reason"]
+
+
+def test_the_vacuous_outcome_is_still_NON_FATAL():
+    """It was never a failure and must not become one — 53 of 56 closed issues
+    are in this state, and turning them red would make the gate unrunnable
+    while telling nobody anything new."""
+    assert M.NO_CITATION not in ("FAIL", "ADVISORY")
+
+
+# ── an issue ABOUT a checker is not an artefact-defect issue ───────────────
+def test_a_title_naming_a_checker_is_not_inferred_as_an_artefact_defect():
+    """FOUND BY THE GATE ITSELF, on one of my own closes.
+
+    Running `--recent 40` flagged vibe-ic#441 ADVISORY: "the body names a
+    shipped artefact the range never changed, and the range changed only
+    checker code". #441 is titled "artefact_defect_close_check is VACUOUS on
+    any issue that names its artefact in prose" — an issue about THIS CHECKER.
+    Its body quotes an artefact path only while explaining that a DIFFERENT
+    issue (#366) cites it: a citation of a citation, which no path regex can
+    tell from a defect report.
+
+    For a defect IN a checker, "the range changed only checker code" is the
+    CORRECT shape of a fix. Inferring on it inverts the gate's meaning.
+
+    Measured over the 40 most recently closed issues: 6 carry a program name
+    in the title and all 6 are genuinely checker defects.
+    """
+    import artefact_defect_close_check as A
+    res = _classify(
+        _issue(body="see %s for the shape" % ART),
+        [CHECKER],
+    )
+    # baseline: without a checker in the title this is still inferred
+    assert res["verdict"] in ("ADVISORY", "PASS", A.NO_CITATION)
+
+    titled = dict(_issue(body="see %s for the shape" % ART))
+    titled["title"] = "artefact_defect_close_check is VACUOUS on prose citations"
+    res2 = A.classify(titled, {CHECKER}, {ART}, "", A.DEFAULT_LABEL,
+                      A.DEFAULT_DATA_ROOT)
+    assert res2["verdict"] == "PASS", res2
+    assert "defect IN a checker" in res2["reason"]
+
+
+def test_a_title_naming_an_ARTEFACT_still_gets_inferred():
+    """THE NEGATIVE CONTROL, and what keeps this from being a loophole.
+
+    #366 — the close this whole gate exists because of — is titled
+    "formal_evidence.json PASS in ... references a .sby that does not exist".
+    That names an ARTEFACT, not a program, so it stays in scope and still
+    fires. Verified live at land time: the historical #366 close still exits 1.
+    """
+    import artefact_defect_close_check as A
+    titled = dict(_issue(body="the report at %s is wrong" % ART))
+    titled["title"] = ("formal_evidence.json PASS references a .sby "
+                       "that does not exist")
+    res = A.classify(titled, {CHECKER}, {ART}, "", A.DEFAULT_LABEL,
+                     A.DEFAULT_DATA_ROOT)
+    assert res["verdict"] == "ADVISORY", res
+
+
+def test_a_LABELLED_artefact_defect_is_never_inferred_away_by_its_title():
+    """Tier A is explicit and must not be weakened: a human labelled it, so a
+    title heuristic does not get to overrule that."""
+    import artefact_defect_close_check as A
+    titled = dict(_issue(labels=["artefact-defect"],
+                         body="the report at %s is wrong" % ART))
+    titled["title"] = "artefact_defect_close_check mis-handles this cell"
+    res = A.classify(titled, {CHECKER}, {ART}, "", A.DEFAULT_LABEL,
+                     A.DEFAULT_DATA_ROOT)
+    assert res["verdict"] == "FAIL", res
