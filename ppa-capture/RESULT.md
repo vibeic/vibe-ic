@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 29 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 30 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -57,7 +57,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 26 | deterministic rules — the default, and every one names its predicate |
+| **A** | 27 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -155,7 +155,7 @@ Four are LIVE on this tree, measured today:
 |---|---|---|
 | F-3 axes with no producer | 8 of 9 gained one (`_ppa/signoff.py`, 8 metric names). **`drv` still has none** — all four of its proof names are produced by nothing anywhere in the tree | **A-1** |
 | F-8 power scope short of its required keys | process / voltage / temperature now filled from the liberty stem; **`mode` still absent**, so the comparison still refuses on both arms | **A-2** |
-| F-17 the reliability report supports no count | the READER is now honest (a verdict outside the enum maps to not-measured with the token quoted) and a ratio proof was added; the axis is still undetermined on a default run | folded into **A-1** |
+| F-17 the reliability report supports no count | the READER is now honest (a verdict outside the enum maps to not-measured with the token quoted) and a ratio proof was added; the axis is still undetermined on a default run | **A-28** — its own rule, which had been folded into A-1 and is a different thing |
 | (smaller) a relative output path plants a file in the installed tree | reproduced below | **A-6** |
 
 ---
@@ -1070,6 +1070,29 @@ that quotes a count without naming the control.
 **(d)** yes — every future batch quotes counts, and none of them will have an
 expected value either.
 
+### A-28 · a verdict token read from an artefact must be matched against a closed enum · `ppa.record_provenance`
+
+**Found by re-reading the state tables as a reader.** F-17's row said its rule was
+*"folded into A-1"*. A-1 is the gate-proof-vocabulary rule; F-17's stated rule is
+that a verdict token must be matched against a closed enum. **Different things**,
+and the second had no record and no general program — one correct implementation
+at a single site, and nothing else.
+
+    comparisons of a verdict against a single literal value   232
+    comparisons against a set                                 119
+    files comparing to a value and NEVER to a set             115
+
+**The 115 is an upper bound on candidates, not a defect count** — comparing to
+one value is right wherever the question really is binary, and no static screen
+separates that from a reader whose `else` branch swallows an unknown token. The
+record says so, and says the per-site judgement is whether that branch would be
+wrong for a token the writer has not invented yet.
+
+The tree contains one correct instance to copy: a reliability screen that maps
+anything outside its three known tokens to not-measured, **quoting what it saw** —
+which is what makes a growing vocabulary visible instead of silently reclassified.
+**(o)** yes. **(d)** yes — it is per artefact type per reader.
+
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1673,7 +1696,7 @@ auditing for it.
 
 ## Summary
 
-**STATUS**: 29 records emitted and validated — 26 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 30 records emitted and validated — 27 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
 re-measurable by `python3 ppa-capture/verify.py` (34 fast + 2 authoritative). No gate
@@ -1694,12 +1717,12 @@ artefacts; all 17 are present.*
 
 The skill splits Bucket A into ALREADY-PROGRAM / EXTRACT-NEW / AUGMENT-EXISTING /
 KEEP-JUDGMENT, and the implementing lane needs the split more than it needs the
-bucket. My 26 resolve as:
+bucket. My 27 resolve as:
 
 | resolution | n | records |
 |---|---:|---|
 | ALREADY-PROGRAM | 16 | not records — listed above with their enforcing program |
-| **AUGMENT-EXISTING** | 21 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27 |
+| **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27 |
 | **EXTRACT-NEW** | 5 | A-3, A-4, A-13, A-22, A-25 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
@@ -1759,6 +1782,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-25 | 29 types | **17 unschema'd** | upstream cause of A-15 and A-17 |
 | A-26 | 2 docs bound | 0 docstrings | 1 expired claim confirmed; population NOT estimated |
 | A-27 | **12 bad screens** | 3 missed their own case | the class behind every warning above |
+| A-28 | 232 single-value | 115 files | upper bound on candidates, stated as such |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
@@ -1896,7 +1920,7 @@ a file behind, would be an instance of two of the records it is verifying.
 Work through it in sequence. Step 1 gates the rest.
 
 1. **Run the verifier** (above). Read the exit code.
-2. **Implement the 26 Bucket-A rules** — a separate lane, per the brief. Take
+2. **Implement the 27 Bucket-A rules** — a separate lane, per the brief. Take
    `pattern` and `fix_action` from `ppa-capture/recoveries.json`; the sketches in
    `ppa-capture/candidates/` are already filed beside the program that owns each
    fix, and each `fix_action` names the specific way its own screen goes wrong.
