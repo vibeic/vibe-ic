@@ -2524,6 +2524,47 @@ question someone can answer in one sitting, where M39 offered "one half is
 missing" — which was both vaguer and, as it turns out, false.
 
 
+## M41 — two hypotheses killed, one link traced, and I am stopping this thread deliberately
+
+Continuing M40 into the `all_of` question. **What is now VERIFIED, by reading:**
+
+1. **Producer correct** — `verilator_coverage_measure.py` emits rc=3 AND the
+   `PASS_WITH_WAIVERS` sentinel on the absent-tool path.
+2. **`all_of` DOES carry the waiver up** — `flow_compliance_check:8103-8106`:
+   *"#651 — a PASS_WITH_WAIVERS sub-gate makes the whole `all_of` step
+   WAIVED-DEFERRED (carried via the hint)."* So composition does not flatten it
+   either.
+
+**SECOND HYPOTHESIS KILLED.** I read `:8113` — *"resolves SKIPPED-CONDITION ahead
+of VACUOUS_PASS when both hints are present"* — as evidence of a VACUOUS-beats-
+WAIVER precedence that would explain the symptom exactly. **It says no such
+thing:** that sentence is about SKIP vs VACUOUS. And the block it sits in is not
+a precedence resolver at all — every branch does the identical
+`reasons.append(hint)`. It is a WHITELIST of which hints may be carried upward.
+
+**So the untraced link is now precisely one thing:** the step-level handler's
+precedence among carried hints, specifically VACUOUS_PASS vs WAIVED-DEFERRED when
+an `all_of` step carries both. That such precedence logic EXISTS is established
+(the SKIP-ahead-of-VACUOUS rule is documented); what it does for this pair is
+not.
+
+**I am stopping this thread here, and the reason is not "not mine".** It is that
+I have now formed two hypotheses in two probes and killed both, and each was
+built by seizing on a comment that fit the symptom rather than by tracing
+control flow. **That is a failure mode with a signature, and I can see it in my
+own last two commits.** A third guess from the same method would be worth less
+than an honest stop — and would carry more authority than it deserves, coming
+after two corrections that made me look careful.
+
+**What the next person gets, versus what M39 offered:**
+
+| | handover |
+|---|---|
+| M39 | "one half is missing" — vague, and false |
+| M40 | "does `all_of` propagate the waiver?" — answerable; the answer is YES |
+| **M41** | **"what is the step-level precedence between VACUOUS_PASS and WAIVED-DEFERRED for an `all_of` carrying both?"** — one function, and both other links are verified sound |
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2609,7 +2650,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **M40: producer VERIFIED correct** (emits rc=3 AND the sentinel), so "one half is missing" is wrong. Untraced link: **Step 4 is an `all_of`** — does composition propagate a member's `PASS_WITH_WAIVERS`? | **likely defect, narrowed** |
+| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **M41:** producer verified correct; `all_of` verified to CARRY the waiver (`:8103`). Untraced link is now one function: **the step-level precedence between VACUOUS_PASS and WAIVED-DEFERRED when an `all_of` carries both hints.** Two hypotheses formed and killed on the way — see M41 before trusting a third. | **likely defect, one link left** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
