@@ -665,3 +665,126 @@ def test_the_route_predicate_exists_and_the_operator_arm_does_not_consult_it():
     assert "route_of" not in body and "SELF_TAPEOUT" not in body, (
         "the operator arm now reads the route; re-decide "
         "test_a_self_tapeout_on_a_shuttle_pdk_is_refused_at_37_5ic")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 5. THE GAP THE MATRIX FOUND — a SIXTH path-specific step, unconditioned
+# ══════════════════════════════════════════════════════════════════════════
+# The five steps above are the ones the flow MARKS as path-specific, by the
+# `ic`/`ip` suffix on their id. Nothing makes that spelling authoritative, so
+# the matrix asked the question the other way round: after the step the flow
+# ITSELF calls "the cell/IP path TERMINAL", which later steps does an IP still
+# owe?
+#
+# MEASURED 2026-08-21 on origin/main 8a9c5ad9e (v1.11.51), by evaluating every
+# step after 37.5ip against an IP tree with `_check_condition`. Exactly two
+# come back owed:
+#
+#     38  Foundry Handoff   no condition, and no escape hatch
+#     39  FPGA final sign-off  no condition, but `--skip-hardware` already
+#                              waives it (`_FPGA_BOARD_STEP_IDS = {6, 39}`)
+#
+# and everything else — M1..M4, 40..44 — falls away on a condition of its own.
+# So the finding is ONE step, and it is step 38.
+def _ip_deliverable(root: Path) -> Path:
+    """A COMPLETE IP deliverable: the streamed layout and all four views.
+
+    Completeness is the point. On a bare tree everything is MISSING and the
+    measurement says nothing; this tree has everything an IP has, so what is
+    still MISSING is what the flow demands of an IP that an IP does not have.
+    """
+    _ip(root, PDK_WITH_SHUTTLE)
+    g = root / "phase3" / "stage4" / "gds"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "macro_top.gds").write_bytes(b"\x00\x06\x00\x02\x00\x07")
+    h = root / "phase3" / "stage4" / "hardmacro"
+    h.mkdir(parents=True, exist_ok=True)
+    (h / "macro_top.lef").write_text("MACRO macro_top\n  SIZE 10 BY 10 ;\n"
+                                     "END macro_top\n")
+    (h / "macro_top.lib").write_text("library(k){cell(macro_top){}}\n")
+    (h / "macro_top.v").write_text("module macro_top(); endmodule\n")
+    (h / "macro_top.gds").write_bytes(b"\x00\x06\x00\x02\x00\x07")
+    return root
+
+
+def test_exactly_one_step_after_the_IP_terminal_has_no_way_to_not_apply(
+        tmp_path):
+    """The measurement, kept as the evidence for the expectation below.
+
+    It PASSES today and states what is true today. If a later step acquires or
+    loses a condition, the set changes and this test says so — which is the
+    only way the expectation below stays attached to a fact rather than to a
+    memory of one.
+    """
+    proj = _ip_deliverable(tmp_path / "ip")
+    steps = _steps()
+    order = [str(s["id"]) for s in steps]
+    after = steps[order.index("37.5ip") + 1:]
+
+    owed = {str(s["id"]) for s in after
+            if s.get("stage") in ("stage4", "stage5_manufacturing")
+            and ((not s.get("condition"))
+                 or FCC._check_condition(proj, s["condition"]))}
+    assert owed == {"38", "39"}, (
+        "the set of post-terminal steps an IP still owes has changed", owed)
+
+    # 39 has an escape hatch and 38 does not. That asymmetry is the finding.
+    assert 39 in FCC._FPGA_BOARD_STEP_IDS, (
+        "39 is waivable via --skip-hardware; if that changed it becomes a "
+        "second instance of the same gap")
+    assert FCC.check_step(proj, _step_by_id("39"), {},
+                          skip_hardware=True).status == "WAIVED"
+
+
+def _step_by_id(sid: str) -> dict:
+    for s in _steps():
+        if str(s["id"]) == sid:
+            return s
+    raise AssertionError(f"step {sid} is not in the flow")
+
+
+def test_the_step_38_gate_has_no_notion_of_the_IP_path_at_all():
+    """Why this is not a matter of the kit merely being unbuilt yet.
+
+    `foundry_handoff_package_check` is written entirely in chip vocabulary —
+    it speaks of "the chip-named GDS deliverable" — and neither it nor
+    `foundry_handoff_pack_gen` mentions a hardmacro, a deliverable class or the
+    router files. There is no IP branch to reach; the step is a chip step whose
+    condition was never written.
+    """
+    gate = (PROGRAMS / "foundry_handoff_package_check.py").read_text()
+    gen = (PROGRAMS / "foundry_handoff_pack_gen.py").read_text()
+    for name, src in (("foundry_handoff_package_check", gate),
+                      ("foundry_handoff_pack_gen", gen)):
+        assert "NO_TEMPLATE" not in src and "route_of" not in src, (
+            f"{name} now consults the route; step 38's applicability is being "
+            f"decided somewhere, and this matrix must be told where")
+    assert "chip-named GDS deliverable" in gate, (
+        "the sentence this finding quotes has moved; re-read the gate before "
+        "trusting the expectation below")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "MEASURED GAP, not a wrong expectation. Step 38 (Foundry Handoff) carries "
+    "no `condition`, so an IP/hardmacro — whose terminal the flow itself names "
+    "as 37.5ip — is required to deliver a mask reticle spec, a WAT probe plan, "
+    "a scribe-line PCM frame and a corner ATE vector kit. An IP has no "
+    "reticle, no wafer and no dicing street: it is placed inside somebody "
+    "else's die and THEIR handoff covers it. Step 38's own notes say the kit "
+    "exists so 'the foundry cannot accept the GDS for fab' without it, which "
+    "is a statement about a die. EVIDENCE: on origin/main 8a9c5ad9e a COMPLETE "
+    "IP deliverable (GDS + .lef/.lib/.v/.gds views) reports step 38 MISSING "
+    "with all five kit members named, and neither the step's gate nor its "
+    "generator contains any hardmacro or route branch. NOT FIXED HERE ON "
+    "PURPOSE: the remedy narrows a sign-off step's applicability, and getting "
+    "that wrong lets a die skip foundry handoff — the opposite and worse "
+    "failure. The proposed one-block edit is in RESULT.md under REQUESTS TO "
+    "THE LANDER. When it lands this test XPASSes and forces the waiver's "
+    "removal."))
+def test_an_IP_does_not_owe_the_foundry_handoff_kit(tmp_path):
+    proj = _ip_deliverable(tmp_path / "ip")
+    result = FCC.check_step(proj, _step_by_id("38"), {})
+    assert result.status == SKIPPED, (
+        "a macro is delivered, not fabricated; step 38 is the chip path's "
+        "foundry deliverable and an IP should not be measured against it",
+        result.status, result.reasons)
