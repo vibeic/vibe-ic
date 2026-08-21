@@ -172,6 +172,80 @@ def _label_matcher(decl):
     return lambda got: bool(rx.match(got))
 
 
+#: The dispatcher's synthetic row for a corpus that expanded to nothing. Written
+#: by `gate_dispatch_over` in `tools/ci/_gate_dispatch.sh` (vibe-ic#1075), NOT by
+#: any `run` line — see `split_empty_corpus_records`.
+_EMPTY_CORPUS_LABEL_RE = re.compile(
+    r'\Acorpus "(?P<name>.+)" is EMPTY — nothing was checked over it\Z')
+
+
+#: Leading shell environment assignments on a command line, e.g. the
+#: `GATE_DISPATCH_ATTEST_POPULATION=1 ` in front of a `gate_dispatch_over` call.
+_ENV_ASSIGN_PREFIX = re.compile(
+    r'^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|\'[^\']*\'|\S*)\s+)+')
+
+
+def declared_corpora(script: Path):
+    """Every corpus name the script hands to `gate_dispatch_over`, by PARSING.
+
+    Deliberately read out of the script rather than out of the record's own
+    `corpora` list: this file's whole design is that one side EXECUTES the
+    script and the other PARSES it, and letting the record vouch for its own
+    synthetic rows would collapse that into the document explaining itself.
+    """
+    out = []
+    for _lineno, line in GD._logical_lines(script.read_text(errors="replace")):
+        # A leading `NAME=value` assignment is part of the COMMAND, not a
+        # different command: `VAR=1 cmd args` runs `cmd` with VAR in its
+        # environment. 7c376e348 (v1.10.69) declared the routed-DEF corpus as
+        # `GATE_DISPATCH_ATTEST_POPULATION=1 gate_dispatch_over ...`, and a
+        # prefix match alone stopped seeing it — so its dispatcher row looked
+        # fabricated, which is the one thing this test is meant to catch for
+        # real. Strip the assignments, then match the command.
+        stripped = _ENV_ASSIGN_PREFIX.sub("", line.strip())
+        if not stripped.startswith("gate_dispatch_over"):
+            continue
+        got = GD._read_quoted(stripped[len("gate_dispatch_over"):].strip())
+        if got is not None:
+            out.append(got[0])
+    return out
+
+
+def split_empty_corpus_records(recorded_labels):
+    """(`run`-line invocations, corpus names whose loop expanded to NOTHING).
+
+    A RECORD IS NOT ALWAYS AN INVOCATION. `gate_dispatch_over` deliberately
+    appends one synthetic NOT_CHECKED row when its producer yields zero items,
+    because until vibe-ic#1075 a corpus that silently emptied cost the run
+    nothing and read exactly like a corpus with nothing wrong in it. That row is
+    written by the dispatcher, not by a `run` line, so no declaration can ever
+    explain it and `reconcile` was right to call it unattributed — it was being
+    asked the wrong question.
+
+    MEASURED on this checkout: the corpus `published cells carrying a routed
+    DEF` is 1 item on origin/main and 0 here, because the published cells moved
+    to `vibeic/benchmark-data`. At 0 the dispatcher emits its synthetic row, the
+    live reconciliation reported "the dispatcher recorded gate(s) no `run` line
+    explains", and the merge gate looked broken. Nothing about the merge gate
+    changed; a corpus emptied.
+
+    Partitioning here rather than teaching `reconcile` about corpora keeps the
+    drift check at full strength AND makes it independent of how many cells
+    happen to be published — the same test now runs at 0 items and at 100. The
+    caller must still prove each name is one the script DECLARES; a synthetic
+    row naming a corpus no `gate_dispatch_over` line mentions is exactly the
+    fabrication this file exists to catch, so it is returned, not swallowed.
+    """
+    invocations, empty = [], []
+    for label in recorded_labels:
+        m = _EMPTY_CORPUS_LABEL_RE.match(label)
+        if m:
+            empty.append(m.group("name"))
+        else:
+            invocations.append(label)
+    return invocations, empty
+
+
 def reconcile(declarations, recorded_labels):
     """(records no declaration explains, literal declarations never invoked).
 
@@ -290,7 +364,20 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
     doc = _list_record(_SCRIPT, _REPO)
     recorded = [g["label"] for g in doc["gates"]]
 
-    unattributed, silent = reconcile(decls, recorded)
+    # A record written BY THE DISPATCHER rather than by a `run` line is set
+    # aside first — and only after the script is made to account for it. See
+    # `split_empty_corpus_records`: an empty corpus leaves a synthetic
+    # NOT_CHECKED row behind on purpose, and reconciling it against `run` lines
+    # asks a question it can never answer. It is not waved through: its corpus
+    # must be one the script DECLARES, so a synthetic-looking label the script
+    # never asked for is still a fabricated gate and still red.
+    invocations, empty_corpora = split_empty_corpus_records(recorded)
+    fabricated = sorted(set(empty_corpora) - set(declared_corpora(_SCRIPT)))
+    assert not fabricated, (
+        "the dispatcher recorded an EMPTY-corpus row for a corpus no "
+        f"`gate_dispatch_over` line in the script declares: {fabricated}")
+
+    unattributed, silent = reconcile(decls, invocations)
     assert not unattributed, (
         "the dispatcher recorded gate(s) no `run` line in the script "
         f"explains: {sorted(set(unattributed))}")
@@ -299,7 +386,16 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
         f"the dispatcher — they are wired through something that bypasses "
         f"the recording: {silent}")
     assert doc["declared"] == len(recorded)
-    assert len(recorded) >= len(decls), (recorded, decls)
+    # IT USED TO SAY `len(recorded) >= len(decls)`, and that is false on a
+    # correct script the moment a loop expands to nothing: 4 templated `run`
+    # lines that fire zero times are 4 declarations backing 0 invocations, so
+    # 80 recorded invocations against 84 declarations is the HEALTHY reading of
+    # an empty corpus. What actually holds in every case is that each LITERAL
+    # declaration contributes one invocation, so the invocations can never fall
+    # below the literal count. `assert_invocations_decompose` then makes the
+    # books close exactly; this is the floor it cannot be satisfied without.
+    literal = [d for d in decls if not d.runtime_expansion]
+    assert len(invocations) >= len(literal), (invocations, literal)
     # The loop really is what makes the two numbers differ, asserted so that a
     # future script with no loop does not leave this test passing vacuously
     # over an equality it no longer checks.
@@ -328,7 +424,73 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
     # `pytest.raises` rather than restating its condition -- a control that
     # asserts the precondition is a control that cannot tell you the assertion
     # still fires.
-    assert_invocations_decompose(decls, recorded)
+    assert_invocations_decompose(decls, invocations)
+
+
+def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
+    """The control for `split_empty_corpus_records`, which must not become a
+    hole through which any unexplained record escapes.
+
+    Driven over a REAL script that sources the REAL dispatch library and runs a
+    `gate_dispatch_over` whose producer prints nothing — the same code path the
+    live hygiene script takes here — so this measures the dispatcher's actual
+    behaviour rather than a hand-written label.
+
+    Three things, and the third is the one that makes the partition safe:
+
+      1. the empty corpus DOES leave a synthetic row behind (vibe-ic#1075); if
+         it ever stops, this control dies rather than quietly passing over a
+         shape that no longer occurs;
+      2. with that row set aside the reconciliation is clean, which is the
+         repair — the same script reconciles at 0 items and at 3;
+      3. a synthetic-looking row naming a corpus the script never declared is
+         STILL unexplained. Without this, "is EMPTY — nothing was checked over
+         it" would be a phrase any fabricated label could wear to walk past the
+         one assertion that catches fabricated labels.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _probe(root, "p_ok", "import sys\nprint('[PASS] fine')\nsys.exit(0)\n")
+        script = _fixture_script(root, (
+            f'run "flat one" "$ROOT" python3 "{root}/p_ok.py"\n'
+            '_per_item() {\n'
+            f'  run "per cell ($(basename "$1"))" "$ROOT" '
+            f'python3 "{root}/p_ok.py"\n'
+            '}\n'
+            'gate_dispatch_over "cells that do not exist" _per_item '
+            'printf ""\n'))
+        decls = GD.parse_declarations(script)
+        doc = _list_record(script, root)
+        recorded = [g["label"] for g in doc["gates"]]
+        # Read inside the tempdir's lifetime — the script is gone below.
+        corpora = declared_corpora(script)
+
+    assert corpora == ["cells that do not exist"]
+
+    # 1. the dispatcher really does record the empty corpus.
+    invocations, empty = split_empty_corpus_records(recorded)
+    assert empty == ["cells that do not exist"], recorded
+    assert len(recorded) == len(invocations) + 1
+
+    # 2. and with it set aside, a script whose loop expanded to nothing is
+    #    clean — one literal declaration, one invocation, one templated
+    #    declaration that legitimately fired zero times.
+    assert reconcile(decls, invocations) == ([], [])
+    assert_invocations_decompose(decls, invocations)
+    # Reconciling the RAW record is what was red, and naming it here is what
+    # stops the partition being confused for a no-op.
+    assert reconcile(decls, recorded)[0] == [
+        'corpus "cells that do not exist" is EMPTY — nothing was checked over it']
+
+    # 3. THE CLAUSE THAT KEEPS IT HONEST: same phrasing, corpus the script never
+    #    declared, still caught.
+    forged = 'corpus "a corpus nobody declared" is EMPTY — nothing was checked over it'
+    _inv, forged_empty = split_empty_corpus_records(recorded + [forged])
+    assert sorted(set(forged_empty) - set(corpora)) == ["a corpus nobody declared"]
+    # …and a record that is not the synthetic shape at all is untouched by the
+    # partition and reaches `reconcile` as before.
+    assert split_empty_corpus_records(["something else"]) == (["something else"], [])
 
 
 def test_a_continued_run_line_is_read_as_the_one_command_bash_runs():
@@ -639,6 +801,13 @@ def test_a_gate_that_refused_is_reported_apart_from_the_ones_that_passed(tmp_pat
     """)
     script = _fixture_script(root, (
         f'run "a green gate" "$ROOT" python3 "{root}/p_ok.py"\n'
+        # #584 — the tolerance is now BOUGHT at the wiring site. The property
+        # this test pins is unchanged and is the one #584 had to preserve: an
+        # EXEMPTED refusal is still non-blocking, because a permanently red
+        # script is a skipped script. The unexempted arm lives in
+        # `test_issue584_not_checked_is_load_bearing.py`.
+        f'uncheckable_until 2999-01-01 "needs a clean checkout, which a '
+        f'developer tree is not obliged to be"\n'
         f'run_tolerating_uncheckable "a refusing gate" "$ROOT" '
         f'python3 "{root}/p_refuse.py"\n'))
     res = GR.repo_hygiene_gate(root, script=script)
@@ -675,14 +844,15 @@ def test_a_missing_hygiene_script_says_it_consulted_zero_gates(tmp_path):
     assert "0 gate(s) consulted" in res.summary, res.summary
 
 
-def test_a_run_that_never_finished_is_an_ERROR_not_a_pass(tmp_path):
+def test_a_run_with_no_forward_progress_is_an_ERROR_not_a_pass(tmp_path):
     root = tmp_path / "r"
     root.mkdir()
     _probe(root, "p_slow", "import time; time.sleep(60)\n")
     script = _fixture_script(
         root, f'run "slow" "$ROOT" python3 "{root}/p_slow.py"\n')
-    res = GR.repo_hygiene_gate(root, script=script, timeout=2)
-    assert res.rc == 2 and "did not finish" in res.summary, res.summary
+    res = GR.repo_hygiene_gate(root, script=script, stall_grace=1)
+    assert res.rc == 2 and "progress watchdog" in res.summary, res.summary
+    assert "nothing was concluded" in res.summary
 
 
 # ==========================================================================
@@ -814,6 +984,9 @@ def test_the_rollup_does_not_claim_all_passed_when_a_gate_refused(tmp_path):
     """)
     out = _run_fixture_script(root, (
         f'run "a green gate" "$ROOT" python3 "{root}/p_ok.py"\n'
+        # #584 — see the note on the neighbouring refusal test.
+        f'uncheckable_until 2999-01-01 "needs a clean checkout to compare '
+        f'against a fresh worktree at the same commit"\n'
         f'run_tolerating_uncheckable "gates are host-independent" "$ROOT" '
         f'python3 "{root}/p_refuse.py"\n'))
     text = out.stdout + out.stderr
@@ -850,3 +1023,136 @@ def test_the_unqualified_sentence_survives_when_nothing_refused(tmp_path):
     assert out.returncode == 0, out.stdout + out.stderr
     assert "all 2 gate(s) passed" in out.stdout, out.stdout
     assert "NOT CHECKED" not in out.stdout
+
+
+# ── One gate, declared twice: clean to git, invisible to every check above ──
+#
+# vibe-ic#1241 shard PR #1256 wired `atomic_artifact_write_check` at line 159
+# of the hygiene script. Its base branch had already wired the SAME program,
+# blockingly, at line 981. The two `run` lines sit ~840 lines apart, so:
+#
+#     git merge <base> <shard>          rc=0, NO conflict reported
+#     grep -c atomic_artifact_write_check.py  ->  2
+#
+# and the merged landing gate runs the checker TWICE under two different
+# labels. Nothing caught it. `checker_execution_wiring_audit` asks whether a
+# checker is run, not how many times; the reconciliation above asks whether
+# every record traces to a `run` line and every `run` line reaches the
+# dispatcher, and two honest declarations firing once each satisfy both.
+#
+# MEASURED on the merged tree before writing this: 30 passed.
+#
+# WHY THE KEY IS THE WHOLE INVOCATION, NOT THE PROGRAM. `sync_image_version.py`
+# is legitimately declared twice on clean main -- `--check` and
+# `--report-upstream --require-remote` are different questions, and a check
+# keyed on the program name would ban a pair the repo deliberately has. Two
+# declarations are redundant only when the SAME command runs in the SAME cwd:
+# then the second can differ from the first in nothing but its label.
+#
+# The key also covers every declaration (74/74 on main), which a program-path
+# key does not: 46 of 76 spell the program through `$PG/` or `$ROOT/` and are
+# invisible to a `programs/...` path regex. There is no denominator hole to
+# disclose here because there is no extraction to fail.
+
+
+def _invocation(decl):
+    """The identity of what bash will actually run: (cwd, normalised argv)."""
+    cmd = " ".join(decl.cmd) if isinstance(decl.cmd, (list, tuple)) \
+        else str(decl.cmd)
+    return (str(decl.cwd_token), " ".join(cmd.split()))
+
+
+def duplicate_invocations(declarations):
+    """Invocations declared more than once -> the labels that declare them."""
+    from collections import defaultdict
+    by_key = defaultdict(list)
+    for d in declarations:
+        by_key[_invocation(d)].append(d.label)
+    return {k: labels for k, labels in by_key.items() if len(labels) > 1}
+
+
+def test_no_gate_is_declared_twice_with_the_same_invocation():
+    """The real script must not run one command twice in one lane.
+
+    A duplicate costs the landing its runtime twice over and, worse, makes the
+    gate list lie about how many distinct questions are being asked. It is the
+    one drift shape `git merge` cannot see, because the two lines need not be
+    anywhere near each other.
+    """
+    decls = GD.parse_declarations(_SCRIPT)
+    assert decls, "the parser found no gates in the real hygiene script"
+    dups = duplicate_invocations(decls)
+    assert not dups, (
+        "the same command is declared more than once in the hygiene script — "
+        "the second adds nothing but a label:\n" + "\n".join(
+            f"  cwd={k[0]} cmd={k[1]}\n    labels: {labels}"
+            for k, labels in sorted(dups.items())))
+
+
+def test_NEGATIVE_CONTROL_the_same_program_with_different_arguments_is_not_a_duplicate():
+    """Proof this is a check and not a ban.
+
+    Keyed on the program alone, this clause would red on clean main today:
+    `sync_image_version.py` is declared twice, and both are wanted. If this
+    test ever fails, the key has been narrowed to the program name and a
+    legitimate pair is about to be deleted to satisfy it.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _probe(root, "p_ok", "import sys\nprint('[PASS] fine')\nsys.exit(0)\n")
+        script = _fixture_script(root, (
+            f'run "asks one thing"  "$ROOT" python3 "{root}/p_ok.py" --check\n'
+            f'run "asks another"    "$ROOT" python3 "{root}/p_ok.py" --report\n'))
+        decls = GD.parse_declarations(script)
+
+    assert len(decls) == 2, decls
+    assert not duplicate_invocations(decls), (
+        "two invocations of one program with DIFFERENT arguments were read as "
+        "duplicates — this clause has become a ban on declaring a program "
+        "twice, which clean main already violates on purpose")
+
+
+def test_POSITIVE_CONTROL_two_run_lines_with_the_same_command_are_caught():
+    """The clause must die on the shape #1256 actually produced.
+
+    Same program, same cwd, same arguments, DIFFERENT labels — which is what a
+    merge of two independently-correct branches yields, and what git reports
+    as a clean merge.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _probe(root, "p_ok", "import sys\nprint('[PASS] fine')\nsys.exit(0)\n")
+        # THE TEMPLATED LINE IS LOAD-BEARING, for the reason
+        # `test_POSITIVE_CONTROL_a_literal_line_firing_twice_is_caught` records
+        # above: `assert_invocations_decompose` checks the LOOP clause first, so
+        # a fixture of literal `run` lines alone makes it raise on clause 1 and
+        # proves nothing about the duplicate. With the loop present, the
+        # existing machinery is genuinely satisfied and only the new clause
+        # speaks. (I hit exactly that trap writing this control.)
+        script = _fixture_script(root, (
+            f'run "wired by the base"  "$ROOT" python3 "{root}/p_ok.py" progs\n'
+            f'run "wired by the shard" "$ROOT" python3 "{root}/p_ok.py" progs\n'
+            'while IFS= read -r _x; do\n'
+            '  [ -n "$_x" ] || continue\n'
+            f'  run "per cell ($(basename "$_x"))" "$ROOT" '
+            f'python3 "{root}/p_ok.py"\n'
+            'done < <(printf "alpha\\n")\n'))
+        decls = GD.parse_declarations(script)
+        doc = _list_record(script, root)
+        recorded = [g["label"] for g in doc["gates"]]
+
+    dups = duplicate_invocations(decls)
+    assert len(dups) == 1, dups
+    (labels,) = dups.values()
+    assert sorted(labels) == ["wired by the base", "wired by the shard"]
+
+    # EVERY CLAUSE ABOVE THIS ONE IS SATISFIED by the same script. The two
+    # labels are distinct, so each declaration is explained and fires exactly
+    # once, and the templated line decomposes. Pinned so nobody concludes the
+    # existing reconciliation already covered the duplicate — it does not.
+    assert firings(decls, recorded) == [1, 1, 1], firings(decls, recorded)
+    unattributed, silent = reconcile(decls, recorded)
+    assert not unattributed and not silent, (unattributed, silent)
+    assert_invocations_decompose(decls, recorded)

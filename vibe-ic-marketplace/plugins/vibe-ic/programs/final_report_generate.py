@@ -667,7 +667,14 @@ def _run_audit(project: Path,
 # digits), so a step id added to the flow tomorrow is read, not silently
 # reclassified. chip-AGNOSTIC: step ids are flow structure, never chip,
 # vendor or SKU names.
-STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+"
+# vibe-ic#1744 — the "generic" shape above was still too narrow, and it failed
+# in exactly the way the paragraph above predicts. The half-steps introduced
+# with the chip/IP split (`0.5ic`, `15.5ic`, `26.5ic`, `37.5ip`, `37.5ic`) carry
+# a FRACTION and a trailing path SUFFIX, neither of which "short alpha prefix +
+# digits" can spell. All five matched nothing, so `.get(sid, "MISSING")` booked
+# every one of them as MISSING and the roll-up table would have disagreed with
+# the tally printed beside it by five steps — #428's defect, in new ids.
+STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+(?:\.[0-9]+)?[A-Za-z]{0,4}"
 _VERDICT_LINE_RE = re.compile(
     r"\[\s*([A-Z][A-Z_-]+?)\s*\]\s*Step\s+(" + STEP_ID_RE + r")\s*:"
 )
@@ -1282,7 +1289,25 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
     # violation falls in std-cell-library layer rules, and substitutes the
     # Magic count when a re-stream is authoritative. A report that
     # contradicts the run it summarises is worse than one that under-reports.
-    if pv.get("drc_signoff") == "(report missing)":
+    # ORGANIC-20260808 — the premise above ("nothing in this tree writes
+    # `drc_signoff.json`") STOPPED BEING TRUE. `eda_report_audit:drc` now
+    # stages one, and its schema is the same one ORGANIC-20260726 had to teach
+    # this function for LVS: it records `passed` / `summary` and carries
+    # NEITHER `verdict` NOR `status`. So the loop above resolves "?" — not
+    # "(report missing)" — and this echo, keyed on the old sentinel alone,
+    # stopped firing for exactly the runs that gained a report.
+    #
+    # MEASURED on a38902d16: 3 committed cells carry `drc_signoff.json` and
+    # all 3 lack both fields, so all 3 read "?" while their runner record says
+    # PASS. `test_organic399_drc_signoff_verdict_echoes_the_runner` catches it
+    # on `spm/v1.9.96_gf180mcuD` — runner "PASS", summary "?".
+    #
+    # UNRESOLVED IS THE SAME STATE AS ABSENT for this purpose: in both cases
+    # the JSON gave no verdict, so the runner's record is what the summary has
+    # to echo. #399's rule is untouched — the verdict still comes from the
+    # runner and is still never re-derived from the raw `.rpt`, which is the
+    # prototype #399 measured and rejected for contradicting five WAIVED runs.
+    if pv.get("drc_signoff") in ("(report missing)", "?"):
         _st, _ex = _runner_step_record(project, "drc")
         if _st:
             _bits = [f"{k}={_ex[k]}" for k in
@@ -1966,8 +1991,20 @@ def _render(project: Path, run_audit: bool = True,
     if tp_ev.get("vectors_csv"):
         md.append(f"- **Vector CSV**: `{tp_ev['vectors_csv']}`")
     md.append("")
-    md.append("_Per-opcode / per-mode coverage detail belongs in_ "
-              "`reports/chip_specific_summary.md` _(this section stays chip-agnostic)._")
+    # Spell the addendum as a CITATION only when this run actually ships it.
+    # Unconditionally backticking the path made every generated final_summary.md
+    # point at a file most runs do not ship — 14 of the 38 pre-existing
+    # unresolved citations counted in #1168. The guidance is unchanged either
+    # way; only the "this artefact is in the tree" claim is dropped when it is
+    # not true.
+    if chip_addendum:
+        md.append("_Per-opcode / per-mode coverage detail belongs in_ "
+                  "`reports/chip_specific_summary.md` _(this section stays chip-agnostic)._")
+    else:
+        md.append("_Per-opcode / per-mode coverage detail belongs in the "
+                  "chip-specific addendum (reports/chip_specific_summary.md), which "
+                  "this run does not ship — author it per chip. This section stays "
+                  "chip-agnostic._")
     md.append("")
 
     md.append("## Output #4 — Analog convergence (tuning loops)")
@@ -2273,7 +2310,12 @@ def _render(project: Path, run_audit: bool = True,
                   "for IC-specific opcode coverage, tester fixture semantics, "
                   "analog tuning targets, and any chip-known issues.")
     else:
-        md.append("_No `reports/chip_specific_summary.md` present. Author it by hand "
+        # Same reason as the Output-#3 note above (#1168): this branch exists
+        # BECAUSE the file is absent, so its path must not be spelled as a
+        # citation of a shipped artefact. It stays readable as the file to
+        # author.
+        md.append("_No chip-specific addendum present; expected at "
+                  "reports/chip_specific_summary.md. Author it by hand "
                   "(or via a chip-specific Phase 1 skill) to document IC-specific "
                   "test interpretations, opcode tables, tuning-target values, etc. "
                   "This generator deliberately keeps the canonical summary "
