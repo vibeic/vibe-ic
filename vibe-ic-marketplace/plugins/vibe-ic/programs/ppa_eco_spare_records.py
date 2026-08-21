@@ -180,19 +180,32 @@ def records_from_plan(plan: Optional[Mapping[str, Any]],
     instances = instances if isinstance(instances, list) else None
     declared = _int_or_none(plan.get("count"))
 
+    #: THE PLAN AGAINST ITSELF, computed once and applied to EVERY row it
+    #: touches. A plan whose `count` disagrees with its own `instances` list is
+    #: not a plan with one bad field: the instance list is what every other
+    #: number here is derived from -- kinds, positions, tie-off candidates --
+    #: so if the list is not the population then none of those is a
+    #: measurement either. Marking only the total INVALID and then reporting
+    #: "0 inverters" off the same list would convict the design on evidence
+    #: this program has just said it does not believe.
+    contradiction: Optional[str] = None
+    if declared is not None and instances is not None \
+            and declared != len(instances):
+        contradiction = (
+            f"the plan says count={declared} and lists {len(instances)} "
+            "instance(s). One of the two is wrong and this program will not "
+            "pick the flattering one, nor derive a kind count or a position "
+            "count from a list it has just refused")
+
     # --- the total ---------------------------------------------------------
     if declared is None and instances is None:
         out.append(_with_source(M.not_measured(
             feas.ECO_M_COUNT,
             "the plan names neither a `count` nor an `instances` list, so it "
             "states no spare population at all", scope), source))
-    elif (declared is not None and instances is not None
-            and declared != len(instances)):
+    elif contradiction is not None:
         out.append(_with_source(M.invalid(
-            feas.ECO_M_COUNT,
-            f"the plan says count={declared} and lists {len(instances)} "
-            "instance(s). One of the two is wrong and this program will not "
-            "pick the flattering one", scope), source))
+            feas.ECO_M_COUNT, contradiction, scope), source))
     else:
         total = declared if declared is not None else len(instances or [])
         if total < 0:
@@ -205,10 +218,13 @@ def records_from_plan(plan: Optional[Mapping[str, Any]],
                                   dict(source or {})))
 
     # --- per kind ----------------------------------------------------------
-    out.extend(_kind_records(plan, instances, scope, source))
+    out.extend(_kind_records(plan, instances, scope, source, contradiction))
 
     # --- spread ------------------------------------------------------------
-    if instances is None:
+    if contradiction is not None:
+        out.append(_with_source(M.invalid(
+            feas.ECO_M_POSITIONS, contradiction, scope), source))
+    elif instances is None:
         out.append(_with_source(M.not_measured(
             feas.ECO_M_POSITIONS,
             "the plan lists no `instances`, so no placement position could be "
@@ -230,7 +246,11 @@ def records_from_plan(plan: Optional[Mapping[str, Any]],
                            "net a future ECO has to repair")}))
 
     # --- tie-off -----------------------------------------------------------
-    out.append(_tie_off_record(plan, instances, declared, scope, source))
+    if contradiction is not None:
+        out.append(_with_source(M.invalid(
+            feas.ECO_M_TIE_OFF, contradiction, scope), source))
+    else:
+        out.append(_tie_off_record(plan, instances, declared, scope, source))
 
     # --- spare ECO pads ----------------------------------------------------
     pads = plan.get("spare_pads")
@@ -247,7 +267,9 @@ def records_from_plan(plan: Optional[Mapping[str, Any]],
 
 def _kind_records(plan: Mapping[str, Any], instances: Optional[List[Any]],
                   scope: Mapping[str, Any],
-                  source: Optional[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+                  source: Optional[Mapping[str, Any]],
+                  contradiction: Optional[str] = None
+                  ) -> List[Dict[str, Any]]:
     """One record per spare KIND the plan is able to talk about.
 
     THE ZERO HERE IS A MEASUREMENT AND THE ABSENCE IS NOT. When the instance
@@ -278,6 +300,10 @@ def _kind_records(plan: Mapping[str, Any], instances: Optional[List[Any]],
     out: List[Dict[str, Any]] = []
     for kind in sorted(kinds):
         metric = feas.eco_metric_for_kind(kind)
+        if contradiction is not None:
+            out.append(_with_source(M.invalid(metric, contradiction, scope),
+                                    source))
+            continue
         if instances is None:
             out.append(_with_source(M.not_measured(
                 metric,
@@ -451,5 +477,15 @@ def main(argv=None) -> int:
     return RC_PASS
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == "__main__":                              # pragma: no cover
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:                            # pragma: no cover
+        # PPA_INTERFACES §1: 3 is INTERNAL ERROR. Letting this propagate exits
+        # 1, which is reserved for a finding about a design, and nothing about
+        # a crash in this program is a fact about one.
+        print(f"[REFUSE] {PROGRAM}: internal error "
+              f"({type(exc).__name__}: {exc})", file=sys.stderr)
+        raise SystemExit(RC_BAD_INVOCATION)

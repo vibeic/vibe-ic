@@ -50,11 +50,42 @@ not varied -- and the caller supplies values with `--values LEVER=a,b,c`, which
 are recorded as the CALLER's, round-tripped through the runner, and published
 with the invocation that chose them.
 
+A LEVER CAN BE REAL AND STILL NOT BE FREE BELOW A FLOOR
+======================================================
+Admission here is measured against the runner's CLI, and that is the right
+question for "can this flow apply the lever". It is NOT the whole question for
+"may a search visit this VALUE".
+
+MEASURED. `--spare-density` is on the runner's command line, so this program
+admitted it, and its own note said: "0 disables spare insertion, which is a
+legitimate arm of a search and not the same as leaving the flag out". A
+cross-layer search took that at its word, ran `--spare-density 0`, deleted all
+ten of one design's spare/ECO cells, and won on area. Spares are what make a
+bug found after tape-out fixable by a metal-only ECO instead of a base-layer
+respin, so what that arm actually searched was whether the design should remain
+repairable -- and nothing in the space said that was not on the table.
+
+The sentence was not wrong, it was UNCONDITIONAL. Disabling spare insertion is
+a legitimate arm for a design that has declared it needs no spare population.
+For a design that has DECLARED one, zero is not a point in the space: it is a
+full place-and-route run spent producing a candidate the promotion gate must
+refuse. So when `--eco-declaration` supplies a design-for-ECO requirement,
+`spare_cell_density` is admitted BOUNDED BELOW and a zero value is refused with
+the declaration cited.
+
+WHAT THIS PROGRAM STILL CANNOT DO, AND SAYS SO. A declared floor is a COUNT of
+spare cells; this lever is a DENSITY as a fraction of placed cells. Converting
+one to the other needs the design's placed-cell count, which is a property of a
+run that has not happened yet, so a positive density cannot be refused here.
+Zero can: zero density inserts zero spares on a design of any size. The
+count is enforced downstream by `_ppa/feasibility.py`'s `eco_readiness` axis,
+and the space row says that rather than implying it checked.
+
 EXIT CODES (docs/PPA_INTERFACES.md 1)
 =====================================
     0  a space was emitted (it may legitimately admit nothing)
-    1  REFUSED -- a finding: a value the runner would not apply as written, or
-       a space whose self-audit failed
+    1  REFUSED -- a value the runner would not apply as written, a value below
+       a declared design-for-ECO floor, or a space whose self-audit failed
     2  [CANNOT CHECK] -- the runner could not be read, or could not be asked
        about a value the caller supplied. Never rc=0: a space measured against
        a runner nobody looked at is a space that describes nothing.
@@ -77,6 +108,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_json as atomic_write_json  # noqa: E402
 from _ppa import cli_exit  # noqa: E402 — PPA_INTERFACES §1: a bad invocation is 3
+# The ONE reader of a design-for-ECO declaration. This program does not parse
+# the block itself: the space and the promotion gate must agree about what
+# "this design requires spares" means, and two parsers is how they stop
+# agreeing.
+from _ppa import feasibility as feas  # noqa: E402
 
 PROGRAM = "ppa_pnr_search_space"
 DEFAULT_JSON_REL = "reports/ppa_pnr_search_space.json"
@@ -95,6 +131,16 @@ RUNNER_REL = "phase3_one_shot_runner.py"
 
 STATUS_EXPOSED = "EXPOSED"
 STATUS_NOT_EXPOSED = "NOT_EXPOSED"
+#: Admitted, and NOT free across its whole range: a declared requirement puts a
+#: floor under it. Distinct from EXPOSED so a reader of the space can see at a
+#: glance that a lever carries a bound, rather than having to find the bound.
+STATUS_BOUNDED_BELOW = "BOUNDED_BELOW"
+
+#: No `--eco-declaration` was supplied. Deliberately NOT the same string as the
+#: gate's `NOT_DECLARED`, which means a document WAS read and declares no
+#: requirement. "nobody told this program" and "the design says it needs none"
+#: are different facts and only one of them is a statement about the design.
+ECO_NOT_SUPPLIED = "NOT_SUPPLIED"
 
 #: The eight names `crosslayer_search_space.py` withholds, plus the two this
 #: flow additionally drives. Every one gets a row whether or not the runner
@@ -140,8 +186,14 @@ LEVERS: Tuple[Dict[str, Any], ...] = (
         "domain": ("the design-for-ECO spare-cell density as a fraction of "
                    "placed cells; the runner clamps it and a clamped value is "
                    "refused here rather than searched"),
-        "note": ("0 disables spare insertion, which is a legitimate arm of a "
-                 "search and not the same as leaving the flag out"),
+        "note": ("0 disables spare insertion. That is a legitimate arm of a "
+                 "search ONLY for a design that has declared it needs no "
+                 "spare/ECO population. Where a declaration requires one, "
+                 "zero is refused with the declaration cited: spares are what "
+                 "make a post-tape-out bug fixable by a metal-only ECO rather "
+                 "than a base-layer respin, and deleting them is not a "
+                 "cheaper implementation of the same chip"),
+        "eco_bounded": True,
     },
     {"lever": "core_utilisation", "layer": "floorplan", "kind": "fraction",
      "flags": ("--core-util", "--core-utilisation", "--core-utilization"),
@@ -179,6 +231,94 @@ LEVERS: Tuple[Dict[str, Any], ...] = (
               "the runner's CLI. A search that moved it would be searching a "
               "different requirement, not a different implementation")},
 )
+
+
+# ---------------------------------------------------------------------------
+# the design's design-for-ECO declaration -- read, never invented
+# ---------------------------------------------------------------------------
+def read_eco_declaration(path: Optional[str]
+                         ) -> Tuple[Dict[str, Any], Optional[str]]:
+    """(the ECO context this space is bounded by, reason-it-could-not-be-read).
+
+    A declaration that was NAMED and could not be read is not "no requirement".
+    It is a [CANNOT CHECK], and the caller turns the second return value into
+    rc=2 -- because publishing an unbounded space from an unreadable
+    requirement is exactly how a search comes to visit the value the
+    requirement forbade.
+
+    The block is parsed by `_ppa/feasibility.eco_requirement_state` and not
+    here. The space and the gate must agree about what "this design requires
+    spares" means, and two parsers is how they stop agreeing.
+    """
+    if not path:
+        return ({"state": ECO_NOT_SUPPLIED, "declared_in": None,
+                 "min_spare_cells": None,
+                 "reason": ("no --eco-declaration was supplied, so this "
+                            "program was not told whether this design "
+                            "requires a spare/ECO population. That is not a "
+                            "finding that it requires none")}, None)
+    p = Path(path)
+    if not p.is_file():
+        return {}, f"{p} does not exist"
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        return {}, f"{p} is unreadable: {exc}"
+    if not isinstance(doc, dict):
+        return {}, f"{p} is a {type(doc).__name__}, not an object"
+    block = doc.get("eco_readiness", doc)
+    state, code, detail = feas.eco_requirement_state(block)
+    if state == feas.ECO_UNREADABLE:
+        return {}, (f"{p} states a design-for-ECO requirement this program "
+                    f"cannot read ({code}): "
+                    f"{detail.get('reason', 'no reason given')}")
+    obligations = detail.get("obligations") or {}
+    return ({"state": state,
+             "declared_in": str(p),
+             "min_spare_cells": obligations.get("min_spare_cells"),
+             "obligations": dict(obligations),
+             "reason": detail.get("reason"),
+             "declaration": dict(block) if isinstance(block, dict) else None},
+            None)
+
+
+def eco_floor_row(eco: Mapping[str, Any]) -> Dict[str, Any]:
+    """What the `spare_cell_density` row publishes about its own floor.
+
+    Emitted whatever the declaration says, including when there is none: the
+    absence of a bound is a fact a reader of a search space needs stated, not
+    a blank they have to interpret.
+    """
+    state = str(eco.get("state") or ECO_NOT_SUPPLIED)
+    floor = eco.get("min_spare_cells")
+    bounds = state == feas.ECO_REQUIRED
+    row: Dict[str, Any] = {
+        "state": state,
+        "declared_in": eco.get("declared_in"),
+        "min_spare_cells": floor,
+        "bounds_this_lever": bounds,
+    }
+    if bounds:
+        row["refuses"] = (
+            "any value this runner would apply as 0. Zero spare density "
+            "inserts zero spares on a design of any size, so a candidate at "
+            "zero cannot meet a declared floor of "
+            f"{floor} and running it would spend a full place-and-route on a "
+            "result the promotion gate must refuse.")
+        row["not_enforced_here"] = (
+            "a POSITIVE density. The declared floor is a COUNT of spare "
+            "cells and this lever is a FRACTION of placed cells; converting "
+            "one to the other needs the design's placed-cell count, which is "
+            "a property of a run that has not happened. This program refuses "
+            "only what it can prove from the knob alone.")
+        row["enforced_downstream_by"] = (
+            "_ppa/feasibility.py, axis `eco_readiness`, which compares the "
+            "measured spare population against this same declaration")
+    else:
+        row["reason"] = eco.get("reason") or (
+            "the declaration states no spare/ECO requirement, so this lever "
+            "is free across its whole range")
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -274,10 +414,12 @@ def value_survives(mod: Any, normaliser: str, raw: str,
 def build_space(flags: Dict[str, int], runner_digest: str,
                 explicit: Optional[Dict[str, List[str]]] = None,
                 checked: Optional[Dict[str, Dict[str, Any]]] = None,
+                eco: Optional[Mapping[str, Any]] = None,
                 ) -> Dict[str, Any]:
     """One entry per lever, admitted or refused, and the flag that decided it."""
     explicit = dict(explicit or {})
     checked = dict(checked or {})
+    eco = dict(eco or {"state": ECO_NOT_SUPPLIED})
     levers: List[Dict[str, Any]] = []
     for spec in LEVERS:
         name = str(spec["lever"])
@@ -311,6 +453,16 @@ def build_space(flags: Dict[str, int], runner_digest: str,
                 "so a candidate that names a value for this lever is a run "
                 "this flow can actually perform"),
         })
+        if spec.get("eco_bounded"):
+            floor_row = eco_floor_row(eco)
+            row["eco_floor"] = floor_row
+            if floor_row["bounds_this_lever"]:
+                row["status"] = STATUS_BOUNDED_BELOW
+                row["justification"] += (
+                    "; and the design declares a spare/ECO population of at "
+                    f"least {floor_row['min_spare_cells']}, so this lever is "
+                    "admitted BOUNDED BELOW -- a zero value is not a point in "
+                    "this space")
         if name in explicit:
             row["domain"] = " | ".join(explicit[name])
             row["values_source"] = "caller"
@@ -331,6 +483,7 @@ def build_space(flags: Dict[str, int], runner_digest: str,
         "status": "MEASURED",
         "measured_against": {"path": RUNNER_REL, "sha256": runner_digest,
                              "cli_flags": sorted(flags)},
+        "eco_declaration": dict(eco),
         "levers": levers,
         "admitted_count": len(admitted),
         "refused_count": len(levers) - len(admitted),
@@ -383,7 +536,54 @@ def audit_space(space: Dict[str, Any]) -> List[str]:
             problems.append(
                 f"{name}: declares caller-supplied values but its domain is "
                 f"not an enumerable list.")
+        problems.extend(_audit_eco_floor(name, l))
     return problems
+
+
+def _audit_eco_floor(name: str, lever: Mapping[str, Any]) -> List[str]:
+    """Every way an ECO-bounded lever's row could be dishonest.
+
+    Split out because it is the newest rule here and the one most likely to be
+    quietly dropped: a lever that carries a floor and does not SAY so publishes
+    a space in which zero looks like an ordinary point.
+    """
+    spec = {str(s["lever"]): s for s in LEVERS}.get(name)
+    if not spec or not spec.get("eco_bounded"):
+        return []
+    floor = lever.get("eco_floor")
+    if not isinstance(floor, dict):
+        return [f"{name}: is bounded by the design-for-ECO declaration and "
+                f"publishes no `eco_floor` block. A lever that carries a "
+                f"floor and does not state it is a space in which the "
+                f"forbidden value looks like an ordinary point."]
+    problems: List[str] = []
+    if "state" not in floor or "bounds_this_lever" not in floor:
+        problems.append(
+            f"{name}: its `eco_floor` names no state or no "
+            f"`bounds_this_lever`, so a reader cannot tell an absent "
+            f"declaration from one that requires nothing.")
+    if floor.get("bounds_this_lever"):
+        if lever.get("status") != STATUS_BOUNDED_BELOW:
+            problems.append(
+                f"{name}: its floor bounds the lever but its status is "
+                f"{lever.get('status')!r}, not {STATUS_BOUNDED_BELOW!r}.")
+        zeros = [v for v in str(lever.get("domain", "")).split("|")
+                 if _is_zero_literal(v)]
+        if zeros:
+            problems.append(
+                f"{name}: a declared spare/ECO floor bounds this lever and "
+                f"its published domain still offers {zeros}. Zero spare "
+                f"density inserts zero spares, which cannot meet any floor.")
+    return problems
+
+
+def _is_zero_literal(text: str) -> bool:
+    """True when `text` is a number equal to zero. `'0.00'` and `'0'` are the
+    same forbidden point and a string comparison would catch only one."""
+    try:
+        return float(str(text).strip()) == 0.0
+    except (TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +599,42 @@ def _parse_values(specs: Sequence[str]) -> Tuple[Dict[str, List[str]],
             continue
         out[lever.strip()] = vals
     return out, bad
+
+
+def _eco_value_refusals(explicit: Mapping[str, List[str]],
+                        checked: Mapping[str, Dict[str, Any]],
+                        eco: Mapping[str, Any]) -> List[str]:
+    """Refuse every supplied value a declared spare/ECO floor forbids.
+
+    Only zero is refusable from a knob alone -- see `eco_floor_row`'s
+    `not_enforced_here`. That is a narrow rule and it is the whole rule: this
+    program will not guess how many spares a positive density yields on a
+    design it has never placed.
+    """
+    if str(eco.get("state")) != feas.ECO_REQUIRED:
+        return []
+    floor = eco.get("min_spare_cells")
+    bounded = {str(s["lever"]) for s in LEVERS if s.get("eco_bounded")}
+    out: List[str] = []
+    for name in sorted(set(explicit) & bounded):
+        rows = (checked.get(name) or {}).get("values") or []
+        applied = {str(r.get("value")): r.get("applied_as") for r in rows}
+        for raw in explicit[name]:
+            used = applied.get(str(raw), raw)
+            if not _is_zero_literal(used):
+                continue
+            out.append(
+                f"{name}={raw}: the runner would apply {used!r}, and this "
+                f"design declares a spare/ECO population of at least {floor} "
+                f"in {eco.get('declared_in')}. Zero spare density inserts "
+                "zero spares on a design of any size, so this point cannot "
+                "meet the declared floor. Spare/ECO cells are what make a "
+                "bug found after tape-out fixable by a metal-only ECO "
+                "instead of a base-layer respin; deleting them is not a "
+                "cheaper implementation of the same chip, and a search that "
+                "visits this point spends a full place-and-route producing a "
+                "candidate the promotion gate must refuse.")
+    return out
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -420,6 +656,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--programs-dir", default=None,
                     help="where the runner lives (default: this file's "
                          "directory)")
+    ap.add_argument("--eco-declaration", default=None, metavar="PATH",
+                    help="a JSON document carrying the design's design-for-ECO "
+                         "requirement (an `eco_readiness` block, or a document "
+                         "that IS one). When it requires a spare population, "
+                         "`spare_cell_density` is admitted BOUNDED BELOW and a "
+                         "zero value is refused. Without it this program is "
+                         "not told whether the design requires spares, and the "
+                         "space says so rather than implying it does not.")
     # §1: argparse exits 2 on a usage error and 2 is UNDETERMINED here, so a
     # caller that skips on 2 swallows the typo. `parse_or_refuse` maps it to
     # 3 and keeps `--help` at 0. Pinned by
@@ -441,6 +685,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("--verify audits a space that exists; it neither enumerates "
               "values nor writes one", file=sys.stderr)
         return RC_BAD_INVOCATION
+
+    eco, eco_why = read_eco_declaration(args.eco_declaration)
+    if eco_why is not None:
+        print(f"{MARK_CANNOT_CHECK} [{PROGRAM}] {eco_why}", file=sys.stderr)
+        print("  A design-for-ECO declaration was NAMED and could not be read. "
+              "Publishing an unbounded space from it would let a search visit "
+              "the value the requirement may have forbidden, so no space is "
+              "published.", file=sys.stderr)
+        return RC_UNDETERMINED
 
     src, why = read_runner(programs)
     if why is not None:
@@ -546,6 +799,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                           "run.")
             checked[name] = {"checked": True, "normaliser": norm,
                              "values": rows}
+        # The floor, applied to the values the CALLER supplied. It runs after
+        # the normaliser round-trip so the judgement is on what the runner
+        # would APPLY, not on how the caller spelled it: `--values
+        # spare_cell_density=-1` is applied as 0 by the runner's own clamp,
+        # and a check on the literal would have let it through.
+        refusals.extend(_eco_value_refusals(explicit, checked, eco))
+
         dupes = {n: v for n, v in explicit.items() if len(set(v)) != len(v)}
         for n, v in sorted(dupes.items()):
             refusals.append(
@@ -557,7 +817,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"{MARK_REFUSE} [{PROGRAM}] {r}", file=sys.stderr)
             return RC_REFUSED
 
-    space = build_space(flags, _sha256(src), explicit, checked)
+    space = build_space(flags, _sha256(src), explicit, checked, eco)
     problems = audit_space(space)
     space["self_audit_problems"] = problems
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -569,6 +829,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"[{PROGRAM}] admitted {space['admitted_count']} lever(s): "
           f"{', '.join(space['admitted_levers']) or '(none)'}")
+    print(f"[{PROGRAM}] design-for-ECO declaration: {eco.get('state')}"
+          + (f" (min_spare_cells={eco.get('min_spare_cells')}, from "
+             f"{eco.get('declared_in')})"
+             if str(eco.get("state")) == feas.ECO_REQUIRED else ""))
     for l in space["levers"]:
         if not l["admitted"]:
             print(f"[{PROGRAM}]   REFUSED {l['lever']}: {l['status']} — "

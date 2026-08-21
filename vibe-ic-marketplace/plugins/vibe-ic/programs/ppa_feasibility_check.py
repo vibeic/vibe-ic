@@ -90,7 +90,8 @@ def _load(path: Optional[str], what: str) -> Any:
 
 def _report(results: List[feas.FeasibilityResult], rc: int,
             policy: feas.FeasibilityPolicy,
-            sources: Mapping[str, Any]) -> Dict[str, Any]:
+            sources: Mapping[str, Any],
+            eco_origin: str = "none") -> Dict[str, Any]:
     doc: Dict[str, Any] = {
         "schema": feas.FEASIBILITY_SCHEMA,
         "verdict": {feas.RC_PASS: "FEASIBLE",
@@ -112,6 +113,22 @@ def _report(results: List[feas.FeasibilityResult], rc: int,
                 for a in policy.axes},
             "limits": {k: dict(v) for k, v in policy.limits.items()},
             "allow_waivers": policy.allow_waivers,
+            # WHERE the design-for-ECO requirement came from, and the state it
+            # resolved to. The ORIGIN is published because this CLI lets the
+            # candidates document stand in for the contract when `--contract`
+            # is omitted, and a candidate set that supplied its own
+            # `eco_readiness: {required: false}` would have declared away the
+            # one axis that could refuse it. Nothing here prevents that -- the
+            # contract lane owns the authoritative form -- but a reader of the
+            # report can now SEE which document was believed.
+            "eco_readiness": {
+                "declaration": (dict(policy.eco_requirement)
+                                if isinstance(policy.eco_requirement, Mapping)
+                                else policy.eco_requirement),
+                "declaration_origin": eco_origin,
+                "state": feas.eco_requirement_state(
+                    policy.eco_requirement)[0],
+            },
         },
         "sources": dict(sources),
         "candidates": [r.as_dict() for r in results],
@@ -195,15 +212,29 @@ def main(argv=None) -> int:
 
     results = feas.adjudicate_set(candidates, policy)
     rc = feas.set_exit_code(results)
+    eco_origin = ("none" if policy.eco_requirement is None
+                  else ("contract" if args.contract else "candidates_document"))
     doc = _report(results, rc, policy,
-                  {"candidates": args.candidates, "contract": args.contract})
+                  {"candidates": args.candidates, "contract": args.contract},
+                  eco_origin)
     _emit(args.json, doc)
+
+    # The design-for-ECO stance, printed UNCONDITIONALLY and before the
+    # verdicts. It is the one axis whose applicability the design declares, so
+    # a run that made no ECO finding must say so out loud rather than leaving
+    # the reader to notice an absent row. A tape-out-bound design whose
+    # contract declares nothing here is the case this line exists for.
+    eco_state = feas.eco_requirement_state(policy.eco_requirement)[0]
+    print(f"eco_readiness: {eco_state} (declaration from {eco_origin})")
 
     # Print EVERY finding, whatever the exit code ends up being.
     for r in results:
         line = f"{r.candidate_id}: {r.verdict}"
         if r.verdict != feas.FEASIBLE:
             line += "  " + ",".join(r.codes)
+        eco = [a for a in r.axes if a.name == feas.ECO_AXIS]
+        if eco:
+            line += f"  [eco_readiness {eco[0].status}]"
         print(line)
     if rc == feas.RC_UNDETERMINED:
         print(f"{MARK_CANNOT} at least one candidate was not adjudicated; "
