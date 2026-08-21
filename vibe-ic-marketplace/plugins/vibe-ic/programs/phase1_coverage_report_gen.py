@@ -4,7 +4,7 @@ phase1_coverage_report_gen.py — Phase 1 (doc-extraction) extraction-coverage R
 
 BACKLOG-v13 Wave 4. Companion to LL-38 (extraction_coverage_check),
 which is the GATE. This program is the REPORT artefact: it always
-runs at end-of-Phase-2a, walks the same pattern-resolution rules as
+runs at end-of-Phase 1, walks the same pattern-resolution rules as
 LL-38, and emits a per-doc breakdown of which verbatim literals
 made it from `<project>/input/docs/<doc>` into
 `<project>/generated_docs/L*.json` and which did not.
@@ -39,6 +39,7 @@ CLI
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -263,8 +264,68 @@ def _load_explicit_patterns(project: Path):
                     tuples.append((it, it))
             if tuples:
                 out[filename] = tuples
+        out = _reconcile_with_docs(project, out)
         return out, cand
     return {}, None
+
+
+
+_RE_NUM_UNIT_SPACE = re.compile(r"(?<=[0-9])[ \u00a0\u3000]+(?=[A-Za-z\u00b0\u00b5\u03bc])")
+
+
+def _is_auto_seeded(label: str) -> bool:
+    """True for entries the seeder harvested, not a human's curation."""
+    return str(label or "").strip().lower().startswith("auto-discovered")
+
+
+def _lit_in(lit: str, hay_low: str) -> bool:
+    """Credit a literal the extractor stored in NORMALISED form.
+
+    Mirrors extraction_coverage_check._lit_present. The extractor writes
+    `<value> <unit>` typed fields with the separating space removed, so a
+    verbatim-only test reports the extractor's own successful extraction as
+    a coverage gap. The collapse is anchored between a digit and a
+    unit-leading letter, so it cannot join two unrelated tokens.
+    """
+    low = lit.lower()
+    if low in hay_low:
+        return True
+    squeezed = _RE_NUM_UNIT_SPACE.sub("", lit).lower()
+    return squeezed != low and squeezed in hay_low
+
+
+def _reconcile_with_docs(project, patterns):
+    """Drop AUTO-SEEDED literals absent from their own source document.
+
+    The canonical pattern file is seeded once and then loaded verbatim
+    forever, so literals a later documentation edit DELETED stay pinned in
+    the denominator where nothing can ever credit them. Human-curated
+    entries are never pruned -- a curated pattern is deliberately allowed
+    not to occur in the document.
+    """
+    out = {}
+    for filename, tuples in patterns.items():
+        text = None
+        for sub in (_pl.input_doc_dir(project), project / "input" / "docs"):
+            for cand in (sub / filename,
+                         sub / (pathlib.Path(filename).stem + ".md"),
+                         sub / (pathlib.Path(filename).stem + ".txt")):
+                if cand.is_file():
+                    try:
+                        text = cand.read_text(errors="replace")
+                    except OSError:
+                        text = None
+                    break
+            if text is not None:
+                break
+        if text is None:
+            out[filename] = tuples
+            continue
+        kept = [(lit, lbl) for lit, lbl in tuples
+                if not _is_auto_seeded(lbl) or lit in text]
+        if kept:
+            out[filename] = kept
+    return out
 
 
 def _autodiscover_patterns(project: Path, *, persist: bool = True):
@@ -404,7 +465,7 @@ def _load_l_text(project: Path) -> str:
 # =====================================================================
 # v0.119.41 (Wave 9, gap #5) — dump-field detection.
 #
-# A fresh agent can inflate Phase-2a coverage to 100% by dropping a
+# A fresh agent can inflate Phase 1 coverage to 100% by dropping a
 # verbatim copy of every input doc into a single catch-all field
 # (e.g. `LX_DUMP`) of any L*.json. The literals all substring-match,
 # so LL-38 reports PASS while semantic extraction is empty. Wave 9
@@ -555,7 +616,7 @@ def _credit_with_quality(patterns,
             # Find which classifications contain the literal.
             classes = []
             for field_val_low, entries in field_index.items():
-                if lit_low in field_val_low:
+                if _lit_in(literal, field_val_low):
                     for e in entries:
                         classes.append(e["classification"])
             ent = {"literal": literal, "label": label}
@@ -572,7 +633,7 @@ def _credit_with_quality(patterns,
                 # (covers cases where the value is split across small
                 # nested fields that the field walker enumerated as
                 # separate strings).
-                if lit_low in l_text_low:
+                if _lit_in(literal, l_text_low):
                     quality_dist["high"] += 1
                     primary_hit.append(ent)
                     full_hit.append(ent)
@@ -637,7 +698,7 @@ def _build_per_doc(patterns, l_text):
         hit_list = []
         miss_list = []
         for literal, label in items:
-            if literal.lower() in haystack_low:
+            if _lit_in(literal, haystack_low):
                 hit_list.append({"literal": literal, "label": label})
             else:
                 miss_list.append({"literal": literal, "label": label})
@@ -746,7 +807,7 @@ def _emit_md(report: dict) -> str:
         lines.append(
             "> WARN: literals found ONLY in these fields are not "
             "credited in the primary coverage tally; promote them to "
-            "structured L1-L13 fields (e.g. `L3.fields_tx[].byte_value`) "
+            "structured L1-L23 fields (e.g. `L3.fields_tx[].byte_value`) "
             "to earn full credit.")
         lines.append("")
     return "\n".join(lines)

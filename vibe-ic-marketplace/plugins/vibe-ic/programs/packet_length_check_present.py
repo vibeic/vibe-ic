@@ -181,7 +181,7 @@ def main(argv: List[str] = None) -> int:
         Path(args.json_out).write_text(report_json)
 
     print(report_json)
-    # IO errors (missing RTL dir etc.) → exit 2 per the vibe-ic-d contract
+    # IO errors (missing RTL dir etc.) → exit 2 per the gate exit-code contract
     # (0 PASS / 1 FAIL / 2 input-missing).
     if any(getattr(f, "category", "") == "IO" for f in findings):
         return 2

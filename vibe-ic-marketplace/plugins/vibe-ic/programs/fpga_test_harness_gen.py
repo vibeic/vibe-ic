@@ -3,6 +3,21 @@
 
 Replaces skill `fpga-test-harness` (archived). Generates DE10-Lite test
 harness wrapper around chip_top + LED diagnostic + KEY trigger.
+
+SCOPE, STATED SO A CALLER DOES NOT ASSUME MORE
+----------------------------------------------
+This emits a FIXED template. It reads nothing from the project — not the RTL,
+not chip_top, not L9 — so the generated wrapper only elaborates for a design
+whose top is a module literally named `chip_top` exposing exactly
+`clk`, `reset_n`, `id_bus` and `state_reg_dbg`, on a DE10-Lite pinout
+(CLOCK_50 / KEY / GPIO_0 / LEDR). Adapting it to another top or board is a
+manual edit.
+
+It writes ONE file, ``<rtl_dir>/fpga_test_harness.sv``.
+
+WIRING: none. No runner, gate or MCP tool invokes this program; Step 6 of
+flow/phase1_phase2_phase3.yaml registers it for discoverability only (see the
+comment on that entry). It is invoked by an agent during board bring-up.
 """
 import argparse, sys
 from pathlib import Path

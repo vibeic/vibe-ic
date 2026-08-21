@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Compliance for skill 'phase1' (vibe-ic-d), updated v0.74 G-implement.
+# Compliance for skill 'phase1', updated v0.74 G-implement.
 # The phase1 skill is the single entry point to the Phase-1 fact-graph
 # pipeline (v0.60). It replaces the v0.51 11-skill serial chain.
 # Requirements below assert the SKILL.md documents the contracts the
@@ -40,9 +40,9 @@ requirements:
     pattern: '(phase1_doc_presence_check|phase1_consistency_check|phase1_quality_parity_check|json_schema_check)'
     skill_section: 'Gates'
 
-  - id: R_pm_agent_role
-    description: "PM Agent role spelled out — dialogue drives gaps, not layers"
-    pattern: '(PM Agent|pm-agent)'
+  - id: R_ic_expert_agent_role
+    description: "IC Expert Agent role spelled out — dialogue drives gaps, not layers"
+    pattern: '(IC Expert Agent|ic-expert-agent)'
     skill_section: 'Agents'
 
   - id: R_ic_expert_role
@@ -72,7 +72,7 @@ requirements:
     skill_section: 'Layer scope'
 
   - id: R_L13_contract_vs_evidence
-    description: "L13 split: Phase 1 fills contract, Phase 2b appends evidence (v0.56 B4)"
+    description: "L13 split: Phase 1 fills contract, Phase 2 appends evidence (v0.56 B4)"
     pattern: '(L13_LAB_CALIBRATION|L13.*contract|known_pass_bitstream|known_pass_transcript)'
     skill_section: 'Layer scope'
 

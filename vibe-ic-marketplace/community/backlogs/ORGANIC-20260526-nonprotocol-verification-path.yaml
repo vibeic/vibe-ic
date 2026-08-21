@@ -41,6 +41,24 @@ suggested_fix: |
 
 id: "ORGANIC-20260526-nonprotocol-verification-path"
 submitted_at: "2026-05-26T03:15:00+08:00"
+status: resolved
+resolved_at: "2026-06-05"
+resolution: >-
+  Re-verified against the current 0.2.42 plugin: the suggested fix is
+  fully implemented. programs/ic_class_registry.json now carries a
+  verification_track field per class (digital_arithmetic_primitive,
+  processor_cpu and siblings = generic_full_stack; half-duplex protocol
+  classes = aid_protocol). programs/phase2_one_shot_runner.py routes on
+  it via _class_uses_aid_reference_tb (:1889) — any class whose
+  verification_track != aid_protocol (or half_duplex_bus == false) SKIPs
+  the protocol reference TB and runs the generic full-stack TB instead
+  (_reference_tb_generic_full_stack, :1539), with the same class
+  predicate applied to the host-tester connect_test gate. Reproduced the
+  original scenario: _class_uses_aid_reference_tb returns use_aid=False
+  for digital_arithmetic_primitive and processor_cpu, so CPU/datapath
+  ICs no longer halt FAIL on an impossible protocol-TB port bind.
+  Regression coverage: programs/tests/test_phase2_class_aware_gating.py
+  — 57/57 PASS (combined with the memmap file) on 2026-06-05.
 session_context: >-
   Fresh field-agent Vibe-IC run on a bit-serial RV32I CPU benchmark.
   Catalog-glue-author pulled the open-source core RTL and AI-authored a

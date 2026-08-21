@@ -1,21 +1,21 @@
 ---
 name: vibe-ic-phase2
-description: Run Phase 2b (L1-L13 → RTL → SOF → <half-duplex-tester> byte[6]=0xF2) via phase2_one_shot_runner. AI-monitored + close-loop ECO.
+description: Run Phase 2 (L1-L27 → RTL → SOF → <half-duplex-tester> byte[6]=0xF2) via design_one_shot_runner. AI-monitored + close-loop ECO.
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 3]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-phase2 <project-dir>` (e.g. `/vibe-ic-phase2 1st_benchmark_sn2025/phase2_v0119.48-vendor`).
+> `/vibe-ic-phase2 <project-dir>` (e.g. `/vibe-ic-phase2 1st_benchmark_example/phase2_v0119.48-vendor`).
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
-# /phase2 — Phase 2b (RTL → SOF → on-board verify) entry
+# /phase2 — Phase 2 (RTL → SOF → on-board verify) entry
 
 **Prerequisite**: `<project>/generated_docs/L1..L13.json` must exist (produced by `/phase1` or `/phase1`).
 
 Main execution (**program-driven**):
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/phase2_one_shot_runner.py $ARGUMENTS
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/design_one_shot_runner.py $ARGUMENTS
 ```
 
 The runner runs: rig_topology skeleton → detect_ic_class → rtl_gen → reference_tb → yosys → qsf/sdc → otp_image_check → fpga_compile → fpga_burn → md905_verify → phase2_manifests → final_audit.
@@ -33,7 +33,7 @@ After the run completes, the AI must:
 
 **Helper skills:** `spec-to-rtl` / `cdc-check` / `rtl-review` / `formal-verify` / `bringup-plan`
 
-**Rule:** `flow_compliance_check.py --phase 2 --strict-structural` Overall: PASS is required for Phase 2b to be considered complete. `PASS_WITH_WAIVERS` requires a corresponding `waivers.json` entry tagged `review_required: true`.
+**Rule:** `flow_compliance_check.py --phase 2 --strict-structural` Overall: PASS is required for Phase 2 to be considered complete. `PASS_WITH_WAIVERS` requires a corresponding `waivers.json` entry tagged `review_required: true`.
 
 ---
 

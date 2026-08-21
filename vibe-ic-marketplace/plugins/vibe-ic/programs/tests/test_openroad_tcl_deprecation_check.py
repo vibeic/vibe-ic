@@ -165,8 +165,20 @@ def test_json_report_shape(tmp_path):
 def test_skip_dirs_are_pruned(tmp_path):
     # Put a deprecated token inside __pycache__ — must NOT be reported.
     _write(tmp_path, "__pycache__/legacy.tcl", "write_gds x.gds\n")
-    code, out, _ = _run(["--search-dir", str(tmp_path)])
-    assert code == 0, out
+    # A scannable file OUTSIDE the skipped directory, so the walk has a real
+    # denominator. Without it the fixture examines zero files, and "pruning
+    # worked" becomes indistinguishable from "the scan covered nothing" — the
+    # exact conflation the examined-count disclosure exists to prevent.
+    _write(tmp_path, "live.tcl", "set_routing_layers -signal met1-met4\n")
+    code, out, err = _run(["--search-dir", str(tmp_path)])
+    # The property is that the token inside __pycache__ is not reported. Assert
+    # that directly rather than through the exit code, which also carries
+    # "examined nothing" and would pass this test for the wrong reason.
+    assert "write_gds" not in (out + err), (out, err)
+    assert "legacy.tcl" not in (out + err), (out, err)
+    assert code == 0, (out, err)
+    assert "examined 1 file" in out, (
+        f"expected exactly the non-pruned file to be examined: {out!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +186,15 @@ def test_skip_dirs_are_pruned(tmp_path):
 # This enforces v0.69 Item 4's residual: the repo's TCL is deprecation-free.
 # ---------------------------------------------------------------------------
 def test_plugin_tree_itself_is_clean():
-    # Default --search-dir (no flag) scans this plugin's own plugins/ root.
-    code, out, err = _run([])
+    # flow #486: scan THIS plugin's own tree explicitly via the manifest-
+    # anchored plugin root. The program's bare default (--search-dir absent)
+    # resolves to parents[2], which on the source monorepo is the
+    # single-plugin `plugins/` dir but on the flattened install cache is the
+    # version-collection dir (all shipped versions) — a different, wrong
+    # target. Pinning --search-dir to the plugin root makes this assertion
+    # mean the same thing in both trees.
+    from _plugin_tree import plugin_root
+    code, out, err = _run(["--search-dir", str(plugin_root())])
     assert code == 0, (
         f"plugin self-check failed: stdout={out!r}\nstderr={err!r}\n"
         "If this fails, one of the plugin's own files still uses a "

@@ -10,7 +10,7 @@ plus a per-cell synth-shim library (~338 modules). The crash is in
 Quartus's hierarchical name-mangler, NOT in the netlist itself.
 
 Workaround: use Yosys 0.62 to:
-  1. read PDK synth-shim (e.g. m18e80pm180su_synth_shim.v from
+  1. read PDK synth-shim (e.g. <pdk>_synth_shim.v from
      pdk_udp_synth_shim_gen.py)
   2. read post-PnR gate netlist (chip_top_asic_pnr.v)
   3. hierarchy -top <top> -check; proc; flatten; clean
@@ -18,7 +18,7 @@ Workaround: use Yosys 0.62 to:
        leaves a single $-prim-based combinational + DFF netlist
   4. write_verilog
   5. run the existing atpg-name-harmonize tool (fix_fault_cut_names.py)
-     to convert remaining `\<NAME>.<sub>.<X>` escape identifiers to
+     to convert remaining `<NAME>.<sub>.<X>` escape identifiers to
      plain `_NAME__sub_X` form — Quartus accepts these.
 
 After this pass, Quartus elaborates the design as a single flat
@@ -30,17 +30,17 @@ name) tuple.
 Usage:
     python3 pdk_yosys_flatten_for_quartus.py \\
         --gate-netlist <chip_top_asic_pnr.v> \\
-        --pdk-shim <m18e80pm180su_synth_shim.v> \\
+        --pdk-shim <pdk_synth_shim.v> \\
         --top chip_top_asic \\
         --output <chip_top_asic_flat.v> \\
-        [--container iic-eda]
+        [--container vibeic-eda]
 """
 from __future__ import annotations
 import argparse, json, os, subprocess, sys, tempfile, shutil
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
-ATPG_HARMONIZE = PLUGIN / "skills" / "atpg-name-harmonize" / "fix_fault_cut_names.py"
+ATPG_HARMONIZE = PLUGIN / "programs" / "fix_fault_cut_names.py"
 
 YS_TEMPLATE = """\
 read_verilog {pdk_shim}
@@ -59,7 +59,7 @@ def main():
     p.add_argument("--pdk-shim",      type=Path, required=True)
     p.add_argument("--top",           required=True)
     p.add_argument("--output",        type=Path, required=True)
-    p.add_argument("--container",     default="iic-eda",
+    p.add_argument("--container",     default="vibeic-eda",
                     help="docker container that has yosys 0.62+")
     p.add_argument("--keep-tmp",      action="store_true")
     args = p.parse_args()

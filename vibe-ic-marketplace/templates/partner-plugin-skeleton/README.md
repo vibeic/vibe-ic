@@ -15,7 +15,7 @@ partner-<vendor>-<topic>/
 │   └── <your-skill>/SKILL.md
 ├── programs/                       (optional deterministic Python — generators / gates)
 │   └── <your-class>_rtl_gen.py
-├── mcp-eda-server/                 (optional — only if shipping new MCP tools)
+├── mcp-eda/                 (optional — only if shipping new MCP tools)
 │   └── src/devices/<class>/<vendor>/
 │       ├── manifest.json
 │       └── driver.py
@@ -30,7 +30,7 @@ partner-<vendor>-<topic>/
 |---|---|
 | New IC class generator | Append to `plugins/vibe-ic/programs/ic_class_registry.json` (PR) |
 | New PDK | Append to `plugins/vibe-ic/programs/pdk_registry.json` (PR) |
-| New device / tester / scope | Drop manifest under `mcp-eda-server/src/devices/<class>/<vendor>/`; auto-detected by `_registry.js` at MCP server start |
+| New device / tester / scope | Drop manifest under `mcp-eda/src/devices/<class>/<vendor>/`; auto-detected by `_registry.js` at MCP server start |
 | New skill | Just put SKILL.md in `skills/<name>/`; Claude auto-loads when keywords match |
 | New deterministic gate | Drop `<gate>_check.py` under `programs/`; reference in `flow/phase*.yaml` |
 | New slash command | Drop `<name>.md` under `commands/` |
@@ -39,7 +39,6 @@ partner-<vendor>-<topic>/
 
 Before contributing, read:
 - `docs/CONTRIBUTING_PARTNER_PLUGIN.md` (umbrella guide)
-- `SKILL_VS_RUNNER_DECISION.md` (how AI dispatches programs vs skills)
 
 ## Validate your plugin locally
 

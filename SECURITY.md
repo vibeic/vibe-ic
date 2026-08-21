@@ -19,7 +19,7 @@ Instead, email **reyer.chu@vibeic.ai** with:
 
 - A description of the issue
 - Steps to reproduce (a minimal test case is ideal)
-- The affected component (`mcp-eda-server`, plugin skill name, …)
+- The affected component (`mcp-eda`, plugin skill name, …)
 - Your assessment of impact (RCE, data exposure, supply chain, etc.)
 - Whether you'd like public credit when the fix ships
 
@@ -37,7 +37,7 @@ We will:
 In scope:
 
 - Code execution / privilege escalation via MCP tool invocation
-- Path traversal in artefact handling (`mcp-eda-server`)
+- Path traversal in artefact handling (`mcp-eda`)
 - Unsafe deserialization / template injection in any skill or
   program
 - Secrets leak through logs, error messages, or generated artefacts

@@ -11,12 +11,69 @@ below prevent it.
 
 ---
 
+## Agent roster & check-in governance
+
+Vibe-IC is operated by a small set of agent roles. They differ by *scenario*
+and, critically, by *what they are allowed to check in (git commit) to*. The
+rule that ties them together: **only the Repo Gatekeeper edits the plugin or the
+MCP server and lands changes on `main`; everyone else who finds a problem files
+it upstream (backlog issue / version-less PR) and lets the Repo Gatekeeper
+resolve and land it.**
+
+> **2026-06-18 (owner directive):** the former **Core Agent** (author) and
+> **Gatekeeper** (land) are now ONE role — **`vibe-ic:repo-gatekeeper`** — which
+> BOTH authors the chip-AGNOSTIC fix AND gates it (machine checks + Step-2.7
+> §4.05 review), assigns the version at merge, and squash-merges. `core-agent`
+> and `gatekeeper` remain as aliases (same unrestricted check-in scope).
+
+| Agent | Scenario | May check in to | Plugin (`plugins/vibe-ic/`) | MCP (`mcp-eda/`) | On finding a problem |
+|---|---|---|---|---|---|
+| **Field Agent** (`vibe-ic:field-agent`) | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog / version-less PR → Repo Gatekeeper |
+| **Benchmark Agent** (`vibe-ic:benchmark-agent`) | Maintainer official runs **+ end-user local runs** | `benchmark-data/` + `community/backlogs/` | ❌ | ❌ | → backlog / version-less PR → Repo Gatekeeper |
+| **Repo Gatekeeper** (`vibe-ic:repo-gatekeeper`) | Maintainer (author + gate + land) | **everything** (owns plugin + MCP) | ✅ only role | ✅ only role | authors the fix, gates it, assigns the version, lands it. Aliases: `core-agent` / `gatekeeper` |
+| **IC Expert Agent** (`vibe-ic:ic-expert-agent`) | Phase 1 — technical review | — design-time, no repo check-in | — | — | — |
+
+Notes:
+
+- **The MCP server lives under the plugin tree** (`plugins/vibe-ic/mcp-eda/`),
+  so "cannot touch the plugin" already covers "cannot touch the MCP".
+- The **Field Agent checks in nothing** but the ORGANIC backlog mirror — not
+  benchmark-data, not the plugin, not the MCP.
+- The **Benchmark Agent** additionally owns `benchmark-data/` (run results,
+  samples, reports). It runs **"Run Benchmark Evaluation"** (open benchmarks via
+  `/vibe-ic-benchmark`) and **"Benchmark IC"** (the canonical ICs via
+  `/vibe-ic-all` → `/benchmark-verify`).
+- **Capture-Enhancement loop:** any non-core agent that discovers a plugin/MCP
+  gap triages it (`benchmark-enhancement-capture`, Bucket A/B/C/D) and files an
+  ORGANIC issue (`community-backlog-submit`). The Core Agent (`core-agent-loop`)
+  lands the chip-AGNOSTIC fix and closes it. Nobody but the Core Agent edits the
+  plugin/MCP.
+
+### Enforcement (program-first, not prose)
+
+The check-in boundary is a **deterministic gate**, not a suggestion. Before any
+`git commit`, an agent gates its own staged diff against its role:
+
+```bash
+python3 plugins/vibe-ic/programs/agent_checkin_scope_guard.py \
+    --role <field-agent|benchmark-agent|core-agent|ic-expert-agent> --staged
+# exit 0 → every staged path is within the role's scope → safe to commit
+# exit 1 → a path is outside scope (each offending path + its protected zone is
+#          listed) → remove it; if it is a plugin/MCP improvement, file a backlog
+# exit 2 → argument / I/O error (unknown role, etc.)
+# `--list-roles` prints the matrix above.
+```
+
+Each role's full charter lives in `plugins/vibe-ic/agents/<role>.md`.
+
+---
+
 ## How to tell what you are being asked
 
 | User phrase | Canonical task | Required entry point |
 |---|---|---|
 | "run phase 2+3", "synth → GDS", "make it taped out", "RTL to silicon", "run the flow" | **Phase 2+3 canonical flow** | Skill `flow-orchestrate` |
-| "generate L1-L9 from this datasheet", "phase 1" | Phase 1 document stack | Skill `datasheet-gen` + L2-L9 skills |
+| "generate L1-L27 from this datasheet", "phase 1" | Phase 1 document stack | Skill `datasheet-gen` + L2-L9 skills |
 | "write a testbench for X" | Single-skill invocation | Skill `testbench-gen` |
 | "review this RTL" | Single-skill invocation | Skill `rtl-review` |
 
@@ -52,7 +109,7 @@ up-front.
 The plan table must be generated from:
 
 ```
-vibe-ic-core/flow/phase2_phase3.yaml
+vibe-ic/flow/phase2_phase3.yaml
 ```
 
 This YAML is the single source of truth. Skills/programs reference it;
@@ -165,7 +222,7 @@ checked response bytes but never the side-effect state changes.
 When you produce `RESULTS.md` (or `FINAL_REPORT.md`), include the
 SHA-256 of the GDS, SOF, and any signed-off netlist. Without this,
 a reviewer cannot tell whether the report describes the artefact in
-the workspace or some earlier iteration. mcp-eda-server's
+the workspace or some earlier iteration. mcp-eda's
 `eda_fpga_compile` and `eda_fpga_program` already record the hash —
 copy it into the report verbatim.
 
@@ -195,8 +252,8 @@ infrastructure.
 
 | Path | What it is |
 |---|---|
-| `plugins/vibe-ic-core/flow/phase2_phase3.yaml` | 33-step machine-readable flow definition (source of truth) |
-| `plugins/vibe-ic-core/skills/flow-orchestrate/SKILL.md` | Human-readable canonical flow + orchestration rules |
+| `plugins/vibe-ic/flow/phase2_phase3.yaml` | 33-step machine-readable flow definition (source of truth) |
+| `plugins/vibe-ic/skills/flow-orchestrate/SKILL.md` | Human-readable canonical flow + orchestration rules |
 | `plugins/vibe-ic-d/programs/flow_compliance_check.py` | Acceptance gate (must exit 0 for PASS) |
 | `plugins/vibe-ic-d/programs/stage{1,2,3,4}_compliance.py` | Per-stage interim gates |
 | `docs/design/STANDARD_FLOW.md` | The original 33-step specification (human-readable) |
@@ -205,7 +262,7 @@ infrastructure.
 
 ```
 I have been given a phase 2+3 task. Per the Vibe-IC canonical flow
-(vibe-ic-core/flow/phase2_phase3.yaml), the mandatory 33 steps are:
+(vibe-ic/flow/phase2_phase3.yaml), the mandatory 33 steps are:
 
 Stage 1 (RTL + Verification):
   01 Spec-to-RTL         — skill: spec-to-rtl

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "eda-tools": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/home/<your-user>/vibe-ic-designs/mcp-eda/src/index.js"
+      ],
+      "env": {
+        "EDA_CONTAINER": "vibeic-eda"
+      }
+    }
+  }
+}
