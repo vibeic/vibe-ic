@@ -247,7 +247,7 @@ def emitted_script_of(tree: ast.AST) -> str:
     """The emitted strings of a parsed module as ONE flat text, one record
     per line.
 
-    STILL FLAT, for the reason `counters` always gave: the emitted script is
+    STILL FLAT, for the reason `counters_of` still gives: the emitted script is
     assembled from many adjacent string literals, and a block-aware reader would
     have to re-implement that assembly to answer a question the flat text already
     answers. What changed is WHICH text -- the script, not the file that prints
@@ -274,7 +274,7 @@ def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
     and a value missing from it makes a CORRECT pin look stale. An emitter that
     prints `puts "no repair applied; 0 of 3 repairs refused"` does state
     `of 3 repairs refused`; suppressing it because the same message also says
-    "no" would refuse a correct test -- the same false refusal `pins` exists to
+    "no" would refuse a correct test -- the same false refusal `pins_of` exists to
     stop, pointed the other way.
 
     AND THE POLARITY GATE CLEARS THIS FUNCTION FOR A MECHANICAL REASON, NOT FOR
@@ -458,7 +458,7 @@ def pins_of(tree: ast.AST) -> Tuple[Dict[str, Set[Tuple[str, int]]],
 
     WHAT ASKS THE QUESTION is `denies_containment`, a walk over Python's own
     negation grammar rather than `_prose_polarity` -- see the measurement there
-    for why, and note that `counters` on the OTHER side of this file does read
+    for why, and note that `counters_of` on the OTHER side of this file does read
     real English and does consult the vocabulary. The two subjects differ; the
     readers follow the subjects.
 
