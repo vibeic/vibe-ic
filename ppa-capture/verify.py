@@ -412,6 +412,33 @@ _dang = sorted(_refs - _ids)
 check("no prose reference points at a record with no section",
       not _dang, f"{len(_refs)} referenced, dangling {_dang}")
 
+# 24 & 25. THE REVERSE DIRECTIONS. Check 29 found a dangling reference that
+#     twenty-seven checks had walked past, all of them asking "is each record
+#     represented?" and none asking "does each representation point at a
+#     record?". These are the two remaining relations with that shape.
+#
+#     An orphan is not cosmetic: a routing entry no record uses is a claim that
+#     a step exists for work nobody filed, and a summary row for a deleted
+#     record asserts a rule the batch no longer makes.
+_added = {"ppa.feasibility", "ppa.head_to_head", "ppa.search", "ppa.artefact_write",
+          "capture.emit", "capture.backlog_sanitize", "repo.host_independence",
+          "repo.test_population", "phase3.lec_post_layout", "ppa.search_space",
+          "ppa.record_provenance", "ppa.pareto", "ppa.cli_contract",
+          "ppa.schema_coverage", "repo.doc_command_reproducibility",
+          "repo.tracked_artefact_hygiene"} & set(ROUTING["steps"])
+_used = {r.get("step") for r in RECS}
+control("orphan-routing", "ppa.feasibility" in _added)
+check("no routing step added by this branch is unused",
+      not (_added - _used), f"{len(_added)} added, orphaned {sorted(_added - _used)}")
+
+_names = {(r.get("rule_name") or r.get("title", "")).strip() for r in RECS}
+_hmap = {sid: nm for sid, nm in heads}
+_srows = [m.group(1) for m in re.finditer(r"^\| (A-\d+|C-2) \| ", MD, re.M)]
+control("orphan-rows", bool(_srows))
+_orph_rows = [s for s in _srows if _hmap.get(s, "") not in _names]
+check("no sweep-table row names a record that does not exist",
+      not _orph_rows, f"{len(_srows)} rows, orphaned {_orph_rows}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

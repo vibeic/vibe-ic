@@ -1502,7 +1502,7 @@ lane — the sweep table as the batch grew, and routing. Then it did not cover t
 brief's *first* requirement, the rule stated for each of the eighteen findings,
 nor whether the emitted backlogs still pass the sanitiser that consumes them —
 and two of those were refused on first write, so a later edit could refuse them
-again in silence. **Twenty-eight checks now, plus an authoritative mode**, the last of them the one that closes the loop:
+again in silence. **Thirty checks now, plus an authoritative mode**, the last of them the one that closes the loop:
 `candidates/` is *generated*, so editing `recoveries.json` without re-emitting
 leaves sketches that still resolve by name, still read plausibly, and describe
 the previous version of the rule. Name resolution cannot see content drift.
@@ -1552,6 +1552,19 @@ whose tails read as record ids — matching them reports a phantom.
 to explain the demotion, I wrote the dead id into the explanation, and the check
 kept failing — correctly, because a reader scanning for that id would still find
 something that looks live. The history is now stated without the bare id.
+
+**The lesson was then applied rather than admired.** Two relations remained with
+the same shape, and both are now checked in the reverse direction: a routing step
+this branch added that no record uses, and a sweep-table row naming a record that
+does not exist. Both come back clean — **16 added steps, all used; 27 rows, none
+orphaned** — but they were unguarded until the direction was named. An orphan is
+not cosmetic: a routing entry nobody uses claims a step exists for work nobody
+filed, and a summary row for a deleted record asserts a rule the batch no longer
+makes.
+
+A suite of checks can share a blind spot precisely *because* it is a suite —
+thirty checks written from one habit of thought all point the same way. That is
+the batch's own central finding at the level of the checking apparatus.
 ---
 
 ## Summary
@@ -1559,7 +1572,7 @@ something that looks live. The history is now stated without the bare id.
 **STATUS**: 29 records emitted and validated — 26 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 ppa-capture/verify.py` (28 fast + 2 authoritative). No gate
+re-measurable by `python3 ppa-capture/verify.py` (30 fast + 2 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1734,7 +1747,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 ppa-capture/verify.py     28 checks, exit 0 = every claim holds
+    python3 ppa-capture/verify.py     30 checks, exit 0 = every claim holds
     python3 ppa-capture/verify.py --slow   + 2 authoritative gate-run checks
 
 **It was held to the two invocation properties this batch records about other
