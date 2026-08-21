@@ -253,23 +253,59 @@ the path twice — which the first version of this fix did.
 > owner's for the same reason, but it is a different change with a different
 > justification, and picking the rc would have treated the symptom.
 
-The three `--corpus-may-be-absent` gates do not agree about what an absent
-corpus means:
+## RETRACTED: THE rc TABLE I PUBLISHED HERE WAS NOT EVIDENCE
 
-    corpus absent entirely      l_doc_field_producer_check        rc 2 UNDETERMINED
-                                evidence_citation_resolves_check  rc 2 UNDETERMINED
-                                benchmark_evidence_index          rc 0   <-- PASS
-    pointer at an empty dir     benchmark_evidence_index          rc 2 UNDETERMINED
+I originally printed a table of exit codes and said the three gates "do not
+agree about what an absent corpus means". **That table is withdrawn.** It
+compared different things, and I built it wrongly twice before noticing.
 
-So `benchmark_evidence_index` distinguishes "you did not point me anywhere"
-(pass) from "you pointed me at nothing" (undetermined), while its two siblings
-call both undetermined. Its own message on the rc 0 path says **"NOTHING WAS
-SCANNED"**, and the dispatcher records that as PASS.
+`_corpus_location` defines FOUR outcomes, and which one you get depends on the
+ORIGIN of the path as well as on what is there:
 
-On a landing host with no corpus bound — which is the normal state, since the
-cells left this repo — this blocking gate therefore always passes without
-checking anything. That is why `published-evidence index honest` reads green on
-main while the index it is named after is stale.
+    env set + unreadable                    -> UNDETERMINED (rc 2), never excused
+    env set + present but not a git checkout-> UNDETERMINED (rc 2)
+    nothing anywhere + call site opted in   -> NO_CORPUS   (rc 0)
+    nothing anywhere + nobody opted in      -> UNDETERMINED (rc 2)
+
+My first table compared the siblings driven by `--corpus <empty dir>` against
+`benchmark_evidence_index` driven with no pointer at all — a different outcome
+of that contract, not a different opinion about the same one. Rebuilding it to
+be even-handed inverted the result (siblings rc 0, the index rc 2), because I
+had then given the index an env pointer at a missing path, which is the first
+outcome above. **Both tables were artefacts of how I drove the gates.** rc 0 for
+"nothing anywhere and the call site opted in" is the contract, and every gate
+here obeys it.
+
+## WHAT SURVIVES, MEASURED WITH ONE VARIABLE
+
+Same host, same tree, environment UNSET, no arguments — the only comparison in
+which the three are asked the same question the same way:
+
+    l_doc_field_producer_check         -> /home/reyerchu/benchmark-data/ic
+    evidence_citation_resolves_check   -> /home/reyerchu/benchmark-data/ic
+    benchmark_evidence_index           -> NO_CORPUS
+
+Two gates read a corpus that is sitting right there; the third says there is
+none. That is a disagreement about WHERE the corpus is, and it is not an
+artefact of how I drove them.
+
+The cause is in `_corpus_location`'s own opening paragraph, which names the
+culprit:
+
+> `tracked_symlink_portability_check`, `tracked_symlink_target_present_check`
+> and **`benchmark_evidence_index`** (v1.10.60) each re-derived the same
+> resolution by hand. This module is that resolution written ONCE, for the same
+> reason `_published_tree` exists: three programs asked the same question on the
+> same day and three programs got it wrong the same way.
+
+The seam was written **for** this gate, and this gate never adopted it: it still
+carries its own `CORPUS_ENV` and `IC_SUBDIR = "benchmark-data/ic"`, so it only
+ever looks INSIDE the repo — the assumption `c5d7f2d00` invalidated when the
+cells moved out.
+
+**The fix is one import, not an exit code.** Routed through the seam it finds
+the corpus and returns its real verdict, which is FAIL — the bound measurement
+above already shows what that verdict is.
 
 **Not changed here, deliberately.** Returning rc 2 would make it NOT_CHECKED on
 every unbound host, and it is dispatched with a plain blocking `run`, under which
