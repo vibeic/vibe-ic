@@ -1516,6 +1516,39 @@ cell in the landing runtime's own guard, and it has been sitting there the whole
 time.
 
 
+## M22 — the matrix closed: what my changes do in BOTH lanes
+
+M20 measured my changes against the pristine file on the host. That left one cell
+empty, so the claim "exactly one red added" was established on a developer host
+and assumed in CI. Closed:
+
+| `test_landing_merge_verdict.py` | pristine | with my changes | delta |
+|---|---|---|---|
+| host 8hd-3 | 9 failed, 125 passed | 10 failed, 124 passed | **+1** — the intended M14 red |
+| pinned image | 22 failed, 112 passed | 22 failed, 112 passed | **0** — identical ID sets |
+
+Control asserted both times (`control VERIFIED pristine (2861 lines)`,
+`restored: markers back = 1`).
+
+### This changes the decision in section B, and makes it easier
+
+**The green-to-red conversion is invisible to CI.** In the image lane
+`..._post_bootstrap_equal_corpus_uses_ordinary_delta` is already failing — it dies
+on its FIRST assertion, `r.returncode == 0`, against the `rc 2 = CANNOT_MEASURE`
+the verifier honestly returns without a Docker CLI, long before reaching the line
+M14 changed. So taking M14 **adds no red to the CI lane at all**. It changes a
+host-lane green into a host-lane red.
+
+I had presented section B as "take a new red or keep a known-false green". That
+framing was pessimistic and I had not measured it. The real choice is narrower:
+**the honest assertion costs nothing in CI**, and buys a true signal on any host
+lane where the guard can actually run. I would take it.
+
+Note the shape of why it is invisible, because it is the whole document in one
+line: the test is already unmeasurable in CI, so making it *more honest* cannot
+make CI redder. A cell with no colour absorbs any change you make to it.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
@@ -1543,9 +1576,16 @@ currently passes.**
 * This is not a new defect. It is the M13 defect moved from the silent column to
   the loud one.
 
-**Take it** if you want the landing gate to stop believing a green it cannot
-fail. **Defer it** if adding a red now is worse for you than a known-false green
-— but then please record it, because nothing else will surface it.
+**MEASURED SINCE (M22): taking this adds NO red to the CI lane.** In the pinned
+image that test is already failing on its first assertion, because the verifier
+honestly returns `rc 2 = CANNOT_MEASURE` without a Docker CLI. Image lane before
+and after my changes: 22 failed, 112 passed, identical ID sets. The conversion
+turns a HOST-lane green into a HOST-lane red and nothing else.
+
+So the choice is narrower than I first wrote it. **Take it** — the honest
+assertion costs nothing in CI and buys a true signal wherever the guard can
+actually run. **Defer it** only if a host-lane red is itself the problem, and
+then please record it, because nothing else will surface it.
 
 I did NOT do the same to `test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts`,
 which is also vacuous, because its property IS guaranteed elsewhere (the arm's
