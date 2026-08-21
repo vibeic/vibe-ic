@@ -1,0 +1,181 @@
+{
+  "schema": "vibeic.ppa.pr_answers.v1",
+  "_doc": [
+    "Appendix C, answered for the branch that re-aimed the six PPA record gates",
+    "(vibe-ic#1241). Every entry below is a kind the checker can RE-VERIFY: an",
+    "artefact is re-hashed, a test is looked up in the file that must define it,",
+    "a path must exist. Prose accompanies answers and never satisfies one.",
+    "",
+    "Base for the change-set these answers describe:",
+    "a00f53f2094812041c8aa6094f27058bc1b14ddd (v1.11.66)."
+  ],
+  "answers": [
+    {
+      "question": 1,
+      "evidence": [
+        {
+          "kind": "artefact",
+          "ref": "ppa-gate-audit/RESULT.md",
+          "sha256": "sha256:7d28ad9cc1db4466fc1806b14afcaa1ba3ff8f271bd6f51589a2d8aa43ae58fa"
+        },
+        {
+          "kind": "prose",
+          "text": "None of the four. This branch adds no measurement: it re-aims six gates that were pointed at benchmark-data/ppa/*, a directory that left this repository in v1.10.56, at the records already committed here. The numbers it reports are the checkers' own verdicts over 15 head-to-head records, 82 contracts, 21 candidate sets and 80 contract pairs."
+        }
+      ]
+    },
+    {
+      "question": 2,
+      "evidence": [
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_corpus_identifies_records_by_declaration.py::test_a_record_under_any_filename_is_in_the_corpus"
+        },
+        {
+          "kind": "artefact",
+          "ref": "ppa-gate-audit/RESULT.md",
+          "sha256": "sha256:7d28ad9cc1db4466fc1806b14afcaa1ba3ff8f271bd6f51589a2d8aa43ae58fa"
+        },
+        {
+          "kind": "prose",
+          "text": "The branch states no PPA number of its own, so it declares no stage, mode, corner or activity basis. It does REPORT that the campaigns' own slow-corner timing scopes carry rc_corner: null on both arms while every typical-corner scope states rc_corner: max \u2014 Part 4 of RESULT.md. That is a finding about the records, not a number this branch produced."
+        }
+      ]
+    },
+    {
+      "question": 3,
+      "evidence": [
+        {
+          "kind": "artefact",
+          "ref": "tools/ci/repo_hygiene_gates.sh",
+          "sha256": "sha256:3864db063036ec318f062663c0d231c54a690e5306423184d50256d6c85235cd"
+        },
+        {
+          "kind": "artefact",
+          "ref": "tools/ci/gate_red_since.json",
+          "sha256": "sha256:b000852092c8bd0d3ee91899710095cb1c3cf9a7ec875a390b91e7aa400e51bb"
+        },
+        {
+          "kind": "artefact",
+          "ref": "ppa-crosslayer/records/h2h_F.json",
+          "sha256": "sha256:f18e681e855233cb3a60029107996367529063c0d8bc044e0ab4ae985bcc4543"
+        },
+        {
+          "kind": "prose",
+          "text": "h2h_F is the source artefact behind the one new red: the gate refuses it BASELINE_TUNED_BY_US. It is committed and unmodified by this branch \u2014 its digest here is the file as it stands on a00f53f20."
+        }
+      ]
+    },
+    {
+      "question": 4,
+      "evidence": [
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_ppa_record_gates_take_a_corpus.py::test_contract_corpus_present_but_empty_is_two_and_never_zero"
+        },
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_problem_integrity_takes_a_corpus.py::test_a_corpus_holding_only_the_baseline_is_two_and_never_zero"
+        },
+        {
+          "kind": "prose",
+          "text": "rc 2 with the population printed. A corpus that exists and holds nothing is VACUOUS and never rc 0; an absent corpus is a separate rc 2 naming the path. Both are pinned, in both directions, for every corpus mode added."
+        }
+      ]
+    },
+    {
+      "question": 5,
+      "evidence": [
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_ppa_record_gates_take_a_corpus.py::test_contract_corpus_absent_is_two_and_never_zero"
+        },
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_ppa_record_gates_take_a_corpus.py::test_a_refusal_is_not_softened_by_an_undetermined_beside_it"
+        },
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_problem_integrity_takes_a_corpus.py::test_an_internal_error_is_rc_3_and_never_rc_1"
+        },
+        {
+          "kind": "prose",
+          "text": "Not as PASS, and the harder case is that it must not swallow a REFUSAL either. The corpus roll-up is severity-ordered, not max(): under max() [1,2] rolls up to 2 and adding one unreadable document would SUBTRACT a finding. Separately, an internal error is rc 3, because a crash exiting 1 would wear the code reserved for a finding about the design."
+        }
+      ]
+    },
+    {
+      "question": 7,
+      "evidence": [
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_pareto.py::test_negative_an_infeasible_candidate_never_enters_the_frontier"
+        },
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_pareto.py::test_negative_a_published_frontier_holding_an_infeasible_member_is_refused"
+        },
+        {
+          "kind": "prose",
+          "text": "No. This branch adds no path into the frontier and does not touch _ppa/pareto.py; the two negative tests that pin the rule are unchanged and passing. The frontier gate itself still refuses for want of a declared objective, which this branch deliberately did not author."
+        }
+      ]
+    },
+    {
+      "question": 11,
+      "evidence": [
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_corpus_identifies_records_by_declaration.py::test_a_record_that_lost_its_arms_is_still_refused_not_mistaken_for_a_report"
+        },
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_ppa_gates_are_aimed_at_a_population_that_exists.py::test_every_ppa_checker_is_aimed_somewhere_that_exists"
+        },
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_problem_integrity_takes_a_corpus.py::test_a_refusal_is_not_softened_by_an_undetermined_beside_it"
+        },
+        {
+          "kind": "prose",
+          "text": "Yes, and each was RUN red before the fix: 4 failed / 3 passed against the pre-fix head-to-head walk, 7 failed / 3 passed against the wiring exactly as it shipped on a00f53f20, 9 failed / 10 passed against the pre-fix problem-integrity program, 4 failed / 2 passed against the pre-fix refusal seam. Recorded in the commit messages and in RESULT.md."
+        }
+      ]
+    },
+    {
+      "question": 12,
+      "evidence": [
+        {
+          "kind": "artefact",
+          "ref": "ppa-gate-audit/RESULT.md",
+          "sha256": "sha256:7d28ad9cc1db4466fc1806b14afcaa1ba3ff8f271bd6f51589a2d8aa43ae58fa"
+        },
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_ppa_gates_are_aimed_at_a_population_that_exists.py::test_no_ppa_exemption_still_claims_that_no_record_has_been_filed"
+        },
+        {
+          "kind": "prose",
+          "text": "That failure is the subject of this branch: four exemptions claimed 'no run in this repository has filed one yet' over a tree holding 17 records, 82 contracts, 21 candidate sets and 80 pairs. The claim exceeded the evidence by the whole population. RESULT.md states this lane's own limits explicitly, including three findings it got wrong and corrected, and the test above stops the false sentence being re-declared."
+        }
+      ]
+    },
+    {
+      "question": 19,
+      "evidence": [
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_corpus_walks_cannot_be_extended_by_a_symlink.py::test_a_symlinked_directory_does_not_extend_the_population"
+        },
+        {
+          "kind": "test",
+          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1241_corpus_walks_cannot_be_extended_by_a_symlink.py::test_a_symlinked_file_is_counted_and_not_silently_dropped"
+        },
+        {
+          "kind": "prose",
+          "text": "PATH/SYMLINK TRAVERSAL, measured and pinned across all four corpus walks: a symlinked DIRECTORY is not traversed, so a corpus cannot be extended to documents outside the tree it names; a symlinked FILE is counted, deliberately, because dropping it would be 'I could not follow it' becoming 'it was never filed'. Its bytes may live outside the corpus and that is disclosed rather than left to be found. THE OTHER SIX ARMS ARE NOT APPLICABLE AND HERE IS WHY, rather than N/A: this branch adds no prompt, no model call and no agent surface (prompt injection), emits no metric of its own (hallucinated metric), adds no MCP tool or dispatch path (generic MCP bypass), and runs no shell, no subprocess and no interpolation into a command in any changed program (raw script, metacharacter, arbitrary shell) \u2014 every changed program reads JSON from disk and returns an exit code."
+        }
+      ]
+    }
+  ]
+}

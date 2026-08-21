@@ -743,3 +743,87 @@ Negative control against the pre-fix program and the two-pair wiring:
 Six rows that opened nothing became eleven rows that open 15 + 2 + 21 + 61 + 148
 + 21 + 1 + 20 + 60 documents, one real refusal, and three rows that still cannot
 look and now say precisely what they are missing.
+
+---
+
+# Part 8 — the PPA review checklist, run against this lane's own change
+
+`ppa_pr_scope_check.py` is Appendix C of the PPA specification answered by
+machine: twenty review questions, applicability decided from the change-set by
+two independent arms, and a merge condition of *"every applicable question has
+verifiable evidence, and every inapplicable question has a machine-checkable
+reason."* Prose never satisfies a question, by design.
+
+It is one of the three checkers the pre-existing `checker execution wiring` red
+names as run by nothing but its own test. **It is not wireable into
+`repo_hygiene_gates.sh`, and that is not an oversight** — it needs a commit
+RANGE, and that file's header states the boundary explicitly: *"anything needing
+a commit RANGE or a base SHA … stays inline in the workflow that has the
+context."* Wiring it there would break the rule the file exists to keep. It
+belongs in the PR workflow, and naming that is the honest disposition.
+
+What it *can* do, today, with no wiring at all, is judge this branch.
+
+## First run — 9 applicable, 9 unanswered
+
+    [FAIL] ppa_pr_scope_check: 9 applicable, 11 N/A, 0 undetermined
+                               (arms: path=RUN content=RUN)
+      tokens: claim_surface, claims, controller, feasibility, gate, metric,
+              pareto, report, security, tool
+      [MISSING_EVIDENCE] Q1 Q2 Q3 Q4 Q5 Q7 Q11 Q12 Q19 — no answers document
+
+The detector, not the author, decided those nine applied.
+
+## Q19 was a real question, and it had not been asked
+
+*"Was it tested against prompt injection, hallucinated metric, generic MCP
+bypass, raw script, metacharacter, path/symlink traversal and arbitrary shell?"*
+
+Four corpus walks landed on this branch and each globs `**/*.json` under a
+directory and reads every match. "Which files are in the population" is not a
+detail for these gates — it is the claim. So it was measured, on CPython
+3.10.12:
+
+    a symlinked DIRECTORY inside the corpus    NOT traversed
+    a symlinked FILE inside the corpus         followed and counted
+
+Both are now pinned, for opposite reasons.
+
+**The directory arm is a guarantee.** `pathlib`'s `**` does not recurse into
+symlinked directories, so a corpus cannot be silently extended to documents
+living elsewhere — the population stays the tree the gate named. That is
+load-bearing and it is *not this code's own doing*, which is exactly why it is
+pinned: CPython 3.13 made it configurable (`Path.glob(recurse_symlinks=…)`), and
+a future interpreter, or a rewrite reaching for `os.walk`, could change it with
+nobody noticing. If that test goes red, the population these gates report is no
+longer the population they searched.
+
+**The file arm is a disclosure, not a defence.** A symlinked file *is* counted,
+deliberately — dropping it would be "I could not follow it" becoming "it was
+never filed", the exact substitution this whole family refuses. What a reader
+must know is that its bytes may come from outside the tree the corpus names.
+Written down rather than left to be discovered.
+
+The other six arms are recorded as inapplicable **with a reason, not an N/A**:
+this branch adds no prompt, model call or agent surface; emits no metric of its
+own; adds no MCP tool or dispatch path; and runs no shell, subprocess or
+interpolation into a command in any changed program — every one of them reads
+JSON from disk and returns an exit code.
+
+## Second run — PASS, with the evidence re-verified
+
+    [PASS] ppa_pr_scope_check: 9 applicable, 11 N/A, 0 undetermined
+                               (arms: path=RUN content=RUN)
+
+    evidence states:  artefact VERIFIED  6
+                      test     VERIFIED 14
+                      prose    UNVERIFIABLE_BY_DESIGN  9
+
+Six artefacts re-hashed and matched, fourteen test ids looked up in the files
+that must define them, nine prose entries correctly counted as satisfying
+nothing. The answers are `ppa-gate-audit/pr_answers.json`.
+
+Q12 — *"does an outward claim's scope exceed its evidence?"* — is answered by
+this lane's own subject: four exemptions claimed "no run in this repository has
+filed one yet" over a tree holding 17 records, 82 contracts, 21 candidate sets
+and 80 pairs. The claim exceeded the evidence by the entire population.
