@@ -102,7 +102,7 @@ def test_skip_set_derived_from_registered_gates_and_chip_agnostic():
     skip = F._skip_analog_p0_gates()
     assert skip, "skip-analog gate set must be non-empty"
     # Every gate in the skip set is actually registered in the umbrella
-    # (derived from _STRUCTURAL_RTL_GATES — never a free-floating literal).
+    # (intersected with _STRUCTURAL_RTL_GATES — never a free-floating literal).
     for g in skip:
         assert g in F._STRUCTURAL_RTL_GATES
         assert F._is_analog_structural_gate(g)
@@ -110,9 +110,18 @@ def test_skip_set_derived_from_registered_gates_and_chip_agnostic():
     for g in ("analog_block_coverage_check", "analog_hardmacro_check",
               "mixed_signal_cosim_check", "analog_flow_compliance_check",
               "analog_digital_interface_check", "analog_a6_block_pv_check",
-              "analog_content_detected_must_emit_l5_check",
               "pdk_analog_completeness_check"):
         assert g in skip, f"{g} must be in the --skip-analog suppression set"
+    # DERIVATION CHANGED — membership is the OWNERSHIP record, not the name
+    # prefix this test used to pin. `analog_content_detected_must_emit_l5_check`
+    # was asserted here as a member because it MATCHES the prefix; it does not
+    # own the deferral. Its subject is the Phase-1 L5 record ("the docs
+    # describe analog content L5 never wrote down"), it reads no A-step
+    # artefact, and it is what makes an analog deferral reviewable — so it
+    # stays required on a deferred-analog run. See
+    # `flow_compliance_check._ANALOG_NAMED_NOT_OWNED` and
+    # `test_deferred_gate_skip_by_ownership.py`.
+    assert "analog_content_detected_must_emit_l5_check" not in skip
     # NO purely-digital structural gate may ever be in the analog skip set.
     for g in ("rig_topology_disclosure_check", "handshake_check",
               "bitwidth_consistency_check", "project_outputs_in_tree_check",

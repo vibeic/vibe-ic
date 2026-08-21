@@ -33,6 +33,34 @@ Static check (IC-agnostic):
   If none match, FAIL.
 
 Outputs a per-file finding; exit 0 on clean, 1 on any finding, 2 on IO err.
+
+#496 — TWO EXTRACTION BUGS, WHICH ONLY CANCEL EACH OTHER OUT
+-----------------------------------------------------------
+``files_checked: 0`` on all 107 tracked ``rtl`` directories under
+``benchmark-data``. The corpus is NOT free of the design class this gate
+audits: ``benchmark-data/evaluation/phase1_parity/sent/phase2/stage1/rtl/
+sent_rx.v`` is a SENT (SAE J2716) receiver, i.e. a textbook multi-bucket
+pulse-period classifier — it measures falling-edge-to-falling-edge periods and
+decodes each into one of sixteen nibble values plus a calibration pulse.
+
+BUG 1 — the "is this a pulse decoder?" test keyed on the LITERAL token
+``low_cnt``. SENT spells its counter ``period_cnt`` and its measurement
+``last_period`` / ``ticks_meas``, so the file was never selected. One spelling
+of one signal name decided whether the gate had any subject at all.
+
+BUG 2 — and this is why fixing Bug 1 alone would have been worse than leaving
+it: ``_has_edge_detector`` only recognises RISING-edge idioms with the negation
+on the SECOND operand (``sig && !sig_q``). A decoder of LOW pulses measures
+FALLING edges, and SENT writes the standard form
+``wire falling = (~sin_s) & sin_s_d;`` — negation on the FIRST operand, stage
+suffix ``_d``. None of the four existing patterns matches it. Widening the
+selector without widening the recognizer would have made this gate emit a
+NO_EDGE_DETECTOR error against a design whose edge detector is right there on
+line 111 — trading a silent gate for a confidently wrong one.
+
+Both are fixed together, and the SENT file is the regression witness: it must
+be SELECTED (``files_checked`` 0 -> 1) and must PASS, and it must FAIL once its
+edge detector is removed.
 """
 from __future__ import annotations
 
@@ -43,6 +71,11 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
+
+import _gate_denominator as GD
+
+# #496 — one unit of this gate's denominator, in the gate's own terms.
+_DENOM_UNIT = "pulse-width / pulse-period classifier files"
 
 
 # ---------------------------------------------------------------------------
@@ -61,10 +94,32 @@ class Finding:
 # Regexes
 # ---------------------------------------------------------------------------
 _LOW_CNT_NAME_RE = re.compile(r"\b\w*low_cnt\w*\b")
+
+# #496 — a pulse-measurement COUNTER. `low_cnt` is one spelling of one signal;
+# a decoder that measures the LOW phase, the HIGH phase, the mark/space, the
+# pulse width or the full falling-to-falling PERIOD is the same design class
+# and the rule applies identically to all of them.
+_PULSE_COUNTER_RE = re.compile(
+    r"\b\w*(?:low|lo|high|hi|pulse|period|width|mark|space|tlow|thigh)"
+    r"_?(?:cnt|count|counter|timer|len|dur)\w*\b",
+    re.IGNORECASE,
+)
+
 # Only comparison operators — NOT `<=` (which is Verilog's non-blocking
 # assignment and would false-positive on ``low_cnt <= 0``).
 _CLASSIFY_RE = re.compile(
     r"\b\w*low_cnt\w*\s*(?:>=|==|!=|<|>)\s*[`\w']"
+)
+
+# #496 — a CLASSIFICATION predicate is a comparison whose left side is the
+# measurement, which is frequently a signal DERIVED from the counter rather
+# than the counter itself: SENT compares `ticks_meas` and `last_period`, not
+# `period_cnt`. Tying the predicate to the counter's own name is what made two
+# distinct spellings both have to be right for the file to be selected.
+_PULSE_CLASSIFY_RE = re.compile(
+    r"\b\w*(?:low|lo|high|hi|pulse|period|width|mark|space|ticks|meas|dur)"
+    r"\w*\s*(?:>=|==|!=|<|>)\s*[`\w']",
+    re.IGNORECASE,
 )
 
 # rising-edge patterns
@@ -90,6 +145,20 @@ _RISING_FROM_Q_RE = re.compile(
 )
 _RISING_BANG_QQ_RE = re.compile(
     r"(\w+)_q\s*&&?\s*[!~]\s*\1_qq\b"
+)
+
+# #496 — FALLING edge, negation on the FIRST operand: `(~sig) & sig_d`, and the
+# mirrored `sig_d & ~sig`. Every pattern above puts the `!`/`~` on the SECOND
+# operand, so a LOW-pulse decoder — which by definition triggers on the falling
+# edge — had no matching pattern at all. The stage suffix set matches
+# `_RISING_FUZZY_RE`'s, and the same `_is_fuzzy_edge_pair` predicate gates it,
+# so `(~food) & foo_d` is still rejected.
+_STAGE_SUFFIX_ALT = r"(?:q\d*|d|r|reg|ff|sync|synced|dly|del|prev|last)"
+_FALLING_FROM_D_RE = re.compile(
+    r"[!~]\s*\(?\s*(\w+)\s*\)?\s*&&?\s*\(?\s*(\w+)_" + _STAGE_SUFFIX_ALT + r"\b"
+)
+_FALLING_FROM_D_REV_RE = re.compile(
+    r"\b(\w+)_" + _STAGE_SUFFIX_ALT + r"\s*&&?\s*[!~]\s*\(?\s*(\w+)\b"
 )
 
 # v0.119.25 fuzzy variant: (X && !Y) where Y ends in a register suffix
@@ -165,9 +234,17 @@ def _find_v_files(rtl_dir: Path) -> List[Path]:
 
 
 def _is_pulse_decoder(text: str) -> bool:
-    if not _LOW_CNT_NAME_RE.search(text):
+    """True iff the file measures a pulse and classifies it into 2+ buckets.
+
+    #496 — the original form required the literal token ``low_cnt`` for BOTH
+    halves. Kept as the first branch (unchanged behaviour for files that spell
+    it that way), with the generalised form as the second.
+    """
+    if _LOW_CNT_NAME_RE.search(text) and len(_CLASSIFY_RE.findall(text)) >= 2:
+        return True
+    if not _PULSE_COUNTER_RE.search(text):
         return False
-    return len(_CLASSIFY_RE.findall(text)) >= 2
+    return len(_PULSE_CLASSIFY_RE.findall(text)) >= 2
 
 
 def _has_edge_detector(text: str) -> bool:
@@ -204,6 +281,17 @@ def _has_edge_detector(text: str) -> bool:
         if _is_fuzzy_edge_pair(m.group(1), m.group(2)):
             return True
 
+    # Pattern 5 (#496): FALLING edge — `(~sig) & sig_d` / `sig_d & ~sig`.
+    # A LOW-pulse decoder fires at the END of the low phase, which is a
+    # falling-to-rising transition of the pulse it just measured and a
+    # FALLING edge of the line for period-measuring protocols. Gated by the
+    # same pairing predicate as Pattern 4, so unrelated names do not count.
+    for rx in (_FALLING_FROM_D_RE, _FALLING_FROM_D_REV_RE):
+        for m in rx.finditer(text):
+            a, b = m.group(1), m.group(2)
+            if _is_fuzzy_edge_pair(a, b):
+                return True
+
     return False
 
 
@@ -215,11 +303,12 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
             category="IO",
             message=f"RTL directory not found: {rtl_dir}",
         ))
-        return findings, {"decoders": [], "checked": 0}
+        return findings, {"decoders": [], "checked": 0, "files_scanned": 0}
 
     v_files = _find_v_files(rtl_dir)
     decoders: List[str] = []
     checked = 0
+    files_scanned = 0
 
     for p in v_files:
         try:
@@ -232,6 +321,7 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
                 file=str(p),
             ))
             continue
+        files_scanned += 1
 
         if not _is_pulse_decoder(text):
             continue
@@ -253,23 +343,46 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
                 file=str(p),
             ))
 
-    return findings, {"decoders": decoders, "checked": checked}
+    return findings, {"decoders": decoders, "checked": checked,
+                      "files_scanned": files_scanned}
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def _denominator(summary: Dict) -> GD.Denominator:
+    checked = summary.get("checked", 0)
+    files = summary.get("files_scanned", 0)
+    details = {"files_scanned": files, "decoder_files": summary.get("decoders", [])}
+    if checked:
+        return GD.Denominator(unit=_DENOM_UNIT, examined=checked,
+                              considered=files, details=details)
+    if files == 0:
+        reason = "no readable .v/.sv file in this directory."
+    else:
+        reason = (
+            f"{files} RTL file(s) read, none of which measures a pulse and "
+            "classifies the measurement into 2+ buckets. A file qualifies "
+            "when it names a pulse/period/width/mark/space counter AND makes "
+            "2+ comparison predicates against a pulse measurement. This "
+            "design decodes no pulse-width-encoded line, so the rising-edge "
+            "gating rule has no subject here.")
+    return GD.Denominator(unit=_DENOM_UNIT, examined=0, considered=files,
+                          not_applicable_reason=reason, details=details)
+
+
 def build_report(findings: List[Finding], rtl_dir: Path, summary: Dict) -> Dict:
     return {
         "program": "pulse_decoder_edge_check",
         "version": "1.0.0",
         "rtl_dir": str(rtl_dir),
-        "summary": {
+        "summary": GD.attach({
             "decoder_files": summary["decoders"],
             "files_checked": summary["checked"],
+            "files_scanned": summary.get("files_scanned", 0),
             "findings_count": len(findings),
             "pass": not any(f.severity == "ERROR" for f in findings),
-        },
+        }, _denominator(summary)),
         "findings": [asdict(f) for f in findings],
     }
 

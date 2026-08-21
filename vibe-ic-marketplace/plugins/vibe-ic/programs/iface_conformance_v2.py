@@ -349,7 +349,7 @@ def parse_all_rtl(text: str) -> List[RtlIface]:
 
 # ── prompt interface extraction ─────────────────────────────────────────────
 # A markdown table row whose first backtick-quoted cell is a signal name and a
-# later cell is a direction word: `| \`clk_A\` | input | ... |`.
+# later cell is a direction word: `| `clk_A` | input | ... |`.
 _DIR_WORD_RE = re.compile(r"\b(input|output|inout)\b", re.IGNORECASE)
 _BACKTICK_RE = re.compile(r"`([A-Za-z_]\w*)`")
 
@@ -440,7 +440,7 @@ _AFTER_NEW_SUBJECT_RE = re.compile(
     re.IGNORECASE)
 
 # (#763) VERB / ATTRIBUTIVE-MODIFIER guard for the direction-word-BEFORE rule.
-# The BEFORE rule (`(input|output) <gap> \`name\``) was written for the role-label
+# The BEFORE rule (`(input|output) <gap> `name``) was written for the role-label
 # form "input `foo`" / "output `bar`" — the direction word labels the immediately-
 # following backtick port. But the word "input"/"output" is also an ordinary
 # English VERB / GERUND ("Output the signal", "output by XORing"), an ATTRIBUTIVE
@@ -969,8 +969,8 @@ def _desc_table_firstcol_names(prompt: str) -> Set[str]:
 
 
 # ORGANIC-20260618 (square_root_0003) — a TEST-VECTOR RESULTS table names its
-# data columns in the HEADER row (`| WIDTH | Test ID | \`num\` | \`final_root\` |
-# \`expected_root\` | Latency | Explanation |`) and carries numeric VALUES in the
+# data columns in the HEADER row (`| WIDTH | Test ID | `num` | `final_root` |
+# `expected_root` | Latency | Explanation |`) and carries numeric VALUES in the
 # body rows. Those header-cell backtick names are column labels, NOT ports — yet
 # the iface scraper's directionless `setdefault(name, "")` branch fabricated them
 # as ports (source=table → STRUCTURAL → block-eligible → spurious rc=1). This
@@ -1099,8 +1099,8 @@ def _table_ports(prompt: str) -> Dict[str, str]:
     (ORGANIC FIR_0001) A backtick cell that is a SystemVerilog reserved
     TYPE/DIRECTION keyword (`logic`/`wire`/`reg`/`bit`/`signed`/`unsigned`/
     `input`/`output`/`inout`) is NEVER a legal port identifier — it is the
-    contents of a TYPE column in a `| \`name\` | \`type\` | desc |` port table.
-    The pipe-window scan can straddle a cell boundary and match `\`logic\` |
+    contents of a TYPE column in a `| `name` | `type` | desc |` port table.
+    The pipe-window scan can straddle a cell boundary and match ``logic` |
     System` (the type cell of one row + the first word of the description cell),
     fabricating a phantom port named `logic` (source=table → STRUCTURAL →
     block-eligible → spurious rc=1). Candidate NAMES are therefore filtered
@@ -1118,7 +1118,7 @@ def _table_ports(prompt: str) -> Dict[str, str]:
     directionless = _directionless_table_names(prompt)
     # Split on the pipe so an inline single-line table (the acceptance shape)
     # and a true multi-row markdown table both work: scan windows of
-    # `\`name\` | dir` regardless of line boundaries.
+    # ``name` | dir` regardless of line boundaries.
     for cell_m in re.finditer(r"`([A-Za-z_]\w*)`\s*\|\s*([A-Za-z]+)", prompt):
         name = cell_m.group(1)
         word = cell_m.group(2).lower()

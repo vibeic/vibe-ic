@@ -253,3 +253,45 @@ def test_real_plugin_tree_is_portable():
     assert r.returncode == 0, (
         "shipped plugin source contains non-portable personal paths:\n"
         + r.stdout)
+
+
+# ── #447 convention: state the denominator ─────────────────────────────────
+def test_a_pass_reports_how_many_files_it_read(tmp_path):
+    """This guard was wired into CI and the repo's own empty-tree probe
+    refused it: PASS over an empty tree, indistinguishable from a real scan.
+    That probe working is why this exists."""
+    import subprocess as sp
+    import sys
+    from pathlib import Path
+    prog = Path(__file__).resolve().parents[1] / "shipped_path_portability_check.py"
+    (tmp_path / "a.py").write_text("x = 1\n")
+    r = sp.run([sys.executable, str(prog), str(tmp_path)],
+               capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "file(s) scanned" in (r.stdout + r.stderr)
+
+
+def test_scanning_zero_files_is_NOT_a_pass(tmp_path):
+    """A clean result over an empty scan is what a WRONG ROOT looks like."""
+    import subprocess as sp
+    import sys
+    from pathlib import Path
+    prog = Path(__file__).resolve().parents[1] / "shipped_path_portability_check.py"
+    (tmp_path / "sub").mkdir()          # no scannable extensions at all
+    r = sp.run([sys.executable, str(prog), str(tmp_path)],
+               capture_output=True, text=True, timeout=60)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "NOTHING_SCANNED" in (r.stdout + r.stderr)
+
+
+def test_a_real_violation_is_still_reported(tmp_path):
+    """The paired half that stops the denominator becoming a way to soften the
+    guard: a personal home path in shipped source still FAILs."""
+    import subprocess as sp
+    import sys
+    from pathlib import Path
+    prog = Path(__file__).resolve().parents[1] / "shipped_path_portability_check.py"
+    (tmp_path / "leaky.py").write_text('P = "/home/someuser/x/y.rpt"\n')
+    r = sp.run([sys.executable, str(prog), str(tmp_path)],
+               capture_output=True, text=True, timeout=60)
+    assert r.returncode == 1, r.stdout + r.stderr

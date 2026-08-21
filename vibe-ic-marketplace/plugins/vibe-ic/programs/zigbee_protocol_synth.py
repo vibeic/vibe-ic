@@ -47,6 +47,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 # ----------------------------------------------------------------------
 # Module-level CONTENT-ONLY detector (the runner wires this; evaluated on
@@ -181,7 +184,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 _MAIN_DOCS = [
@@ -938,7 +943,7 @@ def _l9(gd: Path) -> None:
     if not p.is_file():
         return
     d = _read(p)
-    d["top_module"] = "ieee802154_zigbee_soc"
+    _ptm.apply(d, "ieee802154_zigbee_soc")
     d["module_role"] = (
         "Top-level IEEE 802.15.4 + Zigbee LR-WPAN SoC: O-QPSK/DSSS radio "
         "interface, MAC engine (CSMA-CA, superframe/GTS, FCS), AES-128 CCM* "

@@ -25,7 +25,7 @@ Behaviour
 * SKIP (rc=2)  — there are genuinely NO analog blocks (block list
                   absent or empty).  Real non-applicability.
 * WAIVED (rc=0) — `waivers.json` declares the step waived (evidence
-                  + ticket).
+                  + ticket) AND every live finding is a MEASURED defect.
 * PASS (rc=0)  — every block has DRC violations == 0 AND LVS == match.
 * FAIL (rc=1)  — any block has DRC violations > 0, LVS mismatch, OR a
                   missing/empty/garbage DRC or LVS artefact for a block
@@ -33,6 +33,40 @@ Behaviour
 
 NO FABRICATION (hard rule): a block that has a directory but is missing
 real DRC or LVS evidence is an HONEST FAIL — never a silent PASS.
+
+A WAIVER CANNOT COVER AN ABSENT MEASUREMENT (`_NON_WAIVABLE_RULES`).
+A step waiver is an accepted-RISK statement about a defect somebody
+measured: "DRC reports 3 violations and we ship anyway, ticket T-1".
+Where nothing was measured there is no risk to accept — waiving
+`A6_PV_BLOCK_DIR_MISSING` / `A6_PV_DRC_NO_EVIDENCE` /
+`A6_PV_LVS_NO_EVIDENCE` would turn "the tool never ran" into rc 0, which
+is the unmeasured-reported-as-zero failure this gate exists to refuse.
+Measured on a project declaring one analog block with NO drc/lvs
+artefacts at all plus a `waived_steps: [{id: analog_block_pv}]` entry:
+the gate used to return WAIVED rc=0. Such findings now stay LIVE and the
+step FAILs (rc=1) with `waiver_cannot_cover` naming them; any measured
+DRC/LVS defect present alongside is still listed under
+`suppressed_findings`, so the waiver keeps working for what a waiver is
+for. This is also the ONLY per-block PV gate in the flow since A5
+stopped reading A6's outputs (see `analog_a5_layout_check`'s SCOPE
+section), so its non-silenceable core carries the whole class.
+
+WHAT AN LVS MATCH DOES NOT SAY — the matching disclosure, carried through
+--------------------------------------------------------------------------
+This gate's LVS half is a TOPOLOGY compare. It is blind to common-centroid
+placement, to interdigitated finger order and to dummies — and the last of
+those it is worse than blind to, because a dummy is a device the schematic
+does not have and it makes the compare HARDER. So a block laid out as N
+isolated devices in N slots reaches the same green PASS here as a fully
+matched one, and this gate's report was where a reader looked to find out.
+
+It now carries `_analog_layout_matching`'s classification of every block into
+its summary — `blocks_no_matching_structure`, `blocks_matching_undisclosed`,
+`matching_disclosure` — on EVERY verdict path. This is a RECORD, not a rule:
+no matching class changes this gate's verdict or exit code, because the
+rules over that record belong to A5, where the layout is. What changes is
+that "this block closed A6 with no matching structure" is now a field in the
+artefact rather than an inference from its absence.
 
 Preserves the CLI contract:
     python3 analog_a6_block_pv_check.py <project_dir> [--json <out>]
@@ -55,6 +89,24 @@ _GATE_NAME = "analog_a6_block_pv_check"
 _GATE_LABEL = "analog_block_pv"
 _SKILL = "drc-fix + lvs-triage"
 
+# Findings that report an ABSENT measurement rather than a measured defect.
+# A step waiver may not suppress these — see the module docstring. The
+# complement (A6_PV_DRC_VIOLATIONS / A6_PV_LVS_MISMATCH) is a measured
+# defect and stays waivable, which is what the flow-wide waiver mechanism
+# is for and what waivers_schema_check / waiver_legitimacy_check /
+# foundry_signoff_plan_check separately police. chip-AGNOSTIC.
+_NON_WAIVABLE_RULES = frozenset({
+    "A6_PV_BLOCK_DIR_MISSING",
+    "A6_PV_DRC_NO_EVIDENCE",
+    "A6_PV_LVS_NO_EVIDENCE",
+    # A contradiction between two parseable witnesses is not a measured risk
+    # either: nobody can say WHICH of the two numbers the accepted risk is
+    # about, so there is nothing for a waiver to accept. See
+    # `_witness_disagreements`.
+    "A6_PV_DRC_WITNESS_DISAGREEMENT",
+    "A6_PV_LVS_WITNESS_DISAGREEMENT",
+})
+
 # ---------------------------------------------------------------------------
 # block list (mirrors _analog_a_check_common.load_block_list — kept local so
 # this gate has no hard dependency on import order).
@@ -63,9 +115,25 @@ _SKILL = "drc-fix + lvs-triage"
 
 def _load_block_list(project: Path) -> Optional[List[str]]:
     """Return declared analog block names, or None when no block-list
-    file exists at all (digital-only / non-applicable)."""
+    file exists at all (digital-only / non-applicable).
+
+    ROOTS. `phase1/analog/` is the root A6's OWN flow condition names
+    (`condition.files_exist: ["phase1/analog/analog_block_list.json"]`) and the
+    one `_analog_a_check_common.block_list_path` — which every A1-A5 gate uses
+    — has probed since the A-gates were brought in line. This local reader
+    probed only `phase3/analog/` and the legacy `analog/`, so on a project whose
+    block list lives ONLY at the flow-declared root the step's condition fired,
+    the gate ran, and it returned `SKIP (no analog blocks)` with rc=2 —
+    which `flow_compliance_check._run_program` credits as VACUOUS_PASS. A6
+    therefore reported "per-block PV non-applicable" for a project that
+    declares analog blocks: UNMEASURED PRESENTED AS ZERO. Probing the same
+    roots as the shared helper, in the same precedence order (canonical runner
+    root first), closes it; a project carrying neither root still returns None
+    and still SKIPs, so a genuinely digital IC is unaffected.
+    """
     candidates = [
         project / "phase3" / "analog" / "analog_block_list.json",
+        project / "phase1" / "analog" / "analog_block_list.json",
         project / "analog" / "analog_block_list.json",
     ]
     for path in candidates:
@@ -280,6 +348,125 @@ def _lvs_match(bdir: Path) -> Tuple[Optional[bool], str]:
 # ---------------------------------------------------------------------------
 
 
+def _evidence_gap(bdir: Path, flag_name: str, report_globs: List[str]) -> str:
+    """Say WHY there is no parseable evidence, not merely that there is none.
+
+    A6 owns the per-block PV verdict outright since the A5/A6 cycle was broken
+    (see `analog_a5_layout_check`'s SCOPE section). A5's rules distinguished
+    ABSENT / EMPTY / VERDICT-LESS so an operator could tell "run the tool" from
+    "fix the tool's output"; that granularity is preserved here in the finding
+    DETAIL rather than by splitting the rule id, so no existing consumer of
+    `A6_PV_*_NO_EVIDENCE` changes shape. chip-AGNOSTIC: file states only.
+    """
+    reports = [p.name for g in report_globs for p in sorted(bdir.glob(g))]
+    flag = bdir / flag_name
+    if reports:
+        state = (f"report(s) {reports} present but carry no parseable "
+                 f"verdict")
+    elif not flag.is_file():
+        state = f"no report and no {flag_name} (the tool has not run)"
+    else:
+        try:
+            text = flag.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            state = f"{flag_name} unreadable ({exc.__class__.__name__})"
+        else:
+            state = (f"{flag_name} is empty/whitespace — created, not "
+                     f"signed off"
+                     if not text.strip() else
+                     f"{flag_name} carries no verdict line")
+    return state
+
+
+def _flag_drc_count(bdir: Path) -> Optional[int]:
+    """The DRC count carried by ``drc_clean.flag`` alone, or None."""
+    flag = bdir / "drc_clean.flag"
+    if not flag.is_file():
+        return None
+    try:
+        return _parse_drc_count(flag.read_text(encoding="utf-8",
+                                               errors="replace"))
+    except OSError:
+        return None
+
+
+def _flag_lvs_verdict(bdir: Path) -> Optional[bool]:
+    """The LVS verdict carried by ``lvs_match.flag`` alone, or None."""
+    flag = bdir / "lvs_match.flag"
+    if not flag.is_file():
+        return None
+    try:
+        return _parse_lvs_match(flag.read_text(encoding="utf-8",
+                                               errors="replace"))
+    except OSError:
+        return None
+
+
+def _witness_disagreements(bdir: Path, rel: str, block: str,
+                           drc_count: Optional[int], drc_ev: str,
+                           lvs_ok: Optional[bool], lvs_ev: str) -> List[dict]:
+    """Two parseable PV witnesses for one block that CONTRADICT each other.
+
+    ADDED 2026-07-28 at the convergence merge, to close a defect class that was
+    lost when the A5/A6 dependency cycle was broken. The cycle was real and its
+    removal was right: ``analog_a5_layout_check`` used to require
+    ``drc_clean.flag`` / ``lvs_match.flag`` — A6's own declared outputs — before
+    A5 could pass, while A6 declared ``blocks_on: [A5]``. A5's PV reads were
+    withdrawn and A6 became the sole owner of the per-block PV verdict.
+
+    What the withdrawal did NOT preserve: A5 read the FLAGS, while A6 prefers
+    the REPORT and only falls back to the flag. A project where the two
+    disagree was therefore rejected by old A5 and is accepted by both gates
+    today. MEASURED on a block carrying ``drc_clean.flag: "violations: 5"``
+    beside ``drc.report: "total violations: 0"``, and ``lvs_match.flag:
+    "lvs: mismatch"`` beside ``lvs.report: "netlists match"``, with no waiver::
+
+        test/matrix-63x8-coverage : A5 rc=1  (A5_DRC_NOT_CLEAN + A5_LVS_NOT_MATCH)
+        after the cycle fix, before this rule : A5 rc=0 and A6 rc=0, findings []
+
+    That is the same shape ``spare_cell_preservation_check`` gained
+    RECORD_ARTEFACT_MISMATCH for in the same change: two artefacts of one run
+    disagree and the gate silently believes the clean one. A resumed project
+    produces it naturally — a stale flag beside a fresh report.
+
+    NOT WAIVABLE by a step waiver, for the same reason the no-evidence rules
+    are not: a waiver accepts a MEASURED risk, and here the measurement itself
+    is in dispute — nobody can say which of the two numbers the risk is about.
+
+    NO FALSE ALARM BY CONSTRUCTION: this fires only when BOTH witnesses parse
+    to a verdict AND those verdicts differ. A block with one witness, or with a
+    flag that carries no verdict line, reaches none of these branches.
+    """
+    out: List[dict] = []
+    flag_drc = _flag_drc_count(bdir)
+    if (drc_count is not None and flag_drc is not None
+            and drc_ev != "drc_clean.flag"
+            and (flag_drc > 0) != (drc_count > 0)):
+        out.append({
+            "block": block, "rule": "A6_PV_DRC_WITNESS_DISAGREEMENT",
+            "rel_path": f"{rel}/{drc_ev}|drc_clean.flag",
+            "detail": (f"two parseable DRC witnesses disagree: {drc_ev} "
+                       f"reports {drc_count} violation(s) while "
+                       f"drc_clean.flag reports {flag_drc}. One of them does "
+                       f"not describe this layout, so neither is a sign-off "
+                       f"verdict — re-run DRC and refresh both"),
+        })
+    flag_lvs = _flag_lvs_verdict(bdir)
+    if (lvs_ok is not None and flag_lvs is not None
+            and lvs_ev != "lvs_match.flag" and flag_lvs != lvs_ok):
+        out.append({
+            "block": block, "rule": "A6_PV_LVS_WITNESS_DISAGREEMENT",
+            "rel_path": f"{rel}/{lvs_ev}|lvs_match.flag",
+            "detail": (f"two parseable LVS witnesses disagree: {lvs_ev} "
+                       f"reports {'match' if lvs_ok else 'mismatch'} while "
+                       f"lvs_match.flag reports "
+                       f"{'match' if flag_lvs else 'mismatch'}. One of them "
+                       f"does not describe this layout, so neither is a "
+                       f"sign-off verdict — re-run LVS and refresh both"),
+        })
+    return out
+
+
 def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
     """Return (status, findings) where status is PASS or FAIL.
     A block whose directory exists but lacks real DRC/LVS evidence is
@@ -304,7 +491,10 @@ def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
             "rel_path": f"{rel}/drc.report|drc_clean.flag",
             "detail": ("no parseable DRC result (need drc.report with a "
                        "violation count, or drc_clean.flag carrying an "
-                       "explicit `violations: 0` line)"),
+                       "explicit `violations: 0` line): "
+                       + _evidence_gap(bdir, "drc_clean.flag",
+                                       ["drc.report", "*.drc.report",
+                                        "*.lyrdb", "drc.rpt", "*.drc"])),
         })
     elif drc_count > 0:
         findings.append({
@@ -320,7 +510,11 @@ def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
             "rel_path": f"{rel}/lvs.report|comp.json|lvs_match.flag",
             "detail": ("no parseable LVS result (need lvs.report / "
                        "comp.json with a match verdict, or lvs_match.flag "
-                       "carrying an explicit `match` line)"),
+                       "carrying an explicit `match` line): "
+                       + _evidence_gap(bdir, "lvs_match.flag",
+                                       ["lvs.report", "*.lvs.report",
+                                        "lvs.rpt", "comp.out", "*.lvs",
+                                        "comp.json"])),
         })
     elif lvs_ok is False:
         findings.append({
@@ -328,6 +522,9 @@ def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
             "rel_path": f"{rel}/{lvs_ev}",
             "detail": "LVS reports a mismatch (must be a match)",
         })
+
+    findings.extend(_witness_disagreements(
+        bdir, rel, block, drc_count, drc_ev, lvs_ok, lvs_ev))
 
     return ("FAIL" if findings else "PASS"), findings
 
@@ -457,13 +654,50 @@ def main(argv=None) -> int:
         else:
             findings.extend(fs)
 
+    # THE RECORD, not a rule — see the module docstring. Read from the same
+    # per-block artefact A5 holds to its rules, so the two gates cannot
+    # disagree about one file, and merged into the summary on every path
+    # below (they all splat `**summary`).
+    import _analog_layout_matching as _lm
+    disclosures = {b: _lm.read_disclosure(project / "phase3" / "analog" / b, b)
+                   for b in blocks}
+
     summary = {
         "blocks_checked": len(blocks),
         "blocks_pass": blocks_pass,
         "blocks_fail": len({f["block"] for f in findings}),
+        **_lm.summarise(disclosures),
     }
 
-    if findings and waiver:
+    # A waiver covers a MEASURED defect, never an absent measurement.
+    unwaivable = [f for f in findings
+                  if f.get("rule") in _NON_WAIVABLE_RULES]
+    waivable = [f for f in findings
+                if f.get("rule") not in _NON_WAIVABLE_RULES]
+
+    if findings and waiver and unwaivable:
+        verdict, rc = "FAIL", 1
+        report = {
+            "gate": _GATE_NAME, "verdict": verdict,
+            "step_label": args.step_label, "waiver": waiver,
+            **summary,
+            "findings": unwaivable,
+            "waiver_cannot_cover": [
+                {"block": f.get("block"), "rule": f.get("rule")}
+                for f in unwaivable],
+            "waiver_scope_note": (
+                f"waiver={waiver.get('ticket', '?')} suppressed "
+                f"{len(waivable)} measured defect(s) but CANNOT cover "
+                f"{len(unwaivable)} finding(s) that report no measurement "
+                f"at all: a waiver accepts a known risk, and there is no "
+                f"risk to accept where the tool never produced a result. "
+                f"Run DRC/LVS for the named block(s), then waive what it "
+                f"actually reports."),
+            "suppressed_findings": waivable,
+        }
+        # The live findings are what the operator must act on.
+        findings = unwaivable
+    elif findings and waiver:
         verdict, rc = "WAIVED", 0
         report = {
             "gate": _GATE_NAME, "verdict": verdict,
@@ -503,6 +737,8 @@ def main(argv=None) -> int:
             print(f"  ... and {len(findings) - 8} more", file=sys.stderr)
     if waiver:
         print(f"  waiver:  {waiver.get('ticket', '?')}")
+    # LAST, and on every path — same contract as `structure_only_disclosure`.
+    _lm.matching_disclosure(_GATE_NAME, disclosures)
     return rc
 
 

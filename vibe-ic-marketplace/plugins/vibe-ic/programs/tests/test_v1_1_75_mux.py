@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_mux_completeness.py — pins the deterministic multiplexer SOLVER
+"""test_v1_1_75_mux.py — pins the deterministic multiplexer SOLVER
 (programs/mux_synth.py) on the REAL VerilogEval-Human mux-family prompts and on the
 §4.05 no-leak boundary.
 

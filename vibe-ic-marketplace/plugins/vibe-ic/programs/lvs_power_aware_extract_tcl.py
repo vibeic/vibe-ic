@@ -234,7 +234,8 @@ def _inject_directives(base_tcl: str, directives: List[str]) -> Optional[str]:
 
 
 def build_power_aware_extraction_tcl(
-        base_tcl: str, pdk: str, def_text: str, top: str = ""
+        base_tcl: str, pdk: str, def_text: str, top: str = "",
+        cell_lef: Optional[Path] = None
 ) -> Tuple[str, Dict[str, object]]:
     """Return (tcl, stats). Power-aware ONLY when the PDK is recognised AND the
     routed DEF exposes both a ground rail and usable power-net stripe geometry;
@@ -242,10 +243,19 @@ def build_power_aware_extraction_tcl(
     regression). chip-AGNOSTIC: rail names from the PDK model, geometry from the
     DEF."""
     stats = ExtractTclStats(pdk=_pa._normalize_pdk(pdk))
-    model = _pa.power_model_for(pdk)
+    # cell_lef is consulted ONLY when the NAME resolves to no table entry, so
+    # the named-PDK lanes are unchanged and only the project-staged
+    # (commercial) lane — which previously skipped — gains a model derived
+    # from the PDK's own std-cell LEF.
+    model = _pa.power_model_for(pdk, cell_lef=cell_lef)
     if model is None:
-        stats.skipped_reason = f"unrecognised PDK '{pdk}' — no power model"
+        stats.skipped_reason = (
+            f"unrecognised PDK '{pdk}' — no power model"
+            + ("" if cell_lef else
+               " and no cell LEF supplied to derive one from"))
         return base_tcl, stats.as_dict()
+    if not stats.pdk:
+        stats.pdk = model.key
     # Rail names: pg_pins = (power, ground, well-of-power, well-of-ground).
     power_rail = model.pg_pins[0]
     ground_rail = model.pg_pins[1]
@@ -320,6 +330,8 @@ extract do local
 extract all
 ext2spice lvs
 ext2spice -o $env(SPICE_OUT)
+feedback save $env(FEEDBACK_OUT)
+puts "MAGIC_EXT2SPICE_FEEDBACK $env(FEEDBACK_OUT) [feedback count]"
 puts "MAGIC_EXT2SPICE_DONE $env(SPICE_OUT)"
 quit -noprompt
 """

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,6 +25,40 @@ from .schema import (
     FactGraph,
     LAYER_FILE_NAMES,
 )
+
+# THE L-document write chokepoint. This engine is the OTHER Phase-1 track
+# (fact-graph → L*.json), reached through `phase1_engine.cli`, and it emits
+# the same artefact class as `phase1_doc_one_shot_runner`. A stamp on one
+# track and not the other would make the absence of a stamp ambiguous
+# instead of uniform, which is worse than no stamp at all.
+#
+# THIS FILE EXISTS TWICE — the repo-root `tools/phase1_engine/` master and
+# the byte-identical bundle under `plugins/vibe-ic/tools/phase1_engine/`
+# (`test_v0_2_58_phase1_engine_bundle` compares their digests). The two
+# copies sit at DIFFERENT depths relative to `programs/`, so the resolver
+# below searches upward for the directory that actually contains the
+# module rather than counting `parents[N]` — a fixed index is correct in
+# one copy and silently wrong in the other, which is exactly the drift the
+# bundle test exists to prevent.
+def _find_programs_dir() -> Path:
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        for cand in (base / "programs",
+                     base / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+                     / "programs"):
+            if (cand / "l_doc_generator_stamp.py").is_file():
+                return cand
+    raise ImportError(
+        "l_doc_generator_stamp not found from "
+        f"{here} — this engine emits L documents and cannot do so without "
+        "the write chokepoint that records the producing release; a silent "
+        "unstamped emit is the ambiguity vibe-ic#522 removed.")
+
+
+_PROGRAMS = _find_programs_dir()
+if str(_PROGRAMS) not in sys.path:
+    sys.path.insert(0, str(_PROGRAMS))
+import l_doc_generator_stamp as _stamp  # noqa: E402
 
 
 _LIST_IDX_RE = re.compile(r"^(.+)\[(\d+)\]$")
@@ -427,7 +462,14 @@ def render_layers(
         # original prompt's unit literals. See _annotate_human_units.
         _annotate_human_units(tree)
         fpath = output_dir / fname
-        fpath.write_text(json.dumps(tree, indent=indent, ensure_ascii=False) + "\n")
+        # THE L-document write chokepoint — stamps the producing release.
+        # NOTE the two senses of "provenance" that meet on this line: the
+        # `provenance` / `source_documents` keys injected above say WHICH
+        # INPUT a value came from; the stamp says WHICH RELEASE wrote the
+        # file. A document can be fully traceable to its inputs and still
+        # be seventy releases out of date, which is the failure this
+        # chokepoint closes.
+        _stamp.dump(fpath, tree, indent=indent)
         written[code] = fpath
 
     return written

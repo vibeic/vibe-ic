@@ -16,7 +16,7 @@ or had its direction mismatched (e.g., `id_bus_tx_en` declared `output`
 in L9 but `inout` in RTL because the agent chose to merge tristate).
 
 Mid-flow consequences:
-  - QSF/SDC generators (`aid_class_qsf_gen` / `aid_class_sdc_gen`) read
+  - QSF/SDC generators (`qsf_gen` / `sdc_gen`) read
     L9 and emit pin assignments for pins that don't exist in synth →
     Quartus warns, agent ignores, hardware silently floats.
   - Reverse case: an RTL port not in L9 means no pin assignment → the
@@ -481,6 +481,121 @@ def _reused_ip_instantiated_surface(project: Path, rtl_top: Path,
             if nm:
                 surface.add(nm)
     return surface
+
+
+# ── ORGANIC #778 — L3 doc-level explicit PIN-ALIAS reconciliation ──────────
+# Independent of reused-IP/manifest status (manifest may be None — this is
+# NOT gated on SOURCE_MANIFEST.json or a declared ip_list): the L3 external-
+# interface doc sometimes documents a port under TWO accepted spellings via
+# the backtick-quoted parenthetical grammar:
+#     `<name_a>` (or `<name_b>`)
+# meaning name_a and name_b are two authoritative labels for the SAME
+# physical signal (a doc-author convenience, e.g. a generic bus-role name
+# alongside a design-specific name). The Phase-1 L9 extractor promotes only
+# ONE spelling into top_level_ports[]; when the generated RTL top wrapper
+# "honours the extracted contract" by exposing BOTH spellings as literal
+# ports (tied together internally — e.g. an OR-merge on a read bus, or a
+# duplicated wire on a write bus) the un-promoted spelling surfaces as a
+# spurious RTL-only (or, symmetrically, L9-only) residual — not a genuinely
+# dropped or invented pin.
+#
+# Reconciliation is chip-AGNOSTIC and NO-LEAK: it keys ONLY on the L3 doc's
+# own backtick + "(or ...)" grammar, and only credits a residual pin when
+# the OTHER member of its documented alias group is an ANCHOR — a name
+# already present with AGREEING direction on both L9 and RTL — and the
+# residual pin's own RTL/L9 direction agrees with that anchor's direction.
+# A residual pin whose alias partner is not itself a matched anchor, or
+# whose own direction disagrees with the anchor, is NOT reconciled — it
+# still FAILs (a real direction/pin defect can never hide behind an
+# unrelated doc alias).
+_RE_L3_ALIAS_PAIR = re.compile(
+    r"`([A-Za-z_]\w*)`"                 # first name, in backticks
+    r"\s*\(\s*or\s+"                     # `(or ` separator
+    r"`([A-Za-z_]\w*)`"                 # second name, in backticks
+    r"\s*\)",                            # closing paren
+    re.IGNORECASE,
+)
+
+
+def _l3_doc_alias_groups(project: Path) -> list:
+    """ORGANIC #778 — scan L3 input/generated docs for the explicit
+    backtick `` `a` (or `b`) `` alias grammar and return the list of
+    2-name equivalence groups found (each a frozenset of the two
+    spellings). Order-independent — handles either authoring order
+    (primary-first or alias-first) because the group is unordered.
+    Empty when no L3 doc exists or no such pattern is present.
+    Chip-AGNOSTIC: pure regex on the doc's own grammar; no chip /
+    vendor / bus literal."""
+    groups: list = []
+    seen: set = set()
+    roots = [project / "input" / "docs", _pl.generated_docs_dir(project)]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in sorted(root.glob("L3*")) + sorted(root.glob("*interface*")):
+            try:
+                txt = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            for m in _RE_L3_ALIAS_PAIR.finditer(txt):
+                a, b = m.group(1).strip(), m.group(2).strip()
+                if a and b and a != b:
+                    key = frozenset((a, b))
+                    if key not in seen:
+                        seen.add(key)
+                        groups.append(key)
+    return groups
+
+
+def _reconcile_l3_doc_aliases(only_l9: list, only_rtl: list,
+                              alias_groups: list,
+                              l9_names: set, rtl_names: set,
+                              l9_dir_map: dict, rtl_dir_map: dict):
+    """ORGANIC #778 — drop a residual pin from only_l9/only_rtl when its
+    documented alias-group partner is a genuinely MATCHED anchor pin (the
+    same name present in both L9 and RTL with agreeing direction) and the
+    residual pin's own direction agrees with that anchor's direction.
+
+    Returns (only_l9', only_rtl', advisory_list). `advisory_list` entries
+    are human-readable "<residual> (side, doc-aliased to `<anchor>`)"
+    strings for the PASS-path advisory print. Never removes a pin whose
+    alias partner is not itself a matched anchor, or whose direction
+    disagrees — no-leak."""
+    if not alias_groups:
+        return only_l9, only_rtl, []
+    advisory: list = []
+    kept_l9 = list(only_l9)
+    kept_rtl = list(only_rtl)
+    for group in alias_groups:
+        names = sorted(group)
+        anchor = None
+        anchor_dir = None
+        for n in names:
+            if n in l9_names and n in rtl_names:
+                ld, rd = l9_dir_map.get(n), rtl_dir_map.get(n)
+                if ld and rd and ld == rd:
+                    anchor = n
+                    anchor_dir = rd
+                    break
+        if anchor is None:
+            continue
+        for n in names:
+            if n == anchor:
+                continue
+            if n in kept_rtl:
+                rd = rtl_dir_map.get(n)
+                if rd == anchor_dir:
+                    kept_rtl.remove(n)
+                    advisory.append(
+                        f"{n} (RTL-only, doc-aliased to `{anchor}`)")
+                    continue
+            if n in kept_l9:
+                ld = l9_dir_map.get(n)
+                if ld == anchor_dir:
+                    kept_l9.remove(n)
+                    advisory.append(
+                        f"{n} (L9-only, doc-aliased to `{anchor}`)")
+    return sorted(kept_l9), sorted(kept_rtl), advisory
 
 
 # ── ORGANIC #711 round-2 — AUTO-DERIVE the renamed-interface pairing ────────
@@ -1009,6 +1124,46 @@ def _resolve_compile_defines(project: Path) -> set:
     return {define}
 
 
+def _rtl_power_pin_face(rtl_path: Path,
+                        top_name: Optional[str] = None) -> set:
+    """ORGANIC-20260722 #784 — return the set of port names declared inside the
+    RTL top module's ```ifdef USE_POWER_PINS`` arm (empty when the top has no
+    such arm, or on ANY parse/import error so the gate degrades to its
+    historical exact-name diff).
+
+    Reuses the SAME comment-mask / port-block / power-gate helpers the
+    auto-emitted chip_top wrapper uses (`design_one_shot_runner._chip_top_*`),
+    so the emitter and this gate can never disagree about which pins are the
+    power face. chip-AGNOSTIC: keyed on the universal ``USE_POWER_PINS`` macro
+    name only."""
+    try:
+        import design_one_shot_runner as _d
+        text = _d._chip_top_mask_comments(
+            rtl_path.read_text(errors="ignore"))
+        anchor = None
+        if isinstance(top_name, str) and top_name.strip():
+            anchor = re.search(
+                r"\bmodule\s+%s\s*[(#]" % re.escape(top_name.strip()), text)
+        if anchor is None:
+            anchor = re.search(r"\bmodule\s+\w+\s*[(#]", text)
+        if anchor is None:
+            return set()
+        _params, port_block = _d._chip_top_extract_param_and_ports(
+            text, anchor.end() - 1)
+        if not port_block:
+            return set()
+        # `_chip_top_power_pin_gated_names` yields every IDENTIFIER inside the
+        # guarded arm — including the `inout`/`wire` declaration keywords, which
+        # is harmless where it is used as a membership filter over an
+        # already-extracted name list, but would put non-ports into a set we
+        # SUBTRACT from both sides here. Intersect with the block's real port
+        # names so the face is exactly "ports declared in the power arm".
+        return (_d._chip_top_power_pin_gated_names(port_block)
+                & _d._chip_top_port_names(port_block))
+    except Exception:  # pragma: no cover — defensive
+        return set()
+
+
 def parse_rtl_top_ports(rtl_path: Path,
                         top_name: Optional[str] = None,
                         defines: Optional[set] = None) -> list[dict]:
@@ -1103,6 +1258,61 @@ def waived(project: Path) -> tuple[bool, str]:
 
 
 # ─── main ─────────────────────────────────────────────────────────
+def _exclusion_advisories(only_l9_optional, reused_prefix_matched,
+                          reused_tied_off, reused_config_gated,
+                          reused_ip_passthrough, l3_alias_reconciled):
+    """The WARN lines that explain which pins were EXCLUDED from the mismatch
+    set, and on what grounds.
+
+    #345 salvage 1. These were emitted inline under `if not findings:` — the
+    PASS path only. Every one of them is a statement about what was taken OUT
+    of the comparison, so on a FAIL the reader saw N findings with no record
+    of the exclusions that shaped them. If an exclusion rule is wrong the
+    finding list is wrong, and the evidence was being suppressed precisely
+    then. Built once here so all three verdict paths print the same set.
+    """
+    out = []
+    if only_l9_optional:
+        # v0.3.4 — #491 R4: doc-optional pins the RTL top legitimately omits.
+        out.append(f"  WARN (advisory) — L9 doc-OPTIONAL pin(s) not in "
+                   f"RTL top: {only_l9_optional}")
+    if reused_prefix_matched:
+        # ORGANIC #659: reused-IP struct-bus roots reconciled with their
+        # prefix-expanded scalar pads.
+        _pm = ", ".join(f"{root}\u2192{pads}"
+                        for root, pads in reused_prefix_matched)
+        out.append(f"  WARN (advisory) — reused-IP struct-bus flatten "
+                   f"reconciled (root \u2194 prefix-expanded pads): {_pm}")
+    if reused_tied_off:
+        # ORGANIC #659: SOURCE_MANIFEST-documented intentional tie-offs
+        # dropped from the L9-only diff.
+        out.append(f"  WARN (advisory) — reused-IP SOURCE_MANIFEST tie-off(s) "
+                   f"omitted from RTL top (intentional, internally driven): "
+                   f"{reused_tied_off}")
+    if reused_config_gated:
+        # ORGANIC #781: L9 pins the chosen reused-IP configuration
+        # parameterises away — doc described a fuller variant than was
+        # instantiated, not a dropped pin.
+        out.append(f"  WARN (advisory) — reused-IP CONFIG-GATED L9 pin(s) not "
+                   f"exposed by the instantiated IP variant "
+                   f"(doc-over-declaration, not a dropped pin): "
+                   f"{reused_config_gated}")
+    if reused_ip_passthrough:
+        # ORGANIC #781: chip_top ports that ARE real declared ports of the
+        # instantiated reused-IP module (faithful passthrough) which the L9
+        # doc named differently / did not list.
+        out.append(f"  WARN (advisory) — reused-IP passthrough port(s) present "
+                   f"in chip_top and in the instantiated IP but not enumerated "
+                   f"in L9 (legitimate IP surface): {reused_ip_passthrough}")
+    if l3_alias_reconciled:
+        # ORGANIC #778: residual pin(s) reconciled against the L3 doc's own
+        # alias grammar — a documented duplicate spelling, not a dropped or
+        # invented pin.
+        out.append(f"  WARN (advisory) — L3 doc-declared pin alias(es) "
+                   f"reconciled (not a mismatch): {l3_alias_reconciled}")
+    return out
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print("Usage: l9_rtl_pin_consistency_check.py <project_dir>")
@@ -1181,8 +1391,39 @@ def main(argv: list[str]) -> int:
     l9_names = {n for n in l9_names if not _is_implicit_pin(n)}
     rtl_names = {n for n in rtl_names if not _is_implicit_pin(n)}
 
+    # ORGANIC-20260722 #784 — strip the RTL top's OWN `ifdef USE_POWER_PINS
+    # face from BOTH sides. #704 made the parser preprocessor-aware and blanks
+    # not-taken arms; USE_POWER_PINS is in NEITHER the SIMULATION nor the
+    # SYNTHESIS define-set, so a supply pin declared behind that guard vanished
+    # from `rtl_names` while L9 still declares it (every PDK datasheet lists the
+    # supplies) → a permanent false "L9 declares pins missing from RTL top:
+    # ['vccd1','vssd1']" on any design using the universal USE_POWER_PINS
+    # convention. Simply TAKING the arm is not the fix either: the hardened
+    # face legitimately carries supplies the functional pin table never lists
+    # (unused-domain rails), which would flip the false-missing into an equally
+    # false "RTL has ports not in L9".
+    #
+    # Supply pins are owned by the power-intent / PDN layer (L21), not by this
+    # gate — whose stated purpose is QSF/SDC pin ASSIGNMENT correctness, and a
+    # supply rail is never pin-assigned. The exemption is therefore SYMMETRIC
+    # and derived from the DUT's own source: only names literally declared
+    # inside that module's USE_POWER_PINS arm are exempt, so a dropped
+    # FUNCTIONAL pin can never hide behind it. A top with no USE_POWER_PINS arm
+    # yields an empty set → byte-identical behaviour. chip-AGNOSTIC: the
+    # USE_POWER_PINS macro name only; no chip/vendor/rail literal.
+    power_face = _rtl_power_pin_face(rtl_top, top_name)
+    if power_face:
+        l9_names = l9_names - power_face
+        rtl_names = rtl_names - power_face
+
     only_l9_all = sorted(l9_names - rtl_names)
     only_rtl_all = sorted(rtl_names - l9_names)
+
+    # Direction maps built once, up-front — reused by both the #778 doc-
+    # alias reconciliation below AND the final dir_mismatch pass further
+    # down (single source, no drift between the two uses).
+    l9_dir_map = {p["name"]: p["direction"] for p in l9_ports}
+    rtl_dir_map = {p["name"]: p["direction"] for p in rtl_ports}
 
     # ORGANIC #659 — reused-IP struct-flatten reconciliation. BEFORE the
     # optional/debug splits, if phase2/stage1/rtl/SOURCE_MANIFEST.json
@@ -1250,6 +1491,20 @@ def main(argv: list[str]) -> int:
             reused_config_gated = sorted(reused_config_gated)
             reused_ip_passthrough = sorted(reused_ip_passthrough)
 
+    # ORGANIC #778 — L3 doc-level explicit pin-alias reconciliation (see
+    # _reconcile_l3_doc_aliases doc above). Runs UNCONDITIONALLY (never
+    # gated on manifest/reused-IP status) — the alias grammar is a property
+    # of the L3 INPUT DOC, not of reused-IP provenance, so it also covers a
+    # freshly-authored (non-catalog-glue) top that faithfully exposes both
+    # doc-documented spellings as literal ports.
+    l3_alias_groups = _l3_doc_alias_groups(project)
+    l3_alias_reconciled: list = []
+    if l3_alias_groups:
+        only_l9_all, only_rtl_all, l3_alias_reconciled = (
+            _reconcile_l3_doc_aliases(
+                only_l9_all, only_rtl_all, l3_alias_groups,
+                l9_names, rtl_names, l9_dir_map, rtl_dir_map))
+
     # v0.3.4 — ORGANIC #491 R4. Split L9-only pins into doc-declared
     # OPTIONAL vs required. A doc says "(optional) pin" → the RTL top
     # legitimately may omit it; absence is advisory, not FAIL (mirror
@@ -1264,9 +1519,9 @@ def main(argv: list[str]) -> int:
     only_rtl_debug = [n for n in only_rtl_all if _is_debug_port(n)]
     only_rtl = [n for n in only_rtl_all if not _is_debug_port(n)]
 
-    # Direction-mismatch list (only for pins in BOTH).
+    # Direction-mismatch list (only for pins in BOTH). rtl_dir_map was built
+    # up-front (see #778 comment above) — reused here, single source.
     dir_mismatch: list[str] = []
-    rtl_dir_map = {p["name"]: p["direction"] for p in rtl_ports}
     for p in l9_ports:
         if p["name"] not in rtl_names:
             continue
@@ -1327,49 +1582,24 @@ def main(argv: list[str]) -> int:
             print(f"  WARN — {len(_unknown)} L9 entr"
                   f"{'y' if len(_unknown) == 1 else 'ies'} skipped for "
                   f"unknown reason: {_unknown}")
-        if only_l9_optional:
-            # v0.3.4 — #491 R4 advisory (non-gating): doc-optional
-            # pins the RTL top legitimately omits.
-            print(
-                f"  WARN (advisory) — L9 doc-OPTIONAL pin(s) not in "
-                f"RTL top: {only_l9_optional}"
-            )
-        if reused_prefix_matched:
-            # ORGANIC #659 advisory (non-gating): reused-IP struct-bus
-            # roots reconciled with their prefix-expanded scalar pads.
-            _pm = ", ".join(
-                f"{root}→{pads}" for root, pads in reused_prefix_matched)
-            print(
-                f"  WARN (advisory) — reused-IP struct-bus flatten "
-                f"reconciled (root ↔ prefix-expanded pads): {_pm}"
-            )
-        if reused_tied_off:
-            # ORGANIC #659 advisory (non-gating): SOURCE_MANIFEST-
-            # documented intentional tie-offs dropped from the L9-only diff.
-            print(
-                f"  WARN (advisory) — reused-IP SOURCE_MANIFEST tie-off(s) "
-                f"omitted from RTL top (intentional, internally driven): "
-                f"{reused_tied_off}"
-            )
-        if reused_config_gated:
-            # ORGANIC #781 advisory (non-gating): L9 pins the chosen reused-IP
-            # configuration parameterises away (not ports of the instantiated
-            # IP module). Doc described a fuller variant than was instantiated.
-            print(
-                f"  WARN (advisory) — reused-IP CONFIG-GATED L9 pin(s) not "
-                f"exposed by the instantiated IP variant (doc-over-declaration"
-                f", not a dropped pin): {reused_config_gated}"
-            )
-        if reused_ip_passthrough:
-            # ORGANIC #781 advisory (non-gating): chip_top ports that ARE real
-            # declared ports of the instantiated reused-IP module (faithful
-            # passthrough) which the L9 doc named differently / did not list.
-            print(
-                f"  WARN (advisory) — reused-IP passthrough port(s) present "
-                f"in chip_top and in the instantiated IP but not enumerated "
-                f"in L9 (legitimate IP surface): {reused_ip_passthrough}"
-            )
+        for _a in _exclusion_advisories(
+                only_l9_optional, reused_prefix_matched, reused_tied_off,
+                reused_config_gated, reused_ip_passthrough,
+                l3_alias_reconciled):
+            print(_a)
         return 0
+
+    # #345 salvage 1. EVERY advisory above says WHY a pin was EXCLUDED from
+    # the mismatch set — config-gated, passthrough, tie-off, alias-reconciled.
+    # They used to print only under `if not findings:`, i.e. only on PASS. So
+    # on a FAIL a reader saw N findings and no record of what had been taken
+    # OUT of that comparison, which is the one moment the exclusions matter:
+    # if an exclusion rule is wrong, the finding list is wrong, and the
+    # evidence that would show it was suppressed exactly then. Printed on all
+    # three paths now.
+    _advisories = _exclusion_advisories(
+        only_l9_optional, reused_prefix_matched, reused_tied_off,
+        reused_config_gated, reused_ip_passthrough, l3_alias_reconciled)
 
     is_waived, rationale = waived(project)
     if is_waived:
@@ -1379,6 +1609,8 @@ def main(argv: list[str]) -> int:
         )
         for f in findings:
             print(f"  · {f}")
+        for _a in _advisories:
+            print(_a)
         return 0
 
     print(
@@ -1387,6 +1619,8 @@ def main(argv: list[str]) -> int:
     )
     for f in findings:
         print(f"  · {f}")
+    for _a in _advisories:
+        print(_a)
     return 1
 
 

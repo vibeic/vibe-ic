@@ -32,12 +32,14 @@ Design summary
                                 each with its own ic_class
     unknown                   — fallback: emit everything
 
-Pure-function module; no I/O.
+Pure-function module apart from the ONE manifest read that resolves the
+running plugin version for the N/A stub's `emitted_by` (#800).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict, field
 from typing import Dict, List, Optional, Set, Tuple
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +527,7 @@ def na_stub(ic_class: str, l_doc: str) -> Dict[str, str]:
         # gating the phase2 runner's overall verdict on docs that are correctly
         # N/A. General — applies to every ic_class that emits N/A stubs.
         "extraction_evidence": {},
-        "emitted_by": "l_doc_taxonomy.na_stub v0.2.14",
+        "emitted_by": _pmd.emitted_by("l_doc_taxonomy.na_stub"),
     }
 
 

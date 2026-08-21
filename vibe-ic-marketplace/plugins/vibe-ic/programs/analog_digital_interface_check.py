@@ -11,17 +11,23 @@ Checks:
      and voltage_domain
   3. Level-shifter requirement flagged when digital (1.8V/1.2V) meets analog (3.3V)
 
-Self-skips (exit 0 + INFO) when:
+Self-skips when:
   - No analog_block_list.json or empty block list
+  - The IC is classified non-analog and every declared block is a
+    low_confidence phantom keyword hit (ORGANIC #676)
 
 Usage:
     python3 analog_digital_interface_check.py <project_dir>
     python3 analog_digital_interface_check.py <project_dir> --json reports/gates/interface.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: at least one declared analog block's interface was read and it
+        is complete
     1 = FAIL (missing or incomplete interface)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no analog block is declared, or the
+        declared ones are the phantom keyword hits of a pure-digital IC, so
+        there is no analog/digital boundary here to validate. #521: both used
+        to be rc 0. Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -32,6 +38,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 import _path_layout as _pl
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -273,16 +281,22 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
+
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
 
     if not args.json:
-        status = waiver_status if result.passed else "FAIL"
-        print(f"[{status}] analog_digital_interface_check")
+        print(_vx.verdict_line("analog_digital_interface_check", result.passed,
+                               skipped, reason, pass_token=waiver_status))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

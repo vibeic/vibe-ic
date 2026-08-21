@@ -271,7 +271,19 @@ LAYER_FILE_NAMES = {
     "L8R": "L8_RTL_CONSTANTS.json",
     "L9":  "L9_INTEGRATION_SPEC.json",
     "L10": "L10_TEST_CASES.json",
-    "L11": "L11_CALIBRATION.json",
+    # L11: the emitted filename is L11_OTP_CONTENT.json — measured in 136/136
+    # Phase-1 runs across the fleet, and the name l_doc_taxonomy has always
+    # declared. The previous value "L11_CALIBRATION.json" existed in ZERO runs,
+    # so every consumer that resolved L11 through this map opened a file that
+    # was never written and silently no-opped. Same failure shape as scoring a
+    # requirement in a layer the backend does not read.
+    #
+    # RE-FIXED at the MASTER (tools/phase1_engine) after v1.6.0's bundle-drift
+    # rsync overwrote #323's bundled-side fix with this stale master value —
+    # the drift test and the declarations-agree test both fired, correctly.
+    # The master is the only side that survives a sync; fixing the bundle
+    # alone is how this regressed once already.
+    "L11": "L11_OTP_CONTENT.json",
     "L12": "L12_BEHAVIORAL_SEQUENCES.json",
     # v0.59 H2: aligned with hardware_pass_attestation_check.py and the
     # v0.50-v0.55 canonical filename. L13 has TWO sections:

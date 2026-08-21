@@ -224,7 +224,7 @@ def test_subprocess_endstate_pass_with_waivers(tmp_path):
         [sys.executable, str(_PROGRAMS / "flow_compliance_check.py"), ".",
          "--strict", "--phase", "2", "--strict-structural",
          "--skip-analog", "--skip-hardware"],
-        cwd=proj, capture_output=True, text=True, timeout=300)
+        cwd=proj, capture_output=True, text=True, timeout=60)
     out = r.stdout + r.stderr
     # The cap waiver line must appear with the distinct ticket, and the
     # field-count gate must NOT be listed as a hard structural FAIL.
@@ -818,11 +818,38 @@ def test_round3_prose_scan_veto_removed_from_conjunction(tmp_path):
 
 
 # ── chip-agnostic source guard (cap must name no chip/vendor/SKU literal) ─────
-def test_chip_agnostic_guard():
+def test_chip_agnostic_guard(tmp_path):
+    """The cap's source must name no chip / vendor / SKU literal.
+
+    THE ARGUMENT IS LOAD-BEARING. This called the guard with plugin_root="."
+    while cwd was `programs/`, so the guard walked `programs/{programs,skills,
+    commands}` — three directories that do not exist — and read 0 files. The
+    guard's own v1.7.9 denominator check (NOTHING_SCANNED, rc 2) is what
+    turned that into a visible failure; before v1.7.9 the same call printed a
+    PASS byte-identical to a real clean scan of 1242 files. The root is
+    `plugins/vibe-ic/`, which is this file's grandparent.
+
+    So the census assertion below is not decoration. rc 0 proves "the guard
+    was happy"; only the census proves THIS TEST looked at anything, and it
+    proves it WITHOUT depending on the guard keeping its own self-check. A
+    gate that reports a denominator is only useful to a caller that reads it.
+    """
+    out = tmp_path / "chip_agnostic.json"
     r = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "source_chip_agnostic_check.py"), "."],
-        cwd=_PROGRAMS, capture_output=True, text=True, timeout=300)
+        [sys.executable, str(_PROGRAMS / "source_chip_agnostic_check.py"),
+         str(_PROGRAMS.parent), "--json", str(out)],
+        cwd=_PROGRAMS, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, (r.stdout + r.stderr)[-3000:]
+
+    census = json.loads(out.read_text())["scan_census"]
+    assert census.get("files_read", 0) > 0, (
+        f"the guard reported PASS over {census.get('files_read')} file(s) — "
+        f"a clean result over an empty scan is not a clean result. "
+        f"census={census}")
+    for sub in ("programs", "skills", "commands"):
+        assert census.get(f"dir_{sub}", -1) > 0, (
+            f"plugin_root resolved to a tree with no {sub}/ — wrong root. "
+            f"census={census}")
 
 
 if __name__ == "__main__":

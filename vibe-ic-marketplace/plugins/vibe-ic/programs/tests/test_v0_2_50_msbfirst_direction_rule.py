@@ -17,6 +17,7 @@ runtime-muxed dual-direction RTL, and single-bit-tap delay lines.
 chip-AGNOSTIC: fixtures use generic TopModule/clk/serial_in/q shapes only.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,21 @@ from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_commen
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
+
+import pytest  # noqa: E402
+
+#: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
+#: Without iverilog the gate refuses to run — correctly — and writes no report,
+#: so the read dies with FileNotFoundError on a path that was never meant to
+#: exist. A gate that REFUSED and a gate that produced a bad report are not the
+#: same result, and a traceback cannot tell them apart. Every other test in this
+#: file calls pure rule functions and needs no toolchain.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="runs gates_atomic.py and reads the gates.json it writes; without "
+           "iverilog the gate refuses and writes nothing")
+
 
 RULE = "msbfirst-direction-mismatch"
 
@@ -186,7 +202,7 @@ def _run_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbP",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def _block_rules(run):
@@ -195,6 +211,7 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
+@_needs_gate
 def test_gate_blocks_msb_entry_form(tmp_path):
     ds, run = _stage(tmp_path, _MSBFIRST_SPEC, _WRONG_RTL)
     r = _run_gate(ds, run)
@@ -205,6 +222,7 @@ def test_gate_blocks_msb_entry_form(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_leftshift_idiom(tmp_path):
     ds, run = _stage(tmp_path, _MSBFIRST_SPEC, _CORRECT_RTL)
     r = _run_gate(ds, run)

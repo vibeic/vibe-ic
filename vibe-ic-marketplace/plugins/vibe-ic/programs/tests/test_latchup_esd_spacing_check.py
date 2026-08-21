@@ -410,3 +410,57 @@ def test_real_caravel_chip_io_guardring_absent_not_autofail():
     r = L._guardring_topology_check(Path(path))
     assert r["status"] == "GUARDRING_ABSENT"
     assert r["n_io_or_hicurrent"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# TAPLESS-CELL PDK guard — BIDIRECTIONAL                                       #
+#                                                                              #
+# Measured twice on the IHP SG13 family: a PDK that ships NO tapcell master     #
+# (ties internal to every std cell) produced a CONCLUSIVE false FAIL from the   #
+# DEF-component count — sg13g2 "452 placed std cell(s) but no well taps" and    #
+# sg13cmos5l "364 placed std cell(s) but 0 rated well/substrate-tap cell(s)".   #
+# Both designs' ties are present and measurable in the sign-off GDS.            #
+#                                                                              #
+# The pair below is load-bearing in BOTH directions:                            #
+#   * the DEFECT (tapless PDK) must STOP being a conclusive GAP, and            #
+#   * a GENUINE 0-tap break on a tapcell-methodology PDK must STILL FAIL.       #
+# Either assertion alone is a rubber stamp.                                     #
+# --------------------------------------------------------------------------- #
+def test_tapless_pdk_zero_taps_is_incomplete_not_a_gap(tmp_path):
+    """FIXED DIRECTION: tapless-cell PDK + 0 tap COMPONENTS is EXPECTED."""
+    d = _write(tmp_path, "tapless.def", _def(_std_rows(364)))
+    r = L._latchup_tap_spacing_check(d, tapless_pdk=True)
+    assert r["status"] == "INCOMPLETE"
+    assert r["reason"] == "ZERO_TAPS_TAPLESS_PDK"
+    assert r["status"] not in L.GAP_STATUSES
+    assert r["n_tap"] == 0 and r["n_std"] == 364
+    # honesty contract: INCOMPLETE is NOT a latch-up pass
+    assert "NOT a conclusive structural GAP" in r["note"]
+    assert "tap_geom_layers" in r["note"]
+
+
+def test_tapcell_pdk_zero_taps_still_conclusive_gap(tmp_path):
+    """DEFECT DIRECTION: the guard must NOT mask a real skipped-tapcell break."""
+    d = _write(tmp_path, "tapped.def", _def(_std_rows(364)))
+    r = L._latchup_tap_spacing_check(d, tapless_pdk=False)
+    assert r["status"] == "WELLTAP_SPACING_GAP"
+    assert r["reason"] == "ZERO_TAPS"
+    assert r["status"] in L.GAP_STATUSES
+
+
+def test_tapless_guard_defaults_off_and_is_narrow(tmp_path):
+    """Default is unchanged (guard opt-in), and it only touches ZERO_TAPS."""
+    d = _write(tmp_path, "dflt.def", _def(_std_rows(100)))
+    assert L._latchup_tap_spacing_check(d)["reason"] == "ZERO_TAPS"
+    # a tapless PDK that DOES carry taps is screened normally, not short-circuited
+    rows = _std_rows(100, step=4000) + _tap_rows(100, step=4000)
+    d2 = _write(tmp_path, "dense.def", _def(rows))
+    r = L._latchup_tap_spacing_check(d2, tapless_pdk=True)
+    assert r["status"] == "SPACING_OK_NECESSARY_NOT_SUFFICIENT"
+
+
+def test_run_geometry_layer_threads_tapless_flag(tmp_path):
+    """The public API must carry the flag through to any_conclusive_gap."""
+    d = _write(tmp_path, "api.def", _def(_std_rows(364)))
+    assert L.run_geometry_layer(str(d), tapless_pdk=False)["any_conclusive_gap"] is True
+    assert L.run_geometry_layer(str(d), tapless_pdk=True)["any_conclusive_gap"] is False

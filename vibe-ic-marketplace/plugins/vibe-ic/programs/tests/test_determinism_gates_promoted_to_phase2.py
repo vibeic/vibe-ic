@@ -122,11 +122,46 @@ def test_non_divider_clean_passes(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
-def test_worked_example_moore_fails(tmp_path):
+def test_worked_example_moore_is_detected_and_repaired(tmp_path):
+    """The step used to report a bare FAIL here and ship nothing. It now hands
+    the oracle's verdict to `gate_directed_rtl_repair`, which is accepted only
+    on that same oracle's explicit PASS — so the step reports PASS *and* the
+    RTL on disk has actually changed and now reproduces the spec's example.
+    Detection is still proven: the repair note names the defect."""
     proj = _make_project(tmp_path, RTL_MOORE, spec=SPEC)
+    res = r.step_determinism_gates(proj)
+    assert res.status == "PASS", res.detail
+    assert "gate-directed repair" in res.detail
+    assert "output-cycle-alignment" in res.detail
+    # the repaired bytes are on disk and satisfy the oracle that raised it
+    import worked_example_sequence_oracle_check as _w
+    rtl = next(_pl.rtl_dir(proj).rglob("*.v")).read_text()
+    assert rtl != RTL_MOORE
+    assert _w.analyze(rtl, SPEC)["verdict"] == "PASS"
+
+
+# RTL whose output lags by THREE cycles: the repair transform applies and the
+# result compiles, but one cycle less is still wrong — so no repair is accepted
+# and the step must still FAIL. This is the negative control that keeps the
+# repair path from being a way to turn every FAIL into a PASS.
+RTL_TOO_LATE = """
+module top(input clk, input rst_n, input data_in, output reg data_out);
+  reg d1, d2;
+  always @(posedge clk or negedge rst_n)
+    if(!rst_n) begin d1<=1'b0; d2<=1'b0; data_out<=1'b0; end
+    else begin d1 <= data_in; d2 <= d1; data_out <= d2; end
+endmodule
+"""
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
+def test_unrepairable_worked_example_defect_still_fails(tmp_path):
+    proj = _make_project(tmp_path, RTL_TOO_LATE, spec=SPEC)
     res = r.step_determinism_gates(proj)
     assert res.status == "FAIL", res.detail
     assert "worked-example" in res.detail
+    # and the RTL must be left exactly as authored
+    assert next(_pl.rtl_dir(proj).rglob("*.v")).read_text() == RTL_TOO_LATE
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
@@ -150,6 +185,18 @@ endmodule
 
 # A SEPARATE, internally-correct reusable cell that SHARES the generic 1-bit
 # data_in/data_out port names (a registered inverter) — the false-fail vector.
+# A `pulse_detect`-named top whose output lags by THREE cycles: the repair
+# transform applies and compiles, but one cycle less is still wrong, so no
+# repair is accepted and the step must still FAIL.
+RTL_TOO_LATE_PD = """
+module pulse_detect(input clk, input rst_n, input data_in, output reg data_out);
+  reg d1, d2;
+  always @(posedge clk or negedge rst_n)
+    if(!rst_n) begin d1<=1'b0; d2<=1'b0; data_out<=1'b0; end
+    else begin d1 <= data_in; d2 <= d1; data_out <= d2; end
+endmodule
+"""
+
 RTL_SIBLING_INV = """
 module inv_reg(input clk, input rst_n, input data_in, output reg data_out);
   always @(posedge clk or negedge rst_n) if(!rst_n) data_out<=0; else data_out<=~data_in;
@@ -180,9 +227,25 @@ def test_correct_top_with_sibling_sharing_port_names_passes(tmp_path):
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
 def test_buggy_top_still_caught_despite_sibling(tmp_path):
-    # The fix must NOT over-suppress: a Moore-lag TOP is still BLOCKed even with a
+    # The fix must NOT over-suppress: a Moore-lag TOP is still CAUGHT even with a
     # sibling present (oracle scoped to the top, but the top itself is the bug).
+    # It is now caught AND repaired, so the proof of detection is the repair note
+    # naming the defect; the sibling must be left untouched.
     proj = _make_multimodule(tmp_path, RTL_MOORE, RTL_SIBLING_INV)
+    res = r.step_determinism_gates(proj, "pulse_detect")
+    assert res.status == "PASS", res.detail
+    assert "gate-directed repair" in res.detail
+    assert "output-cycle-alignment" in res.detail
+    joined = "\n".join(p.read_text() for p in _pl.rtl_dir(proj).rglob("*.v"))
+    assert RTL_SIBLING_INV.strip() in joined      # sibling untouched
+    assert RTL_MOORE.strip() not in joined        # top actually rewritten
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
+def test_unrepairable_buggy_top_still_fails_despite_sibling(tmp_path):
+    # The FAIL path must survive the repair wiring: a top whose defect no
+    # transform can fix still reports FAIL, with the sibling untouched.
+    proj = _make_multimodule(tmp_path, RTL_TOO_LATE_PD, RTL_SIBLING_INV)
     res = r.step_determinism_gates(proj, "pulse_detect")
     assert res.status == "FAIL", res.detail
     assert "worked-example" in res.detail and "pulse_detect" in res.detail

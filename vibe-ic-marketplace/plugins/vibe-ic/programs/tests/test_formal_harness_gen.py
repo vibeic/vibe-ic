@@ -168,7 +168,19 @@ def test_generate_emitted_spm_like(tmp_path):
         {"output": "p", "target": "p_reg", "reset_value": "'0",
          "reset_style": "sync"}]
     h = out.read_text()
-    assert "assert (p == '0)" in h
+    # CONCURRENT form: the gate at step 5 requires a named property and an
+    # `assert property`, and until the EDA image carried a frontend that could
+    # PARSE one there was no honest way to emit it.  Pinned as three separate
+    # facts rather than one literal, so a regression says which half broke:
+    # the property must be declared, it must carry the guarded implication, and
+    # something must actually assert it.  A harness with the property and no
+    # assert parses, satisfies half the gate, and proves nothing.
+    assert "property p_reset_safety_1;" in h
+    assert "endproperty" in h
+    assert "|-> (p == '0)" in h, (
+        "the implication must be OVERLAPPING — `|=>` would move the consequent "
+        "one cycle later and prove something the design does not claim")
+    assert "assert property (p_reset_safety_1)" in h
     assert "(* anyseq *) wire rst;" in h
     assert "f_past_valid && rst_active_q" in h   # sync guard
 
@@ -204,7 +216,19 @@ def test_generate_active_low_nonzero_literal(tmp_path):
     assert res["reset"] == "rst_n" and res["reset_active_low"] is True
     h = out.read_text()
     assert "wire rst_active = !rst_n;" in h
-    assert "assert (q == 8'hFF)" in h
+    # CONCURRENT form: the gate at step 5 requires a named property and an
+    # `assert property`, and until the EDA image carried a frontend that could
+    # PARSE one there was no honest way to emit it.  Pinned as three separate
+    # facts rather than one literal, so a regression says which half broke:
+    # the property must be declared, it must carry the guarded implication, and
+    # something must actually assert it.  A harness with the property and no
+    # assert parses, satisfies half the gate, and proves nothing.
+    assert "property p_reset_safety_1;" in h
+    assert "endproperty" in h
+    assert "|-> (q == 8'hFF)" in h, (
+        "the implication must be OVERLAPPING — `|=>` would move the consequent "
+        "one cycle later and prove something the design does not claim")
+    assert "assert property (p_reset_safety_1)" in h
 
 
 # ── thin-wrapper descent to the leaf logic module ──────────────────────────
