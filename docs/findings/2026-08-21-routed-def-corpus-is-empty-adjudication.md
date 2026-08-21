@@ -317,6 +317,37 @@ Two tests are added to `test_routed_def_corpus_dispatch.py`:
   holds no routed DEF expands to 0 items, records `NOT_CHECKED`, carries no
   exemption, leaves an rc-2 process attestation, and blocks.
 
-Nothing about the gate's declaration changes. It is `NOT CHECKED`, it is
-`BLOCKING`, it has no exemption, and all three are correct. What changes is that
-the rule keeping it that way can no longer be deleted in silence.
+### And the branch main is actually in said nothing at all
+
+One change IS made to what the declaration *says* — not to its verdict, its
+blocking, or its rc.
+
+`refuse()`'s absent-corpus branch prints a full sentence with a cause and a
+remedy. The branch where a corpus **was** opened and holds no routed DEF printed
+**nothing**: measured against the real published clone, the producer's entire
+stderr was one line, the resolution note.
+
+    $ VIBE_IC_BENCHMARK_DATA=<clone> python3 tools/ci/routed_def_corpus.py --repo .
+    [routed-def corpus] note: VIBE_IC_BENCHMARK_DATA overrides … -> …/ic
+    # and that is all of it
+
+So the LESS informative outcome was loud and the more informative one was silent,
+and the loudest thing in the run — a blocking dispatcher refusal — was produced by
+the quietest possible producer. A maintainer who hits this red has no path from
+the row to the fact that the corpus was emptied on purpose on 2026-08-20.
+
+It now states its measured zero: which tree it scanned and by which origin, that
+the index holds 0 routed DEFs, what a member looks like, that this is an EMPTY
+POPULATION and not a clean one, and what makes it non-empty again. **stderr only —
+stdout is the machine population and prose there would become an item.** rc is
+unchanged, the population is unchanged, the row is unchanged, and it still blocks.
+
+Pinned by `test_a_corpus_that_was_read_and_holds_none_says_so`, which is RED
+without it.
+
+---
+
+The gate's VERDICT does not change. It is `NOT CHECKED`, it is `BLOCKING`, it has
+no exemption, and all three are correct. What changes is that the rule keeping it
+that way can no longer be deleted in silence, and that the row can now tell a
+reader why it is there.

@@ -367,6 +367,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     rc, paths = _index_paths(corpus)
     if rc != 0:
         return rc
+    if not paths:
+        # A CORPUS THAT WAS READ AND HOLDS NONE USED TO SAY NOTHING AT ALL.
+        # The absent-corpus branch above prints a full sentence with a cause and
+        # a remedy; this one -- the state the landing path is actually in, since
+        # `gatekeeper_review` binds the corpus before the hygiene set runs --
+        # printed only the resolution note and exited. So the LESS informative
+        # outcome was loud and the more informative one was silent, and the
+        # loudest thing in the run (a blocking dispatcher refusal) was produced
+        # by the quietest possible producer.
+        #
+        # rc is UNCHANGED and so is the population: this is 0 items either way,
+        # the dispatcher still records NOT_CHECKED, and it still blocks. Only
+        # the reader gains the sentence. stderr, never stdout -- stdout is the
+        # machine population and prose there would become an item.
+        print(
+            f"[routed-def corpus] scanned the {origin} corpus at {corpus} and "
+            f"its git index holds 0 routed DEF(s). A member is "
+            f"<design>/<version>/phase3/stage3/pnr/routed.def. This is an "
+            f"EMPTY POPULATION, not a clean one: no published cell was "
+            f"examined and nothing is claimed about any. The per-cell gates "
+            f"go live again on the first cell published with a routed DEF.",
+            file=sys.stderr,
+        )
     for path in paths:
         print(path)
     return 0

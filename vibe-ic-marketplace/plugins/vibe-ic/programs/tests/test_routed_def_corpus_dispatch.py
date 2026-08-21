@@ -549,3 +549,30 @@ def test_the_shipped_producer_over_an_empty_corpus_blocks_and_never_passes(
     assert doc["gates"][0]["exempt_until"] is None
     assert proc.returncode == 2, text
     assert attestations and attestations[0]["returncode"] == 2
+
+
+def test_a_corpus_that_was_read_and_holds_none_says_so(tmp_path):
+    """The state the landing path is IN was the one that printed nothing.
+
+    `gatekeeper_review` binds the corpus before the hygiene set runs, so the
+    blocking row on `main` comes from a corpus that WAS opened. That branch
+    emitted only the resolution note and exited: the less informative outcome
+    (no corpus anywhere) got a full sentence with a cause and a remedy, and the
+    more informative one got silence. rc, stdout and the blocking are unchanged
+    by this; only the reader gains the sentence.
+    """
+    external = _external(tmp_path)
+    (external / "ic").mkdir()
+
+    proc = _helper(str(external))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == "", "prose on stdout would become a corpus item"
+    assert "0 routed DEF(s)" in proc.stderr, (
+        "a corpus that was read and holds none said nothing about it")
+    assert "EMPTY POPULATION, not a clean one" in proc.stderr
+    assert "phase3/stage3/pnr/routed.def" in proc.stderr, (
+        "the sentence must name what a member looks like")
+    # NOT the absent-corpus sentence: this corpus exists and was read.
+    assert "NO_CORPUS" not in proc.stderr
+    assert "UNDETERMINED" not in proc.stderr
