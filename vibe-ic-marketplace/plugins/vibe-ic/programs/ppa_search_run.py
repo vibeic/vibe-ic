@@ -33,6 +33,26 @@ EXIT CODES (PPA_INTERFACES §1)
        family means a finding about a real design.
     3  BAD INVOCATION -- never a design FAIL.
 
+WHO DECIDES FEASIBILITY (F-12)
+==============================
+`--feasibility-policy PATH` adjudicates every trial that RAN with the shipped
+hard gate, `_ppa/feasibility.py`, against the required views and limits that
+document declares. Without the flag the STUB runs: every candidate comes back
+UNDETERMINED, the published frontier is empty, and the manifest says so.
+
+The stub remains the default deliberately. A search that has not been told what
+views a promotion verdict must cover cannot decide one, and inventing a default
+view set would credit a one-corner run as signoff. What is NOT acceptable, and
+was the defect, is a CLI that hard-wires the stub so no caller can reach the
+real gate at all -- and a stub whose stated reason ("`_ppa/feasibility.py` has
+not landed") stayed frozen in the source three commits after it stopped being
+true, and went out in sixty published manifests as a fact.
+
+Two rules now hold that shut:
+  * the stub CHECKS the condition it names, every time it speaks;
+  * `--verify` REFUSES a manifest whose published reason names a condition the
+    tree it is audited on contradicts (`STUB_REASON_CONTRADICTED_BY_TREE`).
+
 BUDGET = 1 IS A FIRST-CLASS RUN
 ===============================
 No flag is required to get a bundle. `--max-trials` defaults to 1 and a
@@ -55,6 +75,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
 from _ppa import canonical_json as cj  # noqa: E402
 from _ppa import search as S  # noqa: E402
+from _ppa import search_feasibility as SF  # noqa: E402
 
 PROGRAM = "ppa_search_run"
 
@@ -167,8 +188,15 @@ def _apply_trial(cand: S.Candidate, trial: Dict[str, Any]) -> List[str]:
 # ---------------------------------------------------------------------------
 def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
           explicit: Dict[str, List[str]], frontier_stage: Optional[str],
+          policy_path: Optional[Path] = None,
           ) -> Tuple[int, Dict[str, Any], List[str]]:
-    """(rc, manifest_or_report, human lines)."""
+    """(rc, manifest_or_report, human lines).
+
+    `policy_path` selects the SHIPPED feasibility gate (F-12). Absent, the
+    stub runs and every candidate is UNDETERMINED -- which stays the default
+    because a search that was never told what its required views are has not
+    been given the information a promotion verdict rests on.
+    """
     lines: List[str] = []
 
     problems = budget.problems()
@@ -240,12 +268,29 @@ def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
         lines.extend(f"  - {r}" for r in refusals)
         return RC_REFUSED, {"program": PROGRAM, "refusals": refusals}, lines
 
-    ledger.evaluate_feasibility(None)  # the stub: UNDETERMINED, never ELIGIBLE
+    # F-12. This line used to be `evaluate_feasibility(None)` with no way for
+    # a caller to reach the shipped gate, and it published a stub reason that
+    # named a module which had already landed. Both halves are fixed: the
+    # caller can supply the real function, and the stub's reason is now
+    # computed against the tree at the moment it is written.
+    if policy_path is not None:
+        policy, why, doc = SF.policy_from_path(policy_path)
+        if why is not None:
+            lines.append(f"{MARK_CANNOT_CHECK} --feasibility-policy was given "
+                         f"but no policy was read: {why}")
+            lines.append("  This run was asked to ADJUDICATE its candidates. "
+                         "Falling back to the stub here would publish an "
+                         "UNDETERMINED verdict under a manifest that says a "
+                         "policy was applied, so nothing is published.")
+            return RC_UNDETERMINED, {"program": PROGRAM,
+                                     "undetermined": why}, lines
+        ledger.evaluate_feasibility(SF.feasibility_fn(policy))
+        toolchain = SF.toolchain_record(policy_path, doc or {}, policy)
+    else:
+        ledger.evaluate_feasibility(None)   # the stub: never ELIGIBLE
+        toolchain = SF.stub_toolchain_record()
     man = S.build_manifest(ledger, space_digest, lever_notes, frontier_stage,
-                           toolchain={"feasibility_source": "STUB",
-                                      "feasibility_note":
-                                          S.stub_feasibility(
-                                              S.Candidate({})).reason})
+                           toolchain=toolchain)
 
     n_full = ledger.full_pnr_trials()
     if n_full > budget.max_full_pnr_trials:
@@ -263,6 +308,8 @@ def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
     if trials_path is None:
         lines.append("  NOTE: no --trials given, so this is a PLAN. Its "
                      "candidates are PROPOSED, not results.")
+    lines.append(f"  feasibility: {toolchain['feasibility_source']} — "
+                 f"{toolchain['feasibility_note']}")
     return RC_PASS, man, lines
 
 
@@ -319,6 +366,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     metavar="LEVER=a,b,c",
                     help="explicit values for a lever whose declared domain is "
                          "prose; repeatable")
+    ap.add_argument("--feasibility-policy", default=None, metavar="PATH",
+                    help="adjudicate every trial that RAN with the shipped "
+                         "hard gate (_ppa/feasibility.py) against the "
+                         "required_views / limits / allow_waivers this "
+                         "document declares. Without it the feasibility stub "
+                         "runs, every candidate is UNDETERMINED and the "
+                         "frontier is empty — which is honest, and is not a "
+                         "result.")
     ap.add_argument("--frontier-stage", default=None,
                     help=f"fix the frontier scope; one of "
                          f"{list(S.FIDELITY_LADDER)}")
@@ -341,6 +396,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.verify and args.space:
         print("give a space to build OR --verify a manifest, not both",
               file=sys.stderr)
+        return RC_BAD_INVOCATION
+    if args.verify and args.feasibility_policy:
+        print("--feasibility-policy adjudicates candidates while BUILDING a "
+              "manifest; --verify audits one that already carries its "
+              "verdicts and does not re-adjudicate them", file=sys.stderr)
         return RC_BAD_INVOCATION
     if not args.verify and not args.space:
         print("give a search-space path, or --verify MANIFEST", file=sys.stderr)
@@ -374,7 +434,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         rc, report, lines = build(
             Path(args.space), Path(args.trials) if args.trials else None,
-            budget, explicit, args.frontier_stage)
+            budget, explicit, args.frontier_stage,
+            Path(args.feasibility_policy) if args.feasibility_policy else None)
 
     stream = sys.stderr if rc in (RC_REFUSED, RC_UNDETERMINED) else sys.stdout
     for line in lines:
