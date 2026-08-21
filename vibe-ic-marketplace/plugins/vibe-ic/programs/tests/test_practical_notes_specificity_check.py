@@ -1,7 +1,7 @@
 """Tests for practical_notes_specificity_check.py.
 
 Fixture tokens (chip / vendor / SKU / project codenames) are loaded at
-runtime from ``plugins/vibe-ic/tests/chip_deny_list.txt`` so this
+runtime from ``plugins/vibe-ic/programs/tests/chip_deny_list.txt`` so this
 source file itself stays free of the private tokens it is exercising.
 
 Classification heuristic (token-agnostic):

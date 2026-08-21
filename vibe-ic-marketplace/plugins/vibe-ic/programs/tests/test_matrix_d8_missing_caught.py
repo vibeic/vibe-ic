@@ -156,6 +156,14 @@ Three things this module provably does NOT decide:
    real EDA chain, which CI does not have. Dimensions 1, 2 and 4 ask the
    reachability question directly.
 
+   This gap is no longer disclosed HERE and erased THERE. Since 2026-08-09 the
+   module answers :func:`matrix_cell_substitution` for every cell, so the split
+   travels with the census figure instead of living in this paragraph: the
+   generated table in ``matrix_63x8/README.md`` reports the substituted cells in
+   their own column and the total never folds them into "enforcing". Measured
+   the day the contract landed: 16 of the 61 ENFORCED cells run against the
+   step's own gate, 45 against the stand-in.
+
 3. **The ``__WAIVER_HINT__`` (rc=3 / ``PASS_WITH_WAIVERS``) tier.** Producing it
    for real needs a gate program that passed its threshold with a DRC/LVS slot
    credited via a waiver — i.e. a converged tapeout project; no program in
@@ -173,12 +181,13 @@ Run::
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytest
 
@@ -255,6 +264,54 @@ _VERILOG_BODY = (
     "endmodule\n"
 )
 
+# ──────────────────────────────────────────────────────────────────────
+# PATH-CORRECT FIXTURE BODIES
+#
+# The suffix table below stopped being enough the moment two artefacts of the
+# SAME kind needed different content. Measured 2026-08-19: step 4's own gate
+# runs `verilator_coverage_measure`, which classifies the JSON at
+# `reports/phase2/coverage/coverage_actual.json` and reports
+#
+#     the file at the declared coverage path is a 'another producer' payload
+#     written by another producer, so line/toggle/branch was never measured here
+#
+# for `_JSON_BODY`. Step 4 therefore FAILed on the fully seeded tree and dropped
+# out of REAL_GATE_PASS_TIER_STEPS — the shrink
+# `test_d8_downgrade_is_reachable_through_each_steps_own_real_gate` names. It has
+# been red since the pin landed (d4136c3053), on its own commit and on every one
+# since, so the pin never matched the tree it claims to measure.
+#
+# WHAT THESE NUMBERS ARE, AND ARE NOT. They are not a coverage result: nothing
+# here was simulated, and no run this tree describes ever existed. They are the
+# same kind of stand-in as `_VERILOG_BODY`'s `module d8_fixture_top` — a
+# well-formed artefact of the right SHAPE, so a content-aware gate can reach a
+# verdict and the MISSING-output downgrade this module measures stays reachable.
+# A fixture that cannot satisfy a gate does not measure that gate; it only
+# measures the fixture. The counters clear `coverage_closure`'s 80 % goal
+# deliberately — at 0 % the step FAILs on the goal instead of on the missing
+# output, which is the same "failing for an unrelated reason" the suffix table
+# was introduced to end.
+#
+# NO NARRATIVE FIELDS. `verilator_coverage_measure.artefact_looks_tool_generated`
+# rejects `note` / `notes` / `source` / `tool` carrying estimation language, and
+# `classify_coverage_artefact` calls a bare percentage with no `totals` a
+# FORGERY. Only the `totals` container is written, so the payload cannot be read
+# as a coverage CLAIM — it is counters, or it is nothing.
+_COVERAGE_BODY = (
+    '{"totals": {'
+    '"line": {"covered": 100, "total": 100, "pct": 100.0}, '
+    '"toggle": {"covered": 100, "total": 100, "pct": 100.0}, '
+    '"branch": {"covered": 100, "total": 100, "pct": 100.0}}}\n'
+)
+
+#: Keyed by the tail of the declared path, consulted BEFORE the suffix table.
+#: One entry today; the mechanism exists so the NEXT content-aware gate is a
+#: one-line addition rather than a second special case grown beside this one.
+_PATH_BODIES: Tuple[Tuple[str, str], ...] = (
+    ("reports/phase2/coverage/coverage_actual.json", _COVERAGE_BODY),
+)
+
+
 _KIND_BODIES: Tuple[Tuple[str, str], ...] = (
     (".jsonl", _JSONL_BODY),
     (".json", _JSON_BODY),
@@ -264,12 +321,83 @@ _KIND_BODIES: Tuple[Tuple[str, str], ...] = (
 
 
 def fixture_body(rel: str) -> str:
-    """The body to seed ``rel`` with: kind-correct where a gate parses it."""
+    """The body to seed ``rel`` with: path-correct first, then kind-correct."""
+    for tail, body in _PATH_BODIES:
+        if rel == tail or rel.endswith("/" + tail):
+            return body
     lowered = rel.lower()
     for suffix, body in _KIND_BODIES:
         if lowered.endswith(suffix):
             return body
     return _FIXTURE_BODY
+
+
+# ──────────────────────────────────────────────────────────────────────
+# THE WRONG BODY — present, parseable, and saying the run FAILED
+#
+# `fixture_body` above answers "what does a declared output look like when the
+# step produced one". This answers "...when the step produced a BAD one". The
+# distinction is the whole of the content arm: every body below lands at the
+# SAME path, through the SAME writer, and satisfies the SAME glob as its right
+# counterpart, so an UNMOVED verdict can never be explained by "nothing was
+# there" — which is the failure this dimension's existing arm already covers
+# and must not be allowed to impersonate.
+#
+# Each body is the same KIND as the right one — a `.json` that `json.loads`, a
+# `.v` carrying a matched `module`/`endmodule`, text shaped like a tool report
+# — and each says IN ITS CONTENT that the thing it reports on failed. An
+# unparseable body would be refused on kind and would prove nothing about
+# whether anything reads the content; an absent one is the other arm.
+# ──────────────────────────────────────────────────────────────────────
+_WRONG_JSON = json.dumps(
+    {
+        "d8_fixture": True,
+        "status": "FAIL", "verdict": "FAIL", "result": "FAIL",
+        "passed": False, "ok": False, "clean": False,
+        "violations": 17, "errors": 17, "failures": 17,
+        "violation_count": 17, "error_count": 17,
+    },
+    indent=2, sort_keys=True) + "\n"
+
+_WRONG_JSONL = json.dumps(
+    {"d8_fixture": True, "status": "FAIL", "passed": False, "violations": 17},
+    sort_keys=True) + "\n"
+
+_WRONG_VERILOG = (
+    "// d8 fixture artefact - PRESENT, PARSEABLE, WRONG\n"
+    "module d8_fixture_top (input wire clk, output wire q);\n"
+    "  // `q` is declared an output and is never driven. The module parses and\n"
+    "  // elaborates; what it describes is broken.\n"
+    "endmodule\n"
+)
+
+_WRONG_TEXT = (
+    "d8 fixture artefact\n"
+    "ERROR: 17 violation(s) found\n"
+    "violation report: 17\n"
+    "violation count summary: 17 violation(s) found\n"
+    "RESULT: FAIL\n"
+)
+
+#: Keyed by the SAME suffixes ``_KIND_BODIES`` declares, and iterated through
+#: ``_KIND_BODIES`` below rather than through its own keys, so a kind added to
+#: the right-body table cannot silently fall through to the text default here.
+#: ``test_d8_every_seeded_kind_has_a_wrong_counterpart`` asserts the two agree.
+_WRONG_BY_SUFFIX: Dict[str, str] = {
+    ".jsonl": _WRONG_JSONL,
+    ".json": _WRONG_JSON,
+    ".sv": _WRONG_VERILOG,
+    ".v": _WRONG_VERILOG,
+}
+
+
+def wrong_body(rel: str) -> str:
+    """The body to seed ``rel`` with when it must be PRESENT but WRONG."""
+    lowered = rel.lower()
+    for suffix, _right in _KIND_BODIES:
+        if lowered.endswith(suffix):
+            return _WRONG_BY_SUFFIX[suffix]
+    return _WRONG_TEXT
 
 _GLOB_CHARS = "*?["
 
@@ -397,12 +525,20 @@ def _condition_patterns(step: Dict[str, Any]) -> List[str]:
 def _materialize(project: Path, step: Dict[str, Any],
                  drop_entries: Sequence[str] = (),
                  drop_alts: Sequence[Tuple[str, str]] = (),
-                 gate_ok: bool = True) -> Dict[str, List[str]]:
+                 gate_ok: bool = True,
+                 wrong_entries: Sequence[str] = ()) -> Dict[str, List[str]]:
     """Synthesize a run tree for *step*; return ``{entry: [created rel paths]}``.
 
     ``drop_entries``  entries whose artefacts are NOT created (all alternatives).
     ``drop_alts``     individual ``(entry, alternative)`` pairs not created.
     ``gate_ok``       create the PASS gate's control file.
+    ``wrong_entries`` entries created at the SAME paths with :func:`wrong_body`
+                      instead of :func:`fixture_body` — present, parseable, and
+                      saying the run failed. Routed through this one writer on
+                      purpose: a separate materializer for the wrong tree could
+                      drift from the right one, and then a verdict that did not
+                      move would be a fact about two different trees rather
+                      than about the bytes in one file.
     """
     (project / _GATE_DIR).mkdir(parents=True, exist_ok=True)
     if gate_ok:
@@ -419,7 +555,8 @@ def _materialize(project: Path, step: Dict[str, Any],
                 if (entry, alt) in drop_alts:
                     continue
                 rel = concretize(alt)
-                _write(project, rel, fixture_body(rel))
+                _write(project, rel, (wrong_body(rel) if entry in wrong_entries
+                                      else fixture_body(rel)))
                 assert FCC._glob_first(project, alt), (
                     f"fixture defect: wrote {rel!r} for pattern {alt!r} but the "
                     f"real _glob_first does not find it — the synthesized tree "
@@ -645,14 +782,66 @@ NA_STEPS_AS_MEASURED: Tuple[str, ...] = ("FS1", "P0")
 #: the decision is conscious rather than silent.
 PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 
-#: Steps declaring FEWER THAN TWO ``required_outputs`` entries, measured
-#: 2026-07-27 (27 of 63). They cannot express "one artefact present, the rest
+#: Steps declaring FEWER THAN TWO ``required_outputs`` entries, RE-MEASURED
+#: 2026-08-16 (26 of 63). They cannot express "one artefact present, the rest
 #: absent", so the pooled-evidence check has no shape to build; the population
 #: is pinned so a step that gains a second entry cannot slip past it silently.
+#:
+#: THREE CHANGES vs the 2026-07-27 measurement, and they are independent:
+#:
+#:   + "1"   this change moves `reports/phase1/extraction_coverage_report.{md,json}`
+#:           off step 1, taking it from THREE entries to ONE. It therefore joins
+#:           the population, and d8 says so itself: "step 1 declares 1
+#:           required_output(s) — fewer than the 2 this shape needs — but it is
+#:           not in the measured single-entry population ... Re-measure and
+#:           update the pin in the same change."
+#:
+#:   - "29"  step 29 declares TWO entries (`.../sim_postlayout/results.log OR
+#:           .../pass.flag` and `reports/phase2/gates/post_layout_sim.json`) and
+#:           does so on clean `24ff9530` as well, so it was already stale before
+#:           this change and is NOT this change's doing. It is dropped because
+#:           the count in this comment is a claim: measured over the flow, the
+#:           population is 26 on main and 27 here, and leaving "29" in would have
+#:           made the stated figure wrong in the other direction after adding
+#:           "1". The membership assertion is one-directional — it fires only
+#:           when a single-entry step is ABSENT from this tuple — which is why a
+#:           stale member sat here without reddening anything.
+#:
+#:   - "27"  step 27 now declares both its noise/glitch report and the MCF
+#:           crosstalk-delay verdict. It therefore has two ALL-of entries and
+#:           leaves this fewer-than-two population; retaining it would silently
+#:           disable the partial-evidence shape this pin exists to measure.
+#:   - "37.5self"  ARRIVED and then LEFT, both times RE-DERIVED. It joined this
+#:           population at v1.11.4 declaring exactly one output, and on
+#:           2026-08-20 the owner retired the STEP: the general precheck was
+#:           never a third route, it is a second ARM of `37.5ic`. So the member
+#:           is gone because the step is gone, and `37.5ic` does NOT come back
+#:           into this population — it now declares five outputs, not one.
+#:           RE-DERIVED A FOURTH TIME rather than deleted by hand:
+#:           `[k for k in step_ids() if len(required_outputs(k)) < 2]` was
+#:           recomputed on this tree and answers 26 members, and the tuple below
+#:           is that answer. The recomputation also says, as a by-product, that
+#:           no other member had gone stale in the meantime.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
-    "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5", "A7",
-    "A9", "14", "16", "17", "20", "22", "27", "29", "35", "36", "37", "M4",
-    "42", "44", "P0",
+    # 2026-08-21: 26 -> 27 members. Step 1.6x JOINED — `7fcbc7397` added it with
+    # exactly one required_output (`reports/crosslayer/rewrite_equivalence
+    # _check.json`), which is what this population means. 37.5ic and 37.5self
+    # are still out of it for the reasons below; nothing else moved.
+    #
+    # RE-DERIVED, not appended: this tuple is exactly what
+    # `[k for k in step_ids() if len(required_outputs(k)) < 2]` answers on this
+    # tree, in flow order. The file's own note says why that matters — a
+    # hand-edited tuple is how v1.10.38 shipped a 28-entry pin over a 27-step
+    # population.
+    #
+    # 2026-08-20: 26 members. Step 37.5ic LEFT this population when 69ce9260d
+    # made the release documents an output of it (1 entry -> 3) and is further
+    # out of it now (5 entries); step 37.5self JOINED at v1.11.4 with one output
+    # and LEFT with the step itself when the general precheck became 37.5ic's
+    # second ARM.
+    "1", "1.6x", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5",
+    "A7", "A9", "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36",
+    "37", "M4", "42", "44", "P0",
 )
 
 
@@ -1202,9 +1391,47 @@ def test_d8_cell_census_is_complete():
 #: they had dropped out on the text placeholder alone). The population is
 #: pinned rather than derived so the SHRINKING direction still has to be
 #: explained by a human — see this constant's test.
+#: RE-MEASURED 2026-08-14 on v1.10.40 (75776dbbb), and it GREW again — `4`
+#: joined. Lost: none. The cause is a gate that became MORE honest, not a
+#: fixture change:
+#:
+#:   `fe1f0615e` (#1115/#1173) taught `professional_tb_check` to print
+#:   `VACUOUS_PASS` for a `NOT_APPLICABLE` verdict instead of returning a bare
+#:   rc 0 that `flow_compliance_check` recorded as PASS — in that commit's own
+#:   words, "the producer emitted nothing and the checker read the absence as
+#:   consent".
+#:
+#: Step 4's SEEDED status moved with it, measured through this module's own
+#: `_materialize` + `FCC.check_step` at both revisions:
+#:
+#:   3d13e2c59 (v1.10.39)   WAIVED         in_pass_tier=False
+#:   75776dbbb (v1.10.40)   VACUOUS_PASS   in_pass_tier=True
+#:
+#: and the WAIVED came from the same clause: v1.10.39 reported "WAIVED-DEFERRED:
+#: gate program signalled PASS_WITH_WAIVERS (#651)" plus two PARTIALLY-VACUOUS
+#: lines, all of which v1.10.40 replaces with one "vacuous: gate program
+#: signalled VACUOUS_PASS (input not applicable): professional_tb_check".
+#:
+#: NOTHING ABOUT STEP 4 ITSELF MOVED. Read through `flowref`'s accessor (not a
+#: re-walk of the yaml — the population is 63, and a hand walk keyed by `id`
+#: collects 71), step 4 is byte-identical across the two revisions: same gate
+#: (md5 cb7dc043), same `required_outputs`. `flow_compliance_check.check_step`
+#: is byte-identical too (195e2d64), as is `vacuous_testbench_check`. Only
+#: `professional_tb_check.py` changed.
+#:
+#: So this is the GROWING direction, which this constant's test names as the
+#: benign one: one more step's real gate now reaches the tier at which the
+#: MISSING downgrade fires, so one more cell's enforcement is measurable rather
+#: than substituted-gate-only.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "D1", "1", "2", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
-    "30", "32", "35", "38",
+    # 2026-08-21: GAINED "1.6x", lost nothing. `7fcbc7397` added the step and
+    # its real gate reaches a PASS tier on the seeded fixture, so it joins the
+    # population this pin exists to watch. The direction matters and is worth
+    # restating: a SHRINKING set is the alarming shape (production gates losing
+    # the tier at which the MISSING downgrade fires); a growing one is a new
+    # step arriving, which is this.
+    "D1", "1", "1.6x", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8",
+    "14", "28", "30", "32", "35", "38",
 )
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
 # compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml
@@ -1291,6 +1518,729 @@ def test_d8_downgrade_is_reachable_through_each_steps_own_real_gate():
     )
 
 
+# ══════════════════════════════════════════════════════════════════════
+# THE CONTENT ARM — a declared output that is PRESENT, PARSEABLE and WRONG
+#
+# WHY IT EXISTS
+# -------------
+# Everything above this line reddens on ABSENCE. `probe_negative` removes a
+# declared output and requires the verdict to move; `_real_gate_sweep` does the
+# same through each step's own gate. Not one of them asks what happens when the
+# artefact IS there and says the wrong thing, and the consumer gives a reason to
+# expect the answer is "nothing": `required_outputs` is resolved by
+# `flow_compliance_check._glob_first`, which asks whether a path exists and asks
+# nothing else. Dimension 2 measured the same shape from the other side and
+# wrote it down — a `files_exist` clause is satisfied by a ZERO-BYTE file, and
+# step 21's `routed.def` PASSes at 25 bytes of `VERSION 5.8 ; / END DESIGN`.
+#
+# An existence check wearing the clothes of a correctness check is the disease
+# this campaign was opened to find. This arm is the instrument that says, per
+# step and by measurement rather than by reading the source, WHICH it is here.
+#
+# WHAT IT MEASURES
+# ----------------
+# The same population `_real_gate_sweep` uses — the steps whose OWN gate reaches
+# a PASS tier on the seeded fixture, because a step whose gate cannot reach that
+# tier has no verdict for content to move. For each of them, TWO trees that
+# differ in the bytes of ONE file and in nothing else:
+#
+#     right   every declared output present, `fixture_body`
+#     wrong   the same, except entry[0] carries `wrong_body` — same path, same
+#             kind, same glob, content that says the run failed
+#
+# and `check_step`'s full verdict SIGNATURE (status + sorted reasons, project
+# root scrubbed) on each. MOVED when the signature differs; UNMOVED when the
+# flow said exactly the same thing about a good artefact and a bad one.
+#
+# The reasons are part of the signature deliberately. "The status stayed PASS
+# but the flow named the defect" is a materially different finding from "the
+# flow emitted the identical sentence", and folding them together would hide
+# the half that is good news.
+#
+# WHAT IT DOES NOT CLAIM
+# ----------------------
+#   * That an UNMOVED step's gate is wrong. `wrong_body` is a GENERIC corruption
+#     — a JSON object that self-reports failure, an undriven Verilog output, a
+#     report that says 17 violations. A gate can be entirely correct and still
+#     not read the field this body corrupts. What UNMOVED says is narrower and
+#     still worth saying: on the tree this suite can build, this step's declared
+#     output is decided by its PRESENCE alone.
+#   * That the population is the flow. It is 16 of 63 steps, and the reason the
+#     other 45 are absent is recorded above by
+#     `test_d8_downgrade_is_reachable_through_each_steps_own_real_gate`.
+#   * That the corpus was consulted. It was not — this arm is hermetic, and the
+#     published-run channel that DOES mutate real artefacts is
+#     `matrix_mutation_ledger.ARTEFACT_MUTATIONS`, which needs a benchmark-data
+#     clone this checkout does not carry.
+# ══════════════════════════════════════════════════════════════════════
+_CONTENT_MOVED = "MOVED"
+_CONTENT_UNMOVED = "UNMOVED"
+
+
+def _content_state(right_sig, wrong_sig) -> str:
+    """MOVED / UNMOVED from two verdict signatures.
+
+    Shared by the sweep and by the positive control ON PURPOSE. Without that,
+    a sweep that hard-coded UNMOVED would keep every assertion in
+    CONTENT_ARM_AS_MEASURED green — the pinned population is 16 UNMOVED today,
+    so "always UNMOVED" and "correctly UNMOVED" are indistinguishable from the
+    census alone. Routing the control through this same function makes the
+    control the thing that fails when the decision stops deciding.
+    """
+    return _CONTENT_MOVED if right_sig != wrong_sig else _CONTENT_UNMOVED
+
+
+def _verdict_signature(project: Path, result) -> Tuple[str, Tuple[str, ...]]:
+    """``(status, sorted reasons)`` with the scratch root scrubbed.
+
+    The root is scrubbed because it is a different `mkdtemp` on every tree, so
+    leaving it in would make EVERY pair of signatures differ and the arm would
+    report MOVED for all 16 steps without a single gate having read a byte.
+    Sorted because the reason list's order is not part of what the flow says.
+    """
+    root = str(project)
+    return result.status, tuple(sorted(
+        str(r).replace(root, "<project>") for r in result.reasons))
+
+
+@lru_cache(maxsize=1)
+def _content_arm_sweep() -> Dict[str, Dict[str, Any]]:
+    """``{step: record}`` for every step in the real-gate PASS-tier population.
+
+    The record carries the bytes that were actually written, read back off disk
+    BEFORE the tree is removed, so the controls below grade what the gate was
+    handed rather than what this module intended to hand it.
+    """
+    population = _real_gate_sweep()
+    out: Dict[str, Dict[str, Any]] = {}
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        if key not in population:
+            continue
+        step = dict(F.step_by_id(sid))          # the REAL gate, not PASS_GATE
+        entries = list(F.required_outputs(sid))
+        if not entries:
+            continue
+        entry = entries[0]
+        tmp = Path(tempfile.mkdtemp(prefix="d8_content_"))
+        try:
+            right = tmp / "right"
+            right.mkdir(parents=True)
+            made = _materialize(right, step)
+            right_sig = _verdict_signature(
+                right, FCC.check_step(right, step, {}))
+
+            wrong = tmp / "wrong"
+            wrong.mkdir(parents=True)
+            _materialize(wrong, step, wrong_entries=(entry,))
+            wrong_sig = _verdict_signature(
+                wrong, FCC.check_step(wrong, step, {}))
+
+            rels = tuple(made.get(entry, ()))
+            out[key] = {
+                "entry": entry,
+                "rels": rels,
+                "right_bytes": {r: (right / r).read_bytes() for r in rels},
+                "wrong_bytes": {r: (wrong / r).read_bytes() for r in rels},
+                # Asked of the CONSUMER's own resolver, on the wrong tree: the
+                # entry must still be satisfied there, or "the verdict did not
+                # move" would be a statement about an absent file.
+                "unresolved_alts": tuple(
+                    a for a in alternatives(entry)
+                    if not FCC._glob_first(wrong, a)),
+                "right": right_sig,
+                "wrong": wrong_sig,
+                "state": _content_state(right_sig, wrong_sig),
+            }
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+#: THE FINDING, PINNED. What each step in the real-gate PASS-tier population
+#: does when its first declared output is present, parseable and wrong.
+#:
+#: MEASURED 2026-08-19 on `397b3f25f` in the pinned container image:
+#:
+#:     absence moves the verdict   16 of 16     (the arm this file already had)
+#:     content moves the verdict    0 of 16     (this arm)
+#:
+#: The asymmetry is the whole result. Of the 16, twelve answer VACUOUS_PASS —
+#: the gate DISCLOSED that it did not engage, which is the honest tier and not
+#: a false pass — and four (`1`, `32`, `35`, `38`) answer a plain PASS with no
+#: disclosure at all: `check_step` was handed a declared output whose own
+#: content says the run failed, and reported the step green.
+#:
+#: PINNED rather than asserted-to-be-empty, and asserted in BOTH directions:
+#:
+#:   UNMOVED -> MOVED   good news, and it must still be written down. A gate
+#:                      that LEARNS to read its artefact closes a hole, and the
+#:                      diff that closes it is where that gets recorded.
+#:   MOVED -> UNMOVED   a gate stopped reading content. Nothing else in this
+#:                      repository would notice.
+#:   a step JOINS       it arrives unpinned and this reddens by name, so the
+#:                      population can never grow into an unmeasured cell.
+#:
+#: A step LEAVING the population is NOT graded here: that is the shrink guard
+#: `test_d8_downgrade_is_reachable_through_each_steps_own_real_gate` already
+#: owns, and duplicating it would report one defect as two.
+CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
+    "D1": _CONTENT_UNMOVED, "1": _CONTENT_UNMOVED, "2": _CONTENT_UNMOVED,
+    # 1.6x JOINS the population (`7fcbc7397`). MEASURED, not assumed: UNMOVED —
+    # corrupting the content of `reports/crosslayer/rewrite_equivalence_check
+    # .json` does not move step 1.6x's verdict. That is a content channel the
+    # flow HAS and does not act on, recorded here rather than hidden, which is
+    # the whole purpose of this arm.
+    "1.6x": _CONTENT_UNMOVED,
+    # 4 REJOINS the population with `_COVERAGE_BODY`. Measured, not assumed:
+    # UNMOVED — corrupting the coverage artefact's content does not move step 4's
+    # verdict, because the gate that reads it (`verilator_coverage_measure`) is
+    # reached through an ADVISORY clause on this tree. That is a content channel
+    # the flow HAS and does not act on, which is exactly the gap the D8 content
+    # arm exists to make visible rather than to hide.
+    "4": _CONTENT_UNMOVED,
+    "12": _CONTENT_UNMOVED, "A1": _CONTENT_UNMOVED, "A2": _CONTENT_UNMOVED,
+    "A4": _CONTENT_UNMOVED, "A5": _CONTENT_UNMOVED, "A6": _CONTENT_UNMOVED,
+    "A8": _CONTENT_UNMOVED, "14": _CONTENT_UNMOVED, "28": _CONTENT_UNMOVED,
+    "30": _CONTENT_UNMOVED,
+    # 32 / 35 / 38: UNMOVED -> MOVED, taught by the #433c self-FAIL demotion in
+    # flow_compliance_check.py (_SELF_FAIL_VERDICTS). Before it, a step whose own
+    # declared output carried `"verdict": "FAIL"` was reported green: check_step
+    # opened the artefact, parsed it, read `verdict`, compared it against exactly
+    # one value (SKIPPED-CONDITION) and let every other value through — so a PASS
+    # contradicted by its own evidence stayed a PASS.
+    #
+    # MEASURED on the seeded tree, not assumed. All THREE carry the new reason
+    # verbatim in the wrong arm and not in the right one:
+    #     VERDICT_SELF_REPORTS_FAIL (#433c): declared output(s) carry a
+    #     machine-readable verdict saying the run FAILED — a PASS contradicted by
+    #     its own evidence is not a PASS: <rel>: verdict='FAIL'
+    # naming phase3/stage3/eco/eco_log.json (32), reports/phase3/dfm_screen.json
+    # (35) and phase3/stage4/foundry_handoff/mask_spec.json (38).
+    #
+    # 35 is worth the extra line, because reading it wrongly was one careless
+    # glance away: pytest's own failure report TRUNCATES its reason list, so 35
+    # first appeared to flip PASS -> FAIL with an unchanged list — a verdict that
+    # moved for no stated cause, which is precisely what this file exists to
+    # refuse. Reading the arms directly showed the reason IS there. That is why
+    # `test_the_content_move_names_its_cause` below asserts it mechanically
+    # instead of leaving it to whoever reads the next failure.
+    "32": _CONTENT_MOVED, "35": _CONTENT_MOVED,
+    "38": _CONTENT_MOVED,
+}
+
+
+#: THE BLIND SET — gradable steps whose verdict does NOT move on wrong content.
+#:
+#: A step is GRADABLE when the wrong tree really rewrote something (`rels`), every
+#: alternative still resolves (so the wrong tree is a WRONGNESS and not an ABSENCE),
+#: and at least one rewritten file is of a kind the flow can read at all. For such a
+#: step, UNMOVED is not a neutral fact: it says the flow opened a readable artefact,
+#: found it wrong, and reported the step at the SAME tier as the correct one.
+#:
+#: MEASURED on the seeded tree, 2026-08-19: 8 of the 16 PASS-tier steps are gradable,
+#: and 5 of those 8 are blind. Those five are recorded here rather than asserted away,
+#: because the honest options were to record them or to pretend the arm has no blind
+#: spot, and a census that cannot say "here is what I still cannot see" is the same
+#: instrument this whole module exists to replace.
+#:
+#: A RATCHET, NOT A BASELINE THAT ABSORBS. The set may only SHRINK. A step that
+#: becomes blind is named and reddens; a step that stops being blind is ALSO named and
+#: reddens, so the pin cannot quietly rot into a description of an older tree. Neither
+#: direction can be answered by editing this set alone — the failure message says which
+#: happened and asks for the change that caused it.
+#: 2026-08-21, SHRINK: "2" removed. The test below asks for the shrink to be
+#: recorded and for the change that caused it to be named, and the honest naming
+#: is NOT "a gate learned to read its artefact" — nothing about step 2's gate
+#: changed. Step 2 was never gradable. Both of its declared outputs are its own
+#: gate's `--json` destinations, so the content arm was rewriting files the gate
+#: truncates before it computes anything, and the suffix proxy in `_gradable`
+#: called that a content channel because the filenames end in `.json`. The
+#: measurement it produced was a statement about the proxy, not about step 2.
+#:
+#: The same correction is why 1.6x did NOT enter this set when it arrived.
+#:
+#: WHAT IS NO LONGER WATCHED HERE IS DISCLOSED, NOT DROPPED — see
+#: :data:`CONTENT_ARM_UNGRADABLE_SELF_WRITTEN` below, which names every step in
+#: this position and is re-derived live so it cannot rot into a description of
+#: an older tree.
+#: 2026-08-21, MERGE: "2" RESTORED. It was removed on the yaml INFERENCE that
+#: step 2's only content-bearing declared output is its own gate's `--json`
+#: target. The on-disk MEASUREMENT disagrees — the file survives the gate — so
+#: step 2 is gradable after all, it is UNMOVED, and UNMOVED on a gradable row
+#: is what this set means. Removing it was my error; the measurement puts it
+#: back, and the record of why is above CONTENT_ARM_UNGRADABLE_SELF_WRITTEN.
+CONTENT_ARM_BLIND: Tuple[str, ...] = ("2", "28", "A1", "A4", "D1")
+
+#: Steps the content arm CANNOT grade because every content-bearing artefact it
+#: rewrites is written by that step's own gate. Not a waiver and not a pass: it
+#: is the denominator this arm is missing, published so a reader can see the
+#: shape of what it cannot see.
+#:
+#: MEASURED over the live yaml: four steps declare a required_outputs set that
+#: is entirely their own gate's `--json` / `--out` destinations — 1.6x, 2, 8 and
+#: 36 — of which 1.6x and 2 reach the PASS tier the content arm sweeps. Closing
+#: this is a FLOW change, not a matrix one: the step would have to declare an
+#: artefact some other producer writes, and for 1.6x that is not currently
+#: possible (the step is unconditional by design and a design that ran no
+#: cross-layer search produces no upstream report).
+#: 2026-08-21, MERGE: "2" REMOVED, and the test that removed it is
+#: `test_the_two_readings_of_self_written_agree`, written for exactly this
+#: merge. Two lanes answered "is this row gradable?" two ways and they part on
+#: step 2. MEASURED:
+#:
+#:   step 2    declared output rewritten : reports/phase2/lint/rtl_hygiene.json
+#:             yaml says the gate writes it : YES (it is a --json target)
+#:             SURVIVED the gate on disk    : YES
+#:   step 1.6x yaml says the gate writes it : YES
+#:             SURVIVED the gate on disk    : NO
+#:
+#: The yaml INFERENCE reads a `--json` target and concludes the gate overwrites
+#: it. That over-predicts for any clause that does not actually run: step 2's
+#: path is named by a clause whose program never wrote it, so the file survived
+#: and the content arm CAN grade the step. The on-disk MEASUREMENT is what
+#: happened, and it is the reading this file acts on.
+#:
+#: So the two lanes were not both right here, as they were on the entries pin.
+#: The inference was coarser and it is the one that lost, on evidence.
+CONTENT_ARM_UNGRADABLE_SELF_WRITTEN: Tuple[str, ...] = ("1.6x",)
+
+#: Kinds the flow can read at all. Anything else is not a content channel, so a step
+#: that rewrites only those is NOT gradable and its UNMOVED means nothing about blindness.
+_CONTENT_BEARING_SUFFIXES: Tuple[str, ...] = (".json", ".jsonl")
+
+
+#: Paths a step's OWN gate writes, from the `--json` / `--out` of its own gate
+#: commands. Re-derived from the live yaml, never listed.
+def _gate_written_paths(step_id) -> frozenset:
+    out = set()
+    for clause in F.gate_clauses(step_id):
+        cmd = clause.command or ""
+        for flag in ("--json", "--out"):
+            for m in re.finditer(re.escape(flag) + r"\s+(\S+)", cmd):
+                out.add(m.group(1))
+    return frozenset(out)
+
+
+def _survived_the_gate(rec) -> Tuple[str, ...]:
+    """The rewritten files still carrying the WRONG body once the gate had run.
+
+    ``wrong_bytes`` is read off disk AFTER ``check_step`` returns, so this is a
+    measurement, not an inference from the yaml: if the bytes on disk are no
+    longer the ones the harness wrote, something in the run replaced them.
+
+    The something is usually the step's own gate. A step may declare, as a
+    ``required_outputs`` entry, the very path its gate passes to ``--json`` —
+    and then the gate WRITES that file during ``_evaluate_gate``, before the
+    output bookkeeping ever opens it. The wrong content is gone by the time
+    anything could grade it.
+    """
+    return tuple(
+        rel for rel, body in (rec.get("wrong_bytes") or {}).items()
+        if body == wrong_body(rel).encode("utf-8"))
+
+
+def _gradable(rec, step_id=None) -> bool:
+    """Is this row's UNMOVED/MOVED a judgement about CONTENT at all?
+
+    THE SURVIVAL CLAUSE (2026-08-21). It is not enough that the harness WROTE a
+    wrong body; the wrong body has to still be there when the verdict is taken.
+    Otherwise UNMOVED says "the gate overwrote the file", which is not the same
+    finding as "the gate read the file and did not care", and this arm exists to
+    tell those two apart.
+
+    MEASURED across the whole real-gate PASS-tier population on this tree, and
+    the discrimination is narrow rather than sweeping: **one** step is
+    un-graded by it. `1.6x` declares exactly one output,
+    `reports/crosslayer/rewrite_equivalence_check.json`, which is the same path
+    its own gate command passes to `--json`. Survival 0 of 1. Every other
+    gradable step survives in full — 2, 28, 32, 35, 38, A1, A4 and D1 all 1/1 or
+    2/2 — so no step leaves `CONTENT_ARM_BLIND` because of this clause and the
+    disclosed blind set does not shrink.
+
+    Reproduced directly before the clause was written: seed
+    `rewrite_equivalence_check.json` with `wrong_body`, run the real
+    `check_step`, read the file back. `verdict` goes `"FAIL"` -> absent and the
+    bytes differ — the gate rewrote its own report. Without this clause `1.6x`
+    was charged as NEWLY BLIND, and the failure message diagnosed it as "a gate
+    that stopped reading", which is the opposite of what happened: no gate
+    stopped reading, a step arrived whose only declared artefact is one its gate
+    produces. Charging it would have been the campaign's own disease — measuring
+    something adjacent and reporting it as if it answered the question.
+    """
+    rels = rec.get("rels") or ()
+    if not rels or rec.get("unresolved_alts"):
+        return False
+    return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)
+               for r in _survived_the_gate(rec))
+
+
+def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one():
+    """The blind set may shrink and may not grow, and every change is named.
+
+    `CONTENT_ARM_AS_MEASURED` records WHETHER each row moved. It cannot, alone,
+    tell a row that did not move because the flow has no channel to read from a
+    row that did not move because the flow read the channel and did not act. The
+    first is a capability gap; the second is a gate reporting a wrong artefact as
+    good as a right one. Grading only the first would let the second be legitimised
+    by pinning it UNMOVED, which nothing else in this repository forbids.
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm measured ZERO steps — a broken measurement"
+
+    gradable = {k for k, rec in sweep.items() if _gradable(rec, k)}
+    assert gradable, (
+        "NO step is gradable: every row rewrote only kinds the flow cannot read, so "
+        "the content arm is measuring nothing at all. That is a dead instrument, not "
+        "a clean one."
+    )
+    blind = {k for k in gradable if sweep[k]["state"] == _CONTENT_UNMOVED}
+    pinned = set(CONTENT_ARM_BLIND)
+
+    # THE DISCLOSURE IS ASSERTED, not merely written down. Every PASS-tier step
+    # the arm dropped for rewriting only its own gate's outputs must be named in
+    # CONTENT_ARM_UNGRADABLE_SELF_WRITTEN, in both directions, so the set cannot
+    # quietly grow (a step slipping out of the arm's reach unnoticed) or rot.
+    self_written_only = sorted(
+        k for k, rec in sweep.items()
+        if not _gradable(rec, k)
+        and any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)
+                for r in (rec.get("rels") or ()))
+        and not rec.get("unresolved_alts")
+    )
+    assert self_written_only == sorted(CONTENT_ARM_UNGRADABLE_SELF_WRITTEN), (
+        f"the set of steps the content arm cannot grade changed: measured "
+        f"{self_written_only}, pinned "
+        f"{sorted(CONTENT_ARM_UNGRADABLE_SELF_WRITTEN)}. A step ENTERING this "
+        f"set has left the arm's reach and must be named; a step LEAVING it has "
+        f"gained an artefact its own gate does not write, which is the fix and "
+        f"should be recorded as one."
+    )
+
+    grew = sorted(blind - pinned)
+    healed = sorted(pinned - blind)
+    assert not grew and not healed, (
+        f"the blind set changed. NEWLY BLIND {grew}: a step now reports a readable "
+        f"artefact that is WRONG at the same tier as one that is right — that is a "
+        f"gate that stopped reading, and it must be fixed, not pinned. "
+        f"NO LONGER BLIND {healed}: a gate learned to read its artefact; record the "
+        f"shrink here and name the change that taught it. "
+        f"gradable={sorted(gradable)} blind={sorted(blind)} pinned={sorted(pinned)}"
+    )
+
+
+def test_the_survival_clause_is_load_bearing_and_narrow():
+    """MUTATION ARM for `_gradable`'s survival clause, in both directions.
+
+    LOAD-BEARING: with the clause reverted — grading on what the harness WROTE
+    rather than on what survived — at least one step re-enters the gradable
+    population as blind, and the ratchet above would charge it. If nothing
+    re-enters, the clause is dead weight and this test says so.
+
+    NARROW: the clause may not quietly un-grade a step that really is blind. The
+    set it removes is asserted by name, so widening it — a gate that starts
+    rewriting an artefact it used to merely read — reddens here rather than
+    silently shrinking the disclosed blind set.
+    """
+    recs = _content_arm_sweep()
+
+    def gradable_ignoring_survival(rec) -> bool:
+        rels = rec.get("rels") or ()
+        if not rels or rec.get("unresolved_alts"):
+            return False
+        return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)
+                   for r in rels)
+
+    with_clause = {k for k, r in recs.items() if _gradable(r)}
+    without_clause = {k for k, r in recs.items()
+                      if gradable_ignoring_survival(r)}
+    removed = without_clause - with_clause
+
+    assert removed, (
+        "the survival clause removes NO step from the gradable population, so "
+        "it cannot be what keeps a gate-rewritten artefact from being charged "
+        "as blindness. Either every declared output now survives its own gate — "
+        "in which case delete the clause and say so — or the survival "
+        "measurement has stopped working")
+    assert not (with_clause - without_clause), (
+        f"the survival clause ADDED {sorted(with_clause - without_clause)} to "
+        f"the gradable population; it may only ever remove")
+    assert removed == {"1.6x"}, (
+        f"the survival clause un-grades {sorted(removed)}, pinned {{'1.6x'}}.\n"
+        f"Newly un-graded: {sorted(removed - {'1.6x'})} — a step's declared "
+        f"artefact is now being overwritten by its own gate before the verdict "
+        f"is taken, which removes it from this arm's reach and must be a "
+        f"decision, not a diff.\n"
+        f"No longer un-graded: {sorted({'1.6x'} - removed)} — its artefact now "
+        f"survives the gate, so it re-enters the population and its blindness "
+        f"becomes a real finding again.")
+    for key in removed:
+        assert key not in CONTENT_ARM_BLIND, (
+            f"{key} is un-graded by the survival clause AND named in "
+            f"CONTENT_ARM_BLIND; a step cannot be both out of reach and a "
+            f"recorded blind spot")
+
+
+def test_the_content_move_names_its_cause():
+    """A MOVED row must carry a reason the unmoved arm does not.
+
+    The census records THAT a verdict moved. It cannot, on its own, tell a gate
+    that learned to read its artefact from a gate that became flaky, or from a
+    harness that started failing for an unrelated reason — all three read as
+    UNMOVED -> MOVED. So the wrong arm must name at least one cause the right arm
+    does not, and that named cause is what a later reader has to work with.
+
+    This is not hypothetical bookkeeping. Step 35 was pinned MOVED off a pytest
+    report that TRUNCATED its reason list, so it looked like a verdict that moved
+    with nothing to attribute it to. It was not, but nothing in the file would
+    have caught it if it had been.
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm measured ZERO steps — a broken measurement"
+    unexplained = {}
+    for key, rec in sweep.items():
+        if rec["state"] != _CONTENT_MOVED:
+            continue
+        right, wrong = rec["right"], rec["wrong"]
+        gained = [r for r in wrong[1] if r not in set(right[1])]
+        if not gained:
+            unexplained[key] = (right[0], wrong[0])
+    assert not unexplained, (
+        f"{len(unexplained)} step(s) moved with no reason the unmoved arm did "
+        f"not already carry: {unexplained}. A verdict that changes without "
+        f"naming what changed it cannot be told from one that changed by "
+        f"accident, and the census would record both identically."
+    )
+
+
+def test_d8_a_present_but_wrong_declared_output_is_measured_not_assumed():
+    """Per step: does the flow say anything different about a WRONG artefact?"""
+    sweep = _content_arm_sweep()
+    # The house rule: a zero denominator REFUSES rather than passing over an
+    # empty ledger. With no population there is no measurement, and a green
+    # here would read as "content is fine everywhere".
+    assert sweep, (
+        "the content arm measured ZERO steps: `_real_gate_sweep` returned an "
+        "empty PASS-tier population, so no step's own gate reached a verdict "
+        "for content to move. That is a broken measurement, not a clean one — "
+        "see test_d8_downgrade_is_reachable_through_each_steps_own_real_gate"
+    )
+
+    live = {k: rec["state"] for k, rec in sweep.items()}
+    unpinned = sorted(k for k in live if k not in CONTENT_ARM_AS_MEASURED)
+    assert not unpinned, (
+        f"steps {unpinned!r} entered the real-gate PASS-tier population and "
+        f"have no recorded content-arm state. Measure them and record the "
+        f"result in CONTENT_ARM_AS_MEASURED in the same change: a step that "
+        f"joins the population unmeasured is a cell whose artefact content "
+        f"nothing in this repository has ever asked about. "
+        f"Measured now: { {k: live[k] for k in unpinned} }"
+    )
+
+    changed = {k: (CONTENT_ARM_AS_MEASURED[k], live[k])
+               for k in sorted(live) if CONTENT_ARM_AS_MEASURED[k] != live[k]}
+    if changed:
+        detail = []
+        for k, (was, now) in changed.items():
+            rec = sweep[k]
+            detail.append(
+                f"  step {k}: {was} -> {now}\n"
+                f"      entry   {rec['entry']}\n"
+                f"      right   {rec['right'][0]} :: "
+                f"{list(rec['right'][1])[:2]}\n"
+                f"      wrong   {rec['wrong'][0]} :: "
+                f"{list(rec['wrong'][1])[:2]}")
+        pytest.fail(
+            f"the content arm disagrees with its pin on {len(changed)} of "
+            f"{len(live)} measured step(s):\n"
+            + "\n".join(detail)
+            + "\n\nUNMOVED -> MOVED is a gate that learned to read its own "
+              "artefact: record it in CONTENT_ARM_AS_MEASURED and say which "
+              "change taught it. MOVED -> UNMOVED is a gate that stopped, and "
+              "is the direction nothing else here would catch.")
+
+
+def test_d8_the_wrong_fixture_is_present_parseable_and_still_satisfies_the_entry():
+    """THE CONTROL. Without it, every UNMOVED above could mean "I wrote nothing".
+
+    An UNMOVED verdict is only evidence about content if the wrong tree really
+    differs from the right one in CONTENT and in nothing else. Four ways it
+    could fail to, each of which would turn this whole arm into a green that
+    measured an empty directory — the exact shape dimension 2 named ABSENCE_RED
+    and refused:
+
+      * the file is not there            -> absence, which the other arm owns
+      * the file is 0 bytes              -> ditto, in a thinner disguise
+      * its bytes equal the right body   -> the two trees are the same tree
+      * it no longer satisfies the entry -> `_glob_first` never saw it
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm measured ZERO steps; nothing to control"
+
+    problems: List[str] = []
+    checked = 0
+    for key, rec in sorted(sweep.items()):
+        entry = rec["entry"]
+        if not rec["rels"]:
+            problems.append(
+                f"step {key}: entry {entry!r} produced no files at all")
+            continue
+        if rec["unresolved_alts"]:
+            problems.append(
+                f"step {key}: after corrupting {entry!r} the consumer's own "
+                f"_glob_first no longer resolves {list(rec['unresolved_alts'])}"
+                f" — the wrong tree is an ABSENCE, not a wrong content")
+        for rel in rec["rels"]:
+            checked += 1
+            blob = rec["wrong_bytes"][rel]
+            if not blob:
+                problems.append(f"step {key}: {rel} was written 0 bytes")
+                continue
+            if blob == rec["right_bytes"][rel]:
+                problems.append(
+                    f"step {key}: {rel} — the wrong body is BYTE-IDENTICAL to "
+                    f"the right body, so this step's UNMOVED verdict compares "
+                    f"a tree with itself and means nothing")
+            low = rel.lower()
+            try:
+                if low.endswith(".jsonl"):
+                    for line in blob.decode("utf-8").splitlines():
+                        if line.strip():
+                            json.loads(line)
+                elif low.endswith(".json"):
+                    json.loads(blob.decode("utf-8"))
+                elif low.endswith((".v", ".sv")):
+                    text = blob.decode("utf-8")
+                    assert "module " in text and "endmodule" in text, (
+                        "no module/endmodule pair")
+                else:
+                    blob.decode("utf-8")
+            except Exception as exc:                     # noqa: BLE001
+                problems.append(
+                    f"step {key}: {rel} does not parse as its own kind "
+                    f"({exc}) — an unparseable artefact is refused on KIND and "
+                    f"proves nothing about whether anything reads its content")
+
+    assert not problems, (
+        f"{len(problems)} defect(s) in the wrong fixture, over {checked} "
+        f"corrupted file(s) across {len(sweep)} step(s):\n  - "
+        + "\n  - ".join(problems))
+
+
+def test_d8_every_seeded_kind_has_a_wrong_counterpart():
+    """A kind added to `fixture_body` must not fall through to the text body.
+
+    `wrong_body` iterates `_KIND_BODIES` so the two tables always agree on
+    WHICH suffixes are special; this asserts they also agree on WHAT each one
+    is. Add `.def` to the right table without adding it here and the wrong tree
+    would seed a DEF path with prose, which fails on kind rather than on
+    content and would quietly re-classify that step as unmeasurable.
+    """
+    right_suffixes = {suffix for suffix, _ in _KIND_BODIES}
+    assert right_suffixes == set(_WRONG_BY_SUFFIX), (
+        f"the seeded-kind tables disagree: fixture_body handles "
+        f"{sorted(right_suffixes)}, wrong_body handles "
+        f"{sorted(_WRONG_BY_SUFFIX)}")
+    for suffix, right in _KIND_BODIES:
+        rel = f"probe{suffix}"
+        assert wrong_body(rel) != right, (
+            f"{suffix}: the wrong body equals the right body")
+        assert fixture_body(rel) == right, (
+            f"{suffix}: fixture_body no longer returns the pinned right body")
+    assert wrong_body("probe.rpt") == _WRONG_TEXT
+    assert wrong_body("probe.rpt") != _FIXTURE_BODY
+
+
+#: THE POSITIVE CONTROL's subject, anchored to the flow rather than described.
+#: Step 39 is the ONLY step in the flow whose gate carries a `json_field_true`
+#: clause, i.e. the only place the flow spells out a CONTENT contract for one of
+#: its own declared outputs — the file is both `required_outputs[1]` and the
+#: artefact the clause reads. If that clause moves, the flow can redden on
+#: content; if it stops, the arm above lost its only witness.
+_CONTENT_CONTROL_STEP = 39
+_CONTENT_CONTROL_ARTEFACT = "reports/phase2/fpga/on_board_pass.json"
+_CONTENT_CONTROL_FIELD = "all_scenarios_passed"
+
+
+def test_d8_the_content_arm_can_observe_a_move(tmp_path):
+    """THE POSITIVE CONTROL: a present, parseable, WRONG artefact going red.
+
+    Sixteen UNMOVED verdicts are worth nothing if the instrument cannot report
+    a MOVED one — that is the same "predicate that cannot fail" the matrix
+    README forbids, one level up. So drive the one clause in the whole flow
+    that declares a content contract, through the same `check_step` and the
+    same signature comparison the arm uses, and require the verdict to move
+    BECAUSE OF THE BYTES.
+
+    The two trees differ in exactly one field of one file. Both files are
+    present, non-empty and valid JSON; only the value is wrong. The step's
+    OTHER clause needs hardware evidence no synthesized tree can carry, so the
+    STATUS is FAIL on both sides — which is why this control grades the REASONS
+    and not the status. "The verdict moved" and "the step passed" are different
+    claims, and only the first one is being made here.
+    """
+    sid = _CONTENT_CONTROL_STEP
+    step = dict(F.step_by_id(sid))
+
+    # Anchored, not assumed: if the flow drops or re-points this clause the
+    # control must say so rather than measure some other file.
+    clauses = [c for c in F.gate_clauses(sid) if "json_field_true" in str(c)]
+    gate_text = str(step.get("gate"))
+    assert _CONTENT_CONTROL_ARTEFACT in gate_text, (
+        f"step {sid}'s gate no longer names {_CONTENT_CONTROL_ARTEFACT!r}; the "
+        f"content control has lost its subject. gate={gate_text[:400]}")
+    assert _CONTENT_CONTROL_FIELD in gate_text, (
+        f"step {sid}'s gate no longer reads the field "
+        f"{_CONTENT_CONTROL_FIELD!r}. gate={gate_text[:400]}")
+    assert _CONTENT_CONTROL_ARTEFACT in list(F.required_outputs(sid)), (
+        f"{_CONTENT_CONTROL_ARTEFACT!r} is no longer one of step {sid}'s "
+        f"required_outputs, so it is no longer the same question this arm asks "
+        f"of the other 16 steps: {list(F.required_outputs(sid))}")
+    assert clauses, f"step {sid}: no json_field_true clause resolved"
+
+    right_body = json.dumps(
+        {_CONTENT_CONTROL_FIELD: True,
+         "scenarios": [{"name": "d8", "passed": True}]}, indent=2) + "\n"
+    wrong_body_ = json.dumps(
+        {_CONTENT_CONTROL_FIELD: False,
+         "scenarios": [{"name": "d8", "passed": False}]}, indent=2) + "\n"
+
+    sigs = {}
+    for label, body in (("right", right_body), ("wrong", wrong_body_)):
+        project = tmp_path / label
+        project.mkdir(parents=True)
+        _materialize(project, step)
+        (project / _CONTENT_CONTROL_ARTEFACT).write_text(body)
+        # Both sides are PRESENT and PARSEABLE, asked of the consumer's own
+        # resolver and of json itself, before either verdict is read.
+        assert FCC._glob_first(project, _CONTENT_CONTROL_ARTEFACT), (
+            f"{label}: the consumer's resolver does not find "
+            f"{_CONTENT_CONTROL_ARTEFACT}")
+        assert json.loads(
+            (project / _CONTENT_CONTROL_ARTEFACT).read_text())[
+                _CONTENT_CONTROL_FIELD] is (label == "right")
+        sigs[label] = _verdict_signature(
+            project, FCC.check_step(project, step, {}))
+
+    assert _content_state(sigs["right"], sigs["wrong"]) == _CONTENT_MOVED, (
+        f"step {sid}: the flow said the IDENTICAL thing about "
+        f"{_CONTENT_CONTROL_ARTEFACT} stating {_CONTENT_CONTROL_FIELD}=true "
+        f"and stating it false. This is the arm's only witness that a content "
+        f"red is expressible at all; with it gone, every UNMOVED in "
+        f"CONTENT_ARM_AS_MEASURED is uninformative rather than a finding. "
+        f"signature={sigs['right']}")
+
+    marker = f"{_CONTENT_CONTROL_FIELD} = False"
+    named = [r for r in sigs["wrong"][1] if marker in r]
+    assert named, (
+        f"step {sid}: the verdict moved but no reason names the field that "
+        f"moved it. A content red that cannot say WHICH value was wrong is not "
+        f"actionable. reasons={list(sigs['wrong'][1])}")
+    assert not [r for r in sigs["right"][1] if marker in r], (
+        f"step {sid}: the RIGHT tree also reports {marker!r}, so the reason is "
+        f"not attributable to the corrupted byte. reasons={list(sigs['right'][1])}")
+
+
 def test_d8_platform_capability_gap_table_is_pinned():
     """A re-opened capability gap must redden this suite once, by name.
 
@@ -1360,3 +2310,137 @@ def matrix_cell_state(step_id) -> str:
     if W.waiver_for(step_id, DIM) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+def matrix_cell_substitution(step_id) -> Optional[str]:
+    """Was this cell's ENFORCED verdict measured against the step's OWN gate?
+
+    ``None`` for the steps whose real gate reaches a PASS tier on the seeded
+    fixture — those are decided by ``check_step`` driving the gate the flow
+    yaml actually declares. A disclosure for the rest, whose verdict comes from
+    the substituted stand-in described in KNOWN GAP #2.
+
+    The split is RE-DERIVED from :func:`_real_gate_sweep`, the same live
+    measurement ``test_d8_downgrade_is_reachable_through_each_steps_own_real_gate``
+    grades against ``REAL_GATE_PASS_TIER_STEPS``. Reading the pinned tuple
+    directly would make this a fact about a tuple; reading the sweep makes it a
+    fact about the tree, and weakening the sweep still has to get past that
+    test's shrink guard.
+
+    Why it is reported at all: the substitution was always disclosed HERE, in
+    prose, and always erased THERE, in the one census figure a reader quotes.
+    45 of 61 is not a footnote to 61 — it is most of it.
+    """
+    if matrix_cell_state(step_id) != "ENFORCED":
+        return None
+    if F.normalize_id(step_id) in _real_gate_sweep():
+        return None
+    return (
+        "the 61-cell sweep replaces this step's declared gate with the minimal "
+        "stand-in {\"files_exist\": [\"_d8_gate/gate_ok.flag\"]} so the gate "
+        "verdict is held at a known PASS tier and the MISSING downgrade is "
+        "reachable at all; this step's OWN gate FAILs on a synthesized fixture "
+        "(it needs a converged project no CI has), so what this cell proves is "
+        "that the CATCHER downgrades a PASS-tier verdict when a declared "
+        "output vanishes — not that this step's gate ever reaches that tier in "
+        "production. See KNOWN GAP #2 and "
+        "test_d8_downgrade_is_reachable_through_each_steps_own_real_gate."
+    )
+
+
+def test_the_pin_is_the_MEASURED_population_not_a_SUPERSET_of_it():
+    """The pin must EQUAL the live single-entry population, not contain it.
+
+    WHY THIS EXISTS, and it is not hypothetical — v1.10.38 shipped the defect.
+    The membership assertion above lives inside ``if len(outs) < 2``, so it can
+    only fire in ONE direction:
+
+        a step that DROPS to a single entry   -> absent from the pin -> RED here
+        a step that RISES OUT of the population -> takes the else branch,
+                                                   never consults the pin, and
+                                                   its entry rots silently
+
+    MEASURED on `162b5bde4` (v1.10.38), which relocated the extraction-coverage
+    entries off step 1 and then APPENDED "1" to this tuple instead of
+    re-deriving it::
+
+        pin                     28 entries, containing BOTH "1" and "29"
+        measured population     27
+        step 29 on that commit  declares TWO required_outputs
+                                (sim_postlayout/results.log OR pass.flag,
+                                 reports/phase2/gates/post_layout_sim.json)
+        d8                      294 passed -- it could not see any of that
+
+    A one-directional ratchet accumulates stale members forever, and every
+    landing that moves a step's declaration is another chance to add one. Set
+    equality is what makes the pin a MEASUREMENT rather than a floor: a stale
+    entry reddens the moment it goes stale, and nobody has to remember to look.
+    """
+    measured, seen = set(), set()
+    for cell in _cell_params():
+        c = cell.values[0] if hasattr(cell, "values") else cell
+        key = F.normalize_id(c.step_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(F.required_outputs(c.step_id)) < 2:
+            measured.add(key)
+
+    pinned = set(SINGLE_ENTRY_STEPS_AS_MEASURED)
+    assert pinned == measured, (
+        f"the pin and the flow disagree.\n"
+        f"  pinned but NO LONGER single-entry (stale, invisible to the "
+        f"membership assert): {sorted(pinned - measured)}\n"
+        f"  single-entry but NOT pinned (the case that assert already "
+        f"catches): {sorted(measured - pinned)}\n"
+        f"  re-derive the tuple rather than adding to it — appending is how "
+        f"v1.10.38 shipped a 28-entry pin over a 27-step population.")
+
+
+def test_the_two_readings_of_self_written_agree():
+    """THE MERGE, AS A TEST. Two lanes answered "is this row gradable?" two
+    ways -- inference from the yaml (`_gate_written_paths`) and measurement off
+    disk (`_survived_the_gate`). They agree on this tree, and that agreement is
+    asserted rather than assumed, because the day they part is the day a gate
+    started writing a declared output under a name the yaml does not spell.
+    """
+    sweep = _content_arm_sweep()
+    assert sweep, "the content arm measured ZERO steps -- a broken measurement"
+    disagree = []
+    for step_id, rec in sweep.items():
+        rels = rec.get("rels") or ()
+        if not rels or rec.get("unresolved_alts"):
+            continue
+        readable = [r for r in rels
+                    if str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)]
+        if not readable:
+            continue
+        inferred = any(str(r) not in _gate_written_paths(step_id)
+                       for r in readable)
+        measured = _gradable(rec, step_id)
+        if inferred != measured:
+            disagree.append((step_id, inferred, measured))
+    # ONE DIVERGENCE IS MEASURED AND PINNED, in BOTH directions, so this test
+    # still fires for any new one. The message below anticipated a divergence
+    # in one direction — a gate WRITING a declared output the command does not
+    # name. Measured on this tree it is the OTHER direction:
+    #
+    #   step 2  reports/phase2/lint/rtl_hygiene.json
+    #           the gate command NAMES it as a `--json` target
+    #           the file SURVIVED the gate on disk
+    #
+    # so the command names a target its program did not write on this fixture.
+    # That is why the inference (False) and the measurement (True) disagree, and
+    # it is why the measurement is the reading this file acts on: a `--json`
+    # flag is an intention, and only the disk says what happened.
+    KNOWN_DIVERGENCE = {("2", False, True)}
+    unexpected = [d for d in disagree if tuple(d) not in KNOWN_DIVERGENCE]
+    stale = [d for d in KNOWN_DIVERGENCE if d not in {tuple(x) for x in disagree}]
+    assert not unexpected and not stale, (
+        "the yaml inference and the on-disk measurement disagree about which "
+        "rows are gradable, and not in the way already recorded. NEW: "
+        + repr(unexpected) + "; NO LONGER DIVERGING: " + repr(stale) +
+        ". The measurement is the one this file acts on; a divergence means a "
+        "gate writes a declared output under a path the gate command does not "
+        "name, or names one it does not write — either way a finding about "
+        "that gate, and either way it must be named here rather than absorbed.")
