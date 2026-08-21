@@ -75,6 +75,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _atomic_artefact import write_json as atomic_write_json  # noqa: E402
+
 PROGRAM = "ppa_pnr_search_space"
 DEFAULT_JSON_REL = "reports/ppa_pnr_search_space.json"
 
@@ -552,7 +554,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     problems = audit_space(space)
     space["self_audit_problems"] = problems
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(space, indent=2) + "\n", encoding="utf-8")
+    # Through the atomic writer (vibe-ic#1082): a reader that opens this space
+    # while it is being rewritten must see the old document or the new one,
+    # never half of one -- and a half-written space is a lever list with no
+    # citations, which is the shape this program exists to refuse.
+    atomic_write_json(out_path, space, indent=2)
 
     print(f"[{PROGRAM}] admitted {space['admitted_count']} lever(s): "
           f"{', '.join(space['admitted_levers']) or '(none)'}")
