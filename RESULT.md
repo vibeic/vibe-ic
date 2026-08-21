@@ -133,6 +133,63 @@ standing control that proves the resolver keeps the two apart.
 
 ## 2. Findings
 
+### F0 — step 0.5ic's gate refused the tree step 0.5ic's own producers built. **FIXED.**
+
+The sharpest thing the matrix found, and the only one with a remedy narrow
+enough to take. Step 0.5ic has TWO programs. Driving them in the order the flow
+declares them, on a die that tapes itself out:
+
+```
+submission_template_ingest  -> status=ABSENT, writes NO_TEMPLATE.txt
+tapeout_declaration_gen     -> RETIRES NO_TEMPLATE.txt on purpose — it is the
+                               IP terminal's router and a die must not select
+                               it — and writes SELF_TAPEOUT.txt
+submission_template_check   -> rc 1, NO_TEMPLATE_FILE_MISSING
+```
+
+One step, and its own gate refuses the tree its own producers just built.
+0.5ic gates the whole chip path behind it, so **the self-tape-out route could
+not be reached by running the flow.** The step's SECOND gate clause already read
+it the other way round: `tapeout_declaration_check` PASSES that same tree and
+names `SELF_TAPEOUT.txt` as its router. One step, two clauses, opposite answers.
+
+**Nothing is widened.** The absence must still be DECLARED, it must still live
+in a file the flow reads, and that file must still carry its producer's marker
+on the first line — the same provenance test both producers already apply
+before retiring a marker of their own. The checker now accepts the file the
+design's own declaration selected instead of insisting on the one the other
+half of its own step deliberately retired.
+
+Four arms, every one measured by running the real programs:
+
+| arm | tree | rc before | rc after |
+|---|---|---|---|
+| positive | the self-tape-out tree 0.5ic's producers build | 1 | **0** |
+| negative | the same, router deleted | 1 | 1 |
+| vacuous | a `SELF_TAPEOUT.txt` with the right NAME and no marker | 1 | 1 |
+| control | the IP route | 0 | 0 |
+
+Mutation arms M16 and M17 below.
+
+**Provenance.** The predecessor session on this brief found this and was reaped
+before it could push; its diagnosis was sitting uncommitted in a local worktree
+(`/home/reyerchu/_jicip/wt`, branch `agent/jicip-tapeout-path-matrix`) along
+with its own 1004-line matrix. I reproduced the defect independently from the
+programs before taking it. **My own matrix missed it**, and the reason is worth
+recording: section 3's vacuous-pass guard asks whether a gate can wrongly say
+YES, which a gate that refuses everything passes perfectly. Nothing asked
+whether a route the flow SELECTS can be made to PASS. Section 7 is that
+question, and it exists because this defect showed the guard had only one
+direction.
+
+**One correction I had to make to my own fix.** Making
+`examined["path_router_on_disk"]` marker-checked broke
+`test_a_router_file_nobody_declared_is_named_in_the_refusal`, and that test is
+right: that field is a FILESYSTEM fact, and the refusal that reads it exists to
+name a stray router nobody declared. A marker requirement would have hidden
+exactly the case the sentence was written for. The field is unchanged; the
+marker-checked question is reported separately as `declared_absence_router`.
+
 ### F1 — a self tape-out on a shuttle-served PDK cannot pass 37.5ic. REPORTED, not fixed.
 
 `tapeout_precheck.operator_arm_applicability` decides the operator arm from two
@@ -310,6 +367,20 @@ against a clean 116 passed / 11 skipped / 2 xfailed.
 | M11 | wire an unwired producer up (`pad_ring_gen` into phase3_one_shot_runner) | 1 failed, 115 passed, 11 skipped, 2 xfailed in 41.03s | `test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be` |
 | M12 | take a wired producer dark (`digital_hardmacro_gen`'s dispatch target renamed) | 1 failed, 115 passed, 11 skipped, 2 xfailed in 41.23s | `test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be` |
 
+### Arms for the F0 fix
+
+Base `d88377027`, reddening against a clean 186 passed / 11 skipped / 2 xfailed
+over the matrix plus `test_submission_template_check.py`.
+
+| # | mutation | reddens |
+|---|---|---|
+| M16 | revert the fix — the checker names `NO_TEMPLATE.txt` alone again | 1 failed — `test_a_die_that_tapes_itself_out_can_pass_step_0_5ics_own_gate` |
+| M17 | widen it too far — a router file counts without its producer's marker | 1 failed — `test_a_router_file_without_its_producers_marker_buys_nothing` |
+
+M17 is the half that matters: it proves the fix is a CORRECTION and not a
+relaxation. Without the marker test, an empty file of the right name buys a
+pass.
+
 ### Arms for the F6 repair
 
 Base `0cf908c56`, reddening against a clean 38 passed. Each mutates the THING
@@ -429,6 +500,27 @@ was ON the step this campaign covers, so it was **repaired** (`0cf908c56`) —
 see finding F6. It is the one red in the list above that is green at head; the
 table is the measurement taken BEFORE that repair, kept because it is what the
 A/B actually recorded.
+
+### The delta A/B for the F0 fix
+
+F0 changes a SHIPPED program, so it needs its own arm: the 11 modules that
+reference `submission_template_check`, `_submission_template`,
+`_tapeout_declaration`, `SELF_TAPEOUT` or `NO_TEMPLATE`. Both arms run serially
+against `origin/main` **e4c5840d6**.
+
+```
+base node ids                623
+head node ids                756   (+133, all of them the new module)
+only in base                   0
+OUTCOME CHANGED on shared ids  0
+base   FAILED 6  PASSED 553  SKIPPED 62  XFAIL 2
+head   FAILED 6  PASSED 673  SKIPPED 73  XFAIL 4
+```
+
+The six reds are identical in both arms and are all
+`test_matrix_d3_outputs_produced::test_d3_required_outputs_are_produced`
+[step15, 17, 19, 20, 30, 32] — the d3 UNEVIDENCED_CELLS set, pinned by design
+and closable only by publishing a run tree.
 
 ---
 
