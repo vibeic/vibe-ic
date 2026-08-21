@@ -3075,6 +3075,53 @@ document**, and it is an acquisition, not an engineering task — *"data we neve
 went and got"*.
 
 
+## M53 — the sixth gate measured, and it is a STALE PIN, not a coverage gap
+
+`liar census controls still fire` was the one of the six I had not re-run,
+dismissed as "a wrapped pytest invocation". It is `pytest tools/test_liar_census.py`
+and runs in 14 seconds. It fails on
+`test_nothing_the_flow_declares_is_left_unswept`, and the failure says:
+
+```
+{'swept': 181, 'declared': 181, 'by_kind': {...}, 'unswept': []}
+assert 181 == 179
+```
+
+**`unswept: []`.** Nothing the flow declares is left unswept — `swept ==
+declared == 181`. **The gate fails because a pinned count of 179 is stale**, not
+because anything is uncovered. The property the test is named for is verified
+HOLDING, by the same output that reds it.
+
+**That is the same shape as the `1.6x` finding** from early in this engagement:
+the flow grew (68 → 69 steps) and a pin was not regenerated. Here the flow grew
+to 181 declared clauses against a pin of 179. **Plausibly the same root cause —
+flow growth outrunning pin regeneration — though I have not confirmed the two
+share a mechanism** and will not assert it on shape alone.
+
+### All six blocking FAILs, now measured
+
+| gate | verdict | what it actually says |
+|---|---|---|
+| flow-gate enforcement audit | FAIL | **two clauses**: 2 undeclared + 1 orphan declaring an intent nothing wires (M48) |
+| checker execution wiring | FAIL | 3 checkers nothing but their own test runs (M50) |
+| gates are wired to something | FAIL | **the same 3**, by name (M50) |
+| declaration scans strip comments | FAIL | 5 declaration regexes scanning text no stripper touched |
+| d3 declaration/manifest parity | **FIXED** | 0 not covered (M32) |
+| liar census controls still fire | FAIL | **a stale pin, 181 vs 179 — nothing unswept** |
+
+**So "FAIL — 6" is now: 5 failing, 1 fixed — and of the 5, one is a stale count
+and two are the same defect counted twice.** The honest distinct-defect count is
+**three**: the flow-gate audit's two clauses, the three unwired checkers, and the
+five declaration regexes.
+
+**The dominant theme is one sentence long.** Four of the five concern *things
+the repository DECLARES that nothing EXECUTES* — undeclared or unwired gates,
+checkers only their own tests run, declarations nothing sweeps, an orphan
+declaring an intent nothing wires. **That is the same defect this branch spent
+fifty sections finding in the landing guard**, and the hygiene suite has been
+reporting it by name the whole time.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
