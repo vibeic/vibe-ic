@@ -1,0 +1,32 @@
+{
+  "gate": "l22_verification_plan_measurable_check",
+  "project": "/home/reyerchu/vibe-ic/benchmark-data/ic/ibex",
+  "verdict": "FAIL",
+  "blocking_findings": [
+    {
+      "id": "TARGET_OUTSIDE_CONSUMING_LAYER",
+      "detail": "The design's own inputs state a MEASURABLE verification target in 1 input-doc location(s) and 0 sibling-L-doc location(s), but L22 — the layer a coverage gate consumes — carries 0 measurable coverage_goals[] (of 0 total). The target is present somewhere and absent from the layer that consumes it: nothing downstream can compare a measured number against it.",
+      "evidence": [
+        {
+          "source": "/home/reyerchu/vibe-ic/benchmark-data/ic/ibex/phase1/input_doc/ibex_verification.txt",
+          "line": 86,
+          "match": "100% coverage",
+          "context": "The sequences here are used to drive interrupt and debug stimulus into the core. Testplan \"\"\"\"\"\"\"\" The goal of this bench is to fully verify the Ibex core with 100% coverage. This includes testing all RV32IMCB instructio"
+        }
+      ]
+    }
+  ],
+  "advisory_findings": [],
+  "evidence": {
+    "l22_path": "/home/reyerchu/vibe-ic/benchmark-data/ic/ibex/phase1/generated_docs/L22_VERIFICATION_PLAN.json",
+    "applicability": "APPLICABLE",
+    "coverage_goal_count": 0,
+    "measurable_goal_count": 0,
+    "formal_property_count": 0,
+    "prose_item_count": 6,
+    "verification_plan_present": "implicit",
+    "regression_matrix_populated": false,
+    "coverage_target_hits_input_docs": 1,
+    "coverage_target_hits_sibling_l_docs": 0
+  }
+}
