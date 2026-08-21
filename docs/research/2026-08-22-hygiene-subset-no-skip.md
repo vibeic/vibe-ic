@@ -1244,3 +1244,80 @@ whether the gap they report on the batch is real.
 is a non-measurement, indistinguishable from a green that measured and found
 nothing. `main` is not passing these tests. It is skipping them, silently, and
 the differential read the skip as a pass.
+
+## 22. Closed: the batch took the branch at HEAD, and the count was SEVEN
+
+**The split-merge of §9 is closed.** `origin/land/batch67-assembled` is now
+`85383af35b`, "Merge fix/jland67-hygiene-subset-honoured into the batch-67
+assembly", whose parents are `137caae925` and **`3bfe4338e4`** — the branch head
+that was recommended, not its first commit. The atomic edit-plus-pin pair
+arrived together this time.
+
+Verified on that head:
+
+```
+ci_harness_timeout_ceiling_check                       rc 0 PASS
+148 passed — the ceiling check's own tests, the seventh node below,
+             the two target tests, and the seam guard
+```
+
+Nothing code-bearing is outstanding: `git diff --name-only 3bfe4338e4..HEAD`
+outside `docs/` is EMPTY, so this branch's remaining commits are documentation
+only and the batch carries the complete fix.
+
+### The count was six because my SELECTION was wrong, not because the fix was
+
+`jmeas3` found a SEVENTH node failing on the same digest mismatch, byte for
+byte, in a file I never measured:
+
+```
+test_pytest_per_file_junit.py::test_the_landing_harness_declares_semantic
+                               _progress_not_elapsed_time
+```
+
+Measured here at the pre-merge head `137caae925`, so the red is this document's
+own and not a relayed one:
+
+```
+AssertionError: 'gatekeeper-land.sh is not the complete reviewed executable
+  (sha256=29810dbbeae15c4ced70fcd2708b96a2a9ff5a7640d49350b93b2c4473b6e630,
+   expected=dad5d0f10c8c4f030d71770f2521133a3ba6d430a33646bd652aa2575c0b2d9f)'
+1 failed
+```
+
+and passing on the re-merged head, inside the 148 above.
+
+**Why my 17-file selection missed it.** The selection was built from tokens this
+branch's DIFF touches — `GK_HYG`, `GK_REVIEW`, `hygiene_record`,
+`GATEKEEPER_HYGIENE_REPORT`, `_LANDING_LANE_SHA256`, `summary-json`.
+`test_pytest_per_file_junit.py` contains none of them. It reaches the same
+subject a different way:
+
+```python
+import ci_harness_timeout_ceiling_check as C
+contract = C.landing_semantic_progress_contract(root)
+```
+
+It binds to the digest by IMPORTING THE CHECKER and calling it against the real
+root. A token census over the diff cannot see that edge, because the coupling is
+not lexical with anything the diff contains.
+
+**So "clears 6, adds 0" understated the fix, and the understatement is the less
+dangerous direction — but it is still a denominator error, and it is the one
+this repo has a standing rule about: assert your own denominator.** The correct
+selector for this class is not "tests mentioning the tokens I changed" but
+**"tests that import `ci_harness_timeout_ceiling_check` and call it against the
+real root"**. Applied to this tree that is a small set, and it is the set that
+should have been run.
+
+Corrected claim, with both arms measured here: **taking this branch clears
+SEVEN named nodes across TWO files and adds none.**
+
+### What this cost, said plainly
+
+Nothing, this time, because the understatement pointed the safe way and a peer
+was measuring the same batch with a different method. Had the missed file
+contained a node my change BROKE rather than fixed, the same blind spot would
+have hidden it, and the two arms of my differential would have agreed with each
+other while both being wrong. A selection derived from a diff can only find
+couplings the diff spells out; an import edge to a checker is not one.
