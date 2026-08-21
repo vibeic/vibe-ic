@@ -3728,6 +3728,41 @@ provenance is a relative path and nothing more. D's cell is present and tracked.
 actually missing.**
 
 
+## M69 — my "ownership" reason was weak; the fixture's own principle is the real one, and it revises M46
+
+I filed the coverage bridge as blocked by *"fixture work in another agent's
+test"*. **That is an ownership claim, and this branch has edited other agents'
+test files freely under the same brief** — so by the M68 pattern I checked it.
+
+`_build_oracle_replica`'s docstring states the fixture's design principle:
+
+> Build a Step-4 oracle-track replica **using ONLY the real runner emitters (no
+> hand-written `coverage_actual.json`)**, then satisfy the rest of Step 4's
+> required_outputs.
+
+**That changes the answer, and it revises MY OWN recommendation.** M46 concluded
+the right fix was *"enrich the fixture so Step 4 has no vacuous members"*. But the
+vacuous members are `vacuous_testbench_check` and `professional_tb_check`, and
+making them non-vacuous means **supplying testbench artefacts** — which, done by
+hand, is precisely what this fixture exists not to do.
+
+**So M46's recommended fix conflicts with the fixture's stated principle.** Either
+the enrichment must come from **running the real emitters** for a testbench too —
+a materially bigger change than "enrich the fixture" implied — or the test's
+scenario is intentionally minimal and the deferral path simply cannot be
+exercised within it.
+
+**Which is a better reason than the one I gave**, and a different one: not "it
+belongs to someone else" but "the obvious fix violates the fixture's own rule, and
+the non-obvious one is a redesign". **An ownership claim told the reader nothing
+checkable; this tells them what to weigh.**
+
+**Sixth time a blocker of mine dissolved under inspection** — though this one
+dissolved into a *stronger* constraint rather than none. **That is the first time
+tonight that has happened**, and it is worth distinguishing: five of my blockers
+were false, this one was merely badly stated.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3813,7 +3848,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **TWO clauses, see M48 — declaring `advisory` does NOT close it.** (a) `area_total_vs_budget_check` + `tapeout_docs_gen` declare no `ENFORCEMENT`: one line each, `advisory` truthful (M29). (b) `orphan::silent_decline_audit` **declares an intent nothing wires** — needs WIRING or withdrawal, which no declaration fixes. | **policy + a wiring job** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described. **M68: the "needs a cell authored" premise is FALSE** — a real published cell with a routed DEF is TRACKED in git's index on this host (`ic/spm/v1.5.58_ihp-sg13g2`, 17210 tracked benchmark-data paths); stage it and point `VIBE_IC_BENCHMARK_DATA` at it. Authoring remains forbidden and unnecessary. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. **Fix the FIXTURE** so Step 4 has no vacuous members, making the waiver branch reachable. Owner's call. | **answered + a fix to avoid** |
+| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — and M66 measured it as CHEAP:** a public Apache-2.0 repo at a pinned commit, clone command already written in `docs/research/template_ingest_run.md`, simply absent from this host. | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
