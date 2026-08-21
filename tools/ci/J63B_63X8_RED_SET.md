@@ -371,6 +371,40 @@ it today. It is the counterfactual "what the corpus showed the day before it was
 withdrawn", which is the right question for deciding whether to re-publish, and
 is not a claim about any host's current state.
 
+### The one real defect in the 22, made actionable
+
+`test_d3_no_record_cites_an_absent_run_this_commit_can_answer` is the only
+unambiguous defect the corpus reveals, so it is written out rather than left as
+a table row. **21 manifest records name a run root the REPOSITORY does not
+carry, while a different admissible root answers the same entry.** The
+population, by cited root:
+
+```
+benchmark-data/ic/caravel_user_project   steps D1 (x2), 4, 9, …
+benchmark-data/ic/sha256                 step 5
+benchmark-data/ic/sha256/clean_run_v1427_20260715   step 10
+benchmark-data/ic/u_hawaii_adc           steps A1, A2, A3, A4, A5, A6 (x2), …
+```
+
+The remedy is the same shape as the step-31 fix in this branch — re-point each
+record at the root that actually answers it — and **it was NOT done here, for a
+reason that is not squeamishness.** The root that answers is only visible with a
+pre-withdrawal clone bound. Re-pointing 21 committed records at roots the
+published corpus no longer carries would replace one unreproducible citation
+with another, and would bake a corpus state that upstream deliberately removed
+into a fixture every host reads. That is a worse artefact than the red.
+
+It is repairable by exactly one kind of author: someone with the run trees
+staged, re-deriving each record against what they publish, in the same change
+that publishes it. Until then it sits with reds 1-6 — a real finding whose
+missing input is named.
+
+Note also that the module already degrades correctly around it: the
+`PRODUCED_BY_RUN` branch searches every admissible root and reports
+`STALE MANIFEST RECORD … which root answered instead`, so nothing silently
+passes on a stale citation. The test exists to prompt the repair, not to guard
+against a false green.
+
 ## Landing note — this branch is conflict-neutral, and there is ONE trap
 
 The brief said to split with `jfindings-63x8` and not duplicate it. That was
