@@ -1,31 +1,56 @@
 # The 63x8 matrix family on main: 54 red test IDs, driven to 12
 
-Branch `jmatrix/63x8-main-reds`, five commits, cut from `origin/main`
-`867de4289` (v1.11.18) — the exact commit the list was measured on.
+Branch `jmatrix/63x8-main-reds`, six commits, now rebased onto `origin/main`
+`e36d81c0a` (v1.11.33). The 54 were measured at `867de4289` (v1.11.18) and are
+re-measured here on both bases.
 
 **42 of the 54 are green. 12 remain, and they now form one dependency graph
 rather than a list.**
 
-## Base: main has NOT moved, so no rebase was possible
+## Base: rebased onto v1.11.33. NEITHER BRANCH HAS LANDED.
 
-The brief said to rebase before re-measuring. Checked straight from the server,
-not from a cached ref:
+I was told main was v1.11.47 with `jmatrix/63x8-main-reds` landed as v1.11.44 and
+`jfindings/63x8-producer-identity` as v1.11.39. **None of that is true of the
+remote.** Checked four independent ways before saying so:
 
 ```
-$ git ls-remote origin refs/heads/main
-867de428920c708934f06411fc91225dc4f58fe6	refs/heads/main
-$ git rev-parse 867de4289
-867de428920c708934f06411fc91225dc4f58fe6
+$ git show origin/main:.../plugin.json | grep version
+  "version": "1.11.33",
+$ git log --all --oneline --grep="v1\.11\.3[4-9]\|v1\.11\.4[0-9]" | wc -l
+0
+$ git merge-base --is-ancestor <each branch head> origin/main
+  jmatrix/63x8-main-reds            NOT on main
+  jfindings/63x8-producer-identity  NOT on main
+$ git grep -c CONTENT_ARM_UNGRADABLE_SELF_WRITTEN origin/main   -> 0
+$ git grep -c CROSSLAYER_SEARCH_UNDECLARED        origin/main   -> 0
+$ git grep -c _measured_subject                   origin/main   -> 0
 ```
 
-`origin/main` is byte-identical to my base; `git log 867de4289..origin/main` is
-**0 commits**. The fourteen PPA lanes are still unlanded on
-`refs/heads/land/ppa-tf` (`bb90724dc`). **The A/B below is current.**
+The last check is the one that matters, because a landing rewrites SHAs: searched
+by CONTENT, not commit id, none of this work is on main. v1.11.34 and above do
+not exist on this remote.
 
-Measured for when they do land: `comm -12` over the two changed-file sets is
-**empty** (my 14 files vs their 125), and driving `flowref` at the ppa-tf yaml
-gives `matrix steps=69`, unchanged. **The rebase will be clean and will not
-change any of the 42.**
+Main HAS moved, by 16 commits — `867de4289` (v1.11.18) to `e36d81c0a`
+(v1.11.33), the fourteen PPA lanes plus a PREPARE and an ACTIVATE. So the
+re-measurement was still worth doing, and this branch is now rebased onto it.
+The rebase was clean; main touched one file this branch touches
+(`test_matrix_d2_falsifiable.py`, at `e36d81c0a`) and every change survived.
+The matrix population is **69** under v1.11.33, unchanged.
+
+### A/B on the NEW base, by test id
+
+| | failed | passed |
+|---|---|---|
+| bare `origin/main` v1.11.33, the 54 | **53** | 1 |
+| this branch rebased onto it, the 54 | **12** | **42** |
+
+**Closes 41. Introduces 0** (`comm -13` empty). The 12 that remain are the
+*identical set* to the 12 measured on the old base — `diff` of the two sorted
+lists is empty — so sixteen commits of PPA work moved none of this either way.
+
+That bare-main figure is also the plainest possible confirmation of the
+paragraph above: **the family is exactly as red on today's main as it was on
+`867de4289`.** 53 of 54.
 
 ## 1. The one d8 red — both questions answered
 
@@ -82,18 +107,23 @@ only checks that the landing tool left `.git/gatekeeper-stamp`. The hook says wh
 in its own comment: *"Running them in a hook would make the hook slow enough to
 be bypassed, and a bypassed hook enforces nothing."*
 
-**(c) bypassed — TRUE, and the landings say so themselves.** Three of the last
-fifteen commit bodies on main carry, verbatim:
+**(c) bypassed — TRUE, and it is now measured at 16 of 16.** Every one of the
+sixteen commits main gained since `867de4289` — the whole v1.11.19..v1.11.33
+batch, fourteen PPA lanes plus the PREPARE and the ACTIVATE — carries, verbatim
+in its body:
 
-> `LANDING GATE SKIPPED on the owner's instruction (2026-08-21).`
+> `LANDING GATE SKIPPED on the owner's instruction`
 
-Including on the two commits that caused this family:
+Sixteen for sixteen. Nothing in that batch was gated. The earlier reading (three
+of fifteen) was a floor, not the rate.
+
+And on the two commits that caused this family:
 
 | commit | what it did | gate statement in its body |
 |---|---|---|
 | `7fcbc7397` | **added step 1.6x** | **none at all** |
-| `bfa94460d` | wired 1.6x to an executor | "LANDED BY THE GATEKEEPER" *and* "LANDING GATE SKIPPED on the owner's instruction" |
-| `867de4289` | retired 37.5self | "LANDED BY THE GATEKEEPER, **ROUND 2. Round 1 was refused for three new reds**" *and* "LANDING GATE SKIPPED on the owner's instruction" |
+| `bfa94460d` | wired 1.6x to an executor | "LANDED BY THE GATEKEEPER" *and* "LANDING GATE SKIPPED" |
+| `867de4289` | retired 37.5self | "LANDED BY THE GATEKEEPER, **ROUND 2. Round 1 was refused for three new reds**" *and* "LANDING GATE SKIPPED" |
 
 So: **yes, it is (c), and I am writing it down rather than softening it.**
 
@@ -116,8 +146,10 @@ sentence a human chose to type in the commit body — which is why
 The sharpest single fact: `867de4289` records that **round 1 was refused for
 three new reds**, and it landed anyway under the skip.
 
-If the other agent's blocking gate red across 13 landings lands on the same
-answer, this is one disease: *the expensive tier is correct, is fatal, and is
+Two other lanes reached this question from different measurements — one found an
+always-run BLOCKING gate red across 13 landings, one found selected tests whose
+red was never acted on. With 16 of 16 landings recording the skip, all three are
+one disease: *the expensive tier is correct, is fatal, and is
 not in the path anything actually took.*
 
 ## 3. The freshness mechanism — it already exists, and it was removed
@@ -147,6 +179,14 @@ of the landing path** by owner decision, with this justification:
 suite — and the suite only enforces if the landing gate runs it. Five days later
 the landing gate was skipped. The removal justification and the skip directive
 are individually defensible and jointly fatal.
+
+### Nothing changed on the enforcement side at v1.11.33
+
+Re-checked on today's main, because `88328c9ca` moved `repo_hygiene_gates.sh`
+and might have restored it: the census gate is still marked
+`MOVED OUT OF THE LANDING PATH (owner decision, 2026-08-16)`, the pre-push hook
+is still not installed (`.git/hooks/` holds only `.sample` files), and there is
+still no `.git/gatekeeper-stamp`.
 
 ### The proposal, measured
 
@@ -306,8 +346,15 @@ Whole-file A/B on the file this branch changes most,
 
 ## REQUESTS TO THE LANDER
 
-1. **Land order is free.** Zero file overlap with `land/ppa-tf`, and the matrix
-   population is 69 under both. Measured, not assumed.
+1. **Already rebased onto v1.11.33 and re-measured there.** The fourteen PPA
+   lanes have landed; this branch sits on top of them, the rebase was clean, and
+   the result is identical: 12 red, the same 12. Nothing further is needed from
+   you on ordering.
+0. **This branch has NOT landed, whatever the tracker says.** Searched by content
+   on `origin/main`: `CONTENT_ARM_UNGRADABLE_SELF_WRITTEN` 0,
+   `CROSSLAYER_SEARCH_UNDECLARED` 0, `EXPECTED_STEPS = 69` 0. Bare main still
+   measures 53 of 54 red. If something reported it landed as v1.11.44, that
+   report is wrong and worth chasing — v1.11.34+ do not exist on this remote.
 2. **Version not bumped**; `plugin.json` and both `marketplace.json` untouched.
 3. **No `--write-baseline` on any hygiene gate.** The census block and the
    anchored figures were regenerated by the repository's own
