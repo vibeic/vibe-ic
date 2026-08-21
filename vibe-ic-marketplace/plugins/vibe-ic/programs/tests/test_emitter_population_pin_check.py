@@ -933,6 +933,57 @@ def test_the_accepted_under_reach_fails_LOUDLY(tmp_path):
         f"record boundary, both this and its companion need re-deciding: {doc}")
 
 
+#: One emitted Tcl line per denominator kind `_DEN_TEMPLATES` recognises. Each
+#: states a population of 4 for an emitter with two `incr` sites.
+_DENOMINATOR_KINDS = {
+    "comparison": '  if {$_n >= 4} { puts ALL }',
+    "ratio": '  puts "($_n/4) refused"',
+    "prose": '  puts "PARTIAL: $_n of 4 repairs refused"',
+}
+
+
+def _emitter_with(tcl_lines):
+    """A two-site emitter whose script is `tcl_lines`, correctly escaped."""
+    body = 'def s():\n    return (\n'
+    body += '        "  if {[catch {a}]} { incr _n }\\n"\n'
+    body += '        "  if {[catch {b}]} { incr _n }\\n"\n'
+    for t in tcl_lines:
+        body += '        %r\n' % (t + "\n")
+    return body + '    )\n'
+
+
+def test_polarity_reaches_every_denominator_kind(tmp_path):
+    """`counters_of` asks polarity about EVERY literal denominator, and
+    `_DEN_TEMPLATES` recognises three kinds. Only `comparison` was ever
+    exercised, so a change that applied the consult to the first kind and not
+    the rest would have gone unnoticed -- and it would fail in the confident
+    direction: a retired `($_n/4)` or `of 4 repairs` read as live, refusing a
+    truthful emitter over a number nobody stated.
+
+    Swept rather than sampled, and each kind is checked in BOTH states: the
+    undenied line must be found and compared, the denied one must be refused AND
+    reported under its own kind name, so the evidence tells a reader which of
+    the three was dropped."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+
+    for kind, line in _DENOMINATOR_KINDS.items():
+        rows, refused = E.counters(_emitter_with([line]))
+        found = sorted({v for _, _, dens in rows for _, v in dens})
+        assert found == [4], f"{kind}: not recognised at all, got {found}"
+        assert refused == [], f"{kind}: undenied line was refused: {refused}"
+
+        retired = "  # " + line.strip() + " is no longer the threshold"
+        rows, refused = E.counters(_emitter_with([retired]))
+        found = sorted({v for _, _, dens in rows for _, v in dens})
+        assert found == [], (
+            f"{kind}: a RETIRED denominator was read as live -- polarity does "
+            f"not reach this kind: {found}")
+        assert [r[0] for r in refused] == [f"{kind} denominator"], (
+            f"{kind}: refused under the wrong name, so the evidence would not "
+            f"say which kind was dropped: {refused}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
