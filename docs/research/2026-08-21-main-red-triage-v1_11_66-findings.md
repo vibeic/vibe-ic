@@ -2159,7 +2159,7 @@ read-only mount topology, M15). Vacuity alone did not seem sufficient grounds.
 
 | item | what is missing | who can supply it |
 |---|---|---|
-| Flow-gate enforcement audit (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT: blocking\|advisory`, but their `program_exit_zero:` clauses (flow lines 1847, 5788) make either choice wrong without a wiring change | a POLICY call, not a measurement |
+| Flow-gate enforcement audit (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT: blocking\|advisory`. ~~their `program_exit_zero:` clauses make either choice wrong~~ — **struck, see M29: those clauses execute NOWHERE, so `advisory` contradicts nothing and closes all four today.** The only open question is whether these two SHOULD be able to stop a step. | a POLICY call — but a one-line one, not a wiring project |
 | ~~`flow_manifest_declaration_parity`~~ **CLOSED (M32)** — it was 3 reds, not 2 | ~~a run root from the declared 15; 0 of the 15 are on this host~~ **That blocker was false: 10 of 15 are here and two carry the artefact. Entry measured at 1919 B; gate now 0 not covered.** | nobody — done |
 | Re-founding the 10 knob-dependent tests (M13) | six test-only env knobs cannot cross the hermetic arm boundary, and `os.kill(arm_pid, 0)` is a host-namespace assertion about a container-namespace process | a POLICY call: re-found on `/evidence` + arm receipts + `landing_completion_record.py`, or punch a test-only hole in `_LAND_REVIEWED_ENV_NAMES` plus a writable mount. I recommend the former and did neither. |
 
