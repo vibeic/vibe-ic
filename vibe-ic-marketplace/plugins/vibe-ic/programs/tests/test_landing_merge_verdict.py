@@ -2508,12 +2508,41 @@ fi
                  str(_BENCHMARK_TEST["remote"])},
     )
     pid_file = probe / f"{hung_arm}.pid"
-    deadline = time.monotonic() + 12
+    # Wait on the same suite ceiling the cleanup wait below uses. The old bound
+    # here was a 12s wall-clock estimate, which the verifier outlives on a cold
+    # cache purely by doing its honest work.
+    deadline = time.monotonic() + _T
     while time.monotonic() < deadline and not pid_file.is_file():
         if proc.poll() is not None:
             break
         time.sleep(0.05)
-    assert pid_file.is_file(), proc.communicate(timeout=2)
+    if not pid_file.is_file():
+        # NEVER evaluate the diagnosis inside the assert message. Against a
+        # verifier that is still running, `proc.communicate(timeout=2)` raises
+        # TimeoutExpired, and that exception REPLACES the AssertionError: the
+        # failure then reads "timed out after 2 seconds", which points at the
+        # verifier as the thing that hung. That is the exact inverse of the
+        # common case, where the verifier ran to completion and it is the
+        # CONTROL ARM that never existed. It also leaks the verifier, because
+        # nothing ever reaps it. Settle the process first, then report which of
+        # the two distinguishable things actually happened.
+        still_running = proc.poll() is None
+        if still_running:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        stdout, stderr = proc.communicate()
+        if still_running:
+            why = (f"the verifier was still running after {_T}s and the "
+                   f"{hung_arm} control arm never announced itself")
+        else:
+            why = (f"the verifier EXITED rc={proc.returncode} without ever "
+                   f"running the {hung_arm} control arm: the injected hang was "
+                   f"unreachable, so this test measured NOTHING about "
+                   f"interrupt cleanup")
+        pytest.fail(f"{why}\n=== verifier stdout ===\n{stdout}\n"
+                    f"=== verifier stderr ===\n{stderr}")
     arm_pid = int(pid_file.read_text().strip())
 
     if pid_only_term:

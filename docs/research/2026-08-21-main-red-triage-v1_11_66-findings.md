@@ -158,7 +158,7 @@ than failing.
 | **G1 HOME-exposure** | **13** | `hermetic_candidate_runner.py:426` refuses any subject under `$HOME`; my clone was there | **ONE**, and it is MINE, not main's. Retracted. |
 | **G2 no docker in the image** | all image-lane | `vibeic-eda` has no docker CLI, so the hermetic arm never starts | **ONE** environment fact, not a repo defect |
 | **G3 degraded tier** | **5** | host git 2.34.1 < 2.38, so `merge-tree --write-tree` is unavailable and the verifier refuses with a different rc than the tests assert | **ONE** environment fact. The verifier BEHAVED CORRECTLY — it refused, and said why, in the same output |
-| **G4 interruption timeouts** | **2** | `subprocess.TimeoutExpired` on the two TERM/kill tests | **NOT SETTLED** — these bound a kill path; could be load or real. Not measured to a conclusion |
+| **G4 interruption timeouts** | **2** | control arm unreachable across the hermetic boundary | **SETTLED (M8)** — 8/8 deterministic, not load. Test is stale vs hermetic arms; diagnosis fixed, property still unguarded |
 | **G5 record shape** | **1** | `KeyError: 'corpus_transitions'` — the verifier returned `LAND_OK` and `hygiene_finding_delta["status"] == "CLEAN"`, but the delta carries no `corpus_transitions` key the consumer reads | **CANDIDATE REAL DEFECT.** Same producer/consumer-shape class as `3f5473a1b [v1.11.53] ppa(records)`, one lane over |
 | **G6 lane-parallel probe** | **1** | the concurrency probe dir holds only `cleanup.*`; none of `A2.started`/`B1.started`/`B2.started` was recorded | **CANDIDATE REAL DEFECT**, and pointed: v1.11.62 IS "the lane-parallel window into the protected runtime". Could still be downstream of the arms not starting |
 
@@ -225,25 +225,109 @@ turned out to be my own environment** — pytest-timeout, the `$HOME` mount, and
 now the unbound corpus. All three were found the same way: by reading what the
 failing thing actually said instead of what its colour implied.
 
-## M8 — G4 SETTLED AS FAR AS THIS HOST ALLOWS: it cannot be settled here
+## M8 — G4 SETTLED (and my earlier "unsettleable here" is RETRACTED)
 
-The two `subprocess.TimeoutExpired` reds are
+The two reds are
 `test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees` and
-`test_pid_only_term_kills_a_term_ignoring_b2_and_removes_worktrees`. Both go
-through `_assert_interruption_cleans_every_parallel_arm`, which deliberately
-plants a TERM-IGNORING arm — `while :; do sleep 30; done` — and then asserts the
-verifier's cleanup kills it and removes the worktrees. The bound is `_T = 55`.
+`test_pid_only_term_kills_a_term_ignoring_b2_and_removes_worktrees`, both through
+`_assert_interruption_cleans_every_parallel_arm`.
 
-They are red on the host BOTH under `$HOME` and outside it, so they are not the
-G1 artefact. **But the image lane cannot adjudicate them**: in the image every
-test in this file fails first on the absent Docker CLI, so the lane that would
-act as the control is masked.
+**RETRACTION.** I previously wrote that G4 was unsettleable on 8hd-3 because the
+image lane is masked and the outcome "depends on process and cgroup behaviour".
+Both halves were wrong. The host lane adjudicates this completely, no image
+control is needed, and the outcome does not depend on load at all.
 
-**G4 is therefore UNSETTLED, and it is unsettleable on 8hd-3** for the same
-reason as G2/G3: there is no environment here in which this guard runs cleanly,
-so there is no control arm for a kill-path test whose outcome depends on process
-and cgroup behaviour. It folds into the same conclusion rather than standing as
-a separate open question.
+**MEASUREMENT.** 8 repeats of each test from outside `$HOME` with a 6-char
+TMPDIR (both known artefacts eliminated): **8/8 RED, both tests. Deterministic,
+not flaky, not load-confounded.**
+
+**ROOT CAUSE.** The test plants its TERM-ignoring arm by patching
+`tools/gatekeeper-land.sh` and guarding the hang on two host-side channels: the
+env var `GATEKEEPER_CONCURRENCY_PROBE_DIR`, and a shared host directory the arm
+writes its pid into. Both channels predate the hermetic-arm work. The arms now
+run under `tools/ci/hermetic_candidate_runner.py`, and
+`launch_hermetic_land_arm` (`tools/gatekeeper-verify-merge.sh:538-551`) passes an
+explicit reviewed `--env` allowlist — `GATEKEEPER_BASE`,
+`GATEKEEPER_BENCHMARK_DATA_SHA`, `GATEKEEPER_HYGIENE_*`,
+`GATEKEEPER_VERIFY_ARM`, `GATEKEEPER_VERSION_BY_GATEKEEPER`,
+`VIBEIC_LANDING_PROGRESS_NONCE` — which does **not** carry
+`GATEKEEPER_CONCURRENCY_PROBE_DIR`; `_reviewed_process_env` scrubs everything
+else. The injected `while :; do sleep 30; done` is therefore unreachable. Even
+if the variable were forwarded, the probe directory is an unmounted host path,
+so the arm could not write the pid where the host-side test looks for it.
+
+Evidence, from the verifier's own captured stdout: it runs to **completion,
+rc=0, `LAND OK`**, having dispatched `--- arm A2/B2: base rc=0 candidate rc=0
+(hermetic gates)`. It never hangs. The verifier is healthy; the CONTROL never
+existed.
+
+Note the runtime snapshot is NOT the reason: `--- protected runtime=base/
+fixture-next` selects the clone's own base commit, which does contain the test's
+committed hang. The hang is present in the arm's tree and simply never fires.
+
+**CONSEQUENCE 1 — the property is untested.** "An interrupt kills a
+TERM-ignoring parallel arm and removes every worktree" is not verified by
+anything. The cleanup-event emitter still exists and still works
+(`gatekeeper-verify-merge.sh:851-856`, host side), but no test reaches it. These
+two tests are red rather than silently green, so nothing is being falsely
+claimed — but the guarantee they name is unguarded.
+
+**CONSEQUENCE 2 — the failure misreported itself, and I fixed that.** The old
+line was:
+
+    assert pid_file.is_file(), proc.communicate(timeout=2)
+
+The assert MESSAGE is evaluated on failure, against a verifier that is still
+running (it takes ~21-25s; the old wait bound was a 12s wall-clock estimate). So
+`communicate(timeout=2)` raises `TimeoutExpired`, and that exception REPLACES the
+AssertionError. The test then reports `timed out after 2 seconds`, which reads as
+"the verifier hung" — the exact inverse of the truth. It also leaked the
+verifier, since nothing reaped it. This is precisely the Rule 9 class this brief
+exists to stamp out: "I could not read it" and "I read it and it was empty"
+producing the same verdict.
+
+The fix settles the process first and then distinguishes the two cases by name,
+and raises the wait to `_T` — the same ceiling the cleanup wait 40 lines below
+already uses, under a comment that explicitly disavows wall-clock estimates
+("Wait on the cleanup protocol, not on a wall-clock estimate of how fast a loaded
+host can remove four worktrees"). Someone hardened the second wait and left the
+first.
+
+A/B, both tests, host lane:
+
+| | message |
+|---|---|
+| before | `subprocess.TimeoutExpired: ... timed out after 2 seconds` (blames the verifier — false) |
+| after | `Failed: the verifier EXITED rc=0 without ever running the A2/B2 control arm: the injected hang was unreachable, so this test measured NOTHING about interrupt cleanup` (true, and carries the verifier's full output) |
+
+**THE TESTS ARE STILL RED. This fix does not turn them green and cannot.** It
+converts a misattributed red into a correctly attributed one. Mutation arm: the
+pristine file at base reproduces `TimeoutExpired` 8/8.
+
+**WHAT A REAL FIX WOULD HAVE TO DO, AND WHY I DID NOT MAKE IT.** Restoring the
+guarantee is not a channel patch, for a reason that kills the cheap version: the
+test ends with
+
+    with pytest.raises(ProcessLookupError): os.kill(arm_pid, 0)
+
+which is a HOST-namespace assertion about a process that now lives in a
+container PID namespace. Forwarding the probe dir would not make that assertion
+meaningful again. The guard has to be re-founded on the container lifecycle —
+does the runner kill and reap the arm's container, and are the four worktrees
+gone — which is a different guarantee expressed differently, and it touches
+`hermetic_candidate_runner.py` and `gatekeeper-verify-merge.sh`, both PROTECTED
+paths in the AUTHORITY/RUNTIME closure. The alternative, punching a test-only env
+var and host mount through the hermetic boundary, weakens the isolation property
+the boundary exists to provide. **Which of those two is acceptable is a policy
+call, not mine to make unilaterally** — same class as the flow-gate ENFORCEMENT
+decision and the coverage-bridge verdict-vocabulary question already escalated
+above.
+
+**Correction to the "9 landing-verdict guard UNRUNNABLE here" count.** At least
+these 2 of the 9 ARE runnable on 8hd-3: the verifier completes normally in the
+degraded rebase-replay tier. Their failure has nothing to do with the absent
+docker CLI or git 2.34.1. The unrunnable count is at most 7, and the docker/git
+explanation does not cover G4.
 
 ## M9 — the corpus-bound re-run, and one limitation of it
 
@@ -341,7 +425,7 @@ corpus" hypothesis is disproven at file scale as well as for the single test.
 | G1 | 13 | subject under `$HOME`; `hermetic_candidate_runner.py:426` refuses it | **SETTLED — mine** |
 | G2 | image lane | no Docker CLI in the pinned image | **SETTLED — environment** |
 | G3 | 5 | host git 2.34.1 < 2.38, verifier drops to its degraded tier and refuses with a different rc | **SETTLED — environment; the verifier behaved correctly** |
-| G4 | 2 | TERM/kill cleanup exceeds `_T=55` | **UNSETTLEABLE HERE** — the image control is masked by G2 |
+| G4 | 2 | the injected TERM-ignoring arm never runs: `GATEKEEPER_CONCURRENCY_PROBE_DIR` is not in the hermetic arm's reviewed env allowlist | **SETTLED (M8)** — 8/8 deterministic. Diagnosis fixed; re-founding the guard is a policy call |
 | G5 | 1 | no corpus transition computed under a stub that forces one | **OPEN**, three of my own hypotheses eliminated |
 | G6 | 1 | probe records only `cleanup.*`, no `A2/B1/B2.started` | **OPEN**, corpus eliminated as a cause |
 
@@ -497,9 +581,16 @@ was stopped by the instrument rather than by my reading the message.
 
 The 9 survivors are stable across four versions and are the groups already
 named: 5 x git 2.34.1 degraded tier, 2 x TERM/kill timeouts (G4), G5, G6. None
-of them has moved since v1.11.62, which is consistent with all four being about
-the environment or about evidence this host cannot produce, and inconsistent
-with any of them being a live regression.
+of them has moved since v1.11.62. For three of the four that is consistent with
+being about the environment or about evidence this host cannot produce.
+
+**G4 is the exception, and M8 corrects this paragraph.** Its two reds are not
+environmental: they are deterministic (8/8), they reproduce on a healthy
+verifier that returns `LAND OK`, and their cause is a stale test whose control
+channel cannot cross the hermetic arm boundary. It is not a live REGRESSION —
+the tests have been red since the arms became hermetic — but it is a live
+property of main, not of this host, and the interrupt-cleanup guarantee is
+currently unguarded.
 
 # ===== v1.11.66 FOUR-WAY BUCKET — COMPLETE, 419/419 =====
 
