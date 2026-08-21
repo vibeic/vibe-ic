@@ -200,7 +200,41 @@ def audit_l9(l9_path: Path) -> Tuple[List[Finding], dict]:
                 (isinstance(value, (list, dict)) and len(value) == 0) or
                 value is None
             )
-            if is_empty and required:
+            # The L9 emitter records absence explicitly: alongside a section it
+            # writes `no_<section>_in_input`, true when the INPUT carried none.
+            # Measured over the 193 canonical L9 files in benchmark-data:
+            #
+            #   internal_wires empty + marker true    186   honest, explained
+            #   internal_wires filled + marker false    4   honest, explained
+            #   internal_wires filled + marker true     3   CONTRADICTION
+            #
+            # Erroring on the first group flags an absence the document itself
+            # accounts for, and it is why this gate FAILs 120 of 120 corpus L9
+            # files — a universal FAIL that says nothing about any of them.
+            # The third group is the finding actually worth having: the marker
+            # and the content disagree, so one of them is wrong.
+            marker_key = f"no_{canonical}_in_input"
+            marker_present = marker_key in data
+            input_had_none = bool(data.get(marker_key))
+            if not is_empty and marker_present and input_had_none:
+                findings.append(Finding(
+                    severity="ERROR",
+                    category="ABSENCE_MARKER_CONTRADICTS_CONTENT",
+                    section=canonical,
+                    message=(f"'{key_found}' has {len(value)} entr(ies) but "
+                             f"'{marker_key}' is true — the marker and the "
+                             f"content disagree"),
+                ))
+            if is_empty and required and input_had_none:
+                findings.append(Finding(
+                    severity="INFO",
+                    category="EMPTY_SECTION_EXPLAINED",
+                    section=canonical,
+                    message=(f"Section '{key_found}' is empty, and "
+                             f"'{marker_key}' is true — the input carried none. "
+                             f"Not a completeness defect."),
+                ))
+            elif is_empty and required:
                 findings.append(Finding(
                     severity="ERROR",
                     category="EMPTY_SECTION",

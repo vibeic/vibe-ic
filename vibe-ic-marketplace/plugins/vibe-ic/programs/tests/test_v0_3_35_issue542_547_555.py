@@ -137,7 +137,7 @@ def _write_cdc_rtl(rtl_dir: Path, content: str) -> None:
 
 def _run_cdc_section(project: Path):
     """Run phase2 CDC detection for the project and return the crossing.json."""
-    import phase2_one_shot_runner as p2r
+    import design_one_shot_runner as p2r
     # Call _run_cdc directly by invoking the RTL scan logic inline.
     # We replicate the scan to test it without running the full runner.
     rtl_dir = project / "phase2" / "stage1" / "rtl"
@@ -305,7 +305,7 @@ def test_542_detect_ic_class_returns_crypto_not_cpu():
 
 def test_542_vendor_rtl_check_waives_to_reused_ip():
     """input/vendor_rtl/ non-empty → rtl_gen WAIVED with catalog-glue hint (#542)."""
-    from phase2_one_shot_runner import step_rtl_gen
+    from design_one_shot_runner import step_rtl_gen
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)
         vendor = p / "input" / "vendor_rtl"
