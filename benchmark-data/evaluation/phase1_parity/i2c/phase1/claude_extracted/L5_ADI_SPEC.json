@@ -1,5 +1,0 @@
-{
-  "ic_name": "I2C-bus (UM10204)",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "Pure digital protocol with analog-aware DC characteristics. Lines (SDA, SCL) are open-drain (or open-collector) wired to VDD through pull-up resistors Rp; logic levels are referenced to VDD as VIL = 0.3 VDD (LOW max) and VIH = 0.7 VDD (HIGH min). Ultra Fast-mode (UFm) uses push-pull drivers and is unidirectional. Bus capacitance (Cb) limits the maximum bus speed per mode."
-}

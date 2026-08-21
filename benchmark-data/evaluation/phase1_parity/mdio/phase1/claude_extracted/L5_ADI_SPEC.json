@@ -1,6 +1,0 @@
-{
-  "ic_name": "IEEE 802.3 Management Data Input/Output (MDIO)",
-  "analog_mixed_signal": "Digital open-drain management interface; MDIO requires an external pull-up; pull-up supply 1.2 V to 3.3 V; no analog blocks.",
-  "io_standard": "Open-drain MDIO with external pull-up; CMOS MDC",
-  "not_applicable_reason": "MDIO is a purely digital management protocol interface."
-}
