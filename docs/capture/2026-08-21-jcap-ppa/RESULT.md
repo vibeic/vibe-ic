@@ -746,6 +746,15 @@ says yes for reasons unrelated to this artefact. The predicate is artefact-level
 **The rule's home is a schema**, making the diagnostic mandatory whenever a
 verdict names a tool, not a scan over source.
 
+**Its sharpest instance is this batch's own Bucket-T record**, found by opening
+the samples rather than trusting that the paths resolved: ten committed
+directories cited for a signal-11 crash, none carrying a log or an error file,
+each recording a runner exit of 1 — the same value the golden arm records. The
+tool's real status survived only in an uncommitted transcript, so the record
+cannot be filed upstream at all. That is what this rule buys: not tidier
+artefacts, but the difference between a fork bug that can be handed over and one
+that cannot.
+
 **(o)** yes — had the diagnostic been retained, F-16 would have been assignable
 on the day it was found instead of open across a whole lane.
 **(d)** yes — it is per tool-invoking step, and the tree has many.
@@ -1211,6 +1220,19 @@ preserve the state encoding do. Signal 11, exit 139, AFTER the router printed it
 own completion line. Bad samples committed at
 `ppa-crosslayer/records/trials/{x03,x04,x11,x12,x13,y03,y04,y08,z24,z25}/`;
 golden at `ppa-crosslayer/records/trials/c02/`, same build, same PDK, same script.
+**The samples do not carry the crash, and that is A-15 happening here.** Checked
+rather than assumed: all eleven directories are tracked, but each bad one holds
+only `objective.json`, `records.json` and `run.json` — no log, no report, no
+error file — and every one records `runner_rc: 1`, not the 139 cited above. **The
+golden records `runner_rc: 1` too**, so on the only status field the committed
+artefacts carry, the ten crashing arms are indistinguishable from the passing
+one. The signal and the exit code come from the originating lane's session
+output, which was never committed. So this record cannot be filed upstream as it
+stands: a maintainer receiving these ten directories can reproduce nothing. What
+the tree DOES support is the correlation — 10 of 10 arms with a non-redundant
+accumulator fail, 0 of 52 preserving arms do — which is a netlist property and is
+the lead worth having.
+
 **(o)** yes — the samples ARE the original, retained.
 **(d)** the enhancement is stated as a behaviour, not as a patch to these ten
 inputs: the stage must exit non-zero with a named diagnostic on any instance it
