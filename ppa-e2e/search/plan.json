@@ -1,0 +1,607 @@
+{
+  "space_digest": "sha256:5f0c7b8e2fd16890e9751ccb91910ec4519c7f1437c0c26f87ef7d9485684a16",
+  "seed": 1121,
+  "lever_notes": [],
+  "plan": [
+    {
+      "index": 0,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:6c397ce5593f81f2ff6274ef44e2cfb0f5744f46d06aec0c63316af10bdc0188",
+      "note": "baseline"
+    },
+    {
+      "index": 1,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:a05e782a70b708c0511955f8290162d6c7ef8c51fa44fdeb71e9536a03f8b509",
+      "note": ""
+    },
+    {
+      "index": 2,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:23175833a2d87844aee732e1deac56f3ea6db6332959b6b16ae9923555b793eb",
+      "note": ""
+    },
+    {
+      "index": 3,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:764487aa078bcaddb6185d5919b4d2a6a6759c628f2739e12c384ecd7b4276e2",
+      "note": ""
+    },
+    {
+      "index": 4,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:5dbf571a394e4a6f53a457671cd023c782d97dc8d3a3574edd03da68e9df8db3",
+      "note": ""
+    },
+    {
+      "index": 5,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:beafe17e9058d76424b53eda8b7f1e50da6e28331b875df880555ee750afdb98",
+      "note": ""
+    },
+    {
+      "index": 6,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:94739bb253a039bb7ac3feedbca16231477504f8e1ed93294a07e7f7b7d7be4c",
+      "note": ""
+    },
+    {
+      "index": 7,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:bea544894b481dd7e29fba42d7a21b28a0651f8d74069afeb0a7e3678a32355f",
+      "note": ""
+    },
+    {
+      "index": 8,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:a5e1cd872debdf7e3ce484e28f5f7406d0a30a2f802ecab644c3e45a3b833659",
+      "note": ""
+    },
+    {
+      "index": 9,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:fae31ddefbaf16e2923dda3d4da83f88323590b2cd1597261dd7fbba6a2b0514",
+      "note": ""
+    },
+    {
+      "index": 10,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:e2078bcbf608ffae5003bdb1bef64ee948dda466675fa30b9ee2e15511690e0a",
+      "note": ""
+    },
+    {
+      "index": 11,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:fcfd9a3fd786b9aca5127057268a226c17dd4bf2ed2ec4443f5097a7ee08a79e",
+      "note": ""
+    },
+    {
+      "index": 12,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:f60949396c61431119bd6cbd704631022627de84667b5db87c21e8fb4b3e8f79",
+      "note": ""
+    },
+    {
+      "index": 13,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:cecef4c8851c4bfd5c0a4ee7a5601059cf5e6e2c4ee1f981778b21f72121e7e2",
+      "note": ""
+    },
+    {
+      "index": 14,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:87e0a64f6dcb9501684f1a80b170a3f2a7c08acbb85bdf408479f744d7b75933",
+      "note": ""
+    },
+    {
+      "index": 15,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:2c87164c234e663605d72e55bbb8da2869ca825b8584531207c171142280fd4f",
+      "note": ""
+    },
+    {
+      "index": 16,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:9f69024c3f8336d547ce2d93bc8cb2783b5287677b5e78e240355eed0f1c394f",
+      "note": ""
+    },
+    {
+      "index": 17,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:ee76897c9da73ab6e3adaeba3d10c6dc78fc2edb9d2fefe2ee557205c978c59c",
+      "note": ""
+    },
+    {
+      "index": 18,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:235cec3ccd4e22a20000f52d186d9a0e936a6aba4822a877d699d5fb90eb395c",
+      "note": ""
+    },
+    {
+      "index": 19,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:1f64141cce6697a3ba44fd82fe25ef5e77dc8078c4d804179e992f1d255c9efb",
+      "note": ""
+    },
+    {
+      "index": 20,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:4c264cb068c10718edb39d52c371a42fed90ac3e8f556f0799aaa03893b43366",
+      "note": ""
+    },
+    {
+      "index": 21,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:05d4de27a5c943a17b5fb1000b01f0d37897d1c39794dc5322088812185f6008",
+      "note": ""
+    },
+    {
+      "index": 22,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:bbba1c5f524c8674df94b1beb508bd0104360b1b66f1bff7cc08555a79d757b5",
+      "note": ""
+    },
+    {
+      "index": 23,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:7dddc7f36ce43a17d942b9c0e625fc9efb2c15097a8319c85ac616d2b98b7428",
+      "note": ""
+    },
+    {
+      "index": 24,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:1eeafa206746d25b99e9663c3f3c0f926ff63e34ae00acf60f3842004a32385a",
+      "note": ""
+    },
+    {
+      "index": 25,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:7a70d94b58bc3349bed2af9d93949ab23b1e6b1741fffb579482c10d16196b5f",
+      "note": ""
+    },
+    {
+      "index": 26,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:34ca640437ac9ef8af7a4c811aa222621d5484481d9f31d2463b30e0c43bd192",
+      "note": ""
+    },
+    {
+      "index": 27,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:289e706bcc5f430bc22039d2b80f2e276cfc419cd96cb5260d8653724b323fe1",
+      "note": ""
+    },
+    {
+      "index": 28,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:5ae9f680a6c374abdd0cc8304535fc019217821ac15f0aabc53149e0cccd6275",
+      "note": ""
+    },
+    {
+      "index": 29,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:c3590b601ddd0d335039fd7c34b22c234170e6bdaa7309f885c4943dba04bc7f",
+      "note": ""
+    },
+    {
+      "index": 30,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:c9147ee1bb3b9a0754c1e5b7e22142dd70543634cc570ac12e1b115707dd36cb",
+      "note": ""
+    },
+    {
+      "index": 31,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:411a45926bc4e2a154eeac369cde9e29a845af46543052bb15c96456379efbda",
+      "note": ""
+    },
+    {
+      "index": 32,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:252b79d0c411546bc9808ea2e4e629d414b340eaec4f1dd9751aa563efddeaf5",
+      "note": ""
+    },
+    {
+      "index": 33,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:62fb77b03f6b2e41461bef6be2cde9df2f6dcca373b39dbfbdfaafae76271035",
+      "note": ""
+    },
+    {
+      "index": 34,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:961fb765e6963ac7776f9d19cdbba2c15e2a8de34eb8de970414f2c1c8c7fa3a",
+      "note": ""
+    },
+    {
+      "index": 35,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:70ed00c813a4c76801df3ece72dee40831bf68621540c427dc83c40a30792374",
+      "note": ""
+    },
+    {
+      "index": 36,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:b404a1ab9fc4a1ffe26aa41b8009b9f63a026a65d348abd9b3354a2d6f6fa395",
+      "note": ""
+    },
+    {
+      "index": 37,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:4831869887f15d72c8812393244a7fb92c529949010587becf75ec6f47ce1ed0",
+      "note": ""
+    },
+    {
+      "index": 38,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:dca069036fd52596d02bc1d0806ec3d44bb54f09e187fb1df30250042979c84e",
+      "note": ""
+    },
+    {
+      "index": 39,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:3d927ab376764121bf4c75df8ea74f3646ad40bc8d6fe3c0f2309e026fde1d19",
+      "note": ""
+    },
+    {
+      "index": 40,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:ba4287dca6168ca06f1e928c113f6416c45931c751f21f614fe85304c771fb49",
+      "note": ""
+    },
+    {
+      "index": 41,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:7622e17505ae3c57296c59d3b50e7309324d640c9b90486a7fa7b9fa2b9ee43b",
+      "note": ""
+    },
+    {
+      "index": 42,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:560ca094a246adab825ca5b8891d9c03ab259382bad55399e58f8df56d529212",
+      "note": ""
+    },
+    {
+      "index": 43,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:c09fe225a39876993a70d124e90bee575471790622e77851fb871d617a917c25",
+      "note": ""
+    },
+    {
+      "index": 44,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:48ac6b6f12c98d763d23d0490c4135ab9af9f3c6bfa0d66d29ac2abe4e359608",
+      "note": ""
+    },
+    {
+      "index": 45,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:93f7f96bcb12118a32d41efc200224ad9ec7501bb6452a19013ca2e132280722",
+      "note": ""
+    },
+    {
+      "index": 46,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:d1417aa87bf1f2867c80e12ff03ffe092b76487f3643c422637456cadedef649",
+      "note": ""
+    },
+    {
+      "index": 47,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:5f30a11ad25f2830f1e15a6bc26bdacd76817658501e1aeb28502a38b8c7d7c1",
+      "note": ""
+    },
+    {
+      "index": 48,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:fdf8f148a1a18f79c6e6080ae15a90eecb49444392c8da243ab40eb899cf2d4a",
+      "note": ""
+    },
+    {
+      "index": 49,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:c8b1e89f6ac8ab6028b0037eb17ec5be42f1c2b26a59eeaca5fc432c6a9d765f",
+      "note": ""
+    },
+    {
+      "index": 50,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:bc106598e0c3a6a854e2051cc2d20344feedc56af5a7596be955261fdb8d5401",
+      "note": ""
+    },
+    {
+      "index": 51,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.60",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:e0ab78b96681797644c7f7605d00273a5a75e4bc89d9d13bdb99707d100329b3",
+      "note": ""
+    },
+    {
+      "index": 52,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:a8b7ad3f3836041ebe3f616ebee6a3037cf636edcf9cd62d55c4cd63ae5a8a87",
+      "note": ""
+    },
+    {
+      "index": 53,
+      "knobs": {
+        "die_um": "auto",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:ff54db51b5a212ac1e77a87f99b272b2bba29ef059a3cf229ad59d14a03d4b4a",
+      "note": ""
+    },
+    {
+      "index": 54,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:1f70b33b5dd3e275df2d8d3f83aab90ccd3d84f4a1c4abcef9535362340efd3a",
+      "note": ""
+    },
+    {
+      "index": 55,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.02"
+      },
+      "identity": "sha256:575d4c7f09fd52c49bdb849dfc4a117887e70436bae1c775344e6241c57a3bd0",
+      "note": ""
+    },
+    {
+      "index": 56,
+      "knobs": {
+        "die_um": "280x280",
+        "placement_density": "0.20",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:a0977f9caa45958e2e8e596b06235ea09689eb236f63b54a4ea3f0d6ff454349",
+      "note": ""
+    },
+    {
+      "index": 57,
+      "knobs": {
+        "die_um": "210x210",
+        "placement_density": "0.30",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:d08366837ee5eb720c2352fb4f46f483b52ccce153fda9c685de64a9d6203eea",
+      "note": ""
+    },
+    {
+      "index": 58,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.40",
+        "spare_cell_density": "0.05"
+      },
+      "identity": "sha256:4adc123434753b0099815d32a17acf002621241e280a1da22aa004f63813fa97",
+      "note": ""
+    },
+    {
+      "index": 59,
+      "knobs": {
+        "die_um": "240x240",
+        "placement_density": "0.50",
+        "spare_cell_density": "0.00"
+      },
+      "identity": "sha256:6c1b3663b521619b3f5c2e94988f7acdc94bed343d762e4e2a21b0709bceecc0",
+      "note": ""
+    }
+  ]
+}

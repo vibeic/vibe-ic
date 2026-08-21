@@ -1,5 +1,5 @@
 """Tests for the ADVISORY-ONLY design-complexity hook wired into
-phase2_one_shot_runner.
+design_one_shot_runner.
 
 Contract (additive, non-gating):
   - step_complexity_advisory emits reports/phase2/complexity_advisory.json
@@ -14,7 +14,7 @@ from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 import design_complexity_estimator as dce  # noqa: E402
 
 
