@@ -1569,6 +1569,120 @@ def _f_crosslayer_refuted(p: Path) -> None:
                         "points")})
 
 
+def _f_ppa_h2h_claim_contradicted(p: Path) -> None:
+    """A published head-to-head asserts the one-word win its own triple denies.
+
+    Reddens the Step-36 clause ``ppa_head_to_head_check --corpus .``, which the
+    PPA lane wires BLOCKING. EMPTY cannot reach it, and the reason is
+    structural rather than incidental: the clause is
+    ``optional_program_exit_zero`` conditioned on ``**/*head_to_head*.json``,
+    and :func:`_materialise_conditions` satisfies that glob with a
+    SUBSTANCELESS ``{}``. A document carrying no ``vibeic.ppa.comparison.``
+    schema is not a record, so the corpus walk finds a population of zero and
+    the gate answers, correctly, that it judged nothing:
+
+        EMPTY  rc 2  __VACUOUS_HINT__: ppa_head_to_head_check --corpus .
+
+    A gate that has only ever said "there was nothing to look at" has not been
+    shown able to block, which is what this cell asks.
+
+    WHAT THIS RECORD IS. Two arms over ONE problem, both triples MEASURED, the
+    baseline untuned by this project and its configuration sourced, the
+    measurement basis declared as simulated, contract identity and scope parity
+    intact, every feasibility check clean, tuning parity satisfied. It is a
+    record the gate ACCEPTS -- until it states a verdict.
+
+    The triple is deliberately MIXED: the subject is smaller and burns more
+    power, so the derived Pareto relation is INCOMPARABLE, which the program's
+    own docstring calls the common and honest result. The record then asserts
+    ``pareto: SUBJECT_DOMINATES`` against that same triple. C2 forbids the
+    record to CARRY a collapsed figure of merit, so the asserted verdict is the
+    one route left for an author who wants to say "we won" in a single word --
+    and the program says so in those terms: "an unchecked `pareto:
+    SUBJECT_DOMINATES` over a mixed triple is that word".
+
+    MEASURED, and in BOTH directions, which is what makes it a negative control
+    rather than a way of tripping an unguarded branch:
+
+        this record                    rc 1  VERDICT_CONTRADICTED
+                                             "record asserts
+                                             pareto='SUBJECT_DOMINATES'; the
+                                             numbers in the same record derive
+                                             'INCOMPARABLE'"
+        the same record, verdict key
+        removed and NOTHING else                rc 0  1 accepted
+
+    So the red is earned by the CLAIM contradicting the numbers beside it, not
+    by an absent input, a malformed document or a missing field -- reached
+    through the program's own derivation rather than by breaking the file.
+
+    Chip-, PDK- and vendor-AGNOSTIC by construction: both flow names and the
+    process name are invented, and the rule under test is agreement between a
+    stated verdict and the numbers in the same document.
+    """
+    scope = {
+        "area_um2": {"stage": "post_route", "tool": "openroad",
+                     "fill": "post_fill"},
+        "timing_wns_ns": {"stage": "post_route_extracted", "mode": "functional",
+                          "process": "tt", "voltage_v": 1.8,
+                          "temperature_c": 25.0, "rc_corner": "max",
+                          "clock": "clk", "check": "setup"},
+        "power_mw": {"stage": "post_route_extracted", "scenario": "diagnostic",
+                     "activity_basis": "VECTORLESS", "liberty": "typical",
+                     "tool": "opensta", "process": "tt", "voltage_v": 1.8,
+                     "temperature_c": 25.0, "mode": "functional",
+                     "group": "Total"},
+    }
+    units = {"area_um2": "um^2", "timing_wns_ns": "ns", "power_mw": "mW"}
+    tools = {"area_um2": ("openroad", "pnr/openroad.log"),
+             "timing_wns_ns": ("opensta", "sta/sta.rpt"),
+             "power_mw": ("opensta", "diag/power.rpt")}
+
+    def _arm(flow, role, values, tuned, config_source):
+        return {
+            "flow": flow, "role": role,
+            "design": {"spec_sha256": "sha256:" + "1" * 64,
+                       "pdk": "open-pdk-a", "clock_target_ns": 10.0,
+                       "corners": ["ss", "tt", "ff"]},
+            "contract": {"sha256": "sha256:" + "2" * 64,
+                         "source": "contract.json"},
+            "measurement_basis": "post_route_sta",
+            "config_source": config_source,
+            "tuned_by_this_project": tuned,
+            "ppa": {ax: {"status": "MEASURED", "unit": units[ax],
+                         "scope": scope[ax], "value": val,
+                         "source": {"path": tools[ax][1],
+                                    "sha256": "sha256:" + "0" * 64,
+                                    "tool": tools[ax][0],
+                                    "parser": f"_ppa/{tools[ax][0]}.py"}}
+                    for ax, val in values.items()},
+            "feasibility": {"checks": {
+                k: {"status": "CLEAN", "violations": 0,
+                    "source": "ppa_feasibility_check: SATISFIED (FEAS_OK)"}
+                for k in ("setup", "hold", "drv", "drc", "lvs", "antenna",
+                          "em", "ir", "equivalence")}},
+            "tuning": {"supported": False},
+        }
+
+    _w(p, "reports/ppa/head_to_head.json", {
+        "schema": "vibeic.ppa.comparison.v2",
+        "arms": [
+            _arm("their-flow-defaults", "baseline",
+                 {"area_um2": 6594.0, "timing_wns_ns": 0.0,
+                  "power_mw": 0.573},
+                 False, "their flow's shipped defaults, unmodified"),
+            #: smaller AND hungrier than the baseline, so the derived relation
+            #: is INCOMPARABLE -- the mixed triple the asserted verdict below
+            #: collapses into a win.
+            _arm("our-flow", "subject",
+                 {"area_um2": 5961.0, "timing_wns_ns": 0.0,
+                  "power_mw": 0.698},
+                 True, "our flow's search winner"),
+        ],
+        "verdict": {"their-flow-defaults": {"pareto": "SUBJECT_DOMINATES"}},
+    })
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1598,6 +1712,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "MACRO_OBS_SPANNED": _f_macro_obs_spanned,
     "STEP_FAIL_UNACKNOWLEDGED": _f_step_fail_unacknowledged,
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
+    "PPA_H2H_CLAIM_CONTRADICTED": _f_ppa_h2h_claim_contradicted,
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
     "AREA_OVER_CEILING": _f_area_over_ceiling,
@@ -1670,6 +1785,21 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # -- a declared target AND a recorded library load -- have to be present
     # before it has anything to compare.
     ("36", "declared_pdk_is_the_pdk_used_check ."): "PDK_DECLARED_NOT_USED",
+    # The PPA lane wires this into step 36 as its one BLOCKING clause, and it
+    # arrived reaching only VACUOUS_PASS: the clause is conditioned on
+    # `**/*head_to_head*.json`, `_materialise_conditions` satisfies that glob
+    # with a substanceless `{}`, and a document with no
+    # `vibeic.ppa.comparison.` schema is not a record -- so the corpus walk
+    # judged a population of zero and the gate said so. Nothing had shown the
+    # clause able to block, which is the condition this cell exists to catch.
+    #
+    # MEASURED through `_evaluate_clause` on this tree:
+    #   EMPTY                        tier=VACUOUS  __VACUOUS_HINT__ (0 records)
+    #   PPA_H2H_CLAIM_CONTRADICTED   tier=FAIL     VERDICT_CONTRADICTED
+    # and the same fixture with its `verdict` key removed is rc 0 / 1 accepted,
+    # so the red is the claim contradicting its own numbers and not the record
+    # being broken.
+    ("36", "ppa_head_to_head_check --corpus ."): "PPA_H2H_CLAIM_CONTRADICTED",
     # vibe-ic#1017. #1000 wired both of these BLOCKING and left INCOMPLETE on
     # rc 0, so EMPTY answered PASS to a blocking clause while the programs' own
     # last lines said "NOT screened" / "NOT compared against anything". #1017
