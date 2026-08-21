@@ -137,6 +137,27 @@ repository (or `GATEKEEPER_BENCHMARK_DATA_SHA` binding one).
 On the day one such cell lands, the population becomes 1, four per-cell gates go
 live, and this row stops blocking **with nothing in this repository changed**.
 
+That is not a promise — it is a POSITIVE CONTROL that already runs.
+`test_real_distinct_root_receipts_authorize_only_the_exact_transition` plants one
+tracked routed DEF in a bound external checkout and asserts the shipped producer
+and the dispatcher between them reach:
+
+    candidate_doc["corpora"][0]["items"]        == 1
+    candidate_doc["declared"] == ["ran"]        == 4
+    len(candidate_doc["process_attestations"])  == 4
+
+— and that an untracked candidate-local DEF planted as a laundering control does
+**not** enter the population. So the machinery is live, not merely declared, and
+this gate is a check that currently has nothing to check rather than one that
+could only ever say "nothing to look at". All four directions are pinned:
+
+| input | outcome | pinned by |
+|---|---|---|
+| one published routed DEF | 4 gates run, 4 attestations | `…authorize_only_the_exact_transition` |
+| a corpus read, holding none | `NOT CHECKED`, blocking, unexempted | `…shipped_producer_over_an_empty_corpus…` (new) |
+| producer could not determine | `NOT CHECKED`, blocking, distinct label | `…failed_producer_is_a_distinct_blocking…` |
+| someone buys it an exemption | WIRING ERROR, still rc 2 | `…cannot_buy_an_uncheckable_exemption` (new) |
+
 ---
 
 ## Why there is no dated exemption, and why BLOCKING stays
