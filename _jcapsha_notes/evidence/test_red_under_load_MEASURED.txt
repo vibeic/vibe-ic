@@ -53,3 +53,37 @@ contention is proven rather than inferred. That measurement is running.
 STATUS UNCHANGED: UNDETERMINED, with the named cause. Not green, not a
 regression, and not adjudicated by repeating a run under a load that is still
 climbing.
+
+--- THE LOAD-INDEPENDENT MEASUREMENT, and it does NOT say what I expected ---
+
+    User time            38.56 s
+    System time           1.09 s      -> CPU time ~= 39.7 s
+    Elapsed (wall)      162.04 s
+    Percent of CPU          24 %      (the job waited for 76% of its wall time)
+    load at start 96.21   ->   load at end 130.90
+
+The test documents this program's baseline as 18.9-20.3 s. Its CPU time here is
+about DOUBLE that, and CPU time is precisely the quantity that does NOT inflate
+with contention the way wall time does -- system time is only 1.09 s, so this is
+not scheduler churn.
+
+So the load explanation I published is NOT established by this, and may be
+wrong. Two candidates, and preference cannot choose between them:
+
+  (a) the program's CPU WORK HAS GROWN since the baseline was taken -- a real,
+      load-independent regression living on main, which this branch neither
+      caused (0 references) nor would have found without the red; or
+  (b) contention at load ~100-130 inflates user time ~2x through cache and
+      memory pressure, which is possible but a stretch at 2x with sys time flat.
+
+A POSITIVE CONTROL separates them, and is running: `gate_is_wired_check` is the
+SIBLING in the same parametrised test, it PASSED in the same run, and it carries
+its own documented baseline of 14.3-14.7 s. Measured under the SAME load:
+  near 14-15 s CPU  -> this host is not inflating user time, and the wiring
+                       audit's 39.7 s is REAL, i.e. explanation (a);
+  near 30 s CPU     -> contention inflates ~2x and explains both, i.e. (b).
+
+UNTIL THAT RETURNS THE STATUS IS UNDETERMINED, and my earlier write-up
+overstated it: I called the red environmental on wall-clock evidence alone, which
+is the wrong instrument on a contended host. That sentence is corrected here
+rather than left standing.
