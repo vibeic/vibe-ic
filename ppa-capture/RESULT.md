@@ -48,6 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
 - [A dangling reference the whole verifier walked past](#a-dangling-reference-the-whole-verifier-walked-past)
 - [Emission is reproducible, and the one thing that moves is the one that should](#emission-is-reproducible-and-the-one-thing-that-moves-is-the-one-that-should)
+- [Three checks the verifier was missing, two of which could not have failed](#three-checks-the-verifier-was-missing-two-of-which-could-not-have-failed)
 - [Was every commit green? Replayed, and the answer is one](#was-every-commit-green-replayed-and-the-answer-is-one)
 - [Summary](#summary)
 - [Next](#next)
@@ -1668,6 +1669,37 @@ it**: a check whose result arrives after the push is a check that did not run in
 time. And a map maintained by hand will drift again, so it is now *regenerated*
 from the headings rather than edited — the same promote-the-habit-to-a-program
 move this whole batch is about, applied to the document's own furniture.
+## Three checks the verifier was missing, two of which could not have failed
+
+Reading the records rather than diffing them found that the question the brief
+asks of EVERY record — would the rule have fired on the ORIGINAL defect, and
+would it fire on a DIFFERENT instance of the same class — was answered in all
+thirty, under the `(o)`/`(d)` markers, and enforced by nothing. A marker is one
+token; dropping one is invisible. That is now check 35.
+
+Writing it produced two defects in the verifier itself, and they are the same
+shape as the cluster it verifies:
+
+- **A check appended at the end of the file gates nothing.** `check()` appends to
+  a list; the verdict reads that list once and exits. Everything after the verdict
+  prints and cannot fail the run. Both new checks were written there first and
+  were dead. Check 37 now refuses it — and its first draft searched for the
+  verdict with `.index`, matched the copy of that same literal inside its own
+  source, and reported the bug against itself. `.rindex`, and a control that
+  asserts the two differ.
+- **One helper was defined twice.** Names bind at call time, so every call after
+  the second `def` silently got the other body. The duplicate-pattern guard scored
+  0.385 under the intended normaliser and 0.361 under the shadow — and the shadow
+  is what any check appended at the end of the file would have used. Renamed;
+  check 36 refuses a second definition of any name.
+
+Neither changes a published number: the only `sim()` calls sit above the shadow,
+so 0.385 was always the figure computed. What they change is what the next check
+would have done. Both are recorded as self-instances on **the record that says a
+rule must be routed into a program some verdict consults** — a guard that runs
+after the verdict, and a name that resolves to the wrong body, are both "present,
+and not consumed by the thing that reports on it". They are not a new record.
+
 ## Was every commit green? Replayed, and the answer is one
 
 The verifier proves the deliverable holds *now*. It says nothing about whether it
@@ -1699,7 +1731,7 @@ auditing for it.
 **STATUS**: 30 records emitted and validated — 27 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 ppa-capture/verify.py` (34 fast + 2 authoritative). No gate
+re-measurable by `python3 ppa-capture/verify.py` (37 fast + 2 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1876,7 +1908,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 ppa-capture/verify.py            34 checks   exit 0 = every claim holds
+    python3 ppa-capture/verify.py            37 checks   exit 0 = every claim holds
     python3 ppa-capture/verify.py --slow     + 2 authoritative gate-run checks
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -1896,7 +1928,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 ppa-capture/verify.py     34 checks, exit 0 = every claim holds
+    python3 ppa-capture/verify.py     37 checks, exit 0 = every claim holds
     python3 ppa-capture/verify.py --slow   + 2 authoritative gate-run checks
 
 **It was held to the two invocation properties this batch records about other

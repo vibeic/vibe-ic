@@ -215,16 +215,16 @@ check("every emitted backlog passes its own sanitiser",
 #     the sketches go stale silently — they still resolve by name (check 8),
 #     they still carry a plausible docstring, and they describe the previous
 #     version of the rule. Name resolution cannot see content drift.
-def _n(s: str) -> str:
+def _ws(s: str) -> str:
     return " ".join(str(s).split())
-_sk = _n("".join(f.read_text() for f in CAND.glob("*.py")))
-_yl = _n("".join(f.read_text() for f in CAND.rglob("*.yaml")))
-control("emitted-sync", _n("a field value that was never emitted anywhere") not in _sk)
+_sk = _ws("".join(f.read_text() for f in CAND.glob("*.py")))
+_yl = _ws("".join(f.read_text() for f in CAND.rglob("*.yaml")))
+control("emitted-sync", _ws("a field value that was never emitted anywhere") not in _sk)
 drift = [(r.get("rule_name") or r.get("title"), f)
          for r in RECS
          for f in (("pattern", "docstring", "fix_action") if r["bucket"] == "A"
                    else ("pattern", "suggested_fix"))
-         if _n(r.get(f, "")) and _n(r.get(f, "")) not in (_sk if r["bucket"] == "A" else _yl)]
+         if _ws(r.get(f, "")) and _ws(r.get(f, "")) not in (_sk if r["bucket"] == "A" else _yl)]
 check("every emitted artefact is in sync with its record",
       not drift, f"{len(drift)} stale field(s): {drift[:2]}")
 
@@ -479,6 +479,49 @@ control("title-count", _tm is not None)
 check("the title's record count agrees with the record set",
       bool(_tm) and int(_tm.group(1)) == len(RECS),
       f"title {_tm.group(1) if _tm else '-'}, records {len(RECS)}")
+
+
+
+# 35. the two questions the brief asks of EVERY record -- would the rule have
+# fired on the ORIGINAL defect, and would it fire on a DIFFERENT instance of the
+# same class -- are answered in every record section, under the (o)/(d) markers
+# whose meaning the prose spells out. Nothing enforced this until a read found it
+# unenforced; the markers are cheap to drop and the omission is invisible.
+_secs = {m.group(1): s for s in re.split(r"^### ", MD, flags=re.M)[1:]
+         for m in [re.match(r"([ACT]-\d+)", s)] if m}
+control("brief-questions", all("**(z)**" not in s for s in _secs.values()))
+_no_o = sorted(k for k, s in _secs.items() if "**(o)**" not in s)
+_no_d = sorted(k for k, s in _secs.items() if "**(d)**" not in s)
+check("every record answers the brief's two questions",
+      len(_secs) == len(RECS) and not _no_o and not _no_d,
+      f"{len(_secs)} sections; missing (o): {_no_o or 'none'}; missing (d): {_no_d or 'none'}")
+
+# 36. no name in this file is defined twice. A second `def` of a live helper does
+# not error -- it silently rebinds, so every call AFTER it gets the other body.
+# That is how the near-duplicate guard came to have two normalisers: the intended
+# one scored 0.385, the shadow 0.361, and any check appended at the end of this
+# file (which is where checks get appended) would have quietly used the weaker.
+_defs = re.findall(r"^def (\w+)\(", pathlib.Path(__file__).read_text(), re.M)
+_dupe = sorted({d for d in _defs if _defs.count(d) > 1})
+_fake = _defs + [_defs[0]]
+control("no-shadowed-def", sorted({d for d in _fake if _fake.count(d) > 1}) == [_defs[0]])
+check("no helper in this verifier is defined twice", not _dupe,
+      f"{len(_defs)} defs, {len(set(_defs))} distinct" + (f"; shadowed: {_dupe}" if _dupe else ""))
+
+# 37. no check may sit AFTER the verdict. `check()` appends to `fails`, and the
+# verdict reads `fails` once and exits -- so a check appended at the end of this
+# file runs after the exit code is already decided and gates nothing. It prints,
+# it looks green, and it cannot fail the run. Both checks above were written at
+# the end of the file first and were dead until this one refused them.
+_src   = pathlib.Path(__file__).read_text()
+_vpos  = _src.rindex('print("PASS')   # rindex: the literal also appears in THIS check,
+                                       # and .index found my own line, not the verdict
+_after = [ln for ln in _src[_vpos:].split("\n") if re.match(r"\s*(check|control)\(", ln)]
+control("verdict-last", _src.index('print("PASS') < _vpos
+        and "check(" in _src[:_vpos])   # the .index/.rindex gap IS the bug this caught
+check("no check sits after the verdict", not _after,
+      f"{len(_after)} gating call(s) after the verdict line" if _after else "verdict is last")
+
 
 print()
 if fails:
