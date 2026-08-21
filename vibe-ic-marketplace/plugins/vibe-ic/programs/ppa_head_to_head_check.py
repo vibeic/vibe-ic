@@ -589,11 +589,80 @@ def format_report(rc: int, report: Dict[str, Any]) -> str:
 #: with no further change.
 _RECORD_GLOB = "**/*head_to_head*.json"
 
+#: A record IDENTIFIES ITSELF, and this is the field it does it with. Anything
+#: whose top-level `schema` starts with this is a head-to-head record whatever
+#: it is called; `record_schema()` deliberately reads a MISSING declaration as
+#: v1 and must not be used here, because "declares nothing" is exactly what a
+#: neighbouring document that is not a record also does.
+_RECORD_SCHEMA_PREFIX = "vibeic.ppa.comparison."
+
+
+#: WHY IDENTIFICATION BY NAME WAS WRONG, MEASURED ON THIS REPOSITORY (2026-08-21,
+#: origin/main a00f53f20). `_RECORD_GLOB` alone is a guess about filenames, and
+#: it was wrong in BOTH directions at once:
+#:
+#:   MISSED 15 REAL RECORDS. `ppa-crosslayer/records/h2h_A.json` .. `h2h_O.json`
+#:   each declare `"schema": "vibeic.ppa.comparison.v2"` and each is judged
+#:   without complaint when named on the command line -- 12 PASS, 1 REFUSED
+#:   (`BASELINE_TUNED_BY_US`), 2 UNDETERMINED. `--corpus ppa-crosslayer` found
+#:   NONE of them and printed `0 head-to-head record(s) found`, which is the
+#:   byte-identical output of a corpus that holds nothing. A published refusal
+#:   was invisible because of a filename convention.
+#:
+#:   ATE THIS PROGRAM'S OWN REPORTS. `--corpus ppa-e2e` matched 4 files: 2
+#:   records and 2 `*_report.json` artefacts THIS checker wrote. A report has no
+#:   `arms`, so the gate refused it `TOO_FEW_ARMS ... got 0` -- a REFUSAL, the
+#:   most severe verdict it can reach, aimed at its own output. Half the corpus
+#:   verdict was the gate marking its own paper.
+#:
+#: The rule below is positive identification with the legacy name kept as a
+#: FALLBACK, never as the primary key, and it never widens what is accepted:
+#: every file it adds is one MORE subject to be judged, and every file it drops
+#: is one this program wrote itself.
+def _declares_record_schema(doc: Any) -> bool:
+    got = doc.get("schema") if isinstance(doc, dict) else None
+    return isinstance(got, str) and got.startswith(_RECORD_SCHEMA_PREFIX)
+
+
+def _is_own_report(doc: Any) -> bool:
+    """A report THIS program wrote. Not a subject it is entitled to judge.
+
+    Identified by its SHAPE, not by its filename: it names the `record` it is
+    about, carries the verdict (`ok` / `refusal`), and has no `arms`. A real
+    record always has `arms` -- a record that dropped them is caught by the
+    schema clause above and refused as `TOO_FEW_ARMS`, which is the true
+    finding; this clause cannot hide it.
+    """
+    if not isinstance(doc, dict) or "arms" in doc:
+        return False
+    return "record" in doc and ("ok" in doc or "refusal" in doc)
+
 
 def corpus_records(corpus: Path):
-    """Head-to-head records under `corpus`, by name. The denominator is
-    disclosed on every run so "none found" can never read as "all clean"."""
-    return sorted(p for p in corpus.glob(_RECORD_GLOB) if p.is_file())
+    """Head-to-head records under `corpus`. The denominator is disclosed on
+    every run so "none found" can never read as "all clean"."""
+    named = {p for p in corpus.glob(_RECORD_GLOB) if p.is_file()}
+    out: List[Path] = []
+    for p in sorted(x for x in corpus.glob("**/*.json") if x.is_file()):
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            # UNREADABLE IS NOT ABSENT. A file that was NAMED a record and
+            # cannot be parsed stays in the population so `evaluate` refuses it
+            # out loud; one that was never named a record was never a subject.
+            if p in named:
+                out.append(p)
+            continue
+        if _declares_record_schema(doc):
+            out.append(p)
+        elif _is_own_report(doc):
+            continue
+        elif p in named and isinstance(doc, dict) and "arms" in doc:
+            # Pre-schema records declare nothing (see `record_schema`). The name
+            # is all they ever had, so it is still honoured -- but only together
+            # with the `arms` a head-to-head is defined by.
+            out.append(p)
+    return out
 
 
 #: Aggregation order for a corpus, and it is NOT the integer order.
@@ -650,8 +719,14 @@ def check_corpus(named: Path, may_be_absent: bool = False) -> int:
         return _corpus.refuse(_GATE, named, corpus, origin, may_be_absent,
                               _SCANNED)
     recs = corpus_records(corpus)
+    # THE ZERO IS STATED OVER THE POPULATION IT WAS DRAWN FROM. `0 records
+    # found` alone cannot tell a corpus of a thousand documents that hold no
+    # comparison from a corpus of one empty directory, and those are different
+    # facts about how much was looked at.
+    scanned = sum(1 for x in corpus.glob("**/*.json") if x.is_file())
     print(f"ppa_head_to_head_check --corpus {corpus}: "
-          f"{len(recs)} head-to-head record(s) found")
+          f"{len(recs)} head-to-head record(s) found "
+          f"in {scanned} JSON document(s) scanned")
     if not recs:
         # The MARKER, not just the word. PPA_INTERFACES §1 requires
         # `[CANNOT CHECK]` or `[REFUSE]` on a 2 so that a caller can find one
