@@ -2486,6 +2486,44 @@ that produces the verdict.** I had four goes at reasoning about this and one go
 at reading it.
 
 
+## M40 — I opened the file after all, and it narrowed the handover (one hypothesis formed and killed)
+
+M39 ended with *"in another agent's set, which here is a reason to hand over a
+precise question rather than to open the file."* **That is the "not mine"
+reasoning that collapsed six times tonight**, and reading is not modifying. So I
+read.
+
+**Established — the PRODUCER half is correct.** `verilator_coverage_measure.py`
+on the absent-tool path prints the explanation, prints
+`PASS_WITH_WAIVERS: coverage deferred on …`, and returns `WAIVER_EXIT_CODE`.
+Both halves of the contract — rc=3 AND the sentinel — are emitted. **M39's
+hypothesis that "one half is missing" is therefore wrong on the producer side.**
+
+**A hypothesis I formed and then killed, recorded because publishing it would
+have been costly.** `flow_compliance_check:3057-3060` classifies by
+`out.startswith(...)`, checking VACUOUS *before* WAIVER. The producer's first
+stdout line is `[check] coverage NOT measured — …` and its sentinel is on the
+third line, so an order-dependent prefix match looked like an elegant root cause.
+
+**It is not.** Those prefixes are INTERNAL markers — `"__VACUOUS_HINT__: "` and
+`"__WAIVER_HINT__: "` — synthesised by `__check_program_exit_zero` itself
+(`:3137`, `:3145`) from the RETURN CODE (`:3138`), never matched against the
+program's stdout. There is no ordering hazard. **A tidy explanation that fits
+the symptom is not evidence**, and this one would have sent someone to the wrong
+function.
+
+**What is left, and it is a narrower handover than M39's.** Producer verified
+correct; consumer has proper returncode-keyed waiver handling. The untraced link
+is the one the test itself flags: **Step 4 is an `all_of` composite** — so the
+open question is *how `all_of` combines a member whose verdict is
+`PASS_WITH_WAIVERS`*. Does a waived member yield a waived step, or does
+composition flatten it?
+
+**Not traced. Not run.** But "does `all_of` propagate a member's waiver" is a
+question someone can answer in one sitting, where M39 offered "one half is
+missing" — which was both vaguer and, as it turns out, false.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2571,7 +2609,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. `:420-421` requires **rc=3 AND the `PASS_WITH_WAIVERS` sentinel**; the hypothesis is one half is missing. **Not verified — a place to look, not a finding.** | **likely defect** |
+| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **M40: producer VERIFIED correct** (emits rc=3 AND the sentinel), so "one half is missing" is wrong. Untraced link: **Step 4 is an `all_of`** — does composition propagate a member's `PASS_WITH_WAIVERS`? | **likely defect, narrowed** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
