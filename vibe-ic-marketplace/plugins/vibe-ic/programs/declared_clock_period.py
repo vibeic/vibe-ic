@@ -62,7 +62,6 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#1470
-import _prose_polarity as _polarity  # vibe-ic#712
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # The ONE negation vocabulary (vibe-ic#712). `declared_io_delay_fraction` reads
@@ -334,12 +333,16 @@ def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
             window = text[m.start():m.start() + _IO_WINDOW]
             # The window must not run past a blank line into the next topic.
             window = window.split("\n\n", 1)[0]
-            # vibe-ic#712 — this reads an ENGLISH design document, where denial is
-            # spellable and gets spelled ("no I/O delay is declared for this
-            # block"). Writing the percentage out of a sentence that DENIES it is
-            # the #706/#711 defect exactly.
-            if _polarity.is_denied(window):
-                continue
+            # vibe-ic#712 — a sentence that DENIES the derivation must not have
+            # its percentage written out as a mandate; that is the #706/#711
+            # defect exactly. TWO LANES FIXED THIS INDEPENDENTLY IN THE SAME
+            # BATCH and the merge kept both. The early `continue` that stood
+            # here SILENTLY DROPPED the statement, which reaches the same
+            # verdict as never having read one — and this function's own test
+            # exists to say those are different findings. The denial is
+            # consulted and COUNTED below instead, with the citation, using the
+            # repo's one sentence-reach rule so a denial sitting BEFORE the
+            # token is still seen.
             if not _PERIOD_TOKEN_RE.search(window):
                 continue
             pcts = _PCT_RE.findall(window)
