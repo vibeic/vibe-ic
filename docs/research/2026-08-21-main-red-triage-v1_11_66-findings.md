@@ -1278,7 +1278,7 @@ Every remaining red is now attributed to one of four causes, none of which is
 
 | n | reds | disposition |
 |--:|---|---|
-| 11 | matrix family | the 54-ID agent's lane |
+| 11 | matrix family | **narrowed, M34.** 3 = the mutation-ledger reds measured in M32 (incl. `[step0.5ic]`, newly recorded); 2 = `63x8_coverage`, not re-examined; 6 = `d3_outputs_produced`, whose records cite **home-kind** roots this dimension does not search, with NO published/repo root here carrying the artefacts. Needs a published run tree or a registry waiver — a requirement, not an owner. |
 | 2 | coverage bridge | **jmain-green's 38**, red since v1.11.18. ~~a verdict-vocabulary DESIGN question~~ — **narrowed, see M33: both terms are established (1485 / 215 uses) and asymmetric. `WAIVED-DEFERRED` requires a recorded waiver id + owner reason; absent one it is not available and the pass is vacuous. The open item is "is there a waiver?", a lookup — not a vocabulary choice.** |
 | 3 | flow-gate enforcement audit | a POLICY call — but SMALLER than stated here, see **M29**. ~~the flow's `program_exit_zero` clauses make either choice wrong~~: those clauses execute NOWHERE, so `advisory` contradicts nothing and is truthful today. The real question is only whether these two SHOULD be able to stop a step. |
 | 2 | manifest parity | ~~EVIDENCE this host lacks~~ — **WRONG, see M30/M32. 10 of the 15 declared roots ARE here, two carry the artefact. FIXED: 3 reds closed.** |
@@ -2139,6 +2139,60 @@ now this. The pattern is exact and worth stating once more: **I applied far more
 rigour to the repository's claims than to my own claims about what could not be
 done.** A disposition that hands work away reads as modesty and is therefore the
 least likely thing in a report to be checked — by its author most of all.
+
+
+## M34 — the matrix family: the disposition SURVIVES, but it named the wrong thing
+
+I dispositioned 11 reds as *"matrix family — the 54-ID agent's lane."* That names
+a PERSON, not a requirement, and after five "not mine" claims collapsed under
+audit I checked this one too. **It survives — the first that does — but the
+framing was still wrong, and the corrected version is far more useful.**
+
+The 11 decompose as **6 + 3 + 2**, and two of the three groups are no longer
+anybody's open work:
+
+* **3 × `test_matrix_mutation_ledger`** — measured tonight (M32):
+  `[step0.5ic]`, `[step1.6x]`, and the coverage count. Characterised, and
+  `[step0.5ic]` is newly written down.
+* **2 × `test_matrix_63x8_coverage`** — not re-examined here.
+* **6 × `test_matrix_d3_outputs_produced[step15/17/19/20/30/32]`** — the
+  interesting group, and NOT a matter of anyone's expertise.
+
+**What the 6 actually are.** Each record cites a run root whose KIND this
+dimension does not search (it searches `['published', 'repo']`):
+
+| step | artefact wanted | cited run root |
+|---|---|---|
+| 15 | `phase3/stage3/pnr/floorplan.def` | `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721` (**home**) |
+| 17 | `phase3/stage3/pnr/placed.def` | same |
+| 19 | `phase3/stage3/pnr/post_cts.def` | same |
+| 20 | `phase3/stage3/pnr/post_hold.def` | same |
+| 32 | `phase3/stage3/eco/eco_trigger_decision.json` | same |
+| 30 | `phase3/stage3/spice/critical_path.sp` | `AI_IC_design/4th_benchmark/cv32e40p_e2e` |
+
+The gate states its own remedies and forbids the tempting one: *"Close it by
+re-pointing the record at a root that carries the artefact, by publishing a run
+tree that does, or by waiving the cell through the one waiver registry with the
+disclosure — **never by widening the skip**."* It also says plainly what it is
+NOT: *"This is NOT a claim that the flow fails to produce these artefacts —
+nothing here measured that."*
+
+**Measured, so remedy 1 is closed out.** No `published`/`repo`-kind root on this
+host carries them: the only pnr `.def` anywhere under `benchmark-data` is
+`routed.def` in `spm/v1.5.58_ihp-sg13g2`, and neither `cv32e40p_e2e` nor
+`pdk_portability_ihp-sg13g2_20260721` exists here at all. Re-pointing — the fix
+that closed step 31 in M32 — has nowhere to point.
+
+**So the corrected disposition is a REQUIREMENT, not an owner:** these 6 need
+either a published run tree carrying those five PnR/ECO artefacts and one SPICE
+artefact, or an owner's waiver through the registry with disclosure. Neither is
+a measurement I can make, and the waiver is explicitly an owner's instrument.
+
+**Six "not mine" claims audited; five collapsed, one held.** That the sixth held
+is the point — the audit was worth running BECAUSE it could come back either way.
+And even the survivor improved: *"the 54-ID agent's lane"* told a reader who to
+bother; *"needs a published run tree carrying these six named artefacts, or a
+registry waiver"* tells them what to do.
 
 
 # ===== REQUESTS TO THE LANDER =====
