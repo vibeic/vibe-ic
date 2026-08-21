@@ -26,6 +26,15 @@ CORPUS SAFETY, which #593 makes an explicit acceptance item — "must not
 spuriously emit on non-checklist docs": over 390 tracked input docs, exactly 3
 emit, and all three are the same checklist file under different run
 directories. Zero non-checklist documents emit.
+
+RE-MEASURED after the published results moved to vibeic/benchmark-data. The 390
+counted the per-RUN copies of each input doc as well as the input tree itself,
+and the run trees are gone from this checkout. The retained design input — the
+originals, of which those were copies — is 55 documents, and exactly ONE of
+them emits: `ic/opentitan_aes/input/docs/aes_checklist.md`, with the same 103
+milestones. Both halves of the acceptance item therefore still hold, on a
+smaller and non-duplicated population, and both are still measured here rather
+than skipped: see the note above `_tracked_input_docs`.
 """
 from __future__ import annotations
 
@@ -198,9 +207,44 @@ def test_the_post_emit_hook_is_called():
 
 
 # ── the shipped document ────────────────────────────────────────────────────
+#
+# WHERE THE SUBJECT LIVES NOW. Both tests below were written against
+# `benchmark-data/ic/opentitan_aes/phase1/input_doc/aes_checklist.txt` — the
+# copy of the checklist that a RUN tree carries. Run trees are published cells
+# now and live in vibeic/benchmark-data, so that path is gone from this
+# checkout. The checklist itself is NOT gone: it is DESIGN INPUT, it is exactly
+# what `benchmark-data/` still holds, and it is tracked here at
+# `ic/opentitan_aes/input/docs/aes_checklist.md`.
+#
+# So neither of these needs the published corpus and neither is marked with it.
+# They are re-pointed at the retained input tree, where the same 103 milestones
+# and the same "exactly one document emits" result are measurable in a plain
+# checkout — which is a strictly better place for them than a corpus that may
+# not be present: this acceptance item of #593 can now be measured on every
+# run rather than on the runs that happen to have cells.
+_INPUT_ROOT = _REPO / "benchmark-data"
+_CHECKLIST = _INPUT_ROOT / "ic/opentitan_aes/input/docs/aes_checklist.md"
+
+
+def _tracked_input_docs():
+    """Every tracked design-input document, wherever the layout puts it.
+
+    Two globs, not one, and both on purpose: `ic/<IC>/input/**` is where the
+    design input is tracked today, and `**/phase1/input_doc/*` is the run-tree
+    copy — absent here, present in a checkout that still carries cells or in a
+    clone of the published corpus. Whichever exists is measured; the claim
+    ("every document that emits is a checklist") is the same either way.
+    """
+    seen = {}
+    for pat in ("ic/*/input/**/*", "**/phase1/input_doc/*"):
+        for p in _INPUT_ROOT.glob(pat):
+            if p.is_file() and p.suffix.lower() in (".txt", ".md"):
+                seen[p] = True
+    return sorted(seen)
+
+
 def test_the_real_checklist_yields_every_identifier_the_issue_names():
-    doc = (_REPO / "benchmark-data/ic/opentitan_aes/phase1/input_doc"
-           / "aes_checklist.txt")
+    doc = _CHECKLIST
     if not doc.is_file():
         pytest.skip("the tracked checklist is absent")
     got = {m["id"] for m in EM.extract_milestones(doc.read_text(errors="replace"))}
@@ -213,20 +257,28 @@ def test_the_real_checklist_yields_every_identifier_the_issue_names():
 
 
 def test_it_emits_on_the_checklist_and_on_nothing_else():
-    """#593's acceptance, measured over the tracked corpus rather than
+    """#593's acceptance, measured over the tracked input docs rather than
     asserted. Every emitting document must be a checklist."""
-    root = _REPO / "benchmark-data"
-    if not root.is_dir():
-        pytest.skip("corpus absent")
+    docs = _tracked_input_docs()
+    if not docs:
+        # The same condition the sibling test above already skips on, and the
+        # same reason: a shipped-plugin install carries these tests without
+        # `benchmark-data/` at all. NOT the published-corpus skip — the design
+        # input is retained in this repository, so a checkout that has the
+        # repository and no documents is a change, and the floor below fails
+        # on it rather than skipping.
+        pytest.skip("the tracked input documents are absent")
     emitting = []
-    for p in root.rglob("phase1/input_doc/*"):
-        if p.suffix.lower() not in (".txt", ".md"):
-            continue
+    for p in docs:
         try:
             if EM.extract_milestones(p.read_text(errors="replace")):
                 emitting.append(p.name)
         except OSError:
             continue
+    assert len(docs) >= 40, (
+        f"only {len(docs)} input document(s) scanned; the negative half of "
+        f"this acceptance item is measured over the population, and a "
+        f"population that collapsed makes 'nothing else emits' vacuous")
     assert emitting, "the emitter fires on nothing at all"
     assert all("checklist" in n.lower() for n in emitting), (
         f"emitted on non-checklist input(s): "

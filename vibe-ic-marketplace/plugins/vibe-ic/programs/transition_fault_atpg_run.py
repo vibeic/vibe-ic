@@ -112,6 +112,15 @@ import sys
 import time
 from pathlib import Path
 
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
+
 try:
     import _path_layout as _pl  # type: ignore
 except Exception:  # pragma: no cover - standalone fallback
@@ -460,7 +469,9 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
     # the orphan.
     cname = f"vibeic_tdf_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
     docker_cmd = [
-        "docker", "run", "--rm", "--name", cname, "--entrypoint", "bash",
+        "docker", "run", "--rm", "--name", cname,
+        *_dmem.docker_memory_flags(),
+        "--entrypoint", "bash",
         "-v", f"{project}:/work",
     ]
     for host, ctr in (extra_mounts or []):
@@ -1426,19 +1437,42 @@ def main(argv: list[str] | None = None) -> int:
         # fallback (which made gate-levelise read a missing file → false FAIL).
         args.liberty = _resolve_design_liberty(project, None)
     if args.top is None:
-        stem = Path(args.netlist).stem
-        if stem.endswith("_synth"):
-            args.top = stem[: -len("_synth")]
-        else:
-            _nl = project / args.netlist
-            _m = re.search(r"(?m)^\s*module\s+([A-Za-z_]\w*)",
-                           _nl.read_text(errors="replace")) \
-                if _nl.is_file() else None
+        # The top must name a module of the netlist this run will ACTUALLY
+        # gate-levelise. When a cut netlist is already present it is REUSED
+        # verbatim (see load_or_build_cut_netlist) and the mapped netlist is
+        # never read — so deriving the top from the mapped netlist asks yosys
+        # `hierarchy -top <A>` about a file that only contains <B>. A project
+        # that emits more than one *_synth.v (e.g. a chip-top wrapper beside
+        # the core) picks the wrong one by glob order and the whole TDF run
+        # dies with "ERROR: Module `<A>' not found!" — recorded as "ATPG could
+        # not run", i.e. no transition-coverage statement at all.
+        # So: when the cut netlist exists, IT is the subject; derive from it.
+        _cut = project / args.cut_netlist
+        _subject = _cut if _cut.is_file() else None
+        if _subject is not None:
+            _m = re.search(r"(?m)^\s*module\s+\\?([A-Za-z_]\w*)",
+                           _subject.read_text(errors="replace"))
             if not _m:
-                print(f"{_PROGRAM}: cannot derive --top (no mapped netlist "
-                      f"at {args.netlist})", file=sys.stderr)
+                print(f"{_PROGRAM}: cannot derive --top (no module in cut "
+                      f"netlist {args.cut_netlist})", file=sys.stderr)
                 return 2
             args.top = _m.group(1)
+        else:
+            # No cut netlist yet — `fault cut` will build one FROM the mapped
+            # netlist, so the mapped netlist is the subject. Unchanged.
+            stem = Path(args.netlist).stem
+            if stem.endswith("_synth"):
+                args.top = stem[: -len("_synth")]
+            else:
+                _nl = project / args.netlist
+                _m = re.search(r"(?m)^\s*module\s+([A-Za-z_]\w*)",
+                               _nl.read_text(errors="replace")) \
+                    if _nl.is_file() else None
+                if not _m:
+                    print(f"{_PROGRAM}: cannot derive --top (no mapped netlist "
+                          f"at {args.netlist})", file=sys.stderr)
+                    return 2
+                args.top = _m.group(1)
 
     pdk_dir = None
     if args.pdk_dir:

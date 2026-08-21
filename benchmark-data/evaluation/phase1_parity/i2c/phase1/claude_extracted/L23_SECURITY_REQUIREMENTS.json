@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "UM10204 is a wire-level protocol spec; no confidentiality / integrity / authentication requirements. I2C is broadcast-on-the-bus — any device can snoop SDA/SCL. Application-layer security (e.g. SMBus PEC byte for integrity) is layered on top per the SMBus / PMBus / IPMI specs."
-  }
-}
