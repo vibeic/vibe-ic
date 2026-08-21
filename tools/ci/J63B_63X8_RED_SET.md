@@ -295,10 +295,34 @@ lone 62.6 s run. The mechanism connecting the first fact to the others is now
 **unknown**, and saying so is the honest end of this line of investigation
 rather than a better story.
 
-The next probe for whoever picks it up: find what advances the progress token
-during a long item — `run_owned` passes an `output_progress` probe and a
-`domain_progress_probe`, and one of them is plainly renewing — then ask why that
-renewal was absent in red 13's three-way concurrent run.
+**THE NEXT PROBE WAS ALSO RUN, and it produces the real number.** Driving d6
+alone through the driver at shrinking windows bisects the intra-item renewal
+gap directly:
+
+```
+window 60s -> COMPLETED  62.6s, 82 items
+window 30s -> COMPLETED  49.9s, 82 items
+window 20s -> COMPLETED  51.1s
+window 15s -> COMPLETED  50.0s
+window 10s -> KILLED     15.2s   WATCHDOG_STALLED ... > 10s
+```
+
+**Intra-item renewal exists, and its coarsest gap is between 10 s and 15 s.**
+The production window is 60 s, so the real margin is roughly **4-6x over the
+renewal gap** — not the "14 seconds of headroom" this section claimed when it was
+measuring the wrong thing.
+
+**So the item-duration framing was the wrong measurement, and it is retracted.**
+d6's 46-65 s item is not the hazard; the renewal gap is, and that gap is 10-15 s
+whatever an item's length. The table above listing four modules with items above
+a quarter of the window measures something real but not the thing that decides a
+stall kill. Red 13's `stage=running` stall means the 10-15 s gap stretched past
+60 s under three-way concurrency — about a 5x stretch — and THAT is the question
+worth asking next, not how long any item is.
+
+What is now measured end to end: renewal happens inside items, its gap is
+10-15 s idle, the window is 60 s, and a stall needs that gap to stretch ~5x.
+What is still unknown: which probe supplies the renewal, and what stretched it.
 
 ## 13 — not "the host". One item, 18.95 s, against a 60 s window
 
