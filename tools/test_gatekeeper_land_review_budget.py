@@ -4,6 +4,14 @@ Owner ruling, 2026-08-21: a landing may spend up to four minutes on
 `gatekeeper_review`, and "if the review cannot decide inside that, it must
 return rc=2 UNDETERMINED and BLOCK, never rc=0".
 
+THE NUMBER MOVED AND THE RULE DID NOT. The four minutes was chosen for a
+review that was going to be HANDED this run's hygiene record. That handover was
+a command-line flag on the one gate that may not be skipped, it is gone, and
+the review now runs the set — so the script's default is 1800 s,
+`repo_hygiene_gate._HYGIENE_STALL_GRACE_S`. Nothing here asserts 240; the
+budget is a parameter of `_drive`, and every case below drives the RULE: a
+review that did not decide arrives as rc 2 and BLOCKS, never rc 0.
+
 The function is EXTRACTED FROM THE REAL SCRIPT rather than restated here. A
 copy of the case statement in a test would go on passing after the script's own
 copy was edited, which is the drift this repo removes from gates one at a time;
