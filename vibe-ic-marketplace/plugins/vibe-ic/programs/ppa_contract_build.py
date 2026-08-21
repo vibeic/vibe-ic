@@ -66,6 +66,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import canonical_json, contract as C  # noqa: E402
 
 
@@ -86,7 +87,9 @@ def main(argv=None) -> int:
     ap.add_argument("--no-image-labels", action="store_true",
                     help="do not attempt to read image OCI labels; every "
                          "image version is recorded NOT_MEASURED")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     declaration, reason = C.load_json(Path(args.declaration))
     if reason is not None:

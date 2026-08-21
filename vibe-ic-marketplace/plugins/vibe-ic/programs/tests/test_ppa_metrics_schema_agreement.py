@@ -32,11 +32,13 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from _ppa import metrics as M  # noqa: E402
 
-jsonschema = pytest.importorskip(
-    "jsonschema",
-    reason="jsonschema is not installed, so the published schema was NOT "
-           "checked against the enforcer in this session. This is a SKIP and "
-           "not a pass: nothing here looked.")
+# `importorskip` covered ABSENCE. It did not cover a jsonschema too old to
+# carry `Draft202012Validator` (4.0+), and on 3.2.0 every test below failed
+# with an AttributeError -- turning "I could not check it" into the same red as
+# "I checked it and it was broken", which this file's own docstring forbids.
+from _ppa_jsonschema import require_draft_2020_12  # noqa: E402
+
+jsonschema = require_draft_2020_12()
 
 SCHEMA_PATH = (pathlib.Path(__file__).resolve().parents[2]
                / "schemas" / "ppa" / "metric_record.v1.schema.json")
