@@ -1,8 +1,32 @@
 # Full test coverage for the two tape-out paths, IC and IP
 
-Branch `test/pathsteps-ic-ip-matrix`, cut from `origin/main` **8a9c5ad9e**
-(`[v1.11.51]`, fetched 2026-08-21 18:07). Worktree at cut: 5658 tracked files,
-`git status --porcelain` empty.
+Branch `test/pathsteps-ic-ip-matrix`.
+
+**Cut** from `origin/main` **8a9c5ad9e** (`[v1.11.51]`, fetched 2026-08-21
+18:07); 5658 tracked files, `git status --porcelain` empty.
+
+**Rebased** at the end onto `origin/main` **e4c5840d6**, six commits later.
+After the rebase: `ahead 9, behind 0`, **5679 tracked files** against main's
+5677 — exactly the two this branch adds — and `porcelain` empty. Every figure
+below was re-measured on the rebased tree; the twelve modules of the delivered
+set are green on it (`116 passed / 11 skipped / 2 xfailed` for the matrix,
+`38 passed` for the repaired 37.5ic module, and no change in the other ten).
+
+### The rebase conflicted in all three generated count files, and BOTH SIDES WERE WRONG
+
+Those six commits touched exactly the three derived-count files this branch had
+to touch. Neither side's number was the answer:
+
+```
+                        mine    main    truth on the merged tree
+test_files              2709    2718    2719
+programs_tree_all_py    4000    4014    4015
+```
+
+Resolved by taking main's side as the starting point and **re-running
+`gen_program_inventory.py` on the merged tree**, then setting the six bound
+prose counts from the population it wrote. `--check` exits 0. Picking either
+side would have shipped a number that was true of neither tree.
 
 ### What changed
 
