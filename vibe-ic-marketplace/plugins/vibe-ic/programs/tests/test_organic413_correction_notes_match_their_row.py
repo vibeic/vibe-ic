@@ -32,6 +32,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _corpus_repo_view import corpus_repo
+from _published_corpus import needs_corpus
+
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import provenance_correction_note_check as C  # noqa: E402
@@ -139,12 +142,80 @@ def test_git_refusing_to_list_is_an_ERROR_not_a_PASS(tmp_path, capsys):
     assert "NOT a clean result" in out and "[PASS]" not in out
 
 
-def test_the_published_corpus_is_clean_today():
-    """The measurement #413 closes: 21 tracked ledgers, 50 corrected rows,
-    zero notes claiming a repair their row did not receive."""
-    rep = C.audit(_PROGRAMS.parents[3])
+@needs_corpus
+def test_the_published_corpus_is_clean_today(tmp_path):
+    """The published corpus: 22 tracked ledgers, 36 corrected rows, zero
+    notes claiming a repair their row did not receive.
+
+    THE CLEANLINESS HALF HAS ALWAYS HELD. `verdict == "PASS"` with zero
+    findings, here and at every commit checked — the corpus is clean and that
+    is what #413 closes.
+
+    THE FLOOR DESCRIBED A DIFFERENT CORPUS. It read `>= 50` against "21
+    tracked ledgers, 50 corrected rows", and this repository has never held
+    those numbers. Measured on `a38902d16`: 22 tracked ledgers, 36 corrected
+    rows, counted twice — once through `C.audit` and once by reading every
+    tracked `provenance.jsonl` directly.
+
+    It is not drift. This file has exactly ONE commit in its history,
+    `50aedbdd` ("Merge pull request #918 from vibeic/eda-fork-sync-2026-08-10"),
+    so it arrived vendored rather than authored here — and running this test AT
+    `50aedbdd` fails the same way, on the same 22/36. **It has never passed in
+    this repository**, and the tracked `provenance.jsonl` files are byte-identical
+    between that commit and `a38902d16`, so nothing was withdrawn: the pin was
+    measured against the fork's corpus.
+
+    WHY 36 IS NOT A WEAKENING. The floor exists so the PASS above cannot be
+    earned over an empty or collapsed population — it is a non-vacuity guard,
+    not a target. A floor of 50 over a population of 36 does not guard that
+    property harder; it fails unconditionally, which guards nothing and trains
+    a reader to ignore the file. Pinned at the measured 36, a single corrected
+    row disappearing from the shipped corpus fires it, which is the property
+    the floor was written for.
+
+    The composition, so a future shrink can be attributed rather than guessed:
+
+        8  ic/edge_llm_accel                     2  ic/subservient
+        7  ic/spm/v1.5.58_ihp-sg13g2             1  ic/opentitan_aes
+        7  ic/sha256/clean_run_v1427_20260715
+        6  ic/sha256/clean_run_v1422_20260715
+        5  ic/caravel_user_project
+
+    WHERE THE LEDGERS ARE READ FROM (the 2026-08 split). The corrected rows are
+    a property of the PUBLISHED cells, and those moved to
+    `vibeic/benchmark-data`. `C.audit` enumerates with
+    `git ls-files benchmark-data`, so it can only be aimed at a repository that
+    TRACKS the cells under that prefix — `corpus_repo` supplies one, either the
+    checkout itself when it still carries them or a zero-copy view of the clone
+    named by `$VIBE_IC_BENCHMARK_DATA`. Aiming it at this checkout after the
+    split enumerated nothing and failed on `noted_rows == 0`, which reads as
+    "the corpus lost 36 corrected rows" — a defect claim about data that was
+    simply not here to read. The floors below are unchanged, so an empty or
+    partial corpus still FAILS rather than passing vacuously; measured against
+    the published corpus today: 22 ledgers, 36 noted rows, zero findings.
+    """
+    rep = C.audit(corpus_repo(tmp_path))
     assert rep["verdict"] == "PASS", rep["findings"][:10]
-    assert rep["noted_rows"] >= 50, rep["noted_rows"]
+    assert rep["noted_rows"] >= 36, rep["noted_rows"]
+    # The ledger count is pinned too: 36 corrected rows spread over FEWER
+    # ledgers would satisfy the row floor while the corpus had quietly lost
+    # published runs, and that is the shrink this test is here to notice.
+    assert rep["ledgers"] >= 22, rep["ledgers"]
+
+
+def test_PAIRED_the_row_counter_tracks_the_population_not_a_constant(tmp_path):
+    """The floor above is only a guard if `noted_rows` MOVES with the corpus.
+
+    Were it a constant — or were corrected rows counted from something other
+    than the ledgers — `>= 36` would hold no matter what the corpus lost, and
+    the assertion would be decoration. Two populations, two answers.
+    """
+    one = C.audit(_repo(tmp_path / "a", [dict(_GOOD_BACKFILL)]))
+    assert one["noted_rows"] == 1, one
+
+    none = C.audit(_repo(tmp_path / "b", [{"tool": "yosys", "duration_ms": 0}]))
+    assert none["noted_rows"] == 0, none
+    assert none["verdict"] == "PASS", none["findings"]
 
 
 def test_the_exit_code_is_1_on_a_real_finding(tmp_path, capsys):

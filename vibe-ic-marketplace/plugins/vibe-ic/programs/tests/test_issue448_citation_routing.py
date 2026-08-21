@@ -117,12 +117,13 @@ def test_the_same_citation_is_not_recorded_twice(tmp_path):
 def test_the_three_converged_cells_are_measured_not_assumed():
     """Real data, and the numbers that justify separating the two states."""
     import pytest
-    cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.5.65_sky130A",
-             "spm/v1.5.66_gf180mcuD"]
-    seen = 0
+    cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.10.18_sky130A",
+             "spm/v1.9.96_gf180mcuD"]
+    seen, absent = 0, []
     for c in cells:
         d = _CORPUS / c
         if not d.is_dir():
+            absent.append(c)
             continue
         seen += 1
         recs = B.collect_citation_records(d)
@@ -133,7 +134,15 @@ def test_the_three_converged_cells_are_measured_not_assumed():
         assert mc[0]["decision"] == "OUT_OF_PUBLISHED_SCOPE", (c, mc)
     if seen == 0:
         pytest.skip("published corpus not checked out")
-    assert seen == 3, f"only {seen} of 3 converged cells present"
+    # DERIVED FROM THE ROSTER ABOVE, not typed beside it. The literal `3` was
+    # `len(cells)` written a second time, so editing the roster silently made
+    # the two disagree — and when a cell was withdrawn the message said "only 2
+    # of 3" without naming which. The claim is unchanged: this test names
+    # specific cells and a missing one is a real finding, not a smaller run.
+    assert seen == len(cells), (
+        f"{len(absent)} of the {len(cells)} cell(s) this test names are no "
+        f"longer published: {absent}. Either they were withdrawn — in which "
+        f"case pick their successors — or the roster is stale.")
 
 
 # ── the PLAN-versus-CLAIM split ────────────────────────────────────────────

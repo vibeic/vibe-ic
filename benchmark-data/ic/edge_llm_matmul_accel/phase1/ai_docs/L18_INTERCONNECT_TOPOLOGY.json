@@ -1,7 +1,0 @@
-{
-  "doc_class": "interconnect_topology",
-  "topology": "host <-USB/PCIe-> carrier/management SoC <-Wishbone-> edge_llm_matmul_accel",
-  "note": "Chip is a Wishbone slave; carrier board bridges to host USB/PCIe.",
-  "schema_version": 2,
-  "ic_name": "edge_llm_matmul_accel"
-}

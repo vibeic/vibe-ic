@@ -103,6 +103,46 @@ Three mechanisms, in the order they run:
 3. **The summary line can no longer print a bare 0/0.** Every zero it renders
    carries either the number of documents the zeros were measured over or the
    word UNEXAMINED.
+4. **Both readings' unavailability reaches the verdict, not just the first's.**
+   `stated["unavailable"]` (the extractor died) was wired from the start.
+   `corroboration["unavailable"]` (the SECOND reading died, or the
+   empty-skeleton test that decides whether to ask it could not answer) was
+   computed and published into the artifact and then never consulted, so a zero
+   with no second opinion was stamped ``zero_is_measured=True``. The asymmetry
+   is what marked it an omission rather than a design choice. Both now land in
+   ``ZERO_UNEXAMINED``.
+
+WHY ``ZERO_UNEXAMINED`` DEGRADES ``overall.status``
+---------------------------------------------------
+Because a list carried BESIDE a verdict cannot correct the verdict. This status
+is 33 of the 106 projects that carry this layer -- roughly a third -- and while it
+had its own word, its own list and its own summary line, the field a consumer
+actually reads still said ``PASS``. That is the same substitution as the defect
+above, one level up: real disclosure sitting next to a word that contradicts it,
+where only the word is machine-read.
+
+``phase1_doc_one_shot_runner.emit_coverage_report`` therefore degrades
+``overall.status`` to ``INCOMPLETE_ZERO_UNEXAMINED``. Three properties are
+deliberate:
+
+* **INCOMPLETE, not FAIL.** A reading that did not happen accuses nobody. Same
+  tier the P0 structural umbrella mints for the same sentence ("the input WAS
+  applicable and was NOT examined"); the suffix is this artifact's dialect --
+  its existing words are ``PASS`` / ``FAIL`` / ``FAIL_INPUT_NOT_FULLY_READ`` /
+  ``FAIL_LAYER_DEMANDED_BUT_EMPTY``, so a bare ``INCOMPLETE`` would be the one
+  unqualified word in the set.
+* **Gated on ``_status == "PASS"``,** exactly like ``FAIL_LAYER_DEMANDED_BUT_
+  EMPTY`` beside it, so a real FAIL always outranks a disclosure and the two
+  pre-existing FAIL words are unreachable-by-this-branch.
+* **The percentage is NOT touched.** Same remedy as #499 and as mechanism 2
+  above: reshaping the ratio only moves the dishonesty.
+
+The consumer blast radius of the new word was MEASURED, not assumed: no
+allow-list, enum or JSON schema constrains this field anywhere in the repo, and
+the only consumer that reads it as a verdict
+(``benchmark_evidence_publish._citations_under_a_pass``) fails OPEN on an
+unknown word -- it asserts less, never more. Full accounting at the assignment
+site in ``phase1_doc_one_shot_runner``.
 
 WHY THE CORROBORATION IS NOT A SECOND EXTRACTOR
 -----------------------------------------------
@@ -280,6 +320,31 @@ def _l21_subject_stated(project: Path) -> Dict[str, Any]:
             "items": items, "items_truncated": total > len(items)}
 
 
+def _empty_skeleton_verdict(doc: Dict[str, Any]) -> Optional[bool]:
+    """Is the layer an empty skeleton? ``True`` / ``False`` / ``None``.
+
+    ``None`` is the third answer, and it is the reason this function exists
+    beside `_is_empty_skeleton`: the extraction-claim contract could not be
+    imported, so this reading DID NOT HAPPEN. Collapsing that into ``False``
+    is the same substitution this whole program is against -- "I looked and
+    the answer is no" standing in for "I could not look". The distinction is
+    load-bearing downstream: a `False` means the corroborating reading is not
+    NEEDED (the layer holds content, or claims its extractor ran), while a
+    `None` means it was never ASKED, and only one of those two may be reported
+    as a measured zero.
+    """
+    try:
+        from l_doc_consumer_contract import is_extraction_claimed
+    except Exception:                                       # noqa: BLE001
+        return None
+    if is_extraction_claimed(doc):
+        return False
+    fields = doc.get("fields")
+    if not isinstance(fields, dict):
+        return False
+    return _is_empty_value(fields)
+
+
 def _is_empty_skeleton(doc: Dict[str, Any]) -> bool:
     """The layer asserts nothing AND holds nothing.
 
@@ -289,17 +354,13 @@ def _is_empty_skeleton(doc: Dict[str, Any]) -> bool:
     29 of the 76 candidate projects hold content under keys this probe's
     `layer_holds` does not count, and calling those "empty" would have made the
     rule fire on a filled layer.
+
+    The two-valued view, kept for readers that only need the predicate. A
+    reading that could not run collapses to ``False`` here, which is why
+    `evaluate` uses `_empty_skeleton_verdict` instead: it is the caller that
+    has to tell "not a skeleton" from "could not tell".
     """
-    try:
-        from l_doc_consumer_contract import is_extraction_claimed
-    except Exception:                                       # noqa: BLE001
-        return False
-    if is_extraction_claimed(doc):
-        return False
-    fields = doc.get("fields")
-    if not isinstance(fields, dict):
-        return False
-    return _is_empty_value(fields)
+    return _empty_skeleton_verdict(doc) is True
 
 
 def _is_empty_value(value: Any) -> bool:
@@ -362,10 +423,24 @@ def evaluate(project: Path) -> Dict[str, Any]:
     case and must stay quiet.
 
     ``zero_unexamined`` is the list that stops an empty ``silent_empty`` from
-    reading as a clean measurement. A layer lands there when the probe returned
-    zero without examining anything -- no documents read, or the probe itself
-    could not run. That is disclosure, not a verdict: it does NOT put the run
-    into FAIL, because a corpus that does not exist cannot state a demand.
+    reading as a clean measurement. A layer lands there when a reading that the
+    zero depends on DID NOT HAPPEN. Three ways in, one per reading:
+
+      * the FIRST reading (the extractor) could not run   -> PROBE_UNAVAILABLE
+      * the first reading ran over ZERO documents         -> ZERO_UNEXAMINED
+      * the first reading ran over real documents and returned zero, but the
+        SECOND, corroborating reading could not run -- either the reading
+        itself was unavailable, or the empty-skeleton test that decides whether
+        to ask it could not answer -> ZERO_UNEXAMINED
+
+    The third one is the one that closes the loop. A zero standing on a second
+    reading that never happened is the unexamined answer wearing the measured
+    answer's word, which is the entire subject of this program; the
+    ``unavailable`` flag was already computed and already published in the
+    artifact while the verdict declined to consult it.
+
+    That is disclosure, not a verdict: it does NOT put the run into FAIL,
+    because a corpus that does not exist cannot state a demand.
 
     Each layer record now also carries ``zero_is_measured`` (True / False /
     None-when-nonzero), ``examined``, and ``demand_source`` -- so a reader can
@@ -422,8 +497,16 @@ def evaluate(project: Path) -> Dict[str, Any]:
             corr: Dict[str, Any] = {"statements": 0, "documents": 0,
                                     "items": [], "items_truncated": False,
                                     "unavailable": False}
-            skeleton = _is_empty_skeleton(doc)
-            if skeleton and holds == 0:
+            skeleton = _empty_skeleton_verdict(doc)
+            if skeleton is None:
+                # The skeleton test could not answer, so the probe never
+                # learned whether the second reading was even called for. That
+                # is the same standing as a second reading that ran and could
+                # not report: the corroborating evidence is UNAVAILABLE, not
+                # absent. Recorded in the artifact's own vocabulary so the one
+                # verdict branch below covers both ways of not having looked.
+                corr["unavailable"] = True
+            elif skeleton and holds == 0:
                 corr = probe["subject_stated"](project)
             record["layer_is_empty_skeleton"] = skeleton
             record["corroboration"] = {
@@ -444,6 +527,16 @@ def evaluate(project: Path) -> Dict[str, Any]:
                     stated_items=corr["items"],
                 )
                 silent.append(layer)
+            elif corr.get("unavailable"):
+                # The corroborating reading could not run. Its zero is the
+                # ABSENCE of a second opinion, not a second opinion of zero --
+                # exactly the reading `unavailable` was computed and published
+                # for, and the branch that was missing while the flag sat in
+                # the artifact unread. Symmetric with the FIRST reading's
+                # `stated["unavailable"]` handling above; that asymmetry is
+                # what made this an omission rather than a choice.
+                record.update(status="ZERO_UNEXAMINED", zero_is_measured=False)
+                unexamined.append(layer)
             else:
                 record.update(status="NOT_DEMANDED", zero_is_measured=True)
         layers.append(record)
@@ -520,8 +613,20 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"tables_qualified={ex.get('tables_qualified')} "
               f"zero_is_measured={l.get('zero_is_measured')}")
         if l["status"] == "ZERO_UNEXAMINED":
-            print("    this zero is NOT a measurement: the probe read no "
-                  "input document. It is disclosed, not counted as demand.")
+            # Two different ways of not having looked reach this status, and
+            # the line must not assert the wrong one: printing "read no input
+            # document" over a run that read plenty and lost its SECOND
+            # reading would be a fresh false statement in a program whose
+            # subject is false statements about zeros.
+            if (l.get("corroboration") or {}).get("unavailable"):
+                print("    this zero is NOT a measurement: the corroborating "
+                      "reading of the same documents could not run, so the "
+                      "extractor's zero has no second opinion. It is "
+                      "disclosed, not counted as demand.")
+            else:
+                print("    this zero is NOT a measurement: the probe read no "
+                      "input document. It is disclosed, not counted as "
+                      "demand.")
         if l["status"] == "PROBE_UNAVAILABLE":
             print("    this zero is NOT a measurement: the probe could not "
                   "run at all.")

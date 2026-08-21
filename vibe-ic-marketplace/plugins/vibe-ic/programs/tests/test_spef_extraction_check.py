@@ -103,3 +103,78 @@ def test_short_reason_does_not_pass_waiver(tmp_path):
     }))
     result = _run(tmp_path)
     assert result.returncode == 1, "rubber-stamp waiver must NOT pass"
+
+
+# ---------------------------------------------------------------------------
+# D9 — the gate must read the VALUES, not only count the records.
+#
+# The D9 content census scored step 22 EXISTENCE-ONLY: scaling every number in
+# the SPEF left the verdict unchanged, because `scan_spef` counted `*D_NET` and
+# `*CAP` records and never looked at what they carried. A count does not move
+# when a value does.
+#
+# NO ORACLE. Nothing below knows what any parasitic SHOULD be — a real run ships
+# no answer key. It knows only what a capacitance CANNOT be: negative, in any
+# unit, under any extractor, for any technology. Measured over every published
+# SPEF in this repo before the rule was written: 114459 *CAP entries, 0 negative.
+# ---------------------------------------------------------------------------
+
+_CAP_SPEF = (
+    '*SPEF "IEEE 1481-1998"\n'
+    '*DESIGN "top"\n'
+    '*DATE "2026-08-12"\n'
+    + "".join(f"*D_NET net_{i} {0.01 + i * 0.001:.5f}\n"
+              f"*CAP\n1 net_{i}:1 {0.004 + i * 0.0001:.6f}\n"
+              f"2 net_{i}:2 net_{i + 1}:1 {0.002:.6f}\n*END\n"
+              for i in range(80))
+)
+
+
+def _findings(tmp_path: Path) -> list:
+    return [f["category"] for f in
+            json.loads((tmp_path / "out.json").read_text())["findings"]]
+
+
+def test_a_physically_possible_extraction_still_PASSES(tmp_path):
+    """THE INVERSE ARM, first. Every value non-negative, as every published
+    SPEF in this repo is. A rule that reddened these would be a ban."""
+    _make_spef(tmp_path / "phase3" / "stage3" / "extracted" / "top.spef", _CAP_SPEF)
+    assert _run(tmp_path).returncode == 0
+
+
+def test_ONE_negative_cap_among_many_reddens_the_gate(tmp_path):
+    """The sharp case: a single sign flip in a body of otherwise valid entries.
+
+    Measured on the real published `espi` SPEF — one flipped sign among 114459
+    entries is caught.
+    """
+    spef = _CAP_SPEF.replace("1 net_7:1 0.004700", "1 net_7:1 -0.004700", 1)
+    assert spef != _CAP_SPEF, "fixture drifted: the target line was not replaced"
+    _make_spef(tmp_path / "phase3" / "stage3" / "extracted" / "top.spef", spef)
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "NEGATIVE_PARASITIC" in _findings(tmp_path), _findings(tmp_path)
+
+
+def test_a_negative_D_NET_total_reddens_too(tmp_path):
+    """The other place a capacitance is stated: the net's declared total."""
+    spef = _CAP_SPEF.replace("*D_NET net_3 0.01300", "*D_NET net_3 -0.01300", 1)
+    assert spef != _CAP_SPEF, "fixture drifted: the target line was not replaced"
+    _make_spef(tmp_path / "phase3" / "stage3" / "extracted" / "top.spef", spef)
+    assert _run(tmp_path).returncode == 1
+    assert "NEGATIVE_PARASITIC" in _findings(tmp_path)
+
+
+def test_scaling_EVERY_value_is_caught(tmp_path):
+    """The census's own generic corruption, as a permanent test.
+
+    Each value stays individually plausible in magnitude; the extraction stops
+    being physically possible. This is the mutation that scored step 22
+    EXISTENCE-ONLY before the criterion existed.
+    """
+    import re
+    scaled = re.sub(r"\d+\.\d+",
+                    lambda m: f"{-(float(m.group(0)) * 3 + 7):.6f}", _CAP_SPEF)
+    _make_spef(tmp_path / "phase3" / "stage3" / "extracted" / "top.spef", scaled)
+    assert _run(tmp_path).returncode == 1
+    assert "NEGATIVE_PARASITIC" in _findings(tmp_path)

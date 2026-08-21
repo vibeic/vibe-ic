@@ -343,3 +343,194 @@ def test_the_json_written_still_matches_the_returned_result(tmp_path):
     proc = _run(proj, "--json", str(out))
     assert proc.returncode == 1
     assert json.loads(out.read_text(encoding="utf-8")) == P.evaluate(proj)
+
+
+# ── FIRE: the SECOND reading's own unavailability ────────────────────────────
+# The first reading's unavailability was wired from the start
+# (`stated["unavailable"] -> PROBE_UNAVAILABLE`). The second reading's was
+# computed, published into `record["corroboration"]["unavailable"]`, and then
+# never consulted by the verdict — so a zero whose corroboration COULD NOT RUN
+# was stamped `zero_is_measured=True`, the one stamp this program exists to
+# stop. These cases drive the real code path; nothing about the verdict is
+# stubbed.
+def test_a_zero_whose_corroborating_reading_could_not_run_is_unexamined(
+        tmp_path, monkeypatch):
+    """The second reading is asked and dies. Its zero is the ABSENCE of a
+    second opinion, not a second opinion of zero.
+
+    Driven through the shipped `_l21_subject_stated`: its own source of
+    documents is made to raise, so the real `unavailable` flag is produced by
+    the real except-branch rather than handed in by a fixture.
+    """
+    import l21_doc_supply_rail_synth as _synth
+
+    def _boom(_project):
+        raise RuntimeError("document source layer died")
+
+    monkeypatch.setattr(_synth, "doc_sources", _boom)
+    proj = _project(tmp_path, _DOC_STATES_RAILS_IN_PROSE)
+    res = P.evaluate(proj)
+    layer = _l21(res)
+    assert layer["corroboration"]["unavailable"] is True, layer
+    assert layer["corroboration"]["asked"] is True, layer
+    assert layer["status"] == "ZERO_UNEXAMINED", layer
+    assert layer["zero_is_measured"] is False, layer
+    assert res["zero_unexamined"] == ["L21_POWER_INTENT"], res
+    # Disclosure, not a verdict: an unavailable reading accuses nobody.
+    assert res["silent_empty"] == [], res
+
+
+def test_a_zero_whose_skeleton_test_could_not_answer_is_unexamined(
+        tmp_path, monkeypatch):
+    """The `except: return False` path, one level earlier.
+
+    When the extraction-claim contract cannot be imported, the skeleton test
+    used to answer `False` — "not a skeleton" — which silently means "do not
+    bother with the second reading", and the zero came out MEASURED. It could
+    not look; that is the third answer, and it belongs with the other two ways
+    of not having looked.
+    """
+    monkeypatch.setitem(sys.modules, "l_doc_consumer_contract", None)
+    proj = _project(tmp_path, _DOC_STATES_RAILS_IN_PROSE)
+    res = P.evaluate(proj)
+    layer = _l21(res)
+    assert layer["layer_is_empty_skeleton"] is None, layer
+    assert layer["corroboration"]["unavailable"] is True, layer
+    assert layer["corroboration"]["asked"] is False, layer
+    assert layer["status"] == "ZERO_UNEXAMINED", layer
+    assert layer["zero_is_measured"] is False, layer
+    assert res["zero_unexamined"] == ["L21_POWER_INTENT"], res
+    assert res["silent_empty"] == [], res
+
+
+def test_the_skeleton_verdict_is_three_valued_not_two(tmp_path, monkeypatch):
+    """`None` must be distinguishable from `False` at the source.
+
+    `False` means the second reading is NOT NEEDED (the layer holds content,
+    or claims its extractor ran). `None` means it was never ASKED. Collapsing
+    them is the substitution the whole program is against, and only one of the
+    two may be reported as a measured zero.
+    """
+    assert P._empty_skeleton_verdict(_EMPTY_SKELETON) is True
+    assert P._empty_skeleton_verdict(_FILLED_UNDER_OTHER_KEYS) is False
+    ran = dict(_EMPTY_SKELETON)
+    ran["extraction_status"] = "EXTRACTION_FOUND_NOTHING"
+    assert P._empty_skeleton_verdict(ran) is False
+    monkeypatch.setitem(sys.modules, "l_doc_consumer_contract", None)
+    assert P._empty_skeleton_verdict(_EMPTY_SKELETON) is None
+    # The two-valued view still answers the predicate it always answered.
+    assert P._is_empty_skeleton(_EMPTY_SKELETON) is False
+
+
+def test_the_unexamined_line_names_the_reading_that_did_not_happen(
+        tmp_path, monkeypatch):
+    """Two different ways of not looking reach ZERO_UNEXAMINED, and the
+    operator line must not assert the wrong one. Printing "read no input
+    document" over a run that read plenty and lost its SECOND reading is a
+    fresh false statement in a program whose subject is false statements."""
+    import l21_doc_supply_rail_synth as _synth
+    monkeypatch.setattr(_synth, "doc_sources",
+                        lambda _p: (_ for _ in ()).throw(RuntimeError("x")))
+    proj = _project(tmp_path, _DOC_STATES_RAILS_IN_PROSE)
+    # In-process, so the monkeypatched failure is the one the printer sees.
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = P.main([str(proj)])
+    out = buf.getvalue()
+    assert rc == 0, out
+    assert "corroborating" in out, out
+    assert "read no input document" not in out, out
+
+
+# ── QUIET: the change did not start firing on legitimate state ───────────────
+def test_an_available_corroborating_reading_still_yields_a_measured_zero(
+        tmp_path):
+    """The reverse case for the new branch, stated on its own.
+
+    Both readings run, both find nothing, and the zero keeps the MEASURED
+    stamp. If this case moved, the new branch would be firing on the state it
+    was written to leave alone.
+    """
+    proj = _project(tmp_path, _DOC_STATES_NOTHING_ABOUT_POWER)
+    res = P.evaluate(proj)
+    layer = _l21(res)
+    assert layer["corroboration"]["unavailable"] is False, layer
+    assert layer["layer_is_empty_skeleton"] is True, layer
+    assert layer["status"] == "NOT_DEMANDED", layer
+    assert layer["zero_is_measured"] is True, layer
+    assert res["zero_unexamined"] == [], res
+    assert _run(proj).returncode == 0
+
+
+# ── the verdict a consumer reads ─────────────────────────────────────────────
+# ZERO_UNEXAMINED had its own status word, its own list and its own summary
+# line, and `overall.status` — the one field a consumer machine-reads — still
+# said PASS on 33 of the 106 projects carrying this layer. A list carried BESIDE a verdict
+# cannot correct the verdict. These drive the real, unstubbed
+# `emit_coverage_report`.
+def _coverage_project(tmp_path, with_input_docs):
+    """A project whose coverage ratio is 100% and whose input is fully read,
+    so `overall.status` is decided by the layer-demand probe alone."""
+    g = tmp_path / "phase1" / "generated_docs"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "L21_POWER_INTENT.json").write_text(
+        json.dumps(_EMPTY_SKELETON), encoding="utf-8")
+    (g / "L3_CMD.json").write_text(
+        json.dumps({"doc_id": "L3", "fields": {"opcodes": [{"code": "0xAB"}]}}),
+        encoding="utf-8")
+    if with_input_docs:
+        d = tmp_path / "input" / "docs"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "spec.md").write_text(_DOC_STATES_NOTHING_ABOUT_POWER,
+                                   encoding="utf-8")
+    return tmp_path
+
+
+def _overall(tmp_path, with_input_docs, extracted=None):
+    import phase1_doc_one_shot_runner as R
+    proj = _coverage_project(tmp_path, with_input_docs)
+    _pct, rep = R.emit_coverage_report(
+        proj, extracted if extracted is not None
+        else {"spec": "opcode 0xAB selects it"}, [])
+    return rep["overall"]
+
+
+def test_an_unexamined_zero_degrades_the_reports_overall_status(tmp_path):
+    """The probe examined nothing, so there is nothing to pass.
+
+    100% coverage, every input document read, and the layer-demand probe
+    unable to examine anything. Pre-fix this published `status: PASS` with the
+    contradiction sitting one key away in `layers_zero_unexamined`.
+    """
+    o = _overall(tmp_path, with_input_docs=False)
+    assert o["pct"] == 100.0, o
+    assert o["input_documents_unread"] == 0, o
+    assert o["layers_zero_unexamined"] == ["L21_POWER_INTENT"], o
+    assert o["status"] == "INCOMPLETE_ZERO_UNEXAMINED", o
+    # INCOMPLETE, not FAIL: a reading that did not happen accuses nobody.
+    assert not o["status"].startswith("FAIL"), o
+    assert o["layers_demanded_but_empty"] == [], o
+
+
+def test_a_measured_zero_still_leaves_the_status_a_pass(tmp_path):
+    """The reverse case. The same project with a document the probe CAN read
+    and that states nothing about power: the zero is measured, and PASS is the
+    honest word. If this moved, the new tier would be firing on the state it
+    was written to leave alone."""
+    o = _overall(tmp_path, with_input_docs=True)
+    assert o["pct"] == 100.0, o
+    assert o["layers_zero_unexamined"] == [], o
+    assert o["status"] == "PASS", o
+
+
+def test_a_real_coverage_fail_outranks_the_unexamined_disclosure(tmp_path):
+    """Gated on `_status == "PASS"`, exactly like the sibling
+    `FAIL_LAYER_DEMANDED_BUT_EMPTY` assignment. A disclosure may degrade a
+    PASS; it may never upgrade a FAIL into something softer."""
+    o = _overall(tmp_path, with_input_docs=False,
+                 extracted={"spec": "opcode 0xZZ9 and 0xCD are never cited"})
+    assert o["pct"] < 80.0, o
+    assert o["layers_zero_unexamined"] == ["L21_POWER_INTENT"], o
+    assert o["status"] == "FAIL", o

@@ -200,6 +200,7 @@ from _code_literal import (  # noqa: E402
 from _electrical_mention import (  # noqa: E402
     scan_electrical_mentions as _scan_electrical_mentions,
 )
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 # ─── `typedef enum` harvester for staged HDL inputs (#499) ────────────
 import _hdl_enum as _hdlenum  # noqa: E402
 # ─── Was the input actually READ? (#499) ──────────────────────────────
@@ -3591,8 +3592,14 @@ def _l9_bullet_submodule_extract(text: str) -> List[str]:
             # gate. A bare prose word under a broadened heading (`Clock` /
             # `Single` / `The`) is neither code-spanned nor RTL-shaped, so it
             # is excluded.
-            cs = [c for c in _v648r2_codespan_idents(ml)
-                  if _is_codespan_submodule_name(c)]
+            # The code-span must be in the bullet's NAME position — see
+            # `_l9_bullet_declares_codespan_name`. A span buried in a
+            # sentence is a reference, not a declaration, so only the
+            # LEADING span is a candidate.
+            cs = []
+            if _l9_bullet_declares_codespan_name(ml):
+                cs = [c for c in _v648r2_codespan_idents(ml)[:1]
+                      if _is_codespan_submodule_name(c)]
             if cs:
                 out.extend(cs)
                 continue
@@ -3651,6 +3658,56 @@ def _v648r2_codespan_idents(text_fragment: str) -> List[str]:
         if tok not in out:
             out.append(tok)
     return out
+
+
+# A backtick says "this token is CODE". It does NOT say "this token is a
+# MODULE". IC prose backticks parameters, config keys, signals, filenames and
+# language keywords constantly, and always for the same reason: to mark an
+# identifier inside a sentence ABOUT something else --
+#
+#     - the minimum pad spacing is `min_distance = 0.1` um
+#     - Checks if `priority_override` is non-zero.
+#     - all ports are unsigned (do not use the `signed` keyword)
+#
+# Every one of those was harvested into `L9.submodules` on the published
+# corpus. What separates them from a declaration is not the token, it is the
+# POSITION: a bullet that DECLARES a submodule puts the identifier in its NAME
+# field -- the bullet leads with it and the rest describes it --
+#
+#     - `rx_phy` — recovers the line clock
+#     - **`ctrl_fsm`**: main sequencer
+#     - 2x `sram_bank` (dual-ported)
+#
+# whereas a bullet that MENTIONS one puts words in front of it. So the rule is
+# "the identifier must open the bullet", which is decidable from the bullet's
+# own structure and needs no vocabulary to maintain. Note this is what makes
+# the pre-existing reserved-keyword deny list unnecessary for the `signed`
+# case rather than merely lucky: `signed` is rejected because of WHERE it sits,
+# not because it is on a list -- and an unusual-but-legal name in the same
+# position is admitted for the same reason. That list is left in place; it is
+# not this change's to remove.
+#
+# chip-AGNOSTIC and language-AGNOSTIC: Markdown list/emphasis punctuation and
+# a numeric multiplicity prefix only. The corpus bullets this rejects are
+# written in English and in Chinese and are rejected identically, because the
+# rule never reads the words -- only whether any word precedes the span.
+_RE_L9_BULLET_NAME_POSITION = re.compile(
+    r"^\s*[-*+]\s+"          # the list marker
+    r"(?:\d+\s*[x×]\s*)?"   # optional multiplicity prefix: `2x` / `4 × `
+    r"[*_~#\s]*"             # optional emphasis / heading markup
+    r"`"                     # ...and then the code-span must open
+)
+
+
+def _l9_bullet_declares_codespan_name(bullet_line: str) -> bool:
+    """True iff ``bullet_line`` puts a backtick code-span in its NAME
+    position -- i.e. no WORD precedes the span.
+
+    False for a bullet that merely mentions a code-spanned identifier inside a
+    sentence. chip-AGNOSTIC: list/emphasis punctuation only."""
+    if not isinstance(bullet_line, str):
+        return False
+    return bool(_RE_L9_BULLET_NAME_POSITION.match(bullet_line))
 
 
 def _is_codespan_submodule_name(name: str) -> bool:
@@ -9824,8 +9881,8 @@ def _emit_l14_to_l18_via_extractor(
                 payload = {"extracted": payload}
             payload.setdefault("schema_version", "v0.1.62")
             payload.setdefault("doc_class", doc_name.split("_", 1)[0])
-            payload.setdefault("emitted_by",
-                                f"phase1_protocol_spec_extract.{fn_name} v0.1.62")
+            payload.setdefault("emitted_by", _pmd.emitted_by(
+                f"phase1_protocol_spec_extract.{fn_name}"))
             # _write_l_doc will run R11 scrub + R13 applicability gate.
             # Evidence is per-extractor; pass empty if the extractor
             # didn't carry one (gate-internal evidence sanitiser handles it).
@@ -11854,6 +11911,106 @@ def _byte_list_to_payload_template(
     return tmpl
 
 
+def _payload_template_entry_offset(entry: Any) -> Optional[int]:
+    """Return the int `byte_offset` of a payload-template entry, or None
+    when the entry is not a structurally usable typed byte spec.
+
+    Purely structural / chip-AGNOSTIC: no value, vendor or opcode literal
+    participates in the decision."""
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return int(entry.get("byte_offset"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _payload_template_entry_is_documented(entry: Any) -> bool:
+    """True when a payload-template entry carries a concrete byte the
+    SOURCE DOCUMENT stated (a non-empty `value`), as opposed to a
+    placeholder that only carries a `source` pointer.
+
+    Structural only — an int, or a non-empty string. chip-AGNOSTIC."""
+    if _payload_template_entry_offset(entry) is None:
+        return False
+    val = entry.get("value")
+    if isinstance(val, bool):          # bool is an int subclass; not a byte
+        return False
+    if isinstance(val, int):
+        return True
+    return isinstance(val, str) and val.strip() != ""
+
+
+def _merge_response_payload_template(
+    extracted: Any,
+    synthesised: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge the DOCUMENT-extracted response template over the synthesised
+    typed-shape placeholder, per `byte_offset`. FILL THE GAPS — never
+    overwrite what the document said.
+
+    #812 — the per-opcode enrichment pass used to assign the synthesised
+    placeholder straight onto `response_payload_template`, unconditionally.
+    That placeholder exists only to satisfy a downstream TYPED-SHAPE
+    requirement (a consumer needs a well-formed template even when the
+    document gives nothing), but it was also stamped over opcodes whose
+    document DID state the response bytes — those landed in the sibling
+    `response_payload_template_extracted`, which no consumer read. The
+    polarity was inverted: the better-documented the input, the more
+    information was discarded, and a documented response became
+    indistinguishable from an undocumented one.
+
+    Merge rule (chip-AGNOSTIC, purely positional — no vendor / SKU / IC
+    literal participates):
+
+      * the result spans the UNION of both `byte_offset` domains;
+      * at an offset the document documented, the document's entry wins,
+        verbatim, tagged `provenance="document"`;
+      * every remaining offset keeps the synthesised placeholder, tagged
+        `provenance="synthesised_placeholder"`, so the typed-shape
+        guarantee still holds for the bytes nobody documented;
+      * entries are emitted in ascending `byte_offset` order.
+
+    Structurally unusable extracted entries (not a dict, no int-parseable
+    `byte_offset`, no concrete `value`) are ignored, so a malformed
+    extraction can only ever leave the placeholder standing — it can never
+    replace it with something worse.
+
+    With no extracted bytes at all the output is the synthesised list
+    unchanged apart from the provenance tag, so the undocumented path
+    behaves exactly as it did before.
+    """
+    doc_by_offset: Dict[int, Dict[str, Any]] = {}
+    for ent in (extracted or []) if isinstance(extracted, list) else []:
+        if not _payload_template_entry_is_documented(ent):
+            continue
+        off = _payload_template_entry_offset(ent)
+        if off is None or off in doc_by_offset:
+            continue
+        doc_by_offset[off] = ent
+
+    synth_by_offset: Dict[int, Dict[str, Any]] = {}
+    for ent in synthesised or []:
+        off = _payload_template_entry_offset(ent)
+        if off is None or off in synth_by_offset:
+            continue
+        synth_by_offset[off] = ent
+
+    merged: List[Dict[str, Any]] = []
+    for off in sorted(set(doc_by_offset) | set(synth_by_offset)):
+        if off in doc_by_offset:
+            out = dict(doc_by_offset[off])
+            out["provenance"] = "document"
+        else:
+            out = dict(synth_by_offset[off])
+            out["provenance"] = "synthesised_placeholder"
+        merged.append(out)
+    # Defensive: never return an EMPTY template where the caller had a
+    # well-formed one — the typed-shape guarantee is the placeholder's
+    # whole reason to exist.
+    return merged or list(synthesised or [])
+
+
 def _extract_row_description(row_line: str,
                               op_hex_end: int) -> Optional[str]:
     """Strip every hex-byte-group / numeric column / pipe character
@@ -13218,13 +13375,18 @@ def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
 
 def _v466_strip_internal_fields(blocks) -> None:
     """Drop the private bookkeeping keys the #466 guards stashed on each
-    block before the block list is serialised. Idempotent."""
+    block before the block list is serialised. Idempotent.
+
+    PR #814 R2 also strips `_v814_evidence_span` here: it is emitter-internal
+    for the same reason the #466 keys are, and the L5 schema must not grow a
+    second copy of the evidence text."""
     if not isinstance(blocks, list):
         return
     for blk in blocks:
         if isinstance(blk, dict):
             blk.pop("_v466_kw_literal", None)
             blk.pop("_v466_src_fname", None)
+            blk.pop("_v814_evidence_span", None)
 
 
 # v1.6.66 — closes issue #7 Bug Z. Protocol-class acronyms harvested
@@ -20399,6 +20561,7 @@ def _v1_9_65_post_emit_l8_pdk_scoped_clock(project: Path) -> bool:
         if not isinstance(domains, list):
             continue
         changed = False
+        repointed_names: Set[str] = set()
         for d in domains:
             if not isinstance(d, dict) or d.get("role") != "primary":
                 continue
@@ -20423,8 +20586,46 @@ def _v1_9_65_post_emit_l8_pdk_scoped_clock(project: Path) -> bool:
             d["evidence"] = {"file": rel, "line": line_no,
                              "matched_substring": row_text[:120]}
             changed = True
+            _nm = (d.get("name") or "").strip()
+            if _nm:
+                repointed_names.add(_nm.lower())
         if not changed:
             continue
+        # ORGANIC-20260805 — mirror the re-point onto the `clocks[]` view of
+        # the SAME physical clock. `_post_emit_seed_l8b_clocks_from_l1_v1_6_571`
+        # already ran (call order: seeder line ~59512, this line ~59791) and
+        # seeded `clocks[]` by INHERITING the period `clock_domains[]` held at
+        # that moment — i.e. the PRE-re-point value. Re-pointing only
+        # `clock_domains[]` therefore leaves the two containers owning the same
+        # name with different periods, which is exactly what
+        # `clock_contract_conflicts` refuses ("two clock records own the name
+        # and pin different periods"). Re-point both, or neither. Chip-AGNOSTIC.
+        clocks = data.get("clocks")
+        if isinstance(clocks, list):
+            for c in clocks:
+                if not isinstance(c, dict):
+                    continue
+                _cn = (c.get("name") or "").strip().lower()
+                if not _cn or _cn not in repointed_names:
+                    continue
+                _prev = c.get("freq_mhz")
+                if _prev is not None and abs(float(_prev) - mhz) < 1e-9:
+                    continue
+                if _prev is not None:
+                    _cc.record_alternate_mention(c, {
+                        "freq_mhz": float(_prev),
+                        "freq_hz": int(float(_prev) * 1e6),
+                        "role": "displaced_by_pdk_scoped_row",
+                        "source": (c.get("evidence") or {}).get("file"),
+                        "extraction_strategy": c.get("extraction_strategy"),
+                    })
+                c["freq_mhz"] = mhz
+                c["freq_hz"] = int(mhz * 1e6)
+                c["period_ns"] = 1000.0 / mhz
+                c["extraction_strategy"] = "clock_domain_pdk_scoped_row"
+                c["pdk_scoped_target"] = _CLI_PDK
+                c["evidence"] = {"file": rel, "line": line_no,
+                                 "matched_substring": row_text[:120]}
         if data.get("clock_mhz") is not None:
             data["clock_mhz"] = mhz
         try:
@@ -25093,6 +25294,10 @@ def gen_l3_cmd_protocol(project: Path,
     # Heuristic chip-AGNOSTIC default: response_opcode at byte_offset=0,
     # CRC residue at last byte_offset; intermediate bytes flagged TBD with
     # a `source` pointer so the gate's typed-shape requirement is met.
+    # #812 — this default is a FALLBACK, not the answer. It is merged
+    # UNDER whatever the source document stated (see
+    # `_merge_response_payload_template`): a documented byte always wins
+    # its offset, and the placeholder survives only in the gaps.
     # Each opcode also gains an argument_constraints[] block citing the
     # global addr_max/len_max when applicable.
     enriched_opcodes: List[Dict[str, Any]] = []
@@ -25129,7 +25334,16 @@ def gen_l3_cmd_protocol(project: Path,
             cons.append({"name": "len_max", "max_hex": len_max,
                          "rule": "length > len_max → no reply"})
         new_op = dict(op)
-        new_op["response_payload_template"] = tmpl
+        # #812 — FILL A GAP, do not OVERWRITE. `tmpl` above is the
+        # heuristic typed-shape placeholder; when the source document
+        # itself stated the response bytes they are already in
+        # `response_payload_template_extracted`, and the document must win
+        # at every offset it covers. Merging per byte_offset also makes a
+        # PARTIALLY documented response usable: documented bytes survive,
+        # `source` pointers remain only in the gaps.
+        new_op["response_payload_template"] = (
+            _merge_response_payload_template(
+                op.get("response_payload_template_extracted"), tmpl))
         new_op["argument_constraints"] = cons
         if addr_max:
             new_op["addr_max"] = addr_max
@@ -33882,16 +34096,24 @@ def _v1_6_563_apply_subqualifier_guard(blocks):
     Idempotent: a second call observes that the parenthetical
     block's count no longer matches the head's, so it does nothing.
 
+    PR #814 R2 — this reads the FULL SPAN (`_v814_evidence_span_of`), not the
+    240-char `evidence_paragraph` display window. Grouping and prose-position
+    classification are semantics; a display width must not decide them. Reading
+    the window instead made the guard wrong in two opposite ways depending on
+    where the window sat — see `_v814_evidence_span_of` for both, and
+    `tests/test_l5_analog_evidence_contains_its_keyword.py` for the
+    end-to-end reproduction of each.
+
     Chip-AGNOSTIC: pure structural English; no chip-class literal.
     """
     if not isinstance(blocks, list):
         return
-    # Group blocks by their evidence_paragraph + head count.
+    # Group blocks by their evidence SPAN + head count.
     groups = {}
     for idx, blk in enumerate(blocks):
         if not isinstance(blk, dict):
             continue
-        para = blk.get("evidence_paragraph")
+        para = _v814_evidence_span_of(blk)
         if not isinstance(para, str) or not para:
             continue
         count = blk.get("count")
@@ -34340,6 +34562,119 @@ def _v1_6_613_input_has_digital_serial_readout(extracted: Dict[str, str]) -> boo
     return False
 
 
+#: Width of the stored `evidence_paragraph`. Unchanged; what changes below is
+#: WHERE the window sits, not how wide it is.
+_EVIDENCE_PARAGRAPH_WIDTH = 240
+#: When the window has to move to reach the keyword, how much of it is spent on
+#: text BEFORE the keyword. A quarter keeps enough left context to read the
+#: sentence the keyword is in while leaving the majority for what FOLLOWS it,
+#: which is where an attributed value normally sits ("the regulator drops
+#: 250 mV at full load").
+_EVIDENCE_KEYWORD_LEAD = _EVIDENCE_PARAGRAPH_WIDTH // 4
+
+
+def _evidence_window_containing_keyword(
+        paragraph: str,
+        kw_rel: int,
+        kw_len: int,
+        width: int = _EVIDENCE_PARAGRAPH_WIDTH) -> str:
+    """The <=`width` slice of `paragraph` that CONTAINS the keyword at
+    `kw_rel` (an offset into `paragraph`, before stripping).
+
+    THE DEFECT THIS CLOSES. `evidence_paragraph` was
+    `paragraph.strip()[:width]` — a fixed-width window anchored at the SPAN
+    START. A keyword further into
+    the span than `width` therefore never appeared in the evidence stored for
+    it: the reader was shown a prefix about some other subject, and only the
+    `evidence_paragraph_truncated` flag hinted that anything was missing.
+    Measured on the corpus: 10 of 27 detected blocks stored evidence that did
+    not contain their own keyword, every one of them by this truncation.
+
+    The span is NOT narrowed to fix this — narrowing is the direction that
+    silently destroys evidence, and the numbers a block's spec is harvested
+    from routinely sit in nested sub-items of the keyword's own list item. Only
+    the WINDOW moves, so `paragraph` (and therefore `spec`, `count` and the
+    detected block set) is byte-for-byte what it was.
+
+    The window stays at the span start whenever the keyword already fits inside
+    it, so a block whose evidence is already correct is not perturbed.
+
+    The window is a DISPLAY window and nothing else. Nothing downstream may
+    decide anything from it — see `_v814_evidence_span_of` for the field that
+    exists so the sub-qualifier guard reads the whole span instead.
+
+    chip-AGNOSTIC: pure offset arithmetic; no vocabulary participates.
+    """
+    lead_ws = len(paragraph) - len(paragraph.lstrip())
+    s = paragraph.strip()
+    if len(s) <= width:
+        # The whole span fits — nothing to choose.
+        return s
+    kw = kw_rel - lead_ws
+    if kw < 0 or kw >= len(s):
+        # Keyword outside the stripped text (only reachable if the caller
+        # passes a mismatched offset). Fail back to the historical window
+        # rather than emitting a wrong slice.
+        return s[:width]
+    if kw + kw_len <= width:
+        # Already inside the head window — leave it exactly where it was.
+        return s[:width]
+    start = kw - _EVIDENCE_KEYWORD_LEAD
+    # Lower clamp — this is what GUARANTEES containment rather than merely
+    # making it likely: the window must still reach the END of the literal.
+    # Only binds for a literal longer than `width - lead`.
+    earliest = kw + kw_len - width
+    if start < earliest:
+        start = earliest
+    if start > kw:
+        # Reachable only when the literal is itself wider than the window.
+        # Start at the literal: the most of it that can be shown.
+        start = kw
+    if start + width > len(s):
+        # Moves the window LEFT, so it still ends at the span end and still
+        # covers the keyword.
+        start = len(s) - width
+    if start < 0:
+        start = 0
+    return s[start:start + width]
+
+
+def _v814_evidence_span_of(block) -> str:
+    """The FULL span a block was detected in, for consumers that must reason
+    about prose the display window may have cut away.
+
+    WHY THIS EXISTS. `_v1_6_563_apply_subqualifier_guard` groups blocks by
+    `evidence_paragraph` EQUALITY and then locates each block's keyword inside
+    that string. Both operations were reading the 240-char display window, so
+    the window silently decided semantics:
+
+      * before the anchoring, a keyword past character 240 was simply not
+        findable in the window, so `_v1_6_564_classify_head_vs_paren` could not
+        annotate that block; the guard fell through to its dict-iteration-order
+        fallback and decremented the HEAD subject instead of the parenthetical
+        one — the exact inversion v1.6.564 was written to stop, re-entering
+        by the truncation door;
+      * after the anchoring, two blocks in one span get DIFFERENT windows
+        whenever one of their keywords sits past 240, so the group no longer
+        forms at all and the guard does not fire.
+
+    Reading the span makes both cases behave like the short-paragraph case that
+    was always correct. Private bookkeeping: stripped before serialisation by
+    `_v466_strip_internal_fields`, exactly like the #466 keys. Falls back to
+    the stored window for block shapes that never carried a span (the L5 parity
+    stub), so the guard never sees `None`.
+
+    chip-AGNOSTIC: field plumbing only; no vocabulary participates.
+    """
+    if not isinstance(block, dict):
+        return ""
+    span = block.get("_v814_evidence_span")
+    if isinstance(span, str) and span:
+        return span
+    para = block.get("evidence_paragraph")
+    return para if isinstance(para, str) else ""
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -34439,7 +34774,14 @@ def gen_l5_adi_spec(project: Path,
                 "spec": spec_str,
                 "low_confidence": (spec_str is None),
                 "evidence": f"input/docs/{fname} ({m.group(0)})",
-                "evidence_paragraph": paragraph.strip()[:240],
+                # The window is anchored on the KEYWORD, not on the span start,
+                # so the stored evidence always contains the keyword it
+                # evidences. It stays at the span start whenever the keyword
+                # already fits there, so evidence that was already correct is
+                # byte-for-byte unchanged. See
+                # `_evidence_window_containing_keyword`.
+                "evidence_paragraph": _evidence_window_containing_keyword(
+                    paragraph, kw_pos - p_start, m.end() - m.start()),
                 # R6-FIX-1 (provenance): the 240-char cut can drop the very
                 # text a spec value came from, which is how two blocks shipped
                 # numbers that appear nowhere in their own stored evidence.
@@ -34447,13 +34789,22 @@ def gen_l5_adi_spec(project: Path,
                 # the stored paragraph is the whole basis. Each attributed spec
                 # additionally carries its OWN `evidence_text` window, so a
                 # value is auditable even when this field is truncated.
+                # Meaning is unchanged by the anchoring: the flag says the
+                # stored text is not the whole span, whatever part of it the
+                # window shows.
                 "evidence_paragraph_truncated":
-                    len(paragraph.strip()) > 240,
+                    len(paragraph.strip()) > _EVIDENCE_PARAGRAPH_WIDTH,
                 # ORGANIC #466 R2 — private bookkeeping for the
                 # emitter-side spurious-block guard. Stripped before
                 # serialisation by `_v466_strip_internal_fields`.
                 "_v466_kw_literal": m.group(0),
                 "_v466_src_fname": fname,
+                # PR #814 R2 — private bookkeeping: the WHOLE span, so a
+                # downstream guard reasons about the prose rather than about
+                # whatever part of it the display window happens to show.
+                # Stripped before serialisation alongside the #466 keys; see
+                # `_v814_evidence_span_of`.
+                "_v814_evidence_span": paragraph.strip(),
             }
             # v1.6.402 — for #292 P3. Parse quantifier preceding
             # block type into `count` / `multiplicity` fields.
@@ -35834,6 +36185,111 @@ def _l6_attribute_fsm_states(states: List[Dict[str, Any]]) -> None:
             st["fsm_machine"] = _l6_fsm_machine_id(st)
 
 
+# ---------------------------------------------------------------------------
+# L6 transition recovery — the edge the state-to-state walker already had.
+#
+# THE DEFECT THIS CLOSES, STATED AS THE MEASUREMENT THAT FOUND IT
+# ----------------------------------------------------------------
+# `_V1_6_484_FSM_STATE_TO_STATE_RE` matches `<from_state> <op> <to_state>`,
+# runs the whole guard chain over the match (FSM-context anchor, C-pointer
+# reject, data-movement reject, bare-word-prose reject, transition-verb
+# reject), and then promotes BOTH endpoints into `fsm_states[]` -- and DROPS
+# THE ARROW.  So a source line the extractor has already decided is an FSM
+# transition contributes two states and zero transitions.  Re-running the
+# shipped producer over the published corpus: 16 run roots carry states, ONE
+# carries a transition, and the states of the emptiest ones came from exactly
+# these lines (e.g. a spec whose state table reads
+# ``INITIALIZING  -> LISTENING  (initialization complete)`` yielded 5 states
+# and 0 transitions).
+#
+# WHY RECOVERING THE EDGE IS NOT "MAKING THE EXTRACTOR EMIT MORE"
+# ---------------------------------------------------------------
+# An edge is emitted ONLY when BOTH endpoints survived every promotion gate
+# and appear in the FINAL `fsm_states[]`.  Such an edge asserts nothing the
+# state list has not already asserted -- the same evidence line, the same two
+# tokens, the same guards.  It adds the relation between two facts already
+# published, not a third fact.  The both-endpoints rule is also what keeps the
+# arrows that are NOT transitions out: a signal-direction note
+# ``TxD : Transmit Data (CC -> BD)`` and a message-direction note
+# ``SDO (server -> client)`` never make their endpoints states, so they never
+# make an edge either.  It additionally satisfies the consuming gate's A3
+# (no dangling transition target) BY CONSTRUCTION rather than by a later check.
+#
+# chip-AGNOSTIC: state identity + set membership only; no chip, vendor, PDK,
+# protocol or state-name literal participates.
+def _l6_transition_entry(from_state: str, to_state: str,
+                         trigger: str, evidence: str) -> Dict[str, Any]:
+    """One transition, in the shape `l6_fsm_scaffold_actionable_check`
+    reads (`to` is in its `_TRANSITION_TARGET_KEYS`)."""
+    entry: Dict[str, Any] = {"from": from_state, "to": to_state}
+    if trigger:
+        entry["trigger"] = trigger
+    if evidence:
+        entry["evidence"] = evidence
+    return entry
+
+
+def _l6_attach_declared_transitions(
+        fsm_states: List[Dict[str, Any]],
+        edges: List[Dict[str, str]]) -> int:
+    """Attach to `fsm_states[].transitions` every observed edge whose BOTH
+    endpoints are in `fsm_states`. Returns the number attached.
+
+    In-place; idempotent (an edge already present is not duplicated). An edge
+    naming an endpoint that did not become a state is DROPPED, not repaired --
+    the state promotion gates are the ruler, and an edge is never allowed to
+    introduce a state they rejected."""
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for st in fsm_states:
+        if isinstance(st, dict) and isinstance(st.get("name"), str):
+            by_name[st["name"].upper()] = st
+    attached = 0
+    for e in edges:
+        src = str(e.get("from") or "").upper()
+        dst = str(e.get("to") or "").upper()
+        if not src or not dst or src == dst:
+            continue
+        if src not in by_name or dst not in by_name:
+            continue
+        st = by_name[src]
+        lst = st.get("transitions")
+        if not isinstance(lst, list):
+            lst = []
+            st["transitions"] = lst
+        if any(isinstance(t, dict) and str(t.get("to", "")).upper() == dst
+               for t in lst):
+            continue
+        lst.append(_l6_transition_entry(
+            by_name[src].get("name") or src,
+            by_name[dst].get("name") or dst,
+            str(e.get("trigger") or ""),
+            str(e.get("evidence") or ""),
+        ))
+        attached += 1
+    return attached
+
+
+# The parenthetical / trailing clause a state-table row puts after the arrow
+# is the transition's TRIGGER, written by the document on the same line
+# (``LISTENING -> MASTER   (BMCA: this port is best master)``).  Captured
+# verbatim so the emitted trigger is quoted evidence, never a paraphrase.
+_L6_TRANSITION_TRIGGER_RE = re.compile(
+    r"^\s*(?:\(([^)\n]{1,120})\)|(?:when|if|on|upon|after)\s+([^.;\n]{1,120}))",
+    re.IGNORECASE,
+)
+
+
+def _l6_transition_trigger_after(text: str, end: int) -> str:
+    """Verbatim trigger clause immediately following a state-to-state match,
+    or "" when the document states none."""
+    line_end = text.find("\n", end)
+    tail = text[end: line_end if line_end >= 0 else len(text)]
+    m = _L6_TRANSITION_TRIGGER_RE.match(tail)
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2) or "").strip()
+
+
 def _l6_build_fsm_machines(
         states: List[Dict[str, Any]],
         declared_machines: Dict[str, Dict[str, Any]],
@@ -36068,6 +36524,10 @@ def gen_l6_control_logic(project: Path,
         r"(?:->|=>|→)\s*([A-Z][A-Z0-9_]{3,30})\b",
     )
     seen_state_names: Set[str] = {s["name"] for s in extracted_states}
+    # Edges observed by the state-to-state walker. Collected here, filtered
+    # against the FINAL state set at emit time — see
+    # `_l6_attach_declared_transitions`.
+    _l6_edge_candidates: List[Dict[str, str]] = []
 
     def _add_state(name: str, fname: str, label: str,
                    extraction_strategy: str = "") -> None:
@@ -36377,6 +36837,28 @@ def gen_l6_control_logic(project: Path,
             # spurious FSM state. Arrow-operator matches are unaffected.
             if _v1_0_44_is_bareword_to_prose_noise(text, m):
                 continue
+            # Every guard above has now accepted this match as a
+            # state-to-state RELATION between two identifier-shaped
+            # endpoints. Record the EDGE here rather than discarding it.
+            #
+            # This is BEFORE the ±300-char FSM-context anchor deliberately.
+            # That anchor is a STATE-PROMOTION guard: it decides whether an
+            # ALL-CAPS token in this window may become a state. An edge
+            # promotes nothing — `_l6_attach_declared_transitions` keeps it
+            # only when BOTH endpoints are in the FINAL `fsm_states[]`, which
+            # is a STRICTLY STRONGER condition than the anchor (each endpoint
+            # had to clear the whole promotion chain, by this path or another,
+            # to be there at all). Requiring the anchor here would drop edges
+            # between two states the layer already publishes — measured: a
+            # state table whose header sits >300 chars above its last rows
+            # loses those rows' edges while keeping their states.
+            if not _v1_6_625_is_transition_verb_from(m):
+                _l6_edge_candidates.append({
+                    "from": m.group("from_state"),
+                    "to": m.group("to_state"),
+                    "trigger": _l6_transition_trigger_after(text, m.end()),
+                    "evidence": f"input/docs/{fname} (state-to-state)",
+                })
             if not _v1_6_484_prose_fsm_window_has_anchor(
                     text, m.start()):
                 continue
@@ -36762,6 +37244,9 @@ def gen_l6_control_logic(project: Path,
         ]
         fsm_states = _real_fsm_states[:32]
         pipeline_stages = _pipeline_states[:32]
+        # Attach the edges the state-to-state walker validated, now that the
+        # final state set is known. Both endpoints must be in it.
+        _l6_attach_declared_transitions(fsm_states, _l6_edge_candidates)
         # v1.6.436: flag still reflects real FSM presence — pipeline-only
         # input continues to surface as "no fsm evidence" so downstream
         # state-coverage gates can fall back to filename-level evidence.
@@ -44755,6 +45240,183 @@ def _v1_6_394_post_emit_finalize_sim_only(l9_path) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# L9 submodule name provenance — an extractor may not invent the name.
+#
+# THE DEFECT THIS CLOSES
+# ----------------------
+# Two L9 submodule producers do not EXTRACT a name, they MINT one:
+#
+#   * a literal picker maps a spec token it finds in prose through a hand-kept
+#     table to a synthesized identifier (`K28.5` in a link-layer paragraph ->
+#     a submodule named `k28p5_special_char`), and
+#   * a README bullet walker SLUGIFIES a prose bullet into an identifier
+#     ("Electronic Codebook (ECB) mode," -> `electronic_codebook_mode`).
+#
+# In both cases the entry cites a source FILE AND LINE as its evidence, and
+# the name it publishes does not occur anywhere in that file. A downstream
+# consumer reading `L9.submodules` is then told the design instantiates a
+# module whose name no human ever wrote. Measured on the published corpus by
+# re-running the shipped producer: 15 of 80 emitted entries, across 4 run
+# roots, name a token absent from the document they cite.
+#
+# THE RULE
+# --------
+# If an entry CITES A DOCUMENT, that document must contain the name.
+#
+# That is the repo's own standard (`evidence_citation_resolves_check` requires
+# a citation to resolve) applied one level deeper: to the CLAIM, not just to
+# the path. It is a rule, not a list -- it needs no vocabulary, it does not
+# name a protocol or a token, and a future table that mints names is caught
+# the day it is written rather than the day someone notices.
+#
+# WHAT IT DELIBERATELY DOES NOT GOVERN
+# ------------------------------------
+# An entry with NO document citation is not this extractor's output -- the
+# IC-expert dialogue track authors decompositions that no input document
+# spells out, which is a different producer with a different contract, and
+# silently deleting those would be a second defect of the same shape as the
+# first. Untouched, and the disclosure below says so out loud.
+#
+# chip-AGNOSTIC: string containment against the design's own inputs.
+_RE_L9_EVIDENCE_DOCPATH = re.compile(
+    r"([A-Za-z0-9_.\-/ ]+\.(?:md|txt|rst|adoc|pdf|docx?|xlsx?|pptx?|html?|"
+    r"odt|svg|dia|v|sv|vhdl?))",
+    re.IGNORECASE,
+)
+
+
+def _l9_entry_cited_document(entry: Dict[str, Any]) -> str:
+    """Basename of the input document an L9 submodule entry cites, or "" when
+    it cites none. Reads only the entry's own evidence fields."""
+    if not isinstance(entry, dict):
+        return ""
+    ev = entry.get("evidence")
+    cands: List[str] = []
+    if isinstance(ev, str):
+        cands.append(ev)
+    elif isinstance(ev, dict):
+        for k in ("file", "source", "path", "doc"):
+            v = ev.get(k)
+            if isinstance(v, str):
+                cands.append(v)
+    for c in cands:
+        m = _RE_L9_EVIDENCE_DOCPATH.search(c)
+        if m:
+            return Path(m.group(1).strip()).name
+    return ""
+
+
+def _l9_name_written_by_document(name: str, doc_text: str) -> bool:
+    """True iff ``doc_text`` contains ``name`` VERBATIM (case-insensitive).
+
+    A separator-insensitive variant was written first, so that a name could
+    match a document that punctuates it differently (``pe_array`` vs ``PE
+    array``). It was MEASURED against the published corpus before being kept,
+    and it did not survive: of the 80 entries the producer emits, the
+    relaxation accepted exactly 3 that verbatim containment rejects, and all
+    3 were wrong -- collapsing separators lets a name match across unrelated
+    adjacent words (a line reading ``OOB (COMINIT/COMSAS/COMWAKE)`` accepts a
+    minted ``oob_cominit``). It admitted no true entry. So the strict form is
+    the shipped one, and this note is the record of why."""
+    nm = (name or "").strip()
+    if not nm or not doc_text:
+        return False
+    return nm.lower() in doc_text.lower()
+
+
+def _post_emit_l9_drop_uninstantiated_submodule_names(
+        project: Path, extracted: Dict[str, str]) -> int:
+    """Drop every `L9.submodules` entry that CITES a document which does not
+    contain the entry's own name. Returns the number dropped.
+
+    Runs LAST in the L9 post-emit chain so it sees every producer's output,
+    including any added later. Each drop is recorded on
+    `L9.submodules_dropped_uncited[]` with the citation it failed, so the
+    removal is auditable rather than silent, and the retained/examined counts
+    are stamped on `L9.submodule_name_provenance` — a pass that does not say
+    how much it looked at is not a pass. Never raises; a project whose input
+    text is unavailable is left ALONE rather than emptied (a zero denominator
+    must refuse, not delete)."""
+    try:
+        p = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+        if not p.is_file():
+            return 0
+        try:
+            l9 = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return 0
+        if not isinstance(l9, dict):
+            return 0
+        subs = l9.get("submodules")
+        if not isinstance(subs, list) or not subs:
+            return 0
+        by_base: Dict[str, str] = {}
+        for fn, txt in (extracted or {}).items():
+            if isinstance(txt, str):
+                _b = Path(str(fn)).name
+                by_base[_b] = txt
+                by_base[Path(_b).stem] = txt
+        kept: List[Any] = []
+        dropped: List[Dict[str, str]] = []
+        examined = 0
+        for e in subs:
+            doc = _l9_entry_cited_document(e) if isinstance(e, dict) else ""
+            if not doc:
+                kept.append(e)          # no document citation — not governed
+                continue
+            txt = by_base.get(doc) or by_base.get(Path(doc).stem)
+            if txt is None:
+                # The cited document is not among the extracted texts, so the
+                # claim cannot be checked. REFUSING to judge is the honest
+                # outcome; deleting on an absent denominator is not.
+                kept.append(e)
+                continue
+            examined += 1
+            if _l9_name_written_by_document(str(e.get("name") or ""), txt):
+                kept.append(e)
+            else:
+                dropped.append({
+                    "name": str(e.get("name") or ""),
+                    "cited_document": doc,
+                    "extraction_strategy": str(
+                        e.get("extraction_strategy")
+                        or (e.get("evidence") or {}).get("extraction_strategy")
+                        if isinstance(e.get("evidence"), dict)
+                        else e.get("extraction_strategy") or ""),
+                    "reason": ("name does not occur in the document this "
+                               "entry cites as its evidence"),
+                })
+        l9["submodule_name_provenance"] = {
+            "entries_total": len(subs),
+            "entries_with_document_citation": examined,
+            "entries_dropped": len(dropped),
+            "rule": ("a submodule entry that cites an input document must "
+                     "name a token that document contains"),
+        }
+        if dropped:
+            l9["submodules"] = kept
+            l9["submodules_dropped_uncited"] = dropped
+            if not kept:
+                l9["no_submodules_in_input"] = True
+        # The disclosure is written even when nothing was dropped: a clean
+        # result must still say how many entries it examined, or it is
+        # indistinguishable from never having run.
+        try:
+            _stamp.dump(p, l9)
+        except Exception:
+            return 0
+        return len(dropped)
+    except Exception as exc:
+        # Fail OPEN (never break a run over this) but never SILENTLY: a
+        # producer guard that vanishes without a word is how the defect it
+        # guards against comes back unnoticed.
+        sys.stderr.write(
+            f"WARN: l9_submodule_name_provenance skipped ({type(exc).__name__}"
+            f": {exc}) — L9.submodules left unfiltered\n")
+        return 0
+
+
 # v1.6.426 — for #303 P2 ORGANIC. Memory prose walker. Pre-v1.6.426
 # `L9.memories` was silent across all 8 benchmark chips — the L9
 # emitter had no walker that mined RAM/ROM/cache/regfile mentions
@@ -46999,6 +47661,29 @@ def _v1_6_581_route_l1_fallback_top_module(
     strategy = l9.get("top_module_extraction_strategy") or ""
     if strategy != "l1_ic_name_fallback":
         return False
+    # The fallback FIRED, so by construction no `module <name>(...)`
+    # declaration was found in the input — `top_module` is a
+    # Verilog-sanitised copy of `L1.ic_name`, not an extracted
+    # identifier. That fact is a property of the STRATEGY and is
+    # independent of where the PINS came from, so the honest flag is
+    # stamped here, BEFORE the pin-preservation early return below.
+    #
+    # Previously the `promoted_from_l1` guard returned before this
+    # line, on the stated assumption that "the honest top-module flag
+    # still applies via the normal no_top_module path". MEASURED: it
+    # does not. That path is
+    #     no_top_module_in_input = _flag_no_X_in_input(
+    #         top_module if not top_module_default_applied else None, …)
+    # and `_flag_no_X_in_input` returns False as soon as the value it
+    # is handed is non-empty. On this branch `top_module` is non-empty
+    # BY CONSTRUCTION, so the flag was pinned to False in exactly the
+    # case it exists to report. A design whose docs never name a top
+    # module then shipped `no_top_module_in_input: false` alongside
+    # `top_module_extraction_strategy: l1_ic_name_fallback` — the
+    # strategy stamp and the flag contradicting each other in the same
+    # record, with every downstream L9-vs-RTL consumer reading the flag.
+    # Chip-AGNOSTIC: provenance-based, no chip-class literal.
+    l9["no_top_module_in_input"] = True
     # Real L1.pin_table promotion → pins are genuine, not a
     # fabricated superset-union. Do NOT clear them.
     if promoted_from_l1:
@@ -47006,7 +47691,6 @@ def _v1_6_581_route_l1_fallback_top_module(
     # Mark + clear. Keep `top_module` (= L1.ic_name) as the
     # tentative label; downstream MUST check
     # `no_top_module_in_input` before relying on top_module_pins.
-    l9["no_top_module_in_input"] = True
     # Clear all three aliases consistently so any consumer that
     # reads `ports` / `top_ports` / `top_module_pins` sees the
     # cleared list.
@@ -49152,6 +49836,22 @@ def gen_l10_test_cases(project: Path,
     opcodes = l3.get("opcodes") or []
     addr_max = l3.get("addr_max")
     len_max = l3.get("len_max")
+    # A `pre_wake_false` case ("host sends opcode after POR with no preceding
+    # wake pulse -> DUT silent") asserts a WAKE-PULSE / command-response
+    # protocol. That protocol exists only when opcode synthesis was ENABLED by
+    # real half-duplex / command-table evidence. When the L3 records
+    # `opcode_synthesis_skipped_reason` (no half-duplex declared AND no
+    # command-table heading in input/docs), the opcodes were admitted SOLELY
+    # from an HDL `typedef enum` harvest (hdl_typedef_enum_opcode_v1_7_72) --
+    # i.e. the design's own ISA opcode table, NOT a wire command set. Such a
+    # design (e.g. a processor_cpu core) has no wake pulse and no response
+    # frame, so a pre-wake negative case is a category error: it fabricates a
+    # requirement the design does not have and hard-FAILs l10_tb_conformance's
+    # non-waivable "declared-silence" arm. chip-AGNOSTIC: gated on the L3's own
+    # opcode_synthesis_skipped_reason, never a chip/vendor/SKU literal. A real
+    # command-driven IC has opcode_synthesis_enabled -> no skip reason -> its
+    # pre_wake_false cases are still emitted and still FAIL without a TB.
+    _no_wake_protocol = bool(l3.get("opcode_synthesis_skipped_reason"))
     for op in opcodes[:24]:
         if not isinstance(op, dict) or op.get("hex") == "__TODO__":
             continue
@@ -49180,8 +49880,9 @@ def gen_l10_test_cases(project: Path,
         # a `pre_wake_false` (negative pre-wake) case per opcode that does
         # NOT carry pre_wake_allowed=true. The gate is chip-AGNOSTIC: any
         # opcode-class IC needs a "send opcode without prior wake → DUT
-        # silent" assertion in L10.
-        if not op.get("pre_wake_allowed"):
+        # silent" assertion in L10 -- BUT ONLY when a wake protocol exists
+        # (opcode synthesis enabled). See `_no_wake_protocol` above.
+        if not op.get("pre_wake_allowed") and not _no_wake_protocol:
             cases.append({
                 "name": f"send_{op.get('name','OP').lower()}_no_wake",
                 "kind": "pre_wake_false",
@@ -50251,6 +50952,36 @@ def emit_coverage_report(project: Path,
                          "zero_unexamined": []}
     if _layer_demand.get("silent_empty") and _status == "PASS":
         _status = "FAIL_LAYER_DEMANDED_BUT_EMPTY"
+    # A probe that returned zero WITHOUT examining anything is not a finding
+    # about the design, but it is not a PASS about the design either — nothing
+    # was examined, so there is nothing to pass. `PASS` here is the same
+    # substitution this whole change is against, one level up: the artifact
+    # already carried `layers_zero_unexamined` while the WORD a consumer reads
+    # said the run was clean, and a list nobody is obliged to open cannot
+    # correct a verdict everybody reads.
+    #
+    # INCOMPLETE, not FAIL, and gated on `_status == "PASS"` exactly like the
+    # line above: a reading that did not happen accuses nobody, and a real FAIL
+    # outranks a disclosure. Named in this artifact's own dialect — its four
+    # existing words are `PASS` / `FAIL` / `FAIL_INPUT_NOT_FULLY_READ` /
+    # `FAIL_LAYER_DEMANDED_BUT_EMPTY`, so the bare `INCOMPLETE` that the P0
+    # umbrella uses would be the only unqualified word here.
+    #
+    # WHY A NEW WORD IS SAFE, MEASURED rather than assumed. Every reader of
+    # this field was enumerated: no allow-list, no enum and no JSON schema
+    # constrains it (the three status registries that exist —
+    # `_flow_verdict_tiers.PRODUCER_STATUSES`, `vibe_ic_log.VALID_STATUSES`,
+    # `analog_hil_report_schema_check._VALID_STATUS` — are each scoped to a
+    # different artifact). Exactly one consumer reads it as a verdict at all,
+    # `benchmark_evidence_publish._citations_under_a_pass`, and it fails OPEN:
+    # a word it does not recognise makes it assert LESS, never more, so it
+    # cannot turn a run red. Every other reader either reads `overall.pct` /
+    # `overall.total` only, or looks for a TOP-LEVEL `status` / `verdict` this
+    # artifact does not have. Across 114 published copies under
+    # `benchmark-data/` the field reads `PASS` x108 and `FAIL` x1, so no
+    # published verdict moves.
+    if _layer_demand.get("zero_unexamined") and _status == "PASS":
+        _status = "INCOMPLETE_ZERO_UNEXAMINED"
 
     report = {
         "layer_demand": _layer_demand,
@@ -50273,7 +51004,10 @@ def emit_coverage_report(project: Path,
             # A probe that returned zero WITHOUT examining anything. Carried
             # beside the list above so an empty `layers_demanded_but_empty`
             # cannot be read as "measured, and nothing found" when it is
-            # "nothing was read". Disclosure only — it does not FAIL the run.
+            # "nothing was read". It does not FAIL the run — but it is no
+            # longer disclosure ONLY: a non-empty list degrades `status` to
+            # `INCOMPLETE_ZERO_UNEXAMINED`, because a list carried beside a
+            # verdict that says PASS is a correction nobody is obliged to read.
             "layers_zero_unexamined": list(
                 _layer_demand.get("zero_unexamined") or []),
             "measures": ("coverage of literals found in documents that "
@@ -59426,6 +60160,16 @@ def main() -> int:
     _v1_6_394_post_emit_finalize_sim_only(
         _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json")
 
+    # LAST in the L9 post-emit chain, so it sees every producer's output:
+    # drop any submodule entry that cites a document not containing its own
+    # name. See `_post_emit_l9_drop_uninstantiated_submodule_names`.
+    _n_uncited = _post_emit_l9_drop_uninstantiated_submodule_names(
+        project, extracted)
+    if _n_uncited:
+        print(f"      l9_submodule_name_provenance: dropped {_n_uncited} "
+              f"entry(ies) whose name is absent from the document they cite "
+              f"(recorded in L9.submodules_dropped_uncited)")
+
     # v1.6.107 (#38) — _collect_fsm_states_from_rtl removed: phase1
     # must not read the IP's own RTL (RTL-as-oracle rule). Legitimate
     # OTP-internal FSM states (when described in a datasheet) flow
@@ -62800,6 +63544,56 @@ def main() -> int:
     except Exception as _sweep_err:
         print(f"      L10↔L3 sweep FAILED (fail-open): {_sweep_err}",
               file=sys.stderr)
+
+    # LAST word on who named this design's top module. Runs here, after the
+    # whole protocol-synth chain, for the same reason the L4 reconciler below
+    # runs here: the wrong value is not written by any one overlay. Detectors
+    # co-fire — a document that mentions start bits and stop bits trips the
+    # UART detector whatever else it is about — and among the packs that fire,
+    # the one that writes `L9.top_module` need not be the one whose `ic_name`
+    # ends up naming the design. Measured in this repo's own committed
+    # artefacts: `ble` and `io_link` top out as `PC16550D`, `ddr4` as
+    # `DDR3_SDRAM_component`, `ddr5` and `gddr6` as `HBM3_stack_on_interposer`,
+    # `qspi_ospi` as `SPI`, `sas` as `AHCI_HBA`.
+    #
+    # `phase2_scaffold_gen.derive_top_module_name` ranks L9.top_module above
+    # L1.ic_name and sanitizes the winner into the Verilog top-module
+    # identifier, so this is not a labelling question — it decides what the
+    # RTL, the QSF and the full-stack TB all bind to.
+    #
+    # `_pack_top_module.apply` (called by each pack in place of its bare
+    # assignment) leaves the record this reads; `reconcile` compares the
+    # ic_name recorded WITH the claim against the ic_name left standing and
+    # puts the displaced value back when they disagree. It never removes or
+    # empties `top_module` — `l_doc_structured_field_count_check` counts a
+    # non-empty one toward L9's >=3 typed structural fields.
+    # Fail-open: a broken reconcile must not lose an otherwise complete run.
+    try:
+        import _pack_top_module as _ptm_rec
+        _gd_ptm = _pl.generated_docs_dir(project)
+        _l9p_ptm = _gd_ptm / "L9_INTEGRATION_SPEC.json"
+        if _l9p_ptm.is_file():
+            _l9_ptm = json.loads(_l9p_ptm.read_text())
+            _settled_ic = None
+            _l1p_ptm = _gd_ptm / "L1_DATASHEET.json"
+            if _l1p_ptm.is_file():
+                try:
+                    _l1_ptm = json.loads(_l1p_ptm.read_text())
+                    if isinstance(_l1_ptm, dict):
+                        _settled_ic = _l1_ptm.get("ic_name")
+                except (OSError, ValueError):
+                    _settled_ic = None
+            _ptm_change = _ptm_rec.reconcile(_l9_ptm, _settled_ic)
+            if _ptm_change:
+                _stamp.dump(_l9p_ptm, _l9_ptm)
+                print(f"      → L9 top_module {_ptm_change['action']}: "
+                      f"{_ptm_change.get('was')!r} → "
+                      f"{_ptm_change.get('top_module')!r} "
+                      f"(pack ic_name {_ptm_change.get('pack_ic_name')!r} "
+                      f"≠ settled {_ptm_change.get('settled_ic_name')!r})")
+    except Exception as _ptm_err:
+        print(f"      L9 top_module reconcile FAILED (fail-open): "
+              f"{_ptm_err}", file=sys.stderr)
 
     # #516 — LAST word on L4's register-map claims. Runs here, after every
     # L-doc generator, post-emit walker and protocol-synth overlay has had its
