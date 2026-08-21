@@ -585,6 +585,14 @@ _PIN_SPELLINGS = [
     ('self.assertIn("of 3 repairs refused", script())', True),
     ('self.assertTrue("of 3 repairs refused" in script())', True),
     ('self.assertEqual(script(), "of 3 repairs refused")', True),
+    # A comparison only denies a literal it is a SIDE of. These AFFIRM the
+    # phrase; reading their `!=` as a denial drops a real pin, and a dropped
+    # pin is the silent direction -- CHECK B compares one fewer thing and
+    # still prints PASS.
+    ('assert script().count("of 3 repairs refused") != 0', True),
+    ('assert script().count("of 3 repairs refused") > 0', True),
+    # and a denial of something ELSE in the same statement must not reach it
+    ('assert "of 3 repairs refused" in script() and "zz" not in script()', True),
 ]
 
 

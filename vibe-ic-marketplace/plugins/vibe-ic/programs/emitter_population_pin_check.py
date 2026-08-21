@@ -363,6 +363,16 @@ def denies_containment(node: ast.AST, parent: Dict[int, ast.AST]) -> Optional[st
     `assertTrue` and `assertEqual` are deliberately absent: they AFFIRM, and
     treating them as denials would drop real pins.
 
+    AND A COMPARISON ONLY DENIES A LITERAL IT IS A SIDE OF. `script().count(
+    "of 3 x") != 0` affirms the phrase, and reading that `!=` as a denial drops
+    a real pin -- SILENTLY, because CHECK B then compares one fewer thing and
+    still prints PASS. So the Compare forms require the literal to be a DIRECT
+    operand. The cost is the other direction and it is the loud one: a denial
+    written around a computed operand (`"of ".strip() not in x`) is missed, and
+    a missed denial produces a REFUSAL a reader can answer. Same rule as
+    `_RECORD_BREAKS`: when the two errors are not symmetric, take the one that
+    announces itself.
+
     MEASURED over six realistic assertion spellings, the prose vocabulary got
     THREE of them wrong, in both directions:
 
@@ -390,7 +400,16 @@ def denies_containment(node: ast.AST, parent: Dict[int, ast.AST]) -> Optional[st
             return None
         if isinstance(up, ast.UnaryOp) and isinstance(up.op, ast.Not):
             return "not"
-        if isinstance(up, ast.Compare):
+        if isinstance(up, ast.Compare) and cur is node \
+                and (cur is up.left or cur in up.comparators):
+            # THE LITERAL ITSELF MUST BE A SIDE OF THE COMPARISON -- `cur is
+            # node` says we have not climbed through anything yet.
+            # `script().count("...") != 0` AFFIRMS the phrase, and reading its
+            # `!=` as a denial drops a real pin -- silently, since CHECK B then
+            # compares one fewer thing and still prints PASS. There the
+            # comparison is about the COUNT and the literal is an argument to
+            # it; testing "is the operand the literal" is not enough, because
+            # the operand IS the call.
             if any(isinstance(o, ast.NotIn) for o in up.ops):
                 return "not in"
             if any(isinstance(o, ast.NotEq) for o in up.ops):
