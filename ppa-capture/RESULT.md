@@ -362,6 +362,26 @@ The stub published, verbatim into every manifest of a 60-arm sweep:
 The module had landed three commits before the program that published the
 sentence. Now guarded for that one string; the class — a provenance note
 asserting a named artefact is absent — is not.
+**Corpus-swept on this tree, and the sweep is where the rule's two
+qualifications came from.**
+
+    verb and path anywhere in one literal (119,359 literals)   560   all noise
+    + proximity, wide window                                    85
+    + proximity, medium window                                  14
+    + proximity, tight window                                    6
+    - four attach the verb to a different noun                   2
+    - two are messages on a not-found branch                     0   real
+
+Both narrowings are now the substance of the rule. **The verb must attach to
+that path** — sharing a docstring with it is not attachment, which is the entire
+560. And **the claim must be unconditional**: a message emitted only on the
+branch where the artefact was found missing is correct by construction, and the
+two survivors are exactly that.
+
+**This rule runs CLEAN on the tree today — the only one of the fourteen that
+does.** Its motivating instance was fixed at its one site. It is worth having
+anyway: that site was guarded by hand for one string, and nothing stops the next
+stub from carrying the next one.
 **(o)** yes: the claim reduces to a path, the path resolves, the check is a file
 test. **(d)** yes — it is applied at the publish boundary, so a reason string
 copied into a new publisher inherits it.
@@ -693,9 +713,17 @@ augments to be reported rather than applied by N agents in parallel:
 
 The skill's rule is that a new Bucket-A guard must run CLEAN before it ships,
 because *"a guard that flags the very state you just shipped is not a guard, it's
-a bug."* That rule is about **false** positives. **At least 11 of these 13 fire on
-this tree today, and every one of them is a TRUE positive** — each names a
-measured defect quoted in its record.
+a bug."* That rule is about **false** positives. **12 of these 14 fire on this
+tree today, and every one of them is a TRUE positive** — each names a measured
+defect quoted in its record. **A-7 is the one that runs clean**, and it says so.
+
+Two rules were narrowed BY the sweep rather than merely checked against it, and
+in both cases the version I first wrote would have been rejected on contact:
+**A-8** went 24 → 8 flagged of 54 axes once a varying sibling was required, and
+**A-7** went 560 → 0 once the absence verb had to attach to the path and the
+claim had to be unconditional. Neither narrowing was visible from the defect that
+motivated the rule; both came from running it on data it was not written
+against.
 
 The failure mode to avoid is therefore the opposite of the usual one: an
 implementer who reads "must run clean" and narrows a correct guard until the tree
