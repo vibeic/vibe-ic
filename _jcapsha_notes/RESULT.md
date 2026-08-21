@@ -458,10 +458,13 @@ their own populations, and every one of them was refuted by the same cheap move:
 | F3b: the unhonoured-knob rule has no population | it has four instances, in four subsystems |
 | F2: the arithmetic pin generalises | the shape it keys on occurs at **224 sites** |
 | F4: (implied) a general vocabulary rule | population is **1** — a single instance, not a class |
+| F1 formulation 3 is silent on the rest "by construction" | over-fires on real PDKs — that was an argument, not a measurement |
 
-None of the five was visible from the one case that motivated it. All five took
-a single sweep to expose — and F2 is the sharpest of them, because I wrote the
-lesson into this document and then did not apply it to F2 for two more rounds. That is the durable lesson of this capture, and
+None of the six was visible from the one case that motivated it. All six took
+a single sweep to expose. Two are sharpest: **F2**, because I wrote the lesson
+into this document and then did not apply it to F2 for two more rounds; and
+**formulation 3's "by construction"**, because a by-construction argument is
+the exact shape of a claim that feels too obvious to measure. That is the durable lesson of this capture, and
 it is worth more than any of the five rules in it:
 
 > **A rule is not a rule until it has been run over its own population.**
@@ -527,6 +530,52 @@ Swept for validators carrying a `PREFIX:IDENTIFIER` alternation: **exactly one
 in 1232 programs.** F4 is a real defect with a real measurement, but it is a
 single instance, not a class with a corpus. Recorded as such rather than left to
 read as a general rule by sitting in a list of them.
+
+---
+
+## CORRECTION — "silent by construction" was an argument, and it was wrong
+
+Having adopted formulation 3, I wrote that it is silent on the other eight
+in-scope programs *by construction*, because the refused name would not be in
+the views they skipped. That is an argument. The measurement disagrees.
+
+Formulation 3 as I implemented it greps the unread views for the refused name.
+Run on **both real open PDKs**, with a step that read the reference view and
+refused:
+
+```
+                                         gf180mcuD                    sky130A
+real site declared in the tech view      FIRES (correct)              FIRES (correct)
+name that exists nowhere                 silent (correct)             silent (correct)
+SHORT generic name  'io'                 FIRES on a node-info file    FIRES on a node-info file
+plausible-but-absent 'core'              FIRES on a device-model file FIRES on a simulator init
+```
+
+Two false positives on each PDK. A bare substring search finds a short name
+everywhere, and nothing about "construction" prevents that.
+
+### The amendment, and where it comes from
+
+> **The falsification must ask through the DECLARATION GRAMMAR for that class
+> of thing, never through a free-text search.**
+
+The step already owns a parser for that grammar — it is how the fixed producer
+reads the declaration in the first place — so the check reuses the step's own
+parser instead of inventing a search. Asking the same question that way, on the
+same two PDKs, all four probes:
+
+```
+declared-in-unread-view names   gf180mcuD: [GF_COR_Site, GF_IO_Site]
+                                sky130A:   [sky130_io, sky130_io_corner]
+
+real site declared in tech view  FIRES, with its size      FIRES, with its size
+exists nowhere                   silent                    silent
+SHORT generic name  'io'         silent                    silent
+plausible-but-absent 'core'      silent                    silent
+```
+
+Clean on both, on every probe. The rule survives; the implementation of it that
+I published did not.
 
 ---
 

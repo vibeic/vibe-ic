@@ -20,6 +20,9 @@ without a claim.
 | `f1_formulation2_sweep_MEASURED.txt` | formulation 2's false-positive sweep: population 14. |
 | `f1_formulation2_inscope_MEASURED.txt` | of those, 10 refuse after a lookup into a distribution view and **8 of the 10 read exactly one view** — the measurement that dropped it. |
 | `f1_final_probe.py` | formulation 3, both arms **with the negative control**: name findable in an unread view → fires and names the file; name declared nowhere → silent, and a genuine absence stays a genuine absence. |
+| `f1_substring_fp_probe.py` | the false-positive test of formulation 3's SUBSTRING form on the real PDKs — the one I should have run before adopting it. |
+| `f1_declaration_grammar_probe.py` | the same question asked through the step's own declaration parser. |
+| `f1_formulation3_fp_MEASURED.txt` | both results side by side: substring fires on 2 unrelated files per PDK; declaration grammar is clean on all four probes on both. |
 | `f1_three_formulations.txt` | all three in order, and the lesson: a rule is not a rule until it has been run over its own population. |
 
 ## F2 — the extent came from the oriented footprint

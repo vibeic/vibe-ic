@@ -6,10 +6,10 @@
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.
 
-def rule_refusal_on_absence_falsified_against_unread_views(sample_text, ports):
-    """A refusal that a declared name is ABSENT must be falsified against the views the step did not read. It fires only when the refused NAME is findable in a view that was not opened -- a grep over directories that exist, for a string the step itself chose. It cannot fire on a step that read one view and was right, because the name is not there, and it refuses the REFUSAL rather than the design."""
+def rule_refusal_on_absence_falsified_by_the_declaration_grammar(sample_text, ports):
+    """A refusal that a declared name is ABSENT must be falsified against the views the step did not read -- and the falsification must ask through the DECLARATION GRAMMAR for that class of thing, never through a free-text search. It fires only when the refused name is actually DECLARED in a view the step did not open. The step already owns a parser for that grammar, so the check reuses it rather than inventing a search."""
     # Expected signal: ERROR
-    # Suggested fix action: On any verdict asserting a declared name is absent, take the name from the step's own artefact, enumerate the view directories of the resolved distribution tree, subtract the ones the artefact says were read, and search the remainder for that name. A hit means the refusal is false and the step must look there before it may refuse. No hit means the refusal stands, and the check is silent.
+    # Suggested fix action: On any verdict asserting a declared name is absent, take the name from the step's own artefact, enumerate the view directories of the resolved tree, subtract the ones the artefact says were read, and run the step's OWN declaration parser over the remainder. A declared hit means the refusal is false and names the file. No hit means the refusal stands and the check is silent.
     return []  # list of findings — TODO implement
 
 # Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
