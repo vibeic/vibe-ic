@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -176,16 +177,92 @@ def test_the_pre_existing_dirty_rule_is_unchanged(tmp_path):
 
 
 # ── the wiring, which is where the value actually is ─────────────────────────
+#
+# THE TEXT SEARCHED IS THE EXECUTABLE TEXT, NOT THE FILE (vibe-ic#1087 follow-up).
+#
+# These tests locate invocations by `str.index`, which returns the FIRST match
+# anywhere in the file — including inside a comment. `gatekeeper-land.sh` names
+# both tokens in its own prose before it runs either of them:
+#
+#     212  # it. `landing_worktree_is_clean_check --expect-fingerprint` at the …
+#     220  # `plugin_full_audit.py` run INSIDE this window but OUTSIDE the …
+#     320  run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py"
+#     336          --expect-fingerprint "$FP"
+#
+# so `index("--expect-fingerprint")` returned 212 (a comment) while
+# `rindex("plugin_full_audit.py")` returned 320 (the call), and the ordering
+# assertion compared prose against an invocation and failed. The SCRIPT was
+# correct throughout — 184 < 320 < 336 < stamp — and it is this test that was
+# reading the wrong thing.
+#
+# That is vibe-ic#1012's lesson one level up: "a substring test counted a
+# program named in a COMMENT as wired". The remedy already ships in this repo,
+# so it is IMPORTED rather than re-implemented — a second copy of "what counts
+# as executable" is a second thing to drift.
+if str(_PROGRAMS) not in sys.path:
+    sys.path.insert(0, str(_PROGRAMS))
+from gate_is_wired_check import executable_text  # noqa: E402
+
+
 @pytest.fixture(scope="module")
 def land_sh():
+    """`gatekeeper-land.sh` with its comments removed.
+
+    Comment REMOVAL, not line removal: `executable_text` truncates each line at
+    its `#` and keeps the line, so every surviving token stays in its original
+    relative order and the position comparisons below remain meaningful.
+    """
     if not _LAND_SH.is_file():
         pytest.skip(f"{_LAND_SH} absent")
-    return _LAND_SH.read_text(encoding="utf-8")
+    return executable_text(_LAND_SH, _LAND_SH.read_text(encoding="utf-8"))
+
+
+def test_the_fixture_hides_a_token_that_appears_only_in_prose():
+    """The premise, asserted rather than assumed.
+
+    If `executable_text` ever stopped stripping shell comments this fixture
+    would silently revert to searching prose, and every ordering test above
+    would go back to being satisfied by a mention. Pinned on a synthetic input
+    so it cannot drift with the real script's wording.
+    """
+    sample = "# a comment naming --expect-fingerprint\nrun --emit-fingerprint\n"
+    stripped = executable_text(pathlib.Path("x.sh"), sample)
+    assert "--expect-fingerprint" not in stripped, stripped
+    assert "--emit-fingerprint" in stripped, stripped
 
 
 def test_the_landing_gate_takes_a_fingerprint_and_compares_it(land_sh):
     assert "--emit-fingerprint" in land_sh
     assert "--expect-fingerprint" in land_sh
+
+
+#: WHERE the stamp is written, located by what the line DOES rather than by how
+#: it is spelled.
+#:
+#: This assertion used to carry the literal `git rev-parse HEAD >
+#: "$ROOT/.git/gatekeeper-stamp"` and went red — with `ValueError: substring
+#: not found`, which says nothing about the invariant — the moment the script
+#: stopped using that spelling. It had to: in a `git worktree` `.git` is a FILE
+#: (a `gitdir:` pointer), so the redirect died with "Not a directory", no stamp
+#: was ever written, and the hook then refused the push for want of one. The
+#: script now resolves `$(git rev-parse --absolute-git-dir)`, which is the
+#: PER-WORKTREE git dir.
+#:
+#: So the pattern pins the two things that are actually load-bearing — the
+#: value written is the commit, and the file it lands in is the stamp — and is
+#: indifferent to the expression in between, which is the part that legitimately
+#: changed and may change again.
+_STAMP_WRITE_RE = re.compile(
+    r'git\s+rev-parse\s+HEAD\s*>\s*"?(?P<path>[^"\n]*?gatekeeper-stamp)"?')
+_STAMP_REMOVE_RE = re.compile(r'rm\s+-f\s+"?(?P<path>[^"\n]*?gatekeeper-stamp)"?')
+
+
+def _stamp_write(text: str):
+    m = _STAMP_WRITE_RE.search(text)
+    assert m, ("nothing in the landing script writes `git rev-parse HEAD` into "
+               "a gatekeeper-stamp file — the expensive tier is then enforced "
+               "by nothing, because the pre-push hook has no stamp to compare")
+    return m
 
 
 def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
@@ -194,7 +271,7 @@ def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
     emit = land_sh.index("--emit-fingerprint")
     expect = land_sh.index("--expect-fingerprint")
     last_suite = land_sh.rindex("plugin_full_audit.py")
-    stamp = land_sh.index('git rev-parse HEAD > "$ROOT/.git/gatekeeper-stamp"')
+    stamp = _stamp_write(land_sh).start()
     assert emit < last_suite, "the fingerprint is taken after the suites ran"
     assert last_suite < expect, (
         "the comparison runs before the last suite, so an edit made during it "
@@ -202,6 +279,72 @@ def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
     assert expect < stamp, (
         "the comparison runs after the stamp is written, so it cannot withhold "
         "it")
+
+
+def test_the_stamp_records_the_commit_and_is_dropped_when_a_gate_failed(land_sh):
+    """A stamp that survives a failure is a permanent authorisation to push."""
+    stamp = _stamp_write(land_sh)
+    removals = list(_STAMP_REMOVE_RE.finditer(land_sh))
+    assert removals, "a failing run leaves the previous stamp in place"
+    assert any(m.start() > stamp.start() for m in removals), (
+        "the removal is written before the success branch — read the order")
+
+
+def test_the_writer_and_the_hook_name_the_STAMP_THE_SAME_WAY(land_sh):
+    """The invariant the literal was standing in for.
+
+    The stamp is only enforcement if the tool that WRITES it and the hook that
+    READS it resolve the same path. They drifted once already — the script used
+    `$ROOT/.git` while the hook used the same expression — and the symptom was
+    a push refused for want of a stamp that had been written somewhere else.
+    Two spellings of one path is the two-hand-maintained-lists shape this repo
+    keeps removing; so the two are compared, not each pinned to a constant.
+    """
+    hook = _PROGRAMS.parents[3] / "tools" / "git-hooks" / "pre-push"
+    if not hook.is_file():
+        pytest.skip(f"{hook} absent")
+    hook_text = hook.read_text(encoding="utf-8")
+    reader = re.search(r'STAMP="(?P<path>[^"\n]*gatekeeper-stamp)"', hook_text)
+    assert reader, "the pre-push hook no longer resolves a stamp path"
+    assert _stamp_write(land_sh).group("path") == reader.group("path"), (
+        "the landing script writes the stamp somewhere the hook does not look")
+
+
+def test_the_stamp_path_expression_RESOLVES_and_is_per_worktree(land_sh, tmp_path):
+    """RUN the expression, do not read it.
+
+    Both halves failed in the field and neither is visible in the text:
+
+      * `$ROOT/.git/gatekeeper-stamp` is not a writable path in a worktree at
+        all, because `.git` is a file there — the redirect fails and no stamp
+        exists;
+      * a stamp shared between two worktrees would let gates run in one
+        authorise a push from the other, which sits at a different commit.
+    """
+    expr = _stamp_write(land_sh).group("path")
+    (tmp_path / "main").mkdir()
+    r = _repo(tmp_path / "main")
+    wt = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(r), "worktree", "add", "-q", "--detach",
+                    str(wt), "HEAD"], check=True, capture_output=True,
+                   timeout=60)
+
+    def _resolve(where):
+        out = subprocess.run(["bash", "-c", f'ROOT="{where}"; printf "%s" "{expr}"'],
+                             cwd=str(where), capture_output=True, text=True,
+                             timeout=60)
+        assert out.returncode == 0, out.stderr
+        return out.stdout.strip()
+
+    a, b = _resolve(r), _resolve(wt)
+    for got in (a, b):
+        assert got.endswith("gatekeeper-stamp"), got
+        assert pathlib.Path(got).parent.is_dir(), (
+            f"{got} cannot be written — its parent is not a directory. This is "
+            f"the worktree failure verbatim: `.git` is a FILE there.")
+    assert a != b, (
+        "both worktrees resolve to the SAME stamp file, so gates run in one "
+        "would authorise a push from the other")
 
 
 def test_the_fingerprint_path_is_per_run(land_sh):

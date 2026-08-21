@@ -211,6 +211,162 @@ def test_the_default_run_never_touches_the_shipped_programs_tree(tmp_path):
         "proves only that it did nothing:\n" + r.stdout + r.stderr)
 
 
+# --- 2026-08-04: the CLI was safe and the API was not ------------------------
+
+def test_the_probe_FUNCTION_never_touches_the_shipped_tree_either():
+    """`main()` copied the tree; `probe()` did not — and `probe()` is what the
+    parametrised test above calls.
+
+    That is how `hold_area_budget_check.py` and `hold_corner_coverage_check.py`
+    came to be sitting in a shared checkout with an injected early return: this
+    very file drove the API on them and the run was killed. Asserted through
+    the API, on the real tree, because the CLI-shaped test above passed
+    throughout the window in which the damage was being done.
+    """
+    import hashlib
+    import threading
+    import time
+
+    target = PROGRAMS_DIR / "hold_area_budget_check.py"
+    expected = hashlib.sha256(target.read_bytes()).hexdigest()
+    seen, result = [], {}
+
+    # SAMPLED WHILE IT RUNS, not compared before and after. The pre-fix code
+    # restored in a `finally`, so a before/after comparison passes over it —
+    # that is exactly why the CLI-shaped test above stayed green through the
+    # whole period in which the API was mutating the shipped tree. The window
+    # is what matters: while it is open, every concurrent reader of this gate
+    # gets an exit code it did not earn.
+    t = threading.Thread(
+        target=lambda: result.update(PROBE.probe("hold_area_budget_check")),
+        daemon=True)
+    t.start()
+    while t.is_alive():
+        try:
+            seen.append(hashlib.sha256(target.read_bytes()).hexdigest())
+        except OSError:
+            seen.append("MISSING")
+        time.sleep(0.01)
+    t.join(timeout=_PROBE_TIMEOUT_S)
+
+    assert set(seen) <= {expected}, (
+        "the shipped gate changed on disk while PROBE.probe() ran; for that "
+        "window any concurrent reader of it got an unearned exit code, and a "
+        "kill inside it leaves the tree that way permanently")
+    assert len(seen) > 1, (
+        "the probe finished before a single sample was taken, so nothing was "
+        "observed")
+    assert result.get("state") in ("CAUGHT", "SILENT"), (
+        "no verdict was reached, so the sampling above proves only that "
+        "nothing happened: %s" % result)
+
+
+def test_a_SIGKILL_mid_probe_leaves_the_repository_byte_identical(tmp_path):
+    """The only test that can distinguish this fix from the `finally` it
+    replaces.
+
+    The `finally` in `probe()` was correct before this change and is correct
+    after it. It was never the problem — it does not run on `SIGKILL`, which is
+    how a long agent session ends a subprocess. So the process is killed HERE,
+    inside the window in which the mutation is on disk, and the assertion is
+    that the repository never held it.
+    """
+    import hashlib
+    import os
+    import signal
+    import subprocess as sp
+    import time
+
+    target = PROGRAMS_DIR / "hold_area_budget_check.py"
+    before = hashlib.sha256(target.read_bytes()).hexdigest()
+    # ONLY A DIRECTORY THIS RUN CREATED counts. A previous run of THIS test
+    # kills its child and therefore leaves one behind, and matching that stale
+    # one made the test pass in 0.7s without the child ever reaching its
+    # mutation window — measured, while mutation-proving this very assertion.
+    # Look where the probe ACTUALLY writes, not where /tmp happens to be. The
+    # probe reserves its scratch through _crash_safe_scratch, whose root is
+    # `tempfile.gettempdir()` — i.e. it honours TMPDIR. This test hardcoded
+    # "/tmp", so under any harness that sets TMPDIR (pytest's own --basetemp
+    # wrapper, tox, CI, and every run in this repo's pinned invocation) the
+    # scratch was created somewhere this loop never looked. The failure that
+    # produced was not "not found": it was the assertion below announcing that
+    # the mutation is being applied to the REPOSITORY — the single most alarming
+    # message this file can emit, fired by an environment variable. Measured,
+    # single variable, same commit and same worktree:
+    #     TMPDIR set    -> 1 failed
+    #     TMPDIR unset  -> 1 passed
+    # Importing the probe's own root keeps the two from drifting apart again.
+    import _crash_safe_scratch as _scratch_root
+    tmp_root = _scratch_root._tmp_root()
+    prior = set(tmp_root.glob("gate_cli_probe_*"))
+    child = sp.Popen(
+        [sys.executable, "-c",
+         "import sys;sys.path.insert(0, %r)\n"
+         "import gate_cli_mutation_probe as P\n"
+         "P.probe('hold_area_budget_check')\n" % str(PROGRAMS_DIR)],
+        start_new_session=True, stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+    try:
+        # Wait for the mutation to be ON DISK somewhere. Killing before the
+        # write would make this test pass without ever entering the window.
+        scratch = None
+        deadline = time.time() + _PROBE_TIMEOUT_S
+        while time.time() < deadline and child.poll() is None:
+            for d in set(tmp_root.glob("gate_cli_probe_*")) - prior:
+                if (d / "programs" / ("hold_area_budget_check.py"
+                                      + PROBE._BACKUP_SUFFIX)).exists():
+                    scratch = d
+                    break
+            if scratch:
+                break
+            time.sleep(0.02)
+        assert scratch is not None, (
+            "the probe never entered its mutation window in a NEW scratch "
+            "directory, so the kill below would prove nothing — which is what "
+            "happens when the mutation is being applied to the repository "
+            "instead")
+        os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+    finally:
+        # KILL FIRST, then wait. A bare `wait` here leaves the child running
+        # when the assertion above fails — and if the probe is mutating the
+        # SHIPPED tree at that moment (which is precisely the state that makes
+        # the assertion fail), the orphan goes on doing it into the next test.
+        # Measured while mutation-proving this file: it turned the restored run
+        # red for a reason that belonged to the harness.
+        try:
+            os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        child.wait(timeout=_PROBE_TIMEOUT_S)
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == before, (
+        "a SIGKILL mid-probe changed a shipped gate — the exact state found "
+        "by hand twice on 2026-08-04")
+    assert not list(PROGRAMS_DIR.glob("*" + PROBE._BACKUP_SUFFIX)), (
+        "a killed probe left a sidecar in the repository")
+    # The killed child could not clean up after itself; the reaper does. Run it
+    # here so this test does not leave the litter it is written about.
+    import _crash_safe_scratch as _S
+    _S.reap(PROBE._SCRATCH_PREFIX)
+    assert not scratch.exists(), (
+        "the killed run's scratch survived the reaper: %s" % scratch)
+
+
+def test_there_is_no_flag_that_mutates_the_shipped_tree():
+    """`--in-place` was the escape hatch, and it is the one that got used.
+
+    Driven through argparse rather than read out of the source: a flag can be
+    removed from the help text and still be accepted.
+    """
+    import subprocess as sp
+    r = sp.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
+                "--in-place", "spec_declaration_emit"],
+               cwd=str(PLUGIN_ROOT), capture_output=True, text=True,
+               timeout=_PROBE_TIMEOUT_S)
+    assert r.returncode == 2 and "unrecognized arguments" in r.stderr, (
+        "the probe still accepts a flag that mutates the shipped tree; there "
+        "is no crash-safe version of that, which is why it was removed:\n"
+        + r.stdout + r.stderr)
+
+
 def test_the_probe_can_still_report_SILENT(tmp_path):
     """CONTROL. Without this, CAUGHT on every real gate is indistinguishable
     from a probe that always says CAUGHT. Same gate, a copy whose test file

@@ -43,6 +43,8 @@ PROGRAMS = PLUGIN_ROOT / "programs"
 FLOW_YAML = PLUGIN_ROOT / "flow" / "phase1_phase2_phase3.yaml"
 
 sys.path.insert(0, str(PROGRAMS))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _p0_umbrella_probe_flow as _probe  # noqa: E402
 import benchmark_verify_report as _bvr  # noqa: E402
 import flow_compliance_check as _flow  # noqa: E402
 
@@ -125,7 +127,7 @@ def test_missing_backing_program_is_disclosed_not_silently_dropped(
 # all-clean one
 # ---------------------------------------------------------------------------
 def _run_main(tmp_path, monkeypatch, records, extra_args=(),
-              dispatched=True):
+              dispatched=True, seed_dependency_chain=True):
     """Drive main() with the gate runner replaced by a fixed set of RECORDS.
 
     #497 step 3 — `reasons` is rendered FROM the records, so a stub that states
@@ -136,6 +138,15 @@ def _run_main(tmp_path, monkeypatch, records, extra_args=(),
 
     `dispatched=False` is the no-RTL case: the umbrella considered no gate at
     all and returns `None` as its tri-state.
+
+    THE FLOW IS THE FIXTURE'S, and its P0 is the shipped P0 verbatim — see
+    `_p0_umbrella_probe_flow`. On the shipped 63-step flow a `tmp_path` project
+    leaves P0's declared ancestry (`1` -> `D1`) MISSING, and the ordering rule
+    rewrites the umbrella's own word before it can be read. Here that ancestry
+    is present and SATISFIED, so the rule runs at full strength, finds nothing,
+    and what the report states about P0 is what the umbrella stated.
+    `seed_dependency_chain=False` withholds the seed — the negative control
+    that proves this fixture is what clears the void.
     """
     proj = _project_with_rtl(tmp_path)
     fails, skips, waivers = _flow._p0_buckets_from_records(records)
@@ -150,8 +161,13 @@ def _run_main(tmp_path, monkeypatch, records, extra_args=(),
         return (executed, fails, skips, waivers)
 
     monkeypatch.setattr(_flow, "_run_structural_rtl_gates", _stub)
+    flow_def = tmp_path / "p0_probe_flow.yaml"
+    _probe.write_flow(flow_def)
+    if seed_dependency_chain:
+        _probe.write_seed(proj)
     out = tmp_path / "report.json"
-    rc = _flow.main([str(proj), "--json", str(out), *extra_args])
+    rc = _flow.main([str(proj), "--json", str(out),
+                     "--flow-def", str(flow_def), *extra_args])
     return rc, json.loads(out.read_text())
 
 
@@ -159,20 +175,96 @@ def _fail(name, msg):
     return _flow._p0_gate_record(name, "FAIL", msg, {"exit_code": 1})
 
 
+def _pass(name):
+    """A gate that RAN and came back clean.
+
+    A "clean sweep" fixture has to publish these. Building it from an empty
+    records list instead makes `executed` true by `len([]) == 0` — a clean
+    sweep of NOTHING — and the assertions below then pin the umbrella's word
+    for a population of zero, which is the case this file's own subject says
+    must never be a PASS."""
+    return _flow._p0_gate_record(name, "PASS", "", {"exit_code": 0})
+
+
 def _p0(report):
     hits = [s for s in report["steps"] if s["id"] == "P0"]
     return hits[0] if hits else None
 
 
+# --- the fixture itself, in both directions --------------------------------
+# Everything below reads P0's own verdict out of a run whose dependency chain
+# the fixture satisfies. If that satisfaction ever stops being real, every one
+# of those assertions changes meaning without changing text, so it is asserted
+# here rather than assumed — and asserted with the control that proves the
+# fixture is what does it.
+def test_the_probe_flow_really_satisfies_p0s_dependency_chain(
+        tmp_path, monkeypatch, capsys):
+    """PREMISE. P0 declares ancestors, they are carried, and they all PASS."""
+    assert _probe.stand_in_ids(), (
+        "the shipped P0 declares no blocks_on ancestry, so this fixture guards "
+        "nothing and every 'must still say PASS' assertion below is untested")
+    rc, report = _run_main(tmp_path, monkeypatch, [_pass("gate_ok")],
+                           ("--lenient",))
+    capsys.readouterr()
+    by_id = {str(s["id"]): s for s in report["steps"]}
+    for sid in _probe.stand_in_ids():
+        assert str(sid) in by_id, f"stand-in {sid} is not in the report"
+        assert by_id[str(sid)]["status"] == "PASS", (
+            f"stand-in {sid} is {by_id[str(sid)]['status']!r}, so P0's "
+            f"dependency is excused or absent rather than SATISFIED")
+    assert report["ordering_violations"] == [], report["ordering_violations"]
+    assert not [r for r in by_id["P0"]["reasons"] if "PASS voided" in r]
+    assert rc == 0
+
+
+def test_NEGATIVE_CONTROL_withholding_the_seed_brings_the_void_back(
+        tmp_path, monkeypatch, capsys):
+    """...and the fixture is what clears it, not luck.
+
+    Same flow, same records, same everything — minus the one file the stand-in
+    gates look for. The ancestors go MISSING, the ordering rule fires, and the
+    umbrella's PASS is rewritten. This is the state origin/main measured for
+    every test in this file, and it must stay reachable: if it stops
+    reproducing, the fixture above has gone inert and is passing for a reason
+    it does not state.
+    """
+    rc, report = _run_main(tmp_path, monkeypatch, [_pass("gate_ok")],
+                           ("--lenient",), seed_dependency_chain=False)
+    capsys.readouterr()
+    p0 = _p0(report)
+    assert p0 is not None and p0["status"] == "PASS_VOIDED_BY_DEPENDENCY", (
+        f"the ordering rule no longer voids a P0 PASS over a MISSING "
+        f"dependency; status={p0 and p0['status']!r}")
+    assert any("PASS voided" in r for r in p0["reasons"]), p0["reasons"]
+    assert report["ordering_violations"], (
+        "no ordering violation over an unsatisfied chain")
+
+
 def test_all_gates_clean_still_emits_a_P0_step(tmp_path, monkeypatch, capsys):
-    """Clean sweep: P0 must appear as an explicit PASS, not disappear."""
-    rc, report = _run_main(tmp_path, monkeypatch, [], ("--lenient",))
+    """Clean sweep: P0 must appear as an explicit PASS, not disappear.
+
+    The sweep is stated with a gate that ANSWERED. It used to be stated with
+    an empty records list, which is not a clean sweep — it is a sweep of zero
+    gates whose `len(fails) == 0` is vacuously true — and this assertion was
+    therefore a second pin of the vacuous PASS, one level up from the truth
+    table. The claim under test is unchanged: an all-clean structural run
+    still renders P0 as an explicit PASS in the JSON and in the listing.
+    """
+    rc, report = _run_main(tmp_path, monkeypatch, [_pass("gate_ok")],
+                           ("--lenient",))
     p0 = _p0(report)
     assert p0 is not None, (
         "P0 missing from the JSON steps array on an all-clean structural run")
     assert p0["status"] == "PASS"
     assert p0["reasons"], "an all-clean P0 must still say what it verified"
-    assert report["counts"]["PASS"] >= 1
+    # P0 is IN the PASS numerator, not merely absent from the failures. Stated
+    # as the exact total (P0 + the fixture's stand-ins) rather than `>= 1`,
+    # which the stand-ins alone would satisfy: every tier that is not a full
+    # PASS — `PASS_VOIDED_BY_DEPENDENCY`, `VACUOUS_PASS`, `INCOMPLETE` — sits
+    # outside this count, so this is the assertion that catches P0 being
+    # demoted into one of them while still rendering as a green-looking row.
+    assert report["counts"]["PASS"] == len(_probe.stand_in_ids()) + 1, (
+        f"P0 is not counted as a PASS; counts={report['counts']}")
     assert "Step P0" in capsys.readouterr().out, (
         "P0 missing from the human-readable per-step listing")
 
@@ -240,7 +332,17 @@ def test_no_rtl_umbrella_still_reports_SKIPPED_CONDITION(
 
 
 def test_skips_and_waivers_are_still_listed_verbatim(tmp_path, monkeypatch):
-    """The SKIP and WAIVED-DEFERRED shapes, rendered from their records."""
+    """The SKIP and WAIVED-DEFERRED shapes, rendered from their records.
+
+    The waiver is asserted IN ITS OWN UNIT. `counts` is a tally of STEPS and
+    `gate_w` is a structural SUB-GATE inside the one step P0, so it contributes
+    0 there — #924/#930 removed the `counts["WAIVED"] += len(structural_waivers)`
+    addend precisely because a sub-gate that excused a step off a 63-step
+    denominator made the published ratio RISE with the number of things waived.
+    Both numbers are stated: 0 waived steps, and the sub-gate published verbatim
+    in the channel that carries it. Asserting only the first would be satisfied
+    by dropping the waiver on the floor.
+    """
     waiver = {"gate": "gate_w", "ticket": "T-1", "first_line": "why",
               "review_required": True}
     rc, report = _run_main(
@@ -256,7 +358,11 @@ def test_skips_and_waivers_are_still_listed_verbatim(tmp_path, monkeypatch):
         "WAIVED-DEFERRED: gate_w — thin-input (ticket=T-1, "
         "review_required=true): why",
     ]
-    assert report["counts"]["WAIVED"] == 1
+    assert report["counts"]["WAIVED"] == 0, (
+        "a structural SUB-GATE waiver was counted as a waived STEP; that is "
+        f"the #924 unit error. counts={report['counts']}")
+    assert [w["gate"] for w in report["thin_input_waivers"]] == ["gate_w"], (
+        "the sub-gate waiver left the step tally and landed nowhere")
 
 
 # ---------------------------------------------------------------------------

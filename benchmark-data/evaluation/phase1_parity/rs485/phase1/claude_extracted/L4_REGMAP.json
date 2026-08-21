@@ -1,5 +1,0 @@
-{
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
-  "register_map_present": false,
-  "notes": "RS-485 is a wire-level electrical standard and not a peripheral block guide. There is no architectural register map at the protocol layer — drivers and receivers are stateless analog transceivers. Concrete RS-485 transceiver chips (e.g. TI SN65HVDxx, SN65LBC184, MAX485) and embedded RS-485 controller IP (e.g. NXP iMX UART with RS-485 mode, Synopsys DesignWare UART with RS-485 wrapper) define their own register file (typically: UART config + DE/RE# polarity + half/full-duplex mode + driver-enable timer) at the SoC integration level. RS-485 itself does not."
-}

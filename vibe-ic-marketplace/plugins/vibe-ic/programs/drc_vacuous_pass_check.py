@@ -72,6 +72,9 @@ No external tool dependencies -- pure Python.
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import gzip
+import io
 import json
 import re
 import struct
@@ -79,6 +82,27 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+import _routed_checker_progress as _routed_progress
+import _semantic_child_progress as _semantic_progress
+
+
+PROGRESS_SCOPE = "routed-def:drc-vacuous-pass"
+_ACTIVE_INPUT_PLAN: Optional[_routed_progress.FiniteInputPlan] = None
+
+
+def _read_input_text(path: Path, *, encoding: str | None = None,
+                     errors: str = "strict") -> str:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.text_for(
+            path, encoding=encoding, errors=errors)
+    return Path(path).read_text(encoding=encoding, errors=errors)
+
+
+def _read_input_bytes(path: Path) -> bytes:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.bytes_for(path)
+    return Path(path).read_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +185,53 @@ _LAYOUT_GLOBS = ["*.gds", "*.gds.gz", "*.gdsii", "*.GDS",
                  "*.oas", "*.oasis", "*.def", "*.DEF"]
 
 
+def _matches_name(relative: str, patterns: List[str]) -> bool:
+    return any(fnmatch.fnmatchcase(Path(relative).name, pattern)
+               for pattern in patterns)
+
+
+def _default_disk_population(project: Path,
+                             patterns: List[str]) -> List[Path]:
+    """Historical project-dir discovery order, independent of active cache."""
+    out: List[Path] = []
+    seen = set()
+    for pattern in patterns:
+        for path in sorted(Path(project).rglob(pattern)):
+            try:
+                identity = path.resolve()
+            except OSError:
+                identity = path.absolute()
+            if identity in seen or not path.is_file():
+                continue
+            seen.add(identity)
+            out.append(path)
+    return out
+
+
+def _input_plan(project: Path) -> _routed_progress.FiniteInputPlan:
+    project = Path(project)
+    index = _routed_progress.IndexSnapshot(project)
+    reports = index.select(
+        lambda relative: _matches_name(relative, _DRC_GLOBS),
+        _default_disk_population(project, _DRC_GLOBS),
+        population="vacuous DRC report population")
+    layouts = index.select(
+        lambda relative: _matches_name(relative, _LAYOUT_GLOBS),
+        _default_disk_population(project, _LAYOUT_GLOBS),
+        population="vacuous DRC layout population")
+    reads = [
+        *_routed_progress.planned_reads("drc-report", reports),
+        *_routed_progress.planned_reads("layout", layouts),
+    ]
+    return _routed_progress.FiniteInputPlan(
+        [index.population_unit("drc-vacuous-pass:git-index")], reads)
+
+
+def semantic_progress_units(cell: Path) -> List[str]:
+    """Trusted parent's exact finite manifest for the default cell argv."""
+    return _input_plan(Path(cell)).units
+
+
 # ---------------------------------------------------------------------------
 # (A) MEASURED geometry — read the layout the DRC ran on and count its shapes.
 #     This is the observable the verdict rests on. Pure Python: a GDSII record
@@ -200,21 +271,44 @@ def count_gds_geometry(path: Path) -> LayoutMeasure:
     shapes = 0
     cells = 0
     try:
-        with _open_maybe_gz(path) as fh:
+        if _ACTIVE_INPUT_PLAN is not None:
+            payload = _read_input_bytes(path)
+            raw = io.BytesIO(payload)
+            fh = (gzip.GzipFile(fileobj=raw, mode="rb")
+                  if path.suffix.lower() == ".gz"
+                  or path.name.lower().endswith(".gds.gz") else raw)
+        else:
+            fh = _open_maybe_gz(path)
+        expanded = 0
+        with fh:
             while True:
                 head = fh.read(4)
+                expanded += len(head)
+                if (expanded > _semantic_progress.MAX_WORK_FILE_BYTES
+                        and _ACTIVE_INPUT_PLAN is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "compressed GDS expansion exceeds the routed checker "
+                        "resource bound")
                 if len(head) < 4:
                     break
                 length, rtype = struct.unpack(">H", head[:2])[0], head[2]
                 if length < 4:
                     break                      # malformed record — stop honestly
                 body = fh.read(length - 4)
+                expanded += len(body)
+                if (expanded > _semantic_progress.MAX_WORK_FILE_BYTES
+                        and _ACTIVE_INPUT_PLAN is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "compressed GDS expansion exceeds the routed checker "
+                        "resource bound")
                 if len(body) < length - 4:
                     break
                 if rtype in _GDS_SHAPE_RECS:
                     shapes += 1
                 elif rtype == _GDS_REC_BGNSTR:
                     cells += 1
+    except _semantic_progress.ProgressProtocolError:
+        raise
     except Exception as e:                      # unreadable/corrupt -> unmeasured
         m.error = f"{type(e).__name__}: {e}"
         return m
@@ -231,7 +325,9 @@ def count_def_geometry(path: Path) -> LayoutMeasure:
     `COMPONENTS <N> ;` / `NETS <N> ;` section headers — numeric fields, not prose."""
     m = LayoutMeasure(file=str(path), fmt="def", method="def_section_header")
     try:
-        text = path.read_text(errors="replace")
+        text = _read_input_text(path, errors="replace")
+    except _semantic_progress.ProgressProtocolError:
+        raise
     except Exception as e:
         m.error = f"{type(e).__name__}: {e}"
         return m
@@ -275,11 +371,20 @@ def measure_layout(path: Path) -> LayoutMeasure:
     if name.endswith((".gds", ".gds.gz", ".gdsii")):
         m = count_gds_geometry(path)
         if m.shapes is None:
+            if _ACTIVE_INPUT_PLAN is not None:
+                raise _semantic_progress.ProgressProtocolError(
+                    "semantic routed receipt cannot bind a fallback GDS "
+                    "parser that reopens the pathname outside the verified "
+                    "input descriptor")
             return _count_via_klayout(path) or m
         return m
     if name.endswith((".def",)):
         return count_def_geometry(path)
     if name.endswith((".oas", ".oasis")):
+        if _ACTIVE_INPUT_PLAN is not None:
+            raise _semantic_progress.ProgressProtocolError(
+                "semantic routed receipt cannot bind an OASIS parser that "
+                "reopens the pathname outside the verified input descriptor")
         return (_count_via_klayout(path)
                 or LayoutMeasure(file=str(path), fmt="oasis",
                                  method="none",
@@ -291,6 +396,8 @@ def measure_layout(path: Path) -> LayoutMeasure:
 def _discover_layouts(path: Path) -> List[Path]:
     """Layout artifacts near the DRC report: under the project dir, or beside a
     single log file (its own directory, then its parent)."""
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.paths("layout")
     roots: List[Path] = []
     if path.is_dir():
         roots = [path]
@@ -378,6 +485,11 @@ def _discover(path: Path, under: Optional[List[str]] = None) -> List[Path]:
     project-wide rglob produced a 3x miscount in a sibling gate, and that
     `--under` exists to stop step 21's evidence reaching step 31.
     """
+    if _ACTIVE_INPUT_PLAN is not None:
+        if under:
+            raise _semantic_progress.ProgressProtocolError(
+                "routed parent progress does not cover --under discovery")
+        return _ACTIVE_INPUT_PLAN.paths("drc-report")
     if path.is_file():
         return [path]
     if not path.is_dir():
@@ -403,16 +515,240 @@ def _discover(path: Path, under: Optional[List[str]] = None) -> List[Path]:
     return out
 
 
-def _reported_counts(text: str) -> List[float]:
-    """Every NUMERIC geometry count the checker reported, in any word order."""
+# ---------------------------------------------------------------------------
+# A NUMBER LIFTED OUT OF PROSE IS ONLY A DECLARATION IF THE SENTENCE AFFIRMS IT
+# ---------------------------------------------------------------------------
+# vibe-ic#712: an extractor that greps a value out of a sentence and publishes
+# it as a declared fact republishes the values the sentence DENIES. Measured
+# twice in one day, in two fields — "This block is NOT targeted at <PDK>."
+# became a pdk_target, and a die the document said was "REMOVED, not
+# translated" became a die mandate.
+#
+# This checker has the same shape in TWO places. Both are numbers taken out of
+# report prose and written in as declarations:
+#
+#   * `nonzero_count` — "the 3 violations reported by the previous run are NOT
+#     present here" would publish 3 as this run's violation count. That number
+#     then does two relaxing things: it satisfies (C) `violations_prove_geometry`
+#     and it routes the file to "not a vacuous PASS, defer to the violation-count
+#     gate".
+#   * `reported_geometry_counts` — (B), the checker's own claim that it looked at
+#     geometry. A denied count is not evidence that anything was checked.
+#
+# Refusing a denied number moves the gate in the CONSERVATIVE direction in both
+# cases: fewer ways to establish geometry, fewer files that skip the vacuous
+# check. That is the right direction for a gate whose entire purpose is to
+# refuse a clean it cannot earn.
+#
+# `zero_count` is deliberately NOT polarity-filtered, and that is not an
+# oversight: it is a boolean over a pattern's PRESENCE, not a value lifted out
+# of prose, and its own canonical spelling — `\bno\s+(?:drc\s+)?violations?\s+
+# found\b` — IS a negation. Running the denial vocabulary over "no DRC
+# violations found" would make the cleanest statement in the corpus deny
+# itself.
+#
+# ONE HELPER OWNS THE CONSULT, so the whole-file reference path
+# (`_classify_one`) and the streaming path (`_scan_chunks`) cannot diverge on
+# it: both call `_declared_count`, so both inherit the same answer.
+from _prose_polarity import (  # type: ignore  # noqa: E402
+    NEGATION_RE as _DENIAL_RE,
+    is_denied as _is_denied,
+    sentence_scope as _sentence_scope,
+)
+
+#: Necessary-substring gate for the polarity consult, in the same spirit as the
+#: `_present` gates the window scanner already uses: every alternative in
+#: `_prose_polarity.NEGATION_RE` contains one of these lowercase literals, so a
+#: text holding none of them cannot contain a denial and the consult can be
+#: skipped outright. `no` covers not/no/none/non/no longer/does not apply.
+#:
+#: It is a SPEED gate only — `is_denied` still decides every span it lets
+#: through. Running `NEGATION_RE` itself as the pre-scan was measured at ~66 s
+#: added to a 256 MiB report (27.1 s -> 93.9 s, destroying this rewrite's whole
+#: speed-up); the substring scan is memchr-fast and costs nothing measurable.
+#: `test_the_denial_substring_gate_is_sound` proves the necessary-condition
+#: claim against `NEGATION_RE` itself, so the two cannot drift apart silently.
+_DENIAL_TRIG = ("no", "without", "exclud", "never", "removed", "obsolete",
+                "supersed", "n/a", "inapplicable", "deprecated",
+                "非", "无", "無", "不", "否")
+
+
+def _denial_possible(low: str) -> bool:
+    """True when `low` (already lower-cased) MIGHT contain a denial word."""
+    return any(t in low for t in _DENIAL_TRIG)
+
+#: The window `_sentence_scope` reads around a match. Passed EXPLICITLY rather
+#: than left to the default because `_scan_chunks` must retain exactly this
+#: much context on each side of an accepted match for its window answer to
+#: equal the whole-file answer — a default that drifted would silently break
+#: that equality. Changing either number requires changing nothing else.
+_POLARITY_BEFORE = 240
+_POLARITY_AFTER = 120
+
+
+#: What ends a RECORD in a DRC report. `_sentence_scope` was written for prose
+#: documents: it reaches 240 characters back (stopping at a sentence break) and
+#: 120 forward (stopping at nothing), because #711's denial sat in an earlier
+#: SENTENCE. A DRC report is not prose — consecutive lines are unrelated
+#: records, and a plain `\n` does not end a sentence — so those reaches walk
+#: into neighbouring records and let one record's denial retract another
+#: record's number. MEASURED on the equivalence fuzz: `cells: 87` suppressed by
+#: a `no drc errors found` printed two lines away, and `4211 shapes` by one two
+#: lines below. The span is therefore clamped to the record on BOTH sides,
+#: inside the bounds the helper returns. Bounding it HERE, in the one caller
+#: whose input is machine-generated, is deliberate: `_sentence_scope` is shared
+#: with gates whose input really is prose.
+_RECORD_STOPS = ("\n", ". ", "; ")
+
+# ...AND THE CLEAN VERDICT IS NOT A DENIAL OF ANYTHING ELSE ON ITS LINE.
+#
+# Clamping to the RECORD still let a denial in one part of a line retract
+# another part's number, on the two most ordinary lines a DRC tool prints.
+# MEASURED, whole-file, against `origin/main`, which has no consult at all:
+#
+#   A: "cell top: checked 4211 shapes<SEP>no drc violations found"
+#          base PASS/DRC_CLEAN_EARNED geom=[4211.0] -> here geom=[] FABRICATED
+#   B: "13 DRC errors found<SEP>none waived"
+#          base PASS/DRC_NONZERO_COUNT nonzero=13   -> here None    FABRICATED
+#
+# The FIRST fix for this clamped the forward reach at a comma. That closed the
+# two witnesses and generalised to exactly the two witnesses: holding the
+# assertion fixed and varying only <SEP>, 8 of 11 separators still fabricated —
+# TAB and double space among them, i.e. any column-formatted report. A fix
+# shaped like its examples is not a fix, and this repo has paid for that shape
+# repeatedly. The comma clamp is REMOVED rather than extended into a longer
+# list of separators, because the separator was never the point.
+#
+# THE POINT IS FAMILY A's DENIAL WORD IS NOT A RETRACTION AT ALL. `no ...
+# violations found` IS the clean verdict — the very statement `_ZERO_COUNT_RE`
+# recognises, and the one this consult ALREADY exempts for `zero_count` on the
+# grounds that "running the denial vocabulary over it would make the cleanest
+# statement in the corpus deny itself". That exemption was written for the
+# boolean and not applied to the span, so the identical phrase went on denying
+# the geometry evidence beside it. Blanking those spans before asking
+# `is_denied` — exactly as `blank_bracketed` blanks parentheticals — closes
+# family A for EVERY separator, because it never looks at the separator.
+# MEASURED over the 11-separator sweep: family A 3/11 -> 11/11 kept, controls
+# broken 0.
+#
+# FAMILY B IS NOT CLOSED BY THIS AND IS NOT CLAIMED TO BE. "none waived" is a
+# denial about WAIVERS, and nothing structural separates it from a real
+# retraction without enumerating separators again — which is the move just
+# rejected. It is left DENIED, uniformly across every separator rather than for
+# some and not others, and DISCLOSED: the refusal is recorded in the summary
+# and the verdict says a count was found and retracted instead of the false
+# "no parseable violation verdict". Its direction is the safe one — it drops
+# evidence and moves the verdict to INCONCLUSIVE, so it can lose a PASS the
+# report earned but can never make a failure go quiet.
+
+
+def _blank_clean_verdicts(span: str) -> str:
+    """`span` with every CLEAN-VERDICT statement replaced by spaces.
+
+    Length-preserving, like `blank_bracketed`, so a caller's offsets stay
+    valid. `_ZERO_COUNT_RE`'s canonical spelling IS a negation, so leaving it
+    in the span makes a correct clean run deny its own evidence. chip-AGNOSTIC:
+    the checker's own verdict vocabulary, no design literal."""
+    out = span
+    for r in _ZERO_COUNT_RE:
+        out = r.sub(lambda mm: " " * len(mm.group(0)), out)
+    return out
+
+
+def _record_span(text: str, m: "re.Match") -> Tuple[int, int]:
+    """The span whose polarity governs this match.
+
+    SCOPE IS THE HELPER'S JOB AND THIS DELEGATES TO IT. `_record_span` used to
+    re-clamp `_sentence_scope`'s window here, in this file, because the helper
+    bounded its reach BACKWARD only and a DRC report's consecutive lines are
+    unrelated RECORDS, not one sentence. That was a second private copy of
+    scoping in a module written to end private copies of scoping, and it was
+    the caller's copy that the helper's own docstring named as the reason to
+    fix the reach centrally.
+
+    `070aea3e8` (v1.9.78) did fix it, symmetrically, and gave callers
+    `extra_breaks` for the one thing that genuinely is per-caller: what ends a
+    RECORD in input that is not prose. So the clamps are GONE and
+    `_RECORD_STOPS` is passed in. MEASURED before deleting them, over every
+    span the polarity corpus drives (11 separators x both families, plus the
+    cross-line and cross-sentence cases): 56 spans compared, 56 identical, 0
+    verdict-changing differences. The two invariants the old code asserted for
+    itself — that the span contains the match at both ends — are now
+    guarantees of the helper's own loop, so asserting them again here would be
+    a guard that only looks protective."""
+    return _sentence_scope(text, m.start(), m.end(),
+                           before=_POLARITY_BEFORE, after=_POLARITY_AFTER,
+                           extra_breaks=_RECORD_STOPS)
+
+
+def _declared_count(text: str, m: "re.Match", denial_possible: bool = True
+                    ) -> Optional[float]:
+    """The captured number, or None when the sentence around it DENIES it.
+
+    `denial_possible` is a sound fast reject, not a policy: when the caller has
+    already established that the whole text carries no denial word at all, no
+    span of it can be denied (`is_denied` blanks bracketed spans, which can only
+    REMOVE candidate matches, never add one), so the scope+denial work is
+    skipped. It changes speed only."""
+    if denial_possible:
+        lo, hi = _record_span(text, m)
+        if _is_denied(_blank_clean_verdicts(text[lo:hi])):
+            return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _is_polarity_refusal(m: "re.Match", v: Optional[float]) -> bool:
+    """True when `_declared_count` returned None because the span DENIED the
+    number, rather than because the number would not parse.
+
+    A REFUSAL IS A FACT ABOUT THE REPORT AND HAS TO BE COUNTED. Refusing a
+    denied number is right, but a run whose only violation count was retracted
+    is not the same thing as a run that printed no count at all, and the
+    verdict said the second about the first ("No parseable violation
+    verdict"). That is exactly the class of false statement this whole change
+    exists to remove."""
+    if v is not None:
+        return False
+    try:
+        float(m.group(1))
+        return True
+    except (ValueError, IndexError):
+        return False
+
+
+def _first_declared_count(text: str, r: "re.Pattern",
+                          denial_possible: bool = True
+                          ) -> Tuple[Optional[float], int]:
+    """The first match of `r` whose sentence does not deny it, and HOW MANY
+    matches were refused on the way. A pattern all of whose matches are denied
+    has declared nothing, so the caller moves on to the next pattern rather
+    than publishing a retracted number — and records that it did."""
+    refused = 0
+    for m in r.finditer(text):
+        v = _declared_count(text, m, denial_possible)
+        if v is not None:
+            return v, refused
+        refused += _is_polarity_refusal(m, v)
+    return None, refused
+
+
+def _reported_counts(text: str, denial_possible: bool = True
+                     ) -> Tuple[List[float], int]:
+    """Every NUMERIC geometry count the checker reported, in any word order —
+    minus the ones its own prose retracts, plus how many those were."""
     out: List[float] = []
+    refused = 0
     for r in _REPORTED_COUNT_RE:
         for m in r.finditer(text):
-            try:
-                out.append(float(m.group(1)))
-            except ValueError:
-                pass
-    return out
+            v = _declared_count(text, m, denial_possible)
+            if v is not None:
+                out.append(v)
+            else:
+                refused += _is_polarity_refusal(m, v)
+    return out, refused
 
 
 def _wording_hints(text: str) -> List[str]:
@@ -424,19 +760,27 @@ def _classify_one(text: str) -> dict:
     """Classify a single DRC log's verdict + REPORTED numeric geometry counts.
     Prose is harvested only as `wording_hints` — it decides nothing."""
     zero = any(r.search(text) for r in _ZERO_COUNT_RE)
+    denial_possible = _denial_possible(text.lower())
     nonzero = None
+    refused = 0
     for r in _NONZERO_COUNT_RE:
-        m = r.search(text)
-        if m:
-            nonzero = int(m.group(1))
+        v, n = _first_declared_count(text, r, denial_possible)
+        refused += n
+        if v is not None:
+            nonzero = int(v)
             break
-    counts = _reported_counts(text)
+    counts, n = _reported_counts(text, denial_possible)
+    refused += n
     return {
         "zero_count": zero,
         "nonzero_count": nonzero,
         # (B) a POSITIVE reported count is evidence; a reported 0 is not.
         "reported_geometry_counts": counts,
         "reported_geometry_max": max(counts) if counts else None,
+        # How many numbers the polarity consult REFUSED. Not a decision input —
+        # a disclosure, so a verdict can never say "no count was printed" about
+        # a report that printed one and retracted it.
+        "polarity_refused": refused,
         "wording_hints": _wording_hints(text),   # explanation only
     }
 
@@ -453,9 +797,24 @@ def _classify_one(text: str) -> dict:
 #
 # `_scan_chunks` derives the SAME four facts `audit` needs — (nonempty, is_drc,
 # classification, cited) — from a FIXED-SIZE SLIDING WINDOW over the report, so
-# peak memory is bounded by (one block + one carry) plus the handful of
-# geometry-summary counts / wording hints / cited names the report declares,
-# never by the file size. It reuses the identical compiled pattern tables and
+# peak memory is bounded by (one block + one carry + the trim's bounded search
+# for a cut point) plus the geometry-summary counts / wording hints / cited
+# names the report declares. The window bound holds for ANY input, including a
+# report with no newline in it — see the trim's three-way cut choice below,
+# which is what makes that unconditional. It is NOT a bound on the RETAINED
+# counts: `reported_geometry_counts` still accumulates one float per matched
+# geometry summary, so a report that prints millions of them still costs
+# proportionally (unchanged by this rewrite; a 1 GB report yielded 10.88 M
+# entries and a 174 MB JSON, which is a separate defect and a separate fix).
+# THAT CAVEAT IS NOT THEORETICAL, and stating it abstractly let the change's own
+# headline read as an unconditional memory win. MEASURED, 64 MiB report,
+# `/usr/bin/time -v`, whole-file vs this:
+#     newline-free      143.8 MiB / 12.99 s  ->  46.5 MiB / 1.49 s
+#     newline-delimited 144.0 MiB / 17.55 s  ->  46.6 MiB / 6.91 s
+#     counts-printing   349.7 MiB / 17.44 s  -> 350.4 MiB / 7.36 s   <-- MORE
+# On a body that prints a geometry count on every record the retained list IS
+# the peak, and streaming buys time only. The WINDOW is what is bounded.
+# It reuses the identical compiled pattern tables and
 # reproduces the whole-file `re.search`/`finditer` results EXACTLY — not merely
 # per line — because the window carries an overlap and a match is COUNTED only
 # once it ends before the window's right margin (an "accept-once" watermark),
@@ -478,6 +837,31 @@ def _classify_one(text: str) -> dict:
 # ---------------------------------------------------------------------------
 _READ_BLOCK = 1 << 22       # 4 MiB read granularity
 _CARRY_OVERLAP = 1 << 18    # 256 KiB — the max match length equivalence covers
+#: How far back the trim looks for a safe cut point when the retained prefix
+#: holds no newline. Bounded so the search costs O(1) per window rather than
+#: O(window); past it the trim takes a hard cut (see `_scan_chunks`).
+_SAFE_CUT_SCAN = 1 << 16    # 64 KiB
+#: The trailing run of characters a cut must not land inside: `\w` is what
+#: `\b` is defined against and `[\w.-]` is what the citation look-behind
+#: rejects, so a cut just before this run leaves both reading as they do
+#: whole-file.
+_UNSAFE_TAIL_RE = re.compile(r"[\w.\-]*\Z")
+#: One token character — the class `_UNSAFE_TAIL_RE` is built from. Used to ask
+#: whether a chosen cut point landed INSIDE a token.
+_TOKEN_CHAR_RE = re.compile(r"[\w.\-]")
+
+
+def _cut_is_mid_token(buf: str, cut: int) -> bool:
+    """True when trimming `buf` at `cut` would split a `[\\w.-]` token.
+
+    The next window then opens on a token FRAGMENT, and at index 0 the regex
+    engine sees a start-of-string: `\\b` fires where the file has no boundary
+    and `(?<![\\w.-])` succeeds where the file refuses. Exactly ONE index is
+    affected — from index 1 on, the look-behind reads `buf[0]`, which IS the
+    real preceding character. Chip-AGNOSTIC: lexical."""
+    return (0 < cut < len(buf)
+            and _TOKEN_CHAR_RE.match(buf[cut - 1]) is not None
+            and _TOKEN_CHAR_RE.match(buf[cut]) is not None)
 
 # Necessary-substring gates: a pattern CANNOT match a window that contains none
 # of these lowercase literals (each is a literal every match of the pattern must
@@ -509,6 +893,79 @@ def _present(triggers, low: str) -> bool:
     return any(t in low for t in triggers)
 
 
+def _safe_cut_point(buf: str, keep_from: int) -> int:
+    """Where the sliding window may be trimmed, at or before `keep_from`.
+
+    The cut has to land on a real left boundary, so the next window's first
+    character reads to the regex exactly as it does whole-file: `\\b` and the
+    `(?<![\\w.-])` citation look-behind at start-of-string must not be able to
+    invent a boundary that a mid-token cut would create. THREE cut points, best
+    first:
+
+      1. just after a newline — the case every real DRC report is in;
+      2. just after any other character that is neither a word char nor
+         `.`/`-`, which is the property that made the newline safe in the first
+         place (a space, `)`, `;`, `,` … all serve);
+      3. failing both, a HARD cut at `keep_from`.
+
+    The first revision had only (1) and fell back to `0` — i.e. NO trim at all.
+    A report with no newline in it was therefore never trimmed: the buffer grew
+    to the whole file, with a `buf.lower()` copy of it per window on top.
+    MEASURED on a 256 MiB single-line report: 802 MiB peak / 142.7 s, against
+    527 MiB / 91.3 s for the whole-file `read_text` this rewrite replaces — 1.5x
+    the memory and 1.6x the time of the code it was supposed to bound, and the
+    gap grew super-linearly with size. (2) fixes that outright for any report
+    containing a space, a bracket or a semicolon, which is all of them; the same
+    report now measures 48.7 MiB / 27.4 s.
+
+    (3) exists so the bound holds with no "unless" at all, and it is RATIONED:
+    reached only once the reclaimable prefix is itself `_SAFE_CUT_SCAN` long.
+    Below that there is nothing worth reclaiming, so the no-trim behaviour is
+    kept.
+
+    RATIONING IS NOT A FIX FOR (3)'s HAZARD, only a cap on how often it is hit,
+    and the first revision of this comment claimed otherwise. A cut inside a
+    token leaves the next window starting mid-token, where `\\b` and the
+    citation look-behind see a start-of-string the whole file never had —
+    MEASURED as `top.gds` harvested out of `xtop.gds`, and re-MEASURED at
+    exactly the rationed cut (a >= 64 KiB `[\\w.-]` run, cut=65547, next window
+    opening on `top.gds rest`), where it still happened. What actually fixes it
+    is the caller: `_scan_chunks` notices the cut landed mid-token and starts
+    the next window's scans at index 1 instead of 0, so every regex reads the
+    REAL preceding character (`buf[0]`) exactly as it does whole-file, and the
+    one position whose left context the file never had is the only one skipped.
+
+    Chip-AGNOSTIC: pure lexical boundary arithmetic on the read window."""
+    nl = buf.rfind("\n", 0, keep_from)
+    if nl != -1:
+        return nl + 1
+    lo = max(0, keep_from - _SAFE_CUT_SCAN)
+    m_cut = _UNSAFE_TAIL_RE.search(buf, lo, keep_from)
+    cut = m_cut.start() if m_cut is not None else keep_from
+    # `cut == lo` means the token run reaches the LEFT EDGE of the bounded
+    # search, which on its own says nothing about whether `lo` is a boundary —
+    # only that the search could not see past it. Ask the character before it.
+    # `cut > lo` alone threw away a perfectly safe cut whenever the run began
+    # exactly at `lo`, and hard-cut mid-token instead: for
+    # `"a"*50 + " " + "b"*(64 KiB + 100)` at keep_from = 51 + 64 KiB the
+    # boundary is at 51 and the old test returned the mid-token 65587.
+    if cut > lo or lo == 0 or _TOKEN_CHAR_RE.match(buf[lo - 1]) is None:
+        return cut                  # (2) a real boundary inside the search
+    # (3) The searched span is one unbroken token AND it continues past the
+    # search's left edge, so there is no honest cut anywhere in reach: hard-cut
+    # and let `_scan_chunks` skip index 0 of the next window.
+    #
+    # THE RATION IS THE `lo == 0` ARM ABOVE, not a separate test. `lo` is
+    # `keep_from - _SAFE_CUT_SCAN` clamped at 0, so `keep_from < _SAFE_CUT_SCAN`
+    # is EXACTLY `lo == 0`, and that arm already returns `cut` — which is 0 when
+    # the whole prefix is one token, i.e. no trim, which is what the ration
+    # said. A separate `if keep_from < _SAFE_CUT_SCAN: return 0` below the
+    # search was therefore unreachable: mutating it away changed no answer,
+    # which is the definition of a branch that only looks protective. It is
+    # deleted rather than left to be re-justified by the next reader.
+    return keep_from                # rationed HARD cut, mid-token by definition
+
+
 def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
                  overlap: int = _CARRY_OVERLAP) -> Tuple[bool, bool, dict, set]:
     """Stream a decoded text source via ``read(n) -> str`` ("" at EOF) in fixed
@@ -535,12 +992,32 @@ def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
     geom_cur = [0] * len(_REPORTED_COUNT_RE)     # absolute resume cursor / pattern
     hint_seen: set = set()
     cited: set = set()
+    # How many numbers the polarity consult REFUSED, accumulated exactly as
+    # the whole-file paths accumulate it: once per ACCEPTED match that was
+    # denied, never for a deferred one (those are re-found next window).
+    refused = 0
     # Build each candidate's token matcher once; the cheap `name in window`
     # substring reject keeps the per-window cost near zero when nothing is cited.
     cand = [(p.name, _cite_matcher(p.name)) for p in layout_cands]
 
     buf = ""
     buf_base = 0            # absolute offset of buf[0] in the decoded stream
+    # Where a scan of this window may START. 0 normally. 1 after a trim that
+    # had to cut INSIDE a token (`_safe_cut_point`'s rationed hard cut), because
+    # index 0 is then the only index whose left context the file never had: the
+    # regex sees a start-of-string where the file has a `[\w.-]` character, so
+    # `\b` fires and `(?<![\w.-])` succeeds when neither does whole-file.
+    # MEASURED with this at 0: a `top.gds` citation harvested out of `xtop.gds`
+    # at the rationed cut. From index 1 on, the look-behind reads `buf[0]` —
+    # the REAL preceding character — so those indices are already exact.
+    #
+    # Nothing real is lost. A match the whole file has that starts at that
+    # index would have to have started EARLIER there (its left context is a
+    # token character), and everything earlier was already scanned in a
+    # previous window: the trim only ever discards a prefix that lies at least
+    # `overlap + _POLARITY_BEFORE` before this window's horizon, which is the
+    # `_CARRY_OVERLAP` bound the equivalence is already stated under.
+    scan_from = 0
     while True:
         chunk = read(block)
         final = (chunk == "")
@@ -551,8 +1028,17 @@ def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
         # Matches ending at/before `horizon` (local index) are safe to accept;
         # anything past it may still extend into the next read, so defer it. On
         # the final window, accept to the very end.
-        horizon = len(buf) if final else max(0, len(buf) - overlap)
+        # The right margin must also cover `_sentence_scope`'s FORWARD reach,
+        # or a match accepted near the window's edge would see a truncated
+        # sentence and could read as undenied where the whole file denies it.
+        horizon = (len(buf) if final
+                   else max(0, len(buf) - max(overlap, _POLARITY_AFTER)))
         low = buf.lower()          # one lowercase pass drives every substring gate
+        # Sound fast reject for the polarity consult: no denial word anywhere
+        # in this window => no span of it can be denied. One extra pass per
+        # window, never per match — on a real sign-off report, whose body is
+        # millions of geometry records, this is False for nearly every window.
+        denial_possible = _denial_possible(low)
 
         # A boolean pattern is only HONOURED when its leftmost match ends at or
         # before the horizon: that guarantees the match had real right context
@@ -563,9 +1049,16 @@ def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
         # the next window, and the leftmost real match in the file is always
         # accepted in the window where it sits interior — so existence (all a
         # boolean needs) is decided exactly as the whole-file `search` decides.
+        #
+        # The local is `bm` (boolean match), NOT `m`: the counting loops below
+        # bind their own `m` per accepted match, and one name meaning two
+        # different match objects in two scopes of one function is how a reader
+        # — and any analysis that walks this function as a whole — comes to
+        # believe the boolean probe's match is the one being written into a
+        # count.
         def _hit(r):
-            m = r.search(buf)
-            return m is not None and m.end() <= horizon
+            bm = r.search(buf, scan_from)
+            return bm is not None and bm.end() <= horizon
 
         if not nonempty and buf.strip():
             nonempty = True
@@ -583,12 +1076,18 @@ def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
                 nz_cur[i] = max(nz_cur[i], buf_base + horizon)   # no match here
                 continue
             deferred = False
-            for m in r.finditer(buf, max(0, nz_cur[i] - buf_base)):
-                if m.end() <= horizon:
-                    nz_first[i] = int(m.group(1))
+            for m in r.finditer(buf, max(scan_from, nz_cur[i] - buf_base)):
+                if m.end() > horizon:
+                    deferred = True
+                    break                          # defer; keep cursor, retry next read
+                v = _declared_count(buf, m, denial_possible)
+                if v is not None:
+                    nz_first[i] = int(v)
                     break                          # first match wins; pattern done
-                deferred = True
-                break                              # defer; keep cursor, retry next read
+                refused += _is_polarity_refusal(m, v)
+                # Denied: this match declared nothing. Advance past it and keep
+                # looking, exactly as `_first_declared_count` does whole-file.
+                nz_cur[i] = buf_base + m.end()
             if nz_first[i] is None and not deferred:
                 nz_cur[i] = max(nz_cur[i], buf_base + horizon)
         for i, r in enumerate(_REPORTED_COUNT_RE):
@@ -596,12 +1095,13 @@ def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
                 geom_cur[i] = max(geom_cur[i], buf_base + horizon)  # no match here
                 continue
             deferred = False
-            for m in r.finditer(buf, max(0, geom_cur[i] - buf_base)):
+            for m in r.finditer(buf, max(scan_from, geom_cur[i] - buf_base)):
                 if m.end() <= horizon:
-                    try:
-                        geom[i].append(float(m.group(1)))
-                    except ValueError:
-                        pass
+                    v = _declared_count(buf, m, denial_possible)
+                    if v is not None:
+                        geom[i].append(v)
+                    else:
+                        refused += _is_polarity_refusal(m, v)
                     geom_cur[i] = buf_base + m.end()
                 else:
                     deferred = True
@@ -623,19 +1123,17 @@ def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
         #     `overlap` long that straddles this read's right edge is still whole
         #     in the next window (booleans scan the whole window, no cursor).
         # Everything before the minimum of those is decided for good.
+        #   * `_POLARITY_BEFORE` chars BEFORE the earliest of those, so an
+        #     accepted match's `_sentence_scope` lookback is as complete in the
+        #     window as it is in the whole file.
         active = list(geom_cur) + [nz_cur[i] for i in range(len(_NONZERO_COUNT_RE))
                                    if nz_first[i] is None]
         active.append(buf_base + max(0, horizon - overlap))
-        keep_from = max(0, min(active) - buf_base)
-        # Snap the cut back to JUST AFTER a newline so the next window's first
-        # char keeps a real left boundary. `\b` and the `(?<![\w.-])` citation
-        # look-behind at start-of-string then read identically to the whole file
-        # (a preceding '\n' is non-word and not in [\w.-]) — a mid-token cut
-        # would otherwise invent a boundary the whole-file regex never saw. DRC
-        # reports are newline-delimited, so a cut point is always available;
-        # absent one we simply keep the buffer and read on.
-        nl = buf.rfind("\n", 0, keep_from)
-        keep_from = nl + 1 if nl != -1 else 0
+        keep_from = max(0, min(active) - buf_base - _POLARITY_BEFORE)
+        keep_from = _safe_cut_point(buf, keep_from)
+        # Recomputed at EVERY trim, never accumulated: it describes only the
+        # buffer this trim produces.
+        scan_from = 1 if _cut_is_mid_token(buf, keep_from) else 0
         buf_base += keep_from
         buf = buf[keep_from:]
 
@@ -646,6 +1144,7 @@ def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
         "nonzero_count": nonzero,
         "reported_geometry_counts": counts,
         "reported_geometry_max": max(counts) if counts else None,
+        "polarity_refused": refused,
         "wording_hints": [name for name, _ in _WORDING_HINT_RE
                           if name in hint_seen],
     }
@@ -659,6 +1158,9 @@ def _scan_report_file(fp: Path,
     decoded stream — and therefore every regex result — is identical to the
     whole-file path, without ever holding the file in memory. OSError propagates
     to the caller, which treats it exactly as the old read failure did."""
+    if _ACTIVE_INPUT_PLAN is not None:
+        text = _read_input_text(fp, errors="replace")
+        return _scan_chunks(io.StringIO(text).read, layout_cands)
     with open(fp, "r", errors="replace") as fh:
         return _scan_chunks(fh.read, layout_cands)
 
@@ -751,6 +1253,14 @@ def audit(path: Path, layout: Optional[Path] = None,
         # Wording is carried ONLY to explain the verdict, never to reach it.
         hint = (" [wording hints (non-deciding): "
                 + ", ".join(c["wording_hints"]) + "]") if c["wording_hints"] else ""
+        # A number this checker REFUSED as retracted is not a number the report
+        # never printed, and every message below used to say the second about
+        # the first. The refusal travels with the verdict so a reader can see
+        # that a count WAS there and why it was not used.
+        if c.get("polarity_refused"):
+            hint += (f" [polarity: {c['polarity_refused']} count(s) found and "
+                     f"REFUSED as retracted by the report's own prose — this "
+                     f"run did print numbers; they were not used]")
 
         if measured_empty:
             # Decisive, regardless of the verdict token or the tool's phrasing.
@@ -783,10 +1293,43 @@ def audit(path: Path, layout: Optional[Path] = None,
                     file=str(fp)))
             else:
                 any_real_check = True
+                # SAY WHAT THIS GATE ESTABLISHED, AND NOTHING MORE.
+                #
+                # This gate answers exactly one question: is the 0 vacuous
+                # because the layout is empty? Here it is not — there IS
+                # geometry. That is the whole of the finding.
+                #
+                # The phrase it used to carry, "earned DRC-clean", claims a
+                # different and much larger thing: that a DRC adequate to the
+                # design ran and found nothing. This gate never looks at WHICH
+                # deck produced the 0 and cannot tell a foundry sign-off deck
+                # from the router's own in-loop pass.
+                #
+                # OBSERVED on a full run: the sign-off DRC was killed at its
+                # wall-clock cap and wrote no report; the surviving
+                # `drc_signoff.rpt` was the ROUTER's in-loop projection
+                # (antenna + via only, no spacing, no width, no min-area); and
+                # this line then stamped PASS / "earned DRC-clean" over a
+                # layout independently measured to carry ~1,968 unpatchable
+                # min-area shapes. `drc_signoff.json` correctly recorded
+                # `passed=false, is_signoff_deck=false` and even warned that
+                # the spacing and width categories were absent — so the truth
+                # was on disk, and this sentence contradicted it.
+                #
+                # The verdict is unchanged (still INFO, still not vacuous). The
+                # CLAIM is narrowed to what was measured, and the reader is
+                # pointed at the artefact that owns deck adequacy.
                 result.findings.append(Finding(
                     rule="DRC_CLEAN_EARNED", severity="INFO",
                     message=f"0-violation verdict on a layout proven to contain "
-                            f"geometry ({evidence}) — earned DRC-clean.{hint}",
+                            f"geometry ({evidence}) — the zero is NOT vacuous. "
+                            f"This gate does NOT establish that the deck behind "
+                            f"that zero is adequate for sign-off: it never reads "
+                            f"which deck produced it, so a router in-loop pass "
+                            f"and a foundry sign-off deck are indistinguishable "
+                            f"here. For deck adequacy read "
+                            f"`drc_signoff.json` (`is_signoff_deck`, `passed`) — "
+                            f"do not quote this line as a clean DRC.{hint}",
                     file=str(fp)))
         elif geometry_ok:
             # No verdict token parsed, but the run demonstrably examined
@@ -805,9 +1348,14 @@ def audit(path: Path, layout: Optional[Path] = None,
             any_empty_with_clean = True
             result.findings.append(Finding(
                 rule="DRC_UNVERIFIABLE_RUN", severity="ERROR",
-                message=f"No parseable violation verdict and geometry NOT "
-                        f"established ({evidence}) — INCONCLUSIVE; a clean "
-                        f"requires positive evidence.{hint}",
+                message=(("No violation verdict this checker will USE "
+                          "(every count it found was retracted by the "
+                          "report's own prose)"
+                          if c.get("polarity_refused")
+                          else "No parseable violation verdict")
+                         + f" and geometry NOT established ({evidence}) — "
+                         f"INCONCLUSIVE; a clean requires positive "
+                         f"evidence.{hint}"),
                 file=str(fp)))
 
     result.summary = {"files_found": len(files), "per_file": per_file, **scope}
@@ -854,6 +1402,29 @@ def main(argv: Optional[list] = None) -> int:
                              "declares, so another step's DRC report cannot "
                              "carry — or condemn — this one.")
     args = parser.parse_args(argv)
+
+    global _ACTIVE_INPUT_PLAN
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        try:
+            if progress.enabled:
+                path = Path(args.path)
+                if (not path.is_dir() or args.json is not None
+                        or args.layout is not None or args.under is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "routed parent progress covers the default project-dir "
+                        "DRC invocation only")
+                _ACTIVE_INPUT_PLAN = _input_plan(path)
+                _ACTIVE_INPUT_PLAN.materialize(progress)
+            rc = _main_parsed(args)
+            if _ACTIVE_INPUT_PLAN is not None:
+                _ACTIVE_INPUT_PLAN.checkpoint_decision(
+                    fresh_plan=_input_plan(Path(args.path)))
+            return rc
+        finally:
+            _ACTIVE_INPUT_PLAN = None
+
+
+def _main_parsed(args) -> int:
 
     result = audit(Path(args.path),
                    Path(args.layout) if args.layout else None,

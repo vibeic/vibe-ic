@@ -50,7 +50,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gate_utils import EXCLUDED_DIRS  # shared RTL-scope contract
+from gate_utils import dir_parts_excluded  # shared RTL-scope contract
 
 
 @dataclass
@@ -225,11 +225,11 @@ def collect_files(path: Path) -> list[Path]:
     has no such register to examine. The gate was paying 33,000x to read files
     that cannot answer the question it asks.
 
-    Exclusion is delegated to `gate_utils.EXCLUDED_DIRS` rather than to a fourth
-    private copy — three collectors with three different policies is how this
-    defect survived the fix that added `steps` to only one of them. An explicit
-    FILE argument is still honored verbatim, so pointing the gate at a netlist
-    on purpose still works.
+    Exclusion is delegated to `gate_utils.dir_parts_excluded` rather than to a
+    fourth private copy — three collectors with three different policies is how
+    this defect survived the fix that added `steps` to only one of them. An
+    explicit FILE argument is still honored verbatim, so pointing the gate at a
+    netlist on purpose still works.
     """
     if path.is_file():
         return [path]
@@ -237,7 +237,7 @@ def collect_files(path: Path) -> list[Path]:
         return sorted(
             p for p in path.rglob("*")
             if p.is_file() and p.suffix in (".v", ".sv", ".vh")
-            and not (set(p.relative_to(path).parts[:-1]) & EXCLUDED_DIRS)
+            and not dir_parts_excluded(p.relative_to(path).parts[:-1])
         )
     return []
 

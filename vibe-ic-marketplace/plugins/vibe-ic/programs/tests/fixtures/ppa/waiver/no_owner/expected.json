@@ -1,0 +1,16 @@
+{
+  "schema": "vibeic.ppa.fixture_expectation.v1",
+  "fixture": "waiver/no_owner",
+  "proves": "negative",
+  "known_answer": "Of the three waivers in waivers.json, exactly ONE has an owner. A waiver without an owner is not a decision anybody made -- it is a rule that was switched off and left that way, and it will outlive everyone who remembers why.",
+  "cases": [
+    {"id": 36, "owned": false, "form": "approver present, names nobody", "value": "tapeout-review-pending", "expected_verdict": {"rc": 1, "status": "REFUSED"}, "why": "'tapeout-review-pending' is a state, not a party. Nobody can be asked about it and nobody is accountable if it is wrong. A presence check on the `approver` key accepts this, which is exactly why the check must be on the VALUE."},
+    {"id": 41, "owned": false, "form": "approver key absent", "value": null, "expected_verdict": {"rc": 1, "status": "REFUSED"}, "why": "No owner at all."},
+    {"id": 42, "owned": true, "form": "named party with a ticket and an expiry", "value": "j.okonkwo@example.org (physical design lead)", "expected_verdict": {"rc": 0, "status": "PASS"}, "why": "The control. A gate that rejects this is over-strict, and an over-strict gate gets disabled."}
+  ],
+  "why_rc_is_1_and_not_2": "An unowned waiver is not 'I could not check'. The waiver file was read and understood; the finding is that the waiver is invalid. That is a REFUSAL about the submission, so rc=1 under contract §1. rc=2 is for the case where waivers.json could not be read at all -- see the vacuous fixture.",
+  "must_not": [
+    {"forbidden": "accepting id 36 because the `approver` key exists", "why": "the key is present and empty of meaning; check the value, not the key"},
+    {"forbidden": "rejecting id 42", "why": "a gate that cannot be satisfied is a gate that gets removed"}
+  ]
+}

@@ -139,9 +139,30 @@ def test_the_phase1_runner_records_both_producers():
 
 def test_omitting_project_leaves_the_output_shape_unchanged():
     """Every existing caller passes three arguments. A new required one would
-    break them all; a new key on the old shape would break consumers that
-    compare it."""
+    break them all, and `undeclared_cause` — the key THIS issue added — must
+    still appear only when a project is there to derive it from.
+
+    THE KEY-SET EQUALITY THIS USED TO ASSERT OUTLIVED ITS TRUTH (#785)
+    ------------------------------------------------------------------
+    It read `set(r) == {5 keys}`, justified as "a new key on the old shape would
+    break consumers that compare it". MEASURED at the moment #785 landed: NO
+    consumer compares it — `ip_integration_check` and
+    `phase3_one_shot_runner._macro_supply_preroute_decision` are the only two,
+    and both read named keys. So the equality was pinning a hazard that does not
+    exist, at the cost of forbidding every additive fact — including the one
+    #785 exists to add, that an abstract typing NO pin is not an abstract with
+    no supply pin.
+
+    What it was really protecting is kept and made explicit: the pre-existing
+    keys are all still there, and nothing derived from a project appears without
+    one.
+    """
     r = H.assess([_LEF], _L21, None)
     assert "undeclared_cause" not in r
-    assert set(r) == {"pins", "accounted", "gaps", "declared_rails",
-                      "measured_rails"}
+    assert {"pins", "accounted", "gaps", "declared_rails",
+            "measured_rails"} <= set(r)
+    # Nothing that needs a project may be non-empty without one. The untyped
+    # scan itself needs only the LEF text, so it still answers; its Liberty
+    # CORROBORATION does not.
+    assert r["scanned"]["liberty_cells"] == []
+    assert r["recovered_pins"] == [] and r["recovered_gaps"] == []

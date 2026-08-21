@@ -1,5 +1,0 @@
-{
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
-  "otp_present": false,
-  "notes": "RS-485 is a wire-level electrical standard; no OTP / fuse / configuration ROM at the protocol layer. Concrete RS-485 transceiver chips are stateless analog parts with no programmable bits. Higher-level controller IP (UART with RS-485 wrapper) may have configuration bits at the SoC integration level, but these are not OTP-defined by RS-485."
-}
