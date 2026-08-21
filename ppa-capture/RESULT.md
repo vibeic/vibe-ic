@@ -31,9 +31,9 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 14 | deterministic rules — the default, and every one names its predicate |
+| **A** | 13 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
-| **C** | 1 | the predicate is trivial; the provenance plumbing it must read is not |
+| **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
 
 **Why zero Bucket B.** Every candidate that first read as "needs judgment"
@@ -80,8 +80,8 @@ rather than a symptom.
 | 17 | A verdict token read from an artefact must be matched against a CLOSED enum, and a token outside it is not-measured with the token quoted — never a pass, never the nearest neighbour. | program |
 | 18 | Where a schema offers two ways to state a check, the consumer must accept both; a verdict-valued check may not be required to produce a count. | program |
 
-Two smaller ones carry rules too: an optional dependency must be bundled or
-capability-checked rather than assumed (**A-12**), and a runtime output path must
+Two smaller ones carry rules too: an optional dependency must be bundled, and the
+present-but-too-old arm needs a version matrix (**C-2**), and a runtime output path must
 not resolve inside the installed product (**A-6**).
 
 ## The eighteen, and what is true on this tree
@@ -495,22 +495,36 @@ it holds for any document class this layer gains, and the third disclosed number
 it requires (files that would not parse) is the half neither denominator gate
 asks for.
 
-### A-12 · an optional import is guarded by capability not by exception type · `benchmark.verify_claim_done`
+### C-2 · an optional dependency needs a version matrix — **demoted from Bucket A by its own sweep**
 
-Present-but-too-old and absent are different states; only one is an import
-failure. The measured cost of conflating them: the gate raised on an attribute
-that arrived in the dependency's next major release, and returned **the exit code
-reserved for a finding about the subject under test** — a crash publishing itself
-as a verdict — with **33 test identifiers red on a stock host** for that one
-attribute. The test-side guard had the same hole from the other side: skipping on
-importability covers one of the two ways a dependency can be out of reach.
+This began as a Bucket-A static rule and its own corpus sweep disproved it. The
+narrowing went four rounds and every one over-reported:
 
-A broad static screen finds 79 of 131 handler sites using an attribute of the
-guarded name outside the handler. **That is an upper bound on candidates, not a
-defect count** — a use already behind a capability flag satisfies the rule and
-the screen cannot see the flag. It is quoted for sizing and the record says so.
-**(o)** yes. **(d)** yes — the rule is per attribute of any optionally-imported
-name, so it covers a dependency this layer adopts next, not the one that bit.
+    try/except ImportError handlers binding a name              131
+      using an attribute outside the handler                     79
+        with no capability guard on that use                     56
+          excluding sibling and standard-library imports          8
+
+Then I executed the six of those eight that can be run with the dependency
+blocked. **Six of six degrade with a message; none crashes.** The static form
+does not work, and I could not construct one that does.
+
+**The reason is that the motivating defect was never the absent case.** It was an
+attribute that arrived in the dependency's next major release, on a host carrying
+the older one — the import SUCCEEDS, the guard never runs, and the attribute
+raises. Blocking the module entirely, which is the only state I can synthesise
+here, does not reproduce it. Absent and too-old are different states and only the
+first is an import failure.
+
+> **why_not_bucket_a**: A program cannot decide this from the source — I built
+> the static check four ways and every one over-reported, and every survivor I
+> could execute behaved correctly. The input that would settle it, the dependency
+> installed at an older release, does not exist on the host at check time, and no
+> amount of reading the code conjures it. Producing that input is a version
+> matrix in CI, and that is the engineering.
+
+Cost of the case that bit: **33 red test identifiers** on a stock host, and a
+crash returned under the exit code reserved for a finding about the design.
 
 ### A-13 · a contract relation is not an import edge and owes a pair test · `repo.test_population`
 
@@ -696,7 +710,7 @@ bucket. My 13 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 16 | not records — listed above with their enforcing program |
 | **AUGMENT-EXISTING** | 10 | A-1, A-2, A-5, A-6, A-7, A-8, A-9, A-10, A-11, A-14 |
-| **EXTRACT-NEW** | 4 | A-3, A-4, A-12, A-13 |
+| **EXTRACT-NEW** | 3 | A-3, A-4, A-13 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Two conflict warnings for whoever applies these**, because the skill asks for
