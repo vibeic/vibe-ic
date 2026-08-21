@@ -360,7 +360,11 @@ bad-invocation arm over the six outside it:
 
 Two of six carry the IDENTICAL defect the suite had just fixed inside the glob —
 a bare argument parse returning the could-not-check code where the contract says
-bad-invocation. Both take the one-line shared fix the others already use.
+bad-invocation. Both take the one-line shared fix the others already use. *Re-run
+after merging main: unchanged, and `--help` still returns 0 as the control. The
+one-line fix now has a name — main landed `programs/_gate_usage_exit.py`, whose
+whole reason for existing is that rc 2 already means VACUOUS, so import it rather
+than re-declaring the constant.*
 **(o)** yes. **(d)** yes — the relation is computed, so a module added inside
 the layer's package next week is in the population without anyone editing a list.
 
