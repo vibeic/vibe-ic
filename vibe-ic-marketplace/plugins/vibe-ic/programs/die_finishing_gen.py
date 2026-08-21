@@ -116,13 +116,48 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082
+from _atomic_artefact import write_text as atomic_write_text
+
 try:
     from . import _klayout_launch as _kl                     # type: ignore
+    from . import _tapeout_declaration as _td                # type: ignore
 except ImportError:                                          # standalone gate
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import _klayout_launch as _kl                            # type: ignore
+    import _tapeout_declaration as _td                       # type: ignore
 
 PASS, FAIL, SKIP = 0, 1, 2
+
+#: Lines an EDA container launcher prints before the tool it launched says
+#: anything. They come FIRST, which is the reason the quoting below takes the
+#: last line rather than the first — see `_last_said`.
+_LAUNCHER_NOISE = ("[INFO]", "[WARN]", "[DEBUG]")
+
+
+def _last_said(text: str, limit: int = 200) -> str:
+    """The line of `text` most likely to say what went wrong.
+
+    Quoting the FIRST line was wrong in the one case this reason exists for.
+    Measured: a PDK whose seal-ring PCell library is missing prints
+    `Error: Couldn't load the seal ring library.` and exits 0 — but the
+    container launcher has already printed two banner lines ahead of it, so the
+    diagnosis read "it exited 0 and said: [INFO] Final PATH variable: ...". The
+    banner is not what went wrong, and a reason that quotes it sends the reader
+    to the wrong place.
+
+    A tool says what failed LAST, so this takes the last non-empty line, and
+    skips the launcher banners when the last line is one of them. The full
+    output is carried separately in `generator_output` either way; this only
+    decides which line the human-readable reason quotes.
+    """
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    for ln in reversed(lines):
+        if not ln.startswith(_LAUNCHER_NOISE):
+            return ln[:limit]
+    return lines[-1][:limit]
 
 _CHECK = "die_finishing"
 #: Written by this program on EVERY path; READ (never overwritten in
@@ -226,17 +261,89 @@ def _bridge(project: Path) -> Dict[str, Any]:
     return {}
 
 
+#: SECTION 2C OF THE TAPE-OUT DECLARATION — where a design that has no shuttle
+#: operator writes down what an operator's template would otherwise have
+#: pinned. `_tapeout_declaration.py` derived these three questions FROM this
+#: program — its own note on `seal_ring_script` says "Read by
+#: `die_finishing_gen`" — and until vibe-ic#1410/cpath nothing here read them
+#: back. A design that had answered all three was driven as though it had
+#: answered none.
+_DECL_REQUIRED = "seal_ring_required"
+_DECL_SCRIPT = "seal_ring_script"
+_DECL_MARKER = "seal_ring_marker_layer"
+#: Section 2A, and the ONE question outside 2C this program reads. See
+#: `die_size` for why it is the LAST source there and not the first.
+_DECL_DIE_AREA = "die_area_um"
+_DECL_SOURCE = f"{_td.DECLARATION_REL}:answers"
+
+#: Appended to a no-generator skip when the design DECLARED a ring is
+#: required. Written once so both branches say the same thing.
+_REQUIRED_AND_ABSENT = (
+    ". THE DESIGN DECLARED THAT ONE IS REQUIRED: `seal_ring_required` is true "
+    "in its tape-out declaration, so this is not a not-applicable — it is the "
+    "step being unable to build a ring the design says it must have. No "
+    "`die_finishing.SKIPPED.txt` is written and the step's declared outputs "
+    "stay unsatisfied, which is what makes the flow report it")
+
+
+def _declaration(project: Path) -> Tuple[Dict[str, Any], Optional[str]]:
+    """(the answers this program reads, why-the-file-could-not-be-read).
+
+    FOUR keys, not three: section 2C's whole set, plus `die_area_um` from
+    section 2A — see `die_size` for why that one is read here and why it is
+    the LAST source when it is.
+
+    An ABSENT declaration is `({}, None)`: this program predates the
+    declaration and must keep working on a tree that has none. A declaration
+    that EXISTS and could not be parsed is `({}, why)` — the caller refuses on
+    it rather than proceeding, because "I could not read it" and "I read it and
+    it said nothing" must never produce the same verdict.
+
+    Every value is passed through `_tapeout_declaration.answer`, so a field
+    left `NOT_DETERMINED` comes back as the sentinel and never as a plausible
+    default.
+    """
+    path = project / _td.DECLARATION_REL
+    if not path.is_file():
+        return {}, None
+    doc, why = _td.load(path)
+    if doc is None:
+        return {}, why
+    if not isinstance(doc, dict):
+        return {}, f"{_td.DECLARATION_REL}: the top level is not a mapping"
+    return {k: _td.answer(doc, k)
+            for k in (_DECL_REQUIRED, _DECL_SCRIPT, _DECL_MARKER,
+                      _DECL_DIE_AREA)}, None
+
+
+def _declared(answers: Dict[str, Any], key: str) -> Optional[Any]:
+    """The answer to `key`, or None when it is unanswered. Never a default."""
+    v = answers.get(key)
+    return v if _td.is_answered(v) else None
+
+
 def resolve_script(project: Path, explicit: Optional[str],
                    pdk_root: Optional[str],
-                   pdk: Optional[str]) -> Tuple[Optional[str], str, List[str]]:
+                   pdk: Optional[str],
+                   declared: Optional[Dict[str, Any]] = None
+                   ) -> Tuple[Optional[str], str, List[str]]:
     """(script, source, tried) — the PDK's seal-ring generator.
 
     Order, first hit wins, every step named in `tried` so an absence is a
     STATEMENT about specific locations rather than a shrug:
       1. `--script`
       2. the project's PDK-bridge declaration (`sealring.script`)
-      3. `$KLAYOUT_SEALRING_SCRIPT` — LibreLane's own PDK variable
-      4. `$PDK_ROOT/$PDK/` + the conventional script path
+      3. the design's own tape-out declaration (`seal_ring_script`)
+      4. `$KLAYOUT_SEALRING_SCRIPT` — LibreLane's own PDK variable
+      5. `$PDK_ROOT/$PDK/` + the conventional script path
+
+    STEP 3 IS THE NEW ONE and it sits THERE on purpose. The bridge config is
+    the PDK integration's own answer and outranks the design's; the environment
+    variable and the constructed conventional path are both weaker than
+    something a human wrote down about THIS die, so the declaration outranks
+    them. A shuttle design that answers nothing resolves exactly as it did
+    before this step existed, because an unanswered field never returns a
+    value.
 
     Existence is NOT checked here. The script lives wherever KLayout lives,
     which may be inside a container with no host counterpart, so only the
@@ -249,6 +356,10 @@ def resolve_script(project: Path, explicit: Optional[str],
     tried.append(f"{_BRIDGE_CFG}:{_BRIDGE_KEY}.script")
     if isinstance(cfg.get("script"), str) and cfg["script"]:
         return cfg["script"], f"{_BRIDGE_CFG}:{_BRIDGE_KEY}.script", tried
+    tried.append(f"{_DECL_SOURCE}.{_DECL_SCRIPT}")
+    decl_script = _declared(declared or {}, _DECL_SCRIPT)
+    if isinstance(decl_script, str) and decl_script.strip():
+        return decl_script.strip(), f"{_DECL_SOURCE}.{_DECL_SCRIPT}", tried
     tried.append(f"${_ENV_SCRIPT}")
     env_script = os.environ.get(_ENV_SCRIPT)
     if env_script:
@@ -266,12 +377,29 @@ def resolve_script(project: Path, explicit: Optional[str],
 
 def die_size(project: Path, gds: Path,
              width: Optional[float],
-             height: Optional[float]) -> Tuple[Optional[float], Optional[float], str]:
+             height: Optional[float],
+             declared: Optional[Dict[str, Any]] = None
+             ) -> Tuple[Optional[float], Optional[float], str]:
     """(width_um, height_um, source).
 
     The floorplan's own DIEAREA is preferred over the GDS bounding box: the
     bbox is whatever geometry happens to reach furthest, which on a die with
     an outline marker or an overhanging label is not the die.
+
+    THE DECLARATION IS THE LAST SOURCE, NOT THE FIRST, and the order is the
+    whole reason it can be added at all (vibe-ic#1410/cpath). A DEF's DIEAREA
+    is the die that was BUILT; `die_area_um` is the die that was AGREED. The
+    ring must fit the layout it is being added to, so where both exist the
+    built one wins and this changes nothing for any project that has a DEF —
+    which is every project that has ever reached this step. Where they
+    DISAGREE that is a real defect, and it is 37.5ic's general precheck that
+    owns it: comparing the layout against the declaration is that step's job,
+    and quietly sealing to the declared number here would erase the evidence
+    it reads.
+
+    What it DOES close: a self-tape-out that streamed a GDS and carries no DEF
+    used to reach "no DIEAREA found; caller must pass --die-width/--die-height"
+    and skip, while the number it needed was written down two directories away.
     """
     if width and height:
         return float(width), float(height), "--die-width/--die-height"
@@ -293,7 +421,18 @@ def die_size(project: Path, gds: Path,
             x0, y0, x1, y1 = (int(m.group(i)) for i in (1, 2, 3, 4))
             return ((x1 - x0) / scale, (y1 - y0) / scale,
                     f"DIEAREA of {d.relative_to(project)}")
-    return None, None, "no DIEAREA found; caller must pass --die-width/--die-height"
+    rect = _declared(declared or {}, _DECL_DIE_AREA)
+    if (isinstance(rect, (list, tuple)) and len(rect) == 4
+            and all(isinstance(c, (int, float)) and not isinstance(c, bool)
+                    for c in rect)):
+        w, h = float(rect[2]) - float(rect[0]), float(rect[3]) - float(rect[1])
+        if w > 0 and h > 0:
+            return w, h, (f"{_DECL_SOURCE}.{_DECL_DIE_AREA} {list(rect)} "
+                          "(no DEF DIEAREA on this tree)")
+    return None, None, ("no DIEAREA found in any DEF and "
+                        f"{_DECL_SOURCE}.{_DECL_DIE_AREA} is "
+                        f"{_td.NOT_DETERMINED}; caller must pass "
+                        "--die-width/--die-height")
 
 
 #: What a `pya-cli` script DECLARES. LibreLane's generic caller passes
@@ -455,7 +594,7 @@ def write_finished_def(routed: Path, out: Path,
                   + text[at:])
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(merged)
+        atomic_write_text(out, merged)
     except OSError as exc:
         return False, f"cannot write the finished-die DEF: {exc}"
     return True, f"{len(rects)} seal-ring placement blockage(s)"
@@ -620,7 +759,7 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         res["artefacts"] = artefacts
         try:
             rep.parent.mkdir(parents=True, exist_ok=True)
-            rep.write_text(json.dumps(res, indent=2))
+            atomic_write_json(rep, res)
         except OSError as exc:                               # noqa: BLE001
             res.setdefault("report_unwritable", str(exc))
         return res
@@ -630,13 +769,61 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         return done({"state": "FAIL",
                      "reason": f"unknown invocation form {declared_form!r} "
                                f"(known: {', '.join(_FORMS)})"})
+
+    # ── SECTION 2C OF THE TAPE-OUT DECLARATION ────────────────────────────
+    # Read BEFORE anything is resolved, because one of its answers can decide
+    # the whole step and another changes what a skip is allowed to claim.
+    decl, decl_why = _declaration(project)
+    if decl_why:
+        # The file EXISTS and could not be read. Not a skip: the three answers
+        # are UNKNOWN rather than absent, and a step that cannot see its input
+        # must say so rather than report a clean not-applicable.
+        return done({"state": "FAIL",
+                     "reason": f"the tape-out declaration exists and could "
+                               f"not be read, so section "
+                               f"{_td.SECTION_SEAL_RING} is unknown rather "
+                               f"than unanswered: {decl_why}"})
+    seal_required = _declared(decl, _DECL_REQUIRED)
+    answered_2c = [k for k in (_DECL_REQUIRED, _DECL_SCRIPT, _DECL_MARKER)
+                   if _declared(decl, k) is not None]
+    if answered_2c and seal_required is None:
+        # SOMEBODY WAS ASKED AND DID NOT ANSWER THE ONE QUESTION THE OTHER TWO
+        # HANG OFF. "Is there a seal ring" is not a property of the layout —
+        # `_tapeout_declaration.py` opens by saying so: it is "required by
+        # whom?", and this field is the whom. A script or a marker layer
+        # answered while this is left NOT_DETERMINED is a declaration that was
+        # started and abandoned, which must not buy the exit code of a
+        # declaration nobody was ever handed.
+        return done({"state": "FAIL",
+                     "reason": f"declaration section {_td.SECTION_SEAL_RING} "
+                               f"was STARTED ({', '.join(sorted(answered_2c))} "
+                               f"answered) and leaves {_DECL_REQUIRED!r} "
+                               f"{_td.NOT_DETERMINED}. Nothing here decides "
+                               f"for the design whether the party that takes "
+                               f"this layout requires a ring; answer "
+                               f"{_DECL_REQUIRED!r} in "
+                               f"{_td.DECLARATION_REL}",
+                     "declaration": dict(decl)})
+    if seal_required is False:
+        # A DECIDED OUTCOME, and the only source that can decide it is the
+        # design. `marker=True`: this earns `die_finishing.SKIPPED.txt`, the
+        # artefact the flow declares as the alternative to a finished die,
+        # exactly as "this PDK ships no generator" does.
+        return done(_skip(
+            f"the design's own tape-out declaration answers "
+            f"{_DECL_REQUIRED}=false in {_td.DECLARATION_REL}: the party that "
+            f"takes this layout does not require a seal ring, so none is "
+            f"inserted and none is claimed. This is a DECLARED "
+            f"not-applicable, not an absence of evidence",
+            marker=True, declaration=dict(decl)))
+
     tech = tech or cfg.get("tech")
-    marker = marker or cfg.get("marker_layer")
+    marker = marker or cfg.get("marker_layer") or _declared(decl, _DECL_MARKER)
     id_cells = [c for c in
                 ((cfg.get("die_id") or {}).get("cells") or [])
                 if isinstance(c, str)]
 
-    script, src, tried = resolve_script(project, script, pdk_root, pdk)
+    script, src, tried = resolve_script(project, script, pdk_root, pdk, decl)
     if not script:
         # LibreLane's own wording for this case names the PDK and says the step
         # is skipped: "KLAYOUT_SEALRING_SCRIPT is unset. KLayout.SealRing may
@@ -647,8 +834,20 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         return done(_skip(
             f"no seal-ring generator is declared for the {named} PDK — die "
             "finishing may not be supported for it, so this step is SKIPPED "
-            "and no ring is claimed (looked for: " + "; ".join(tried) + ")",
-            marker=True, pdk=named, tried=tried))
+            "and no ring is claimed (looked for: " + "; ".join(tried) + ")"
+            + (_REQUIRED_AND_ABSENT if seal_required else ""),
+            # THE MARKER TURNS ON WHAT THE DESIGN DECLARED, and this is the
+            # `_skip` docstring's own distinction applied to a fact it could
+            # not previously see. "This PDK ships no generator" is a legitimate
+            # not-applicable ONLY while nobody has said a ring is required. A
+            # design that answered `seal_ring_required=true` and got no ring is
+            # the OTHER case — the step could not run — and must not leave
+            # `die_finishing.SKIPPED.txt` behind, because the flow reads that
+            # marker as the step having produced one of its two declared
+            # outcomes and the die would ship unsealed against its own
+            # declaration.
+            marker=not seal_required, pdk=named, tried=tried,
+            seal_ring_required=seal_required))
 
     gds_path = Path(gds) if gds else _first(project, _GDS_GLOBS)
     if gds_path is not None and not gds_path.is_absolute():
@@ -686,9 +885,13 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
              f"the seal-ring generator declared by {src} ({script}) does not "
              f"exist in the {runner.kind} environment ({runner.detail}) — "
              f"die finishing is SKIPPED for the {named} PDK and no ring is "
-             "claimed"),
-            marker=True, pdk=named, script=script, script_source=src,
-            tried=tried))
+             "claimed")
+            + (_REQUIRED_AND_ABSENT if seal_required else ""),
+            # Same rule as the branch above: a declared-required ring that was
+            # not built is the step failing to run, never a not-applicable.
+            marker=not seal_required, pdk=named, script=script,
+            script_source=src, tried=tried,
+            seal_ring_required=seal_required))
 
     if declared_form:
         form, form_why = declared_form, "declared"
@@ -705,7 +908,7 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
                 script=script, script_source=src, form=form,
                 form_source=form_why))
 
-    w, h, die_src = die_size(project, gds_path, width, height)
+    w, h, die_src = die_size(project, gds_path, width, height, decl)
     if not w or not h:
         return done(_skip(f"cannot determine the die size: {die_src}",
                           script=script, script_source=src))
@@ -732,7 +935,7 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
     # report makes the SAME container that already runs DRC/LVS able to run it.
     if not runner.covers(engine):
         materialised = rep.parent / Path(engine).name
-        materialised.write_text(Path(engine).read_text())
+        atomic_write_text(materialised, Path(engine).read_text())
         engine = materialised
     for label, pth in (("GDS", gds_path), ("engine", engine),
                        ("output", staged.parent), ("report dir", rep.parent)):
@@ -794,7 +997,7 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         seal["reason"] = (
             f"the PDK seal-ring generator ({script}) produced no output layout "
             f"at {staged} — it exited {rc}"
-            + (f" and said: {tail.splitlines()[0][:200]}" if tail else "")
+            + (f" and said: {_last_said(tail)}" if tail else "")
             + ". No ring was added; the die is unsealed.")
         return done(seal)
 
@@ -898,7 +1101,7 @@ def main(argv=None) -> int:
         if not o.is_absolute():
             o = project / o
         o.parent.mkdir(parents=True, exist_ok=True)
-        o.write_text(json.dumps(res, indent=2))
+        atomic_write_json(o, res)
 
     print(json.dumps(res, indent=2))
     state = (res.get("seal_ring") or {}).get("state")

@@ -2,6 +2,18 @@
 """tapeout_readiness_check.py — the EXTERNAL refusal interface, pointed at a
 shuttle that still exists.
 
+ENFORCEMENT: advisory here — this gate is not in
+``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
+it inline at all. It runs as the SECOND ARM of step 37.5ic, invoked by
+``tapeout_precheck`` whenever the PDK ships a shuttle precheck and that
+operator's template was fetched; ``tapeout_precheck``'s rc IS that step's
+verdict, so a refusal here refuses the step. "advisory" names the RUNNER channel
+it is absent from, not a verdict this gate cannot reach. Declared because
+vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an
+enforcement decision nobody made; wiring it into the runner would change what a
+real run blocks on, which is the flow owner's call and is recorded, not taken
+here. Kept in the first 4 kB: `declared_intent` reads only `text[:4000]`.
+
 WHY THIS EXISTS (vibe-ic#1744)
 ==============================
 Every other gate in this tree we wrote. A gate we wrote can be made to pass by
@@ -213,6 +225,18 @@ class Shuttle:
     default_image: str
     entrypoint: Tuple[str, ...]      # argv prefix inside the container
     ladder: Tuple[LadderStep, ...]
+    #: WHICH PDK THIS SHUTTLE'S PRECHECK IS FOR — the FAMILY name, not a
+    #: variant. It is the answer to "does this PDK ship a shuttle precheck",
+    #: and it was previously written down NOWHERE: the fact lived only inside
+    #: the `shuttle_id` string and the prose. A consumer that has a PDK and
+    #: needs to know whether a second, external authority exists for it had to
+    #: parse an id, so this is stated as a field.
+    #:
+    #: NOT duplicated into `pdk_registry.json`. That registry answers "how do I
+    #: build on this PDK" (site, decks, cells); this one answers "who else
+    #: refuses submissions on it". One fact, one authority — a copy in the
+    #: other file would be a second place to forget.
+    pdk: str = ""
     note: str = ""
     retired_reason: str = ""
 
@@ -233,6 +257,7 @@ _WAFER_SPACE_GF180MCU = Shuttle(
     tool="gf180mcu-precheck",
     upstream="https://github.com/wafer-space/gf180mcu-precheck",
     default_image="ghcr.io/wafer-space/gf180mcu-precheck:latest",
+    pdk="gf180mcu",
     # The upstream image's own documented invocation (its Dockerfile carries
     # this as org.opencontainers.image.usage); the entrypoint is a nix dev-shell
     # wrapper, so the argv is the bare `python precheck.py …`.
@@ -255,8 +280,18 @@ _WAFER_SPACE_GF180MCU = Shuttle(
             # / below a byte threshold). It is NOT a die-DIMENSION gate and is
             # deliberately not claimed here: naming it would report coverage this
             # tree does not have.
-            covered_by=("die_slot_dimension_check", "seal_ring_check",
-                        "frame_dimension_check")),
+            #
+            # `general_precheck` IS claimed, and the claim is the point of
+            # recomputing this: it examines the SAME property — the flattened
+            # bounding box's lower-left against a declared origin, and its
+            # extent against a declared die area — for a design with no
+            # operator. Until it landed this step recomputed as UNCOVERED, and
+            # the artefact that proves the gap was real is published:
+            # `u_hawaii_adc` sky130A streams a `phase3/stage4/gds/ldo.gds`
+            # whose flattened box starts at (-4.5, -223.305) um, byte-identical
+            # to that design's own analog hardmacro.
+            covered_by=("general_precheck", "die_slot_dimension_check",
+                        "seal_ring_check", "frame_dimension_check")),
         LadderStep(
             "KLayout.CheckPadMask", "Check Pad Mask",
             "the pad openings do not match the pad mask for the slot",
@@ -278,7 +313,11 @@ _WAFER_SPACE_GF180MCU = Shuttle(
         LadderStep(
             "Checker.KLayoutZeroAreaPolygons", "Zero Area Polygons Checker",
             "the layout contains zero-area polygons",
-            covered_by=("zero_area_polygon_check",)),
+            # `general_precheck` counts them EXACTLY, from the integer shoelace
+            # area of every BOUNDARY/BOX in the stream — no tolerance, because
+            # a GDSII coordinate is an integer and a tolerance would be a
+            # threshold of ours that somebody could widen.
+            covered_by=("general_precheck", "zero_area_polygon_check")),
         LadderStep(
             "Checker.KLayoutAntenna", "Antenna Checker",
             "antenna ratio violations",
@@ -306,6 +345,7 @@ _EFABLESS_OPEN_MPW = Shuttle(
     tool="mpw_precheck",
     upstream="https://github.com/efabless/mpw_precheck",
     default_image="efabless/mpw_precheck:latest",
+    pdk="sky130",
     entrypoint=("python3", "mpw_precheck.py"),
     ladder=(
         LadderStep("license", "License", "licence files missing or wrong"),
@@ -340,6 +380,74 @@ SHUTTLES: Dict[str, Shuttle] = {
 
 #: The shuttle a bare invocation asks. The LIVE one, by construction.
 DEFAULT_SHUTTLE = _WAFER_SPACE_GF180MCU.shuttle_id
+
+
+# --------------------------------------------------------------------------- #
+# "Does this PDK ship a shuttle precheck?" — asked of the registry above.
+#
+# WHY THIS LIVES HERE AND NOT IN THE CALLER. The registry IS the answer, and a
+# caller that re-derived it from the `shuttle_id` string would be a second copy
+# of the mapping with nothing tying the two together.
+#
+# A RETIRED SHUTTLE IS NOT AN ANSWER OF YES. The whole value of this arm is
+# that the verdict is somebody else's; a counterparty that stopped answering
+# cannot refuse, so it is not a second authority, and demanding a run from one
+# that no longer exists would make every design on that PDK permanently
+# unpassable. `shuttle_for_pdk` therefore resolves LIVE entries only, and
+# `retired_shuttles_for_pdk` exists beside it so a report can still NAME the
+# retired one — "this PDK once had an external bar and no longer does" is a
+# fact a reader is entitled to, and it is not the same fact as "this PDK never
+# had one".
+# --------------------------------------------------------------------------- #
+def shuttle_for_pdk(pdk_name: str) -> Optional[Shuttle]:
+    """The LIVE shuttle whose precheck covers `pdk_name`, or None.
+
+    Matching is by the SAME identity rule the tree already uses to decide
+    whether a declared PDK target and a library name are the same process —
+    `declared_pdk_is_the_pdk_used_check.shares_identity` — so a declaration of
+    `gf180mcuD` and a registry entry of `gf180mcu` resolve to each other and an
+    interior fragment does not. Re-implementing the comparison here would be a
+    second rule that could drift into matching more, or less, than the gate
+    that already owns the question.
+
+    Returns None for an empty/unknown name. None means "this registry names no
+    live shuttle for it" — it does NOT mean "no PDK was determined"; the caller
+    must keep those two apart, because one is a legitimate missing arm and the
+    other is a thing nobody looked up.
+    """
+    return _first_matching(pdk_name, LIVE)
+
+
+def retired_shuttles_for_pdk(pdk_name: str) -> Tuple[Shuttle, ...]:
+    """Every RETIRED shuttle whose precheck once covered `pdk_name`.
+
+    Reported, never run. See the block comment above.
+    """
+    matches = tuple(sh for sh in SHUTTLES.values()
+                    if sh.status == RETIRED and _pdk_matches(pdk_name, sh))
+    return matches
+
+
+def _first_matching(pdk_name: str, status: str) -> Optional[Shuttle]:
+    for sh in SHUTTLES.values():
+        if sh.status == status and _pdk_matches(pdk_name, sh):
+            return sh
+    return None
+
+
+def _pdk_matches(pdk_name: str, shuttle: Shuttle) -> bool:
+    if not (pdk_name or "").strip() or not shuttle.pdk:
+        return False
+    try:
+        import declared_pdk_is_the_pdk_used_check as _pdkid
+    except ImportError:                      # pragma: no cover - defensive
+        # NEVER silently fall back to a looser rule. A comparison we could not
+        # load is a comparison that did not happen, and reporting "no shuttle"
+        # from it would be exactly the silence this file exists to refuse. Exact
+        # equality is the STRICT direction, so the worst it can do is under-claim
+        # an arm — which the caller reports as NOT_DETERMINED, never as a pass.
+        return pdk_name.strip().lower() == shuttle.pdk.strip().lower()
+    return _pdkid.shares_identity(_pdkid.tokens(pdk_name), shuttle.pdk)
 
 #: Where a finished layout lives in this repo's project layout. Ordered; the
 #: first glob that matches anything wins. Nothing here is chip-specific.
@@ -448,6 +556,23 @@ def default_image_resolver(image: str, allow_pull: bool,
     except (OSError, subprocess.SubprocessError):
         return None
     if q.returncode == 0 and q.stdout.strip():
+        return image
+    # `docker images -q` answers for a NAME[:TAG] reference and returns EMPTY
+    # (exit 0) for a `repo@sha256:...` one — measured on Docker 29.7.1. So the
+    # MOST precise way to pin the counterparty's tool, by content digest, was
+    # the one form this resolver could not see, and the gate then reported "the
+    # counterparty was never asked" about an image sitting on the host. Ask the
+    # question that does answer for both forms before concluding absence.
+    # `image inspect` exits NON-ZERO for an image that is genuinely not there,
+    # so this widens what resolves, never what passes: an absent image is still
+    # None, and None is still NOT_DETERMINED.
+    try:
+        i = subprocess.run([docker_bin, "image", "inspect",
+                            "--format", "{{.Id}}", image],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if i.returncode == 0 and i.stdout.strip():
         return image
     if not allow_pull:
         return None

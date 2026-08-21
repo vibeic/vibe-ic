@@ -13,14 +13,14 @@ and the contribution guides for extending it.
 | | |
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
-| Plugin version | **1.10.97** |
-| Deterministic programs | **1195** top level (`plugins/vibe-ic/programs/*.py`), of which **1125** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
+| Plugin version | **1.11.68** |
+| Deterministic programs | **1238** top level (`plugins/vibe-ic/programs/*.py`), of which **1164** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 | Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
-| Canonical flow | **68 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) |
-| Test files | **2630** under `plugins/vibe-ic/programs/tests/` + **32** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
+| Canonical flow | **68 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) — 26 of them conditional, including the cell/IP vs chip/IC split |
+| Test files | **2727** under `plugins/vibe-ic/programs/tests/` + **31** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
 | License | Apache-2.0 |
 
 Every count above is generated, not typed: `python3 plugins/vibe-ic/programs/gen_program_inventory.py` writes [`PROGRAM_INVENTORY.json`](plugins/vibe-ic/programs/PROGRAM_INVENTORY.json), and `--check` fails when a stated count drifts from the tree. Several of these populations are simultaneously true and count different things — the artefact carries a `definition` for each, so quote the key, not a bare number.
@@ -39,8 +39,8 @@ Design**: the AI agent is the core decision-maker; EDA tools are callable
 execution engines.
 
 It is also **program-first**. The product is the deterministic runner chain
-(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1195 top-level programs
-→ MCP-EDA), not a prompt. **66 of the 68 flow steps are gated by a program
+(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1238 top-level programs
+→ MCP-EDA), not a prompt. **60 of the 63 flow steps are gated by a program
 whose exit code is the verdict**; the AI is the fall-through when a program
 cannot decide, never the thing that declares PASS.
 
@@ -82,26 +82,6 @@ stage only once real silicon comes back. Every step declares
 `program_exit_zero`); `↻` marks a close-loop step that re-runs until its gate
 is satisfied.
 
-**68 steps is the whole flow, not the path any one design walks.** Five of them
-are **conditional**, in the same way the analog and mixed-signal tracks already
-were: they declare a `condition: files_exist`, and `flow_compliance_check.py`
-routes a step whose condition is unmet to `SKIPPED-CONDITION` rather than
-running it. What decides is a real artefact from Phase 1, not a label. Step
-`0.5ic` (Submission Template Ingest) always writes one of two files —
-`input/submission_template/slots/*.yaml` when the design is going onto a
-shuttle slot, or `input/submission_template/NO_TEMPLATE.txt` when it is not.
-Pad Ring (`15.5ic`), Die Finishing (`26.5ic`) and Shuttle Precheck (`37.5ic`)
-are conditional on the slot geometry; Digital Hardmacro Generation (`37.5ip`)
-is conditional on `NO_TEMPLATE.txt` and is where the cell/IP path terminates,
-because an IP is delivered as a hardmacro and never as a die. `0.5ic` itself
-carries no condition — it is the step that decides, and a decider gated on its
-own decision would be circular. **63** was the flow's total before these five
-were added, which is why older text says 63 — it is not a count of what runs
-every time. Conditionality is the norm here rather than the exception: **26 of
-the 68 steps carry a `condition`** (the analog A1-A9 and mixed-signal M1-M4
-tracks among them), and only 42 are unconditional. No single design walks all
-68.
-
 Run the whole thing:
 
 ```bash
@@ -110,13 +90,14 @@ python3 plugins/vibe-ic/programs/flow_compliance_check.py <project_dir> \
 # exit 0 is the only PASS
 ```
 
-#### `stage_phase1` — Phase 1, Spec Extraction (input → L1-L27 structured JSON) — 1 step
+#### `stage_phase1` — Phase 1, Spec Extraction (input → L1-L27 structured JSON) — 2 steps
 
 End-of-stage gate: `phase1_compliance`
 
 | # | Step | Machine gate |
 |---|---|---|
 | `D1` | Phase 1 doc extraction — dialogue **or** existing documents → the L1-L27 layered JSON set | program |
+| `0.5ic` | Submission template ingest — the operator's slot geometry and identity fixtures, **read** rather than computed. Chooses the path: a template present ⇒ chip/IC, `NO_TEMPLATE.txt` ⇒ cell/IP | program |
 
 #### `stage1` — RTL Generation + Verification — 7 steps
 
@@ -169,13 +150,14 @@ is present. End-of-stage gate: `analog_compliance`
 | `A8` | Hardmacro generation (LEF + Liberty + GDS + Verilog) | program |
 | `A9` | ↻ Co-simulation / hardware verification | program |
 
-#### `stage3` — Physical Design + Sign-off — 18 steps
+#### `stage3` — Physical Design + Sign-off — 20 steps
 
 End-of-stage gate: `stage3_compliance` (`stage3_compliance.py`)
 
 | # | Step | Machine gate |
 |---|---|---|
 | `15` | Floorplan + PDN | program |
+| `15.5ic` | Pad ring — the I/O pads, corner cells and filler that form the die's edge *(chip/IC path only)*. Precedes routing because the pads **are** the top-level ports | program |
 | `16` | Clock planning | program |
 | `17` | Placement (global + detailed) | program |
 | `18` | Spare-cell + ECO-prep insertion (Design-for-ECO) | program |
@@ -187,6 +169,7 @@ End-of-stage gate: `stage3_compliance` (`stage3_compliance.py`)
 | `24` | ↻ IR drop (static + dynamic) | program |
 | `25` | ↻ EM check (electromigration lifetime) | program |
 | `26` | ↻ Antenna check (gate-oxide protection) | program |
+| `26.5ic` | Die finishing — seal ring and die identification *(chip/IC path only)* | program |
 | `27` | ↻ Signal integrity (crosstalk / noise / glitch + crosstalk-delay) | program |
 | `28` | ↻ PERC / reliability sign-off (ESD + latch-up + cross-domain) | program |
 | `29` | Post-layout gate-level simulation (post-sim + SDF) | program |
@@ -206,7 +189,7 @@ End-of-stage gate: `mixed_signal_compliance`
 | `M3` | Mixed-signal verification (AMS co-sim + RNM + interface signal integrity) | program |
 | `M4` | Mixed-signal sign-off (top-level PV + final verdict) | program |
 
-#### `stage4` — Output + Validation — 7 steps
+#### `stage4` — Output + Validation — 9 steps
 
 End-of-stage gate: `stage4_compliance` (`stage4_compliance.py`)
 
@@ -217,6 +200,8 @@ End-of-stage gate: `stage4_compliance` (`stage4_compliance.py`)
 | `35` | DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) | program |
 | `36` | Tapeout checklist (final sign-off confirmation) | program |
 | `37` | GDSII output (**only if step 31 PV is fully clean**) | program |
+| `37.5ip` | Digital hardmacro generation — LEF + Liberty + GDS + Verilog, and they must **agree**. The cell/IP path's terminal step | program |
+| `37.5ic` | Shuttle precheck — the operator's own refusal, run before submission *(chip/IC path only)*. The one gate in this flow whose verdict the project does not write | program |
 | `38` | Foundry handoff (mask spec + WAT plan + scribe layout + corner test kit) | program |
 | `39` | FPGA final sign-off (recompile + on-board test) | program |
 
@@ -377,7 +362,7 @@ claude plugin install vibe-ic
 
 The MCP-EDA server lives **inside** the plugin
 (`plugins/vibe-ic/mcp-eda/`), so one install gets the skills, the agents,
-the 1195 top-level programs, and all 56 EDA/device tools. See
+the 1238 top-level programs, and all 56 EDA/device tools. See
 [`plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md`](plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md)
 for the container prerequisites.
 
@@ -479,7 +464,7 @@ auto-registered on install. Inventory of record:
 
 ---
 
-## Deterministic programs (1195 top level)
+## Deterministic programs (1238 top level)
 
 ```bash
 cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
@@ -561,7 +546,7 @@ vibe-ic-marketplace/
 ├── templates/partner-plugin-skeleton/
 ├── community/backlogs/
 └── plugins/
-    └── vibe-ic/                         ← the single plugin (v1.10.97)
+    └── vibe-ic/                         ← the single plugin (v1.11.68)
         ├── .claude-plugin/plugin.json
         ├── flow/
         │   └── phase1_phase2_phase3.yaml   ← 68-step source of truth
@@ -573,11 +558,11 @@ vibe-ic-marketplace/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
         ├── skills/                      ← 60 skills, each + compliance.yaml
-        ├── programs/                    ← 3857 *.py at any depth (1195 top level)
+        ├── programs/                    ← 4030 *.py at any depth (1211 top level)
         │   ├── flow_compliance_check.py ← final gate
         │   ├── stage{1,2,3,4}_compliance.py
         │   ├── pdk_registry.json, ic_class_registry.json
-        │   └── tests/                   ← 2630 test files
+        │   └── tests/                   ← 2727 test files
         ├── mcp-eda/                     ← bundled MCP server, 56 tools
         ├── ip-catalog/                  ← reusable open-source IP index
         └── hooks/

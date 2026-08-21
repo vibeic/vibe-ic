@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """Gate the shuttle-template ingest — step 0.5ic's verdict.
 
+ENFORCEMENT: advisory here — this gate is not in
+``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
+it inline at all. It runs when ``flow_compliance_check`` evaluates step 0.5ic's
+``program_exit_zero`` clause, so its rc IS that step's verdict — "advisory"
+names the RUNNER channel it is absent from, not a verdict this gate cannot
+reach. Declared because vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an
+enforcement decision nobody made; wiring it into the runner would change what a
+real run blocks on, which is the flow owner's call and is recorded, not taken
+here. Kept in the first 4 kB: `declared_intent` reads only `text[:4000]`.
+
 Judges the record `submission_template_ingest` wrote: that the template it
 claims is really on disk and unchanged, that the slot geometry does not
 disagree with itself, that the slot this design DECLARED is one the template
@@ -26,6 +36,12 @@ WHAT IT REFUSES
                                   cannot be checked against itself.
     SLOT_GEOMETRY_DEGENERATE      a rect that is not four numbers, or has a
                                   non-positive width or height.
+    PAD_LIST_UNREAD               a slot declares no pad list under any name the
+                                  ingester knows, while the same file does carry
+                                  list-valued keys it did not claim. That is not
+                                  a slot with no pads; it is a slot whose pads
+                                  were not understood, and the two must not
+                                  share an answer.
     CORE_NOT_INSIDE_DIE           the core rect is not contained in the die rect.
     RING_DISAGREES                the slot DECLARES a ring width and the die is
                                   not the core grown by it on all four sides.
@@ -41,11 +57,30 @@ WHAT IT REFUSES
                                   things at once.
     TREE_DISAGREES_WITH_REPORT    the record and the files on disk do not agree
                                   about what was produced.
-    NO_TEMPLATE_FILE_MISSING      the record says no template and the step's
-                                  declared prose output is not there.
+    SLOT_FILE_DISAGREES_WITH_RECORD
+                                  the slot file a later step will open does not
+                                  carry the geometry the record says it does. A
+                                  report that agrees with the operator and
+                                  disagrees with its own output has pinned
+                                  nothing.
+    NO_TEMPLATE_FILE_MISSING      the record DECLARES there is no template and
+                                  the file that declaration lives in — the one
+                                  the flow routes the IP path on — is not there.
     REPORT_ABSENT / REPORT_UNREADABLE / REPORT_SCHEMA
                                   there is no record to judge, which is a
                                   refusal and never a quiet pass.
+
+THE TWO OUTPUTS ARE ROUTERS
+==========================
+Measured on the flow that consumes them: `slots/*.yaml` makes the chip-path
+steps applicable and `NO_TEMPLATE.txt` makes the IP-path step applicable, by a
+`files_exist` condition and nothing else. No step blocks on this one and no step
+takes a required_input from it, so THIS GATE'S OWN FAIL DOES NOT STOP EITHER
+PATH FROM BEING SELECTED — the file existing is the whole decision.
+
+So an absence has to be BOUGHT before it is written, and this gate tests the
+same predicate the producer used, out of the same module, so the two cannot
+drift into a file one wrote and the other would have refused.
 
 NOT_APPLICABLE IS NOT A PASS
 ============================
@@ -80,10 +115,44 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling imports below resolve however this is invoked
 
 import _submission_template as ST  # noqa: E402
+import _tapeout_declaration as TD  # noqa: E402  the OTHER half of step 0.5ic
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402  vibe-ic#1082
 
 
 PROGRAM = "submission_template_check"
+
+
+def _declared_absence_router(project: Path) -> Optional[str]:
+    """Which router file a DECLARED absence of a template lives in, or None.
+
+    STEP 0.5ic HAS TWO PROGRAMS AND THEY BOTH WRITE HERE. `submission_template_
+    ingest` records the absence and writes `NO_TEMPLATE.txt`;
+    `tapeout_declaration_gen` — the other half of the SAME step — then RETIRES
+    that marker on purpose when the design declares `deliverable=DIE`, because
+    `NO_TEMPLATE.txt` is the IP terminal's router (37.5ip) and a die must not
+    select it. It writes `SELF_TAPEOUT.txt` in its place.
+
+    So a declared absence legitimately lives in either file, and which one is
+    decided by the design's own declaration rather than by this checker.
+    (`slots/*.yaml` is the third router and is not an absence at all.)
+
+    A FILE COUNTS ONLY WHEN IT CARRIES ITS PRODUCER'S MARKER on the first line.
+    That is the same test both producers already apply before retiring a marker
+    of their own: a file some other hand left behind is evidence of nothing,
+    and accepting it would let an empty file of the right name buy a pass.
+    """
+    for rel, marker in ((ST.NO_TEMPLATE_REL, ST.NO_TEMPLATE_MARKER),
+                        (TD.SELF_TAPEOUT_REL, TD.SELF_TAPEOUT_MARKER)):
+        path = project / rel
+        if not path.is_file():
+            continue
+        try:
+            head = path.read_text(errors="replace").splitlines()[:1]
+        except OSError:
+            continue
+        if head and head[0].strip() == marker:
+            return rel
+    return None
 
 
 def _refusal(rule: str, message: str, **extra) -> Dict[str, Any]:
@@ -177,6 +246,32 @@ def check_slot_geometry(slot: dict) -> List[Dict[str, Any]]:
     return out
 
 
+def check_slot_pads(slot: dict) -> List[Dict[str, Any]]:
+    """Refusals raised by ONE slot's pad declaration.
+
+    MEASURED against a real operator template: its slot files carry one pad list
+    PER DIE SIDE, and an ingester looking for a single singular key found none
+    and recorded a null. Nothing refused that, so "this slot has no pads" and
+    "this program did not understand this slot" were the same sentence. They are
+    not the same sentence any more.
+    """
+    pads = slot.get("pads") or {}
+    if pads.get("lists"):
+        return []
+    unmatched = pads.get("unmatched_list_keys") or []
+    if not unmatched:
+        return []          # genuinely no list-valued key at all: nothing missed
+    return [_refusal(
+        "PAD_LIST_UNREAD",
+        f"slot {slot.get('slot')!r} ({slot.get('source_file')}) declares no pad "
+        f"list matching {pads.get('pattern')!r}, and the same file carries "
+        f"{len(unmatched)} list-valued key(s) this program did not claim: "
+        f"{', '.join(map(str, unmatched))}. A slot whose pads were not "
+        f"understood must not read as a slot with no pads.",
+        slot=slot.get("slot"), source_file=slot.get("source_file"),
+        unmatched_list_keys=unmatched)]
+
+
 def _geometry_key(slot: dict) -> tuple:
     die, core = slot.get("die_area") or {}, slot.get("core_area") or {}
     return (tuple(die.get("rect") or ()), tuple(core.get("rect") or ()))
@@ -197,7 +292,7 @@ def evaluate(project: Path, doc: Optional[dict],
     examined: Dict[str, Any] = {
         "slots_in_record": 0, "slot_files_on_disk": 0,
         "fixtures_in_record": 0, "template_files_rehashed": 0,
-        "no_template_marker_on_disk": False,
+        "path_router_on_disk": False,
     }
     na_reason: Optional[str] = None
 
@@ -205,7 +300,15 @@ def evaluate(project: Path, doc: Optional[dict],
     on_disk = sorted(slots_dir.glob("*.yaml")) if slots_dir.is_dir() else []
     no_tmpl = project / ST.NO_TEMPLATE_REL
     examined["slot_files_on_disk"] = len(on_disk)
-    examined["no_template_marker_on_disk"] = no_tmpl.is_file()
+    # A FILESYSTEM FACT, AND IT MUST STAY ONE. This says whether the IP
+    # terminal's router is on disk, marker or no marker, because the refusal
+    # that reads it — NEVER_LOOKED / NO_TEMPLATE_WITHOUT_REASON, "and the file
+    # IS on disk, which is the file the flow selects its IP path on" — exists
+    # precisely to name a stray one nobody declared. Requiring a marker here
+    # would hide the case the sentence was written for. The marker-checked
+    # question is a DIFFERENT question and is reported separately, below, as
+    # `declared_absence_router`.
+    examined["path_router_on_disk"] = no_tmpl.is_file()
 
     if report_problem is not None:
         refusals.append(report_problem)
@@ -237,14 +340,13 @@ def evaluate(project: Path, doc: Optional[dict],
 
     # ---- nobody looked ---------------------------------------------------- #
     if status == ST.STATUS_NOT_ATTEMPTED:
-        if not no_tmpl.is_file():
-            refusals.append(_refusal(
-                "NO_TEMPLATE_FILE_MISSING",
-                f"the record says no template and {ST.NO_TEMPLATE_REL} is not "
-                f"there, so the step produced nothing and said nothing."))
         detail = ""
+        if no_tmpl.is_file():
+            detail += (f" And {ST.NO_TEMPLATE_REL} IS on disk, which is the "
+                       f"file the flow selects its IP path on — a run nobody "
+                       f"investigated is currently choosing a delivery path.")
         if why:
-            detail = (f" A reason IS stated ({len(why)} chars) and buys "
+            detail += (f" A reason IS stated ({len(why)} chars) and buys "
                       f"nothing here: it describes a template nobody searched "
                       f"for. State it together with the path that was searched.")
         refusals.append(_refusal(
@@ -260,13 +362,58 @@ def evaluate(project: Path, doc: Optional[dict],
 
     # ---- searched, and it is not there ------------------------------------ #
     if status == ST.STATUS_ABSENT:
-        if not no_tmpl.is_file():
-            refusals.append(_refusal(
-                "NO_TEMPLATE_FILE_MISSING",
-                f"the record says the template is absent and "
-                f"{ST.NO_TEMPLATE_REL} is not there. A design that targets no "
-                f"shuttle must still SAY so."))
-        if len(why) < ST.MIN_REASON_CHARS:
+        if lookup.get("path_exists"):
+            examined["template_path_exists_but_is_not_a_directory"] = True
+        # THE DECLARATION DECIDES WHETHER THE ROUTER IS EXPECTED. Tested with
+        # the producer's own predicate so a file one wrote can never be one the
+        # other would have refused.
+        if ST.declares_no_template(status, why):
+            # THE DECLARED ABSENCE HAS TWO LEGITIMATE HOMES, NOT ONE.
+            #
+            # This clause named `NO_TEMPLATE.txt` alone, and that made THE
+            # SELF-TAPE-OUT ROUTE IMPASSABLE. Measured by driving step 0.5ic's
+            # own two programs, in the order the flow declares them, on a die
+            # with no operator:
+            #
+            #   submission_template_ingest  -> status=ABSENT, writes
+            #                                  NO_TEMPLATE.txt
+            #   tapeout_declaration_gen     -> RETIRES NO_TEMPLATE.txt on
+            #                                  purpose and writes
+            #                                  SELF_TAPEOUT.txt
+            #   submission_template_check   -> rc 1, NO_TEMPLATE_FILE_MISSING
+            #
+            # The step's own gate refused the tree the step's own producers had
+            # just built, and 0.5ic gates the whole chip path behind it. The
+            # step's SECOND gate clause already reads it the other way:
+            # `tapeout_declaration_check` PASSES that same tree and names
+            # `SELF_TAPEOUT.txt` as its router.
+            #
+            # NOTHING IS WIDENED BY THIS. The absence must still be DECLARED,
+            # it must still live in a file the flow reads, and that file must
+            # still carry its producer's marker. The only change is that the
+            # checker now accepts the file the design's own declaration
+            # selected instead of insisting on the one the other half of its
+            # step deliberately retired.
+            router = _declared_absence_router(project)
+            if router is None:
+                refusals.append(_refusal(
+                    "NO_TEMPLATE_FILE_MISSING",
+                    f"the record DECLARES there is no template and neither "
+                    f"{ST.NO_TEMPLATE_REL} nor {TD.SELF_TAPEOUT_REL} is there "
+                    f"carrying its producer's marker. A design that targets no "
+                    f"shuttle must still SAY so, in a file the flow reads: "
+                    f"{ST.NO_TEMPLATE_REL} routes the IP terminal and "
+                    f"{TD.SELF_TAPEOUT_REL} routes a die doing its own "
+                    f"tape-out.",
+                    declared_reason_chars=len(why)))
+            else:
+                examined["declared_absence_router"] = router
+                na_reason = why
+        else:
+            extra = ("" if not no_tmpl.is_file() else
+                     f" And {ST.NO_TEMPLATE_REL} IS on disk, which is the file "
+                     f"the flow selects its IP path on — an undeclared absence "
+                     f"is currently choosing a delivery path.")
             refusals.append(_refusal(
                 "NO_TEMPLATE_WITHOUT_REASON",
                 f"the template was searched for at "
@@ -275,10 +422,8 @@ def evaluate(project: Path, doc: Optional[dict],
                 f"that is a genuine not-applicable for this design "
                 f"({'absent' if not why else f'only {len(why)} char(s)'}; "
                 f"{ST.MIN_REASON_CHARS} required). Nothing to check is a FAIL, "
-                f"not a pass.",
+                f"not a pass.{extra}",
                 stated_chars=len(why), floor=ST.MIN_REASON_CHARS))
-        else:
-            na_reason = why
         return _verdict(refusals, examined, na_reason)
 
     if status != ST.STATUS_INGESTED:
@@ -345,6 +490,31 @@ def evaluate(project: Path, doc: Optional[dict],
                     slot=s.get("slot"), source_file=src,
                     recorded_sha256=recorded, actual_sha256=now))
         refusals.extend(check_slot_geometry(s))
+        refusals.extend(check_slot_pads(s))
+
+    # THE ARTEFACT A LATER STEP OPENS MUST SAY WHAT THE RECORD SAYS. The slot
+    # files under the project are the step's declared output and the thing
+    # downstream reads; checking the operator's template and not them would
+    # leave the die number editable by anyone after the fact. Compared only
+    # when the COUNTS already agree, so this rule and TREE_DISAGREES_WITH_REPORT
+    # can never both name one defect.
+    if slots and len(on_disk) == len(slots):
+        emitted, unreadable = [], []
+        for f in on_disk:
+            try:
+                emitted.append(json.loads(f.read_text(errors="replace")))
+            except ValueError as exc:
+                unreadable.append(f"{f.name} ({exc})")
+        want = sorted((str(s.get("slot")), _geometry_key(s)) for s in slots)
+        got = sorted((str(s.get("slot")), _geometry_key(s)) for s in emitted)
+        if unreadable or want != got:
+            detail = (f"unreadable: {', '.join(unreadable)}" if unreadable
+                      else f"record pins {want}; the files carry {got}")
+            refusals.append(_refusal(
+                "SLOT_FILE_DISAGREES_WITH_RECORD",
+                f"the slot file(s) under {ST.SLOTS_DIR_REL} do not carry the "
+                f"geometry this record claims for them — {detail}",
+                unreadable=unreadable))
 
     # two files pinning one name to different geometry
     by_name: Dict[str, List[dict]] = {}

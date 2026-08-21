@@ -138,6 +138,17 @@ _UNVERIFIED = (
 )
 
 
+#: Inner bound for the `git` plumbing calls below, in seconds.
+#:
+#: These are `git cat-file` / `git ls-tree` / `git rev-parse` reads of this
+#: repository, MEASURED at under 0.01 s each in the pinned image (the whole file
+#: runs in 1.30 s with the sibling preflight file). The 120 s literal they
+#: carried was above the per-call ceiling `ci_harness_timeout_ceiling_check`
+#: publishes, and a bound above that ceiling turns that gate red — which put a
+#: smoke-floor test, and therefore every landing, in refusal.
+_GIT_BOUND = 30
+
+
 def _git(*args: str, input_bytes: bytes | None = None) -> tuple[int, bytes]:
     proc = subprocess.run(
         ["git", *args],
@@ -145,7 +156,7 @@ def _git(*args: str, input_bytes: bytes | None = None) -> tuple[int, bytes]:
         input=input_bytes,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=120,
+        timeout=_GIT_BOUND,
         check=False,
     )
     return proc.returncode, proc.stdout
@@ -158,7 +169,7 @@ def _git_bytes(*args: str, input_bytes: bytes | None = None) -> bytes:
         input=input_bytes,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=120,
+        timeout=_GIT_BOUND,
         check=False,
     )
     assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")

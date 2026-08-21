@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """digital_hardmacro_check.py — the gate of record for flow step 37.5ip.
 
+ENFORCEMENT: advisory here — this gate is not in
+``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
+it inline at all. It runs when ``flow_compliance_check`` evaluates step 37.5ip's
+``program_exit_zero`` clause, so its rc IS that step's verdict — "advisory"
+names the RUNNER channel it is absent from, not a verdict this gate cannot
+reach. Declared because vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an
+enforcement decision nobody made; wiring it into the runner would change what a
+real run blocks on, which is the flow owner's call and is recorded, not taken
+here. Kept in the first 4 kB: `declared_intent` reads only `text[:4000]`.
+
 Step 37.5ip is where the two paths part. A chip is FABRICATED; an IP is
 DELIVERED. What is delivered is not a die — it is a kit of FOUR VIEWS of one
 macro:
@@ -257,6 +267,57 @@ DEFAULT_TOL_PCT = 2.0
 DEFAULT_TOL_UM = 0.01
 
 VIEW_EXTS = (".lef", ".lib", ".gds", ".v")
+
+#: The same four views written as the paths step 37.5ip DECLARES, so the set
+#: this program searches is stated in the vocabulary the flow uses rather than
+#: only as a suffix filter.
+#:
+#: WHY BOTH FORMS EXIST (measured 2026-08-20)
+#: ------------------------------------------
+#: Discovery itself must stay `iterdir()` + `suffix.lower()`: a kit that ships
+#: `CORE.LEF` is a kit, and `Path.glob("*.lef")` is case-SENSITIVE on Linux, so
+#: globbing alone would make an upper-case delivery invisible — the failure
+#: mode where a check reports "no kit" about a kit that is right there.
+#:
+#: But a suffix filter names no path, and dimension 4 asks a fair question of
+#: every gate: does the program actually read what the step declares? It could
+#: resolve `*.lef`, `*.lib` and `*.gds` only from PROSE in this docstring, and
+#: could not resolve `phase3/stage4/hardmacro/*.v` at all. Three of the four
+#: were being credited to a comment. These globs are used below to say which
+#: declared view was searched for and not found, so the answer stops depending
+#: on what the documentation happens to mention.
+#:
+#: WRITTEN OUT, not built with an f-string over ``VIEW_EXTS``: a comprehension
+#: produces the same four strings at runtime and NO literal in the source, so
+#: any reader that works from the text — dimension 4, a grep, a person — still
+#: could not tell which paths this program opens. The assertion below keeps the
+#: two forms from drifting.
+DECLARED_VIEW_GLOBS = (
+    "phase3/stage4/hardmacro/*.lef",
+    "phase3/stage4/hardmacro/*.lib",
+    "phase3/stage4/hardmacro/*.gds",
+    "phase3/stage4/hardmacro/*.v",
+)
+assert tuple(g.rsplit("*", 1)[-1] for g in DECLARED_VIEW_GLOBS) == VIEW_EXTS, (
+    "DECLARED_VIEW_GLOBS and VIEW_EXTS name different view sets")
+
+
+def unmatched_view_globs(project: Path) -> List[str]:
+    """Which declared view path matched NOTHING under `project`.
+
+    Case-insensitive, to agree with `discover_packages`: `*.lef` here also
+    accounts for `CORE.LEF`.
+    """
+    out: List[str] = []
+    for pattern in DECLARED_VIEW_GLOBS:
+        ext = pattern.rsplit("*", 1)[-1].lower()
+        base = project / pattern.rsplit("/", 1)[0]
+        hit = base.is_dir() and any(
+            q.is_file() and q.suffix.lower() == ext for q in base.iterdir())
+        if not hit:
+            out.append(pattern)
+    return out
+
 
 
 def _require(obj, what: str):
@@ -1088,7 +1149,9 @@ def run_audit(project: Path, tol_pct: float = DEFAULT_TOL_PCT,
         result.findings.append(Finding(
             rule="NO_HARDMACRO_PACKAGE", severity="INFO",
             message=(f"`{hm_dir.name}/` under phase3/stage4 holds no "
-                     f"{'/'.join(VIEW_EXTS)} view. Step 37.5ip is the cell/IP "
+                     f"{'/'.join(VIEW_EXTS)} view. Searched and found nothing "
+                     f"for: {', '.join(unmatched_view_globs(project))}. "
+                     f"Step 37.5ip is the cell/IP "
                      f"path TERMINAL: what it delivers is the kit, so with no "
                      f"kit on disk NOTHING about one has been established — "
                      f"this is NOT a statement that the IP is deliverable.")))
@@ -1096,6 +1159,7 @@ def run_audit(project: Path, tol_pct: float = DEFAULT_TOL_PCT,
             "skipped": True, "reason": "no_hardmacro_package",
             "hardmacro_dir": str(hm_dir),
             "hardmacro_dir_exists": hm_dir.is_dir(),
+            "searched_and_absent": unmatched_view_globs(project),
             "packages": [], "verdict_tier": "NOT_DETERMINED",
             "pass": True,
         }

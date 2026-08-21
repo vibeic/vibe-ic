@@ -97,6 +97,10 @@ def build_record(project: Path, template: Optional[str], slot: Optional[str],
         "attempted": template is not None,
         "searched": [],
         "template_root": None,
+        # EXISTS and IS A TEMPLATE are different questions. An archive sitting
+        # unextracted at the given path is not "nothing there", and reporting it
+        # as such would hide the one thing the operator needs to be told.
+        "path_exists": False,
         "template_present": False,
     }
     rec: Dict[str, Any] = {
@@ -111,6 +115,9 @@ def build_record(project: Path, template: Optional[str], slot: Optional[str],
         "slots_shipped": [],
         "fixtures": [],
         "scan": None,
+        # WHICH FILE THIS RUN WROTE AS THE FLOW'S DISCRIMINATOR, and whether
+        # it was a declaration. Filled in by `write_artefacts`.
+        "path_selector": None,
         "provenance": {
             "fetched_by_this_program": False,
             "network": "never — the template is a path, not a download",
@@ -130,6 +137,7 @@ def build_record(project: Path, template: Optional[str], slot: Optional[str],
         root = root.absolute()
     lookup["searched"] = [str(root)]
     lookup["template_root"] = str(root)
+    lookup["path_exists"] = root.exists()
 
     if not root.is_dir():
         rec["status"] = ST.STATUS_ABSENT
@@ -175,7 +183,7 @@ def _safe_slot_filename(slot: str, used: set) -> str:
 
 
 def _no_template_text(rec: Dict[str, Any]) -> str:
-    """The prose half of the record: what happened, in the two absent cases."""
+    """The prose half of a DECLARED absence. This file SELECTS the IP path."""
     lines = [ST.NO_TEMPLATE_MARKER, ""]
     if rec["status"] == ST.STATUS_ABSENT:
         lines += [
@@ -184,6 +192,13 @@ def _no_template_text(rec: Dict[str, Any]) -> str:
             "Searched:",
         ]
         lines += [f"  {p}" for p in rec["lookup"]["searched"]]
+        if rec["lookup"].get("path_exists"):
+            lines += [
+                "",
+                "The path EXISTS but is not a directory. This step reads a",
+                "directory tree and never extracts or fetches anything, so an",
+                "archive left at that path is not an ingested template.",
+            ]
     else:
         lines += [
             "STATUS: NOT_ATTEMPTED — no template path was given. NOBODY LOOKED.",
@@ -212,10 +227,58 @@ def _no_template_text(rec: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _no_declaration_text(rec: Dict[str, Any]) -> str:
+    """The prose half when the step ran and NO decision came out of it.
+
+    This file is deliberately NOT one a flow condition tests. It records that
+    the step produced no answer -- which is not the same as answering "no
+    template", and must not select a path on that answer's behalf.
+    """
+    why = rec.get("no_template_reason")
+    lines = [ST.NO_TEMPLATE_MARKER, "",
+             "STATUS: " + str(rec["status"]) + " — NO DECLARATION WAS MADE.", ""]
+    if rec["status"] == ST.STATUS_NOT_ATTEMPTED:
+        lines += [
+            "No template path was given. NOBODY LOOKED.",
+            "",
+            "This is not the same fact as a template that is absent, and it",
+            "cannot be bought with a stated reason: a reason offered for a",
+            "template nobody searched for describes nothing.",
+        ]
+        if why:
+            lines += ["", f"A reason IS stated ({len(why)} chars) and buys "
+                          f"nothing here:", f"  {why}"]
+    else:
+        lines += ["A template was searched for and is not there:"]
+        lines += [f"  {p}" for p in rec["lookup"]["searched"]]
+        if rec["lookup"].get("path_exists"):
+            lines += ["",
+                      "The path EXISTS but is not a directory. This step reads a",
+                      "directory tree and never extracts or fetches anything, so an",
+                      "archive left at that path is not an ingested template."]
+        lines += ["",
+                  f"…but no usable reason was stated for why that is a genuine",
+                  f"not-applicable for this design (at least "
+                  f"{ST.MIN_REASON_CHARS} characters are required).",
+                  ""]
+        lines += [f"Stated: {why!r}" if why else "Stated: (nothing)"]
+    lines += [
+        "",
+        "WHY THIS FILE IS NOT `NO_TEMPLATE.txt`. That name is a ROUTER: the",
+        "flow makes its IP-path step applicable on that file existing, and",
+        "nothing else. Writing it here would let a run nobody investigated",
+        "select a delivery path, which is the one thing this step exists to",
+        "prevent. This file selects nothing. Re-run the step with a template",
+        "path, or state a reason together with the path that was searched.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def write_artefacts(project: Path, rec: Dict[str, Any]) -> Dict[str, Any]:
     """Write the step's declared outputs and report what was written."""
     written: Dict[str, Any] = {"slot_files": [], "no_template": None,
-                               "retired_stale": []}
+                               "no_declaration": None, "retired_stale": []}
     slots_dir = project / ST.SLOTS_DIR_REL
     no_tmpl = project / ST.NO_TEMPLATE_REL
 
@@ -240,10 +303,26 @@ def write_artefacts(project: Path, rec: Dict[str, Any]) -> Dict[str, Any]:
             if head and head[0].strip() == ST.NO_TEMPLATE_MARKER:
                 no_tmpl.unlink()
                 written["retired_stale"].append(str(no_tmpl))
-    else:
+    elif ST.declares_no_template(rec["status"], rec.get("no_template_reason")):
         no_tmpl.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(no_tmpl, _no_template_text(rec))
         written["no_template"] = str(no_tmpl)
+    else:
+        # NO DECISION CAME OUT OF THIS RUN. The step still says so out loud --
+        # a step that produces nothing is indistinguishable from one that never
+        # ran -- but it says so in a file that ROUTES NOTHING.
+        no_decl = project / ST.NO_DECLARATION_REL
+        no_decl.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(no_decl, _no_declaration_text(rec))
+        written["no_declaration"] = str(no_decl)
+        if no_tmpl.exists():
+            try:
+                head = no_tmpl.read_text(errors="replace").splitlines()[:1]
+            except OSError:
+                head = []
+            if head and head[0].strip() == ST.NO_TEMPLATE_MARKER:
+                no_tmpl.unlink()
+                written["retired_stale"].append(str(no_tmpl))
     return written
 
 
@@ -277,6 +356,21 @@ def main(argv=None) -> int:
 
     try:
         rec["written"] = write_artefacts(project, rec)
+        w = rec["written"]
+        if w["slot_files"]:
+            rec["path_selector"] = {"file": ST.SLOTS_DIR_REL + "/*.yaml",
+                                    "declared": True,
+                                    "selects": "the path for a design that has "
+                                               "a slot contract"}
+        elif w["no_template"]:
+            rec["path_selector"] = {"file": ST.NO_TEMPLATE_REL,
+                                    "declared": True,
+                                    "selects": "the path for a design that "
+                                               "DECLARED it targets no shuttle"}
+        else:
+            rec["path_selector"] = {"file": None, "declared": False,
+                                    "selects": "nothing — no decision came out "
+                                               "of this run"}
         doc = report_document(rec)
         report = project / ST.REPORT_REL
         report.parent.mkdir(parents=True, exist_ok=True)

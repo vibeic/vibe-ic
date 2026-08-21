@@ -667,7 +667,14 @@ def _run_audit(project: Path,
 # digits), so a step id added to the flow tomorrow is read, not silently
 # reclassified. chip-AGNOSTIC: step ids are flow structure, never chip,
 # vendor or SKU names.
-STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+"
+# vibe-ic#1744 — the "generic" shape above was still too narrow, and it failed
+# in exactly the way the paragraph above predicts. The half-steps introduced
+# with the chip/IP split (`0.5ic`, `15.5ic`, `26.5ic`, `37.5ip`, `37.5ic`) carry
+# a FRACTION and a trailing path SUFFIX, neither of which "short alpha prefix +
+# digits" can spell. All five matched nothing, so `.get(sid, "MISSING")` booked
+# every one of them as MISSING and the roll-up table would have disagreed with
+# the tally printed beside it by five steps — #428's defect, in new ids.
+STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+(?:\.[0-9]+)?[A-Za-z]{0,4}"
 _VERDICT_LINE_RE = re.compile(
     r"\[\s*([A-Z][A-Z_-]+?)\s*\]\s*Step\s+(" + STEP_ID_RE + r")\s*:"
 )

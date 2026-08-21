@@ -108,6 +108,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import _path_layout as _pl
+import _watchdog  # noqa: E402  plugin-wide progress-stall process supervision
 from _atomic_artefact import write_text as atomic_write_text
 
 # SHARED READERS, imported rather than re-typed — the same rule the gate
@@ -432,15 +433,28 @@ def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
         env["PDK_ROOT"] = pdk_root
         cmd = ["magic", "-noconsole", "-dnull", "-rcfile", magicrc,
                str(script)]
+        # BLOCKING PROCESS POLICY: magic is a potentially long EDA run, so it
+        # goes through the plugin-wide progress watchdog rather than a bare
+        # host launch with a wall-clock timeout. `timeout_s` becomes the hard
+        # ceiling; a job still making forward progress is never killed by it,
+        # and a silent+idle one is killed before it reaches the ceiling.
+        def _popen(argv, **kwargs):
+            return subprocess.Popen(argv, cwd=str(work), **kwargs)
+
         try:
-            cp = subprocess.run(cmd, cwd=work, capture_output=True, text=True,
-                                errors="replace", timeout=timeout_s)
-        except (OSError, subprocess.TimeoutExpired) as exc:
+            cp = _watchdog.run_supervised(
+                cmd, env=env, hard_ceiling_s=float(timeout_s),
+                popen_factory=_popen)
+        except OSError as exc:
             return False, f"magic did not complete: {exc}"
+        if cp.outcome != "natural":
+            # stalled / ceiling / launch_error are NOT a LEF verdict: say which.
+            return False, (f"magic did not complete: watchdog reported "
+                           f"{cp.outcome} after {cp.elapsed_s:.0f}s")
         produced = work / f"{top}.lef"
         if not produced.is_file() or produced.stat().st_size == 0:
-            tail = (cp.stderr or cp.stdout or "").strip().splitlines()[-3:]
-            return False, (f"magic exited {cp.returncode} and wrote no LEF; "
+            tail = (cp.err or cp.out or "").strip().splitlines()[-3:]
+            return False, (f"magic exited {cp.rc} and wrote no LEF; "
                            f"last output: {' | '.join(tail) or '(none)'}")
         # A PIN-LESS ABSTRACT IS WORSE THAN NO ABSTRACT — it is an outline and
         # a set of obstructions with nothing to connect to, and it LOOKS like
