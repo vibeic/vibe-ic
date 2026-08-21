@@ -263,14 +263,13 @@ They were written here first. That is all that is pad-shaped about them.
     For F2 the red/green pair is already measured above and does not need
     re-deriving; for F1 the unaccounted-name lists for both trees are in
     `evidence/upstream_input_set_MEASURED.txt`.
-  * **F3b** is not red — it has no population at all; see the next bullet.
+  * **F3b** is RED, on **4 true positives**. An earlier version of this
+    document said it had no population and was premature to land. That claim
+    was made without measuring and it is wrong — see the correction below.
   * **F4** is red on `main` and stays red: nothing on any branch fixes it, and
     I declined to fix it tonight for the reason given in its own section.
-* **F3b's guard has no population yet.** Nothing on `main` declares a variable
-  unhonoured, so a gate written to it today would run over zero subjects — and
-  this repo's own doctrine (`gate_zero_denominator_refuses_check`) says a gate
-  that read nothing must not exit 0. Premature, and stated as such rather than
-  landed vacuous.
+* **F3b's guard has a population of 4, and that is the argument for it.**
+  Corrected below; the earlier text here claimed the opposite without measuring.
 * **No `--write-baseline`, on any gate.** No assertion relaxed, no regex
   widened, no test deleted, no baseline rewritten — including the one regex it
   would have been convenient to widen. No GDS touched, no pin moved, no rule
@@ -361,6 +360,48 @@ lesson that survives is narrower and more useful: **a re-implementation can be
 pinned against upstream where upstream's artefact is CITED and READABLE, and
 cannot be pinned against upstream's implicit distribution-wide facts at all —
 those have to be caught on the output side, by asking what the step read.**
+
+---
+
+## CORRECTION — F3b has a population of four, and the repo has absorbed none of them
+
+I wrote that nothing on `main` declares a variable the tool does not honour, so
+a guard would run over zero subjects. I had not measured it. Measuring it: the
+class has **four independent instances on the current tree, in four different
+subsystems**, found by sweeping all 1232 programs for a not-honoured claim whose
+subject is a NAMED TOOL rather than one of our own gates (77 raw hits narrow to
+12, and 12 read by hand give 4).
+
+| instance | the input the tool does not honour |
+|---|---|
+| a synthesis techmap module | a declared cell map that silently does not bind |
+| a timing-diagnosis module | a delay target the mapper silently ignores |
+| two analog layout modules | a declared placement construct the stream-out does not honour |
+| the pad ring | the rotation arguments, crossed inside the tool |
+
+**Contract compliance across the four: 0 of 4.** None carries the non-honouring
+as a machine-readable record; all four wrote the lesson as prose in whichever
+module happened to find it.
+
+### The signature, and why the class survives review
+
+Measured across the instances, they share one shape: **the artefact is
+indistinguishable from never having set the input.** One of them produced a
+BYTE-IDENTICAL netlist, and cost 22 % of a timing path before anyone looked. The
+pad ring produces an identical ring at the default, because the two crossed
+arguments carry the same value there. There is nothing in the output to review,
+which is exactly why four separate people had to rediscover it.
+
+### What this changes
+
+The guard is not premature — it is overdue. It is still RED on `main`, but the
+red is **4 true positives**, not a false one, and the population is the work
+list for whoever lands it. The landing constraint is the same as F1 and F2's and
+the reason is much better: the contract is worth having precisely because the
+repo has found this class four times and absorbed it zero times.
+
+`recoveries.json`'s F3b record now carries the population, the failure
+signature, and this landing status.
 
 ---
 
