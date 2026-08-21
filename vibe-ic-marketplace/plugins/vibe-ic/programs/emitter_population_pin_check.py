@@ -304,8 +304,15 @@ def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
     the baseline exists for ("extractors that predate the vocabulary are
     recorded, not failed"), yet the register cannot take them. The only honest
     routes are to fix all 40 first, or to change the gate's own rule -- both
-    decisions well above a fix to this file, which is why they are written down
-    here rather than attempted.
+    decisions well above a fix to this file.
+
+    AND THE DECIDING REASON IS NOT DEFERENCE, IT IS THE CONSEQUENCE. Sharpening
+    the predicate HERE would take `prose_polarity_consulted_check` to rc=1 on
+    the whole tree -- the exact gate this branch exists to turn green, on the
+    exact batch it exists to unblock. A branch that fixes one polarity-blind
+    extractor and blocks the batch on forty is not a fix; it is the original
+    finding multiplied. The sharpening has to travel on its own, with its own
+    forty repairs, and not ride in beside this.
 
     (That 40 is larger than the 35 an earlier wrapper-based measurement gave:
     edited into the source, `for`-target names also propagate through the
