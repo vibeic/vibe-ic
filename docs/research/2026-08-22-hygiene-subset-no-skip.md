@@ -472,9 +472,17 @@ being verified and the move is not safe as it stands.
 `origin/land/batch67-assembled` is no longer `546487a8a`. It is now
 `8c409aa5a`, "Merge fix/jland67-hygiene-subset-honoured into the batch
 assembly" — this branch has already been taken. Its second parent is
-`05732dd26`, which is the FIRST of this branch's eleven commits, not its head.
+`05732dd26`, which is the FIRST commit of this branch — the direct child of
+`546487a8a` — and not its head. (The branch was 13 commits at `c71b023c4`.
+An earlier draft of this section said eleven: that was the count when it was
+MEASURED, at `caee6baaf`, and it was carried forward after the branch had
+grown. A number copied past the state it described is the same defect as a
+stale baseline, so it is corrected here rather than quietly. Nothing below
+depends on it: the load-bearing facts are that only the first commit was
+taken and that five of the six CODE commits were left behind, both of which
+are re-derived below.)
 
-Six of those eleven touch code. Five of the six are not in the batch:
+Six commits touch code. Five of the six are not in the batch:
 
 | commit | in the batch | what it carries |
 | --- | --- | --- |
