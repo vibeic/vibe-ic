@@ -1612,6 +1612,25 @@ spaces and so a double hyphen. All 8 were the test's assumption, not the
 document's links — 21 of 21 resolve. Nineteenth screen error of this lane, and
 the same shape as the eighteen before it: a plausible failure count produced by
 the measuring code.
+## Emission is reproducible, and the one thing that moves is the one that should
+
+A last property nobody had measured: **re-running the emitter over the same
+records — does it produce the same artefacts?** If it did not, the committed
+`candidates/` would be one arbitrary rendering of many and the sync check would
+be comparing against an accident.
+
+    16 sketch files          byte-identical on re-emit
+    3 backlog YAMLs          differ in exactly one line
+
+That line is `submitted_at`, and the emitter's own source explains why it must:
+the field is *"a measurement or it is nothing"*, having previously been a literal
+midnight that made every record look measured. So the single non-reproducible
+field is the single field whose whole purpose is to record an instant.
+
+The practical consequence, stated because it will surprise someone: **re-emitting
+dirties three files in `git status`** without changing a word of content. The
+committed timestamps are the record of when this batch was emitted; a re-run
+should be reverted rather than committed.
 ---
 
 ## Summary
