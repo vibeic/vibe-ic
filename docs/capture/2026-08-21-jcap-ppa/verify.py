@@ -556,6 +556,18 @@ if SLOW:
               (got_p, got_s) == (exp_p, exp_s) and f"{exp_p} passed" in MD,
               f"ran {got_p} passed/{got_s} skipped, report says {exp_p}/{exp_s}")
 
+# 39. tallies written INSIDE prose code blocks. The table figures were checked
+# from the first version of this file; a "Bucket-A records 26" sitting in an
+# indented block three sections away was not, and two of them were stale by two
+# because a block reads as a transcript rather than as a claim. Any such line
+# must equal the live count, or say in the same line which run it is quoting.
+_tally = re.findall(r"^ {4,}Bucket-A records\s+(\d+)(.*)$", MD, re.M)
+_nA = sum(1 for r in RECS if r["bucket"] == "A")
+control("prose-tally", bool(_tally) and all(x.isdigit() for x, _ in _tally))
+_bad = [x for x, rest in _tally if int(x) != _nA and "(" not in rest]
+check("prose tallies match the live Bucket-A count", not _bad,
+      f"{len(_tally)} tally line(s), live count {_nA}" + (f", stale: {_bad}" if _bad else ""))
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
