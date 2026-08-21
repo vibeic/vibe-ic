@@ -772,20 +772,36 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 
 | rule | naive | after the sweep | outcome |
 |---|---:|---:|---|
+| A-5 | 34 commands | 9 | rescoped; **0 of the 9 guard**, nothing to narrow |
 | A-7 | 560 hits | 0 | narrowed twice; **runs clean** |
 | A-8 | 24 of 54 axes | 8 | narrowed; found a live defect |
 | A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off |
+| A-14 | 11 candidates | **8 confirmed** | strengthened; 3 masked, not cleared |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 
 In every case the discriminator was invisible from the defect that motivated the
-rule, and in three of the four a naive screen missed the motivating case itself.
+rule, and in three of them a naive screen missed the motivating case itself.
 That is the argument for the sweep being mandatory rather than advisory.
 
-**The other nine Bucket-A rules are UNSWEPT**, and this is the honest limit of
-this lane. Their numbers measure the defect they name, which is real, but nobody
-has yet measured how often they would fire on legitimate state. On a base rate of
-four for four, the implementing lane should sweep each one before building it and
-should expect to narrow it.
+**Five of the six sweeps were mis-measured on the first attempt, by me, in this
+lane.** A prefix match pulled every permission flag into A-5's population (34 for
+9). A greedy multi-line match bled a boilerplate block into A-14's (47 for 11),
+and confining it to one line then reported 0. A-7's verb matched a path three
+paragraphs away (560 for 0). A-11's literal-argument screen missed a pattern held
+in a constant. And A-14's invocation test cleared cases argparse had merely
+*masked* — one error is reported, so a missing required argument hides an
+unrecognized flag, which is why 4 confirmed became 8 once the required arguments
+were supplied. **Every rule here will be built by someone writing the same screen
+I wrote.** Each `fix_action` now names the specific way its own screen goes
+wrong.
+
+**Eight Bucket-A rules remain UNSWEPT**, and that is the honest limit of this
+lane. Their numbers measure the defect they name, which is real, but nobody has
+yet measured how often they would fire on legitimate state. Two of the eight —
+the two vocabulary diffs — are false-positive-free by construction, since a set
+difference over declared tables cannot invent a member. The other six should be
+swept before they are built, and on a base rate of five narrowings in six sweeps
+they should be expected to change.
 
 The failure mode to avoid is therefore the opposite of the usual one: an
 implementer who reads "must run clean" and narrows a correct guard until the tree
