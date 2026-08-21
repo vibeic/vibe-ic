@@ -28,8 +28,9 @@ import pathlib
 import subprocess
 import sys
 
+from _published_corpus import cell_dirs, corpus_root, needs_corpus
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
-_REPO = _PROGRAMS.parents[3]
 
 
 def _load(name):
@@ -140,12 +141,24 @@ def test_an_untracked_record_is_not_read(tmp_path):
     assert C.main(["--root", str(repo)]) == 2, "an untracked record was read"
 
 
+@needs_corpus
 def test_the_corpus_as_committed_passes():
     """The regression this exists for: after re-derivation the shipped record
-    tells the truth, and it must keep doing so."""
-    if not (_REPO / "benchmark-data/ic").is_dir():
-        return
-    assert C.main(["--root", str(_REPO)]) == 0
+    tells the truth, and it must keep doing so.
+
+    ROOTED AT THE CORPUS, NOT AT THIS CHECKOUT. `CITATION_ROUTING.txt` sits
+    beside the cell it describes, and the cells now live in
+    `vibeic/benchmark-data`. Rooted at this repository the gate finds no tracked
+    record at all and answers rc 2 — CANNOT DETERMINE, its own word for "I could
+    not look" — which the old `assert ... == 0` then rendered as a defect in the
+    shipped records. The guard above it could not stop that: it asked whether
+    `benchmark-data/ic` EXISTS, and it does, because the design INPUTS stayed.
+
+    Nothing about what is checked changed. Point `VIBE_IC_BENCHMARK_DATA` at a
+    clone and this runs exactly as it always did, on the same records, and can
+    still fail.
+    """
+    assert C.main(["--root", str(corpus_root())]) == 0
 
 
 # ── the wiring it makes safe ───────────────────────────────────────────────
@@ -222,11 +235,22 @@ def test_a_skipped_fpga_audit_does_not_name_a_log_it_lacks():
 
 
 def test_the_published_cell_no_longer_names_it():
-    cell = (_REPO / "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A")
-    f = cell / "reports/phase2/fpga/quartus_map_audit.json"
-    if not f.is_file():
-        return
-    d = json.loads(f.read_text())
-    assert "compile_log" in d, "the key must stay — consumers key on this shape"
-    cl = d["compile_log"]
-    assert cl is None or (cell / cl).is_file()
+    """The same field, read off whatever cells the corpus actually carries.
+
+    It used to name ONE cell by path under this checkout and `return` when that
+    path was absent. After the cells moved to `vibeic/benchmark-data` the
+    `return` was the only branch left, so the test reported PASS on every run
+    while reading nothing — the absence-rendering-as-a-pass this whole file
+    exists to argue against, in the file itself. Swept over `cell_dirs()`
+    instead: absent corpus SKIPs at the marker, present corpus is measured.
+    """
+    audits = [c / "reports/phase2/fpga/quartus_map_audit.json"
+              for c in cell_dirs()]
+    for f in [a for a in audits if a.is_file()]:
+        cell = f.parents[3]
+        d = json.loads(f.read_text())
+        assert "compile_log" in d, (
+            f"{f}: the key must stay — consumers key on this shape")
+        cl = d["compile_log"]
+        assert cl is None or (cell / cl).is_file(), (
+            f"{f}: names {cl!r}, a proof the published cell does not carry")

@@ -16,6 +16,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 REQUIRED_FILES = (
@@ -76,7 +77,7 @@ class Phase3Report:
             "sta_wns_ns": self.sta_wns_ns,
             "sta_tns_ns": self.sta_tns_ns,
             "verdict": self.verdict,
-            "emitted_by": "phase3_verify_aggregate v0.1.50",
+            "emitted_by": _pmd.emitted_by("phase3_verify_aggregate"),
         }
 
 
@@ -188,7 +189,8 @@ def verify(project_dir: Path) -> Phase3Report:
 def report_to_markdown(rep: Phase3Report) -> str:
     out = ["# Phase 3 backend verification aggregate",
            "",
-           f"_Emitted by `phase3_verify_aggregate.py` (v0.1.50). "
+           f"_Emitted by `phase3_verify_aggregate.py` "
+           f"(v{_pmd.running_plugin_version()}). "
            f"Refuse to claim tape-out-ready without DRC=0 AND WNS>=0 "
            f"AND all backing checks PASS._",
            "",

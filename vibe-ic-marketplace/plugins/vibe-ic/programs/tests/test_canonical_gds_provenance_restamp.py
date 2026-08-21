@@ -165,9 +165,22 @@ def test_defect_direction_hash_mismatch_without_restamp(tmp_path: Path) -> None:
         f"findings: {[(f.rule, f.detail) for f in findings]}")
 
 
-def test_defect_direction_naive_append_causes_inconsistent(tmp_path: Path) -> None:
-    """PRE-FIX: naive 'append a new entry' anti-fix trades HASH_MISMATCH for
-    HASH_INCONSISTENT — both are FAIL, proving append-only is not a valid fix."""
+def test_appending_the_correct_hash_is_now_the_valid_fix(tmp_path: Path) -> None:
+    """Appending a record that declares the digest the file ACTUALLY carries
+    is the correct way to record a re-emit, and the gate accepts it.
+
+    This test previously asserted the opposite — that appending merely traded
+    HASH_MISMATCH for HASH_INCONSISTENT, "proving append-only is not a valid
+    fix". That was true of the old checker, and it is why every producer in
+    this runner patched provenance IN PLACE instead. Patching in place is what
+    made a hand-edited artefact indistinguishable from a re-run one: any
+    disagreement between ledger and disk was resolved by amending the ledger.
+    The checker now resolves a path to its NEWEST record, so an append is both
+    honest and sufficient.
+
+    The second half below is the load-bearing part: appending a record whose
+    digest does NOT match disk must still FAIL, so this is not "append makes
+    everything pass"."""
     project = _make_stale_project(tmp_path, top="widget")
     top = "widget"
 
@@ -175,23 +188,34 @@ def test_defect_direction_naive_append_causes_inconsistent(tmp_path: Path) -> No
     canon_gds = project / _canon_gds_rel(top)
     correct_sha = _sha(canon_gds.read_bytes())
 
-    # Naive append: add a SECOND entry with the correct hash (wrong approach)
-    bad_entry = {
-        "tool": "klayout",
-        "command": "anti-fix-append",
-        "exit_code": 0,
-        "duration_ms": 0,
-        "timestamp": "2026-01-01T00:01:17Z",
-        "outputs": {_canon_gds_rel(top): correct_sha},
-    }
-    with (project / "provenance.jsonl").open("a") as f:
-        f.write(json.dumps(bad_entry) + "\n")
+    def _append(sha_value: str) -> None:
+        with (project / "provenance.jsonl").open("a") as f:
+            f.write(json.dumps({
+                "tool": "klayout",
+                "command": "re-emit",
+                "exit_code": 0,
+                "duration_ms": 0,
+                "timestamp": "2026-01-01T00:01:17Z",
+                "outputs": {_canon_gds_rel(top): sha_value},
+            }) + "\n")
 
+    # Append the digest the shipped file ACTUALLY carries.
+    _append(correct_sha)
     verdict, findings = audit(project)
-    inconsistent = [f for f in findings if f.rule == "PROVENANCE_HASH_INCONSISTENT"]
-    assert verdict == "FAIL", "naive-append must FAIL with HASH_INCONSISTENT"
-    assert inconsistent, (
-        "naive-append must produce PROVENANCE_HASH_INCONSISTENT; "
+    assert verdict == "PASS", (
+        "appending the real digest of the shipped bytes must be accepted; "
+        f"findings: {[(f.rule, f.detail) for f in findings]}")
+    assert [f for f in findings
+            if f.rule == "PROVENANCE_OUTPUT_SUPERSEDED"], (
+        "the earlier record must be reported as superseded, not dropped in "
+        f"silence; findings: {[(f.rule, f.detail) for f in findings]}")
+
+    # ...and the reverse: appending a digest the file does NOT carry must
+    # still FAIL. Supersession must not become a way to declare anything.
+    _append("sha256:" + "f" * 64)
+    verdict, findings = audit(project)
+    assert verdict == "FAIL", "a newest record that disagrees with disk must FAIL"
+    assert [f for f in findings if f.rule == "PROVENANCE_HASH_MISMATCH"], (
         f"findings: {[(f.rule, f.detail) for f in findings]}")
 
 
@@ -277,21 +301,28 @@ def test_fixed_direction_no_prior_entry_appends_correctly(tmp_path: Path) -> Non
 def test_fixed_direction_idempotent_second_call(tmp_path: Path) -> None:
     """FIXED: running the fixed Step 37 a second time is a no-op (canon_gds
     already exists → copy branch skipped → restamp not called again).
-    Provenance must contain exactly one entry for the canonical GDS path."""
+
+    The project starts with a STALE declaration, so the first call supersedes
+    it with one appended record: two occurrences, one of them history. The
+    second call must add nothing — a producer that appends on every pass would
+    grow the ledger without bound and is as wrong as one that amends it."""
     project = _make_stale_project(tmp_path)
     top = "chip_top"
 
     _step37_fixed(project, top)   # first call: copy + restamp
+    after_first = (project / "provenance.jsonl").read_text()
     _step37_fixed(project, top)   # second call: canon_gds exists → skip
+    after_second = (project / "provenance.jsonl").read_text()
 
-    prov_text = (project / "provenance.jsonl").read_text()
-    count = prov_text.count(_canon_gds_rel(top))
-    assert count == 1, (
-        f"canonical GDS path must appear exactly once in provenance; "
+    assert after_second == after_first, (
+        "the second call must not touch provenance at all")
+    count = after_second.count(_canon_gds_rel(top))
+    assert count == 2, (
+        f"expected the superseded declaration plus the current one; "
         f"got {count} occurrences")
 
     verdict, findings = audit(project)
-    assert not [f for f in findings if f.rule == "PROVENANCE_HASH_INCONSISTENT"]
+    assert not [f for f in findings if f.severity == "ERROR"], findings
     assert verdict == "PASS"
 
 
@@ -391,16 +422,23 @@ def test_defect_direction_rerun_stale_refresh_leaves_a_wrong_hash(
 def test_fixed_direction_rerun_stale_refresh_is_restamped(
         tmp_path: Path) -> None:
     """FIXED: the same re-run, with the re-stamp called right after the copy —
-    the declared hash follows the bytes that were actually shipped, in place
-    (no second entry, so no PROVENANCE_HASH_INCONSISTENT)."""
+    the NEWEST declared hash follows the bytes that were actually shipped, and
+    the previous round's declaration survives as history rather than being
+    overwritten by it."""
     project, primary, canon = _rerun_project(tmp_path)
+    before = (project / "provenance.jsonl").read_text().splitlines()
     _real_step37_copy(primary, canon)
     _restamp(project, "chip_top", canon)
 
-    prov_text = (project / "provenance.jsonl").read_text()
-    assert prov_text.count(_canon_gds_rel("chip_top")) == 1, (
-        "the re-stamp must patch IN PLACE, not append a contradicting entry")
-    assert _sha(canon.read_bytes()) in prov_text
+    prov_lines = [l for l in (project / "provenance.jsonl")
+                  .read_text().splitlines() if l.strip()]
+    assert prov_lines[:len(before)] == before, (
+        "the re-stamp must not amend the records already in the ledger")
+    declared = [json.loads(l)["outputs"][_canon_gds_rel("chip_top")]
+                for l in prov_lines
+                if _canon_gds_rel("chip_top") in json.loads(l).get("outputs", {})]
+    assert declared[-1] == _sha(canon.read_bytes()), (
+        "the NEWEST declaration must carry the digest of the shipped bytes")
 
     verdict, findings = audit(project)
     assert verdict == "PASS", (
