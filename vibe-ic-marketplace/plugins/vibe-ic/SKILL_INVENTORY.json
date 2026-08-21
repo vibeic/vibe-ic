@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 63,
+  "total": 62,
   "by_tier": {
     "debug": 13,
     "judgment": 7,
     "nl_primary": 33,
-    "unclassified": 2,
+    "unclassified": 1,
     "verification": 8
   },
   "skills": [
@@ -38,7 +38,6 @@
     "equivalence-check",
     "field-agent-loop",
     "flow-change-acceptance",
-    "fork-gatekeeper-loop",
     "formal-verify",
     "fpga-hps-bridge",
     "fpga-led-probe-allocation",
@@ -214,11 +213,6 @@
       "name": "flow-change-acceptance",
       "frontmatter_name": "flow-change-acceptance",
       "tier": "nl_primary"
-    },
-    {
-      "name": "fork-gatekeeper-loop",
-      "frontmatter_name": "fork-gatekeeper-loop",
-      "tier": "unclassified"
     },
     {
       "name": "formal-verify",

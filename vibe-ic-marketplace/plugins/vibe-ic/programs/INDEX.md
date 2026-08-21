@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1079
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1079)
+- **Total programs (excluding helpers / shims):** 1075
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1075)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1070 |
+| `any` | 1066 |
 
 ## Alphabetical listing
 
@@ -463,8 +463,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `htol_attestation_check` | any | — | Step 43 reliability qualification (HTOL) attestation gate (v2.3). |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed hardware debug loop (hw-debug-loop skill). |
 | `hw_vs_rtl_verdict_check` | any | v0.45 | Require N byte-identical FAILs before blaming hardware. |
-| `hygiene_shard_aggregate` | any | — | combine sharded hygiene runs, denominator first. |
-| `hygiene_shard_plan` | any | — | split the hygiene gates across hosts by MEASURED time. |
 | `hyperbus_protocol_synth` | any | — | HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55). |
 | `i2c_protocol_synth` | any | v0.1.79 | I2C-class protocol synth helper. |
 | `i2s_protocol_synth` | any | v0.1.83 | I2S-class protocol synth helper. |
@@ -577,7 +575,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `landing_collateral_revert_check` | any | — | a squash must not silently revert work that landed alongside it in the same push. |
 | `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
-| `landing_merge_verdict` | any | — | the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all. |
 | `landing_worktree_is_clean_check` | any | — | the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has. |
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN... |
 | `latency_conformance_check` | any | — | v1.0 plugin gate (ORGANIC #705). |
@@ -999,7 +996,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_required_inputs_check` | any | — | refuse to run a step that has nothing to read. |
 | `step_write_ledger` | any | — | record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED. |
 | `structured_table_extractor` | any | — | ONE general extractor for the whole TABLE tier. |
-| `suite_write_guard` | any | — | a test run must not write into the tree it tests. |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
 | `sv2v_mixed_driver_fixup` | any | — | deterministic post-pass to repair Verilog produced by sv2v when SystemVerilog hw2reg / packed-struct patterns produce MIXED-DRIVER nets (... |
 | `sv_compat_check` | any | — | Check if Verilog files require the -sv flag for Yosys synthesis. |
@@ -1151,7 +1147,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1070 programs)
+### `any` (1066 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1586,8 +1582,6 @@ _(no programs in this group)_
 - `htol_attestation_check` — Step 43 reliability qualification (HTOL) attestation gate (v2.3).
 - `hw_acceptance_test_passed_check` — final-step gate for the closed hardware debug loop (hw-debug-loop skill).  _[v0.119.15]_
 - `hw_vs_rtl_verdict_check` — Require N byte-identical FAILs before blaming hardware.  _[v0.45]_
-- `hygiene_shard_aggregate` — combine sharded hygiene runs, denominator first.
-- `hygiene_shard_plan` — split the hygiene gates across hosts by MEASURED time.
 - `hyperbus_protocol_synth` — HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55).
 - `i2c_protocol_synth` — I2C-class protocol synth helper.  _[v0.1.79]_
 - `i2s_protocol_synth` — I2S-class protocol synth helper.  _[v0.1.83]_
@@ -1699,7 +1693,6 @@ _(no programs in this group)_
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `landing_collateral_revert_check` — a squash must not silently revert work that landed alongside it in the same push.
 - `landing_is_one_commit_check` — a landing is ONE commit, not two.
-- `landing_merge_verdict` — the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all.
 - `landing_worktree_is_clean_check` — the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has.
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN...  _[v0.2.30]_
 - `latency_conformance_check` — v1.0 plugin gate (ORGANIC #705).
@@ -2119,7 +2112,6 @@ _(no programs in this group)_
 - `step_required_inputs_check` — refuse to run a step that has nothing to read.
 - `step_write_ledger` — record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED.
 - `structured_table_extractor` — ONE general extractor for the whole TABLE tier.
-- `suite_write_guard` — a test run must not write into the tree it tests.
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
 - `sv2v_mixed_driver_fixup` — deterministic post-pass to repair Verilog produced by sv2v when SystemVerilog hw2reg / packed-struct patterns produce MIXED-DRIVER nets (...
 - `sv_compat_check` — Check if Verilog files require the -sv flag for Yosys synthesis.

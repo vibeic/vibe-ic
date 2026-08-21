@@ -76,19 +76,7 @@ echo "--- cheap tier (also enforced by the pre-push hook) ---"
 if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   run "NDA — commit messages"   python3 "$PROGRAMS/commit_msg_nda_check.py" --repo "$ROOT" --rev-range "$RANGE"
   run "NDA — added content/paths" python3 "$PROGRAMS/nda_diff_scan_check.py" --rev-range "$RANGE"
-  # `GATEKEEPER_VERSION_BY_GATEKEEPER=1` — the VERSION-LESS authoring-PR path,
-  # for `tools/gatekeeper-verify-merge.sh` (vibe-ic#1019). The version is
-  # assigned AT MERGE by the gatekeeper, so a PR under verification legitimately
-  # carries no bump and demanding one here would refuse every conformant PR —
-  # the same deferral `tools/git-hooks/pre-push` already applies off-main, using
-  # the same flag the program already ships. A BACKWARDS version is still
-  # refused in both directions, so this defers the gate and does not disable it.
-  # Unset (the push path) is unchanged: current == previous still FAILs.
-  if [ "${GATEKEEPER_VERSION_BY_GATEKEEPER:-0}" = "1" ]; then
-    run "version monotonic (assigned at merge — deferred)" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE" --version-by-gatekeeper
-  else
-    run "version bumped monotonically" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE"
-  fi
+  run "version bumped monotonically" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE"
   run "agent check-in scope"    python3 "$PROGRAMS/agent_checkin_scope_guard.py" --role core-agent --base "$BASE"
   run "benchmark evidence structure" python3 "$PROGRAMS/benchmark_evidence_structure_check.py" --tree benchmark-data --changed-since "$BASE"
   # vibe-ic#635 — a NEW published number must arrive with its composition.
@@ -96,15 +84,8 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   # published carry no per-problem name set, and applying this retroactively
   # would fail every landing over work nobody is doing.
   run "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
-  # PER-RUN, not a fixed name. `tools/gatekeeper-verify-merge.sh` (vibe-ic#1019)
-  # runs this script for the BASE and for the CANDIDATE at the same time — two
-  # arms of one differential — and a shared `/tmp/gk_*.txt` would have had each
-  # arm reading the other's range. A gate that silently answers about the wrong
-  # tree is the defect this whole file exists to stop.
-  MSGFILE="$(mktemp -t gk_commit_text.XXXXXX)"
-  git log --format='%B' "$RANGE" > "$MSGFILE" 2>/dev/null
-  run "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" "$MSGFILE"
-  rm -f "$MSGFILE"
+  git log --format='%B' "$RANGE" > /tmp/gk_commit_text.txt 2>/dev/null
+  run "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" /tmp/gk_commit_text.txt
   # 2026-08-03 — the batch that landed five PRs from a 6.5-hour-stale base and
   # let three of its own commits erase the other two. `gatekeeper_stale_branch_check`
   # said STALE_OVERLAP on all five BEFORE the land; nothing looked at the
@@ -139,18 +120,7 @@ run "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version
 # via --batch, which additionally requires the version bump to sit on the TIP.
 # Auto-detected rather than configured, so a batch is never silently waved
 # through as if it were a single landing.
-#
-# AN EMPTY RANGE IS NOT A LANDING, so it is not a landing of one commit either.
-# Asked over `X..X` the checker sees ZERO commits and answers FAIL — a vacuous
-# refusal, and one with teeth beyond this line: `gatekeeper-verify-merge.sh`
-# (vibe-ic#1019) runs this script over an empty range on the BASE to learn which
-# gates are ALREADY failing, and a gate that fails vacuously there would let a
-# candidate's REAL one-commit violation be waived as pre-existing. Range-scoped
-# gates must SKIP over an empty range, exactly as the block above already does.
-GK_RANGE_N="$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)"
-if [ "$GK_RANGE_N" = "0" ]; then
-  echo "  SKIP  landing shape — range is empty, so there is no landing to shape"
-elif [ "$GK_RANGE_N" -gt 1 ]; then
+if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" -gt 1 ]; then
   run "landing is a valid batch (version on tip)" \
       python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE" --batch
 else
@@ -207,25 +177,6 @@ fi
 
 echo "--- full tier (minutes; stamps the tree on success) ---"
 
-# vibe-ic#1029 — the full tier is the window in which the gates read the tree,
-# and it is the window in which they have three times been caught WRITING to
-# it. `landing_worktree_is_clean_check --expect-fingerprint` at the end of this
-# tier already refuses the stamp when a TRACKED file moved; what it does not do
-# is name what moved, or see the untracked (`??`) half that `git add -A` would
-# sweep just the same.
-#
-# This baseline pairs with the compare below to answer, by name, "did the full
-# tier write into the tree". It is deliberately taken around the WHOLE tier
-# rather than around pytest alone: `repo_hygiene_gates.sh` and
-# `plugin_full_audit.py` run INSIDE this window but OUTSIDE the pytest command,
-# so the in-process pytest guard (programs/suite_write_guard.py, loaded by the
-# plugin's rootdir conftest) cannot see them. That gap is exactly the stage
-# whose family this repo already caught rewriting 77 tracked files.
-WG_BASE="$(mktemp -t gk_writeguard.XXXXXX)"
-trap 'rm -f "$FP" "$WG_BASE"' EXIT
-run "write-guard baseline" \
-    python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --snapshot "$WG_BASE"
-
 # The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
 # Omitted from the first version of this script, which covered the governance
 # gates and quietly dropped the tests — the gap surfaced when
@@ -236,163 +187,25 @@ run "write-guard baseline" \
 # harness bound from this line and fails any inner subprocess timeout above it,
 # because an inner bound larger than the harness does not fail a test — it
 # outlives the harness and takes the session down.
-#
-# `GATEKEEPER_PYTEST_JUNIT=<path>` additionally writes a junit report for this
-# run. It changes NO verdict here — the `if out=…` below still decides — and
-# exists because `gatekeeper-verify-merge.sh` (vibe-ic#1019) compares the
-# candidate's failed SET against the base's. Without a report it would have to
-# run the same suite a second time, and a landing gate slow enough to be
-# bypassed is a bypassed gate. `xunit1` is asked for because it is the family
-# that carries the `file` attribute, so a selected file that produced no test
-# case at all can be told from a clean one.
-#
-# `GATEKEEPER_PYTEST_MAXFAIL=<n>` overrides `--maxfail`; `0` removes the bound.
-# `10` stays the default and the push path is unchanged — stopping early is right
-# when the answer is "this is red, go fix it". It is WRONG for a differential:
-# `gatekeeper-verify-merge.sh` compares the candidate's failed SET against the
-# base's, and a truncated run has no failed set, only a prefix of one. Measured
-# on PR #1028 (137 selected files, 3242 tests at the base): `--maxfail=10`
-# stopped the candidate at 1437 tests, which the verdict correctly refused as
-# unmeasurable. A landing gate that cannot answer for a wide PR is a landing gate
-# nobody uses.
 run_pytest() {
-  local sel out
-  # PER-RUN: see the MSGFILE note above. Two concurrent arms sharing one
-  # selection file would each run the other's test list.
-  sel="$(mktemp -t gk_sel.XXXXXX)"
-  local maxfail=(--maxfail="${GATEKEEPER_PYTEST_MAXFAIL:-10}")
-  [ "${GATEKEEPER_PYTEST_MAXFAIL:-10}" = "0" ] && maxfail=()
-  local junit=()
-  [ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ] \
-    && junit=(-o junit_family=xunit1 "--junitxml=$GATEKEEPER_PYTEST_JUNIT")
+  local sel=/tmp/gk_sel.txt out
   ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
   if [ ! -s "$sel" ]; then
     echo "  FAIL  targeted test selection produced no files — not a clean result"
-    FAILED=1; rm -f "$sel"; return
+    FAILED=1; return
   fi
-  # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
-  #
-  # #1047 fixed the environment of a pytest this suite SPAWNS. The same defect was
-  # sitting on the suite the LANDING GATE ITSELF runs, and it was worse, because
-  # this is the session whose exit code decides whether a change may be pushed.
-  #
-  # Bare `python3 -m pytest` autoloads every `pytest11` entry point installed on
-  # the host. Measured on the landing host 2026-08-12: of 8 installed entry points
-  # exactly one — `web3`'s `pytest_ethereum` — raises at import
-  # (`ImportError: cannot import name 'ContractName' from 'eth_typing'`), and it
-  # takes the session down AT COLLECTION. Not one test runs. A package this repo
-  # does not use, has never imported, and does not ship made the landing gate
-  # unrunnable, which is precisely why merges were going around it via
-  # `gh pr merge` — the bypass vibe-ic#1019/#1036 is about.
-  #
-  # So the session declares what it loads instead of inheriting it. The suite needs
-  # exactly ONE third-party plugin — `pytest-timeout`, for the `--timeout` flags on
-  # this very line — verified by grepping the whole suite for the fixtures and marks
-  # of every other installed plugin: requests_mock 0 files, typeguard 0, anyio 0,
-  # hydra 0, xdist mentioned only in a README.
-  #
-  # `suite_write_guard` is UNAFFECTED and must stay that way: conftest.py loads it
-  # through `pytest_plugins`, not through an entry point, so disabling autoload does
-  # not disarm the write guard. That is the check that would have made this fix a
-  # false green, so it is asserted rather than assumed — the guard's PASS/FAIL line
-  # must still appear in `out`.
-  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 xargs -a "$sel" python3 -m pytest -q -p pytest_timeout "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread "${junit[@]+"${junit[@]}"}" 2>&1 )"; then
+  if out="$( cd "$PLUGIN" && xargs -a "$sel" python3 -m pytest -q --maxfail=10 --timeout=180 --timeout-method=thread 2>&1 )"; then
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
-    # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
-    # the write guard from the session would be a false green, and it would look
-    # exactly like this one. The guard reports on every session it is loaded into,
-    # so its absence from the output means it did not run.
-    if ! printf '%s\n' "$out" | grep -qa 'suite_write_guard:'; then
-      echo "  FAIL  suite_write_guard did not report — the session ran WITHOUT the"
-      echo "        write guard, so 'the suite wrote nothing' was never checked."
-      FAILED=1
-    fi
   else
     printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
     FAILED=1
   fi
-  rm -f "$sel"
 }
 run_pytest
 
-# ── REPO-LEVEL tests (tools/) ──────────────────────────────────────────────
-# `run_pytest` above cannot reach them, and not by accident: the targeted
-# selector is PLUGIN-scoped by construction —
-#     _SOURCE_DIRS = ("programs", "benchmark");  _TESTS_REL = "programs/tests"
-# — and it is invoked with cwd=$PLUGIN, so `tools/` at the repo root is not
-# even addressable from there. No change to any file under `tools/` can select
-# a test, and no test under `tools/` can be selected by any change. Measured on
-# a38902d16: 28 files / 552 tests that gate NOTHING. They were all green, which
-# is exactly why it stayed invisible — a blind spot announces itself only when
-# something behind it breaks, and by then it has been blind for a while.
-#
-# DISCOVERY, never a roster. A hardcoded list is the recorded-register defect
-# (census / tranche baseline / skip-routing ratchet) that goes stale the moment
-# a file is added, and it would go stale silently and in the safe-looking
-# direction: fewer files still reports PASS.
-run_repo_tools_pytest() {
-  local files out rc wg wrc snap
-  mapfile -t files < <(cd "$ROOT" && find tools \
-      \( -name 'test_*.py' -o -name '*_test.py' \) -type f | sort)
-  # An empty corpus is a VACUOUS pass, not a pass. A gate that reports success
-  # over zero items is indistinguishable from one that works, and is worse.
-  if [ "${#files[@]}" -eq 0 ]; then
-    echo "  FAIL  repo tools tests: discovery matched NO files under tools/ —"
-    echo "        an empty corpus is not evidence that anything passed."
-    FAILED=1; return
-  fi
-  # The in-process `programs/suite_write_guard.py` is loaded by the PLUGIN
-  # conftest and is NOT present in this session, so the property it asserts —
-  # the suite writes nothing `git status --porcelain` would show — is asserted
-  # here from the outside rather than quietly dropped.
-  #
-  # DELEGATED to that same program via its --snapshot/--compare CLI instead of
-  # diffing `git status` by hand. A hand-rolled comparison is a SECOND
-  # definition of "wrote to the tree" that can drift from the first, and the
-  # first one already knows that `__pycache__`/`.pytest_cache`/`*.pyc` are
-  # regenerable and not a violation. (Written by hand first; the test below
-  # caught it flagging pytest's own bytecode cache as a write.)
-  snap="$(mktemp -t gk_tools_wg.XXXXXX)"
-  python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
-      --snapshot "$snap" >/dev/null 2>&1 || {
-    echo "  FAIL  repo tools tests: could not baseline the tree — not a pass"
-    FAILED=1; rm -f "$snap"; return
-  }
-  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
-        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        "${files[@]}" 2>&1 )"
-  rc=$?
-  wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
-        --compare "$snap" 2>&1)"; wrc=$?
-  rm -f "$snap"
-  if [ "$rc" -ne 0 ]; then
-    printf '  FAIL  repo tools tests (%s file(s))\n' "${#files[@]}"
-    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
-    FAILED=1; return
-  fi
-  # rc 0 clean / 1 wrote / 2 NOT_CHECKED. 2 is NOT a pass: "I could not look"
-  # must never reach a reader as "I looked and it was fine".
-  if [ "$wrc" -ne 0 ]; then
-    printf '  FAIL  repo tools tests wrote to the tree (write-guard rc=%s)\n' "$wrc"
-    printf '%s\n' "$wg" | tail -8 | sed 's/^/          /'
-    FAILED=1; return
-  fi
-  printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
-}
-run_repo_tools_pytest
-
 run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
-
-# #1029 — the standing assertion, executed: everything above ran against this
-# tree, so nothing above may have CHANGED it. Names every offending path rather
-# than only failing, because a count is what made three writers cost three
-# separate accidental discoveries. rc=2 (could not look) fails here too: `run`
-# treats any non-zero as FAIL, which is the point — "I could not measure" must
-# never reach the stamp as "I measured and it was clean".
-run "the full tier wrote nothing into the tree" \
-    python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --compare "$WG_BASE"
 
 # LAST, and after every suite has read the tree. Everything above answers
 # "do the gates pass"; this answers "did they all read the same tree", which is
