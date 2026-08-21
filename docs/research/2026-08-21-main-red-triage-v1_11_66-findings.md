@@ -1792,16 +1792,35 @@ news.**
 
 # ===== REQUESTS TO THE LANDER =====
 
-Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
-files. **No program, no gate, no flow, no version, no baseline was touched.**
+Branch `ptmo/main-red-triage-v11166`. **Four files:** this document, a design
+proposal (`2026-08-22-refounding-the-hermetic-era-landing-guards.md`), and two
+test files. **No program, no gate, no flow, no version, no baseline was touched.**
+
+**Measured effect, both lanes** (`test_landing_merge_verdict.py`):
+
+| lane | pristine | this branch |
+|---|---|---|
+| host 8hd-3 | 9 failed, 125 passed | **6 failed, 128 passed** |
+| pinned image | 22 failed, 112 passed | **22 failed, 112 passed** |
+
+134 collected throughout; nothing newly red in either lane. **Read M27 before
+quoting the host number:** the repair is invisible to CI, because all 22 image
+failures die on the absent Docker CLI with `rc 2 = RC_CANNOT_MEASURE` before
+reaching any assertion this branch changed.
 
 ## A. Take freely — strict improvements, no decision needed
 
 | # | change | why it is safe |
 |---|---|---|
-| 1 | `test_hermetic_candidate_runner.py`: `save_container` gains `create=` and writes atomically (M16) | HARNESS only. Kills a **4-in-10** flake whose message falsely accuses `hermetic_candidate_runner.py` of leaking containers. A/B 4/10 -> 0/12. The runner is untouched. |
-| 2 | `test_hermetic_candidate_runner.py`: new `rw_bind` behaviour + `test_a_read_write_subject_bind_refuses_before_the_candidate_starts` (M15) | ADDITIVE. First coverage of the `"bind is not exact/read-only"` refusal. Mutation arm proven: delete the `RW is not False` clause and it goes red. |
+| 1 | `test_hermetic_candidate_runner.py`: `save_container` gains `create=` and writes atomically (M16) | HARNESS only. Kills a **4-in-10** flake whose message falsely accuses `hermetic_candidate_runner.py` of leaking containers. A/B 4/10 -> 0/12 on the host; the race does not reproduce in the image at all (M23). The runner is untouched. |
+| 2 | `test_hermetic_candidate_runner.py`: new `rw_bind` behaviour + `test_a_read_write_subject_bind_refuses_before_the_candidate_starts` (M15) | ADDITIVE. First coverage of the `"bind is not exact/read-only"` refusal. Mutation arm proven: delete the `RW is not False` clause and it goes red. Passes in BOTH lanes (M21). |
 | 3 | `test_landing_merge_verdict.py`: the G4 diagnosis fix (M8) | Does NOT change any verdict. Converts a misattributed `TimeoutExpired` into a message naming the true cause, and stops leaking the verifier process. The two tests stay RED either way. |
+| 4 | `test_landing_merge_verdict.py`: **design A** — `..._candidate_wave_precedes_parallel_isolated_base_wave` re-founded and renamed to `..._every_arm_of_both_waves_actually_ran` (M24 tail, proposal) | Asserts all four arms from the verdict document (`base_land`, `land`, `base_total`, `candidate_total`) instead of probe-directory markers the arm cannot write. STRONGER than what it replaces — a marker proved an arm STARTED, a record proves it COMPLETED. Discriminates: `base_total == 0` and `base_land is None` are both real, disclosed conditions. RED -> GREEN, verified full-file. **Note the rename**, so a test-ID diff across this change will misreport it as a fix (M20 tail). |
+| 5 | `test_landing_merge_verdict.py`: **design C** — the three tamper guards re-founded (M24) | Each now asserts the verifier REFUSES (`rc 1`), the tamper did NOT redefine the tree (`expected_tree == verified_tree`), it never reached the real worktree (`candidate_test_worktree_status == "clean"`), and it WAS observed (the planted test in `delta.new_failures`). Specification verified against a live run BEFORE the edit. 3 RED -> GREEN. **Retires** the old `rc 2` / `doc is None` / `"raw attestation failed"` assertions deliberately — that was a hard `Refusal` for an arm dirtying the REAL worktree, which no longer happens; the check moved into `candidate_test_worktree_status`. The reasoning is inline in each test. |
+
+Items 4 and 5 turn four reds green. If you would rather land the diagnostic and
+harness work first and take the re-foundings separately, items 1-3 are
+independent of them.
 
 ## B. ONE DECISION I NEED FROM YOU — a green becomes a red
 
