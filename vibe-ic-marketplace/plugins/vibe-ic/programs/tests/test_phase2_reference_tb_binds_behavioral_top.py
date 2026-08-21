@@ -23,7 +23,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 
 
 # A minimal reference-TB instantiation block in the canonical shape the real

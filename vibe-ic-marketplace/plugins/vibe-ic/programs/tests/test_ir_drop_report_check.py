@@ -27,7 +27,7 @@ def test_pass_with_pdk_unavailable_waiver(tmp_path):
     can declare the unavailability via waiver. ≥20-char reason required."""
     (tmp_path / "waivers.json").write_text(json.dumps({
         "ir_drop_report_unavailable_reason":
-            "KeyFoundry m18e80pm180su has no PSM-compatible PDN extraction; "
+            "commercial 180nm PDK has no PSM-compatible PDN extraction; "
             "IR-drop deferred until commercial flow",
     }))
     r = _run([str(tmp_path)])

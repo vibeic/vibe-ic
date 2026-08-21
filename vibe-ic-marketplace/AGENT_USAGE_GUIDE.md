@@ -13,18 +13,24 @@ below prevent it.
 
 ## Agent roster & check-in governance
 
-Vibe-IC is operated by **five agent roles**. They differ by *scenario* and,
-critically, by *what they are allowed to check in (git commit) to*. The rule
-that ties them together: **only the Core Agent edits the plugin or the MCP
-server; everyone else who finds a problem files it on the backlog and lets the
-Core Agent resolve it.**
+Vibe-IC is operated by a small set of agent roles. They differ by *scenario*
+and, critically, by *what they are allowed to check in (git commit) to*. The
+rule that ties them together: **only the Repo Gatekeeper edits the plugin or the
+MCP server and lands changes on `main`; everyone else who finds a problem files
+it upstream (backlog issue / version-less PR) and lets the Repo Gatekeeper
+resolve and land it.**
+
+> **2026-06-18 (owner directive):** the former **Core Agent** (author) and
+> **Gatekeeper** (land) are now ONE role — **`vibe-ic:repo-gatekeeper`** — which
+> BOTH authors the chip-AGNOSTIC fix AND gates it (machine checks + Step-2.7
+> §4.05 review), assigns the version at merge, and squash-merges. `core-agent`
+> and `gatekeeper` remain as aliases (same unrestricted check-in scope).
 
 | Agent | Scenario | May check in to | Plugin (`plugins/vibe-ic/`) | MCP (`mcp-eda/`) | On finding a problem |
 |---|---|---|---|---|---|
-| **Field Agent** (`vibe-ic:field-agent`) | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog → Core Agent |
-| **Benchmark Agent** (`vibe-ic:benchmark-agent`) | Maintainer official runs **+ end-user local runs** | `benchmark-data/` + `community/backlogs/` | ❌ | ❌ | → backlog → Core Agent |
-| **Core Agent** (`vibe-ic:core-agent`) | Maintainer | **everything** (owns plugin + MCP) | ✅ only role | ✅ only role | resolves backlog → fixes plugin/MCP |
-| **PM Agent** (`vibe-ic:pm-agent`) | Phase 1 — NL dialogue front door | — design-time, no repo check-in | — | — | — |
+| **Field Agent** (`vibe-ic:field-agent`) | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog / version-less PR → Repo Gatekeeper |
+| **Benchmark Agent** (`vibe-ic:benchmark-agent`) | Maintainer official runs **+ end-user local runs** | `benchmark-data/` + `community/backlogs/` | ❌ | ❌ | → backlog / version-less PR → Repo Gatekeeper |
+| **Repo Gatekeeper** (`vibe-ic:repo-gatekeeper`) | Maintainer (author + gate + land) | **everything** (owns plugin + MCP) | ✅ only role | ✅ only role | authors the fix, gates it, assigns the version, lands it. Aliases: `core-agent` / `gatekeeper` |
 | **IC Expert Agent** (`vibe-ic:ic-expert-agent`) | Phase 1 — technical review | — design-time, no repo check-in | — | — | — |
 
 Notes:
@@ -50,7 +56,7 @@ The check-in boundary is a **deterministic gate**, not a suggestion. Before any
 
 ```bash
 python3 plugins/vibe-ic/programs/agent_checkin_scope_guard.py \
-    --role <field-agent|benchmark-agent|core-agent|pm-agent|ic-expert-agent> --staged
+    --role <field-agent|benchmark-agent|core-agent|ic-expert-agent> --staged
 # exit 0 → every staged path is within the role's scope → safe to commit
 # exit 1 → a path is outside scope (each offending path + its protected zone is
 #          listed) → remove it; if it is a plugin/MCP improvement, file a backlog
@@ -67,7 +73,7 @@ Each role's full charter lives in `plugins/vibe-ic/agents/<role>.md`.
 | User phrase | Canonical task | Required entry point |
 |---|---|---|
 | "run phase 2+3", "synth → GDS", "make it taped out", "RTL to silicon", "run the flow" | **Phase 2+3 canonical flow** | Skill `flow-orchestrate` |
-| "generate L1-L23 from this datasheet", "phase 1" | Phase 1 document stack | Skill `datasheet-gen` + L2-L9 skills |
+| "generate L1-L27 from this datasheet", "phase 1" | Phase 1 document stack | Skill `datasheet-gen` + L2-L9 skills |
 | "write a testbench for X" | Single-skill invocation | Skill `testbench-gen` |
 | "review this RTL" | Single-skill invocation | Skill `rtl-review` |
 
