@@ -1,6 +1,6 @@
 # findings — agent `ptmo`: the v1.11.66 red triage, and what auditing my own claims found
 
-host 8hd-3 · started 2026-08-21 · **32 sections; read this header before M0**
+host 8hd-3 · started 2026-08-21 · **57 sections (M0–M62); read this header before M0**
 
 **SCOPE HAS GROWN PAST THE TITLE IT STARTED WITH.** This began as RUN 8 —
 "v1.11.62 and the ownership question" — and M0 below still states that premise,
@@ -20,10 +20,10 @@ turned out to be the least reliable thing in it:
 * **six "not mine" claims audited → five collapsed, one held** with a better
   framing. A blocker reads as modesty and is therefore the last thing anyone
   re-checks, its author included.
-* **seven instrument defects catalogued**, of which THREE reported my own work as
-  more successful than it was.
-* **nine retractions of published findings**, plus three near-misses that
-  measurement killed before publication.
+* **nine instrument defects catalogued**, of which FOUR reported my own work — or
+  my own record — as more accurate than it was.
+* **twenty-three retractions of published findings**, plus three near-misses that
+  measurement killed before publication. **Two of my conclusions reversed twice.**
 
 The reds are in the tables. The reason to keep the rest is that most of what went
 wrong here was not in the repository.
@@ -3587,7 +3587,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M58, MEASURED: the analyser does not propagate stripped status through FOR-LOOP TARGETS.** Reassignment and subscripting are handled; iteration is not — and both sites reach the scan via `for decl in …split(',')` / `for line in …splitlines()`. The code is correct; the gate is a false positive here. Likely affects a large share of the 175, so **the 170 baseline partly counts an analyser limit**. Fix belongs in `stripped_locals` (`ast.For` targets), NOT in the subjects. | **gate false positive, mechanism measured** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
 
-## D. Corrections to my own earlier reports — the complete list
+## D. Corrections to my own earlier reports — 23 of them
 
 This section listed FOUR corrections while the log had accumulated roughly a
 dozen more. It is the section whose whole job is to stop you acting on a
@@ -3629,6 +3629,28 @@ document keeps finding. Complete now.
     in this document (M36).
 14. **"9 → 6 reds"** — a HOST number. CI is **unchanged at 22 → 22**; the repair
     is invisible to the landing lane (M27).
+
+**Corrections made after section D was first written** (it too went stale — the
+anti-staleness section is not exempt):
+
+15. **"the coverage bridge is a matrix-registry waiver lookup"** (M37) —
+    WITHDRAWN; two mechanisms share one word (M38).
+16. **"M43: not a defect, Step 4 has four vacuous members"** — right conclusion,
+    **wrong evidence**: a flat cross-step ledger read as one step's membership.
+17. **"M44: a defect after all"** — WRONG; the hint IS carried, its branch was
+    declined (M45).
+18. **"M29: `advisory` closes all four"** — INCOMPLETE; the audit has TWO
+    clauses and the orphan needs wiring, not a declaration (M48).
+19. **"the `1.6x` red and the liar-census pin share a root cause"** — DISPROVEN;
+    one is a missing mutation, the other a stale count.
+20. **"M56: the `:257` reassignment breaks the analyser's chain"** — WRONG;
+    measured, it is FOR-LOOP TARGETS that are not propagated (M58).
+21. **"the analyser fix would move a baseline"** — an IMAGINARY BLOCKER; the
+    gate's own docstring says the set may only shrink (M59).
+22. **"the known `magic` flake"** — NOT a flake; 10/10 deterministic, an
+    environment red (M60).
+23. **"load-confounded on both trees"** (my brief-2 call, accepted at the time) —
+    **BACKWARDS.** `assert elapsed > 4.5` fails when the host is FAST (M62).
 
 **Three near-misses that measurement killed before publication**, listed because
 each would have been believed: "three tamper guards fail in the strong tier" (the
