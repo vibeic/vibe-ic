@@ -1119,18 +1119,77 @@ two of the reds this report leaves open are its to close.
 
 ## Reproduce
 
+**Enumerate the family** (this is what produced the 17; the `test_matrix_`
+prefix alone finds only 15):
+
 ```
 git worktree add -f <wt> origin/main --detach
 cd <wt>/vibe-ic-marketplace/plugins/vibe-ic
 export PYTHONDONTWRITEBYTECODE=1; unset VIBE_IC_BENCHMARK_DATA
 for f in programs/tests/test_matrix_*.py; do
   python3 -m pytest -q -p no:randomly -p no:cacheprovider "$f"; done
-python3 -m pytest -q programs/tests/test_flow_manifest_declaration_parity.py
-python3 programs/matrix_mutation_ledger.py --replay D3-UNDECLARED-ARTEFACT --step 1.6x
+grep -rln 'matrix_63x8\|matrix_cell_state\|gen_matrix_63x8_census' \
+     programs/tests/*.py | grep -v '/test_matrix_'      # the other consumers
 ```
 
+**Let the repo choose your verification set** — it named 46 files where a hand
+list had 24:
+
+```
+python3 programs/ci_targeted_test_select.py --base origin/main
+```
+
+**Reproduce red 13 on demand** — three concurrent nested runs at the PRODUCTION
+window, 3/3 killed. This is the only reliable reproduction found; load alone
+never worked (8 attempts, to load 48.5):
+
+```
+for n in 1 2 3; do (python3 - <<'EOF' &
+import sys, time, pathlib, importlib
+sys.path[:0] = [str(pathlib.Path('programs/tests').resolve()),
+                str(pathlib.Path('programs').resolve())]
+cov = importlib.import_module('test_matrix_63x8_coverage')
+d6 = pathlib.Path('programs/tests/test_matrix_d6_skip_discipline.py').resolve()
+t = time.monotonic()
+try:
+    cov._run_outcome_reports((d6,), cwd=pathlib.Path('.').resolve())
+    print(f"COMPLETED {time.monotonic()-t:.1f}s")
+except AssertionError:
+    print(f"KILLED {time.monotonic()-t:.1f}s")
+EOF
+); done
+```
+
+Vary `cov._OUTCOME_PROGRESS_STALL_S` in that snippet to bisect the renewal gap
+(killed at 10 s, survives at 15 s). Set
+`VIBEIC_MATRIX_OUTCOME_WORKERS=1` to serialise the waves — 1.85x wall-clock.
+
+**Probe what the fourth state would close** (throwaway tree only — the contract
+is not this agent's to author):
+
+```
+python3 programs/matrix_mutation_ledger.py --replay D3-UNDECLARED-ARTEFACT --step 1.6x
+# then: make d3's matrix_cell_state return a 4th state for a step whose every
+# entry is UNPROVEN with no cited run root, and run test_matrix_mutation_ledger:
+#   3 failed -> 2 failed   (reds 7-9 close; the ledger GRID pin opens)
+```
+
+## What was and was not done
+
+**Four reds closed** — 16 and 17 by re-deriving a measurement that a declaration
+landed without, 12 and 10 by removing races from tests that had no margin of
+their own, each with mutation proofs on both arms and stability measured at
+extreme load with their ceilings stated.
+
+**Five left open**, every one with a measured mechanism and a named missing
+input: 7-9 wait on a contract that is UNSTARTED (probed: it closes them, and
+costs two further edits); 11 has one observation and no reproduction in eight
+attempts; 13 has a full measured chain, a repeatable reproduction and a shipped
+mitigation whose necessity is unproven.
+
+**Eight owned elsewhere**, allocated by content and audited commit by commit.
+
 Nothing here was obtained by widening an assertion, rewriting a baseline,
-deleting a test or relaxing a rule deck. Two reds were closed by re-deriving a
-measurement on the current tree, one by removing a race from a test that had
-none of its own margin, and the rest are classified with their missing input
-named.
+deleting a test or relaxing a rule deck. Where a story could not be replaced by
+a number, the story was retracted — twenty-three times, several of them against
+this agent's own earlier conclusions in this same file.
