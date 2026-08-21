@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import heapq
 import json
 import re
 import shutil
@@ -111,6 +112,21 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import sdc_constraints as _sdc
 import floorplan_contract as _fpc
+from l_doc_consumer_contract import project_relative_source
+# THE L-document write chokepoint. Every path in this file that writes a
+# `generated_docs/*.json` goes through `_stamp.dump`, which records the
+# plugin release and the L-doc taxonomy that produced the file. Before this
+# existed, an L document said nothing about its own vintage and a reader had
+# no way to tell a two-version-family-old artefact from a current one.
+import l_doc_generator_stamp as _stamp
+# One clock name declares exactly one period. Several independent extraction
+# strategies write into L8.clocks[] / L8.clock_domains[] and nothing used to
+# compare what they wrote, so a converged run shipped `clk` at both 100 MHz
+# and 125 MHz and every consumer quietly picked one by list order. This
+# module is the producer-side contract: it folds a borrowed-name record into
+# the record that owns the name (stated rule, no guessing) and REFUSES —
+# recording an explicit conflict on the document — for anything else.
+import clock_contract as _cc
 # v1.6.95 — Capability 1 of GitHub issue #27. Deeper README parser
 # extracts key sizes / block width / S-box parallelism / supported
 # cipher modes / cited public-standard URLs from README prose and
@@ -158,6 +174,37 @@ from _incidental_mention import (  # noqa: E402
     AnchoredBlob as _AnchoredBlob,
     subject_term as _subject_term,
 )
+
+# ─── One code-literal reader, shared with the L4 gate (#499) ──────────
+# `l4_regmap_enumerated_values_typed_check` derives how many code ->
+# meaning bindings a field OWES by scanning the field's own text with
+# `CODE_LITERAL_RE`. The lifter below must emit from exactly that scan,
+# over exactly those keys, or the detector ends up strictly stronger
+# than the extractor and the layer can never satisfy the gate no matter
+# how complete the input is. See `_code_literal` for the measurement.
+from _code_literal import (  # noqa: E402
+    CODE_LITERAL_RE as _CODE_LITERAL_RE,
+    declared_codes as _cl_declared_codes,
+    field_text as _cl_field_text,
+    natural_binary_pattern as _cl_natural_binary_pattern,
+    split_sentences as _cl_split_sentences,
+    to_binary_pattern as _cl_to_binary_pattern,
+)
+
+# ─── One electrical-mention scan, shared with the L1 gate (#514) ──────
+# `l1_electrical_specs_typed_depth_check` exists to falsify this
+# module's `no_electrical_specs_in_input` claim. If the two carried
+# separate notions of "electrical mention", a disagreement between them
+# would be an artefact of the comparison rather than a finding about
+# the document. See `_electrical_mention`.
+from _electrical_mention import (  # noqa: E402
+    scan_electrical_mentions as _scan_electrical_mentions,
+)
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+# ─── `typedef enum` harvester for staged HDL inputs (#499) ────────────
+import _hdl_enum as _hdlenum  # noqa: E402
+# ─── Was the input actually READ? (#499) ──────────────────────────────
+import _input_ingest as _ingest  # noqa: E402
 
 
 def _design_identity_fields(project: Path) -> dict:
@@ -389,9 +436,7 @@ def _v1_6_580_write_failure_stub(
     payload.setdefault("layer", layer_name)
     payload.setdefault("schema_version", 2)
     try:
-        stub_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False)
-            + "\n", encoding="utf-8")
+        _stamp.dump(stub_path, payload)
     except Exception:
         return
 
@@ -663,6 +708,17 @@ def extract_pptx(p: Path) -> str:
 # participates in the regexes.
 _V1_6_350_SPICE_NETLIST_SUFFIXES = frozenset({
     ".cir", ".sp", ".spice", ".cdl", ".net", ".ckt",
+})
+
+# v1.7.72 — for #499 defect 1. HDL-source extensions. Verilog /
+# SystemVerilog design and package files are plain ASCII exactly like
+# the SPICE netlists above; `extract_one` had no branch for them, so a
+# design that stages its parameter / CSR package as ground truth had
+# that document silently converted to the empty string. Chip-AGNOSTIC:
+# these are IEEE-1364 / IEEE-1800 file-name conventions, not a
+# chip-class literal.
+_V1_7_72_HDL_SOURCE_SUFFIXES = frozenset({
+    ".sv", ".v", ".svh", ".vh",
 })
 
 # `* pin <NAME>,<NET>` or `* pin <NAME> <NET>` — canonical SPICE
@@ -1074,6 +1130,26 @@ def extract_one(p: Path) -> str:
             return p.read_text(encoding="utf-8", errors="replace")
         except Exception:
             return ""
+    # v1.7.72 — for #499 defect 1. HDL source (`.sv` / `.v` / `.svh` /
+    # `.vh`) is the one plain-ASCII industry-standard format that fell
+    # through this dispatch to `""`. A design that names an HDL package
+    # as its parameter / CSR ground truth had that document silently
+    # dropped: the runner recorded the drop in
+    # `extraction_skipped.json` ("converter for extension '.sv'
+    # returned empty") while every downstream metric read a clean zero.
+    #
+    # The asymmetry was the tell: SPICE netlists directly above are
+    # ingested verbatim as plain ASCII, and extension-less files get a
+    # text sniff — Verilog / SystemVerilog is not less plain-text than
+    # either. Read verbatim, exactly like the SPICE branch; the
+    # `typedef enum` harvester (`_hdl_enum.parse_typedef_enums`) then
+    # lifts the declarations downstream. Chip-AGNOSTIC: HDL syntax is
+    # identical across every digital IC.
+    if suf in _V1_7_72_HDL_SOURCE_SUFFIXES:
+        try:
+            return p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
     if suf == "":
         # Extension-less file — sniff and accept if it looks like text.
         return extract_extensionless_text(p)
@@ -1332,6 +1408,203 @@ def _v1_6_558_is_image_derived_source(fname):
     if not isinstance(fname, str) or not fname:
         return False
     return bool(_V1_6_558_IMAGE_SOURCE_RE.search(fname))
+
+
+# ---------------------------------------------------------------------------
+# for #454 — Strategy-2 ROW-SHAPE refusal.
+#
+# The Strategy-2 walkers (`_V1_6_558_OPCODE_PAT` / `_V1_6_245_BARE_OPCODE_PAT`)
+# match a `<hex> <MNEMONIC>` pair on any single line of any extracted doc.
+# The opcode-synthesis precondition is a DOCUMENT-level gate, so once it
+# opens the walkers scrape the WHOLE document — including chapters that
+# have the same two-column shape but carry no commands at all:
+#
+#   * a connector / pin-assignment table  -> `<pin index> <signal name>`
+#   * a rate or capacity prose line       -> `<number> <unit>`
+#   * a numeric-range declaration         -> `<lo>-<hi>` (the HI is matched)
+#
+# Each scraped row then receives a synthetic `response_opcode_hex = op + 1`
+# and a single-byte echo `response_payload_template`, i.e. a fabricated
+# command that no document ever declared.
+#
+# The predicates below refuse a row on its SHAPE alone. They are
+# vocabulary-free on purpose — they key on notation and column layout, never
+# on signal / rail / protocol names, so no design or vendor literal enters
+# the logic:
+#
+#   `signal_name_notation`      the SIGNAL column (the token right after the
+#                               matched hex, NOT the human-readable
+#                               description column) is an active-low name
+#                               `NAME#`, or a differential-pair / lane
+#                               designator `NAMEp(3)` / `NAMEn3` /
+#                               `NAMEp1 ("TX1+")`. Command mnemonics are
+#                               never written in either notation.
+#   `repeated_index_signal_column`
+#                               the row carries a SECOND `<index> <signal>`
+#                               column group — the two-up layout a connector
+#                               pinout is printed in. A command table has one
+#                               opcode per row.
+#   `physical_unit_after_value` the value is DECIMAL and is followed by a
+#                               physical unit of rate / capacity / frequency.
+#                               An opcode encoding never carries a unit.
+#   `hex_range_upper_bound`     the matched hex is the UPPER bound of an
+#                               `0xAA-0xBB` range, so it is half of a
+#                               declaration, not an encoding.
+#
+# Measured over the whole benchmark corpus that ships its input document
+# (204 candidate rows / 17 designs): 64 rows refused, 0 of them from a real
+# command-code table (0 false refusals against 63 genuine command rows).
+# Refusals are COUNTED into the emitted L3 doc rather than dropped silently,
+# so an empty `opcodes[]` can be told apart from a parser miss.
+#
+# Deliberately NOT refused: object-dictionary index tables, data-type /
+# encoding tables, EtherType tables and register maps. Those rows are
+# syntactically IDENTICAL to command rows (`0x1000  VAR  Device type` has
+# the same shape as `0x00  PUT_PC  Put a posted transaction`); no row-level
+# signal separates them, so filtering them would be guesswork.
+# chip-AGNOSTIC.
+# ---------------------------------------------------------------------------
+_I454_RE_PHYSICAL_UNIT_AFTER_VALUE = re.compile(
+    r"^[ \t]*\d{1,4}[ \t]+"
+    r"(?:[GMKkTm]?[Bb][ \t]*/[ \t]*s"      # 10 GB/s, 26 MB/s, 25 Gb/s
+    r"|[GMKkTm][Bb]\b(?![A-Za-z])"          # 16 GB, 512 MB
+    r"|[GMk]?Hz"                            # 33 MHz
+    r"|[GMk]?T[ \t]*/[ \t]*s)\b"            # 20 GT/s
+)
+_I454_RE_ACTIVE_LOW_SIGNAL = re.compile(r"^[A-Za-z][A-Za-z0-9_]*#")
+_I454_RE_DIFF_PAIR_SIGNAL = re.compile(
+    r"^[A-Za-z]{2,}[pn]\(\d+\)"             # HSOp(0) / HSIn(11)
+    r"|^[A-Za-z]{3,}[pn]\d+\b"              # SSTXp1 / SSRXn2
+    r"|^[A-Za-z]+[pn]\d?[ \t]*\(\"?[TR]X\d*[+\-−]\"?\)"
+)
+_I454_RE_SECOND_INDEX_SIGNAL_COLUMN = re.compile(
+    r"\S[ \t]{2,}(?:[A-Z]?\d{1,3}|[A-Z]\d{1,2})[ \t]{2,}"
+    r"[A-Za-z][A-Za-z0-9_()+\-]*"
+)
+_I454_RE_HEX_RANGE_UPPER_BOUND = re.compile(
+    r"0x[0-9A-Fa-f]{1,4}[ \t]*[-–—][ \t]*$"
+)
+
+
+def _i454_signal_column(row_line, hex_token):
+    """Return the row's SIGNAL / MNEMONIC column — the text starting at the
+    token right after the matched hex. Explicitly NOT the trailing
+    human-readable description column: a description may legitimately quote
+    a rail or pin name while the row is still a command row.
+    """
+    if not isinstance(row_line, str) or not isinstance(hex_token, str):
+        return ""
+    for tok in ("0x" + hex_token, hex_token):
+        idx = row_line.find(tok)
+        if idx >= 0:
+            return row_line[idx + len(tok):].lstrip(" \t|,")
+    return ""
+
+
+def _i454_non_command_row_reason(row_line, hex_token):
+    """Return a short reason string when ``row_line`` is structurally NOT a
+    command-table row, else None.
+
+    ``row_line`` is the full source line the Strategy-2 walker matched and
+    ``hex_token`` the hex it captured (without any ``0x`` prefix). Pure
+    function of the row's shape — see the block comment above for the
+    predicate set and its measured behaviour. chip-AGNOSTIC.
+    """
+    if not isinstance(row_line, str) or not row_line.strip():
+        return None
+    if _I454_RE_PHYSICAL_UNIT_AFTER_VALUE.match(row_line.lstrip("\r\n")):
+        return "physical_unit_after_value"
+    signal = _i454_signal_column(row_line, hex_token or "")
+    if _I454_RE_ACTIVE_LOW_SIGNAL.match(signal) or \
+            _I454_RE_DIFF_PAIR_SIGNAL.match(signal):
+        return "signal_name_notation"
+    if _I454_RE_SECOND_INDEX_SIGNAL_COLUMN.search(row_line):
+        return "repeated_index_signal_column"
+    head = row_line
+    for tok in ("0x" + (hex_token or ""), hex_token or ""):
+        idx = row_line.find(tok)
+        if idx > 0:
+            head = row_line[:idx]
+            break
+    if _I454_RE_HEX_RANGE_UPPER_BOUND.search(head):
+        return "hex_range_upper_bound"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# for #454 follow-up — Strategy-1 BIT-POSITION-RULER row refusal.
+#
+# The Strategy-1 walker reads a 4-column row as
+# `<rx_len> <tx_len> <tx_addr> <opcode_hex>`. A bus-protocol figure that
+# draws a data word as adjacent bit fields prints its axis in exactly that
+# shape — a run of DECIMAL bit indices:
+#
+#     31           24 23           16 15            8 7             0
+#
+# The walker reads column 4 as HEX, so the decimal bit index 16 becomes
+# opcode `0x16`, and the callsite then synthesises `response_opcode_hex =
+# op + 1`. The result is a command that no document ever declared.
+#
+# This was previously suppressed downstream by a HARD-CODED LIST OF EIGHT
+# HEX VALUES in `phase1_post_process.HALLUC_PATTERNS`. That list was
+# removed with this predicate because it was the wrong instrument twice
+# over: it deleted those eight values out of ANY design's command table
+# (a genuine `0x24`-class command was indistinguishable from the artefact),
+# and it caught the artefact only where the ruler happened to land on one
+# of its eight values — measured over six ruler offsets of the same shape
+# it stopped four and let two through, while the predicate below stops all
+# six.
+#
+# The predicate describes what a ruler IS, with no value and no vocabulary
+# in it: the row is NOTHING BUT a strictly-descending run of decimal
+# integers that partitions a contiguous range into equal-width fields —
+#
+#   * every token on the row is a plain decimal integer (a command row
+#     carries a mnemonic, a byte group or a description after the opcode;
+#     a ruler carries nothing else),
+#   * an EVEN count of at least four of them, strictly descending,
+#   * each consecutive `<hi> <lo>` pair spans the same width, >= 2, and
+#   * every INNER boundary is adjacent (`lo_of_field_k == hi_of_field_k+1
+#     + 1`), which is what makes the fields contiguous rather than an
+#     arbitrary descending number sequence.
+#
+# Fail-open by construction: a ruler carrying a trailing caption is NOT
+# refused. Refusals are counted into `non_command_row_refusal_count`
+# alongside the Strategy-2 ones, so the silence stays visible.
+# chip-AGNOSTIC.
+# ---------------------------------------------------------------------------
+_I454_RE_PLAIN_DECIMAL = re.compile(r"^\d+$")
+_I454_RULER_MIN_FIELDS = 2          # >= 2 fields, i.e. >= 4 columns
+_I454_RULER_MIN_FIELD_WIDTH = 2     # excludes a `3 2 1 0` degenerate run
+
+
+def _i454_bit_position_ruler_row(row_line):
+    """True when ``row_line`` is a bit-position ruler — a figure axis that
+    partitions a contiguous numeric range into equal-width adjacent fields
+    — rather than a command-table row. Pure function of the row's shape;
+    see the block comment above. chip-AGNOSTIC.
+    """
+    if not isinstance(row_line, str) or not row_line.strip():
+        return False
+    values = []
+    for tok in row_line.split():
+        if not _I454_RE_PLAIN_DECIMAL.match(tok):
+            # Anything that is not a bare decimal (a mnemonic, a hex byte,
+            # a description, a caption) means the row carries content a
+            # ruler does not have.
+            return False
+        values.append(int(tok))
+    if len(values) < 2 * _I454_RULER_MIN_FIELDS or len(values) % 2:
+        return False
+    if any(values[i] <= values[i + 1] for i in range(len(values) - 1)):
+        return False
+    widths = {values[i] - values[i + 1] for i in range(0, len(values), 2)}
+    if len(widths) != 1 or min(widths) < _I454_RULER_MIN_FIELD_WIDTH:
+        return False
+    # Inner boundaries: the low end of one field abuts the high end of the
+    # next. This is what makes the run a PARTITION of one range.
+    return all(values[i] == values[i + 1] + 1
+               for i in range(1, len(values) - 1, 2))
 
 
 # v0.1.90 — for ORGANIC-20260530-phase1-large-doc-hang. Several L-doc
@@ -1701,6 +1974,11 @@ _PIN_TABLE_LINE_RE = re.compile(
     r"\b(input|output|inout|bidir|power|ground)\b",
     re.IGNORECASE,
 )
+
+# A whitespace-delimited token carrying a path separator: a file path, never a
+# port declaration nor a port name. Masked out of the narrative line-scan
+# before the direction anchor is searched and before names are tokenised.
+_PATHLIKE_TOKEN_RE = re.compile(r"\S*[/\\]\S*")
 
 # v1.6.252 — for #111 ORGANIC. CSR / regmap / ISA-spec / bit-field
 # docs must NEVER trigger OTP-evidence extraction. The L4/L11 OTP
@@ -3314,8 +3592,14 @@ def _l9_bullet_submodule_extract(text: str) -> List[str]:
             # gate. A bare prose word under a broadened heading (`Clock` /
             # `Single` / `The`) is neither code-spanned nor RTL-shaped, so it
             # is excluded.
-            cs = [c for c in _v648r2_codespan_idents(ml)
-                  if _is_codespan_submodule_name(c)]
+            # The code-span must be in the bullet's NAME position — see
+            # `_l9_bullet_declares_codespan_name`. A span buried in a
+            # sentence is a reference, not a declaration, so only the
+            # LEADING span is a candidate.
+            cs = []
+            if _l9_bullet_declares_codespan_name(ml):
+                cs = [c for c in _v648r2_codespan_idents(ml)[:1]
+                      if _is_codespan_submodule_name(c)]
             if cs:
                 out.extend(cs)
                 continue
@@ -3374,6 +3658,56 @@ def _v648r2_codespan_idents(text_fragment: str) -> List[str]:
         if tok not in out:
             out.append(tok)
     return out
+
+
+# A backtick says "this token is CODE". It does NOT say "this token is a
+# MODULE". IC prose backticks parameters, config keys, signals, filenames and
+# language keywords constantly, and always for the same reason: to mark an
+# identifier inside a sentence ABOUT something else --
+#
+#     - the minimum pad spacing is `min_distance = 0.1` um
+#     - Checks if `priority_override` is non-zero.
+#     - all ports are unsigned (do not use the `signed` keyword)
+#
+# Every one of those was harvested into `L9.submodules` on the published
+# corpus. What separates them from a declaration is not the token, it is the
+# POSITION: a bullet that DECLARES a submodule puts the identifier in its NAME
+# field -- the bullet leads with it and the rest describes it --
+#
+#     - `rx_phy` — recovers the line clock
+#     - **`ctrl_fsm`**: main sequencer
+#     - 2x `sram_bank` (dual-ported)
+#
+# whereas a bullet that MENTIONS one puts words in front of it. So the rule is
+# "the identifier must open the bullet", which is decidable from the bullet's
+# own structure and needs no vocabulary to maintain. Note this is what makes
+# the pre-existing reserved-keyword deny list unnecessary for the `signed`
+# case rather than merely lucky: `signed` is rejected because of WHERE it sits,
+# not because it is on a list -- and an unusual-but-legal name in the same
+# position is admitted for the same reason. That list is left in place; it is
+# not this change's to remove.
+#
+# chip-AGNOSTIC and language-AGNOSTIC: Markdown list/emphasis punctuation and
+# a numeric multiplicity prefix only. The corpus bullets this rejects are
+# written in English and in Chinese and are rejected identically, because the
+# rule never reads the words -- only whether any word precedes the span.
+_RE_L9_BULLET_NAME_POSITION = re.compile(
+    r"^\s*[-*+]\s+"          # the list marker
+    r"(?:\d+\s*[x×]\s*)?"   # optional multiplicity prefix: `2x` / `4 × `
+    r"[*_~#\s]*"             # optional emphasis / heading markup
+    r"`"                     # ...and then the code-span must open
+)
+
+
+def _l9_bullet_declares_codespan_name(bullet_line: str) -> bool:
+    """True iff ``bullet_line`` puts a backtick code-span in its NAME
+    position -- i.e. no WORD precedes the span.
+
+    False for a bullet that merely mentions a code-spanned identifier inside a
+    sentence. chip-AGNOSTIC: list/emphasis punctuation only."""
+    if not isinstance(bullet_line, str):
+        return False
+    return bool(_RE_L9_BULLET_NAME_POSITION.match(bullet_line))
 
 
 def _is_codespan_submodule_name(name: str) -> bool:
@@ -6194,9 +6528,21 @@ def _extract_verilog_blocks(text: str) -> List[str]:
     # on fenced + RST-directive shapes.
     return blocks
 
+# v1.7.80 — for #514. The sibling of `_RE_BULLET_KV_SPEC`, carrying
+# two instances of the same defect class that issue names. `([\d.]+)`
+# accepted a number ending in a full stop, so a sentence boundary
+# could be read into the value exactly as it was in the bullet-KV
+# path; and `\s*` spans NEWLINES, so a symbol at the end of one
+# paragraph and an unrelated quantity at the start of the next could
+# be joined into one specification. Neither fires anywhere in the
+# current corpus (measured: 8 matches, 0 affected), but a rule that
+# is wrong only on documents nobody has fed it yet is still wrong —
+# and the whole point of #514 is that these read as confident output.
+# A number begins and ends with a digit; a specification does not
+# span a line break.
 _ELECTRICAL_SPEC_RE = re.compile(
-    r"\b(VDD|VDDA|VSS|VOH|VOL|VIH|VIL|IDD|TJ|VBG|VREF)\b\s*[:=]?\s*"
-    r"([\d.]+)\s*(V|mV|mA|μA|uA|°C|MHz|kHz)",
+    r"\b(VDD|VDDA|VSS|VOH|VOL|VIH|VIL|IDD|TJ|VBG|VREF)\b[ \t]*[:=]?[ \t]*"
+    r"(\d+(?:\.\d+)?)[ \t]*(V|mV|mA|μA|uA|°C|MHz|kHz)",
     re.IGNORECASE,
 )
 _FREQUENCY_RE = re.compile(
@@ -6230,10 +6576,42 @@ _RE_BULLET_KV_SPEC = re.compile(
     # whose param tokens carry English connectives — kills the
     # `"SRET instruction is executed when V"` false-positive that
     # relaxing lowercase capitalisation would otherwise enable.
+    #
+    # v1.7.80 — for #514. A KV match may not span a sentence boundary.
+    # Three of this pattern's properties combined to read the English
+    # indefinite article as an ampere: the value charset ended in
+    # `[\d.,_]*`, so a sentence-ending full stop was absorbed into the
+    # NUMBER; the unit alternation offers bare single letters; and the
+    # trailing-prose tolerance swallowed the remainder so nothing
+    # downstream could object. On `TSTRB = 1. A normal content byte`
+    # that yields value `1.` unit `A` — a one-ampere specification
+    # minted from a byte-qualifier sentence. Three general repairs,
+    # none of which names a unit:
+    #
+    #   (1) A number begins AND ends with a digit. Trailing `.` `,`
+    #       `_` are punctuation of the surrounding text, never part of
+    #       the literal.
+    #   (2) A unit may not abut an alphanumeric. `1Ampere` does not
+    #       carry the unit `A`, and `204A` in an enumeration is an
+    #       identifier, not a current.
+    #   (3) The tolerated remainder must start at a boundary: either
+    #       whitespace (the pre-existing tolerance — `3.3 V nominal`)
+    #       or a clause terminator that the NUMBER ITSELF runs into.
+    #       The `(?<=[0-9])` lookbehind is what makes that second form
+    #       safe: it can only fire when no unit was matched, so a
+    #       sentence boundary can never be the thing that promotes a
+    #       prose word into a unit. `(?=[ \t]|$)` keeps a decimal
+    #       point (`2.5V`) and a range dot (`0..7`) from being read as
+    #       a clause end and truncating the number.
+    #
+    # Net effect on the sentence above: value `1`, NO unit, remainder
+    # `. A normal content byte` tolerated as prose. The byte-qualifier
+    # value survives — as the unitless design parameter it always was
+    # — and the fabricated ampere is gone.
     r"^[ \t]*[\-\*\+]?[ \t]*"
     r"(?P<param>[A-Za-z][\w ~\-/()²³µΩ°.]{1,60}?)"
     r"[ \t]*[:=][ \t]*"
-    r"(?P<value>[<>≈±]?[ \t]*[+-]?\d[\d.,_]*)"
+    r"(?P<value>[<>≈±]?[ \t]*[+-]?\d(?:[\d.,_]*[\d])?)"
     r"[ \t]*"
     r"(?P<unit>dBFS/Hz|dBFS|dBc|dB|Vpp|mV|µV|uV|kV|V|"
     r"mA|µA|uA|nA|A|"
@@ -6244,11 +6622,11 @@ _RE_BULLET_KV_SPEC = re.compile(
     r"pF|nF|µF|uF|"
     r"µm|nm|um|"
     r"Ω|ohm|"
-    r"%|x)?"
+    r"%|x)?(?![A-Za-z0-9])"
     r"(?:[ \t]*(?:@|at)[ \t]*"
     r"(?P<cond>[\d.]+[ \t]*"
     r"(?:Hz|kHz|MHz|GHz|°C|V|ns|µs|us|ms)))?"
-    r"(?:[ \t]+[^\n]*)?[ \t]*$",
+    r"(?:[ \t]+[^\n]*|(?<=[0-9])[.,;!?](?=[ \t]|$)[^\n]*)?[ \t]*$",
     re.MULTILINE,
 )
 
@@ -6960,6 +7338,93 @@ def _extract_bullet_kv_specs(text: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _collect_electrical_specs_for_doc(
+        fname: str,
+        text: str,
+        e_seen: Set[Tuple[str, str, str]],
+) -> List[Tuple[Dict[str, Any], Dict[str, str]]]:
+    """Yield L1 ``electrical_specs[]`` entries found in ONE input doc.
+
+    Returns ``[(spec_entry, evidence_item), ...]`` in emission order.
+    `e_seen` is the caller's cross-document dedup set and is mutated
+    in place, exactly as when this loop lived inline in
+    ``gen_l1_datasheet``.
+
+    v1.7.80 — for #514. Lifted out of ``gen_l1_datasheet`` so the
+    corpus re-derivation and the regression tests can call the real
+    emission path instead of re-implementing it. Re-implementing it
+    was how the four fabricated ampere entries stayed invisible: the
+    only way to see what the emitter produces was to read what it had
+    already published.
+    """
+    out: List[Tuple[Dict[str, Any], Dict[str, str]]] = []
+    for m in _ELECTRICAL_SPEC_RE.finditer(text):
+        param, val, unit = m.group(1), m.group(2), m.group(3)
+        try:
+            num = float(val)
+        except ValueError:
+            continue
+        key = (param.upper(), str(num), unit)
+        if key in e_seen:
+            continue
+        e_seen.add(key)
+        out.append((
+            {
+                "name": param.upper(),
+                "parameter": param,
+                "min_typ_max": {"typ": num},
+                "unit": unit,
+                "conditions": "VDD=nominal, T=25C unless otherwise stated",
+                "evidence": f"input/docs/{fname}",
+            },
+            {"literal": f"{param}={val}{unit}",
+             "label": "electrical spec"},
+        ))
+    # v1.6.234 — closes #101. Bullet KV-pair spec parser. Captures
+    # `<Phrase>: <value> <unit>` lines that the hardcoded VDD/VOH/...
+    # list above never matched. Routes only electrical-unit entries
+    # to L1.electrical_specs; timing-unit entries go to L2,
+    # unitless ones go to L5.design_parameters via gen_l5_adi_spec.
+    for entry in _extract_bullet_kv_specs(text):
+        unit = entry["unit"]
+        # v1.6.236 — for #101 field-agent feedback. L1 now also
+        # accepts _SAMPLE_RATE_UNITS (kS/s, MS/s, GS/s) since
+        # ADC/DAC sample-rate is an electrical spec, and the
+        # `condition` field (singular) is now emitted alongside
+        # `conditions` (plural, pre-existing) so layer-mirror
+        # consistency check between L1 and L5 passes.
+        if (unit not in _ELECTRICAL_UNITS
+                and unit not in _SAMPLE_RATE_UNITS):
+            continue
+        param = entry["parameter"]
+        value = entry["value"]
+        key = (param.upper(), value, unit)
+        if key in e_seen:
+            continue
+        e_seen.add(key)
+        try:
+            num: Any = float(value.replace(",", ""))
+        except ValueError:
+            num = value
+        out.append((
+            {
+                "name": param,
+                "parameter": param,
+                "min_typ_max": ({"typ": num}
+                                if isinstance(num, float) else None),
+                "value": value,
+                "unit": unit,
+                "condition": entry["condition"],
+                "conditions": (entry["condition"] or
+                               "VDD=nominal, T=25C unless otherwise stated"),
+                "evidence": f"input/docs/{fname}",
+                "extraction_strategy": "bullet_kv_pair_spec",
+            },
+            {"literal": entry["raw"],
+             "label": "electrical spec (bullet KV)"},
+        ))
+    return out
+
 
 # v1.6.9 Fix 4 — schema-level alias normalization map (chip-AGNOSTIC).
 #
@@ -7506,6 +7971,35 @@ def extract_text_pipeline(project: Path,
                                           # reads INPUT docs only.
                                           "phase2", "phase3", "reports",
                                           "extracted_docs"})
+            # ORGANIC — the ingester must never read its OWN documentation as
+            # the design's specification. The skip set above excludes the
+            # runner's own OUTPUT (phase1/phase2/phase3/reports); nothing
+            # excluded the runner's own SOURCE. When the plugin is checked out
+            # INSIDE the run root (run root holds `input/` and a plugin
+            # checkout side by side — a normal deployment) this rglob walked
+            # the plugin tree and ingested 9 plugin READMEs as design input:
+            # 97.2% of the corpus by bytes on a run whose real input was ONE
+            # natural-language request. L1 then described the TOOL (a pin named
+            # `Verb` from a docs table of verbs; the plugin README's vendor and
+            # process node), and ic_class was decided from that text — the
+            # crypto detector matched the literal `SHA` in the plugin's
+            # artifact-ATTESTATION section, classifying the design
+            # `crypto_accelerator`, whose registry declares rtl_gen=null, so
+            # RTL was WAIVED and Phase-2 FAILed with `rtl/ missing`.
+            # Identified by STRUCTURE (plugin manifest / programs+flow+skills
+            # triple), never by directory name. See _input_corpus_scope.py.
+            _tooling_roots = []
+            _tooling_excluded: List[str] = []
+            try:
+                if str(Path(__file__).resolve().parent) not in sys.path:
+                    sys.path.insert(
+                        0, str(Path(__file__).resolve().parent))
+                import _input_corpus_scope as _ics
+                _tooling_roots = _ics.find_tooling_roots(project)
+            except Exception:
+                # DEGRADE LOUDLY: recorded as NOT_RUN below, never silently
+                # treated as "no tooling present".
+                _ics = None  # type: ignore[assignment]
             if not _v1_6_343_any_doc_dir:
                 _v1_6_343_cap = 30
                 _v1_6_343_count = 0
@@ -7532,6 +8026,14 @@ def extract_text_pipeline(project: Path,
                     if any(seg in _v1_6_343_skip_segments
                            for seg in rel.parts):
                         continue
+                    # ORGANIC — tooling subtree: the plugin's own checkout is
+                    # not design input. Recorded, never dropped silently.
+                    if _tooling_roots and _ics is not None:
+                        _hit = _ics.path_is_tooling(rel.as_posix(),
+                                                    _tooling_roots)
+                        if _hit is not None:
+                            _tooling_excluded.append(rel.as_posix())
+                            continue
                     if readme.suffix.lower() not in {
                             ".md", ".rst", ".txt", ".adoc",
                             ".asciidoc"}:
@@ -7598,6 +8100,35 @@ def extract_text_pipeline(project: Path,
                 "extraction_strategy: "
                 "rglob_readme_fallback_v1_6_343\n"
             )
+        # ORGANIC — DEGRADE LOUDLY (flow-change-acceptance §6). Excluding input
+        # is an action with consequences, so it is never silent. `status=RAN`
+        # with an empty excluded_roots positively means "no tooling subtree
+        # present"; `NOT_RUN` means the rule never applied. The two are never
+        # conflated into "nothing was excluded".
+        try:
+            if _ics is not None:
+                _scope = _ics.scope_record(
+                    project, _tooling_roots, _tooling_excluded, status="RAN")
+            else:
+                _scope = {"_schema_version": "1", "status": "NOT_RUN",
+                          "rule": "programs/_input_corpus_scope.py",
+                          "_comment": ("the input-corpus scope rule could not "
+                                       "be loaded; tooling subtrees were NOT "
+                                       "excluded on this run"),
+                          "excluded_roots": [], "excluded_files": [],
+                          "excluded_file_count": 0}
+            _scope_p = project / "phase1" / "input_corpus_scope.json"
+            _scope_p.parent.mkdir(parents=True, exist_ok=True)
+            _scope_p.write_text(json.dumps(_scope, indent=2) + "\n",
+                                encoding="utf-8")
+            if _tooling_excluded:
+                print(f"      input_corpus_scope: excluded "
+                      f"{len(_tooling_excluded)} tooling document(s) from "
+                      f"{len(_tooling_roots)} tooling subtree(s) — the "
+                      f"plugin's own checkout is not design input "
+                      f"(→ phase1/input_corpus_scope.json)")
+        except Exception:
+            pass
 
     # v1.6.291 — for #166 + #168 round-2 ORGANIC (Option A).
     # Persist every `__chip_root_docs__/<rel_path>` in-memory entry
@@ -7928,6 +8459,15 @@ def _write_l_doc(project: Path, name: str, content: dict,
     # thin-input and rich-input runs; this defensive pass guarantees the
     # flag is always True/False regardless of which code path produced it.
     _ensure_bool_flags(content)
+    # CLOCK CONTRACT — one clock name, one period. Applied at the same write
+    # chokepoint as the sanitisers above so no L emitter, present or future,
+    # can put a self-contradictory clock contract into a document. Borrowed-
+    # name records are folded onto the record that owns the name (their
+    # numbers survive under `alternate_frequency_mentions[]`); a genuine
+    # two-owner disagreement is NOT resolved here — it is stamped on the
+    # document as `clock_contract_conflicts[]` and blocks the run in
+    # `_post_emit_enforce_clock_contract`. Fail-closed beats guessing.
+    _cc.enforce(content)
     # v0.1.60 capture (R11): wire phase1_post_process.scrub_l_doc into the
     # write chokepoint so every L doc emission gets the HALLUC_PATTERNS scan
     # (ic_name lifted from "SUCH ARM TECHNOLOGY" license clause, opcode_hex
@@ -7982,7 +8522,7 @@ def _write_l_doc(project: Path, name: str, content: dict,
         ] = str(_e)[:200]
     out = _pl.generated_docs_dir(project) / f"{name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(content, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, content)
     todo = json.dumps(content).count("__TODO__")
     n_ev = sum(len(v) for v in evidence.values())
     return LDocResult(name=name, path=out,
@@ -8089,10 +8629,12 @@ _FOUNDRY_CTX_RE = re.compile(
 #       (\d+ nm) — a bare "TSMC process" with no node is too weak to
 #       overrule a negation-free reading.
 # Chip-AGNOSTIC: pure structural negation vocabulary; no chip literal.
-_FOUNDRY_NEGATION_RE = re.compile(
-    r"(?:\bnot\b|\bno\b|\bwithout\b|\bexcluding\b|\bexclud\w*\b|"
-    r"\bnever\b|\bnon-?\b|非|无|無|不|否)",
-    re.IGNORECASE)
+# vibe-ic#712 — the vocabulary lives in ONE place. This file and
+# `floorplan_contract` each grew a private copy within a day of each other, and
+# two copies drift; the second is written only after the field it guards has
+# already published a denied value. The SCOPE rule stays local (it genuinely
+# differs per field); only the list of words that mean "no" is shared.
+from _prose_polarity import DENIAL_CORE_RE as _FOUNDRY_NEGATION_RE  # noqa: E402
 _FOUNDRY_NUMERIC_NODE_RE = re.compile(r"\d+\s?nm", re.IGNORECASE)
 
 
@@ -8108,6 +8650,747 @@ def _foundry_match_trustworthy(span: str) -> bool:
     if not _FOUNDRY_NUMERIC_NODE_RE.search(span):
         return False            # dual-evidence: need a numeric node
     return True
+
+
+# ORGANIC-20260801 — the THIRD evidence source: a LABELLED DECLARATION.
+#
+# #451/#457 read prose and #513 read staged PATHS, and both decide "is
+# this a PDK identifier?" by testing the token against a CLOSED NAME
+# LIST: `_OPEN_PDK_TOKEN_RE` (the open PDKs) or `_FOUNDRY_CTX_RE` (six
+# commercial foundries). That model can only ever extract a PDK the
+# extractor already knows the name of. A design that stages its OWN
+# commercial enablement — the case `analog_pdk_availability.resolve_pdk`
+# rung 1 exists for, and calls "the commercial / NDA-node case" — is
+# exactly the design whose foundry is NOT on a six-entry list, so
+# `pdk_target` stays null however plainly the design declares it, and
+# `l19_pdk_floorplan_contract_check` L19-3 blocks on that null.
+#
+# WIDENING THE NAME LIST IS NOT THE FIX. It would be one more reactive
+# entry per foundry encountered, and the next design would fail the same
+# way. Read the DECLARATION instead of recognising the NAME.
+#
+# WHAT MAKES THIS SAFE — a LABEL, not a mention. The distinction is the
+# whole point, and it is what separates this from the naive "run the
+# same regexes over file CONTENT" repair, which adopts sentences like
+#
+#     "Structural shape modelled on the <open-pdk> technology files
+#      shipped in the eda image"                        <- a MENTION
+#
+# and would set a design's pdk_target to a PDK it does not tape out on.
+# A mention carries no field label. A declaration does:
+#
+#     "**PDK source**: <foundry> <process> (180nm ...)"  <- a DECLARATION
+#
+# so this tier fires only on `^<label> :` — a labelled field at the
+# start of a line — and never on running prose.
+#
+# EVERY #457 GUARD IS KEPT: the declared VALUE must be negation-free and
+# must carry a numeric process node (`_foundry_match_trustworthy`), so a
+# line like "Process: not yet selected" or "PDK: TBD" still denies.
+#
+# Chip-AGNOSTIC: the vocabulary is FIELD LABELS ("pdk", "process",
+# "technology", "foundry"), which are properties of documents, not of
+# any vendor, foundry, SKU or part. No design literal appears here.
+_PDK_DECL_LABEL = (
+    r"pdk(?:[ \t]*(?:source|target|name|version|kit))?|"
+    r"process(?:[ \t]*(?:node|technology|name|kit))?|"
+    r"technology(?:[ \t]*node)?|"
+    r"foundry(?:[ \t]*process)?|"
+    r"(?:target|silicon)[ \t]*process|"
+    r"design[ \t]*kit"
+)
+# A labelled field at the START of a line. Leading markdown/list
+# decoration (`**`, `#`, `>`, `-`, `*`, bullets) is allowed and so is a
+# trailing `**`/`__` closing the bold label, because that is how such a
+# field is written in a README/datasheet — but the label must still be
+# the first thing on its line, which running prose never is.
+_PDK_DECL_RE = re.compile(
+    r"(?im)^[ \t]*[*_#>\-•·]*[ \t]*"
+    r"(?:\*\*|__)?[ \t]*(?:" + _PDK_DECL_LABEL + r")[ \t]*(?:\*\*|__)?"
+    r"[ \t]*[:=][ \t]*(\S[^\n]{0,200})")
+# Where a declared value stops being the identifier and starts being
+# commentary: a bracket, a list separator, or a clause break.
+_PDK_DECL_VALUE_STOP_RE = re.compile(r"[(\[{,;/|]|\s[-–—]\s")
+# Documents that live inside the design's own staged PDK tree. The prose
+# reader does not descend into `input/pdk*/` and the #513 staged reader
+# keeps only enablement SUFFIXES (.lib/.lef/.tech/.db/.gds), so a PDK
+# README/bridge document under that root is read by NEITHER today.
+_PDK_DECL_DOC_GLOBS = ("input/pdk*/**/*.md", "input/pdk*/**/*.txt",
+                       "input/pdk*/**/*.rst")
+_PDK_DECL_MAX_FILES = 64
+_PDK_DECL_MAX_BYTES = 200_000
+_PDK_DECL_MAX_TOKEN = 64
+
+
+def _pdk_declared_value_token(value: str) -> Optional[str]:
+    """The identifier part of a declared PDK value, or None.
+
+    Keeps the value up to its first structural delimiter — the point at
+    which a declaration stops naming the process and starts describing
+    it — then collapses whitespace and caps the length. Returns None
+    when the remainder carries no letter (a bare number is not an
+    identifier) or fails the #457 guards.
+    """
+    if not isinstance(value, str):
+        return None
+    # #457 guards apply to the WHOLE declared value, so "Process: not
+    # yet chosen (was 180nm)" is denied by the negation and a value with
+    # no numeric node is denied by dual-evidence.
+    if not _foundry_match_trustworthy(value):
+        return None
+    stop = _PDK_DECL_VALUE_STOP_RE.search(value)
+    head = value[:stop.start()] if stop else value
+    head = re.sub(r"\s+", " ", head).strip().strip("*_`\"'.:=- ")
+    if not head:
+        return None
+    # The value must name something, not merely restate the node. With
+    # every `<n>nm` token removed there has to be an identifier LEFT:
+    # "Process: 180nm" declares a geometry, not a target, and adopting
+    # it would hand the foundry pack a node where a process belongs —
+    # the "silent wrong value" #457 exists to refuse.
+    residue = _FOUNDRY_NUMERIC_NODE_RE.sub(" ", head)
+    if not re.search(r"[A-Za-z]", residue):
+        return None
+    return head[:_PDK_DECL_MAX_TOKEN].strip()
+
+
+def _labelled_pdk_declaration(project: Path, scope: str = "all"):
+    """(pdk_target, snippet, source_rel, line) from a LABELLED PDK
+    declaration, or (None, None, None, None).
+
+    Scans the same input-doc roots the prose reader uses PLUS the
+    documents inside the design's own staged PDK tree, which is where a
+    PDK bridge/README naturally lives and which no current reader opens.
+    Deterministic: files sorted, per-file read capped, file count capped.
+
+    ORGANIC-20260803 — `scope` splits those two populations, because they
+    are not the same kind of evidence and must not have the same rank:
+
+      "design"  the design's OWN documents. A labelled declaration here is
+                the design speaking about itself, so it outranks a bare
+                MENTION of a name off a closed list.
+      "staged"  documents that ship INSIDE the staged PDK tree. These
+                describe the PDK, not the design's intent. Promoting them
+                would let a PDK's own README answer "what does this design
+                target?", which is exactly the question a declared-vs-used
+                gate needs the design to answer for itself. Measured: on a
+                real run whose docs still named an open PDK, reading the
+                staged tree at high rank replaced the design's answer with
+                the staged PDK's README title. So this half stays last.
+      "all"     both, in the historical order (design roots first).
+    """
+    seen: set = set()
+    per_file: List[Tuple[str, str]] = []
+
+    def _add(f: Path) -> None:
+        try:
+            rp = f.resolve()
+        except OSError:
+            return
+        if rp in seen or not f.is_file():
+            return
+        seen.add(rp)
+        try:
+            t = f.read_text(errors="replace")[:_PDK_DECL_MAX_BYTES]
+        except OSError:
+            return
+        try:
+            rel = str(f.relative_to(project))
+        except ValueError:
+            rel = f.name
+        per_file.append((rel, t))
+
+    if scope in ("design", "all"):
+        for base in (project / "phase1" / "input_doc",
+                     project / "input" / "docs", project / "input_doc"):
+            if not base.is_dir():
+                continue
+            for f in sorted(base.rglob("*")):
+                if f.suffix.lower() in (".png", ".jpg", ".pdf", ".gds",
+                                        ".zip"):
+                    continue
+                _add(f)
+                if len(per_file) >= _PDK_DECL_MAX_FILES:
+                    break
+    if scope in ("staged", "all"):
+        for pat in _PDK_DECL_DOC_GLOBS:
+            for f in sorted(project.glob(pat)):
+                _add(f)
+                if len(per_file) >= _PDK_DECL_MAX_FILES:
+                    break
+
+    for rel, text in per_file:
+        for m in _PDK_DECL_RE.finditer(text):
+            tok = _pdk_declared_value_token(m.group(1))
+            if not tok:
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            snippet = text[max(0, m.start()):m.end()].replace(
+                "\n", " ")[:160]
+            return tok, snippet, rel, line
+    return None, None, None, None
+
+
+# ORGANIC-20260728 #513 — the SECOND evidence source of the SAME
+# extractor. #451/#457 gave the extractor exactly one source: PROSE. A
+# design that does not DESCRIBE its process still STAGES one: liberty /
+# LEF / tech files under its own `input/pdk*/` tree. That enablement is
+# on disk before L19 is emitted, and `l19_pdk_floorplan_contract_check`
+# L19-3 fails precisely on "stages a PDK, declares none".
+#
+# The identifier is NOT read off a name list and NOT keyed to any
+# filename: the staged file's own relative PATH is tokenised on
+# non-alphanumerics and handed to the SAME `_OPEN_PDK_TOKEN_RE` /
+# `_FOUNDRY_CTX_RE` + `_foundry_match_trustworthy` machinery the prose
+# path uses. Tokenisation is required because a PDK identifier inside a
+# cell-library filename is glued to the rest of the name by `_`, and `_`
+# is a word character, so `\b` can never fire on the raw path.
+#
+# PROSE IS UNTOUCHED: this source is consulted only after BOTH prose
+# passes have fallen through. A design whose docs name a process keeps
+# the prose answer, byte for byte, including #457's negation and
+# dual-evidence denies — which apply here unchanged.
+#
+# Roots + enablement suffixes mirror `l19_pdk_floorplan_contract_check`
+# (`_STAGED_PDK_GLOBS` / `_PDK_ENABLEMENT_SUFFIXES`) so the extractor
+# reads exactly the population that gate blocks on. Duplicated rather
+# than imported: that gate imports `phase3_one_shot_runner`, and phase 1
+# must not drag the phase-3 runner into its import graph.
+_STAGED_PDK_GLOBS = ("input/pdk*/**/*",)
+_STAGED_PDK_SUFFIXES = (".lib", ".lef", ".tlef", ".tech", ".techlef",
+                        ".db", ".gds")
+# Same 2000-entry glob cap the gate applies, so the extractor and the
+# gate see the SAME staged population on a large PDK install — a design
+# whose enablement the gate can see must be one the extractor can read.
+_STAGED_PDK_MAX_ENTRIES = 2000
+_STAGED_PDK_MAX_FILES = 64          # enablement files kept + disclosed
+# Path -> word text. Only the PATH is ever read; a staged liberty file is
+# routinely tens of MB and its content is never opened.
+_PATH_WORD_SPLIT_RE = re.compile(r"[^0-9A-Za-z]+")
+
+
+def _staged_pdk_enablement_files(project: Path) -> List[str]:
+    """#513 — project-relative paths of the PDK enablement the design
+    stages under its own `input/pdk*/` tree, sorted (deterministic) and
+    capped. Empty list when the design stages nothing."""
+    out: List[str] = []
+    for pat in _STAGED_PDK_GLOBS:
+        try:
+            entries = sorted(project.glob(pat))[:_STAGED_PDK_MAX_ENTRIES]
+        except OSError:
+            continue
+        for f in entries:
+            try:
+                if not f.is_file():
+                    continue
+            except OSError:
+                continue
+            if f.suffix.lower() not in _STAGED_PDK_SUFFIXES:
+                continue
+            try:
+                out.append(str(f.relative_to(project)))
+            except ValueError:
+                out.append(f.name)
+            if len(out) >= _STAGED_PDK_MAX_FILES:
+                return out
+    return out
+
+
+# ORGANIC-20260803 — TIER 3 of the staged read: the enablement's OWN
+# DECLARED LIBRARY NAME.
+#
+# WHAT WAS MEASURED. On a real run the staged read opened 27 enablement
+# files and recorded `"staged_identifier": null` with the reason "neither
+# the open-PDK token table nor the foundry-context rule matched". Both
+# tiers above test the tokenised PATH against a CLOSED NAME LIST, so the
+# staged read can only ever name a PDK whose name is already compiled in.
+# Across every staged tree reachable on the run fleet the path tiers
+# derived an identifier for 14 of 110 recorded reads — and the 96 that
+# failed were not all commercial: an open-PDK design whose enablement is
+# filed under vendor-neutral directory names fails identically.
+#
+# So the flow could STAGE a process it could not NAME, and a process it
+# cannot name becomes an unnamed input to sign-off:
+# `declared_pdk_is_the_pdk_used_check.declared_target` reads exactly this
+# record, and a null here is what makes that gate unanswerable.
+#
+# WIDENING THE NAME LIST IS STILL NOT THE FIX (see the #513 note above).
+# Read what the enablement DECLARES about ITSELF instead.
+#
+# WHY LIBERTY, AND ONLY LIBERTY. Every candidate content record was
+# measured on the staged trees actually present on the fleet:
+#
+#   Liberty  `library (<name>) {`   the file's own top-level declaration.
+#                                   Present in every Liberty file read,
+#                                   and the name carries the library
+#                                   family (corner suffixes differ, the
+#                                   family prefix does not).      ADOPTED
+#   LEF      `MACRO <name>`         yielded a FILLER CELL name on a real
+#                                   macro LEF and a LAYER name on a tech
+#                                   LEF — cell/layer identity, not
+#                                   library identity.            REJECTED
+#   GDS      LIBNAME record         yielded a bare DATE on one staged
+#                                   stream and a 3-letter placeholder on
+#                                   tool-written streams.        REJECTED
+#   SPICE    files named `.lib`     model libraries, no `library(` header
+#                                   at all — they must be, and are,
+#                                   silently skipped.         NO EVIDENCE
+#
+# A `.lib` suffix therefore does NOT imply Liberty; the header decides.
+#
+# WHY THIS CANNOT INVENT A VALUE. The identifier returned is always a
+# VERBATIM PREFIX of names the staged files declare about themselves —
+# never a normalised, guessed or table-derived string. When the declared
+# names share no token-boundary prefix the tier returns nothing rather
+# than manufacturing one, and the disclosure records every name it saw so
+# the refusal is auditable.
+#
+# Chip-AGNOSTIC: the vocabulary here is the Liberty grammar's `library`
+# keyword and a structural stop-list of words every PDK on earth uses
+# ("cells", "tech", "typ"). No vendor, foundry, SKU or part appears.
+_LIBERTY_LIBRARY_HEADER_RE = re.compile(
+    rb"(?im)^[ \t]*library[ \t]*\([ \t]*[\"']?([A-Za-z0-9_.+\-]{2,120})")
+# Only a Liberty-carrying suffix is opened. The path tiers still cover
+# every suffix in `_STAGED_PDK_SUFFIXES`.
+_STAGED_CONTENT_SUFFIXES = (".lib",)
+# The `library(...)` header is the first declaration in a Liberty file by
+# grammar, so a bounded head read always reaches it. Measured: found in
+# the first 256 KiB of every Liberty file on the fleet.
+_STAGED_CONTENT_HEAD_BYTES = 262_144
+# Bounded by the same 64 the enablement listing is bounded by, so no
+# staged file the disclosure names is one the header read skipped: a cap
+# lower than the listing would make "read but not named" ambiguous
+# between "declared nothing" and "never opened".
+_STAGED_CONTENT_MAX_FILES = _STAGED_PDK_MAX_FILES
+_STAGED_FAMILY_MIN_LEN = 3
+_STAGED_FAMILY_MAX_LEN = 64
+# Words that identify no process because every process has them. Same
+# doctrine as `declared_pdk_is_the_pdk_used_check.STOPWORDS`.
+_STAGED_FAMILY_STOPWORDS = frozenset({
+    "lib", "libs", "library", "liberty", "cell", "cells", "stdcell",
+    "stdcells", "std", "pdk", "tech", "technology", "kit", "process",
+    "node", "foundry", "corner", "corners", "typ", "typical", "min",
+    "max", "slow", "fast", "nom", "nominal", "worst", "best", "generic",
+    "default", "top", "macro", "macros", "model", "models",
+})
+
+
+def _declared_library_names(project: Path, files: List[str]):
+    """(rel, declared_name) for every staged file that DECLARES a Liberty
+    library name in its own header. Deterministic (input order kept),
+    bounded per file and in file count. A file whose header is not
+    Liberty contributes nothing — no guess is made from its name."""
+    out: List[Tuple[str, str]] = []
+    opened = 0
+    for rel in files:
+        if opened >= _STAGED_CONTENT_MAX_FILES:
+            break
+        if not rel.lower().endswith(_STAGED_CONTENT_SUFFIXES):
+            continue
+        f = project / rel
+        try:
+            with f.open("rb") as fh:
+                head = fh.read(_STAGED_CONTENT_HEAD_BYTES)
+        except OSError:
+            continue
+        opened += 1
+        m = _LIBERTY_LIBRARY_HEADER_RE.search(head)
+        if not m:
+            continue                    # not Liberty (e.g. a SPICE model lib)
+        try:
+            name = m.group(1).decode("ascii", "replace").strip()
+        except Exception:               # noqa: BLE001
+            continue
+        if name:
+            out.append((rel, name))
+    return out
+
+
+def _token_boundary_common_prefix(names: List[str]) -> str:
+    """The longest prefix all `names` share, cut back to a TOKEN
+    boundary so the result is stable when the staged set changes.
+
+    A character-wise common prefix is not stable: staging one more corner
+    of the same library can slice a name in half. Cutting back to the
+    last separator makes the answer depend on the library FAMILY rather
+    than on which files happened to be staged.
+    """
+    if not names:
+        return ""
+    if len(set(names)) == 1:
+        return names[0]
+    ordered = sorted(set(names))
+    lo, hi = ordered[0], ordered[-1]        # sorted: extremes bound the rest
+    k = 0
+    while k < len(lo) and k < len(hi) and lo[k] == hi[k]:
+        k += 1
+    cp = lo[:k]
+    if not cp:
+        return ""
+    # A mid-token cut: the prefix ends on an alphanumeric and at least one
+    # name continues with another alphanumeric.
+    if cp[-1].isalnum() and any(
+            len(s) > len(cp) and s[len(cp)].isalnum() for s in names):
+        m = re.search(r"^(.*[^0-9A-Za-z])[0-9A-Za-z]*$", cp)
+        cp = m.group(1) if m else ""
+    return cp.rstrip("_-.+ ")
+
+
+def _library_family(names: List[str]) -> str:
+    """The family identifier a set of declared library names agrees on,
+    or "" when they agree on nothing usable.
+
+    Heterogeneous sets are handled by GROUPING on the first token and
+    taking the STRICTLY largest group: a staged root routinely carries a
+    std-cell library in several corners plus one unrelated hardmacro, and
+    the library staged in depth is the process. A TIE is refused, not
+    broken — picking one of two equally-attested families would be a
+    coin-flip presented as a measurement, the silent-wrong-value shape
+    #457 exists to refuse.
+    """
+    fam = _token_boundary_common_prefix(names)
+    if not fam:
+        groups: Dict[str, List[str]] = {}
+        for n in names:
+            key = _PATH_WORD_SPLIT_RE.split(n, 1)[0].lower()
+            groups.setdefault(key, []).append(n)
+        if not groups:
+            return ""
+        ranked = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        if len(ranked) > 1 and len(ranked[0][1]) == len(ranked[1][1]):
+            return ""                   # no plurality — no honest answer
+        fam = _token_boundary_common_prefix(ranked[0][1])
+    if len(fam) < _STAGED_FAMILY_MIN_LEN:
+        return ""
+    if not re.search(r"[A-Za-z]", fam):
+        return ""                       # a bare number names no process
+    # Every token generic: `cells_typ` says "the typical corner of the
+    # cells", which is true of every PDK ever shipped and therefore
+    # identifies none of them. At least one token has to carry identity.
+    parts = [t for t in _PATH_WORD_SPLIT_RE.split(fam.lower()) if t]
+    if not parts or all(t in _STAGED_FAMILY_STOPWORDS for t in parts):
+        return ""
+    return fam[:_STAGED_FAMILY_MAX_LEN]
+
+
+def _staged_pdk_content_identifier(project: Path, files: List[str]):
+    """(identifier, source_rel, evidence) from the staged enablement's OWN
+    declared library names, or (None, None, []).
+
+    Derived PER STAGED ROOT in sorted order. `input/pdk` is consulted
+    before `input/pdk_local` because that is the order the roots already
+    sort in, and a design's own local additions must not outrank the PDK
+    it staged. Every returned identifier is a verbatim prefix of names
+    read out of the files; `evidence` lists each (file, declared name)
+    that voted for it.
+    """
+    declared = _declared_library_names(project, files)
+    if not declared:
+        return None, None, []
+    by_root: Dict[str, List[Tuple[str, str]]] = {}
+    for rel, name in declared:
+        root = rel.split("/", 2)
+        key = "/".join(root[:2]) if len(root) > 1 else root[0]
+        by_root.setdefault(key, []).append((rel, name))
+    for key in sorted(by_root):
+        entries = by_root[key]
+        fam = _library_family([n for _rel, n in entries])
+        if not fam:
+            continue
+        voters = [(rel, n) for rel, n in entries if n.startswith(fam)]
+        if not voters:
+            continue
+        return fam, voters[0][0], voters
+    return None, None, []
+
+
+def _staged_pdk_scan_truncated(project: Path) -> bool:
+    """Did either cap hide staged enablement from the read?
+
+    `_staged_pdk_enablement_files` applies a 2000-entry glob cap (mirroring
+    `l19_pdk_floorplan_contract_check`) and a 64-file listing cap. Measured
+    on a real 15433-entry staged tree, the glob cap hid 11 of 62 enablement
+    files. A refusal produced by a cap is not a statement about the PDK, and
+    the two must not be indistinguishable in the record.
+    """
+    for pat in _STAGED_PDK_GLOBS:
+        try:
+            entries = sorted(project.glob(pat))
+        except OSError:
+            continue
+        if len(entries) > _STAGED_PDK_MAX_ENTRIES:
+            return True
+        kept = 0
+        for f in entries:
+            try:
+                if f.is_file() and f.suffix.lower() in _STAGED_PDK_SUFFIXES:
+                    kept += 1
+            except OSError:
+                continue
+        if kept > _STAGED_PDK_MAX_FILES:
+            return True
+    return False
+
+
+def _staged_pdk_identifier_detail(project: Path,
+                                  staged: Optional[List[str]] = None) -> dict:
+    """#513 + ORGANIC-20260803 — everything the staged read concluded.
+
+    Returns a dict with `identifier`, `source`, `kind` and `evidence`.
+    `_staged_pdk_identifier` is the stable 2-tuple shim over it.
+
+    Three tiers, in this order, so every answer the two path tiers could
+    already produce is byte-identical to before and the new tier can only
+    turn a null into a value:
+      1. an open-PDK token in the tokenised path, unambiguous bare;
+      2. a commercial-foundry name that clears `_FOUNDRY_CTX_RE` AND
+         `_foundry_match_trustworthy` (negation-free + numeric node);
+      3. the library family the staged Liberty files DECLARE about
+         themselves.
+
+    Tier 2 is deliberately conservative on shallow layouts: the staged
+    root's own `pdk` component is itself one of the context anchors
+    `_FOUNDRY_CTX_RE` accepts, so on a short path it is consumed as the
+    anchor and the resulting span carries no numeric node — the #457
+    dual-evidence guard then denies the match. Denying is the correct
+    outcome: the alternative is loosening the guard #457 exists to
+    enforce, which would trade a silent null for a silent wrong value.
+    Tier 3 does not loosen it — it stops asking the path at all and reads
+    the declaration instead.
+    """
+    empty = {"identifier": None, "source": None, "kind": None,
+             "evidence": []}
+    files = _staged_pdk_enablement_files(project) if staged is None else staged
+    if not files:
+        return empty
+    texts = [(rel, _PATH_WORD_SPLIT_RE.sub(" ", rel)) for rel in files]
+    for rel, words in texts:
+        m = _OPEN_PDK_TOKEN_RE.search(words)
+        if m:
+            tok = re.sub(r"^ihp[- ]?", "",
+                         m.group(1).lower()).replace(" ", "")
+            return {"identifier": tok, "source": rel, "kind": "path_token",
+                    "evidence": []}
+    for rel, words in texts:
+        for m in _FOUNDRY_CTX_RE.finditer(words):
+            span = words[max(0, m.start() - 24):m.end()]
+            if not _foundry_match_trustworthy(span):
+                continue
+            return {"identifier": (m.group(1) or m.group(2)).lower(),
+                    "source": rel, "kind": "path_token", "evidence": []}
+    fam, src, voters = _staged_pdk_content_identifier(project, files)
+    if fam:
+        return {"identifier": fam, "source": src,
+                "kind": "declared_library_name",
+                "evidence": [{"file": r, "declared_library": n}
+                             for r, n in voters]}
+    return empty
+
+
+def _staged_pdk_identifier(project: Path, staged: Optional[List[str]] = None):
+    """#513 — (pdk_target, source_rel) derived from the design's OWN
+    staged PDK enablement, or (None, None). Stable 2-tuple shim over
+    `_staged_pdk_identifier_detail`; see that docstring for the tiers."""
+    d = _staged_pdk_identifier_detail(project, staged)
+    return d["identifier"], d["source"]
+
+
+# ORGANIC #513 — where the staged-PDK READ is recorded. Same dual-write
+# shape as `regmap_tables_not_registers.json` (#512): a read that was
+# attempted and produced nothing is information, and silence about it is
+# indistinguishable from never having looked.
+#
+# WHERE IT MAY NOT GO, and why: NOT under `generated_docs/`, and NOT
+# anywhere `l19_pdk_floorplan_contract_check._design_input_corpus`
+# scans (`phase1/input_doc/**`, `input/docs/**`, `input/**/*.{json,tcl,
+# sdc,md,txt,yaml,yml,cfg}`). That corpus is what L19-2 greps to decide
+# whether a declared `pdk_target` is TRACEABLE to the design's own
+# inputs. A disclosure file naming the token, dropped inside that
+# corpus, would make any target self-traceable — the false-certificate
+# shape #512 removed. `phase1/` and `reports/phase1/` are outside every
+# one of those globs.
+PDK_STAGING_READ_FILENAME = "pdk_staging_read.json"
+
+
+def _write_staged_pdk_read_disclosure(
+        project: Path, adopted_target, adopted_source, adopted_line) -> None:
+    """#513 — record what the staged-PDK read saw and what it did with it.
+
+    Written whenever the design HAS a staged-PDK root (i.e. the read was
+    attempted), including the case where the read yielded no usable
+    identifier and the case where PROSE won and the staged evidence was
+    not adopted. Not written when the design stages nothing: there was
+    no read, and a record of a read that never happened is noise, not
+    disclosure.
+    """
+    roots: List[str] = []
+    for pat in _STAGED_PDK_GLOBS:
+        root_pat = pat.split("/**", 1)[0]
+        try:
+            for d in sorted(project.glob(root_pat)):
+                if d.is_dir():
+                    try:
+                        roots.append(str(d.relative_to(project)))
+                    except ValueError:
+                        roots.append(d.name)
+        except OSError:
+            continue
+    if not roots:
+        return                       # nothing staged → no read to disclose
+
+    files = _staged_pdk_enablement_files(project)
+    detail = _staged_pdk_identifier_detail(project, staged=files)
+    staged_tok = detail["identifier"]
+    staged_rel = detail["source"]
+    adopted_from = None
+    if adopted_target:
+        adopted_from = "input_doc_prose" if adopted_line else "staged_pdk_path"
+
+    # ORGANIC-20260803 — what was READ but yielded no name. A refusal that
+    # cannot show what it looked at is indistinguishable from not looking.
+    read_names = _declared_library_names(project, files)
+    truncated = _staged_pdk_scan_truncated(project)
+
+    if not files:
+        reason = ("a staged-PDK root exists but holds no enablement file "
+                  f"({', '.join(_STAGED_PDK_SUFFIXES)}); nothing to read")
+    elif not staged_tok:
+        reason = ("enablement files were read but no PDK identifier could be "
+                  "derived: the open-PDK token table and the foundry-context "
+                  "rule found nothing in their paths, and their own headers "
+                  f"declared {len(read_names)} library name(s) that agree on "
+                  "no usable family. This staged PDK CANNOT BE NAMED — it "
+                  "must not become an unnamed input to sign-off"
+                  + (". NOTE: the staged-tree scan hit its cap, so enablement "
+                     "the read never saw may exist — this refusal may be an "
+                     "artefact of the cap rather than of the PDK"
+                     if truncated else ""))
+    elif adopted_from == "staged_pdk_path":
+        reason = "the staged path supplied L19.fields.pdk_target"
+    else:
+        reason = ("the design's own prose already declared a target, which "
+                  "takes precedence; the staged read is recorded so a "
+                  "divergence between the two is visible rather than silent")
+
+    payload = {
+        "produced_by": "_emit_l19_to_l23_skeletons",
+        "meaning": (
+            "what the Phase-1 pdk_target extractor read from the PDK "
+            "enablement this design STAGES under its own input tree, and "
+            "what it did with it. The prose evidence source is authoritative "
+            "when it yields anything; this source is consulted only when "
+            "prose is silent."),
+        "staged_pdk_roots": roots,
+        "enablement_files_read": len(files),
+        # A count equal to the cap means the listing is truncated, not
+        # that the design staged exactly this many files.
+        "enablement_files_read_cap": _STAGED_PDK_MAX_FILES,
+        # True when a cap hid staged enablement from this read. A refusal
+        # below is then not necessarily a statement about the PDK.
+        "enablement_scan_truncated": truncated,
+        "enablement_files": files,
+        "staged_identifier": staged_tok,
+        "staged_identifier_source": staged_rel,
+        # WHICH tier produced it: "path_token" (the two closed name lists)
+        # or "declared_library_name" (the enablement's own header).
+        "staged_identifier_kind": detail["kind"],
+        # Each (file, declared library name) that voted for the identifier,
+        # so the value can be re-derived by hand from the staged tree.
+        "staged_identifier_evidence": detail["evidence"],
+        # Every library name the headers declared, adopted or not. This is
+        # the audit trail behind a refusal.
+        "declared_library_names": [
+            {"file": r, "declared_library": n} for r, n in read_names],
+        # THE REFUSAL SIGNAL. True when a PDK is physically staged and the
+        # flow could not name it. A consumer that proceeds past this is
+        # signing off against a process it cannot identify.
+        "staged_pdk_unnameable": bool(files) and not staged_tok,
+        "adopted_pdk_target": adopted_target,
+        "adopted_evidence_source": adopted_source,
+        "adopted_evidence_kind": adopted_from,
+        "reason": reason,
+    }
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    for out_dir in (_pl.phase1_dir(project), _pl.reports_phase1_dir(project)):
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / PDK_STAGING_READ_FILENAME).write_text(
+                text, encoding="utf-8")
+        except Exception:
+            pass
+    if staged_tok is None:
+        try:
+            print(f"WARN: staged PDK enablement read but no identifier "
+                  f"derivable — roots={roots}, files_read={len(files)}: "
+                  f"{reason}", file=sys.stderr)
+        except Exception:
+            pass
+
+
+# ORGANIC-20260803b — characters that may appear INSIDE one filesystem path
+# token. A PDK name found inside such a token names a FILE, not a process.
+_PATH_TOKEN_CHARS_RE = re.compile(r"[A-Za-z0-9_.+~@%-]|[/\\]")
+
+
+def _match_is_inside_path_token(text: str, start: int, end: int) -> bool:
+    """True when `text[start:end]` sits inside a filesystem PATH token.
+
+    The token is grown outward from the match over path-legal characters and
+    is called a path only when it carries a SEPARATOR (`/` or `\\`). Requiring
+    a separator — rather than guessing at file extensions — is what keeps this
+    from mis-classifying ordinary identifiers: a std-cell library name such as
+    `<pdk>_fd_sc_hd` or a sentence-final `<pdk>.` carries no separator and is
+    NOT a path, while `reference/data/<pdk>.tcl` plainly is.
+
+    chip-AGNOSTIC: path syntax only; no chip / foundry / PDK literal.
+    """
+    i = start
+    while i > 0 and _PATH_TOKEN_CHARS_RE.fullmatch(text[i - 1]):
+        i -= 1
+    j = end
+    while j < len(text) and _PATH_TOKEN_CHARS_RE.fullmatch(text[j]):
+        j += 1
+    tok = text[i:j]
+    return "/" in tok or "\\" in tok
+
+
+def _declared_pdk_alternates(project: Path, source_rel, line, adopted):
+    """Every open-PDK name CO-DECLARED on the adopted target's own line.
+
+    Returns an ordered, de-duplicated list that always begins with `adopted`,
+    or `[]` when the adopted target came from somewhere with no line (a staged
+    enablement PATH — #513 — where there is no row to read) or when the row
+    names nothing else.
+
+    Same-row scope is the whole safety argument: a name on the design's own
+    target row was declared together with the target; a name elsewhere in the
+    document is a mention, and this file's ORGANIC-20260801 note already
+    forbids promoting a mention to a declaration.
+
+    chip-AGNOSTIC: reads the same `_OPEN_PDK_TOKEN_RE` name namespace the
+    adopted target itself came from; no chip / foundry / PDK literal added.
+    """
+    if not adopted or not source_rel or not line:
+        return []
+    try:
+        text = (project / source_rel).read_text(errors="replace")[:200_000]
+    except OSError:
+        return []
+    rows = text.split("\n")
+    if line < 1 or line > len(rows):
+        return []
+    row = rows[line - 1]
+    out = [adopted]
+    for m in _OPEN_PDK_TOKEN_RE.finditer(row):
+        if _match_is_inside_path_token(row, m.start(), m.end()):
+            continue
+        span = row[max(0, m.start() - 24):m.end()]
+        if _FOUNDRY_NEGATION_RE.search(span):
+            continue
+        tok = re.sub(r"^ihp[- ]?", "", m.group(1).lower()).replace(" ", "")
+        if tok not in out:
+            out.append(tok)
+    return out if len(out) > 1 else []
 
 
 def _extract_pdk_target_from_inputs(project: Path):
@@ -8126,7 +9409,18 @@ def _extract_pdk_target_with_provenance(project: Path):
     (relative) + 1-based line number of the match so L19 can carry a
     schema-valid `extraction_evidence` (file + line). Returns
     (pdk_target, snippet, source_rel, line) or (None, None, None, None).
-    Deterministic; capped scan (large-doc doctrine)."""
+    Deterministic; capped scan (large-doc doctrine).
+
+    ORGANIC #513 — two evidence sources, in this order:
+      1. PROSE (#451/#457, unchanged): the design's own input docs.
+         `line` is the 1-based line of the match, always >= 1.
+      2. STAGED PDK ENABLEMENT: the paths of the `.lib`/`.lef`/… the
+         design stages under its own `input/pdk*/`. Reached ONLY when
+         prose yields nothing, so every prose answer is byte-identical
+         to pre-#513. A staged match has no line in the prose sense —
+         the PATH is the evidence — so `line` is None and `source_rel`
+         is the staged file. `line is None` is therefore the caller's
+         discriminator between the two sources."""
     per_file = []           # (rel_path, text)
     total = 0
     for base in (project / "phase1" / "input_doc",
@@ -8149,22 +9443,118 @@ def _extract_pdk_target_with_provenance(project: Path):
             total += len(t)
             if total > 2_000_000:
                 break
-    if not per_file:
-        return None, None, None, None
 
     def _snip(text, lo, hi):
         return text[max(0, lo):hi].replace("\n", " ")[:160]
 
+    # ORGANIC-20260801 — SOURCE 1b: a LABELLED PDK DECLARATION.
+    # It reads a declaration (`^<label>: <value>`) rather than recognising a
+    # name, so it extends to any foundry instead of the six in
+    # `_FOUNDRY_CTX_RE`, and it keeps the #457 negation + numeric-node guards
+    # on the declared value.
+    #
+    # ORGANIC-20260803 — ORDER. This tier used to run LAST, after both
+    # name-list prose tiers. That ordering means a design's own labelled
+    # declaration can never outrank a bare MENTION of a name the extractor
+    # happens to know, and the note this tier was written with says why that
+    # is wrong: "A mention carries no field label. A declaration does."
+    #
+    # Measured, on a real design being moved off an open process: its L1 says
+    #     line 27  ... <competitor>'s demo chip (<open-pdk>, 100 MHz, ...)
+    #     line 33  | target PDK | <open-pdk> |
+    # and Phase 1 adopted line 27 — a sentence about somebody else's chip —
+    # as this design's pdk_target, because the open-PDK tier fires on the
+    # first occurrence anywhere in the document. Once that design declares a
+    # different process with a label, the stale sentence still won.
+    #
+    # BLAST RADIUS IS NARROW, because `_pdk_declared_value_token` already
+    # refuses almost everything: the declared value must carry a numeric node
+    # AND still name something once the node is removed AND be negation-free.
+    # A document that declares `PDK: <open-pdk-name>` has no node in the
+    # value, so this tier still returns nothing and the answer is unchanged.
+    # The answer changes only where a document carries a deliberate, explicit,
+    # node-bearing process declaration — exactly where it should win.
+    #
+    # NARROWED, from a measured regression. The first cut of this promotion
+    # returned the declared VALUE whatever it said, and two existing fixtures
+    # went from `sg13g2` to `IHP SG13G2 130nm SiGe` — the same process, but as
+    # prose instead of the normalised token that `pdk_registry` and
+    # `l19_pdk_floorplan_contract_check` match on. A declaration that names a
+    # process the name list ALREADY knows is therefore handed back to the
+    # name-list tier, which normalises it. The promotion applies only where
+    # the declaration names something no tier below can name — which is the
+    # whole reason the labelled tier exists.
+    decl_tok, decl_snip, decl_rel, decl_line = _labelled_pdk_declaration(
+        project, scope="design")
+    if decl_tok and not _OPEN_PDK_TOKEN_RE.search(decl_tok):
+        return decl_tok, decl_snip, decl_rel, decl_line
     # Open-PDK tokens are unambiguous bare — scan each file in turn so
     # the first match's provenance (file + line) is preserved.
+    #
+    # ORGANIC-20260803 — POLARITY. The #457 negation guard was added to the
+    # commercial tier below and never to this one, so the two tiers read the
+    # SAME sentence shape with opposite results. Measured on a two-file control
+    # whose only difference is which vendor the negated sentence names:
+    #
+    #   "This block is NOT targeted at <open-pdk>."   + a labelled declaration
+    #        -> pdk_target = <open-pdk>          (the negated mention WON)
+    #   "This block is NOT fabricated at a <foundry> 180nm process."
+    #                                            + the same labelled declaration
+    #        -> pdk_target = the declared value  (the negation DENIED it)
+    #
+    # The first line is a design saying which process it does not use, and the
+    # extractor adopted it as the process the design targets — over the
+    # design's own labelled declaration three lines below, because this tier
+    # runs first. The same file's ORGANIC-20260801 note already argues that a
+    # MENTION must not become a declaration; that argument applies here.
+    #
+    # The guard is the negation half of `_foundry_match_trustworthy` and only
+    # that half: the dual-evidence numeric-node half must NOT be carried over,
+    # because an open-PDK name identifies a process on its own and carries no
+    # node. Scanning continues past a negated match instead of returning, so a
+    # document that first says "not <A>" and later declares <A> plainly still
+    # resolves to <A> — only the negated occurrence is skipped.
+    # ORGANIC-20260803b — PROVENANCE. This tier returns the FIRST name-list
+    # match anywhere in the document, and a document's FIRST mention of a PDK
+    # name is very often a FILE PATH in a bibliography, not a statement of
+    # intent. Measured on a real design's L1, whose YAML front matter opens
+    #
+    #     line  9   sources:
+    #                 - reference/data/<pdk-a>.tcl + openlane_common.tcl
+    #     line 33   | target PDK | open-source(<PDK-A> primary;<PDK-B> secondary) |
+    #
+    # and Phase 1 adopted LINE 9 — a citation of a tool config file — as this
+    # design's pdk_target, with `extraction_evidence` pointing at the path. The
+    # same file's ORGANIC-20260801 note already states the governing principle
+    # ("A mention carries no field label. A declaration does."); a path is
+    # weaker than a mention, since it names a FILE rather than a process.
+    #
+    # The repair is a RANKING, not a filter: a path match is kept as a
+    # fallback and returned unchanged when it is the ONLY evidence in the
+    # document. So a design whose docs name their PDK solely through a staged
+    # path answers exactly as before — the answer changes only where the
+    # document ALSO names the PDK outside a path, which is where it should.
+    #
+    # chip-AGNOSTIC: `/` and `\` are path separators, a property of file
+    # systems. No chip, foundry, vendor or PDK literal is added here.
+    _path_only_hit = None
     for rel, text in per_file:
-        m = _OPEN_PDK_TOKEN_RE.search(text)
-        if m:
+        for m in _OPEN_PDK_TOKEN_RE.finditer(text):
+            span = text[max(0, m.start() - 24):m.end()]
+            if _FOUNDRY_NEGATION_RE.search(span):
+                continue            # polarity-aware deny (negated mention)
             tok = re.sub(r"^ihp[- ]?", "",
                          m.group(1).lower()).replace(" ", "")
             line = text.count("\n", 0, m.start()) + 1
-            return (tok, _snip(text, m.start() - 60, m.end() + 60),
-                    rel, line)
+            hit = (tok, _snip(text, m.start() - 60, m.end() + 60),
+                   rel, line)
+            if _match_is_inside_path_token(text, m.start(), m.end()):
+                if _path_only_hit is None:
+                    _path_only_hit = hit
+                continue
+            return hit
+    if _path_only_hit is not None:
+        return _path_only_hit
     # Commercial-foundry names: iterate every match in every file so a
     # negated / weak first mention does not poison a valid later one
     # (polarity-aware + dual-evidence deny via _foundry_match_trustworthy).
@@ -8177,6 +9567,22 @@ def _extract_pdk_target_with_provenance(project: Path):
             line = text.count("\n", 0, m.start()) + 1
             return (tok, _snip(text, m.start() - 20, m.end() + 40),
                     rel, line)
+    # ORGANIC-20260801 / -20260803 — SOURCE 1b (staged half): a labelled
+    # declaration inside the staged PDK tree's own README / bridge document.
+    # Kept at its original last-resort rank: it describes the PDK, not the
+    # design's intent, so it must not displace what the design says.
+    decl_tok, decl_snip, decl_rel, decl_line = _labelled_pdk_declaration(
+        project, scope="staged")
+    if decl_tok:
+        return decl_tok, decl_snip, decl_rel, decl_line
+    # #513 — SOURCE 2: the PDK the design stages rather than describes.
+    # Reached only here, i.e. only when prose asserted nothing at all,
+    # so no prose verdict can change. The evidence IS the staged path,
+    # so it is returned as both the snippet and the source, with no
+    # line (see the docstring's discriminator contract).
+    staged_tok, staged_rel = _staged_pdk_identifier(project)
+    if staged_tok:
+        return staged_tok, staged_rel, staged_rel, None
     return None, None, None, None
 
 
@@ -8216,6 +9622,15 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
     # evidence survives into L19.extraction_evidence in schema-valid shape.
     _pdk_tgt, _pdk_ev, _pdk_src, _pdk_line = (
         _extract_pdk_target_with_provenance(project))
+    # ORGANIC #513 — disclose the staged-PDK read (what was seen, what was
+    # adopted, and why) outside generated_docs/. Fail-open: a disclosure
+    # that cannot be written must never take the L-doc emit down.
+    try:
+        _write_staged_pdk_read_disclosure(
+            project, _pdk_tgt, _pdk_src, _pdk_line)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"      staged-PDK read disclosure FAILED (fail-open): {e}",
+              file=sys.stderr)
 
     for code, doc_name in _L19_L23_CODES_AND_NAMES:
         try:
@@ -8232,6 +9647,30 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
             if code == "L19" and _pdk_tgt and isinstance(
                     skeleton.get("fields"), dict):
                 skeleton["fields"]["pdk_target"] = _pdk_tgt
+                # ORGANIC-20260803b — a design may declare MORE THAN ONE
+                # target process, and `pdk_target` is one scalar. Measured on
+                # a real design whose L1 declares
+                #     | target PDK | open-source(<A> primary;<B> secondary) |
+                # Phase 1 kept only <A>, and phase3's declared-vs-resolved
+                # guard then REFUSED an entire run on <B> — a process the
+                # design names, in the same breath, on the same row.
+                #
+                # The co-declared names are recorded ALONGSIDE the scalar, so
+                # every existing consumer of `pdk_target` (pdk_registry,
+                # l19_pdk_floorplan_contract_check, the foundry pack) reads
+                # exactly the same value it read before. Only a consumer that
+                # asks "does this design declare <X> at all?" gains an answer.
+                #
+                # SAME-ROW ONLY. The alternates are harvested from the ONE
+                # line the adopted target itself came from, never from the
+                # document at large — the file's own ORGANIC-20260801 rule is
+                # that a MENTION must not become a DECLARATION, and a name
+                # sharing the design's own target row is co-declared, while a
+                # name three paragraphs away is a mention.
+                _alts = _declared_pdk_alternates(
+                    project, _pdk_src, _pdk_line, _pdk_tgt)
+                if _alts:
+                    skeleton["fields"]["pdk_target_alternates"] = _alts
                 skeleton["extraction_status"] = "PARTIALLY_EXTRACTED"
                 # ORGANIC #457 — the pre-#457 code set
                 # skeleton["extraction_evidence"]["pdk_target"] directly,
@@ -8242,10 +9681,17 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
                 # `evidence` ARGUMENT (which _write_l_doc honors) in the
                 # canonical {source: [{literal,label}]} schema shape so
                 # it lands in L19.extraction_evidence with file + line.
+                # ORGANIC #513 — a staged-PDK match has no line (the PATH
+                # is the evidence, see `_extract_pdk_target_with_provenance`),
+                # so name the staged file in the label instead. Prose
+                # always carries line >= 1, so its label is unchanged.
                 _src_key = _pdk_src or "input/docs"
                 _label = "pdk_target"
                 if _pdk_line:
                     _label = f"pdk_target ({_src_key}:{_pdk_line})"
+                elif _pdk_src:
+                    _label = (f"pdk_target (staged PDK enablement path: "
+                              f"{_src_key})")
                 evidence.setdefault(_src_key, []).append({
                     "literal": _pdk_ev or _pdk_tgt,
                     "label": _label,
@@ -8255,6 +9701,83 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
         except Exception as e:
             print(f"      L19-L23 skeleton emit {doc_name} crashed: {e}",
                   file=sys.stderr)
+
+    # v1.8.79 landed `l21_macro_supply_rail_synth` — the PRODUCER that derives
+    # the rail set from the design's OWN hard-macro LEFs — but landed it with
+    # NO CALL SITE anywhere in the tree. Its consumer,
+    # `l21_macro_supply_rail_declared_check`, runs as an advisory in THIS step
+    # (D1), so the gate kept finding no declared rails and kept failing, while
+    # the program that exists to declare them ran only when a human invoked it
+    # by hand. A producer whose only caller is a human is not wired.
+    #
+    # Producer and consumer belong to the SAME step, so the producer goes here:
+    # after the L19-L23 loop, which is what puts L21_POWER_INTENT.json on disk.
+    # Fail-open like every other post-emit hook — deriving rails must never take
+    # the L-doc emit down. NOT_APPLICABLE (rc 0, no hard macro with PG pins) and
+    # a missing L21 (rc 2) are both ordinary outcomes, not errors.
+    #
+    # The DOC-TABLE producer runs FIRST, and it is a second evidence source for
+    # the same layer, not a duplicate of the LEF one. Measured on a real
+    # mixed-signal cell: the LEF producer reports
+    #     verdict: NOT_APPLICABLE
+    #     count: 0 hard macro(s) with PG pins across 0 LEF file(s)
+    # not because it looks in the wrong places (v1.8.95 fixed that) but because
+    # the design's macros are its OWN analog blocks, whose LEFs are generated at
+    # A8 in PHASE 3 — they do not exist yet when this Phase-1 hook runs. The
+    # same design states its rails outright, in a two-row markdown table under a
+    # heading called "Supplies / levels". A rail the design WROTE DOWN is the
+    # earliest and most direct evidence there is, so it is read first; the LEF
+    # producer then adds only what the documents did not state, because both
+    # test "already declared" against the same consumer-visible key set.
+    # ORGANIC #691 — RECORD THAT EACH PRODUCER RAN, whatever it returned.
+    #
+    # Both calls are fail-open, which is right: a synthesiser that dies must not
+    # take Phase 1 with it. But a producer that did not run was, from the
+    # record, indistinguishable from one that ran and found nothing to declare.
+    # MEASURED on a real Phase-3 run: L21_POWER_INTENT.json carried 0
+    # power_rails and 3 power_domains, every one stamped
+    # `derived_by: l21_macro_supply_rail_synth`, and the doc synthesiser had
+    # left NO artefact anywhere in the run.
+    #
+    # The visible symptom was one rail reported `rail_undeclared`, because
+    # `measured_rails()` re-derives from DEF geometry and rescues the two rails
+    # that HAVE geometry — the third has none precisely because it was never
+    # declared. Chasing that symptom leads to the rail; the cause is a missing
+    # producer.
+    #
+    # Same family as #544 (a declared gate that returned no verdict) and #682
+    # (a gate whose execution nothing recorded) — except this one is a PRODUCER,
+    # upstream of every gate that consumes it.
+    _prod_log: List[Dict[str, Any]] = []
+    for _label, _mod in (("l21_doc_supply_rail_synth", "l21_doc_supply_rail_synth"),
+                         ("l21_macro_supply_rail_synth", "l21_macro_supply_rail_synth")):
+        _row: Dict[str, Any] = {"producer": _label}
+        try:
+            _m = __import__(_mod).main
+            _rc = _m([str(project), "--apply"])
+            _row["rc"] = _rc
+            _row["outcome"] = "ran"
+            if _rc not in (0, 2):
+                print(f"      L21 {_label} rc={_rc}", file=sys.stderr)
+        except Exception as e:                              # noqa: BLE001
+            _row["rc"] = None
+            _row["outcome"] = "did-not-run"
+            _row["error"] = repr(e)
+            print(f"      L21 {_label} FAILED (fail-open): {e}", file=sys.stderr)
+        _prod_log.append(_row)
+    try:
+        _pp = _pl.report_path(project, "phase1/l21_rail_producers.json")
+        _pp.parent.mkdir(parents=True, exist_ok=True)
+        _pp.write_text(json.dumps({
+            "_comment": "Which L21 rail producers this run DISPATCHED, and what "
+                        "each returned. Written unconditionally: a producer "
+                        "that did not run must not read like one that ran and "
+                        "declared nothing (vibe-ic#691).",
+            "producers": _prod_log,
+            "all_ran": all(r["outcome"] == "ran" for r in _prod_log),
+        }, indent=2) + "\n")
+    except OSError:
+        pass          # an unwritable report dir must never fail Phase 1
     return out
 
 
@@ -8358,8 +9881,8 @@ def _emit_l14_to_l18_via_extractor(
                 payload = {"extracted": payload}
             payload.setdefault("schema_version", "v0.1.62")
             payload.setdefault("doc_class", doc_name.split("_", 1)[0])
-            payload.setdefault("emitted_by",
-                                f"phase1_protocol_spec_extract.{fn_name} v0.1.62")
+            payload.setdefault("emitted_by", _pmd.emitted_by(
+                f"phase1_protocol_spec_extract.{fn_name}"))
             # _write_l_doc will run R11 scrub + R13 applicability gate.
             # Evidence is per-extractor; pass empty if the extractor
             # didn't carry one (gate-internal evidence sanitiser handles it).
@@ -9026,12 +10549,56 @@ _RE_PIN_RANGE = re.compile(
 _RE_PIN_BRACKET_RANGE = re.compile(r"^([A-Za-z_]+)\[(\d+):(\d+)\]$")
 
 
+def _v455_slash_group_is_parallel(parts: List[str]) -> bool:
+    """Is a `a/b/c` backtick group an ENUMERATION of pins, or one pin written
+    with a suffix ABBREVIATION?
+
+    The `/` split exists for the banked / differential idiom — `CK4/CK5/CK6`,
+    `CK_t/CK_c` — where every part spells a COMPLETE pin name. Vendor docs use
+    the same punctuation for the opposite thing: `la_data_in/out/oenb` means
+    la_data_in, la_data_**out**, la_**oenb** — the parts after the first are
+    SUFFIX FRAGMENTS, and splitting them emits `out` / `oenb`, pins of nothing.
+
+    The two are separated by whether the parts are structurally PARALLEL:
+
+      * they share a common alphabetic prefix  (`CK`4/`CK`5, `CK_`t/`CK_`c,
+        `v`ccd1/`v`ssd1, `data_`in/`data_`out); or
+      * they are uniformly compound / uniformly simple — every part contains
+        `_`, or none does (`clk/rst`, `wb_clk_i/wb_rst_i`).
+
+    An abbreviation is neither: `la_data_in/out/oenb` shares no prefix, and its
+    first part is compound while the rest are bare.
+
+    chip-AGNOSTIC: pure token shape — no design, vendor, PDK or IC-class
+    literal participates.
+    """
+    if len(parts) < 2 or not all(parts):
+        return False
+    first = parts[0]
+    n = 0
+    while n < len(first) and all(len(p) > n and p[n] == first[n] for p in parts):
+        n += 1
+    if n and first[0].isalpha():
+        return True
+    compound = [("_" in p) for p in parts]
+    return all(compound) or not any(compound)
+
+
 def _v455_expand_pin_token(tok: str) -> List[str]:
-    """`IN1..IN6` → [IN1..IN6]; `CK4/CK5/CK6` → split; plain → [tok]."""
+    """`IN1..IN6` → [IN1..IN6]; `CK4/CK5/CK6` → split; plain → [tok].
+
+    A NON-parallel slash group is a suffix abbreviation, not an enumeration
+    (see `_v455_slash_group_is_parallel`): only its first part is a
+    fully-spelled name, so only that part is expanded. RESTRICTION — this can
+    only ever emit fewer names, never more.
+    """
     tok = tok.strip()
     if "/" in tok:
+        parts = [p.strip() for p in tok.split("/")]
+        if not _v455_slash_group_is_parallel(parts):
+            return _v455_expand_pin_token(parts[0]) if parts[0] else []
         out: List[str] = []
-        for part in tok.split("/"):
+        for part in parts:
             out.extend(_v455_expand_pin_token(part))
         return out
     m = _RE_PIN_BRACKET_RANGE.match(tok)
@@ -9062,6 +10629,34 @@ def _v455_dir_from_line(line: str) -> str:
     return "unspecified"
 
 
+#: Clause separators for the prose-bullet interface shape. A datasheet bullet
+#: routinely declares two DIFFERENT port roles in one sentence:
+#:     "- Digital serial outputs `OUT1..OUT6` (+ `dout` serial),
+#:        modulator clocks `CK4/CK5/CK6`."
+#: `_v455_dir_from_line` already knows that "clocks" means input — but it scans
+#: the WHOLE line with a fixed precedence, so the leading "outputs" wins and
+#: every token on the line, including the clocks in the trailing clause, is
+#: emitted mode=output. Resolving the SAME precedence per clause fixes it
+#: without inventing any new vocabulary. chip-AGNOSTIC: punctuation only.
+_RE_V455_CLAUSE_SPLIT = re.compile(r"[,;]|，|；")
+
+
+def _v455_dir_for_span(line: str, pos: int, line_dir: str) -> str:
+    """Direction for the token at `pos`, resolved from ITS OWN clause.
+
+    Falls back to the whole-line answer when the token's clause states no
+    direction of its own, so a single-clause line behaves exactly as before.
+    """
+    start = 0
+    for sep in _RE_V455_CLAUSE_SPLIT.finditer(line):
+        if sep.start() > pos:
+            clause_dir = _v455_dir_from_line(line[start:sep.start()])
+            return clause_dir if clause_dir != "unspecified" else line_dir
+        start = sep.end()
+    clause_dir = _v455_dir_from_line(line[start:])
+    return clause_dir if clause_dir != "unspecified" else line_dir
+
+
 def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
     """Backticked pin tokens (ranges expanded) found inside port-context
     heading ranges — the bullet-list interface shape analog datasheets
@@ -9072,7 +10667,13 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
         if not body:
             continue
         for start, end in _port_context_heading_ranges(body):
-            for line in body[start:end].splitlines():
+            _chunk = body[start:end]
+            # ORGANIC #376 — GFM omits a table's outer pipes, so the
+            # #627 leading-name-cell restriction below has to recognise
+            # a row by its table BLOCK, not by a leading `|` it may not
+            # have. Computed once per chunk.
+            _gfm_rows = _gfm_pipe_table_row_indices(_chunk)
+            for _line_i, line in enumerate(_chunk.splitlines()):
                 direction = _v455_dir_from_line(line)
                 # ORGANIC #610 — a port cell may annotate ONE canonical port
                 # with an inline alternate-spelling: ``\`name\` (or \`alt\`)`` /
@@ -9110,22 +10711,57 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                 # serves) the original all-tokens + short-name-drop behaviour
                 # is unchanged. chip-AGNOSTIC: pure table-row structure, no
                 # IC-class / token literals. Mirrors #611's provenance pattern.
+                # ORGANIC #376 — `or _line_i in _gfm_rows` covers the
+                # outer-pipe-omitted GFM table. This site RESTRICTS
+                # (only the leading name cell promotes), so admitting a
+                # row here can only ever remove a promotion, never add
+                # one: the direction cell and the type cell of a port
+                # table stop being emitted as ports of the chip.
+                # The leading-name-cell RESTRICTION is a property of the ROW
+                # STRUCTURE, not of whether the row's prose happens to sniff as
+                # a direction. Gating it on `direction` (as it was) means a
+                # port-MAPPING table — `| wrapper signal | example port |
+                # notes |`, which states no direction in any row — never
+                # engages it, so EVERY backticked token in EVERY cell is
+                # promoted as a pin of the CHIP: a row `| `user_irq` | `irq` |
+                # 3-bit |` makes the SUBMODULE's port name `irq` a top-level
+                # chip pin, and L1.pin_table then carries a pin no design
+                # declares. `_v0_3_2_classify_pin_header` already knows such a
+                # table is not a port table; this walker never asked it.
+                #
+                # So the restriction keys on the pipe-row structure alone,
+                # while `_is_port_table_row` — which RELAXES the short-name
+                # drop and pins the row's direction — keeps its direction
+                # requirement unchanged. Splitting them keeps this edit a pure
+                # RESTRICTION: it can only ever remove a promotion (#627's own
+                # note), never admit a new one.
+                #
+                # chip-AGNOSTIC: pure table-row structure, no IC-class literal.
+                _is_pipe_row = (_is_pipe_table_row(line)
+                                or _line_i in _gfm_rows)
                 _is_port_table_row = (
-                    _is_pipe_table_row(line)
+                    _is_pipe_row
                     and direction in ("input", "output", "inout"))
                 _leading_cell_toks: set = set()
-                if _is_port_table_row:
+                if _is_pipe_row:
                     for _cell in line.split("|"):
                         if _cell.strip():
                             _leading_cell_toks = set(
                                 _RE_BACKTICK_TOKEN.findall(_cell))
                             break
-                for tok in _RE_BACKTICK_TOKEN.findall(line):
-                    # #627 — in a port-table row, ONLY the leading name-cell
-                    # token is a port (a later-cell width/parameter token is
-                    # not promoted).
-                    if _is_port_table_row and tok not in _leading_cell_toks:
+                for _tm in _RE_BACKTICK_TOKEN.finditer(line):
+                    tok = _tm.group(1)
+                    # #627 — in ANY pipe-table row, ONLY the leading name-cell
+                    # token is a port (a later-cell width / parameter / mapped
+                    # submodule-port token is not promoted).
+                    if _is_pipe_row and tok not in _leading_cell_toks:
                         continue
+                    # A pipe-table row's direction lives in its own cell and is
+                    # already row-scoped; only the PROSE bullet shape needs the
+                    # per-clause resolution.
+                    tok_dir = (direction if _is_port_table_row
+                               else _v455_dir_for_span(line, _tm.start(),
+                                                       direction))
                     expanded = _v455_expand_pin_token(tok)
                     # aliases attach only to a single (non-banked) canonical tok
                     tok_aliases = (alias_for.get(tok, [])
@@ -9165,7 +10801,7 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                         seen.add(name)
                         out.append({
                             "name": name,
-                            "mode": direction,
+                            "mode": tok_dir,
                             "aliases": list(tok_aliases),
                             "rtl_name": name.lower(),
                             "board_name": name,
@@ -9179,7 +10815,9 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
 
 
 def _v455_sanitize_and_merge_pins(pins: List[dict],
-                                  extracted: Dict[str, str]) -> List[dict]:
+                                  extracted: Dict[str, str],
+                                  self_name: Optional[str] = None
+                                  ) -> List[dict]:
     """#455 final pin pass: drop uncorroborated ALL-CAPS prose pins,
     merge the backticked-interface pins (banked ranges expanded)."""
     bodies = [b for b in (extracted or {}).values() if b]
@@ -9211,6 +10849,41 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
                         return True
         return False
 
+    # A design's own TOP-MODULE name is not one of its ports. An external-
+    # interface doc that states "Top module name: `<top>`" puts a backticked
+    # identifier inside a port-context heading range, and the backtick walker
+    # promoted it to a pin with `mode=unspecified` — a sentence that NAMES THE
+    # MODULE read as a sentence that declares a port. The resulting phantom pin
+    # lands in L1.pin_table but not in L9.ports (the consumed layer), so
+    # `l_doc_cross_consistency_check R_pin_table_subset_ports` FAILs on a pin
+    # the design never had.
+    #
+    # The invariant is already encoded in this file for the submodule
+    # back-walker (`_v1_6_478_reject_top_module_name`, #343 P2); this wires the
+    # SAME rejector into the pin merge — one more consumer of an existing rule,
+    # not a new one.
+    #
+    # Deliberately NARROW so it cannot mask a real missing port: the drop fires
+    # only when the candidate ALSO carries no direction. Every genuine port
+    # reaches this pass with mode ∈ {input, output, inout} (a port-table row
+    # carries its own direction cell; a prose bullet resolves one per clause).
+    # `mode=unspecified` means no walker ever established a direction — the
+    # signature of a bare identifier mention. chip-AGNOSTIC: the comparison is
+    # against the design's OWN extracted top-module / ic_name, no literal.
+    # `self_name` is the caller's already-resolved chip name (which honours the
+    # authoritative `--ic-name` CLI override); the doc heuristics are a
+    # fallback for callers that have not resolved one yet.
+    _self_names = set()
+    if isinstance(self_name, str) and self_name and self_name != "UNKNOWN_IC":
+        _self_names.add(self_name)
+    for _fn in (_extract_top_module_from_docs, _ic_name_from_docs):
+        try:
+            _nm = _fn(extracted)
+        except Exception:  # nosec — a name heuristic must never break the pass
+            _nm = None
+        if isinstance(_nm, str) and _nm and _nm != "UNKNOWN_IC":
+            _self_names.add(_nm)
+
     kept: List[dict] = []
     for entry in pins:
         name = str(entry.get("name") or "")
@@ -9222,6 +10895,11 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
         # SHAPE-only predicates → chip-AGNOSTIC; no chip/vendor literal.
         if _is_sdc_directive_token(name) or _is_stdcell_lib_shape_token(name):
             continue
+        if (str(entry.get("mode") or "").lower()
+                not in ("input", "output", "inout")):
+            if any(_v1_6_478_reject_top_module_name(name, _s)
+                   for _s in _self_names):
+                continue  # the module's own name, with no direction
         if name.isupper() and name.isalpha():
             if name in _PIN_PROSE_DENY and name not in backticked:
                 continue  # ALL-CAPS English prose word — hallucination
@@ -9231,9 +10909,18 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
 
     have = {str(e.get("name")) for e in kept}
     for extra in _v455_interface_pins(extracted):
-        if extra["name"] not in have:
-            have.add(extra["name"])
-            kept.append(extra)
+        if extra["name"] in have:
+            continue
+        # Same self-name guard on the re-add path — this walker is where the
+        # top-module mention is promoted in the first place, so a drop above
+        # that is not repeated here would be undone one loop later.
+        if (str(extra.get("mode") or "").lower()
+                not in ("input", "output", "inout")
+                and any(_v1_6_478_reject_top_module_name(extra["name"], _s)
+                        for _s in _self_names)):
+            continue
+        have.add(extra["name"])
+        kept.append(extra)
     return kept
 
 
@@ -10224,6 +11911,106 @@ def _byte_list_to_payload_template(
     return tmpl
 
 
+def _payload_template_entry_offset(entry: Any) -> Optional[int]:
+    """Return the int `byte_offset` of a payload-template entry, or None
+    when the entry is not a structurally usable typed byte spec.
+
+    Purely structural / chip-AGNOSTIC: no value, vendor or opcode literal
+    participates in the decision."""
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return int(entry.get("byte_offset"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _payload_template_entry_is_documented(entry: Any) -> bool:
+    """True when a payload-template entry carries a concrete byte the
+    SOURCE DOCUMENT stated (a non-empty `value`), as opposed to a
+    placeholder that only carries a `source` pointer.
+
+    Structural only — an int, or a non-empty string. chip-AGNOSTIC."""
+    if _payload_template_entry_offset(entry) is None:
+        return False
+    val = entry.get("value")
+    if isinstance(val, bool):          # bool is an int subclass; not a byte
+        return False
+    if isinstance(val, int):
+        return True
+    return isinstance(val, str) and val.strip() != ""
+
+
+def _merge_response_payload_template(
+    extracted: Any,
+    synthesised: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge the DOCUMENT-extracted response template over the synthesised
+    typed-shape placeholder, per `byte_offset`. FILL THE GAPS — never
+    overwrite what the document said.
+
+    #812 — the per-opcode enrichment pass used to assign the synthesised
+    placeholder straight onto `response_payload_template`, unconditionally.
+    That placeholder exists only to satisfy a downstream TYPED-SHAPE
+    requirement (a consumer needs a well-formed template even when the
+    document gives nothing), but it was also stamped over opcodes whose
+    document DID state the response bytes — those landed in the sibling
+    `response_payload_template_extracted`, which no consumer read. The
+    polarity was inverted: the better-documented the input, the more
+    information was discarded, and a documented response became
+    indistinguishable from an undocumented one.
+
+    Merge rule (chip-AGNOSTIC, purely positional — no vendor / SKU / IC
+    literal participates):
+
+      * the result spans the UNION of both `byte_offset` domains;
+      * at an offset the document documented, the document's entry wins,
+        verbatim, tagged `provenance="document"`;
+      * every remaining offset keeps the synthesised placeholder, tagged
+        `provenance="synthesised_placeholder"`, so the typed-shape
+        guarantee still holds for the bytes nobody documented;
+      * entries are emitted in ascending `byte_offset` order.
+
+    Structurally unusable extracted entries (not a dict, no int-parseable
+    `byte_offset`, no concrete `value`) are ignored, so a malformed
+    extraction can only ever leave the placeholder standing — it can never
+    replace it with something worse.
+
+    With no extracted bytes at all the output is the synthesised list
+    unchanged apart from the provenance tag, so the undocumented path
+    behaves exactly as it did before.
+    """
+    doc_by_offset: Dict[int, Dict[str, Any]] = {}
+    for ent in (extracted or []) if isinstance(extracted, list) else []:
+        if not _payload_template_entry_is_documented(ent):
+            continue
+        off = _payload_template_entry_offset(ent)
+        if off is None or off in doc_by_offset:
+            continue
+        doc_by_offset[off] = ent
+
+    synth_by_offset: Dict[int, Dict[str, Any]] = {}
+    for ent in synthesised or []:
+        off = _payload_template_entry_offset(ent)
+        if off is None or off in synth_by_offset:
+            continue
+        synth_by_offset[off] = ent
+
+    merged: List[Dict[str, Any]] = []
+    for off in sorted(set(doc_by_offset) | set(synth_by_offset)):
+        if off in doc_by_offset:
+            out = dict(doc_by_offset[off])
+            out["provenance"] = "document"
+        else:
+            out = dict(synth_by_offset[off])
+            out["provenance"] = "synthesised_placeholder"
+        merged.append(out)
+    # Defensive: never return an EMPTY template where the caller had a
+    # well-formed one — the typed-shape guarantee is the placeholder's
+    # whole reason to exist.
+    return merged or list(synthesised or [])
+
+
 def _extract_row_description(row_line: str,
                               op_hex_end: int) -> Optional[str]:
     """Strip every hex-byte-group / numeric column / pipe character
@@ -10489,29 +12276,204 @@ _RE_NUMERIC_WITH_UNIT = re.compile(
 )
 
 
-def _analog_spec_from_paragraph(paragraph: str) -> Optional[str]:
-    """Assemble an L5.analog_blocks spec string from the numeric+unit
-    tokens actually present in `paragraph`. Returns None when no
-    numeric evidence is found — caller must mark the block
-    low_confidence=True and emit `spec: null`.
+# ── R6-FIX-1 — a spec value must be ATTRIBUTED, not merely nearby ──────────
+#
+# WHAT WAS WRONG. The previous implementation took `matches[:6]` — the first six
+# numeric+unit tokens anywhere in the keyword's paragraph, in document order —
+# and joined them into a prose string. Nothing tied a number to the QUANTITY it
+# measures, so on a real input it emitted, measured verbatim:
+#
+#   block of type X   "<t1>, <t2>, <t3>, <t4>, <v1>, <v2>"
+#   block of type Y   "<t1>, <t2>, <t3>, <t4>, <v1>, <v2>"   <- BYTE-IDENTICAL
+#
+# Two blocks of DIFFERENT types matched a keyword in the same table row, so both
+# were handed the same six numbers — which were a debounce-time enumeration and
+# a protection-threshold REGISTER FIELD enumeration. Neither number is a property
+# of either block. Other blocks were given numbers that do not appear in their
+# own stored `evidence_paragraph` at all, so the entry could not even be audited
+# against its own provenance.
+#
+# WHY NOT "JUST MAKE IT STRUCTURED". `l5_analog_block_spec_actionable_check`
+# FAILs this shape because `analog_real_corner_sweep.l5_block_specs()` cannot
+# parse it. Type-casting the same six numbers into `specs[]` would clear the
+# gate and make things WORSE: A4 would then grade one block against another
+# quantity's over-voltage register threshold and stamp a real PASS/FAIL instead
+# of the current visible `PASS_INFORMATIONAL` fallback. That is a fabricated
+# measurement, which is worse than an unparseable one.
+#
+# THE FIX. Emit a spec value ONLY for a number the text ASSOCIATES with a named
+# quantity, and name it in the CONSUMER'S OWN vocabulary (imported, so there is
+# one copy of that vocabulary, not two that drift). A number with no adjacent
+# quantity label is not emitted at all — the block then carries `spec: null` +
+# `low_confidence: True`, which is this function's already-documented contract
+# and the honest description of the extraction. Nothing is fabricated and no
+# threshold is relaxed.
+#
+# chip-AGNOSTIC: unit algebra + adjacency + the consumer's vocabulary. No chip
+# class, no part number, no canned spec value.
 
-    v1.6.240 (#102): replaces the v1.6.66 hardcoded `DEFAULTS` map.
-    The map fabricated specs on keyword-only prose mentions, which
-    the field agent flagged on 3 of 8 benchmark ICs. chip-AGNOSTIC:
-    pure structural pattern matching on numeric+unit pairs; no
-    chip-class literal or canned spec string in detection.
-    """
+# Unit token (as matched by _RE_NUMERIC_WITH_UNIT) -> (dimension, SI scale).
+# The dimension is what makes an association FALSIFIABLE: a label naming a
+# voltage may only bind a volt-dimensioned number.
+_UNIT_DIMENSION_SCALE = {
+    "v": ("voltage", 1.0), "vpp": ("voltage", 1.0), "mv": ("voltage", 1e-3),
+    # `Vdd` is emitted by `_RE_NUMERIC_WITH_UNIT` as a unit spelling. Without a
+    # dimension entry the token is matched and then silently DROPPED, which is
+    # the same unattributed-and-unreported failure this function exists to end.
+    "vdd": ("voltage", 1.0),
+    "µv": ("voltage", 1e-6), "uv": ("voltage", 1e-6), "kv": ("voltage", 1e3),
+    "a": ("current", 1.0), "ma": ("current", 1e-3),
+    "µa": ("current", 1e-6), "ua": ("current", 1e-6), "na": ("current", 1e-9),
+    "hz": ("frequency", 1.0), "khz": ("frequency", 1e3),
+    "mhz": ("frequency", 1e6), "ghz": ("frequency", 1e9),
+    "s": ("time", 1.0), "ms": ("time", 1e-3),
+    "µs": ("time", 1e-6), "us": ("time", 1e-6), "ns": ("time", 1e-9),
+    "ω": ("resistance", 1.0), "ohm": ("resistance", 1.0),
+    "kω": ("resistance", 1e3), "mω": ("resistance", 1e6),
+    "pf": ("capacitance", 1e-12), "nf": ("capacitance", 1e-9),
+    "µf": ("capacitance", 1e-6), "uf": ("capacitance", 1e-6),
+    "°c": ("temperature", 1.0),
+    "db": ("ratio_db", 1.0), "dbc": ("ratio_db", 1.0), "dbfs": ("ratio_db", 1.0),
+    "%": ("percent", 1.0), "ppm": ("ppm", 1.0), "ppm/°c": ("ppm_per_c", 1.0),
+}
+
+# Canonical consumer key -> the dimension it must be measured in. A label/number
+# pair whose dimensions disagree is REJECTED rather than coerced.
+_KEY_DIMENSION = {
+    "vout": "voltage", "vin": "voltage", "dropout": "voltage",
+    "iout": "current", "iq": "current",
+    "reff": "resistance",
+    "psrr": "ratio_db",
+}
+
+# Characters a quantity LABEL may be built from. Deliberately excludes digits
+# and every separator (`:` `,` `;` `|` `.` newline), so a label is only accepted
+# when it is IMMEDIATELY adjacent to the number with nothing but label text in
+# between. This adjacency requirement is what rejects
+# `over-voltage threshold 00: <v>V` — the `00:` between the words and the number
+# breaks the run, so that value is correctly left unattributed.
+_LABEL_CHARS = re.compile(r"[A-Za-z_\-()/\s]+")
+_LABEL_WORD = re.compile(r"[A-Za-z][A-Za-z_]*")
+_MAX_LABEL_WORDS = 3
+
+
+def _label_candidates(text: str, before: bool) -> List[str]:
+    """Label phrases immediately adjacent to a number, longest first.
+
+    `before=True` -> suffixes of the run that ENDS at the number.
+    `before=False` -> prefixes of the run that STARTS at the number."""
+    m = (_LABEL_CHARS.search(text[::-1]) if before else _LABEL_CHARS.match(text))
+    if not m or m.start() != 0:
+        return []
+    run = m.group(0)[::-1] if before else m.group(0)
+    words = _LABEL_WORD.findall(run)
+    if not words:
+        return []
+    out = []
+    for n in range(min(_MAX_LABEL_WORDS, len(words)), 0, -1):
+        grp = words[-n:] if before else words[:n]
+        out.append("".join(grp))
+    return out
+
+
+def _analog_spec_associations(paragraph: str,
+                             block_type: Optional[str] = None,
+                             max_specs: int = 6) -> List[Dict[str, Any]]:
+    """Numeric+unit tokens the paragraph ATTRIBUTES to a named quantity.
+
+    Returns [] when nothing is attributable — an unattributed number is NEVER
+    emitted. chip-AGNOSTIC."""
     if not paragraph:
+        return []
+    try:
+        from analog_real_corner_sweep import normalize_spec_label
+    except Exception:
+        # Consumer vocabulary unavailable: we cannot name anything in the form
+        # the consumer reads, so we attribute NOTHING rather than guess. The
+        # caller marks the block low_confidence — honest degradation.
+        return []
+
+    out: List[Dict[str, Any]] = []
+    seen_keys = set()
+    for m in _RE_NUMERIC_WITH_UNIT.finditer(paragraph):
+        unit_raw = m.group("unit")
+        dim_scale = _UNIT_DIMENSION_SCALE.get(unit_raw.strip().lower())
+        if dim_scale is None:
+            continue
+        dimension, scale = dim_scale
+        try:
+            value_si = float(m.group("num")) * scale
+        except (TypeError, ValueError):
+            continue
+        # after-label first ("<v>V regulator voltage"), then before ("Reff <r>").
+        hit = None
+        for before in (False, True):
+            side = (paragraph[:m.start()] if before
+                    else paragraph[m.end():])
+            for cand in _label_candidates(side, before):
+                key = normalize_spec_label(cand, block_type)
+                if not key or key in seen_keys:
+                    continue
+                # Dimensional falsifiability: a voltage label may not bind a
+                # frequency. An unknown key carries no dimension claim, so it
+                # is admitted on the label alone.
+                want = _KEY_DIMENSION.get(key)
+                if want is not None and want != dimension:
+                    continue
+                hit = (key, cand, before)
+                break
+            if hit:
+                break
+        if hit is None:
+            continue
+        key, cand, before = hit
+        seen_keys.add(key)
+        lo = max(0, m.start() - 60)
+        out.append({
+            "name": key,
+            "target": value_si,
+            "unit": {"voltage": "V", "current": "A",
+                     "resistance": "ohm", "ratio_db": "dB"}.get(
+                         dimension, unit_raw),
+            "label": cand,
+            "raw": f"{m.group('num')} {unit_raw}",
+            "evidence_text": paragraph[lo:m.end() + 60].strip(),
+            "attribution": ("label_before_value" if before
+                            else "label_after_value"),
+        })
+        if len(out) >= max_specs:
+            break
+    return out
+
+
+def _analog_spec_from_paragraph(
+        paragraph: str,
+        block_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Assemble a STRUCTURED L5.analog_blocks spec from the numeric+unit tokens
+    the paragraph ATTRIBUTES to a named quantity. Returns None when nothing is
+    attributable — caller must mark the block low_confidence=True and emit
+    `spec: null`.
+
+    Shape matches the already-sanctioned structured payload that
+    `_v455_attach_block_specs` writes (`{"specs": [...]}`), which is the shape
+    `analog_real_corner_sweep.l5_block_specs()` reads and which the v466
+    spurious-block guard already treats as real block-layer evidence — its own
+    comment states a paragraph-harvested STRING spec "is NOT block-layer
+    evidence (it is just numbers near a prose mention)".
+
+    v1.6.240 (#102) replaced a hardcoded DEFAULTS map that fabricated specs on
+    keyword-only prose mentions; R6-FIX-1 closes the weaker form of the same
+    defect that replacement left behind — attributing numbers to a block merely
+    because they share a paragraph with its keyword. chip-AGNOSTIC.
+    """
+    specs = _analog_spec_associations(paragraph, block_type)
+    if not specs:
         return None
-    matches = list(_RE_NUMERIC_WITH_UNIT.finditer(paragraph))
-    if not matches:
-        return None
-    # Cap to first 6 numeric+unit pairs; longer assemblies become
-    # noisy. Preserve token order from source paragraph.
-    tokens = []
-    for m in matches[:6]:
-        tokens.append(f"{m.group('num')} {m.group('unit')}")
-    return ", ".join(tokens)
+    return {
+        "specs": specs,
+        "spec_extraction": "paragraph_attributed_r6",
+        "summary": ", ".join(f"{s['raw']} ({s['name']})" for s in specs),
+    }
 
 
 # v1.6.402 — for #292 P3: parse quantifier preceding analog block
@@ -10731,12 +12693,297 @@ def _v466_line_is_block_header(line: str) -> bool:
     return False
 
 
+# ORGANIC — SELF-CONTAMINATION guard. `phase1_dialogue_render` writes each
+# layer's heading from `tools/phase1_engine/schema.LAYER_TITLES`, e.g.
+#     ## L5 — Analog-Digital Interface (ADC/DAC, mixed-signal pads, PHY AFE)
+#            — NOT the vendor 'Analog Devices Inc.'
+# Those lines are the PLUGIN'S OWN BOILERPLATE, not design evidence. Measured
+# on cell sha256 x gf180mcuD: the L5 heading is a markdown heading, so
+# `_v466_line_is_block_header` ranked it ABOVE every prose hit; the `adc` and
+# `dac` classes anchored on it and won before the negation guard could see the
+# body sentence ("Purely digital synchronous block. No ADC, DAC, PHY AFE ...",
+# on which `_v0_1_62_analog_kw_negated` correctly returns True). The emitter's
+# `continue` advances to the next CLASS, never the next MATCH, so the negated
+# occurrence was never reached. Result: two fabricated analog blocks (adc, dac)
+# on a pure-digital SHA-256 core, whose own `evidence_paragraph` quotes this
+# heading verbatim — and the fabrication then drove a whole A1-A9 analog track
+# that wrote ngspice sizing/corner decks for hardware that does not exist.
+# chip-AGNOSTIC: keyed on the plugin's own layer-code heading grammar.
+#
+# NARROWING (second pass). Recognising the boilerplate by SHAPE alone —
+# "any `## L<n> —` heading" — traded a false positive for a false NEGATIVE.
+# The sole caller (`gen_l5_adi_spec`) runs this over the USER'S INPUT DOCS,
+# and the L-numbered heading style is exactly what this plugin's own layer
+# scheme teaches users to write, so a genuine mixed-signal spec whose ADC
+# evidence sits under `## L5 - ADC subsystem: 12-bit SAR ADC, 1 MSPS` was
+# silently dropped. The boilerplate is therefore identified by its ACTUAL
+# RENDERED TEXT: `phase1_dialogue_render._render_layer` emits
+# ``f"## {code} — {LAYER_TITLES[code]}"``, so a heading counts as the
+# plugin's own only when the text after the layer code EQUALS that layer's
+# canonical title (whitespace/dash/case-normalised). Any other L-numbered
+# heading is the user's own words and is design evidence.
+# chip-AGNOSTIC: the titles come from the plugin's own schema, never from a
+# chip name or value literal.
+#
+# COMPLETENESS + ROBUSTNESS (third pass). Whole-line equality against ONE
+# table left two measured holes, and the fix for both is the same predicate
+# sitting BETWEEN the two failed rules — not shape-only (too broad, drops the
+# user's real specs) and not literal-equality (too narrow, leaks):
+#
+#   HOLE A — the plugin has TWO layer-title tables, and the guard knew one.
+#   `tools/phase1_engine/render._HUMAN_LAYER_TITLE` (used by
+#   `render_human_docs`, `title = _HUMAN_LAYER_TITLE.get(code, code)` then
+#   `f"# {title}"`) writes the FIRST LINE of every `L*_*.md` human doc, and
+#   its wording differs from `schema.LAYER_TITLES` for 10 of its 14 codes
+#   (L1 L2 L3 L5 L6 L8 L8R L9 L10 L13). Measured: the first line of
+#   `L5_ADI_SPEC.md`, `# L5 — Analog-Digital Interface`, was NOT recognised
+#   as the plugin's own. Inert today — none of those 14 short titles matches
+#   any `_ANALOG_KEYWORDS` pattern, so re-feeding a real `L5_ADI_SPEC.md`
+#   still yields `analog_blocks: []` — but a guard that knows only half of
+#   what the plugin writes is one title edit away from live fabrication.
+#   Note the human table's values already CARRY the layer code
+#   ("L5 — Analog-Digital Interface"), so the code prefix is stripped to
+#   reach the same {code: title} shape as the schema table.
+#
+#   HOLE B — trivial mangling of the rendered heading defeated equality, and
+#   each of these was measured END-TO-END on the pure-digital document as
+#   REPRODUCING the original fabrication (`analog_blocks: ['adc','dac']`):
+#   curly apostrophes for straight ones, edited trailing punctuation, the
+#   closed-ATX form (`## … ##`), a heading truncated / wrapped at a column,
+#   and a lowercased heading. Doc extraction, editors and copy-paste all
+#   produce these.
+#
+# So a heading is the PLUGIN'S OWN when, after normalisation, it matches a
+# known title from EITHER table BY PREFIX. Normalisation neutralises only
+# harmless variation — unicode punctuation folded to ASCII (curly quotes,
+# en/em dashes, NBSP), whitespace collapsed, closing ATX hashes stripped,
+# trailing punctuation ignored, case folded across the WHOLE heading
+# including the layer code — and a truncated heading still matches on
+# its leading run. The truncation arm is one-directional: the candidate may
+# be a PREFIX of a canonical title (a heading that got cut), never a canonical
+# title plus the user's own extra words, because
+# `## L2 - Functional Requirements for the ADC` is the USER'S sentence and
+# must stay evidence. It also carries a length floor, so a stub like
+# `## L5 - Analog` cannot claim a long canonical title by accident.
+# A heading that merely LOOKS L-numbered but matches no known title is still
+# the user's content — the shape-only rule is NOT restored.
+# chip-AGNOSTIC: every canonical string comes from the plugin's own two
+# tables; no chip name, field name or value literal appears here.
+# U+2010..U+2015 (hyphen, non-breaking hyphen, figure/en/em dash, horizontal
+# bar) + U+2212 minus + ASCII hyphen — every dash a renderer or an editor may
+# put between the layer code and its title.
+_V466_TITLE_DASH_CLASS = r'‐-―−\-'
+# The layer code is matched case-INSENSITIVELY for the same reason the title
+# body is casefolded: case is not what makes a line the plugin's own. Folding
+# the title but not the code would leave the guard case-blind on 95% of the
+# line and case-bound on the remaining 5%, and a pipeline that lowercases a
+# heading would walk the whole rendered boilerplate straight back in. It
+# cannot broaden the guard on its own — the title after the code must still
+# match a canonical title, so `## l5 - ADC subsystem: 12-bit SAR ADC` stays
+# the user's evidence.
+_RE_LAYER_CODE_HEADING = re.compile(
+    r'^\s{0,3}#{1,6}\s*([Ll]\d+[A-Za-z]?)\s*['
+    + _V466_TITLE_DASH_CLASS + r']\s*(\S.*?)\s*$')
+_RE_LAYER_TITLE_DASHES = re.compile('[' + _V466_TITLE_DASH_CLASS + ']+')
+# a CLOSED ATX heading ends with a whitespace-preceded run of hashes
+_RE_LAYER_TITLE_ATX_CLOSE = re.compile(r'\s+#+\s*$')
+# trailing punctuation carries no meaning for identity of a title
+_RE_LAYER_TITLE_TRAIL_PUNCT = re.compile(
+    r'[\s.,;:!?\'"`*_)\]}>' + _V466_TITLE_DASH_CLASS + r']+$')
+# unicode punctuation that doc extraction / editors substitute freely
+_V466_TITLE_UNI_FOLD = {
+    0x2018: "'", 0x2019: "'", 0x201A: "'",   # curly / low single quote
+    0x201B: "'", 0x2032: "'",                # reversed quote, prime
+    0x201C: '"', 0x201D: '"', 0x201E: '"',   # curly / low double quote
+    0x201F: '"', 0x2033: '"',                # reversed quote, dbl prime
+    0x00A0: ' ', 0x2007: ' ', 0x2009: ' ',   # NBSP, figure, thin space
+    0x200A: ' ', 0x202F: ' ', 0x3000: ' ',   # hair, narrow-NBSP, ideogr.
+    0x2026: '...', 0x2044: '/',              # ellipsis, fraction slash
+}
+# A candidate shorter than this may only match a canonical title EXACTLY.
+# Without the floor, `## L5 - Analog` would claim L5's long canonical title
+# by prefix and the user's own stub heading would stop being evidence.
+_V466_MIN_TRUNCATED_TITLE = 12
+_V466_LAYER_TITLES_NORM: Optional[Dict[str, Tuple[str, ...]]] = None
+
+
+def _v466_norm_layer_title(s: str) -> str:
+    """Normalise a heading title for comparison: fold unicode punctuation to
+    ASCII, unify every dash variant, collapse whitespace, casefold. Doc
+    extraction routinely rewrites an em dash to a hyphen, a straight
+    apostrophe to a curly one and a space to NBSP; none of that changes which
+    title the line is, so none of it may defeat the comparison."""
+    folded = (s or '').translate(_V466_TITLE_UNI_FOLD)
+    return re.sub(
+        r'\s+', ' ', _RE_LAYER_TITLE_DASHES.sub('-', folded)).strip().lower()
+
+
+def _v466_norm_layer_title_cmp(s: str) -> str:
+    """`_v466_norm_layer_title` plus trailing-punctuation removal — the form
+    the identity comparison uses. Applied to BOTH sides, so an edited final
+    period / quote / bracket cannot change whether two titles are the same."""
+    return _RE_LAYER_TITLE_TRAIL_PUNCT.sub('', _v466_norm_layer_title(s))
+
+
+def _v466_strip_layer_code_prefix(code: str, title: str) -> str:
+    """`_HUMAN_LAYER_TITLE` values embed the layer code ("L5 — Analog-Digital
+    Interface") while `LAYER_TITLES` values do not. Strip the embedded code so
+    both tables yield the same {code: title-body} shape."""
+    m = re.match(
+        r'^\s*' + re.escape(code) + r'\s*[' + _V466_TITLE_DASH_CLASS
+        + r']\s*(\S.*)$', title or '', re.IGNORECASE)
+    return m.group(1) if m else (title or '')
+
+
+def _v466_load_layer_titles() -> Dict[str, str]:
+    """Load this plugin's own layer titles from `tools/phase1_engine/schema.py`
+    (the single source the renderer itself reads). Returns {} when the schema
+    is not reachable, in which case the self-contamination guard is inert
+    rather than guessing — a guard that guesses would drop real evidence."""
+    import importlib.util as _ilu
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        cand = base / "tools" / "phase1_engine" / "schema.py"
+        if not cand.is_file():
+            continue
+        try:
+            spec = _ilu.spec_from_file_location(
+                "_v466_phase1_engine_schema", cand)
+            mod = _ilu.module_from_spec(spec)
+            sys.modules.setdefault("_v466_phase1_engine_schema", mod)
+            spec.loader.exec_module(mod)
+            titles = getattr(mod, "LAYER_TITLES", None)
+            if isinstance(titles, dict) and titles:
+                return {str(k).upper(): str(v) for k, v in titles.items()}
+        except Exception:  # noqa: BLE001 - never hard-fail on schema import
+            pass
+    try:  # installed-cache layout: the package may already be importable
+        from phase1_engine.schema import LAYER_TITLES as _lt  # type: ignore
+        if isinstance(_lt, dict) and _lt:
+            return {str(k).upper(): str(v) for k, v in _lt.items()}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _v466_load_human_layer_titles() -> Dict[str, str]:
+    """Load the plugin's SECOND layer-title table,
+    `tools/phase1_engine/render._HUMAN_LAYER_TITLE`.
+
+    `render_human_docs` writes the FIRST LINE of every `L*_*.md` human doc
+    from it (`title = _HUMAN_LAYER_TITLE.get(code, code)` then
+    `f"# {title}"`), so those lines are just as much the plugin's own
+    boilerplate as the `schema.LAYER_TITLES` headings — and their wording
+    differs for most codes, which is why one table was not enough.
+
+    Read STATICALLY with `ast`: `render.py` uses package-relative imports and
+    must not be executed just to read a lookup table. Returns {} when the
+    table is unreachable, in which case this half of the guard is inert
+    rather than guessing (the premise test asserts it is NOT inert)."""
+    import ast as _ast
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        cand = base / "tools" / "phase1_engine" / "render.py"
+        if not cand.is_file():
+            continue
+        try:
+            tree = _ast.parse(cand.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - never hard-fail on a lookup table
+            continue
+        for node in tree.body:
+            if not isinstance(node, _ast.Assign):
+                continue
+            if not any(isinstance(t, _ast.Name)
+                       and t.id == "_HUMAN_LAYER_TITLE"
+                       for t in node.targets):
+                continue
+            try:
+                tbl = _ast.literal_eval(node.value)
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(tbl, dict) and tbl:
+                return {str(k).upper(): str(v) for k, v in tbl.items()}
+    try:  # installed-cache layout: the package may already be importable
+        from phase1_engine.render import (  # type: ignore
+            _HUMAN_LAYER_TITLE as _ht)
+        if isinstance(_ht, dict) and _ht:
+            return {str(k).upper(): str(v) for k, v in _ht.items()}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _v466_plugin_layer_titles() -> Dict[str, Tuple[str, ...]]:
+    """{LAYER_CODE: (normalised canonical title, ...)} over BOTH of the
+    plugin's title tables, loaded once. A code can carry more than one
+    canonical wording — e.g. L13 is "Lab / Hardware Calibration (contract +
+    evidence)" in `schema.LAYER_TITLES` and "Lab Calibration (Phase 1:
+    contract; Phase 2: evidence)" in `render._HUMAN_LAYER_TITLE` — and every
+    wording the plugin can emit must be recognised as its own."""
+    global _V466_LAYER_TITLES_NORM
+    if _V466_LAYER_TITLES_NORM is None:
+        acc: Dict[str, List[str]] = {}
+        for _loader in (_v466_load_layer_titles,
+                        _v466_load_human_layer_titles):
+            for code, title in (_loader() or {}).items():
+                body = _v466_strip_layer_code_prefix(code, title)
+                norm = _v466_norm_layer_title_cmp(body)
+                if not norm:
+                    continue
+                bucket = acc.setdefault(code, [])
+                if norm not in bucket:
+                    bucket.append(norm)
+        _V466_LAYER_TITLES_NORM = {k: tuple(v) for k, v in acc.items()}
+    return _V466_LAYER_TITLES_NORM
+
+
+def _v466_line_is_plugin_layer_title(line: str) -> bool:
+    """True ONLY when `line` is a layer heading this plugin's own renderer
+    wrote — `## L<n> — <that layer's canonical title>` from
+    `schema.LAYER_TITLES`, or `# L<n> — <that layer's title>` from
+    `render._HUMAN_LAYER_TITLE` — allowing for the harmless mangling that
+    doc extraction, editors and copy-paste introduce: unicode punctuation,
+    NBSP, respaced dashes, closing ATX hashes, edited trailing punctuation,
+    and truncation / wrapping (a cut heading still matches on its leading
+    run).
+
+    A user's own L-numbered heading carrying the user's own words is NOT
+    boilerplate and must keep counting as design evidence — so the
+    truncation arm only ever lets the CANDIDATE be shorter, never the
+    canonical title plus the user's own extra words, and a candidate below
+    `_V466_MIN_TRUNCATED_TITLE` must match exactly."""
+    raw = _RE_LAYER_TITLE_ATX_CLOSE.sub('', line or '')
+    m = _RE_LAYER_CODE_HEADING.match(raw)
+    if not m:
+        return False
+    canons = _v466_plugin_layer_titles().get(m.group(1).upper())
+    if not canons:
+        return False
+    cand = _v466_norm_layer_title_cmp(m.group(2))
+    if not cand:
+        return False
+    for canon in canons:
+        if cand == canon:
+            return True
+        if (len(cand) >= _V466_MIN_TRUNCATED_TITLE
+                and canon.startswith(cand)):
+            return True
+    return False
+
+
 def _v466_best_class_match(text: str, pat: str):
     """ORGANIC #466 R2 — return the regex match for class `pat` that
     PREFERS a Block HEADER line. Iterates ALL matches; the first one
     whose source line is a Block header wins. When no match sits on a
     header line, falls back to the FIRST match (legacy single-search
     behaviour). Returns a re.Match or None.
+
+    ORGANIC — matches sitting on the plugin's OWN rendered layer-title
+    heading are skipped entirely (see _v466_line_is_plugin_layer_title —
+    matched against the layer's CANONICAL title, so a user's own
+    L-numbered heading is NOT treated as boilerplate). If every
+    match is on such a line the class has NO design evidence and None is
+    returned, rather than falling back to the boilerplate.
 
     Chip-AGNOSTIC: header preference is pure structural; the class
     pattern is caller-supplied analog vocabulary, no chip-class literal.
@@ -10749,11 +12996,19 @@ def _v466_best_class_match(text: str, pat: str):
         return None
     if not matches:
         return None
+    # drop self-contaminating matches BEFORE any ranking
+    real = []
     for m in matches:
+        ls, le = _v466_line_bounds(text, m.start())
+        if not _v466_line_is_plugin_layer_title(text[ls:le]):
+            real.append(m)
+    if not real:
+        return None
+    for m in real:
         ls, le = _v466_line_bounds(text, m.start())
         if _v466_line_is_block_header(text[ls:le]):
             return m
-    return matches[0]
+    return real[0]
 
 
 # ─── ORGANIC-20260606 #466 R2 — explicit-enumeration spurious guard ──
@@ -11057,20 +13312,34 @@ def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
             continue
         spec = blk.get("spec")
         # A STRUCTURED block-spec TABLE (dict) is itself L5 block-layer
-        # evidence — keep unconditionally. A paragraph-HARVESTED string
-        # spec is NOT block-layer evidence (it is just numbers near a
-        # prose mention), so a candidate grounded only in product
-        # narrative is still tested below.
-        if isinstance(spec, dict) and spec:
+        # evidence — keep unconditionally. A paragraph-HARVESTED spec is
+        # NOT block-layer evidence (it is just numbers near a prose
+        # mention), so a candidate grounded only in product narrative is
+        # still tested below.
+        #
+        # KEY ON PROVENANCE, NOT ON THE PYTHON TYPE. This used to read
+        # `isinstance(spec, dict)`, which worked only for as long as dicts
+        # came exclusively from spec tables. When paragraph harvesting was
+        # restructured to emit the same `{"specs": [...]}` payload the
+        # consumer reads, every harvested spec silently inherited the
+        # table's exemption and a product-narrative candidate came back —
+        # measured: the #466 pin re-emitted a converter block from an
+        # acronym that appears only in the L1 product narrative. The
+        # harvester stamps its own origin, so ask for that instead.
+        harvested = (isinstance(spec, dict)
+                     and str(spec.get("spec_extraction", ""))
+                     .startswith("paragraph"))
+        if isinstance(spec, dict) and spec and not harvested:
             survivors.append(blk)
             continue
-        # For a string spec we only drop when L5 declares the strong
-        # ``## Block`` heading enumeration — that lets us reliably tell a
-        # real block (it has a heading) from a product-narrative
-        # hallucination (it does not). With only a bare count statement
-        # we keep the legacy behaviour for string-spec blocks (the
-        # ambiguous prose-only enumeration is owned by the skill prose).
-        spec_is_string = isinstance(spec, str) and spec.strip() != ""
+        # For a paragraph-harvested spec we only drop when L5 declares the
+        # strong ``## Block`` heading enumeration — that lets us reliably
+        # tell a real block (it has a heading) from a product-narrative
+        # hallucination (it does not). With only a bare count statement we
+        # keep the legacy behaviour (the ambiguous prose-only enumeration
+        # is owned by the skill prose).
+        spec_is_string = (isinstance(spec, str) and spec.strip() != "") \
+            or harvested
         if spec_is_string and not has_headers:
             survivors.append(blk)
             continue
@@ -11106,13 +13375,18 @@ def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
 
 def _v466_strip_internal_fields(blocks) -> None:
     """Drop the private bookkeeping keys the #466 guards stashed on each
-    block before the block list is serialised. Idempotent."""
+    block before the block list is serialised. Idempotent.
+
+    PR #814 R2 also strips `_v814_evidence_span` here: it is emitter-internal
+    for the same reason the #466 keys are, and the L5 schema must not grow a
+    second copy of the evidence text."""
     if not isinstance(blocks, list):
         return
     for blk in blocks:
         if isinstance(blk, dict):
             blk.pop("_v466_kw_literal", None)
             blk.pop("_v466_src_fname", None)
+            blk.pop("_v814_evidence_span", None)
 
 
 # v1.6.66 — closes issue #7 Bug Z. Protocol-class acronyms harvested
@@ -12143,6 +14417,62 @@ def _is_pipe_table_row(line: str) -> bool:
     line-scan emission."""
     s = (line or "").lstrip()
     return s.startswith("|") and s.count("|") >= 2
+
+
+# ORGANIC #376 — GFM makes a pipe table's OUTER pipes OPTIONAL, so a
+# perfectly legal port table can be written with no leading `|` on any
+# row. `_is_pipe_table_row` anchors on that leading `|`, so for such a
+# table it answers False on EVERY row, and any caller that uses it to
+# recognise a port-table row loses the row's cell structure entirely.
+#
+# Widening `_is_pipe_table_row` itself is the wrong repair, and the
+# direction of the error is why: of its three call sites, two use it
+# PERMISSIVELY (a row shape is treated as corroboration that a token is
+# a real port) and only one uses it RESTRICTIVELY (in a port-table row,
+# only the leading name cell holds the port). Relaxing the shared
+# predicate would admit more tokens at the first two and reject more at
+# the third — one edit moving the result in both directions at once.
+#
+# So the relaxed form is a SEPARATE, block-scoped predicate, anchored on
+# the one construct GFM actually requires: the DELIMITER row. A bare
+# "line contains two pipes" test would match prose and a bitwise-or
+# expression; a delimiter row (`---|---`, `:--|--:`) has no other
+# meaning. Membership is computed over a whole chunk because that anchor
+# lives on a DIFFERENT line than the rows it qualifies, which is exactly
+# what a single-line predicate cannot see.
+#
+# chip-AGNOSTIC: pure Markdown table structure — no design, vendor, PDK
+# or IC-class literal.
+_RE_GFM_DELIM_ROW = re.compile(
+    r"^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$")
+
+
+def _gfm_pipe_table_row_indices(chunk: str) -> frozenset:
+    """0-based line indices of `chunk` that belong to a GFM pipe table.
+
+    Anchored on the table's DELIMITER row rather than on a leading `|`,
+    so it recognises the outer-pipe-omitted form that
+    `_is_pipe_table_row` cannot see. From each delimiter row, claims the
+    header line directly above and the contiguous run of pipe-carrying
+    lines below, stopping at the first blank or pipe-less line — the
+    block GFM itself terminates a table on.
+
+    Returns indices only; the caller decides what a row membership
+    means. Deliberately NOT a drop-in replacement for
+    `_is_pipe_table_row` (see the note above it)."""
+    lines = (chunk or "").splitlines()
+    rows: set = set()
+    for i, ln in enumerate(lines):
+        if not _RE_GFM_DELIM_ROW.match(ln):
+            continue
+        rows.add(i)
+        if i and lines[i - 1].strip() and "|" in lines[i - 1]:
+            rows.add(i - 1)
+        j = i + 1
+        while j < len(lines) and lines[j].strip() and "|" in lines[j]:
+            rows.add(j)
+            j += 1
+    return frozenset(rows)
 
 
 # v1.6.264 — for #122 ORGANIC. RST grid-table cell values
@@ -18066,14 +20396,250 @@ def _v1_6_295_propagate_class_path_to_layer_docs(
             continue
         data["class_path"] = cp
         try:
-            path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
+            _stamp.dump(path, data)
             updated += 1
         except Exception:
             continue
     return updated
+
+
+# ORGANIC-20260803b — the run's PDK, set from `--pdk` in main(). None means
+# "not stated"; every extraction then behaves exactly as it did before.
+_CLI_PDK: Optional[str] = None
+
+# A frequency or a period literal, with its unit, anywhere on a line.
+_PDK_ROW_FREQ_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(GHz|MHz|kHz|ns|ps|us)\b", re.IGNORECASE)
+# The row must be ABOUT the clock. Without this, a row that merely names the
+# process and happens to carry a time literal ("<pdk> setup time 3 ns") would
+# be read as a clock-period declaration. Same vocabulary the prose-fmax
+# walker's own `_RE_L2_CLOCK_VOCAB` gate uses, kept in step with it.
+_PDK_ROW_CLOCK_VOCAB_RE = re.compile(
+    r"(?i)\b(?:clock|clk|fmax|f_?max|frequency|period|"
+    r"operating[\s\-]?freq(?:uency)?)\b")
+
+
+def _v1_9_65_pdk_scoped_clock_mhz(project: Path, pdk: Optional[str]):
+    """The clock frequency a design document assigns TO THIS PDK, or None.
+
+    WHY THIS EXISTS
+    ---------------
+    A design that targets more than one process states its timing target once
+    per process, as a table keyed by the process name:
+
+        | Target clock period — <PDK-A> | 10 ns (100 MHz) |
+        | Target clock period — <PDK-B> | 20 ns  (50 MHz) |
+
+    Phase 1's prose-fmax walker takes the FIRST such row it meets and demotes
+    every other to `alternate_frequency_mentions[]`. That is a coin-flip the
+    document already answered: which row applies is decided by which process
+    the run is building. `l8_sta_clock_period_design_owned_check`'s own
+    write-up records the ambiguity — "declare `clk` twice with conflicting
+    frequencies ... and sdc_gen silently takes whichever the precedence walk
+    reaches first — reported as an advisory". On the FIRST process listed the
+    coin lands right and the advisory is harmless; on the SECOND it lands
+    wrong, and the whole backend then closes timing against a period this
+    design never asked for on this process.
+
+    WHAT IS READ
+    ------------
+    Only a line that BOTH names this run's process AND carries a time or
+    frequency literal. The process name must not sit inside a file path (a
+    citation of a tool config file is not a timing statement) and must not be
+    negated. When no line satisfies all of that, this returns None and
+    nothing changes.
+
+    Returns (freq_mhz, source_rel, line_no, line_text) or None.
+
+    chip-AGNOSTIC: a PDK-name namespace the file already owns, plus time /
+    frequency units. No chip literal, no per-design rule.
+    """
+    if not pdk:
+        return None
+    want = pdk.strip().lower()
+    if not want:
+        return None
+    best = None
+    for base in (project / "input" / "docs", project / "phase1" / "input_doc"):
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*")):
+            if not f.is_file() or f.suffix.lower() in (
+                    ".png", ".jpg", ".pdf", ".gds", ".zip"):
+                continue
+            try:
+                text = f.read_text(errors="replace")[:200_000]
+            except OSError:
+                continue
+            try:
+                rel = str(f.relative_to(project))
+            except ValueError:
+                rel = f.name
+            for n, row in enumerate(text.split("\n"), start=1):
+                if not _PDK_ROW_CLOCK_VOCAB_RE.search(row):
+                    continue
+                named = False
+                for m in _OPEN_PDK_TOKEN_RE.finditer(row):
+                    if _match_is_inside_path_token(row, m.start(), m.end()):
+                        continue
+                    if _FOUNDRY_NEGATION_RE.search(
+                            row[max(0, m.start() - 24):m.end()]):
+                        continue
+                    tok = re.sub(r"^ihp[- ]?", "",
+                                 m.group(1).lower()).replace(" ", "")
+                    # The row names this run's process when it names the
+                    # process exactly, or names the FAMILY this revision
+                    # belongs to (`<family>` covers `<family>D`). Same
+                    # one-directional rule the declared-vs-resolved guard
+                    # uses: a row naming a DIFFERENT revision does not match.
+                    if want == tok or (
+                            len(want) == len(tok) + 1
+                            and want.startswith(tok)
+                            and want[len(tok):].isalpha()):
+                        named = True
+                        break
+                if not named:
+                    continue
+                mhz = None
+                for fm in _PDK_ROW_FREQ_RE.finditer(row):
+                    val, unit = float(fm.group(1)), fm.group(2).lower()
+                    if val <= 0:
+                        continue
+                    if unit == "ghz":
+                        mhz = val * 1000.0
+                    elif unit == "mhz":
+                        mhz = val
+                    elif unit == "khz":
+                        mhz = val / 1000.0
+                    elif unit == "ns":
+                        mhz = 1000.0 / val
+                    elif unit == "us":
+                        mhz = 1.0 / val
+                    elif unit == "ps":
+                        mhz = 1_000_000.0 / val
+                    if mhz is not None:
+                        break
+                if mhz is None:
+                    continue
+                if best is None:
+                    best = (mhz, rel, n, row.strip()[:200])
+    return best
+
+
+def _v1_9_65_post_emit_l8_pdk_scoped_clock(project: Path) -> bool:
+    """Re-point L8's primary clock at the row this run's PDK owns.
+
+    Runs AFTER the prose walker has emitted `clock_domains[]`, so the
+    displaced frequency survives in `alternate_frequency_mentions[]` exactly
+    as the walker's own losers do — nothing the design said is discarded, and
+    the swap records its own evidence (`pdk_scoped_*` keys) so a reader can
+    see which row was chosen and why.
+
+    NO-OP unless the run named a PDK AND a document row assigns a frequency
+    to it AND that frequency differs from the one already adopted. Returns
+    True when a file was rewritten.
+    """
+    hit = _v1_9_65_pdk_scoped_clock_mhz(project, _CLI_PDK)
+    if hit is None:
+        return False
+    mhz, rel, line_no, row_text = hit
+    gd = _pl.generated_docs_dir(project)
+    if not gd.is_dir():
+        return False
+    any_updated = False
+    for layer in ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM"):
+        path = gd / f"{layer}.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        domains = data.get("clock_domains")
+        if not isinstance(domains, list):
+            continue
+        changed = False
+        repointed_names: Set[str] = set()
+        for d in domains:
+            if not isinstance(d, dict) or d.get("role") != "primary":
+                continue
+            prev = d.get("freq_mhz")
+            if prev is not None and abs(float(prev) - mhz) < 1e-9:
+                continue
+            if prev is not None:
+                _cc.record_alternate_mention(d, {
+                    "freq_mhz": float(prev),
+                    "freq_hz": int(float(prev) * 1e6),
+                    "role": "displaced_by_pdk_scoped_row",
+                    "source": (d.get("evidence") or {}).get("file"),
+                    "extraction_strategy": "clock_domain_doc_prose_fmax",
+                })
+            d["freq_mhz"] = mhz
+            d["freq_low_mhz"] = mhz
+            d["freq_high_mhz"] = None
+            d["freq_hz"] = int(mhz * 1e6)
+            d["period_ns"] = 1000.0 / mhz
+            d["extraction_strategy"] = "clock_domain_pdk_scoped_row"
+            d["pdk_scoped_target"] = _CLI_PDK
+            d["evidence"] = {"file": rel, "line": line_no,
+                             "matched_substring": row_text[:120]}
+            changed = True
+            _nm = (d.get("name") or "").strip()
+            if _nm:
+                repointed_names.add(_nm.lower())
+        if not changed:
+            continue
+        # ORGANIC-20260805 — mirror the re-point onto the `clocks[]` view of
+        # the SAME physical clock. `_post_emit_seed_l8b_clocks_from_l1_v1_6_571`
+        # already ran (call order: seeder line ~59512, this line ~59791) and
+        # seeded `clocks[]` by INHERITING the period `clock_domains[]` held at
+        # that moment — i.e. the PRE-re-point value. Re-pointing only
+        # `clock_domains[]` therefore leaves the two containers owning the same
+        # name with different periods, which is exactly what
+        # `clock_contract_conflicts` refuses ("two clock records own the name
+        # and pin different periods"). Re-point both, or neither. Chip-AGNOSTIC.
+        clocks = data.get("clocks")
+        if isinstance(clocks, list):
+            for c in clocks:
+                if not isinstance(c, dict):
+                    continue
+                _cn = (c.get("name") or "").strip().lower()
+                if not _cn or _cn not in repointed_names:
+                    continue
+                _prev = c.get("freq_mhz")
+                if _prev is not None and abs(float(_prev) - mhz) < 1e-9:
+                    continue
+                if _prev is not None:
+                    _cc.record_alternate_mention(c, {
+                        "freq_mhz": float(_prev),
+                        "freq_hz": int(float(_prev) * 1e6),
+                        "role": "displaced_by_pdk_scoped_row",
+                        "source": (c.get("evidence") or {}).get("file"),
+                        "extraction_strategy": c.get("extraction_strategy"),
+                    })
+                c["freq_mhz"] = mhz
+                c["freq_hz"] = int(mhz * 1e6)
+                c["period_ns"] = 1000.0 / mhz
+                c["extraction_strategy"] = "clock_domain_pdk_scoped_row"
+                c["pdk_scoped_target"] = _CLI_PDK
+                c["evidence"] = {"file": rel, "line": line_no,
+                                 "matched_substring": row_text[:120]}
+        if data.get("clock_mhz") is not None:
+            data["clock_mhz"] = mhz
+        try:
+            _stamp.dump(path, data)
+            any_updated = True
+        except Exception:
+            continue
+    if any_updated:
+        print(f"[phase1] PDK-SCOPED CLOCK: the design document assigns "
+              f"{mhz:g} MHz ({1000.0 / mhz:g} ns) to '{_CLI_PDK}' at "
+              f"{rel}:{line_no} — L8 primary clock re-pointed at that row; "
+              f"the displaced value is kept in "
+              f"alternate_frequency_mentions[].")
+    return any_updated
 
 
 def _v1_6_295_post_emit_l8_clock_mhz_back_fill(project: Path) -> bool:
@@ -18123,10 +20689,7 @@ def _v1_6_295_post_emit_l8_clock_mhz_back_fill(project: Path) -> bool:
         if data.get("no_clock_mhz_in_input") is True:
             data["no_clock_mhz_in_input"] = False
         try:
-            path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
+            _stamp.dump(path, data)
             any_updated = True
         except Exception:
             continue
@@ -19206,7 +21769,23 @@ def gen_l1_datasheet(project: Path,
             # may not have a trailing \n but offset error is
             # bounded and never causes a wrong range hit).
             _running_offset += len(line) + 1
-            ml = _PIN_TABLE_LINE_RE.search(line)
+            # ORGANIC — a FILE PATH is not a port declaration. The direction
+            # anchor `\b(input|output|inout|...)\b` was searched over the RAW
+            # line, and `/` is a word boundary, so a document that cites its
+            # own staged PDK by path — `input/pdk/lef/.../STD/<lib>.lef`, the
+            # very path this flow MANDATES for a staged PDK — matched
+            # `\binput\b` INSIDE the path. The line then promoted every
+            # capitalised token on it to a port with `mode=input`. Measured on
+            # a CPU cell whose L1/L3 cite their staged PDK in the ordinary
+            # way: `PDK`, `STD` and `IO` were emitted into L1.pin_table as
+            # phantom input ports, and `l9_rtl_pin_consistency_check` then
+            # correctly FAILed the design for declaring a pin its RTL top does
+            # not have. Mask whitespace-delimited path-like tokens for BOTH
+            # the anchor search and the name tokenisation: a directory name is
+            # never a port direction and a path fragment is never a port name.
+            # chip-AGNOSTIC — pure token shape, no path, vendor or PDK literal.
+            scan_line = _PATHLIKE_TOKEN_RE.sub(" ", line)
+            ml = _PIN_TABLE_LINE_RE.search(scan_line)
             if not ml:
                 continue
             # v1.6.264 — for #122 ORGANIC. Lines inside RST grid-
@@ -19243,7 +21822,7 @@ def gen_l1_datasheet(project: Path,
             mode_token = ml.group(1).lower()
             if mode_token not in {"input", "output", "inout"}:
                 continue
-            tokens = re.split(r"[\s\t\|,]+", line.strip())
+            tokens = re.split(r"[\s\t\|,]+", scan_line.strip())
             tokens = [t for t in tokens if t]
             if len(tokens) < 2:
                 continue
@@ -19336,69 +21915,11 @@ def gen_l1_datasheet(project: Path,
     e_seen: Set[Tuple[str, str, str]] = set()
     for fname, text in extracted.items():
         ev = evidence.setdefault(f"input/docs/{fname}", [])
-        for m in _ELECTRICAL_SPEC_RE.finditer(text):
-            param, val, unit = m.group(1), m.group(2), m.group(3)
-            try:
-                num = float(val)
-            except ValueError:
-                continue
-            key = (param.upper(), str(num), unit)
-            if key in e_seen:
-                continue
-            e_seen.add(key)
-            e_specs.append({
-                "name": param.upper(),
-                "parameter": param,
-                "min_typ_max": {"typ": num},
-                "unit": unit,
-                "conditions": "VDD=nominal, T=25C unless otherwise stated",
-                "evidence": f"input/docs/{fname}",
-            })
+        for spec, ev_item in _collect_electrical_specs_for_doc(
+                fname, text, e_seen):
+            e_specs.append(spec)
             if len(ev) < 24:
-                ev.append({"literal": f"{param}={val}{unit}",
-                           "label": "electrical spec"})
-        # v1.6.234 — closes #101. Bullet KV-pair spec parser. Captures
-        # `<Phrase>: <value> <unit>` lines that the hardcoded VDD/VOH/...
-        # list above never matched. Routes only electrical-unit entries
-        # to L1.electrical_specs; timing-unit entries go to L2,
-        # unitless ones go to L5.design_parameters via gen_l5_adi_spec.
-        for entry in _extract_bullet_kv_specs(text):
-            unit = entry["unit"]
-            # v1.6.236 — for #101 field-agent feedback. L1 now also
-            # accepts _SAMPLE_RATE_UNITS (kS/s, MS/s, GS/s) since
-            # ADC/DAC sample-rate is an electrical spec, and the
-            # `condition` field (singular) is now emitted alongside
-            # `conditions` (plural, pre-existing) so layer-mirror
-            # consistency check between L1 and L5 passes.
-            if (unit not in _ELECTRICAL_UNITS
-                    and unit not in _SAMPLE_RATE_UNITS):
-                continue
-            param = entry["parameter"]
-            value = entry["value"]
-            key = (param.upper(), value, unit)
-            if key in e_seen:
-                continue
-            e_seen.add(key)
-            try:
-                num: Any = float(value.replace(",", ""))
-            except ValueError:
-                num = value
-            e_specs.append({
-                "name": param,
-                "parameter": param,
-                "min_typ_max": ({"typ": num}
-                                if isinstance(num, float) else None),
-                "value": value,
-                "unit": unit,
-                "condition": entry["condition"],
-                "conditions": (entry["condition"] or
-                               "VDD=nominal, T=25C unless otherwise stated"),
-                "evidence": f"input/docs/{fname}",
-                "extraction_strategy": "bullet_kv_pair_spec",
-            })
-            if len(ev) < 24:
-                ev.append({"literal": entry["raw"],
-                           "label": "electrical spec (bullet KV)"})
+                ev.append(ev_item)
 
     # Frequency hints.
     for fname, text in extracted.items():
@@ -19460,7 +21981,35 @@ def gen_l1_datasheet(project: Path,
     # pin-topic regex (PinList / Pinout / PinTable / PinMap / Pinmux),
     # the flag must be False even if the structured pin list is empty.
     no_pin_table_in_input = _flag_no_X_in_input(pins, evidence, "pin_table")
-    no_electrical_specs_in_input = not e_specs
+    # v1.7.80 — for #514. `no_electrical_specs_in_input` used to be
+    # `not e_specs`: a statement about the EXTRACTOR emitted as a
+    # statement about the INPUT. A reader — or a downstream program —
+    # is entitled to read "no electrical specs in input" as "this was
+    # checked and there is nothing there", and it meant "I found
+    # nothing". Those are different facts and the document could not
+    # tell them apart.
+    #
+    # The flag now asserts only what an independent scan of the input
+    # corroborates. When the extractor came back empty but the input
+    # DOES carry electrical quantities, the flag is False and the
+    # un-extracted mentions are published with their source lines, so
+    # the honest reading is available to anyone: "the input has these
+    # and I did not type them." Making the flag unconditionally False
+    # was the other available shortcut and it is worse — it trades a
+    # false claim for no information at all.
+    _unextracted_elec: List[Dict[str, str]] = []
+    if not e_specs:
+        for _fname, _text in extracted.items():
+            for _lno, _lit in _scan_electrical_mentions(_text, limit=12):
+                _unextracted_elec.append({
+                    "evidence": f"input/docs/{_fname}:{_lno}",
+                    "literal": _lit,
+                })
+                if len(_unextracted_elec) >= 24:
+                    break
+            if len(_unextracted_elec) >= 24:
+                break
+    no_electrical_specs_in_input = (not e_specs) and not _unextracted_elec
     no_ic_name_in_input = (ic_name == "UNKNOWN_IC")
 
     if not pins:
@@ -19643,7 +22192,7 @@ def gen_l1_datasheet(project: Path,
 
     # ORGANIC-20260606 #455 — final pin pass: ALL-CAPS-prose deny +
     # banked-range backticked-interface merge (analog-datasheet shape).
-    pins = _v455_sanitize_and_merge_pins(pins, extracted)
+    pins = _v455_sanitize_and_merge_pins(pins, extracted, ic_name)
 
     content = {
         "schema_version": 2,
@@ -19659,6 +22208,13 @@ def gen_l1_datasheet(project: Path,
         "no_pin_table_in_input": no_pin_table_in_input,
         "electrical_specs": e_specs[:64],
         "no_electrical_specs_in_input": no_electrical_specs_in_input,
+        # v1.7.80 — for #514. Present ONLY when the extractor came up
+        # empty on an input that does carry electrical quantities.
+        # This is the field that lets a reader tell "the input has
+        # none" (flag True, this key absent) from "I found none"
+        # (flag False, this key lists what was missed, with lines).
+        "electrical_specs_unextracted_mentions": (
+            _unextracted_elec or None),
         "ordering_info": ordering_info,
         # v1.6.295 — for #186 ORGANIC. Tapeout metadata block.
         # null when no anchor matched in any extracted doc.
@@ -21883,6 +24439,12 @@ def gen_l3_cmd_protocol(project: Path,
     ic_name = _ic_name_from_docs(extracted, project)
     opcodes: List[Dict[str, Any]] = []
     evidence: Dict[str, List[Dict[str, str]]] = {}
+    # for #454 — rows the Strategy-2 walker matched but refused because the
+    # source row is structurally not a command-table row. Surfaced in the
+    # emitted doc so an empty `opcodes[]` can be told apart from a parser
+    # miss. This is an HONEST-UNCERTAINTY marker: it must be read, never
+    # silently resolved.
+    non_command_row_refusals: List[Dict[str, str]] = []
     # v1.6.245 — for #106. Precondition gate. The v1.6.243 picker
     # ran every opcode-synthesis strategy on every input, including
     # processor-core ICs whose docs have stray hex tokens (RISC-V
@@ -22011,7 +24573,6 @@ def gen_l3_cmd_protocol(project: Path,
             key = "0x" + op_hex.upper()
             if key in seen_opcodes:
                 continue
-            seen_opcodes.add(key)
             # v1.6.136 (#51 Fix 11f) — slice the matched line out
             # of cmd_text so _infer_opcode_name sees only this row,
             # not adjacent rows' byte-data or descriptions.
@@ -22019,6 +24580,35 @@ def gen_l3_cmd_protocol(project: Path,
             line_end = cmd_text.find("\n", m.start())
             row_line = cmd_text[line_start:
                                 line_end if line_end != -1 else None]
+            # for #454 follow-up — ROW-SHAPE refusal for Strategy 1. A
+            # figure that draws a data word as adjacent bit fields prints
+            # its axis as `<hi> <lo> <hi> <lo> ...` decimal indices, which
+            # is the same 4-column shape this walker reads as
+            # `<rx_len> <tx_len> <tx_addr> <opcode_hex>` — so a decimal bit
+            # index became a hex opcode. Refuse on the row's SHAPE and
+            # COUNT the refusal, the same contract Strategy 2 uses. This
+            # replaces a hard-coded list of eight hex VALUES that used to
+            # scrub the symptom downstream in phase1_post_process, which
+            # would delete a genuine command carrying one of those values
+            # out of any design.
+            #
+            # Anchored on the FIRST CAPTURED COLUMN, not on `m.start()`:
+            # the row pattern opens with `^\s*`, and `\s` spans newlines,
+            # so a match preceded by a blank line starts on that blank line
+            # and the `row_line` slice above comes back empty.
+            _ruler_anchor = m.start(1)
+            _ruler_ls = cmd_text.rfind("\n", 0, _ruler_anchor) + 1
+            _ruler_le = cmd_text.find("\n", _ruler_anchor)
+            _ruler_row = cmd_text[_ruler_ls:
+                                  _ruler_le if _ruler_le != -1 else None]
+            if _i454_bit_position_ruler_row(_ruler_row):
+                non_command_row_refusals.append({
+                    "hex": key,
+                    "reason": "bit_position_ruler_row",
+                    "evidence": f"input/docs/{fname}",
+                })
+                continue
+            seen_opcodes.add(key)
             # Try to parse rx_len / tx_len.
             try: rx_len = int(rx_len_s, 0)
             except (ValueError, TypeError): rx_len = "var"
@@ -22117,6 +24707,28 @@ def gen_l3_cmd_protocol(project: Path,
                     continue
                 key = f"0x{hex_b.zfill(2)}"
                 if key in seen_opcodes:
+                    continue
+                # for #454 — ROW-SHAPE refusal. The opcode-synthesis
+                # precondition is a DOCUMENT-level gate, so this walker
+                # scrapes every line of a doc it opened for — including
+                # connector pin-assignment tables, rate/capacity prose and
+                # numeric-range declarations, none of which declare a
+                # command. Each such row previously became an opcode with a
+                # synthetic `op + 1` response and an echo payload template.
+                # Refuse on the row's SHAPE and COUNT the refusal, so the
+                # resulting silence is visible rather than looking like a
+                # document with no command protocol.
+                _row_start = text.rfind("\n", 0, m.start()) + 1
+                _row_end = text.find("\n", m.start())
+                _row_line = text[_row_start:
+                                 _row_end if _row_end != -1 else None]
+                _refuse = _i454_non_command_row_reason(_row_line, hex_b)
+                if _refuse:
+                    non_command_row_refusals.append({
+                        "hex": key,
+                        "reason": _refuse,
+                        "evidence": f"input/docs/{fname}",
+                    })
                     continue
                 seen_opcodes.add(key)
                 opcodes.append({
@@ -22617,10 +25229,75 @@ def gen_l3_cmd_protocol(project: Path,
                                 "label": "len_max (extracted, "
                                          "disk-scan fallback)"})
 
+    # v1.7.72 — for #499. Opcodes DECLARED by a staged HDL input.
+    #
+    # Every strategy above SYNTHESISES opcodes from documentation prose
+    # and tables, which is why they sit behind the v1.6.245 precondition
+    # gate: on a processor core, stray hex tokens in an ISA chapter
+    # fabricate opcodes. A `typedef enum` in an HDL package the design
+    # itself staged is not synthesis — it is the design stating its own
+    # opcode table, with a name and an explicit value per member. It is
+    # therefore admitted independently of the synthesis precondition,
+    # and only from `enum_role == "opcode"` type names.
+    #
+    # Measured (#499): with `.sv` dropped by the converter, both L3
+    # opcode gates reported VACUOUS_PASS — "no command protocol in
+    # input" — for a CPU whose staged package declares eleven opcodes.
+    # A dropped document manufactures a clean-looking zero.
+    #
+    # Members with no explicit value are NOT emitted: a dispatch key the
+    # document did not state is exactly the fabrication the gates catch.
+    _v1_7_72_seen_opcode_keys = {
+        (str((op or {}).get("name") or "").upper(),
+         str((op or {}).get("hex") or "").lower())
+        for op in opcodes if isinstance(op, dict)
+    }
+    for _enum in _hdlenum.harvest_enums(extracted):
+        if _enum.get("enum_role") != _hdlenum.ROLE_OPCODE:
+            continue
+        _src = _enum.get("source_file") or ""
+        for _mem in _enum.get("members") or []:
+            _val = _mem.get("value")
+            if not isinstance(_val, int) or isinstance(_val, bool):
+                continue
+            _name = str(_mem.get("name") or "").strip()
+            if not _name:
+                continue
+            _hex = f"0x{_val:02x}"
+            _key = (_name.upper(), _hex.lower())
+            if _key in _v1_7_72_seen_opcode_keys:
+                continue
+            _v1_7_72_seen_opcode_keys.add(_key)
+            opcodes.append({
+                "name": _name,
+                "hex": _hex,
+                "code_literal": _mem.get("literal"),
+                "width_bits": _enum.get("declared_width"),
+                "declared_type": _enum.get("type_name"),
+                "rx_len": None,
+                "tx_len": None,
+                "response_opcode_hex": None,
+                "pre_wake_allowed": False,
+                "evidence": f"input/docs/{_src}",
+                "extraction_strategy":
+                    "hdl_typedef_enum_opcode_v1_7_72",
+            })
+            _ev = evidence.setdefault(f"input/docs/{_src}", [])
+            if len(_ev) < 24:
+                _ev.append({
+                    "literal": f"{_name} = {_mem.get('literal')}",
+                    "label": (f"opcode declared by "
+                              f"`typedef enum {_enum.get('type_name')}`"),
+                })
+
     # Wave-on-fix: per-opcode response_payload_template + argument_constraints.
     # Heuristic chip-AGNOSTIC default: response_opcode at byte_offset=0,
     # CRC residue at last byte_offset; intermediate bytes flagged TBD with
     # a `source` pointer so the gate's typed-shape requirement is met.
+    # #812 — this default is a FALLBACK, not the answer. It is merged
+    # UNDER whatever the source document stated (see
+    # `_merge_response_payload_template`): a documented byte always wins
+    # its offset, and the placeholder survives only in the gaps.
     # Each opcode also gains an argument_constraints[] block citing the
     # global addr_max/len_max when applicable.
     enriched_opcodes: List[Dict[str, Any]] = []
@@ -22657,7 +25334,16 @@ def gen_l3_cmd_protocol(project: Path,
             cons.append({"name": "len_max", "max_hex": len_max,
                          "rule": "length > len_max → no reply"})
         new_op = dict(op)
-        new_op["response_payload_template"] = tmpl
+        # #812 — FILL A GAP, do not OVERWRITE. `tmpl` above is the
+        # heuristic typed-shape placeholder; when the source document
+        # itself stated the response bytes they are already in
+        # `response_payload_template_extracted`, and the document must win
+        # at every offset it covers. Merging per byte_offset also makes a
+        # PARTIALLY documented response usable: documented bytes survive,
+        # `source` pointers remain only in the gaps.
+        new_op["response_payload_template"] = (
+            _merge_response_payload_template(
+                op.get("response_payload_template_extracted"), tmpl))
         new_op["argument_constraints"] = cons
         if addr_max:
             new_op["addr_max"] = addr_max
@@ -22756,6 +25442,17 @@ def gen_l3_cmd_protocol(project: Path,
         # gate fired (synthesis ran); a populated string explains
         # why opcodes are empty by design (NOT a parser miss).
         "opcode_synthesis_skipped_reason": opcode_synthesis_skipped_reason,
+        # for #454 — rows an opcode walker matched and then refused on
+        # their SHAPE (connector pin-assignment row, rate / capacity
+        # prose, numeric-range upper bound, bit-position ruler row from a
+        # figure axis). Counting them keeps
+        # the refusal auditable: `no_opcodes_in_input: true` together with
+        # a non-zero count means "the walker saw candidate rows and judged
+        # none of them to be commands", which is a different fact from
+        # "the document contains no `<hex> <MNEMONIC>` rows at all".
+        # HONEST-UNCERTAINTY marker — read it, do not silently resolve it.
+        "non_command_row_refusal_count": len(non_command_row_refusals),
+        "non_command_row_refusals": non_command_row_refusals[:32],
     }
     return _write_l_doc(project, "L3_CMD_PROTOCOL", content, evidence)
 
@@ -23186,6 +25883,38 @@ _V1_6_512_ENCODING_PROSE_RE = re.compile(
     r"(?:\s*[:\-—–]\s*(?P<desc>[^\n,]{1,80}))?",
 )
 
+# vibe-ic#592 — Tier 2b. The Tier-2 row below hard-requires column 1 to be a
+# BARE BINARY string, so a table that states the code in hex or in a sized
+# literal is invisible to it. Measured on the OpenTitan AES register doc, whose
+# `CTRL_SHADOWED.MODE` table is
+#
+#     | Value | Enum Name | Description |
+#     | 0x01 | AES_ECB | 6'b00_0001: Electronic Codebook (ECB) mode. |
+#
+# every existing path yields ZERO typed `enumerated_values`: Tier 2 needs binary
+# in column 1, the Tier-1 prose regex needs `<binary>[:=]<mnem>` adjacency (the
+# binary here is followed by a sentence), and the v1.7.72 code-literal lifter
+# rejects the row because it declares TWO literals (the hex and the col-3
+# binary) and that lifter requires exactly one.
+#
+# SELF-CHECKING, which is what makes a numeric first column safe to lift at all:
+# a row is accepted only when the DESCRIPTION carries a code literal that renders
+# to the SAME width-`width` pattern as column 1. The two literals are independent
+# statements by the document, and requiring them to agree is what stops an
+# arbitrary `| number | name | text |` table — a register offset map, a pin list
+# — from being read as an encoding. Under-extraction is the safe direction here;
+# a table that states the code once is simply not lifted by this tier.
+#
+# chip-AGNOSTIC: pipe-table grammar plus the shared code-literal renderer. No
+# vendor, PDK or design token appears.
+_V1_6_592_ENCODING_TABLE_HEXROW_RE = re.compile(
+    r"^[ \t]*\|\s*[`]?(?P<code>(?:\d+'[bBhHdDoO][0-9a-fA-FxXzZ_]+"
+    r"|0[xX][0-9a-fA-F]+|0[bB][01_]+))[`]?\s*\|\s*"
+    r"[`]?(?P<mnem>[A-Za-z][A-Za-z0-9_]+)[`]?\s*\|"
+    r"(?P<desc>[^|\n]{1,160})?",
+    re.MULTILINE,
+)
+
 _V1_6_512_ENCODING_TABLE_ROW_RE = re.compile(
     r"^\s*\|\s*[`]?(?P<pattern>[01]{1,8})[`]?\s*\|\s*"
     r"[`]?(?P<mnem>[A-Za-z][A-Za-z0-9_]+)[`]?\s*\|"
@@ -23481,6 +26210,14 @@ def _v1_6_512_lift_field_encoding(
         existing.append({
             "pattern": pat,
             "mnem": mnem,
+            # v1.7.72 — for #499. `mnem` is not one of the meaning
+            # keys `l4_regmap_enumerated_values_typed_check` reads, so
+            # a tier that emitted only `mnem` + an empty `description`
+            # produced a binding the gate could not see — the same
+            # extractor/detector drift #499 was filed about, one tier
+            # over. The mnemonic IS the meaning the document states;
+            # publish it under a key the consumer reads.
+            "meaning": desc or mnem,
             "description": desc,
             "extraction_strategy":
                 "field_encoding_prose_v1_6_512",
@@ -23502,9 +26239,45 @@ def _v1_6_512_lift_field_encoding(
         existing.append({
             "pattern": pat,
             "mnem": mnem,
+            # v1.7.72 — see the Tier-1 note above: publish the meaning
+            # under a key the consuming gate actually reads.
+            "meaning": desc or mnem,
             "description": desc,
             "extraction_strategy":
                 "field_encoding_table_row_v1_6_512",
+        })
+        appended += 1
+    # Tier 2b (#592) — pipe-table rows whose code column is hex / sized /
+    # 0b-prefixed rather than a bare binary string. Accepted ONLY when the
+    # description states a literal that renders to the same pattern, so the row
+    # verifies itself; see the regex comment for why that guard is the whole
+    # reason a numeric first column can be lifted safely.
+    for m in _V1_6_592_ENCODING_TABLE_HEXROW_RE.finditer(window_text):
+        code_tok = m.group("code")
+        mnem = m.group("mnem")
+        if not code_tok or not mnem:
+            continue
+        pat = _cl_to_binary_pattern(code_tok, width)
+        if pat is None or len(pat) != width:
+            continue
+        desc = (m.group("desc") or "").strip().lstrip("|").strip()
+        if not any(_cl_to_binary_pattern(t, width) == pat
+                   for t in _CODE_LITERAL_RE.findall(desc)):
+            # The document states the code once. Not lifted — under-extraction
+            # is the safe direction, and an unverified numeric column is how a
+            # register offset map becomes an "encoding".
+            continue
+        key = (pat, mnem)
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        existing.append({
+            "pattern": pat,
+            "mnem": mnem,
+            "meaning": desc or mnem,
+            "description": desc,
+            "extraction_strategy":
+                "field_encoding_table_hexrow_v1_6_592",
         })
         appended += 1
     # v1.6.518 — for #356 P3 ORGANIC. Reserved-field guard for the
@@ -23519,10 +26292,17 @@ def _v1_6_512_lift_field_encoding(
     # Tier-2 above are exempt: their length-match guard already
     # rejects short binary strings under wide fields, so they
     # cannot produce the same false positive. chip-AGNOSTIC.
-    if _v1_6_518_is_likely_reserved_field(field, width):
-        if existing:
-            field["encoding"] = existing
-        return appended
+    #
+    # v1.7.72 — for #499. The guard says "for the decimal Tier-4 walker
+    # only" and its own comment exempts the binary tiers, but it was
+    # written as an early `return`, so it silently gated everything
+    # appended after it too. Measured on a real 30-bit field: the
+    # width>=16 branch fired and the code-literal tier below never ran,
+    # even though that tier does no zero-padding — the behaviour the
+    # guard exists to prevent. Narrowed to a conditional around the
+    # decimal loop it was documented to guard.
+    _v1_7_72_decimal_eligible = not _v1_6_518_is_likely_reserved_field(
+        field, width)
     # v1.6.517 — for #354 R5 Fix 2. Tier 3 — decimal encoding
     # shape (`0 = MODE_A` / `1 = MODE_B` style). Some
     # real-benchmark CSR docs use decimal patterns instead of
@@ -23533,8 +26313,8 @@ def _v1_6_512_lift_field_encoding(
     # the canonical binary form. (pattern, mnem) key dedup
     # against the Tier-1/Tier-2 emits keeps the walker
     # idempotent. chip-AGNOSTIC.
-    for m in _V1_6_517_ENCODING_DECIMAL_PROSE_RE.finditer(
-            window_text):
+    for m in (_V1_6_517_ENCODING_DECIMAL_PROSE_RE.finditer(window_text)
+              if _v1_7_72_decimal_eligible else ()):
         raw_dec = m.group("dec")
         try:
             dec_val = int(raw_dec)
@@ -23553,13 +26333,152 @@ def _v1_6_512_lift_field_encoding(
         existing.append({
             "pattern": bin_pat,
             "mnem": mnem,
+            # v1.7.72 — see the Tier-1 note above.
+            "meaning": mnem,
             "description": "",
             "extraction_strategy":
                 "field_encoding_decimal_v1_6_517",
         })
         appended += 1
+    # v1.7.72 — for #499 defect 2. Tier 5 — the code-literal form the
+    # gate has always been able to SEE but no tier could produce.
+    appended += _v1_7_72_lift_code_literal_encoding(
+        field, width, existing, existing_keys)
     if existing:
         field["encoding"] = existing
+    return appended
+
+
+# v1.7.72 — for #499 defect 2. `identifier[hi:lo]` — the bit slice a
+# sentence names alongside a constant. Pure Verilog part-select syntax.
+_V1_7_72_BIT_SLICE_RE = re.compile(
+    r"\b[A-Za-z_]\w*\s*\[\s*(?P<hi>\d+)\s*:\s*(?P<lo>\d+)\s*\]")
+
+
+def _v1_7_72_slice_of_width(sentence: str,
+                            want_width: int) -> Optional[str]:
+    """The first ``hi:lo`` slice in ``sentence`` that is exactly
+    ``want_width`` bits wide, or ``None``.
+
+    Used to record WHAT a narrower constant constrains, so a 6-bit
+    literal stated about bits 7:2 of a 30-bit field is never filed as
+    an encoding of the whole field.
+    """
+    for m in _V1_7_72_BIT_SLICE_RE.finditer(sentence or ""):
+        try:
+            hi, lo = int(m.group("hi")), int(m.group("lo"))
+        except ValueError:
+            continue
+        if abs(hi - lo) + 1 == want_width:
+            return f"{max(hi, lo)}:{min(hi, lo)}"
+    return None
+
+
+def _v1_7_72_lift_code_literal_encoding(
+        field: Dict[str, Any],
+        width: int,
+        existing: List[Dict[str, Any]],
+        existing_keys: Set[Tuple[str, str]]) -> int:
+    """v1.7.72 — for #499 defect 2. Lift the code -> meaning binding a
+    field states in its OWN description, in the Verilog-literal form.
+
+    The shape the four earlier tiers all miss::
+
+        MODE: Always set to 2'b01 to indicate vectored interrupt
+              handling (read-only).
+
+    There is no ``=`` and no table row — the code and its meaning sit
+    in one sentence of prose that Phase 1 had ALREADY captured into
+    ``field["description"]``. ``l4_regmap_enumerated_values_typed_check``
+    reads that same string, finds ``2'b01`` with its own regex, and
+    requires one binding; the lifter walked past it. That asymmetry —
+    detector strictly stronger than extractor — is the defect.
+
+    So this tier does not carry a regex of its own. It calls
+    ``_code_literal.declared_codes`` / ``field_text``: literally the
+    functions the gate calls, over literally the bytes the gate reads.
+    The set the gate counts and the set this emits from cannot diverge
+    because there is only one set.
+
+    Rules, all of them about NOT asserting more than the document does:
+
+      * ONE literal per sentence. A sentence carrying two or more
+        codes is an enumeration (``00 = idle, 01 = busy``) and belongs
+        to Tiers 1-3, which capture the per-code mnemonic; binding all
+        of them to the same whole-sentence meaning would be worse than
+        not binding them.
+      * A pattern already bound by an earlier tier is left alone.
+      * A literal whose declared width equals the field's is rendered
+        at the field width. One that does NOT is rendered at its own
+        width and recorded with ``pattern_width`` plus, when the
+        sentence names one, the ``applies_to_bits`` slice it
+        constrains — because ``mtvec[7:2] is always set to 6'b0`` says
+        something about six bits, not about the thirty-bit field that
+        contains them, and zero-extending it would claim the field is
+        zero.
+      * A narrower literal must be radix-explicit. A bare binary run
+        whose length disagrees with the field width is far more likely
+        to be an unrelated number than a code for this field.
+      * ``4'bxx`` yields nothing: an unknown bit is not an encoding.
+
+    Chip-AGNOSTIC.
+    """
+    text = _cl_field_text(field)
+    if not text:
+        return 0
+    codes = _cl_declared_codes(field)
+    if not codes:
+        return 0
+    bound_patterns = {
+        str(e.get("pattern") or "")
+        for e in existing if isinstance(e, dict)
+    }
+    appended = 0
+    for sentence in _cl_split_sentences(text):
+        toks: List[str] = []
+        for raw in _CODE_LITERAL_RE.findall(sentence):
+            tok = str(raw).strip()
+            if tok and tok not in toks:
+                toks.append(tok)
+        if len(toks) != 1:
+            continue
+        tok = toks[0]
+        pattern = _cl_to_binary_pattern(tok, width)
+        pattern_width = width
+        applies_to = None
+        if pattern is None:
+            # Not this field's width — keep the constant at the width
+            # the document declared it at, and say which slice it is
+            # about when the document says so.
+            radix_explicit = ("'" in tok
+                              or tok[:2].lower() in ("0x", "0b"))
+            if not radix_explicit:
+                continue
+            natural = _cl_natural_binary_pattern(tok)
+            if natural is None:
+                continue
+            pattern_width, pattern = natural
+            applies_to = _v1_7_72_slice_of_width(sentence, pattern_width)
+        if pattern in bound_patterns:
+            continue
+        key = (pattern, "")
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        bound_patterns.add(pattern)
+        entry: Dict[str, Any] = {
+            "pattern": pattern,
+            "pattern_width": pattern_width,
+            "code": tok,
+            "meaning": sentence[:300],
+            "description": sentence[:300],
+            "extraction_strategy":
+                "field_encoding_code_literal_v1_7_72",
+        }
+        if applies_to:
+            entry["applies_to_bits"] = applies_to
+        existing.append(entry)
+        appended += 1
     return appended
 
 
@@ -23886,6 +26805,29 @@ def _v1_6_512_lift_encoding_for_registers(
                             total += (
                                 _v1_6_512_lift_field_encoding(
                                     fld, _sig_window))
+            # v1.7.72 — for #499. The field's OWN documentation is
+            # available whether or not its name (or its register's
+            # name) occurs anywhere in the joined corpus text. Every
+            # sweep above is a WINDOW sweep: it invokes the per-field
+            # lifter only from inside a mention-anchored window, so a
+            # field with no anchor was never offered to any tier at
+            # all — including the code-literal tier, which needs no
+            # window because it reads the field's own description.
+            #
+            # Measured before adding this call: across 106 corpus
+            # doc-sets the code-literal tier produced ONE binding
+            # through the window loops and twenty when handed the
+            # fields' own text. A tier reachable only by accident of
+            # naming is a tier that shipped inert.
+            #
+            # Placed last so every decision above — in particular the
+            # `_v1_6_516_field_post` baseline that gates the Tier-3
+            # fallback — is taken on exactly the inputs it was taken
+            # on before. This call only ADDS.
+            _v1_7_72_own_text = _cl_field_text(fld)
+            if _v1_7_72_own_text:
+                total += _v1_6_512_lift_field_encoding(
+                    fld, _v1_7_72_own_text)
     return total
 
 
@@ -24412,6 +27354,87 @@ def _infer_uniform_access_from_prose(prose_window: str) -> Optional[str]:
     return raw
 
 
+# v1.7.72 — for #499 defect 3. An RST grid table's LOGICAL rows are
+# delimited by `+---+` separator lines, not by physical newlines: every
+# `|...|` line between two separators belongs to the same row. The CSR
+# bit-field walkers iterated physical lines and required a bit range in
+# column 1, so a row whose text wrapped onto a second line lost
+# everything after the wrap:
+#
+#     | 31:2  | **BASE:** ... always aligned to 256 bytes, i.e.,      |
+#     |       | ``mtvec[7:2]`` is always set to 6'b0.                 |
+#
+# stored as "...always aligned to 256 bytes, i.e.," — the sentence cut
+# mid-clause, taking the `6'b0` constant with it. Truncated text is
+# worse than absent text: it reads as a complete field description.
+#
+# Joining is the RST grammar, not a heuristic, so it is applied once to
+# the window before parsing rather than patched into each walker.
+_V1_7_72_RE_GRID_BODY_LINE = re.compile(r"^\s*\|.*\|\s*$")
+
+
+def _v1_7_72_join_rst_grid_rows(window: str) -> str:
+    """Collapse each RST grid-table logical row onto one physical line.
+
+    Cells are joined with a single space; a blank continuation cell
+    contributes nothing. Non-table lines pass through byte-identical,
+    and a table whose rows never wrap is returned unchanged, so the
+    walkers downstream see the same input they always did except where a
+    row genuinely continued.
+
+    Only text INSIDE an RST grid block is touched — a block is entered
+    by a ``+---+`` separator and left by the first non-``|`` line. A
+    Markdown pipe table has no ``+---+`` separator, so its rows are not
+    grid rows and merging them would corrupt a table this function has
+    no business rewriting. (Found by probing the function with a
+    Markdown table before trusting it: without the block guard it
+    collapsed all three rows of one into a single line.)
+    """
+    if not window or "|" not in window:
+        return window
+    out: List[str] = []
+    pending: Optional[List[str]] = None
+    in_grid = False
+
+    def _flush() -> None:
+        nonlocal pending
+        if pending is not None:
+            out.append("| " + " | ".join(c.strip() for c in pending) + " |")
+            pending = None
+
+    for line in window.splitlines():
+        if _RE_RST_GRID_SEP_LINE.match(line):
+            _flush()
+            in_grid = True
+            out.append(line)
+            continue
+        if in_grid and _V1_7_72_RE_GRID_BODY_LINE.match(line):
+            cells = line.strip()[1:-1].split("|")
+            if pending is None:
+                pending = [c.strip() for c in cells]
+            elif len(cells) == len(pending):
+                pending = [
+                    (" ".join(p for p in (prev, cur.strip()) if p)).strip()
+                    for prev, cur in zip(pending, cells)
+                ]
+            else:
+                # Column count changed — not a continuation of the same
+                # logical row. Emit what we have and start over.
+                _flush()
+                pending = [c.strip() for c in cells]
+            continue
+        _flush()
+        in_grid = False
+        out.append(line)
+    _flush()
+    joined = "\n".join(out)
+    # `splitlines()` drops a trailing newline; restore it so a window
+    # with no wrapped row round-trips byte-identical.
+    if window.endswith("\n") and not joined.endswith("\n"):
+        joined += "\n"
+    return joined
+
+
 def _parse_csr_2col_grid(window: str,
                          prose_above: Optional[str] = None
                          ) -> List[Dict[str, Any]]:
@@ -24426,9 +27449,13 @@ def _parse_csr_2col_grid(window: str,
     so downstream gates can spot the unknown.
 
     Chip-AGNOSTIC: structural-only.
+
+    v1.7.72 — for #499 defect 3. Continuation rows are joined first; a
+    wrapped cell used to lose everything after the wrap.
     """
     if not window:
         return []
+    window = _v1_7_72_join_rst_grid_rows(window)
     lines = window.splitlines(keepends=False)
     sep_idx = -1
     for i, ln in enumerate(lines):
@@ -24613,10 +27640,14 @@ def _v1_6_412_parse_bit_definition_grid(
 
     Chip-AGNOSTIC: pure structural RST grammar; no chip / vendor /
     project literal in the regex or this helper.
+
+    v1.7.72 — for #499 defect 3. Continuation rows are joined first, in
+    step with the other two RST grid walkers.
     """
     fields: List[Dict[str, Any]] = []
     if not window:
         return fields
+    window = _v1_7_72_join_rst_grid_rows(window)
     if not _V1_6_412_RE_BIT_DEFINITION_HEADER.search(window):
         return fields
     seen_bits: set = set()
@@ -25146,9 +28177,14 @@ def _parse_csr_bitfield_grid(window: str) -> List[Dict[str, Any]]:
     return a list of `register.fields[]` entries (field_name, bits,
     msb, lsb, access, description). Returns `[]` when no grid is
     present or the header doesn't carry the canonical Bit / R/W /
-    Description columns."""
+    Description columns.
+
+    v1.7.72 — for #499 defect 3. Continuation rows are joined first, so
+    a wrapped description cell keeps the clause that follows the wrap.
+    """
     if not window:
         return []
+    window = _v1_7_72_join_rst_grid_rows(window)
     # Locate first separator line.
     lines = window.splitlines(keepends=False)
     sep_idx = -1
@@ -28419,6 +31455,217 @@ _RE_L4_NO_REGMAP = re.compile(
     r'不需\s*產生.*register\s*file')
 
 
+# v1.7.74 — for #507. L4 keeps every register the input DECLARED.
+#
+# `registers[:128]` was a bare slice with no stated rationale, and the
+# only thing it could ever do was drop registers without saying so. That
+# is tolerable for prose-derived entries — those come from heuristic
+# walkers and a runaway table is a real risk — but a register the input
+# DECLARES is the design's own statement, and dropping one is data loss
+# of exactly the kind #507 is about. The cap is kept for the heuristic
+# entries and raised, per-run, to admit every declared one; whatever it
+# still drops is written down.
+_L4_PROSE_REGISTER_CAP = 128
+_V1_7_75_DECLARED_STRATEGY = "hdl_typedef_enum_address_v1_7_74"
+
+
+def _v1_7_74_register_is_declared(reg: Any) -> bool:
+    """True when this L4 register carries an input DECLARATION."""
+    if not isinstance(reg, dict):
+        return False
+    strat = str(reg.get("extraction_strategy") or "")
+    if _V1_7_75_DECLARED_STRATEGY in strat:
+        return True
+    return bool(str(reg.get("declared_type") or "").strip())
+
+
+def _v1_7_74_cap_registers(
+        registers: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]],
+                                                  Dict[str, Any]]:
+    """Apply the L4 register cap without ever dropping a declared one.
+
+    Returns ``(kept, truncation_record)``. Declaration order is
+    preserved: the cap decides WHICH entries survive, never their order.
+    ``truncation_record["dropped"]`` is 0 when nothing was cut, and the
+    record is emitted either way so the absence of a cut is a stated
+    fact rather than an assumption.
+    """
+    total = len(registers)
+    keep_idx = set(range(min(total, _L4_PROSE_REGISTER_CAP)))
+    for i, reg in enumerate(registers):
+        if _v1_7_74_register_is_declared(reg):
+            keep_idx.add(i)
+    kept = [r for i, r in enumerate(registers) if i in keep_idx]
+    dropped = [r for i, r in enumerate(registers) if i not in keep_idx]
+    record: Dict[str, Any] = {
+        "cap": _L4_PROSE_REGISTER_CAP,
+        "collected": total,
+        "carried": len(kept),
+        "dropped": len(dropped),
+        "declared_never_dropped": True,
+        "dropped_names": [str(r.get("name") or "") for r in dropped[:32]],
+        "reason": (
+            "heuristic prose-derived registers beyond the cap were cut; "
+            "registers the input DECLARES are exempt from the cap"
+            if dropped else
+            "every collected register is carried; the cap did not bite"),
+    }
+    return kept, record
+
+
+def _v1_7_74_absorb_deduped_regmap_row(existing: Dict[str, Any],
+                                       row: Dict[str, Any]) -> bool:
+    """Keep what a deduped register-table row knew. Returns True if it
+    contributed anything.
+
+    Dropping a row because another source already carries its address
+    also drops everything ELSE that row carried: its own name for the
+    register, its access and description columns, and the evidence line
+    naming the document and the literal it was read from.
+
+    Measured for #507 — routing an address-valued `typedef enum` into L4
+    made the declaration the FIRST source for 145 addresses, and the
+    documentation table rows that AGREED with it were then dropped
+    whole. Twenty-one address literals left the input-completeness
+    denominator with them, and the doc that had been at 100% fell to
+    52%. The dedupe is right — two records at one address is an
+    ambiguous decode. The silence is not: a source that corroborates
+    another has still told you something.
+    """
+    contributed = False
+    name = str(row.get("name") or "").strip()
+    if name and name != str(existing.get("name") or "").strip():
+        aliases = existing.setdefault("also_named", [])
+        if isinstance(aliases, list) and name not in aliases:
+            aliases.append(name)
+            contributed = True
+    for key in ("access", "description", "reset_value", "default"):
+        val = row.get(key)
+        if (isinstance(val, str) and val.strip()
+                and not str(existing.get(key) or "").strip()):
+            existing[key] = val
+            contributed = True
+    ev = row.get("evidence")
+    if ev:
+        corr = existing.setdefault("corroborating_evidence", [])
+        if isinstance(corr, list) and ev not in corr:
+            corr.append(ev)
+            contributed = True
+    return contributed
+
+
+def _v1_7_74_merge_declared_register_bindings(
+        registers: List[Dict[str, Any]],
+        extracted: Dict[str, str],
+        evidence: Dict[str, List[Dict[str, str]]]) -> Dict[str, Any]:
+    """Route every ADDRESS-VALUED `typedef enum` into L4's registers[].
+
+    `CSR_<NAME> = 12'h<addr>` is a name bound to a register address, and
+    L4 is the layer that carries register addresses. Before #507 the
+    harvester had no branch for this shape at all, so 145 such bindings
+    in one measured package reached the L docs only where prose
+    elsewhere happened to repeat the name — 84 of them nowhere.
+
+    A binding whose address a prose walker ALREADY captured is not
+    duplicated: the existing record is stamped with the name and the
+    type the input declares it under, so the declaration corroborates
+    the prose entry instead of competing with it. Only an address no
+    entry carries is appended.
+
+    Chip-AGNOSTIC: the routing decision is `_hdl_enum.route_enum`, which
+    reads the member set's shape and never the type's name.
+    """
+    record: Dict[str, Any] = {
+        "bindings": 0,
+        "already_carried": 0,
+        "appended": 0,
+        "sources": [],
+    }
+    try:
+        declared_enums = _hdlenum.address_map_enums(extracted)
+    except Exception:
+        return record
+    if not declared_enums:
+        return record
+
+    by_address: Dict[int, Dict[str, Any]] = {}
+    for reg in registers:
+        if not isinstance(reg, dict):
+            continue
+        addr = reg.get("address_int")
+        if isinstance(addr, int) and not isinstance(addr, bool):
+            by_address.setdefault(addr, reg)
+
+    for enum in declared_enums:
+        src = str(enum.get("source_file") or "")
+        type_name = str(enum.get("type_name") or "")
+        width = enum.get("declared_width")
+        bindings = enum.get("bindings") or []
+        src_ref = f"input/docs/{src}" if src else "input/docs"
+        n_new = 0
+        n_seen = 0
+        for binding in bindings:
+            name = str(binding.get("name") or "").strip()
+            value = binding.get("value")
+            if not name or not isinstance(value, int):
+                continue
+            record["bindings"] += 1
+            prior = by_address.get(value)
+            if prior is not None:
+                # The prose walker already carries this address. Stamp
+                # the declaration onto it rather than emitting a second
+                # register at the same address — an ambiguous decode is
+                # exactly what `l4_regmap_phase2_emitter_contract_check`
+                # blocks on.
+                n_seen += 1
+                prior.setdefault("declared_name", name)
+                prior.setdefault("declared_type", type_name)
+                corr = prior.setdefault("corroborating_evidence", [])
+                if isinstance(corr, list):
+                    stamp = f"{src_ref} (typedef enum {type_name})"
+                    if stamp not in corr:
+                        corr.append(stamp)
+                continue
+            reg = {
+                "address": f"0x{value:x}",
+                "address_int": value,
+                "name": name,
+                "declared_name": name,
+                "declared_type": type_name,
+                "access": "",
+                "default": "",
+                "description": "",
+                "fields": [],
+                "width_bits": width,
+                "evidence": f"{src_ref} (typedef enum {type_name})",
+                "extraction_strategy": _V1_7_75_DECLARED_STRATEGY,
+            }
+            registers.append(reg)
+            by_address[value] = reg
+            n_new += 1
+        record["already_carried"] += n_seen
+        record["appended"] += n_new
+        record["sources"].append({
+            "type_name": type_name,
+            "source_file": src_ref,
+            "declared_width": width,
+            "bindings": len(bindings),
+            "already_carried": n_seen,
+            "appended": n_new,
+            "routing_rule": (enum.get("routing") or {}).get("rule"),
+            "routing_reason": (enum.get("routing") or {}).get("reason"),
+        })
+        ev = evidence.setdefault(src_ref, [])
+        if len(ev) < 24:
+            ev.append({
+                "literal": (f"typedef enum {type_name} — "
+                            f"{len(bindings)} register address binding(s)"),
+                "label": ("register address bindings declared by a staged "
+                          "HDL input (v1.7.74)"),
+            })
+    return record
+
+
 def gen_l4_regmap(project: Path,
                   extracted: Dict[str, str]) -> LDocResult:
     """L4: register / OTP layout + IP macro reference.
@@ -29939,10 +33186,18 @@ def gen_l4_regmap(project: Path,
         return (isinstance(nm, str)
                 and re.match(r"^csr_[0-9A-Fa-f_]+$", nm) is not None)
 
-    if registers:
+    def _merge_registers_by_address(
+            regs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Collapse entries that claim the SAME address into one.
+
+        Keyed on address ALONE — deliberately not on (address, name),
+        because the whole point is that one of the two entries carries a
+        synthesised `csr_<addr>` placeholder precisely BECAUSE its name
+        was unknown, so the names are expected to differ.
+        """
         by_addr: Dict[str, int] = {}
         merged: List[Dict[str, Any]] = []
-        for entry in registers:
+        for entry in regs:
             addr = entry.get("address")
             if not isinstance(addr, str) or not addr.startswith("0x"):
                 merged.append(entry)
@@ -29977,7 +33232,10 @@ def gen_l4_regmap(project: Path,
             else:
                 by_addr[key] = len(merged)
                 merged.append(entry)
-        registers = merged
+        return merged
+
+    if registers:
+        registers = _merge_registers_by_address(registers)
 
     # v1.6.488 — for #346 R2 ORGANIC. Re-run the v1.6.481 field-
     # access inheritance step AFTER the v1.6.270 address-based dedup
@@ -30175,6 +33433,20 @@ def gen_l4_regmap(project: Path,
         if len(registers) >= 512:
             break
 
+    # Re-establish the v1.6.270 one-address-one-register invariant.
+    # The walker above appends keyed on the COMPOSITE (address, name),
+    # so it cannot recognise an existing entry whose name is the
+    # synthesised `csr_<addr>` placeholder — it appends a SECOND
+    # register at an address that already has one, re-creating exactly
+    # the duplicate shape the v1.6.270 pass was written to eliminate.
+    # That pass ran before this walker and never runs again, so without
+    # this re-merge `l4_regmap_phase2_emitter_contract_check` FAILs
+    # phase 1 with "N address(es) are claimed by more than one
+    # register". Idempotent — a no-op when the walker added nothing
+    # colliding. Chip-AGNOSTIC.
+    if registers:
+        registers = _merge_registers_by_address(registers)
+
     # v1.6.295 — for #183 ORGANIC. Register-array collapse. Walk the
     # row list looking for contiguous runs of `PREFIX[N]` rows with
     # ascending integer N + identical access tag, and collapse each
@@ -30352,11 +33624,23 @@ def gen_l4_regmap(project: Path,
     # only ensure they run before this call. Chip-AGNOSTIC.
     _v1_6_591_backfill_reset_value_kind(registers)
 
+    # v1.7.74 — for #507. Address-valued `typedef enum` declarations in
+    # a staged HDL input are register-map bindings; route them here,
+    # after every prose walker, so an address the prose already carries
+    # is corroborated rather than duplicated.
+    _v1_7_74_declared = _v1_7_74_merge_declared_register_bindings(
+        registers, extracted, evidence)
+    if _v1_7_74_declared["appended"]:
+        no_registers_in_input = False
+    _v1_7_74_registers, _v1_7_74_cap_record = (
+        _v1_7_74_cap_registers(registers))
+
     content = {
         "schema_version": 2,
         "doc_class": "regmap",
         "ic_name": ic_name,
-        "registers": registers[:128],
+        "registers": _v1_7_74_registers,
+        "register_cap_v1_7_74": _v1_7_74_cap_record,
         "no_registers_in_input": no_registers_in_input,
         "otp_layout": otp_layout,
         "no_otp_layout_in_input": no_otp_layout_in_input_l4,
@@ -30371,6 +33655,46 @@ def gen_l4_regmap(project: Path,
         # these for CPU-internal state definitions without
         # generating bogus address-decode logic.
         "internal_registers": _v1_6_567_internal_registers[:256],
+    }
+
+    # v1.7.74 — for #507. L4's DENOMINATOR.
+    #
+    # `l4_regmap_enumerated_values_typed_check` reported PASS — "2
+    # multi-bit enum-eligible fields all carry typed code->meaning
+    # enumerated_values" — on an L4 that was missing 84 of the 145
+    # register address bindings its own input declares. The gate was not
+    # wrong: it had no view of how many registers the input declares, so
+    # a shortfall of any size sat behind its PASS. A numerator with no
+    # denominator.
+    #
+    # This block is the denominator, measured at emit time from the
+    # input's own declarations. It is DESCRIPTIVE — the gate re-derives
+    # both sides from the input and the emitted L4 rather than trusting
+    # these numbers, because a denominator a producer computes for its
+    # own consumer can only ever confirm itself.
+    _v1_7_74_carried_names = {
+        str(r.get("declared_name") or "")
+        for r in _v1_7_74_registers if isinstance(r, dict)
+    }
+    _v1_7_74_declared_names = [
+        str(b.get("name") or "")
+        for e in (_hdlenum.address_map_enums(extracted) or [])
+        for b in (e.get("bindings") or [])
+    ]
+    content["input_declared_registers"] = {
+        "declared": len(_v1_7_74_declared_names),
+        "carried_at_emit": sum(1 for n in _v1_7_74_declared_names
+                               if n and n in _v1_7_74_carried_names),
+        "absent_at_emit": sorted(
+            n for n in _v1_7_74_declared_names
+            if n and n not in _v1_7_74_carried_names),
+        "already_carried_by_prose": _v1_7_74_declared["already_carried"],
+        "appended": _v1_7_74_declared["appended"],
+        "sources": _v1_7_74_declared["sources"],
+        "measured_at": "gen_l4_regmap emit",
+        "authority": (
+            "descriptive only — l4_regmap_declared_register_coverage_check "
+            "re-derives both sides independently"),
     }
 
     # v1.6.95 — issue #27 Capability 1. Lift README key-length facts
@@ -30772,16 +34096,24 @@ def _v1_6_563_apply_subqualifier_guard(blocks):
     Idempotent: a second call observes that the parenthetical
     block's count no longer matches the head's, so it does nothing.
 
+    PR #814 R2 — this reads the FULL SPAN (`_v814_evidence_span_of`), not the
+    240-char `evidence_paragraph` display window. Grouping and prose-position
+    classification are semantics; a display width must not decide them. Reading
+    the window instead made the guard wrong in two opposite ways depending on
+    where the window sat — see `_v814_evidence_span_of` for both, and
+    `tests/test_l5_analog_evidence_contains_its_keyword.py` for the
+    end-to-end reproduction of each.
+
     Chip-AGNOSTIC: pure structural English; no chip-class literal.
     """
     if not isinstance(blocks, list):
         return
-    # Group blocks by their evidence_paragraph + head count.
+    # Group blocks by their evidence SPAN + head count.
     groups = {}
     for idx, blk in enumerate(blocks):
         if not isinstance(blk, dict):
             continue
-        para = blk.get("evidence_paragraph")
+        para = _v814_evidence_span_of(blk)
         if not isinstance(para, str) or not para:
             continue
         count = blk.get("count")
@@ -30826,9 +34158,25 @@ def _v1_6_563_apply_subqualifier_guard(blocks):
 # co-occurrence guard (_RE_ANALOG_CONTEXT) passed because the negated sentence
 # still carries analog vocabulary. Reject when a negation marker precedes the
 # keyword within its own sentence. Chip-AGNOSTIC negation vocabulary (zh + en).
+#
+# ORGANIC — vocabulary widened by two markers this list could not see, both
+# measured on a real Traditional-Chinese input doc (spm × ihp-sg13cmos5l):
+#   * BARE `無` — the list only carried it in fixed compounds (無需 / 無任何 /
+#     無 analog / 無 ESD), so `無 SW-visible registers` read as NOT negated.
+#     Admitted only when the next character is whitespace or ASCII, which is
+#     how `無` is written when it negates a Latin term. A `無` glued to a CJK
+#     character is a COMPOUND WORD, not a negator — 無線 (wireless), 無源
+#     (passive), 無限 (unlimited), 無論 (regardless) all carry real analog /
+#     design content and must NOT be read as denials. Failing to match those
+#     is the safe direction: evidence is kept, never invented.
+#   * `N/A` — the canonical applicability denial in a spec table cell or an
+#     inline field. (`not applicable` / `shall not` / `does not` already match
+#     through the bare `not` alternative.)
 _RE_ANALOG_NEGATION = re.compile(
     r"不需|不需要|無需|毋需|沒有|不含|不具|不支援|不採用|無任何|"
     r"純數位|纯数位|純數字|无\s*analog|無\s*analog|無\s*類比|無\s*ESD|"
+    r"無(?=[\s\x00-\x7F])|"
+    r"\bn\s*/\s*a\b|"
     r"\b(?:no|not|without|none|absent|lacks?|excludes?|"
     r"does\s+not|do\s+not|doesn['’]?t|don['’]?t|"
     r"no\s+analog|not\s+needed|not\s+required|not\s+present|"
@@ -30837,15 +34185,247 @@ _RE_ANALOG_NEGATION = re.compile(
 )
 
 
+# ─── ORGANIC — CLAUSE SCOPE. Two measured over-reaches of the guard ──────
+# The guard above only ever looks LEFT (clause start → keyword), so a marker
+# that is not in the keyword's own clause must not be visible at all. Two
+# shapes broke that, and both silently DELETED genuine hardware:
+#
+#   (1) THE COMMA WAS NOT A SEPARATOR. Hard delimiters were only
+#       `\n 。！？； ;` and `". "`, so "negate A, but specify B" written on
+#       ONE line lost B as well:
+#         "There is no external DRAM, but the tile instantiates an on-chip
+#          single-port SRAM 1024x32 in `buf_sram.v`."      → SRAM deleted
+#         "The datapath shall not stall on a write conflict, and the scratch
+#          register file 32x8 … feeds the MAC directly."   → regfile deleted
+#       Both are real memories with depth/width/name populated.
+#
+#   (2) A MARKER FIRED FROM A DIFFERENT TABLE COLUMN. Markdown tables are
+#       how specification documents are written, and a row is NOT a
+#       sentence — each cell is its own scope:
+#         | buf0 | N/A | single-port SRAM 1024x32 | `buf_sram.v` |
+#         | acc0 | No  | register file 16x24      | `acc_regfile.v` |
+#       The `N/A` is the value of an ECC column and the `No` the value of a
+#       SW-visible column; neither says anything about the memory in the
+#       NEXT column, yet both suppressed it.
+#
+# BOTH repairs are MONOTONE IN ONE DIRECTION BY CONSTRUCTION: each can only
+# move the clause START FORWARD, so the text handed to `_RE_ANALOG_NEGATION`
+# is always a SUBSET of what the old code searched. `True → False` is
+# reachable; `False → True` is not. Neither repair can therefore suppress
+# anything that is harvested today — the only risk they carry is admitting a
+# denial, which is what the over-split control below exists to bound.
+
+# A comma is a WEAK boundary. "no A, B, or C" is ONE denial with an elided
+# list, and splitting there would fabricate B and C — exactly the defect this
+# guard was written to close. A comma therefore opens a new clause only when
+# the material after it is a NEW PREDICATION rather than a list continuation:
+#   (a) an adversative / contrastive clause opener, or
+#   (b) a FINITE VERB. In specification prose a finite verb is almost always
+#       an auxiliary / modal / copula or a third-person `-s` form. BARE STEMS
+#       are deliberately absent — they collide with nouns ("support",
+#       "store", "buffer", "use", "map") — and so are PAST PARTICIPLES, which
+#       are modifiers far more often than predicates: admitting `embedded` /
+#       `integrated` / `mapped` would turn "…, or a memory-mapped interface"
+#       into a clause and fabricate the interface out of its own denial.
+#   (c) the zh predication verbs, which are not inflected.
+# UNRECOGNISED VERB → NOT A BOUNDARY → the negation keeps reaching, i.e. the
+# rule FAILS CLOSED onto the pre-repair behaviour. It can never lose a row
+# that is harvested today.
+_RE_CLAUSE_NUCLEUS = re.compile(
+    # (a) adversative / contrastive clause openers
+    r"\b(?:but|however|yet|whereas|while|although|though|instead|rather|"
+    r"nevertheless|nonetheless|conversely)\b"
+    r"|但是|但|然而|不過|不过|惟|可是|反之|相反|另一方面"
+    # (b) auxiliaries / modals / copulas — unambiguously finite verbs
+    r"|\b(?:is|are|was|were|be|been|being|has|have|had|does|do|did|"
+    r"shall|should|will|would|can|could|may|might|must)\b"
+    # (c) third-person present forms. -ed / bare stems are deliberately
+    #     ABSENT: `implemented` / `embedded` / `integrated` / `mapped` are
+    #     modifiers far more often than predicates, and bare stems collide
+    #     with nouns (`support`, `store`, `buffer`, `use`, `map`).
+    r"|\b(?:instantiates|implements|contains|includes|provides|holds|"
+    r"carries|feeds|exposes|owns|embeds|stores|drives|serves|requires|"
+    r"supports|connects|attaches|resides|uses|adds|declares|defines|"
+    r"comprises|allocates|consists|generates|produces|accepts|receives|"
+    r"sends|selects|arbitrates|integrates)\b"
+    # (d) zh predication verbs, which carry no inflection
+    r"|內含|包含|具有|提供|使用|實作|實現|例化|配置|支援|採用|連接"
+    r"|内含|实作|实现|支持|采用|连接",
+    re.IGNORECASE,
+)
+_CLAUSE_SOFT_DELIMS = (",", "，")
+_CLAUSE_HARD_DELIMS = ("\n", "。", "！", "？", "；", ";", ". ")
+# How far past the keyword the clause is allowed to run when deciding whether
+# a comma opened a NEW PREDICATION. A clause never spans this much text, and
+# the bound keeps the forward delimiter scan O(window) instead of O(document)
+# per match — an ASCII document carries none of the zh delimiters, so an
+# unbounded `find` would re-scan megabytes for every keyword occurrence.
+# Truncating can only make a nucleus HARDER to find, i.e. it fails closed onto
+# the pre-repair behaviour.
+_CLAUSE_SCOPE_LOOKAHEAD = 2000
+
+
+def _neg_md_is_alignment_row(line: str) -> bool:
+    """ORGANIC — True for a markdown table ALIGNMENT row (`|---|:--:|`).
+    Such a row delimits a table but is not a data row, and it can never
+    contain a keyword. chip-AGNOSTIC markdown grammar."""
+    s = line.strip()
+    if not s or "|" not in s or "-" not in s:
+        return False
+    return all(ch in "|-: \t" for ch in s)
+
+
+def _neg_md_row_pipe_positions(line: str):
+    """ORGANIC — indices of the pipes in `line` that delimit table CELLS.
+
+    A pipe is NOT a cell delimiter when it is backslash-escaped (`\\|`, the
+    markdown way to put a literal pipe in a cell) or when it sits inside an
+    inline-code span (`` `a|b` ``). Backtick parity is tracked left to right;
+    an unbalanced backtick makes the tail read as code, which loses cell
+    boundaries and falls back to the whole-line scope — the conservative
+    direction. chip-AGNOSTIC markdown grammar."""
+    pos = []
+    in_code = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "`":
+            in_code = not in_code
+            i += 1
+            continue
+        if ch == "|" and not in_code:
+            pos.append(i)
+        i += 1
+    return pos
+
+
+def _neg_md_line_is_table_row(text: str, ls: int, le: int) -> bool:
+    """ORGANIC — True iff the line `text[ls:le]` really is a markdown table
+    row, as opposed to a prose line that merely contains a pipe.
+
+    Two accepted shapes, both requiring >= 2 cell-delimiting pipes:
+      * the canonical bordered row, whose first non-space character is `|`;
+      * the borderless GFM row (`a | b | c`), accepted ONLY when the
+        contiguous run of pipe-bearing lines it belongs to also contains an
+        ALIGNMENT row — that row is what makes a pipe-bearing block a table.
+    Anything else (`sel = a | b;`, a single trailing pipe, a lone prose line)
+    is not a row. chip-AGNOSTIC markdown grammar."""
+    line = text[ls:le]
+    if line.count("|") < 2:          # cheap C-level reject before the walk
+        return False
+    if len(_neg_md_row_pipe_positions(line)) < 2:
+        return False
+    if _neg_md_is_alignment_row(line):
+        return False
+    if line.lstrip().startswith("|"):
+        return True
+    # Borderless: walk the contiguous pipe-bearing block for an alignment row.
+    for direction in (-1, 1):
+        cur_s, cur_e = ls, le
+        for _ in range(200):
+            if direction < 0:
+                if cur_s <= 0:
+                    break
+                cur_e = cur_s - 1
+                cur_s = text.rfind("\n", 0, cur_e) + 1
+            else:
+                if cur_e >= len(text):
+                    break
+                cur_s = cur_e + 1
+                nxt = text.find("\n", cur_s)
+                cur_e = len(text) if nxt < 0 else nxt
+            probe = text[cur_s:cur_e]
+            if _neg_md_is_alignment_row(probe):
+                return True
+            if len(_neg_md_row_pipe_positions(probe)) < 2:
+                break
+    return False
+
+
+def _neg_md_table_cell_span(text: str, kw_start: int):
+    """ORGANIC — (cell_start, cell_end) of the markdown table CELL that holds
+    `kw_start`, or None when that line is not a table row / the keyword is not
+    inside a delimited cell. A negation in a SIBLING cell must not be visible
+    from here — an ECC column reading `N/A` and a SW-visible column reading
+    `No` say nothing about the memory specified in the next column."""
+    ls = text.rfind("\n", 0, kw_start) + 1
+    le = text.find("\n", kw_start)
+    if le < 0:
+        le = len(text)
+    if not _neg_md_line_is_table_row(text, ls, le):
+        return None
+    line = text[ls:le]
+    k = kw_start - ls
+    left = None
+    right = None
+    for p in _neg_md_row_pipe_positions(line):
+        if p < k:
+            left = p
+        elif p > k and right is None:
+            right = p
+    if left is None:
+        # Keyword sits BEFORE the first cell delimiter (borderless row, first
+        # cell). There is no sibling cell to its left, so nothing to narrow.
+        return None
+    return (ls + left + 1, ls + (len(line) if right is None else right))
+
+
+def _neg_comma_clause_start(text: str, s_start: int, kw_start: int,
+                            scope_end: int) -> int:
+    """ORGANIC — the start of the comma-delimited clause that holds the
+    keyword, or `s_start` when no comma in [s_start, kw_start) opens a new
+    predication. Walks the commas RIGHT TO LEFT and takes the LAST one whose
+    trailing segment (comma → `scope_end`) carries a clause nucleus, so a
+    denial that governs an elided list keeps reaching every item of it."""
+    commas = []
+    for delim in _CLAUSE_SOFT_DELIMS:
+        i = text.find(delim, s_start, kw_start)
+        while i >= 0:
+            commas.append(i + len(delim))
+            i = text.find(delim, i + len(delim), kw_start)
+    for c in sorted(commas, reverse=True):
+        if _RE_CLAUSE_NUCLEUS.search(text[c:scope_end]):
+            return c
+    return s_start
+
+
 def _v0_1_62_analog_kw_negated(text: str, kw_start: int, kw_end: int) -> bool:
-    """True iff the analog keyword at [kw_start:kw_end] sits in a clause whose
-    leading text (sentence start → keyword) carries a negation marker.
-    Sentence boundaries: zh 。！？； + en .;\\n and blank-paragraph breaks."""
+    """True iff the keyword at [kw_start:kw_end] sits in a clause whose
+    leading text (clause start → keyword) carries a negation marker.
+    Clause boundaries: zh 。！？； + en .;\\n and blank-paragraph breaks,
+    plus (ORGANIC) the markdown table CELL the keyword sits in and the
+    comma that opens a new predication — see the block comment above.
+
+    ORGANIC — this is now the SINGLE definition of "negated" in this file.
+    Two callers share it deliberately: `gen_l5_adi_spec` (the analog keyword
+    harvester it was written for) and `_v1_6_426_extract_memories_from_text`
+    (the L9 memory prose walker). A second, differently-shaped negation
+    mechanism in the same module would be worse than one — the two would
+    drift and disagree about what a denial looks like."""
     s_start = 0
-    for delim in ("\n", "。", "！", "？", "；", ";", ". "):
+    scope_end = min(len(text), kw_end + _CLAUSE_SCOPE_LOOKAHEAD)
+    for delim in _CLAUSE_HARD_DELIMS:
         d = text.rfind(delim, 0, kw_start)
         if d >= 0 and d + len(delim) > s_start:
             s_start = d + len(delim)
+        d2 = text.find(delim, kw_end, scope_end)
+        if d2 >= 0:
+            scope_end = d2
+    # ORGANIC repair 2 — TABLE-CELL SCOPE. A row is not a sentence; a marker
+    # in one cell must not reach the memory specified in a sibling cell.
+    cell = _neg_md_table_cell_span(text, kw_start)
+    if cell is not None:
+        if cell[0] > s_start:
+            s_start = cell[0]
+        if cell[1] < scope_end:
+            scope_end = cell[1]
+    # ORGANIC repair 1 — COMMAS separate clauses, but only when what follows
+    # is a new predication rather than an elided list item.
+    s_start = _neg_comma_clause_start(text, s_start, kw_start, scope_end)
     clause = text[s_start:kw_end]
     return bool(_RE_ANALOG_NEGATION.search(clause))
 
@@ -30939,7 +34519,15 @@ def _v455_attach_block_specs(blocks: List[dict],
     if not tables:
         return
     for b in blocks:
-        if not isinstance(b, dict) or b.get("spec"):
+        if not isinstance(b, dict):
+            continue
+        # Skip ONLY when the block already carries the form the consumer
+        # reads (a dict with specs[]). A bare truthiness test here let a
+        # junk STRING scraped by an earlier, cruder pass pre-empt the
+        # structured table parsed right above — the worse value winning
+        # purely by running first.
+        _existing = b.get("spec")
+        if isinstance(_existing, dict) and _existing.get("specs"):
             continue
         cand = {str(b.get("name", "")).lower(),
                 str(b.get("type", "")).lower()}
@@ -30972,6 +34560,119 @@ def _v1_6_613_input_has_digital_serial_readout(extracted: Dict[str, str]) -> boo
         if isinstance(txt, str) and _V1_6_613_L5_SERIAL_READOUT_RE.search(txt):
             return True
     return False
+
+
+#: Width of the stored `evidence_paragraph`. Unchanged; what changes below is
+#: WHERE the window sits, not how wide it is.
+_EVIDENCE_PARAGRAPH_WIDTH = 240
+#: When the window has to move to reach the keyword, how much of it is spent on
+#: text BEFORE the keyword. A quarter keeps enough left context to read the
+#: sentence the keyword is in while leaving the majority for what FOLLOWS it,
+#: which is where an attributed value normally sits ("the regulator drops
+#: 250 mV at full load").
+_EVIDENCE_KEYWORD_LEAD = _EVIDENCE_PARAGRAPH_WIDTH // 4
+
+
+def _evidence_window_containing_keyword(
+        paragraph: str,
+        kw_rel: int,
+        kw_len: int,
+        width: int = _EVIDENCE_PARAGRAPH_WIDTH) -> str:
+    """The <=`width` slice of `paragraph` that CONTAINS the keyword at
+    `kw_rel` (an offset into `paragraph`, before stripping).
+
+    THE DEFECT THIS CLOSES. `evidence_paragraph` was
+    `paragraph.strip()[:width]` — a fixed-width window anchored at the SPAN
+    START. A keyword further into
+    the span than `width` therefore never appeared in the evidence stored for
+    it: the reader was shown a prefix about some other subject, and only the
+    `evidence_paragraph_truncated` flag hinted that anything was missing.
+    Measured on the corpus: 10 of 27 detected blocks stored evidence that did
+    not contain their own keyword, every one of them by this truncation.
+
+    The span is NOT narrowed to fix this — narrowing is the direction that
+    silently destroys evidence, and the numbers a block's spec is harvested
+    from routinely sit in nested sub-items of the keyword's own list item. Only
+    the WINDOW moves, so `paragraph` (and therefore `spec`, `count` and the
+    detected block set) is byte-for-byte what it was.
+
+    The window stays at the span start whenever the keyword already fits inside
+    it, so a block whose evidence is already correct is not perturbed.
+
+    The window is a DISPLAY window and nothing else. Nothing downstream may
+    decide anything from it — see `_v814_evidence_span_of` for the field that
+    exists so the sub-qualifier guard reads the whole span instead.
+
+    chip-AGNOSTIC: pure offset arithmetic; no vocabulary participates.
+    """
+    lead_ws = len(paragraph) - len(paragraph.lstrip())
+    s = paragraph.strip()
+    if len(s) <= width:
+        # The whole span fits — nothing to choose.
+        return s
+    kw = kw_rel - lead_ws
+    if kw < 0 or kw >= len(s):
+        # Keyword outside the stripped text (only reachable if the caller
+        # passes a mismatched offset). Fail back to the historical window
+        # rather than emitting a wrong slice.
+        return s[:width]
+    if kw + kw_len <= width:
+        # Already inside the head window — leave it exactly where it was.
+        return s[:width]
+    start = kw - _EVIDENCE_KEYWORD_LEAD
+    # Lower clamp — this is what GUARANTEES containment rather than merely
+    # making it likely: the window must still reach the END of the literal.
+    # Only binds for a literal longer than `width - lead`.
+    earliest = kw + kw_len - width
+    if start < earliest:
+        start = earliest
+    if start > kw:
+        # Reachable only when the literal is itself wider than the window.
+        # Start at the literal: the most of it that can be shown.
+        start = kw
+    if start + width > len(s):
+        # Moves the window LEFT, so it still ends at the span end and still
+        # covers the keyword.
+        start = len(s) - width
+    if start < 0:
+        start = 0
+    return s[start:start + width]
+
+
+def _v814_evidence_span_of(block) -> str:
+    """The FULL span a block was detected in, for consumers that must reason
+    about prose the display window may have cut away.
+
+    WHY THIS EXISTS. `_v1_6_563_apply_subqualifier_guard` groups blocks by
+    `evidence_paragraph` EQUALITY and then locates each block's keyword inside
+    that string. Both operations were reading the 240-char display window, so
+    the window silently decided semantics:
+
+      * before the anchoring, a keyword past character 240 was simply not
+        findable in the window, so `_v1_6_564_classify_head_vs_paren` could not
+        annotate that block; the guard fell through to its dict-iteration-order
+        fallback and decremented the HEAD subject instead of the parenthetical
+        one — the exact inversion v1.6.564 was written to stop, re-entering
+        by the truncation door;
+      * after the anchoring, two blocks in one span get DIFFERENT windows
+        whenever one of their keywords sits past 240, so the group no longer
+        forms at all and the guard does not fire.
+
+    Reading the span makes both cases behave like the short-paragraph case that
+    was always correct. Private bookkeeping: stripped before serialisation by
+    `_v466_strip_internal_fields`, exactly like the #466 keys. Falls back to
+    the stored window for block shapes that never carried a span (the L5 parity
+    stub), so the guard never sees `None`.
+
+    chip-AGNOSTIC: field plumbing only; no vocabulary participates.
+    """
+    if not isinstance(block, dict):
+        return ""
+    span = block.get("_v814_evidence_span")
+    if isinstance(span, str) and span:
+        return span
+    para = block.get("evidence_paragraph")
+    return para if isinstance(para, str) else ""
 
 
 def gen_l5_adi_spec(project: Path,
@@ -31057,7 +34758,11 @@ def gen_l5_adi_spec(project: Path,
             if p_end < 0:
                 p_end = len(text)
             paragraph = text[p_start:p_end]
-            spec_str = _analog_spec_from_paragraph(paragraph)
+            # R6-FIX-1: `spec` is now the STRUCTURED payload (or None), and it
+            # is scoped to the block TYPE so the consumer's per-type symbol
+            # vocabulary applies. `cls` is the detected block class, which is
+            # what the entry's own `type` field is set to two lines below.
+            spec_str = _analog_spec_from_paragraph(paragraph, cls)
             entry: Dict[str, Any] = {
                 # v1.6.66 — closes issue #7 Bug Y. The previous
                 # `cls + "_default"` literal self-declared every
@@ -31069,12 +34774,37 @@ def gen_l5_adi_spec(project: Path,
                 "spec": spec_str,
                 "low_confidence": (spec_str is None),
                 "evidence": f"input/docs/{fname} ({m.group(0)})",
-                "evidence_paragraph": paragraph.strip()[:240],
+                # The window is anchored on the KEYWORD, not on the span start,
+                # so the stored evidence always contains the keyword it
+                # evidences. It stays at the span start whenever the keyword
+                # already fits there, so evidence that was already correct is
+                # byte-for-byte unchanged. See
+                # `_evidence_window_containing_keyword`.
+                "evidence_paragraph": _evidence_window_containing_keyword(
+                    paragraph, kw_pos - p_start, m.end() - m.start()),
+                # R6-FIX-1 (provenance): the 240-char cut can drop the very
+                # text a spec value came from, which is how two blocks shipped
+                # numbers that appear nowhere in their own stored evidence.
+                # Disclose the cut instead of leaving the reader to infer that
+                # the stored paragraph is the whole basis. Each attributed spec
+                # additionally carries its OWN `evidence_text` window, so a
+                # value is auditable even when this field is truncated.
+                # Meaning is unchanged by the anchoring: the flag says the
+                # stored text is not the whole span, whatever part of it the
+                # window shows.
+                "evidence_paragraph_truncated":
+                    len(paragraph.strip()) > _EVIDENCE_PARAGRAPH_WIDTH,
                 # ORGANIC #466 R2 — private bookkeeping for the
                 # emitter-side spurious-block guard. Stripped before
                 # serialisation by `_v466_strip_internal_fields`.
                 "_v466_kw_literal": m.group(0),
                 "_v466_src_fname": fname,
+                # PR #814 R2 — private bookkeeping: the WHOLE span, so a
+                # downstream guard reasons about the prose rather than about
+                # whatever part of it the display window happens to show.
+                # Stripped before serialisation alongside the #466 keys; see
+                # `_v814_evidence_span_of`.
+                "_v814_evidence_span": paragraph.strip(),
             }
             # v1.6.402 — for #292 P3. Parse quantifier preceding
             # block type into `count` / `multiplicity` fields.
@@ -31646,9 +35376,40 @@ def gen_l5_adi_spec(project: Path,
     return _write_l_doc(project, "L5_ADI_SPEC", content, evidence)
 
 
+# Reject-rule trigger vocabulary for `gen_l6_control_logic`. Every entry is
+# an `re.search` PATTERN, not a plain substring, so a pattern that can land
+# INSIDE a longer token must say so explicitly.
+#
+# v1.8.55 — `9.?bit` carried NO LEFT BOUNDARY and therefore fired inside any
+# multi-digit width whose last digit is 9. MEASURED on edge_llm_accel (whose
+# host datapath is BDW=39, so "39 bit" is written throughout its docs): three
+# lines of `input/docs/L4_command_protocol.md` matched `9 bit` / `9-bit`
+# INSIDE `39 bit` / `39-bit`, and each minted a phantom reject rule whose
+# condition was the raw markdown line (one of them a table row) and whose
+# action was the hardcoded `DROP_FRAME_AND_RETURN_TO_IDLE` — on a design with
+# no framing protocol at all (its own L3 emits `L3.opcodes empty`).
+# `l6_fsm_scaffold_actionable_check` then correctly refused those three rules
+# as non-actionable and BLOCKED phase 1. That gate's docstring already cites
+# this exact "39-bit host write yields the keyword `9 bit`" case, i.e. the
+# symptom was known and the DETECTOR was landed while the FABRICATOR here was
+# left in place. This is the producer fix.
+#
+# Same defect shape as v1.8.50 (CTS counted clock buffers by cell-NAME
+# substring) and v1.8.48 (the `*spare*` name filter): a NAME/SUBSTRING match
+# with no token boundary. Chip-AGNOSTIC — any design mentioning a
+# 9/19/29/39/49/…-bit width in a doc whose filename matches
+# `event|reject|rx_event|protocol` was affected.
+#
+# MUTATION-TESTED so de-noising does not blind the rule (the li.5 lesson):
+# `9-bit` / `9 bit` / `9bit` / `9-BIT MODE` / "the 9th bit … 9 bit marker"
+# all still match; `39 bit`, `39-bit`, `19 bit`, `29-bit`, `49 bit`,
+# `129-bit`, `9999 bit` all correctly stop matching. Swept over all 9
+# published cells under `benchmark-data/ic/*/input/docs/`: this keyword fires
+# 3 times corpus-wide, all 3 in edge_llm_accel, all 3 phantom, and 0 genuine
+# 9-bit reject rules exist to lose.
 _REJECT_RULE_KEYWORDS = (
     "discard", "reject", "ignore", "drop", "abort", "silent",
-    "unwoken", "pre.?wake", "9.?bit", "crc.?fail",
+    "unwoken", "pre.?wake", r"(?<![0-9])9.?bit", "crc.?fail",
 )
 
 
@@ -32357,6 +36118,241 @@ def _v1_6_496_state_match_acceptable(
         text_arg, m.start())
 
 
+# ---------------------------------------------------------------------------
+# v1.7.74 — for #505. Per-machine attribution of L6 FSM states.
+#
+# `L6.fsm_states[]` is written by SEVERAL independent extractors: the
+# prose walkers (which harvest a state name from narrative text anywhere
+# in the corpus), the Verilog-`parameter` / arrow / token tiers, and the
+# `typedef enum` harvester (v1.7.72), which reads a NAMED, CLOSED member
+# set out of a staged HDL package. Before this change every one of them
+# appended into ONE flat list with no record of WHICH machine the state
+# belongs to, so a passing sentence about block A's state machine became
+# an eleventh member of block B's ten-member declared enum.
+#
+# The grouping key is derived from what the extractor ACTUALLY KNEW, and
+# from nothing else:
+#   * a state carrying `declared_type` was read out of a `typedef enum`
+#     whose type name IS the machine's identity -> that type name;
+#   * every other state was inferred from a document, so its identity is
+#     the SOURCE DOCUMENT it was inferred from.
+# There is no name matching across the two sources, no state-name
+# allow-list and no document-name pattern: purely the provenance each
+# state already carries. Chip-AGNOSTIC.
+_L6_EVIDENCE_LABEL_SUFFIX_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+# Grouping granularity for states with no declared type. The extractors
+# record provenance at document level (`input/docs/<file> (<label>)`),
+# so document level is the finest grouping their own evidence supports.
+_L6_FSM_MACHINE_DOC_PREFIX = "doc:"
+_L6_FSM_MACHINE_UNATTRIBUTED = "doc:<unattributed>"
+
+
+def _l6_state_evidence_source(state: Dict[str, Any]) -> str:
+    """The source document an L6 state entry was extracted from.
+
+    Evidence is written either as ``input/docs/<file>`` (bare) or as
+    ``input/docs/<file> (<walker label>)``. Strip the trailing
+    parenthesised label — filenames may contain spaces, so trimming the
+    suffix is safer than splitting on whitespace."""
+    ev = str(state.get("evidence") or "").strip()
+    if not ev:
+        return ""
+    return _L6_EVIDENCE_LABEL_SUFFIX_RE.sub("", ev).strip()
+
+
+def _l6_fsm_machine_id(state: Dict[str, Any]) -> str:
+    """Identity of the state machine ONE extracted L6 state belongs to.
+
+    Derived only from that state's own extractor provenance:
+    `declared_type` when an HDL `typedef enum` declared it, otherwise the
+    document the state was inferred from. Never from the state's name."""
+    if not isinstance(state, dict):
+        return _L6_FSM_MACHINE_UNATTRIBUTED
+    declared = state.get("declared_type")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip()
+    src = _l6_state_evidence_source(state)
+    if src:
+        return f"{_L6_FSM_MACHINE_DOC_PREFIX}{src}"
+    return _L6_FSM_MACHINE_UNATTRIBUTED
+
+
+def _l6_attribute_fsm_states(states: List[Dict[str, Any]]) -> None:
+    """Stamp `fsm_machine` on every state entry, in place."""
+    for st in states:
+        if isinstance(st, dict) and not st.get("fsm_machine"):
+            st["fsm_machine"] = _l6_fsm_machine_id(st)
+
+
+# ---------------------------------------------------------------------------
+# L6 transition recovery — the edge the state-to-state walker already had.
+#
+# THE DEFECT THIS CLOSES, STATED AS THE MEASUREMENT THAT FOUND IT
+# ----------------------------------------------------------------
+# `_V1_6_484_FSM_STATE_TO_STATE_RE` matches `<from_state> <op> <to_state>`,
+# runs the whole guard chain over the match (FSM-context anchor, C-pointer
+# reject, data-movement reject, bare-word-prose reject, transition-verb
+# reject), and then promotes BOTH endpoints into `fsm_states[]` -- and DROPS
+# THE ARROW.  So a source line the extractor has already decided is an FSM
+# transition contributes two states and zero transitions.  Re-running the
+# shipped producer over the published corpus: 16 run roots carry states, ONE
+# carries a transition, and the states of the emptiest ones came from exactly
+# these lines (e.g. a spec whose state table reads
+# ``INITIALIZING  -> LISTENING  (initialization complete)`` yielded 5 states
+# and 0 transitions).
+#
+# WHY RECOVERING THE EDGE IS NOT "MAKING THE EXTRACTOR EMIT MORE"
+# ---------------------------------------------------------------
+# An edge is emitted ONLY when BOTH endpoints survived every promotion gate
+# and appear in the FINAL `fsm_states[]`.  Such an edge asserts nothing the
+# state list has not already asserted -- the same evidence line, the same two
+# tokens, the same guards.  It adds the relation between two facts already
+# published, not a third fact.  The both-endpoints rule is also what keeps the
+# arrows that are NOT transitions out: a signal-direction note
+# ``TxD : Transmit Data (CC -> BD)`` and a message-direction note
+# ``SDO (server -> client)`` never make their endpoints states, so they never
+# make an edge either.  It additionally satisfies the consuming gate's A3
+# (no dangling transition target) BY CONSTRUCTION rather than by a later check.
+#
+# chip-AGNOSTIC: state identity + set membership only; no chip, vendor, PDK,
+# protocol or state-name literal participates.
+def _l6_transition_entry(from_state: str, to_state: str,
+                         trigger: str, evidence: str) -> Dict[str, Any]:
+    """One transition, in the shape `l6_fsm_scaffold_actionable_check`
+    reads (`to` is in its `_TRANSITION_TARGET_KEYS`)."""
+    entry: Dict[str, Any] = {"from": from_state, "to": to_state}
+    if trigger:
+        entry["trigger"] = trigger
+    if evidence:
+        entry["evidence"] = evidence
+    return entry
+
+
+def _l6_attach_declared_transitions(
+        fsm_states: List[Dict[str, Any]],
+        edges: List[Dict[str, str]]) -> int:
+    """Attach to `fsm_states[].transitions` every observed edge whose BOTH
+    endpoints are in `fsm_states`. Returns the number attached.
+
+    In-place; idempotent (an edge already present is not duplicated). An edge
+    naming an endpoint that did not become a state is DROPPED, not repaired --
+    the state promotion gates are the ruler, and an edge is never allowed to
+    introduce a state they rejected."""
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for st in fsm_states:
+        if isinstance(st, dict) and isinstance(st.get("name"), str):
+            by_name[st["name"].upper()] = st
+    attached = 0
+    for e in edges:
+        src = str(e.get("from") or "").upper()
+        dst = str(e.get("to") or "").upper()
+        if not src or not dst or src == dst:
+            continue
+        if src not in by_name or dst not in by_name:
+            continue
+        st = by_name[src]
+        lst = st.get("transitions")
+        if not isinstance(lst, list):
+            lst = []
+            st["transitions"] = lst
+        if any(isinstance(t, dict) and str(t.get("to", "")).upper() == dst
+               for t in lst):
+            continue
+        lst.append(_l6_transition_entry(
+            by_name[src].get("name") or src,
+            by_name[dst].get("name") or dst,
+            str(e.get("trigger") or ""),
+            str(e.get("evidence") or ""),
+        ))
+        attached += 1
+    return attached
+
+
+# The parenthetical / trailing clause a state-table row puts after the arrow
+# is the transition's TRIGGER, written by the document on the same line
+# (``LISTENING -> MASTER   (BMCA: this port is best master)``).  Captured
+# verbatim so the emitted trigger is quoted evidence, never a paraphrase.
+_L6_TRANSITION_TRIGGER_RE = re.compile(
+    r"^\s*(?:\(([^)\n]{1,120})\)|(?:when|if|on|upon|after)\s+([^.;\n]{1,120}))",
+    re.IGNORECASE,
+)
+
+
+def _l6_transition_trigger_after(text: str, end: int) -> str:
+    """Verbatim trigger clause immediately following a state-to-state match,
+    or "" when the document states none."""
+    line_end = text.find("\n", end)
+    tail = text[end: line_end if line_end >= 0 else len(text)]
+    m = _L6_TRANSITION_TRIGGER_RE.match(tail)
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2) or "").strip()
+
+
+def _l6_build_fsm_machines(
+        states: List[Dict[str, Any]],
+        declared_machines: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Group attributed L6 states into one record per state machine.
+
+    `declared_machines` maps an HDL `typedef enum` type name to the
+    CLOSED member list that enum declares. A closed machine's member
+    list is taken from the DECLARATION, never from the flat state list,
+    so no inferred state can ever add a member to it — that is the whole
+    point of a closed enum as completeness evidence.
+
+    States inferred from documents group by source document and are
+    reported as OPEN (`closed: false`): the corpus may mention more of
+    that machine's states elsewhere, so its member list is a lower bound.
+
+    Every state is attributed; none is dropped."""
+    order: List[str] = []
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for st in states:
+        if not isinstance(st, dict):
+            continue
+        mid = st.get("fsm_machine") or _l6_fsm_machine_id(st)
+        rec = grouped.get(mid)
+        if rec is None:
+            order.append(mid)
+            rec = grouped[mid] = {
+                "machine_id": mid,
+                "declared_type": (st.get("declared_type")
+                                  if isinstance(st.get("declared_type"), str)
+                                  else None),
+                "closed": mid in declared_machines,
+                "source": (declared_machines.get(mid, {}).get("source")
+                           or _l6_state_evidence_source(st)),
+                "extraction_strategies": [],
+                "states": [],
+            }
+        strat = st.get("extraction_strategy")
+        if (isinstance(strat, str) and strat
+                and strat not in rec["extraction_strategies"]):
+            rec["extraction_strategies"].append(strat)
+        nm = str(st.get("name") or "")
+        if nm and nm not in rec["states"]:
+            rec["states"].append(nm)
+    # A declared machine's member list comes from its declaration.
+    out: List[Dict[str, Any]] = []
+    for mid in order:
+        rec = grouped[mid]
+        emitted = len(rec["states"])
+        decl = declared_machines.get(mid)
+        if decl:
+            rec["closed"] = True
+            rec["declared_type"] = mid
+            rec["states"] = list(decl.get("members") or [])
+            rec["source"] = decl.get("source") or rec["source"]
+        rec["state_count"] = len(rec["states"])
+        # How many of this machine's states survived the emit-time cap
+        # on `fsm_states[]`. Equal to `state_count` unless the cap bit.
+        rec["emitted_state_count"] = emitted
+        out.append(rec)
+    return out
+
+
 def gen_l6_control_logic(project: Path,
                          extracted: Dict[str, str]) -> LDocResult:
     """L6: reject rules from RX/event docs + dispatcher FSM scaffold."""
@@ -32528,6 +36524,10 @@ def gen_l6_control_logic(project: Path,
         r"(?:->|=>|→)\s*([A-Z][A-Z0-9_]{3,30})\b",
     )
     seen_state_names: Set[str] = {s["name"] for s in extracted_states}
+    # Edges observed by the state-to-state walker. Collected here, filtered
+    # against the FINAL state set at emit time — see
+    # `_l6_attach_declared_transitions`.
+    _l6_edge_candidates: List[Dict[str, str]] = []
 
     def _add_state(name: str, fname: str, label: str,
                    extraction_strategy: str = "") -> None:
@@ -32837,6 +36837,28 @@ def gen_l6_control_logic(project: Path,
             # spurious FSM state. Arrow-operator matches are unaffected.
             if _v1_0_44_is_bareword_to_prose_noise(text, m):
                 continue
+            # Every guard above has now accepted this match as a
+            # state-to-state RELATION between two identifier-shaped
+            # endpoints. Record the EDGE here rather than discarding it.
+            #
+            # This is BEFORE the ±300-char FSM-context anchor deliberately.
+            # That anchor is a STATE-PROMOTION guard: it decides whether an
+            # ALL-CAPS token in this window may become a state. An edge
+            # promotes nothing — `_l6_attach_declared_transitions` keeps it
+            # only when BOTH endpoints are in the FINAL `fsm_states[]`, which
+            # is a STRICTLY STRONGER condition than the anchor (each endpoint
+            # had to clear the whole promotion chain, by this path or another,
+            # to be there at all). Requiring the anchor here would drop edges
+            # between two states the layer already publishes — measured: a
+            # state table whose header sits >300 chars above its last rows
+            # loses those rows' edges while keeping their states.
+            if not _v1_6_625_is_transition_verb_from(m):
+                _l6_edge_candidates.append({
+                    "from": m.group("from_state"),
+                    "to": m.group("to_state"),
+                    "trigger": _l6_transition_trigger_after(text, m.end()),
+                    "evidence": f"input/docs/{fname} (state-to-state)",
+                })
             if not _v1_6_484_prose_fsm_window_has_anchor(
                     text, m.start()):
                 continue
@@ -33070,6 +37092,124 @@ def gen_l6_control_logic(project: Path,
                     "pipeline_stages_inline_bracket_v1_6_462",
             })
 
+    # v1.7.72 — for #499. States DECLARED by a staged HDL input.
+    #
+    # Every tier above infers states from prose ("returns to IDLE"),
+    # arrows, or Verilog `parameter` lines. A `typedef enum` whose type
+    # name declares it a state type is the design enumerating its own
+    # controller states — the strongest evidence a document can carry,
+    # and the one Phase 1 could not read at all while `.sv` was being
+    # dropped by the converter.
+    #
+    # Measured (#499): the prose walker derived exactly ONE state, from
+    # a passing mention in an unrelated chapter, while the staged
+    # package declared ten. `l6_fsm_scaffold_actionable_check` was
+    # right to refuse "a module that cannot leave reset".
+    #
+    # Encodings are NOT synthesised. These members carry no explicit
+    # values, so no `encoding` is emitted for them — SystemVerilog's
+    # implicit numbering is a language default, not something the
+    # document said.
+    #
+    # v1.7.74 — for #505. The dedupe below used to SKIP an enum member
+    # whose name had already been harvested by an inference tier, which
+    # left the declared member represented by an entry attributed to a
+    # document that merely mentioned the name — a closed enum silently
+    # losing one of its own members to a prose scrape. A declaration
+    # outranks an inference: on a name collision the existing entry is
+    # RE-ATTRIBUTED to the declaring enum and the inferred evidence is
+    # kept alongside it as corroboration. Nothing is dropped.
+    _v1_7_72_seen_states = {
+        str(s.get("name") or "") for s in extracted_states
+        if isinstance(s, dict)
+    }
+    _v1_7_72_state_by_name: Dict[str, Dict[str, Any]] = {}
+    for _s in extracted_states:
+        if isinstance(_s, dict):
+            _v1_7_72_state_by_name.setdefault(str(_s.get("name") or ""), _s)
+    # v1.7.74 — for #505. type_name -> the CLOSED member set the
+    # declaration carries, used to group `fsm_machines[]` at emit time.
+    _v1_7_74_declared_machines: Dict[str, Dict[str, Any]] = {}
+    for _enum in _hdlenum.harvest_enums(extracted):
+        if _enum.get("enum_role") != _hdlenum.ROLE_FSM_STATE:
+            continue
+        _src = _enum.get("source_file") or ""
+        _type_name = str(_enum.get("type_name") or "").strip()
+        if _type_name:
+            _decl = _v1_7_74_declared_machines.setdefault(
+                _type_name,
+                {"source": f"input/docs/{_src}", "members": []})
+            for _mem in _enum.get("members") or []:
+                _mname = str(_mem.get("name") or "").strip()
+                if _mname and _mname not in _decl["members"]:
+                    _decl["members"].append(_mname)
+        for _mem in _enum.get("members") or []:
+            _name = str(_mem.get("name") or "").strip()
+            if not _name:
+                continue
+            _prior = _v1_7_72_state_by_name.get(_name)
+            # v1.7.74 — for #505. A PIPELINE STAGE that happens to share
+            # the member's name is a different object living in a
+            # different list (`pipeline_stages[]`), so it must neither
+            # absorb the declaration nor suppress it: fall through and
+            # emit the declared member as its own FSM state.
+            _prior_is_stage = (isinstance(_prior, dict)
+                               and _prior.get("source_kind")
+                               == "cpu_pipeline_stage")
+            if _name in _v1_7_72_seen_states and not _prior_is_stage:
+                # v1.7.74 — for #505. An inference tier already emitted
+                # this name. The `typedef enum` DECLARES it, so move the
+                # entry onto the declared machine (unless another
+                # declaration already owns it) and retain the inferred
+                # evidence as corroboration.
+                if (isinstance(_prior, dict)
+                        and not _prior.get("declared_type")
+                        and _type_name):
+                    _prior_ev = _prior.get("evidence")
+                    if isinstance(_prior_ev, str) and _prior_ev:
+                        _corr = _prior.setdefault(
+                            "corroborating_evidence", [])
+                        if isinstance(_corr, list) and _prior_ev not in _corr:
+                            _corr.append(_prior_ev)
+                    _prior["evidence"] = (
+                        f"input/docs/{_src} (typedef enum {_type_name})")
+                    _prior["extraction_strategy"] = (
+                        "hdl_typedef_enum_state_v1_7_72")
+                    _prior["declared_type"] = _type_name
+                    _prior["fsm_machine"] = _type_name
+                    if isinstance(_mem.get("value"), int) and not isinstance(
+                            _mem.get("value"), bool):
+                        _prior["encoding"] = _mem.get("literal")
+                        _prior["encoding_value"] = _mem.get("value")
+                continue
+            _v1_7_72_seen_states.add(_name)
+            _state: Dict[str, Any] = {
+                "name": _name,
+                "transitions": [],
+                "actions": [],
+                "evidence": (f"input/docs/{_src} "
+                             f"(typedef enum {_enum.get('type_name')})"),
+                "extraction_strategy":
+                    "hdl_typedef_enum_state_v1_7_72",
+                "declared_type": _enum.get("type_name"),
+            }
+            if isinstance(_mem.get("value"), int) and not isinstance(
+                    _mem.get("value"), bool):
+                _state["encoding"] = _mem.get("literal")
+                _state["encoding_value"] = _mem.get("value")
+            extracted_states.append(_state)
+            # A declaration outranks whatever was mapped here before, so
+            # a later enum collides with the DECLARED entry, not with a
+            # same-named pipeline stage.
+            _v1_7_72_state_by_name[_name] = _state
+            _ev = evidence.setdefault(f"input/docs/{_src}", [])
+            if len(_ev) < 28:
+                _ev.append({
+                    "literal": _name,
+                    "label": (f"FSM state declared by "
+                              f"`typedef enum {_enum.get('type_name')}`"),
+                })
+
     # v1.6.59 — closes issue #5 follow-up. The AID 5-state template
     # (Tier B in v1.6.58) was a per-class boilerplate that never
     # represented the actual chip's FSM. It is removed entirely.
@@ -33104,6 +37244,9 @@ def gen_l6_control_logic(project: Path,
         ]
         fsm_states = _real_fsm_states[:32]
         pipeline_stages = _pipeline_states[:32]
+        # Attach the edges the state-to-state walker validated, now that the
+        # final state set is known. Both endpoints must be in it.
+        _l6_attach_declared_transitions(fsm_states, _l6_edge_candidates)
         # v1.6.436: flag still reflects real FSM presence — pipeline-only
         # input continues to surface as "no fsm evidence" so downstream
         # state-coverage gates can fall back to filename-level evidence.
@@ -33122,12 +37265,29 @@ def gen_l6_control_logic(project: Path,
         pipeline_stages = []
         no_fsm_states_in_input = _flag_no_X_in_input(
             extracted_states, evidence, "fsm")
+    # v1.7.74 — for #505. Attribute every emitted state to the machine
+    # its OWN extractor knew about, then group. Both steps read only the
+    # provenance already on each state (`declared_type` / evidence
+    # source document); no state is dropped, reordered or renamed.
+    _l6_attribute_fsm_states(fsm_states)
+    fsm_machines = _l6_build_fsm_machines(
+        fsm_states, _v1_7_74_declared_machines)
     content = {
         "schema_version": 2,
         "doc_class": "control_logic",
         "ic_name": ic_name,
         "reject_rules": rules[:32],
         "fsm_states": fsm_states,
+        # v1.7.74 — for #505. One record per state machine, grouped from
+        # extractor provenance. A record with `closed: true` was DECLARED
+        # by an HDL `typedef enum` and its member list is exactly what
+        # that declaration says — an inferred state can never add to it.
+        # A record with `closed: false` was inferred from a document and
+        # its member list is a lower bound. Always emitted (empty list
+        # when there are no states) so consumers can distinguish "one
+        # machine" from "several" instead of reading a flat union.
+        "fsm_machines": fsm_machines,
+        "fsm_machine_count": len(fsm_machines),
         # v1.6.436 — for #312 P2 ORGANIC. Pipeline stages routed to a
         # typed sibling key so downstream UVM/SVA/state-cover generators
         # never see them as FSM states. Always emitted as a list (empty
@@ -35138,6 +39298,11 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     if not isinstance(top_ports, list):
         return
     clk_pins = []
+    #: Ports admitted ONLY by the C4 reach fix below — i.e. ports that on the
+    #: pre-fix code produce NO clock_domains record at all. Labelling changes
+    #: are confined to these, which is what keeps the fix strictly ADDITIVE:
+    #: no record that exists today can change its domain_kind/role/freq.
+    _c4_widened_pins: Set[str] = set()
     for p in top_ports:
         if not isinstance(p, dict):
             continue
@@ -35155,6 +39320,23 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
         nm_base = _v1_6_434_normalize_port_basename(nm_l)
         if nm_base == "clk" or nm_base.endswith("_clk") or nm_base == "clock":
             clk_pins.append(nm)
+        elif _V1_6_574_CLOCK_PORT_RE.match(nm):
+            _c4_widened_pins.add(nm)
+            # C4/2026-07-31 — REACH fix, purely ADDITIVE. v1.6.574 widened
+            # the clock-port matcher "so analog multiphase ports (`CK1`..
+            # `CK6`) seed" — but the widening was applied ONLY to the
+            # sibling that fills `L8.clocks[]`. This function fills
+            # `L8.clock_domains[]`, which is the list `sdc_gen` and
+            # `l8_sta_clock_period_design_owned_check` actually read, and it
+            # kept the pre-v1.6.574 three-way string test. Measured
+            # consequence on a real cell: L9.top_ports held `ck4/ck5/ck6`,
+            # the sibling accepted all three, this test accepted none,
+            # `clock_domains` stayed `[]`, `_derive_primary_clk_freq_hz`
+            # (which resolves the design's own stated 1.0 MHz correctly) was
+            # never reached, and the emitted SDC carried the plugin's 50 MHz
+            # default — a 50x wrong period. Reusing the SIBLING'S predicate
+            # rather than restating it is what stops the two drifting again.
+            clk_pins.append(nm)
     if not clk_pins:
         return
     # Try to derive primary frequency from timing_constants (look for
@@ -35168,12 +39350,31 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
         # / `i_clk` / `clk_in` are recognised as primary domains.
         _pin_base = _v1_6_434_normalize_port_basename(pin.lower())
         is_primary = (_pin_base == "clk" or _pin_base == "clock")
+        # Frequency stays gated on the CANONICAL name test: handing
+        # `primary_freq_hz` to every clock port would assert that they all run
+        # at the one timing constant the layer happens to carry, which is a
+        # fabrication on any genuinely multi-rate design. Evidence-bound
+        # frequencies arrive from `l8_doc_clock_freq_synth`, per document row.
         freq_hz = primary_freq_hz if is_primary else None
+        # C4/2026-07-31 — domain_kind/role by PROPERTY, for widened pins only.
+        # `primary`/`master` vs `secondary`/`derived` was decided by whether
+        # the port is spelled `clk` — a PROXY. The property is: this loop
+        # synthesises domains from TOP-LEVEL PORTS, and a top-level clock port
+        # is not derived from anything; `derived` means generated from another
+        # clock (PLL / divider), which the code marks with `derived_from`.
+        # This matters concretely: `clock_contract.entry_is_derived` treats
+        # `role: derived` as OUT of the one-name-one-period contract, so
+        # `sdc_validator_check` skipped all three of this design's clocks and
+        # reported `1 SDC file(s) OK` having cross-checked ZERO of them — a
+        # VACUOUS PASS I produced myself and caught by reading its own count
+        # line. Confined to `_c4_widened_pins` so no record that exists on the
+        # pre-fix code can change label.
+        _c4_property_primary = (is_primary or pin in _c4_widened_pins)
         entry = {
             "name": pin,
             "source_pin": pin,
-            "domain_kind": "primary" if is_primary else "secondary",
-            "role": "master" if is_primary else "derived",
+            "domain_kind": "primary" if _c4_property_primary else "secondary",
+            "role": "master" if _c4_property_primary else "derived",
             "source": "synthesised-from-L9.top_ports",
             "evidence": "L9.top_ports",
             "reset_strategy": "unspecified",
@@ -37395,6 +41596,31 @@ def gen_l8_timing_waveform(project: Path,
                         if freq_mhz.is_integer()
                         else f"clk_{freq_mhz:.3f}mhz".replace(".", "p")
                     )
+                # A bare frequency literal harvested from prose has NO name
+                # of its own — `_canonical_clk` above staples the project's
+                # clock-port name onto it. When that name is already OWNED by
+                # a record with a pinned period (the prose-fmax walker's
+                # `role=primary` entry, which read a frequency for that
+                # literal clock), emitting here produced a SECOND record for
+                # the same clock at a different period: the `clk` 100 MHz /
+                # 125 MHz contradiction that `sdc_validator_check` refuses to
+                # validate an SDC against. This mention is not a competing
+                # period declaration for that clock, so it must not be shaped
+                # like one. Keep the number as evidence on the owning record
+                # and emit nothing. Chip-AGNOSTIC: provenance markers only.
+                _owner_cc = _cc.owning_entry_with_period(
+                    clock_domains, _entry_name)
+                if _owner_cc is not None:
+                    _cc.record_alternate_mention(_owner_cc, {
+                        "freq_mhz": freq_mhz,
+                        "freq_hz": int(freq_hz),
+                        "source": f"input/docs/{fname}",
+                        "role": "extracted_from_doc_freq_mention",
+                        "extraction_strategy":
+                            "doc_freq_mention_keyword_window",
+                    })
+                    existing_freqs.add(freq_mhz)
+                    continue
                 # v1.6.370 — for #265 P2. Track evidence-doc-class
                 # rank so chip-top evidence (rank=0) can overwrite a
                 # peripheral re-mention (rank=10) rather than letting
@@ -39355,6 +43581,48 @@ def _is_real_submodule_name(name: str) -> bool:
     return True
 
 
+def _is_bullet_submodule_name(nm: str) -> bool:
+    """Heading-anchored bullet submodule name filter.
+
+    Deliberately relaxes `_is_real_submodule_name`'s RTL-shape gate: the
+    `Key sub-blocks:` / `Submodules:` heading anchor is strong evidence, so
+    bare-word names like `alu` / `regfile` are accepted here. The length
+    floor, the table-header deny, the verb deny, the reserved-word deny and
+    the vowel/consonant check all remain.
+
+    Module-level (was nested in the L9 emitter) so the deny lists it
+    enforces are directly testable, matching `_is_real_submodule_name`.
+    chip-AGNOSTIC: language keywords and English tokens only.
+    """
+    if not isinstance(nm, str):
+        return False
+    nm = nm.strip()
+    if len(nm) < 3:
+        return False
+    if nm.lower() in _DOC_TABLE_HEADER_TOKENS:
+        return False
+    if nm.lower() in _COMMON_ENGLISH_VERB_TOKENS:
+        return False
+    # A Verilog/SystemVerilog reserved word is never a module name — the
+    # language forbids it. Specs quote keywords in prose constantly
+    # ("do not use the `signed` keyword in a port declaration"), and the
+    # bullet walker harvests backticked identifiers, so without this the
+    # quoted keyword becomes a CONFIDENT L9 submodule (the bullet path
+    # does not tag `low_confidence`, unlike the heading path). Downstream
+    # `l9_submodule_conformance_check` then examines it and FAILs a
+    # correct design with SUBMODULE_FILE_MISSING. Exact match only, so a
+    # legitimate `signed_mult` / `case_decoder` is untouched.
+    if nm.lower() in _VERILOG_RESERVED_KEYWORDS:
+        return False
+    # vowel + consonant for bare-alphabetic names
+    if not any(c.isdigit() or c == "_" for c in nm):
+        has_v = any(c.lower() in "aeiou" for c in nm)
+        has_c = any(c.lower() in "bcdfghjklmnpqrstvwxyz" for c in nm)
+        if not (has_v and has_c):
+            return False
+    return True
+
+
 # v1.6.91 (#23 Bug 2 P2) — vendor-tool / EDA-environment doc patterns.
 # These docs (Intel User Guides, Application Notes, Terasic dev-kit
 # READMEs, EDA tool manuals) describe the dev-kit / EDA tools, not
@@ -40964,13 +45232,188 @@ def _v1_6_394_post_emit_finalize_sim_only(l9_path) -> int:
         delta = after - before
         if delta > 0:
             try:
-                p.write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(p, l9)
             except Exception:
                 return 0
         return delta
     except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# L9 submodule name provenance — an extractor may not invent the name.
+#
+# THE DEFECT THIS CLOSES
+# ----------------------
+# Two L9 submodule producers do not EXTRACT a name, they MINT one:
+#
+#   * a literal picker maps a spec token it finds in prose through a hand-kept
+#     table to a synthesized identifier (`K28.5` in a link-layer paragraph ->
+#     a submodule named `k28p5_special_char`), and
+#   * a README bullet walker SLUGIFIES a prose bullet into an identifier
+#     ("Electronic Codebook (ECB) mode," -> `electronic_codebook_mode`).
+#
+# In both cases the entry cites a source FILE AND LINE as its evidence, and
+# the name it publishes does not occur anywhere in that file. A downstream
+# consumer reading `L9.submodules` is then told the design instantiates a
+# module whose name no human ever wrote. Measured on the published corpus by
+# re-running the shipped producer: 15 of 80 emitted entries, across 4 run
+# roots, name a token absent from the document they cite.
+#
+# THE RULE
+# --------
+# If an entry CITES A DOCUMENT, that document must contain the name.
+#
+# That is the repo's own standard (`evidence_citation_resolves_check` requires
+# a citation to resolve) applied one level deeper: to the CLAIM, not just to
+# the path. It is a rule, not a list -- it needs no vocabulary, it does not
+# name a protocol or a token, and a future table that mints names is caught
+# the day it is written rather than the day someone notices.
+#
+# WHAT IT DELIBERATELY DOES NOT GOVERN
+# ------------------------------------
+# An entry with NO document citation is not this extractor's output -- the
+# IC-expert dialogue track authors decompositions that no input document
+# spells out, which is a different producer with a different contract, and
+# silently deleting those would be a second defect of the same shape as the
+# first. Untouched, and the disclosure below says so out loud.
+#
+# chip-AGNOSTIC: string containment against the design's own inputs.
+_RE_L9_EVIDENCE_DOCPATH = re.compile(
+    r"([A-Za-z0-9_.\-/ ]+\.(?:md|txt|rst|adoc|pdf|docx?|xlsx?|pptx?|html?|"
+    r"odt|svg|dia|v|sv|vhdl?))",
+    re.IGNORECASE,
+)
+
+
+def _l9_entry_cited_document(entry: Dict[str, Any]) -> str:
+    """Basename of the input document an L9 submodule entry cites, or "" when
+    it cites none. Reads only the entry's own evidence fields."""
+    if not isinstance(entry, dict):
+        return ""
+    ev = entry.get("evidence")
+    cands: List[str] = []
+    if isinstance(ev, str):
+        cands.append(ev)
+    elif isinstance(ev, dict):
+        for k in ("file", "source", "path", "doc"):
+            v = ev.get(k)
+            if isinstance(v, str):
+                cands.append(v)
+    for c in cands:
+        m = _RE_L9_EVIDENCE_DOCPATH.search(c)
+        if m:
+            return Path(m.group(1).strip()).name
+    return ""
+
+
+def _l9_name_written_by_document(name: str, doc_text: str) -> bool:
+    """True iff ``doc_text`` contains ``name`` VERBATIM (case-insensitive).
+
+    A separator-insensitive variant was written first, so that a name could
+    match a document that punctuates it differently (``pe_array`` vs ``PE
+    array``). It was MEASURED against the published corpus before being kept,
+    and it did not survive: of the 80 entries the producer emits, the
+    relaxation accepted exactly 3 that verbatim containment rejects, and all
+    3 were wrong -- collapsing separators lets a name match across unrelated
+    adjacent words (a line reading ``OOB (COMINIT/COMSAS/COMWAKE)`` accepts a
+    minted ``oob_cominit``). It admitted no true entry. So the strict form is
+    the shipped one, and this note is the record of why."""
+    nm = (name or "").strip()
+    if not nm or not doc_text:
+        return False
+    return nm.lower() in doc_text.lower()
+
+
+def _post_emit_l9_drop_uninstantiated_submodule_names(
+        project: Path, extracted: Dict[str, str]) -> int:
+    """Drop every `L9.submodules` entry that CITES a document which does not
+    contain the entry's own name. Returns the number dropped.
+
+    Runs LAST in the L9 post-emit chain so it sees every producer's output,
+    including any added later. Each drop is recorded on
+    `L9.submodules_dropped_uncited[]` with the citation it failed, so the
+    removal is auditable rather than silent, and the retained/examined counts
+    are stamped on `L9.submodule_name_provenance` — a pass that does not say
+    how much it looked at is not a pass. Never raises; a project whose input
+    text is unavailable is left ALONE rather than emptied (a zero denominator
+    must refuse, not delete)."""
+    try:
+        p = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+        if not p.is_file():
+            return 0
+        try:
+            l9 = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return 0
+        if not isinstance(l9, dict):
+            return 0
+        subs = l9.get("submodules")
+        if not isinstance(subs, list) or not subs:
+            return 0
+        by_base: Dict[str, str] = {}
+        for fn, txt in (extracted or {}).items():
+            if isinstance(txt, str):
+                _b = Path(str(fn)).name
+                by_base[_b] = txt
+                by_base[Path(_b).stem] = txt
+        kept: List[Any] = []
+        dropped: List[Dict[str, str]] = []
+        examined = 0
+        for e in subs:
+            doc = _l9_entry_cited_document(e) if isinstance(e, dict) else ""
+            if not doc:
+                kept.append(e)          # no document citation — not governed
+                continue
+            txt = by_base.get(doc) or by_base.get(Path(doc).stem)
+            if txt is None:
+                # The cited document is not among the extracted texts, so the
+                # claim cannot be checked. REFUSING to judge is the honest
+                # outcome; deleting on an absent denominator is not.
+                kept.append(e)
+                continue
+            examined += 1
+            if _l9_name_written_by_document(str(e.get("name") or ""), txt):
+                kept.append(e)
+            else:
+                dropped.append({
+                    "name": str(e.get("name") or ""),
+                    "cited_document": doc,
+                    "extraction_strategy": str(
+                        e.get("extraction_strategy")
+                        or (e.get("evidence") or {}).get("extraction_strategy")
+                        if isinstance(e.get("evidence"), dict)
+                        else e.get("extraction_strategy") or ""),
+                    "reason": ("name does not occur in the document this "
+                               "entry cites as its evidence"),
+                })
+        l9["submodule_name_provenance"] = {
+            "entries_total": len(subs),
+            "entries_with_document_citation": examined,
+            "entries_dropped": len(dropped),
+            "rule": ("a submodule entry that cites an input document must "
+                     "name a token that document contains"),
+        }
+        if dropped:
+            l9["submodules"] = kept
+            l9["submodules_dropped_uncited"] = dropped
+            if not kept:
+                l9["no_submodules_in_input"] = True
+        # The disclosure is written even when nothing was dropped: a clean
+        # result must still say how many entries it examined, or it is
+        # indistinguishable from never having run.
+        try:
+            _stamp.dump(p, l9)
+        except Exception:
+            return 0
+        return len(dropped)
+    except Exception as exc:
+        # Fail OPEN (never break a run over this) but never SILENTLY: a
+        # producer guard that vanishes without a word is how the defect it
+        # guards against comes back unnoticed.
+        sys.stderr.write(
+            f"WARN: l9_submodule_name_provenance skipped ({type(exc).__name__}"
+            f": {exc}) — L9.submodules left unfiltered\n")
         return 0
 
 
@@ -41268,6 +45711,85 @@ def _v1_6_426_normalise_port_count(port_token) -> str:
     return ""
 
 
+# ─── ORGANIC — a doc that declares its own layer NOT APPLICABLE is not ──
+#     evidence, and the L9 memory prose walker was mining it anyway.
+#
+# MEASURED on the real `benchmark-data/ic/spm/input/docs/L5_register_map.md`.
+# That file opens with `status: not-applicable` in its OWN frontmatter and its
+# body reads:
+#       `spm` **無 SW-visible registers**。
+#       → 不需 Plugin 產生 register file / CSR decoder / memory-mapped interface。
+# `_V1_6_426_RE_MEMORY_PROSE` matched the literal phrase `register file` inside
+# the sentence instructing the plugin NOT to generate one and emitted
+#   {name: null, kind: regfile, type: "register file", port_count: null,
+#    depth: null, width: null, evidence_file: "L5_register_map.md",
+#    low_confidence: true}
+# — every field that would make it actionable is null. That single fabricated
+# row is the ONLY `low_confidence: true` entry in the spm
+# `L9_INTEGRATION_SPEC.json`, and the in-gate stub-backed rule (#434,
+# review_required) reads low_confidence evidence as DEFERRED work, so Step D1
+# (Phase 1 Doc Extraction) was downgraded to WAIVED-DEFERRED on an ingestion
+# that was otherwise clean (`extraction_skipped: []`, 9/9 extracted).
+#
+# THE DOCTRINE IS ALREADY IN THIS FILE: a doc's own frontmatter outranks any
+# heuristic read of its body — the same rule as the Tier -1 frontmatter `ic:`
+# declaration in `_ic_name_from_docs`. The author has stated that this layer's
+# subject does not exist in this design; nothing mined out of that body is
+# design evidence.
+#
+# SCOPED STRICTLY PER FILE. The walker is called once per extracted doc, so a
+# not-applicable L5 can never silence a genuine L9 in the same corpus. And the
+# rule FAILS OPEN in every ambiguous case (no frontmatter / no `status:` key /
+# any other status value) — a guard that guesses would delete evidence the
+# author did supply. chip-AGNOSTIC: YAML frontmatter grammar only; no chip
+# name, PDK name or design literal participates.
+#
+# ─── SIGNAL 2 (SENTENCE level) — salvage #315 ────────────────────────────
+# The frontmatter rule above is only the FILE-level half. A doc with no
+# `status:` declaration can still DENY a memory in prose, and the walker
+# was blind to that: `_V1_6_426_RE_MEMORY_PROSE` fired on `register file`
+# inside the sentence instructing the plugin not to generate one. Same
+# defect class as #358 on the analog side — a keyword matcher firing on
+# text that DENIES the thing. The analog path already carried a negation
+# guard; the memory walker had none.
+#
+# REUSE, NOT A SECOND MECHANISM: the per-match guard in
+# `_v1_6_426_extract_memories_from_text` CALLS the analog path's own
+# `_v0_1_62_analog_kw_negated`, which is the single definition of
+# "negated" in this module. `continue` advances to the next MATCH, so a
+# denial never shadows a real spec later in the same file.
+_RE_DOC_FRONTMATTER_BLOCK = re.compile(r"\A---\s*\n(.*?)\n---", re.DOTALL)
+_RE_DOC_FRONTMATTER_STATUS = re.compile(
+    r"^[ \t]*status[ \t]*:[ \t]*[\"']?(.*?)[\"']?[ \t]*$",
+    re.MULTILINE | re.IGNORECASE)
+# Deliberately NOT `l_doc_evidence_util.NO_INFORMATION_TOKENS`. That set also
+# carries `tbd` / `todo` / `pending` / `unknown` / `draft`, which mean "not
+# written yet" — NOT "does not exist". A `status: tbd` doc that already carries
+# a real memory paragraph must still be harvested; suppressing it would lose
+# evidence the author did supply.
+_DOC_STATUS_NOT_APPLICABLE = frozenset({
+    "not-applicable", "not_applicable", "not applicable", "notapplicable",
+    "n/a", "n.a.", "na", "不適用", "不适用",
+})
+
+
+def _doc_declares_not_applicable(text) -> bool:
+    """ORGANIC — True iff `text` opens with a YAML frontmatter block whose
+    `status:` key declares the document NOT APPLICABLE to this design.
+
+    Returns False for every other status value, for a doc with no frontmatter,
+    and for a frontmatter with no `status:` key. chip-AGNOSTIC."""
+    if not text or not isinstance(text, str):
+        return False
+    fm = _RE_DOC_FRONTMATTER_BLOCK.match(text)
+    if not fm:
+        return False
+    m = _RE_DOC_FRONTMATTER_STATUS.search(fm.group(1))
+    if not m:
+        return False
+    return m.group(1).strip().lower() in _DOC_STATUS_NOT_APPLICABLE
+
+
 def _v1_6_426_extract_memories_from_text(
         text: str, source_fname: str,
         l9_top_module: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -41283,8 +45805,16 @@ def _v1_6_426_extract_memories_from_text(
     names downstream). When `l9_top_module` is None / empty the
     top-module tier is a no-op; ISA-ext / shape-gate / noun-deny
     still apply. Chip-AGNOSTIC.
+
+    ORGANIC — a doc whose own frontmatter declares `status: not-applicable`
+    yields NOTHING (see the block comment above). Per-file by construction.
     """
     if not text or not isinstance(text, str):
+        return []
+    # ORGANIC — the document declares its own subject not applicable to this
+    # design. Harvesting a memory out of it fabricates hardware the author
+    # explicitly said is absent.
+    if _doc_declares_not_applicable(text):
         return []
     if len(text) > 5_000_000:
         # Bound the cost on extreme inputs.
@@ -41292,6 +45822,12 @@ def _v1_6_426_extract_memories_from_text(
     out: List[Dict[str, Any]] = []
     seen: set = set()
     for m in _V1_6_426_RE_MEMORY_PROSE.finditer(text):
+        # ORGANIC signal 2 (SENTENCE level) — reuse the analog path's own
+        # negation predicate so this file has exactly ONE definition of
+        # "negated". `continue` advances to the next MATCH (not the next
+        # doc), so a denial sentence never shadows a real spec later on.
+        if _v0_1_62_analog_kw_negated(text, m.start(), m.end()):
+            continue
         try:
             type_token = m.group("type") or ""
             port_token = m.group("port") or ""
@@ -41512,8 +46048,460 @@ _MEMORY_NAME_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Generator-emitted memory-macro identifiers. The #612 word-boundary token
+# test above is deliberately strict and MUST stay strict: it is what keeps
+# PROGRAM / DIAGRAM / HISTOGRAM / diagram_ctrl out of `memories[]`, because
+# their `ram` is a mid-word accident.
+#
+# But memory COMPILERS emit macro cell names in which the memory morpheme is
+# legitimately interior, so the strict token test cannot see it:
+#     fakeram45_2048x39     -> `ram` preceded by `e`
+#     fakeram45_1024x32     -> `ram` preceded by `e`
+#     dffram_1024x32        -> `ram` preceded by `f`
+# (`sky130_sram_1kbyte_1rw1r_32x256_8` is NOT in this class — its `sram` is
+# preceded by `_`, so the #612 clause above already promotes it.)
+#
+# A lexical rule was tried first and abandoned: an "organisation token"
+# (`<digits>x<digits>`) paired with the morpheme, tightened until it was
+# anchored at `_`/string-start, rejected whitespace and leading-zero (hex)
+# operands, and required a digit right after the morpheme.
+# `test_the_tightest_lexical_rule_is_still_wrong_in_both_directions` spells
+# that rule out as a regex, scores it, and states what it gets wrong. Nothing
+# in the promotion path inspects `<digits>x<digits>` any more.
+#
+# The corroboration is taken from OUTSIDE the string instead, from the
+# design's own staged physical-macro artefacts under `input/pdk_local/` —
+# this runner's existing convention for design-staged macro IP, which the L4
+# OTP-IP walker above also reads. STAGING BY SYMLINK COUNTS: see
+# `_staged_macro_scan` for the traversal policy, and
+# `test_this_walker_is_a_superset_of_its_two_siblings` for how this walker
+# compares, per staging shape, with the two other readers of this directory.
+#
+# RESIDUAL: the conjunct that survives is the memory morpheme, so a design
+# that stages `DIAGRAM_16x9.lef` under its own `input/pdk_local/` WILL promote
+# `DIAGRAM_16x9` — it staged a physical macro under that cell name.
+# `test_staged_artifact_is_the_only_lever` asserts that behaviour.
+#
+# FAIL-SAFE: with no project path, or no `input/pdk_local/`, the staged set is
+# empty, and `_is_staged_memory_macro_name` returns False on an empty set — so
+# this clause cannot fire.
+#
+# Chip-AGNOSTIC: LEF / Liberty / GDS / behavioural-model file naming plus the
+# LEF `MACRO <cell>` keyword. No chip-class string literal participates; the
+# evidence is read from whatever the design under analysis staged, not from a
+# built-in list of macro names.
+_MEMORY_NAME_TOKEN_ANYWHERE_RE = re.compile(
+    r"(ram|rom|sram|dram|cache|regfile|fifo|mem)",
+    re.IGNORECASE,
+)
+# Tried in order, first match wins.
+# `test_artefact_suffixes_are_ordered_so_no_suffix_masks_a_longer_one`
+# re-derives from the tuple whether that order decides any stem, so an entry
+# that DOES overlap an existing one — `.gz`, `.lib.gz` — fails there instead
+# of silently truncating a stem.
+#
+# `.gds.gz` has its own entry because `.gz` is not in this tuple.
+_MEMORY_MACRO_ARTEFACT_SUFFIXES = (
+    ".gds.gz", ".gdsii", ".lef", ".lib", ".gds", ".db", ".sv", ".v",
+)
+_MEMORY_MACRO_LEF_DECL_RE = re.compile(
+    r"^[ \t]*MACRO[ \t]+([A-Za-z_][A-Za-z0-9_$.\[\]-]*)",
+    re.MULTILINE,
+)
+_MEMORY_MACRO_STAGE_REL = ("input", "pdk_local")
+# Total directory entries the scan may CONSUME, across the whole walk.
+_MEMORY_MACRO_MAX_FILES = 4096
+# Entries any ONE directory may consume before the scan moves on to the next
+# pending directory (see the fair-share note in `_staged_macro_scan`).
+_MEMORY_MACRO_DIR_SLICE = 64
+# Entries RETAINED from any ONE directory listing. `heapq.nsmallest` keeps the
+# lexicographically smallest N, which makes the listing deterministic. It does
+# NOT make the listing cheap — see `_capped_dir_listing` for what was measured.
+_MEMORY_MACRO_MAX_DIR_ENTRIES = 4096
+_MEMORY_MACRO_MAX_LEF_BYTES = 8 * 1024 * 1024
+# Cap on the reported truncation events themselves, so a pathological tree
+# cannot turn the anomaly report into the anomaly.
+_MEMORY_MACRO_MAX_TRUNCATION_EVENTS = 16
 
-def _v1_6_441_is_useful_memory_entry(entry) -> bool:
+
+def _capped_dir_listing(directory, cap):
+    """`(entries, n_seen)` — the `cap` smallest entries of `directory` in path
+    order, plus how many entries the listing actually had.
+
+    `n_seen > len(entries)` is exactly the condition "this listing was cut",
+    which the caller reports.
+
+    `heapq.nsmallest` is fed a GENERATOR deliberately, so that only `cap` Path
+    objects are retained rather than one per entry. That is NOT a memory bound
+    on the call: `_MEMORY_MACRO_MAX_FILES` is what bounds the walk.
+    `test_capped_listing_is_linear_in_the_directory_not_constant` measures
+    what the generator does and does not buy.
+
+    Propagates OSError — `iterdir()` raises it lazily, inside `nsmallest` — so
+    the caller decides what an unreadable directory means."""
+    n_seen = 0
+
+    def _counted():
+        nonlocal n_seen
+        for entry in directory.iterdir():
+            n_seen += 1
+            yield entry
+
+    return heapq.nsmallest(cap, _counted()), n_seen
+
+
+def _staged_macro_scan(project):
+    """`(cell_names, truncation_events)` for the design at `project`.
+
+    `cell_names` is the lower-cased set of physical-macro CELL NAMES staged
+    under `<project>/input/pdk_local/**`, read two independent ways from the
+    same open standards:
+      * the file STEM of every `*.lef / *.lib / *.gds / *.gds.gz / *.gdsii /
+        *.db / *.v / *.sv` artefact;
+      * every `MACRO <cell>` declaration inside a staged `*.lef` (one LEF may
+        abstract several cells).
+
+    `truncation_events` is a list of `{"reason": ..., ...}` dicts, empty on a
+    scan that read everything it reached. The reason codes this scan emits are
+    enumerated in the block comment below the entry loop, with the test that
+    drives each.
+    `_v1_6_426_emit_memories` is what turns it into something a reader sees;
+    see the `staged_macro_scan_truncated` block there.
+
+    `project` being None, not a path, or having no `input/pdk_local/` yields
+    `(frozenset(), [])` — nothing was staged and nothing was lost.
+    `input/pdk_local/` existing but not being STATABLE is a different fact and
+    yields a `staged_root_unreadable` event.
+    Chip-AGNOSTIC."""
+    if project is None:
+        return frozenset(), []
+    try:
+        root = Path(project).joinpath(*_MEMORY_MACRO_STAGE_REL)
+    except (TypeError, ValueError, AttributeError):
+        return frozenset(), []
+    try:
+        if not root.is_dir():
+            return frozenset(), []
+    except OSError as exc:
+        # NOT the same as "no such directory": `is_dir()` returns False for a
+        # missing path and RAISES here, so this branch means the entry is
+        # THERE and its status could not be read — EACCES when
+        # `input/pdk_local` is a symlink into a directory this process may not
+        # search. Returning an empty set with an empty event list would make
+        # that indistinguishable from a design that stages nothing.
+        return frozenset(), [{
+            "reason": "staged_root_unreadable",
+            "path": str(_MEMORY_MACRO_STAGE_REL[0]) + "/"
+                    + str(_MEMORY_MACRO_STAGE_REL[1]),
+            "error": type(exc).__name__,
+        }]
+
+    names: set = set()
+    truncation: List[Dict[str, Any]] = []
+    n_events = [0]
+    seen_dirs: set = set()
+    # Each element is a mutable cursor `[directory, entries_or_None, index]`.
+    pending: List[list] = []
+
+    def _rel(path) -> str:
+        """Path as written relative to `input/pdk_local/`. The walk carries
+        in-tree paths, not a symlink's resolved target, so a reported path is
+        the one the design wrote under `root`."""
+        try:
+            return str(Path(path).relative_to(root))
+        except (ValueError, TypeError):
+            return str(path)
+
+    def _note(event) -> None:
+        """Record a truncation event, itself bounded — and say so when the
+        bound bites, because a truncated truncation report is the defect this
+        whole block exists to close, one level up."""
+        n_events[0] += 1
+        if len(truncation) < _MEMORY_MACRO_MAX_TRUNCATION_EVENTS:
+            truncation.append(event)
+
+    def _enqueue(directory) -> None:
+        """Queue `directory` unless a directory with the same RESOLVED
+        identity is already queued.
+
+        `stat()` follows symlinks, so the key is the `(st_dev, st_ino)` of the
+        TARGET. That is what makes a directory-symlink loop terminate:
+        `input/pdk_local/self -> .` and `vendor/up -> ..` both resolve onto a
+        directory that has already been queued, so they are dropped instead of
+        walked again.
+
+        The caller has already stat'ed `directory` (that is how it knows it is
+        a directory), so a failure here needs the file to change underneath
+        the walk — a TOCTOU window, not pinned by a fixture. It is reported
+        rather than dropped: a directory the walk decided to enter and then
+        did not is the shape of loss this block exists to make visible."""
+        try:
+            st = directory.stat()
+        except OSError as exc:
+            _note({
+                "reason": "directory_unreadable",
+                "path": _rel(directory),
+                "error": type(exc).__name__,
+            })
+            return
+        key = (st.st_dev, st.st_ino)
+        if key in seen_dirs:
+            return
+        seen_dirs.add(key)
+        pending.append([directory, None, 0])
+
+    # ---------------------------------------------------------------------
+    # SYMLINKS ARE FOLLOWED — file symlinks AND directory symlinks, and
+    # whether the target sits inside the project or outside it. A design that
+    # points `input/pdk_local/fakeram45` at `/opt/ip/fakeram45` counts as
+    # having staged it, the same as one that copied it.
+    #
+    # Following a symlink can land on four things. Each is decided here; the
+    # first three are pinned by their own test, the fourth by
+    # `test_symlink_into_an_unsearchable_directory_is_reported`:
+    #   * NEITHER DIRECTORY NOR REGULAR FILE — a broken symlink, but also a
+    #     FIFO, socket or device node. `is_dir()` and `is_file()` both return
+    #     False, so the entry loop skips it and it never reaches `_enqueue`. A
+    #     dangling `foo.lef` is not evidence that `foo` was staged.
+    #   * DIRECTORY LOOP — `_enqueue` keys every directory on the
+    #     `(st_dev, st_ino)` of its followed target, so a self- or
+    #     ancestor-pointing symlink is queued at most once. The entry budget
+    #     bounds the walk even if identity were unavailable.
+    #   * TARGET OUTSIDE THE PROJECT — followed, deliberately. What this
+    #     function returns from a followed target is cell NAMES (file stems,
+    #     and `MACRO <cell>` headers out of `*.lef` bodies); reported event
+    #     paths go through `_rel`, which yields the in-tree path.
+    #   * TARGET THERE BUT NOT STATABLE — `is_dir()` RAISES rather than
+    #     returning False, which is what a symlink into a directory this
+    #     process may not search produces. It becomes an `entry_unreadable`
+    #     event; `test_on_the_unsearchable_shape_the_siblings_do_not_report_
+    #     either` measures what the two sibling readers do on the same shape.
+    #
+    # ORDER IS FAIR-SHARE, NOT DIRECTORY-NAME ORDER. Each pending directory
+    # yields at most `_MEMORY_MACRO_DIR_SLICE` entries and then goes to the
+    # back of the queue, so which directory gets scanned is not decided by its
+    # name. `test_large_sibling_directory_cannot_starve_the_real_macro` drives
+    # the case a plain breadth-first walk loses.
+    #
+    # WHERE THIS SCAN GIVES UP, AND WHAT IT SAYS WHEN IT DOES. An enumeration,
+    # not a guarantee — the reason codes this function emits, each against the
+    # test that drives it:
+    #
+    #   staged_root_unreadable      root `is_dir()` raised
+    #                               <- test_staged_root_symlinked_into_an_
+    #                                  unsearchable_directory_is_reported
+    #   directory_unreadable        `iterdir()` raised
+    #                               <- test_an_unreadable_directory_is_
+    #                                  reported_like_a_cap
+    #   directory_unreadable        `_enqueue` stat raised — TOCTOU ONLY,
+    #                               NOT PINNED; see `_enqueue`
+    #   directory_listing_capped    one listing exceeded the per-dir cap
+    #                               <- test_large_sibling_directory_cannot_
+    #                                  starve_the_real_macro
+    #   entry_unreadable            `is_dir()`/`is_file()` raised
+    #                               <- test_symlink_into_an_unsearchable_
+    #                                  directory_is_reported
+    #   lef_macro_headers_not_read  LEF over the byte cap
+    #                               <- test_oversized_lef_body_is_reported_
+    #                                  and_the_stem_still_counts
+    #   lef_body_unreadable         LEF read (or re-stat) raised
+    #                               <- test_an_unreadable_lef_body_loses_the_
+    #                                  cells_it_abstracts_and_says_so
+    #                                  (the re-stat half is TOCTOU, unpinned)
+    #   entry_budget_exhausted      budget gone with work still queued
+    #                               <- test_exhausted_budget_is_reported_in_
+    #                                  l9_and_on_the_affected_rows
+    #   truncation_report_capped    the report's own bound bit
+    #                               <- test_the_truncation_report_says_when_
+    #                                  it_is_itself_truncated
+    #
+    # Three places deliberately emit NOTHING, because no cell name is lost at
+    # them: an entry whose name carries none of the artefact suffixes
+    # (it names no cell under this convention), an entry that is neither
+    # directory nor regular file (broken symlink / FIFO / socket / device —
+    # nothing is staged there), and `_enqueue` declining a directory identity
+    # it has already walked.
+    #
+    # `test_every_oserror_handler_in_the_scan_reports_or_is_listed_here`
+    # checks the handlers in this function that NAME OSError against the
+    # source; see its docstring for what that check does and does not cover.
+    # ---------------------------------------------------------------------
+    _enqueue(root)
+    budget = _MEMORY_MACRO_MAX_FILES
+    while pending and budget > 0:
+        cursor = pending.pop(0)
+        current, entries, index = cursor
+        if entries is None:
+            try:
+                entries, n_seen = _capped_dir_listing(
+                    current, _MEMORY_MACRO_MAX_DIR_ENTRIES)
+            except OSError as exc:
+                # Not a cap, but the same consequence: evidence this scan
+                # was supposed to read and did not.
+                _note({
+                    "reason": "directory_unreadable",
+                    "path": _rel(current),
+                    "error": type(exc).__name__,
+                })
+                continue
+            if n_seen > len(entries):
+                _note({
+                    "reason": "directory_listing_capped",
+                    "path": _rel(current),
+                    "entries": n_seen,
+                    "cap": _MEMORY_MACRO_MAX_DIR_ENTRIES,
+                })
+            cursor[1] = entries
+        take = min(_MEMORY_MACRO_DIR_SLICE, len(entries) - index, budget)
+        for path in entries[index:index + take]:
+            try:
+                if path.is_dir():
+                    _enqueue(path)
+                    continue
+                if not path.is_file():
+                    # Broken symlink, FIFO, socket, device node.
+                    continue
+            except OSError as exc:
+                # The entry is THERE and the walk could not tell what it is,
+                # so whatever it might have staged is not in `names`.
+                # `is_dir()` / `is_file()` return False for a missing or
+                # non-traversable path rather than raising, so reaching here
+                # means something else — EACCES for
+                # `input/pdk_local/fakeram45 -> <vault>/fakeram45` when
+                # `<vault>` is not searchable. Same consequence as the
+                # unreadable directory above, so it gets the same treatment.
+                _note({
+                    "reason": "entry_unreadable",
+                    "path": _rel(path),
+                    "error": type(exc).__name__,
+                })
+                continue
+            fname = path.name
+            low = fname.lower()
+            stem = ""
+            for suffix in _MEMORY_MACRO_ARTEFACT_SUFFIXES:
+                if low.endswith(suffix) and len(low) > len(suffix):
+                    stem = fname[: len(fname) - len(suffix)]
+                    break
+            if not stem:
+                continue
+            names.add(stem.lower())
+            if low.endswith(".lef"):
+                # A LEF can abstract several cells; read the MACRO headers.
+                # Both failures below keep the STEM (already in `names`) and
+                # lose only the extra cells this LEF may abstract — the same
+                # loss the byte cap causes, so it carries a reason code for
+                # the same reason.
+                try:
+                    size = path.stat().st_size
+                except OSError as exc:
+                    # TOCTOU only: `is_file()` above stat'ed this same path.
+                    # No fixture opens this window; reported, not pinned.
+                    _note({
+                        "reason": "lef_body_unreadable",
+                        "path": _rel(path),
+                        "error": type(exc).__name__,
+                    })
+                    continue
+                if size > _MEMORY_MACRO_MAX_LEF_BYTES:
+                    # The stem above was still recorded; only the additional
+                    # cells this LEF may abstract are lost.
+                    _note({
+                        "reason": "lef_macro_headers_not_read",
+                        "path": _rel(path),
+                        "bytes": size,
+                        "cap": _MEMORY_MACRO_MAX_LEF_BYTES,
+                    })
+                    continue
+                try:
+                    body = path.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    # Reachable without a race: a staged `bundle.lef` whose
+                    # own mode denies read still stats fine, so every cell it
+                    # abstracts beyond its own stem is lost.
+                    _note({
+                        "reason": "lef_body_unreadable",
+                        "path": _rel(path),
+                        "error": type(exc).__name__,
+                    })
+                    continue
+                for m in _MEMORY_MACRO_LEF_DECL_RE.finditer(body):
+                    names.add(m.group(1).lower())
+        index += take
+        budget -= take
+        cursor[2] = index
+        if index < len(entries):
+            # Fair share: unfinished directories go to the BACK of the queue.
+            pending.append(cursor)
+    if pending:
+        # The loop condition is `pending and budget > 0`, so work still
+        # pending here means the budget — not the tree — ended the walk.
+        _note({
+            "reason": "entry_budget_exhausted",
+            "cap": _MEMORY_MACRO_MAX_FILES,
+            "unfinished_dirs": len(pending),
+            "first_unfinished": _rel(pending[0][0]),
+        })
+    if n_events[0] > len(truncation):
+        truncation.append({
+            "reason": "truncation_report_capped",
+            "cap": _MEMORY_MACRO_MAX_TRUNCATION_EVENTS,
+            "events_total": n_events[0],
+        })
+    return frozenset(names), truncation
+
+
+def _staged_macro_cell_names(project) -> frozenset:
+    """The staged cell-name set alone, for callers that only decide promotion
+    and have nowhere to report a truncated scan. `_staged_macro_scan` is the
+    full result; see it for the traversal and symlink policy."""
+    return _staged_macro_scan(project)[0]
+
+
+def _staged_clause_could_have_promoted(entry) -> bool:
+    """True for a REJECTED row that the staged-macro clause could have
+    promoted if the scan had been complete: no structural field, no #612
+    word-boundary token (a row with one is already promoted and never reaches
+    here), and a memory morpheme somewhere in the name — i.e. the row failed
+    on the staged-set membership test and nothing else.
+
+    Used only to decide which candidate rows carry the truncation note, so the
+    note is attached to the rows it can actually be true of."""
+    if not isinstance(entry, dict):
+        return False
+    if any(entry.get(k) for k in ("depth", "width", "port_count")):
+        return False
+    name = entry.get("name")
+    if not name:
+        return False
+    name = str(name)
+    if _MEMORY_NAME_TOKEN_RE.search(name):
+        return False
+    return bool(_MEMORY_NAME_TOKEN_ANYWHERE_RE.search(name))
+
+
+def _is_staged_memory_macro_name(name, staged_macro_names) -> bool:
+    """True iff `name` carries a memory morpheme ANYWHERE **and** the design
+    under analysis actually staged a physical macro under that exact cell name
+    (`staged_macro_names`, as produced by `_staged_macro_cell_names`).
+
+    The staged artefact is the whole of the new evidence. Nothing here
+    inspects `<digits>x<digits>`; see the block comment above for why that
+    token was abandoned, and the RESIDUAL there for what the surviving
+    morpheme conjunct still lets through.
+
+    Says NOTHING about which number in the name is depth and which is width —
+    this predicate only decides PROMOTION. depth/width stay None and the entry
+    keeps its `low_confidence` marker."""
+    if not name or not staged_macro_names:
+        return False
+    name = str(name)
+    if not _MEMORY_NAME_TOKEN_ANYWHERE_RE.search(name):
+        return False
+    return name.lower() in staged_macro_names
+
+
+def _v1_6_441_is_useful_memory_entry(entry, staged_macro_names=None) -> bool:
     """Return True iff the memory entry carries genuine macro evidence.
 
     Structural fields (depth / width / port_count) are the primary signal —
@@ -41526,13 +46514,67 @@ def _v1_6_441_is_useful_memory_entry(entry) -> bool:
     I/O pin, an UPPER_SNAKE EDA config key (FP_CORE_UTIL / PL_TARGET_DENSITY /
     WITH_CSR / *_PC), or a PDK/FPGA platform token (GF180MCU / Cyclone10LP /
     sky130_fd_sc_hd). Those go to memory_candidates[], never memories[].
-    Chip-AGNOSTIC: pure structural / name-shape gate."""
+
+    A SECOND, NARROWER name-only clause admits macro cell names whose morpheme
+    is interior and therefore invisible to the #612 word-boundary test
+    (`fakeram45_2048x39`). It fires only when the design under analysis staged
+    a physical macro under that exact cell name — see
+    `_is_staged_memory_macro_name`, and the block comment above it.
+
+    `staged_macro_names` defaults to None — no corroboration available — in
+    which case the second clause is inert, which is the fail-SAFE answer for a
+    caller that cannot supply the design's staged-macro set.
+
+    Chip-AGNOSTIC: structural fields, name-token shape, and the design's own
+    staged LEF / Liberty / GDS artefacts."""
     if not isinstance(entry, dict):
         return False
     if any(entry.get(k) for k in ("depth", "width", "port_count")):
         return True
     name = entry.get("name")
-    return bool(name and _MEMORY_NAME_TOKEN_RE.search(str(name)))
+    if name and _MEMORY_NAME_TOKEN_RE.search(str(name)):
+        return True
+    return _is_staged_memory_macro_name(name, staged_macro_names)
+
+
+def _organic_405_mark_rejected(entry: dict) -> dict:
+    """ORGANIC #405 — a REJECTED bare-keyword row is provenance, not evidence.
+
+    `memory_candidates[]` is the reject bucket (#317 P3): every row in it is
+    one `_v1_6_441_is_useful_memory_entry` turned away. Those rows carried
+    `"low_confidence": true`, and `flow_compliance_check._STUB_TAG_RE` greps
+    the raw bytes of every evidence file for exactly that token and reads a
+    hit as DEFERRED work — so the step's PASS is downgraded to WAIVED.
+
+    Two different facts were sharing one token:
+        "we have evidence, and we are not confident in it"   -> deferred work
+        "we saw a bare keyword and REJECTED it"              -> provenance
+    Only the first is deferred work. The second is the walker doing its job,
+    and it was costing clean ingestions their verdict.
+
+    MEASURED over every committed L9 spec in this repo: 57 of 89
+    `memory_candidates` rows have name, depth, width AND port_count all null.
+    The opentitan_aes one is mined from a paragraph explaining why the block
+    does NOT use a FIFO ("Compared to first-in, first-out (FIFO) interfaces,
+    having separate registers has a couple of advantages...").
+
+    The row is KEPT — deleting it would throw away the provenance #317 added
+    on purpose, and "the walker found nothing" and "the walker found a phrase
+    and rejected it" are different facts a reader must be able to tell apart.
+    Only the misread flag is renamed. Chip-AGNOSTIC: no design content is
+    inspected.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    out = dict(entry)
+    out.pop("low_confidence", None)
+    out["rejected_low_information"] = True
+    out.setdefault(
+        "rejection_reason",
+        "bare-keyword prose match with no structural evidence "
+        "(depth/width/port_count absent and the name carries no memory "
+        "token) — recorded as provenance, NOT as deferred work")
+    return out
 
 
 def _v1_6_453_sync_no_memories_flag(l9: dict) -> None:
@@ -42213,12 +47255,30 @@ def _v1_6_511_emit_instantiation_template(
     l9["no_internal_wires_in_input"] = no_iw_flag
 
 
-def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
+def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
     """v1.6.426 — for #303 P2 ORGANIC. Walk all input_doc/*.txt
     bodies, run the memory prose walker, dedupe across files, and
     populate `l9["memories"]`. Also stamps the `no_memories_in_input`
     sentinel so downstream gates can distinguish "input has no memory
     prose" from "field missing — schema regression".
+
+    `project` is the design root. It is read ONLY to collect the cell
+    names the design staged under `input/pdk_local/**` (LEF / Liberty /
+    GDS / behavioural model), which is what the promotion gate uses to
+    corroborate a macro cell name. Symlinks under that directory are
+    followed, so the read can reach outside the project when the design
+    staged its IP that way — see `_staged_macro_scan` for the policy.
+    Optional and fail-SAFE: when omitted, or when the design stages no
+    macros, the staged set is empty and the corroborated clause cannot
+    fire.
+
+    When that scan reports a shortfall, this emitter writes it to
+    three places: `L9.staged_macro_scan_truncated` (the reason codes),
+    a `[WARN]` on stderr, and `staged_macro_scan:
+    "truncated:input/pdk_local"` on each `memory_candidates[]` row that
+    failed ONLY the staged-set test. What the scan reports is
+    enumerated in the block comment inside `_staged_macro_scan`; that
+    enumeration, not this docstring, is the statement about coverage.
 
     v1.6.441 — for #317 P3 ORGANIC. Reject bare-keyword null rows
     (name/depth/width all None) at emit time. Rejected rows are
@@ -42258,6 +47318,11 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
     # emitter has not yet stamped top_module — the cascade then
     # only applies tiers 2-4 (ISA-ext / shape-gate / noun-deny).
     l9_top_module = l9.get("top_module") if isinstance(l9, dict) else None
+    # Corroboration from OUTSIDE the document prose: the cell names this
+    # design actually staged as physical macros. Collected once per emit.
+    # `staged_scan_cut` is empty on a complete scan and carries reason
+    # codes when a cap stopped it short — see the report block below.
+    staged_macro_names, staged_scan_cut = _staged_macro_scan(project)
     if isinstance(extracted, dict):
         for fname, body in extracted.items():
             if not body or not isinstance(body, str):
@@ -42275,11 +47340,35 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
                     continue
                 seen.add(key)
                 # v1.6.441 — for #317 P3. Null-row gate.
-                if _v1_6_441_is_useful_memory_entry(entry):
+                if _v1_6_441_is_useful_memory_entry(
+                        entry, staged_macro_names):
+                    # Provenance: record when the row owes its promotion to
+                    # a staged physical macro rather than to its own name
+                    # shape, so a reader can trace the evidence back to the
+                    # artefact on disk.
+                    if (not any(entry.get(k) for k in
+                                ("depth", "width", "port_count"))
+                            and not _MEMORY_NAME_TOKEN_RE.search(
+                                str(entry.get("name") or ""))):
+                        entry["promotion_evidence"] = (
+                            "staged_macro_artifact:input/pdk_local")
                     aggregated.append(entry)
                 else:
                     if len(rejected) < 32:
-                        rejected.append(entry)
+                        # ORGANIC #405 marks the row as provenance rather
+                        # than deferred work, and returns a COPY; stamp the
+                        # copy, which is the object that reaches L9.
+                        row = _organic_405_mark_rejected(entry)
+                        # Observable truncation, at the row where the loss
+                        # lands. This row failed ONLY the staged-set
+                        # membership test, and the scan that built that set
+                        # did not finish, so its absence from `memories[]`
+                        # is not a finding about the design.
+                        if (staged_scan_cut
+                                and _staged_clause_could_have_promoted(row)):
+                            row["staged_macro_scan"] = (
+                                "truncated:input/pdk_local")
+                        rejected.append(row)
                     continue
                 if len(aggregated) >= 32:
                     break
@@ -42292,6 +47381,49 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
     # bare-keyword mentions" from "field missing — schema regression".
     l9["memory_candidates"] = rejected
     l9["no_memory_candidates_in_input"] = len(rejected) == 0
+    # MAKE THE TRUNCATION OBSERVABLE.
+    #
+    # A truncated scan is fail-SAFE in direction — a smaller staged set can
+    # only lose a promotion, not invent one — but a lost promotion nobody can
+    # see is the defect this change exists to fix, wearing a cap: `memories`
+    # comes back EMPTY and nothing in the output says why. The shape of the
+    # report is borrowed from the one this module already uses for a silent
+    # drop (`extract_text_pipeline`, v1.6.93 / issue #26): a stderr WARN plus
+    # a reason-coded record. Three places:
+    #
+    #   * stderr `[WARN]`, while the run is happening;
+    #   * `L9.staged_macro_scan_truncated` — reason codes, in the document
+    #     this emitter OWNS and that Phase 2, `l9_floorplan_contract_check`
+    #     and a human reviewer all read;
+    #   * `staged_macro_scan` on the affected `memory_candidates[]` rows
+    #     (stamped above), so the shortfall is legible from the row where it
+    #     landed rather than only from a sibling key.
+    #
+    # Emitted ONLY when something was actually cut: a complete scan adds no
+    # key. The text emitted here carries no `low_confidence` /
+    # `deterministic_stub` tag, so it does not read as deferred work — the
+    # confusion ORGANIC #405 had just untangled.
+    if staged_scan_cut:
+        l9["staged_macro_scan_truncated"] = {
+            "_comment": (
+                "The input/pdk_local/** scan that corroborates a "
+                "generator-emitted memory-macro cell name did NOT finish. "
+                "A memory_candidates[] row marked "
+                "staged_macro_scan=truncated:input/pdk_local may be a real "
+                "staged macro this scan never reached — verify by hand."),
+            "root": "input/pdk_local",
+            "events": staged_scan_cut,
+            "candidate_rows_affected": sum(
+                1 for e in rejected
+                if isinstance(e, dict)
+                and e.get("staged_macro_scan") == "truncated:input/pdk_local"),
+        }
+        print("[WARN] staged-macro scan under input/pdk_local was truncated "
+              "(%s); a memory macro may be missing from L9.memories[] — see "
+              "L9.staged_macro_scan_truncated"
+              % ", ".join(sorted({str(e.get("reason"))
+                                  for e in staged_scan_cut})),
+              file=sys.stderr)
     # v1.6.453 — for #327 P3 ORGANIC. Recompute the
     # `no_memories_in_input` flag from BOTH `memories` and
     # `memory_candidates` so the boolean is consistent with the
@@ -42428,9 +47560,7 @@ def _v1_6_403_post_emit_mirror_analog_multiplicity(
         after = len(l9.get("submodules") or []) if isinstance(l9, dict) else 0
         if n > 0 and after > before:
             try:
-                l9p.write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l9p, l9)
             except Exception:
                 return 0
         return n
@@ -42531,6 +47661,29 @@ def _v1_6_581_route_l1_fallback_top_module(
     strategy = l9.get("top_module_extraction_strategy") or ""
     if strategy != "l1_ic_name_fallback":
         return False
+    # The fallback FIRED, so by construction no `module <name>(...)`
+    # declaration was found in the input — `top_module` is a
+    # Verilog-sanitised copy of `L1.ic_name`, not an extracted
+    # identifier. That fact is a property of the STRATEGY and is
+    # independent of where the PINS came from, so the honest flag is
+    # stamped here, BEFORE the pin-preservation early return below.
+    #
+    # Previously the `promoted_from_l1` guard returned before this
+    # line, on the stated assumption that "the honest top-module flag
+    # still applies via the normal no_top_module path". MEASURED: it
+    # does not. That path is
+    #     no_top_module_in_input = _flag_no_X_in_input(
+    #         top_module if not top_module_default_applied else None, …)
+    # and `_flag_no_X_in_input` returns False as soon as the value it
+    # is handed is non-empty. On this branch `top_module` is non-empty
+    # BY CONSTRUCTION, so the flag was pinned to False in exactly the
+    # case it exists to report. A design whose docs never name a top
+    # module then shipped `no_top_module_in_input: false` alongside
+    # `top_module_extraction_strategy: l1_ic_name_fallback` — the
+    # strategy stamp and the flag contradicting each other in the same
+    # record, with every downstream L9-vs-RTL consumer reading the flag.
+    # Chip-AGNOSTIC: provenance-based, no chip-class literal.
+    l9["no_top_module_in_input"] = True
     # Real L1.pin_table promotion → pins are genuine, not a
     # fabricated superset-union. Do NOT clear them.
     if promoted_from_l1:
@@ -42538,7 +47691,6 @@ def _v1_6_581_route_l1_fallback_top_module(
     # Mark + clear. Keep `top_module` (= L1.ic_name) as the
     # tentative label; downstream MUST check
     # `no_top_module_in_input` before relying on top_module_pins.
-    l9["no_top_module_in_input"] = True
     # Clear all three aliases consistently so any consumer that
     # reads `ports` / `top_ports` / `top_module_pins` sees the
     # cleared list.
@@ -42785,23 +47937,6 @@ def gen_l9_integration_spec(project: Path,
     # and `regfile` that are real submodules but lack underscore /
     # digit / stem). Keep length floor + table-header deny + verb
     # deny + vowel-consonant check — they remain valid here.
-    def _is_bullet_submodule_name(nm: str) -> bool:
-        if not isinstance(nm, str):
-            return False
-        nm = nm.strip()
-        if len(nm) < 3:
-            return False
-        if nm.lower() in _DOC_TABLE_HEADER_TOKENS:
-            return False
-        if nm.lower() in _COMMON_ENGLISH_VERB_TOKENS:
-            return False
-        # vowel + consonant for bare-alphabetic names
-        if not any(c.isdigit() or c == "_" for c in nm):
-            has_v = any(c.lower() in "aeiou" for c in nm)
-            has_c = any(c.lower() in "bcdfghjklmnpqrstvwxyz" for c in nm)
-            if not (has_v and has_c):
-                return False
-        return True
     # v1.6.415 — for #297 P2. DSL-class submodule provenance counter.
     _v1_6_415_dsl_class_filtered = 0
     for fname, text in extracted.items():
@@ -43302,6 +48437,13 @@ def gen_l9_integration_spec(project: Path,
                  if isinstance(l6_doc, dict) else None) or []
     l6_pipeline_stages = ((l6_doc or {}).get("pipeline_stages")
                           if isinstance(l6_doc, dict) else None) or []
+    # v1.7.74 — for #505. Per-machine grouping mirrored verbatim from L6;
+    # L9 derives no grouping of its own.
+    _l6_fsm_machines_mirror = [
+        m for m in (((l6_doc or {}).get("fsm_machines")
+                     if isinstance(l6_doc, dict) else None) or [])
+        if isinstance(m, dict)
+    ]
     # Legacy-fallback split — if L6 was written before v1.6.436 it may
     # still concatenate pipeline stages into fsm_states. Re-partition
     # by source_kind tag here so L9 stays clean.
@@ -43329,13 +48471,27 @@ def gen_l9_integration_spec(project: Path,
         _l6_pipeline_union.append(s)
     if _l6_fsm_clean:
         # v1.6.84 (#16 audit-sweep): transitions may be present-but-null.
-        fsm_states_summary = [
-            {"name": s.get("name"),
-             "transitions": s.get("transitions") or [],
-             "evidence": (s.get("evidence")
-                          or "promoted from L6.fsm_states")}
-            for s in _l6_fsm_clean[:32] if isinstance(s, dict) and s.get("name")
-        ]
+        # v1.7.74 — for #505. Carry the state's machine attribution
+        # across the mirror. Without it L9 re-flattens states belonging
+        # to different machines into one set, and every state-coverage /
+        # transition-completeness consumer downstream inherits the wrong
+        # denominator again. Additive keys, emitted only when L6 has
+        # them, so pre-v1.7.74 L6 inputs mirror byte-identically.
+        fsm_states_summary = []
+        for s in _l6_fsm_clean[:32]:
+            if not isinstance(s, dict) or not s.get("name"):
+                continue
+            _row: Dict[str, Any] = {
+                "name": s.get("name"),
+                "transitions": s.get("transitions") or [],
+                "evidence": (s.get("evidence")
+                             or "promoted from L6.fsm_states"),
+            }
+            if s.get("fsm_machine"):
+                _row["fsm_machine"] = s.get("fsm_machine")
+            if s.get("declared_type"):
+                _row["declared_type"] = s.get("declared_type")
+            fsm_states_summary.append(_row)
     else:
         # v1.6.79 — closes issue #12 cross-IC fingerprint follow-up.
         # The previous fallback emitted an 8-state AID-class FSM
@@ -43448,6 +48604,90 @@ def gen_l9_integration_spec(project: Path,
                     break
         if top_module:
             break
+    # === THE STAGED RTL TREE WAS INVISIBLE TO PHASE 1 ===
+    #
+    # The scan above needs BOTH a directory named `input/rtl/` or `rtl/` AND a
+    # file named chip_top/top/dut. A Path-A run stages its sources under
+    # `input/design_src/`, which matches neither. `grep -n design_src` over this
+    # file returns NOTHING: the staged RTL tree is read only by Phase 2
+    # (`design_one_shot_runner`, `reused_ip_rtl_consume`, `floorplan_contract`),
+    # so Phase 1 infers the top module from prose while the `module`
+    # declaration sits unread in the run's own input tree.
+    #
+    # MEASURED (caravel_user_project x sky130A, v1.9.71):
+    #     input/design_src/verilog/rtl/user_project_wrapper.v:32
+    #         module user_project_wrapper #(
+    #     L9_INTEGRATION_SPEC.json
+    #         "top_module": "caravel_user_project",
+    #         "top_module_extraction_strategy": "l1_ic_name_fallback",
+    #         "no_top_module_in_input": false
+    # The weak last-resort fallback hashed the PRODUCT name into a module that
+    # exists nowhere, while recording that the input DID name a top. The run
+    # only synthesized the right cell because `--top-name` was passed on the
+    # command line; without it that name goes into Phase 2.
+    #
+    # WHY A STRUCTURAL RULE AND NOT MORE FILENAMES. `top.v` is a convention, and
+    # a convention that has already failed once here. The top of an RTL tree has
+    # a definition that needs no convention: it is DECLARED and no other module
+    # in the same tree INSTANTIATES it. That is what is computed below.
+    #
+    # FAIL-OPEN BY CONSTRUCTION. The answer is taken ONLY when exactly one
+    # declared module is uninstantiated. Zero (every module instantiated —
+    # a cyclic or partial tree) or several (testbenches, sibling tops, an
+    # unpruned staging set) falls through to the existing cascade unchanged, so
+    # this can add a top module where there was none but can never replace a
+    # confidently-extracted one with a guess. chip-AGNOSTIC: Verilog tokens only.
+    if top_module is None:
+        _src_root = project / "input" / "design_src"
+        if _src_root.is_dir():
+            _decl: Dict[str, int] = {}
+            _inst: set = set()
+            _mod_re = re.compile(
+                r"^\s*module\s+([A-Za-z_][A-Za-z0-9_]{0,63})", re.MULTILINE)
+            # `<master> <instance> (` / `<master> #(...) <instance> (` — the two
+            # Verilog instantiation forms. Anchored at line start so a bare
+            # identifier inside an expression cannot look like an instance.
+            _inst_re = re.compile(
+                r"^\s*([A-Za-z_][A-Za-z0-9_]{0,63})\s*"
+                r"(?:#\s*\([^;]*?\)\s*)?"
+                r"([A-Za-z_][A-Za-z0-9_]{0,63})\s*\(",
+                re.MULTILINE | re.DOTALL)
+            _KEYWORDS = {
+                "module", "endmodule", "input", "output", "inout", "wire",
+                "reg", "logic", "assign", "always", "always_ff", "always_comb",
+                "always_latch", "initial", "generate", "endgenerate", "if",
+                "else", "case", "casex", "casez", "endcase", "for", "while",
+                "function", "endfunction", "task", "endtask", "begin", "end",
+                "parameter", "localparam", "define", "include", "timescale",
+                "ifdef", "ifndef", "endif", "default", "posedge", "negedge",
+                "return", "typedef", "struct", "package", "endpackage",
+            }
+            try:
+                _files = [p for p in sorted(_src_root.rglob("*"))
+                          if p.is_file() and p.suffix.lower() in (".v", ".sv")]
+            except OSError:
+                _files = []
+            for _f in _files:
+                try:
+                    _txt = _f.read_text(errors="ignore")
+                except OSError:
+                    continue
+                # Strip comments before either scan — a commented-out
+                # instantiation must not make a real top look instantiated.
+                _txt = re.sub(r"//[^\n]*", " ", _txt)
+                _txt = re.sub(r"/\*.*?\*/", " ", _txt, flags=re.DOTALL)
+                for _m in _mod_re.finditer(_txt):
+                    _decl.setdefault(_m.group(1), 0)
+                for _m in _inst_re.finditer(_txt):
+                    _master, _inst_name = _m.group(1), _m.group(2)
+                    if (_master in _KEYWORDS or _inst_name in _KEYWORDS
+                            or _master.startswith("`")):
+                        continue
+                    _inst.add(_master)
+            _roots = sorted(n for n in _decl if n not in _inst)
+            if len(_roots) == 1:
+                top_module = _roots[0]
+                top_module_extraction_strategy = "staged_rtl_structural_top"
     # v1.6.273 — for #135 ORGANIC. Doc-side top-module fallback chain.
     # Pre-v1.6.273 the only extractor scanned `input/rtl/` for module
     # declarations; doc-only Phase 1 (doc-extraction) inputs always emitted the sentinel
@@ -43516,11 +48756,7 @@ def gen_l9_integration_spec(project: Path,
                                 )
                                 _v1_6_545_l1[
                                     "no_tapeout_metadata_in_input"] = False
-                                _v1_6_545_l1_path.write_text(
-                                    json.dumps(
-                                        _v1_6_545_l1, indent=2,
-                                        ensure_ascii=False) + "\n",
-                                    encoding="utf-8")
+                                _stamp.dump(_v1_6_545_l1_path, _v1_6_545_l1)
                     except Exception:
                         pass
     if top_module is None:
@@ -43623,11 +48859,7 @@ def gen_l9_integration_spec(project: Path,
                         _v1_6_398_l1["no_tapeout_metadata_in_input"] = (
                             False
                         )
-                        _v1_6_398_l1_path.write_text(
-                            json.dumps(
-                                _v1_6_398_l1, indent=2,
-                                ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(_v1_6_398_l1_path, _v1_6_398_l1)
             except Exception:
                 pass
     # v1.6.405 — for #294 P2: when v1.6.398 returned None too (or did
@@ -43674,11 +48906,7 @@ def gen_l9_integration_spec(project: Path,
                         _v1_6_405_l1["no_tapeout_metadata_in_input"] = (
                             False
                         )
-                        _v1_6_405_l1_path.write_text(
-                            json.dumps(
-                                _v1_6_405_l1, indent=2,
-                                ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(_v1_6_405_l1_path, _v1_6_405_l1)
             except Exception:
                 pass
     # v1.6.189 (#76 P1) — fall back to the runner's canonical
@@ -44023,6 +49251,13 @@ def gen_l9_integration_spec(project: Path,
         "sim_only_modules": sim_only_modules,
         "fsm_states": fsm_states_summary,
         "no_fsm_states_in_input": no_fsm_states_in_input,
+        # v1.7.74 — for #505. Mirror of L6.fsm_machines[]: which machine
+        # each mirrored state belongs to and whether that machine was
+        # DECLARED by an HDL `typedef enum` (closed member set) or
+        # inferred from a document (lower bound). A state-coverage
+        # consumer needs this to pick the right denominator.
+        "fsm_machines": _l6_fsm_machines_mirror,
+        "fsm_machine_count": len(_l6_fsm_machines_mirror),
         # v1.6.436 — for #312 P2 ORGANIC. Pipeline stages mirrored from
         # L6.pipeline_stages so downstream UVM/SVA/state-cover does NOT
         # see IF/ID/EX/MEM/WB as state-encoded enum entries.
@@ -44091,7 +49326,10 @@ def gen_l9_integration_spec(project: Path,
     # RAM / ROM / cache / register-file blocks. Chip-AGNOSTIC: pure
     # regex over open-standard memory naming prose; no chip-class
     # string literal participates.
-    _v1_6_426_emit_memories(content, extracted)
+    # `project` is threaded in so the promotion gate can corroborate a
+    # generator-emitted macro cell name against the design's own staged
+    # LEF / Liberty / GDS under `input/pdk_local/`.
+    _v1_6_426_emit_memories(content, extracted, project)
     # v1.6.509 — for #351 P2 ORGANIC. Populate L9.memory_map[] by
     # walking Markdown / AsciiDoc / RST pipe-table address-range
     # rows (`| 0xSTART .. 0xEND | <region> |`). Pre-v1.6.509 the
@@ -44363,7 +49601,62 @@ def _harvest_bring_up_sequence_from_paragraph(
 # verification-plan markdown table in the INPUT docs (NO RTL oracle), keyed on
 # bilingual column SEMANTICS (test/expected/input), never on chip literals.
 _L10_TC_TEST_COL = re.compile(
-    r'(?i)測試|\btest\b|vector|向量|scenario|情境|firmware|韌體|\bcase\b|案例|類別')
+    r'(?i)測試|\btests?\b|vector|向量|scenario|情境|firmware|韌體|\bcase\b|案例|類別')
+
+# ORGANIC — `- <field>:` TABLE-LABEL recovery. Measured on cell
+# sha256 x gf180mcuD (plugin 1.5.85).
+#
+# DEFECT: `phase1_dialogue_render._bullets()` renders EVERY record list as
+#     - <field_name>:
+#     <blank>
+#     | <union of the record's own keys> |
+#     | --- | --- |
+#     | ...data rows... |
+# because `_table()` builds the header row from the RECORD's keys. So the
+# field name — `test_vectors`, `negative_tests`, `opcodes`, `submodules`,
+# `behavioral_sequences`, … — the ONE token that identifies what the table
+# IS, appears ONLY in the label line and NEVER in the header row. Every
+# table harvester keyed solely on the header row, so a record list whose
+# per-record keys did not happen to carry the harvester's vocabulary was
+# silently dropped, after which the emitter wrote a FALSE
+# `no_<X>_in_input: true` — a positive claim about the INPUT that the input
+# contradicts.
+#
+# Measured instance: L10.test_vectors (4 rows, header
+# `id|name|source|command|block_hex|expected_digest_hex`) and
+# L10.negative_tests (4 rows, header `id|name|stimulus|expected`) both
+# carry NO test/vector/case token in the header, so both were dropped and
+# L10_TEST_CASES.json emitted `test_cases: []` + `no_test_cases_in_input:
+# true` — collapsing Step-4 functional verification to a connectivity-only
+# skeleton for a design whose input shipped three FIPS 180-4 golden digests.
+#
+# FIX: treat the `- <field>:` label immediately above a table as part of
+# that table's identifying semantics. chip-AGNOSTIC: pure markdown
+# structure; no chip name, field name, or value literal is hardcoded.
+_TABLE_LABEL_RE = re.compile(r'^\s*[-*]\s*([A-Za-z0-9_.]+)\s*:\s*$')
+
+
+def _preceding_table_label(lines: List[str], hdr_idx: int) -> str:
+    """Return the `- <field>:` label owning the table whose header row is at
+    ``lines[hdr_idx]`` (blank lines between label and table are allowed), or
+    '' when the table has no such label.
+
+    BOUNDED look-back. The renderer emits the table immediately under its
+    label, so a hand-written doc's stray blank lines are tolerated but a
+    label more than 3 lines above the header row belongs to a DIFFERENT
+    block and must not be claimed. The bound is a distance test and nothing
+    else: with the same lines and no prose in between, a label 3 lines up IS
+    claimed and one 4 lines up is NOT (see
+    `test_lookback_bound_is_the_deciding_branch`)."""
+    j = hdr_idx - 1
+    while j >= 0 and not lines[j].strip():
+        if hdr_idx - j > 3:
+            return ""
+        j -= 1
+    if j < 0:
+        return ""
+    m = _TABLE_LABEL_RE.match(lines[j])
+    return m.group(1).replace('_', ' ').replace('.', ' ') if m else ""
 _L10_TC_EXP_COL = re.compile(
     r'(?i)預期|expect|golden|digest|\bresult\b|結果|判定|pass|必過')
 _L10_TC_IN_COL = re.compile(
@@ -44390,11 +49683,38 @@ def _harvest_test_cases_from_input_tables(
                 hdr = [c.strip() for c in line.strip().strip('|').split('|')]
                 sep = lines[i + 1].strip()
                 is_sep = bool(sep) and set(sep) <= set('|-: ') and '-' in sep
+                # ORGANIC — the `- <field>:` label above the table is part
+                # of the table's identifying semantics (see
+                # _preceding_table_label). Without it a rendered
+                # `L10.test_vectors` record list is invisible here, because
+                # `_table()` builds the header from the record's own keys
+                # and the field name never reaches the header row.
                 hjoin = ' '.join(hdr)
-                if (len(hdr) >= 2 and is_sep
-                        and _L10_TC_TEST_COL.search(hjoin)
-                        and (_L10_TC_EXP_COL.search(hjoin)
-                             or _L10_TC_IN_COL.search(hjoin))):
+                label = _preceding_table_label(lines, i)
+                hsem = hjoin + ' ' + label
+                # LEGACY path, byte-identical to the pre-label predicate:
+                # the HEADER ROW alone already carries the vocabulary.
+                by_header = bool(
+                    _L10_TC_TEST_COL.search(hjoin)
+                    and (_L10_TC_EXP_COL.search(hjoin)
+                         or _L10_TC_IN_COL.search(hjoin)))
+                # WIDENED path — the label may supply the test-ness, but it
+                # may NOT supply the whole predicate on its own. Accepting
+                # the label alone admitted a bench-instrument list
+                # (`- <x>_equipment:` over instrument|model|input), an
+                # ownership matrix (name|input|owner) and a build-artifact
+                # list (name|source|size) as L10 functional cases, because a
+                # single label token could satisfy BOTH halves at once. The
+                # HEADER ROW must corroborate, and specifically with an
+                # ORACLE column: a harvested case whose golden value has no
+                # column to come from is an oracle with no answer, which is
+                # the same rubber stamp as no case at all. An input-only
+                # column is NOT corroboration — every table has inputs.
+                by_label = bool(
+                    label
+                    and _L10_TC_TEST_COL.search(hsem)
+                    and _L10_TC_EXP_COL.search(hjoin))
+                if len(hdr) >= 2 and is_sep and (by_header or by_label):
                     j = i + 2
                     while j < n and '|' in lines[j]:
                         cells = [c.strip()
@@ -44415,15 +49735,88 @@ def _harvest_test_cases_from_input_tables(
                         if name in seen:
                             continue
                         seen.add(name)
-                        last = re.sub(r'[`*]', '', cells[-1]).strip()
-                        out.append({
+                        # ORGANIC — pick the expected cell by HEADER
+                        # SEMANTICS, not by position. Taking cells[-1]
+                        # silently drops the golden value whenever the table
+                        # carries a TRAILING COMMENTARY column: a header of
+                        # the shape `...|expected_<x>|note` with `note` left
+                        # EMPTY on most rows makes every golden value collapse
+                        # to "". A test case whose `expected` is blank is an
+                        # oracle with no answer — it cannot fail, which is the
+                        # same rubber stamp as having no test at all. See the
+                        # `_preceding_table_label` note above for the measured
+                        # instance. Positional fallback is retained for tables
+                        # whose header carries no `expected`-class column.
+                        exp_i = next(
+                            (ci for ci, h in enumerate(hdr)
+                             if ci < len(cells)
+                             and _L10_TC_EXP_COL.search(h.replace('_', ' '))),
+                            None)
+                        last = re.sub(
+                            r'[`*]', '',
+                            cells[exp_i] if exp_i is not None else cells[-1]
+                        ).strip()
+                        # GATEKEEPER (Step-2.7 on this change): when the header
+                        # NAMED an oracle column and that cell is EMPTY on this
+                        # row, the input simply carries no golden value here.
+                        # Falling back to `cells[-1]` then lifts the trailing
+                        # COMMENTARY cell into `expected` — measured: a `note`
+                        # of "TBD" became the golden value — which is the same
+                        # defect this change exists to remove, inverted: a blank
+                        # oracle can never FAIL, a fabricated one can never
+                        # PASS, and a false FAIL is exactly what sends someone
+                        # to fix a design that is not broken. So: never
+                        # fabricate. Keep the row (dropping it silently would
+                        # re-create the false `no_test_cases_in_input`) and mark
+                        # the absence so it is visible to any consumer instead
+                        # of masquerading as a graded case.
+                        _oracle_absent = bool(exp_i is not None and not last)
+                        # ORGANIC — the STIMULUS cell was picked purely
+                        # POSITIONALLY (`cells[1]` on any >=3-column table)
+                        # while `expected` is picked by HEADER SEMANTICS. On
+                        # every table whose oracle column happens to sit at
+                        # index 1 — e.g. `| test firmware | expected | covers |`
+                        # — those two resolve to the SAME cell, so the emitted
+                        # case restates its own stimulus as its golden value.
+                        # `l10_test_case_oracle_anchor_check` correctly calls
+                        # that EXPECTED_RESTATES_STIMULUS: a comparison of a
+                        # value against itself is trivially true, so the
+                        # generated testbench can never fail. Measured on a
+                        # CPU cell: 2 of 10 harvested cases were this shape,
+                        # and the source table was WELL-FORMED — the stimulus
+                        # (the firmware name) sat in column 0 all along.
+                        # Resolve by header semantics, and ONLY when the
+                        # positional pick collides with the oracle column, so
+                        # every table that was already correct is byte-identical.
+                        _stim_i = 1 if len(cells) >= 3 else 0
+                        if exp_i is not None and _stim_i == exp_i:
+                            _stim_i = next(
+                                (ci for ci, h in enumerate(hdr)
+                                 if ci < len(cells) and ci != exp_i
+                                 and _L10_TC_IN_COL.search(h.replace('_', ' '))),
+                                None)
+                            if _stim_i is None:
+                                _stim_i = next(
+                                    (ci for ci, h in enumerate(hdr)
+                                     if ci < len(cells) and ci != exp_i
+                                     and _L10_TC_TEST_COL.search(
+                                         h.replace('_', ' '))),
+                                    None)
+                            if _stim_i is None:
+                                _stim_i = 0 if exp_i != 0 else min(
+                                    1, len(cells) - 1)
+                        _case = {
                             "name": name,
                             "kind": "functional_vector",
-                            "stimulus": cells[1] if len(cells) >= 3 else cells[0],
+                            "stimulus": re.sub(
+                                r'[`*]', '', cells[_stim_i]).strip(),
                             "expected": last,
                             "evidence": (f"input/docs/{fname} "
                                          "(verification-plan table)"),
-                        })
+                        }
+                        if _oracle_absent:
+                            _case["oracle_absent"] = True
+                        out.append(_case)
                         if len(out) >= 24:
                             return out
                     i = j
@@ -44443,6 +49836,22 @@ def gen_l10_test_cases(project: Path,
     opcodes = l3.get("opcodes") or []
     addr_max = l3.get("addr_max")
     len_max = l3.get("len_max")
+    # A `pre_wake_false` case ("host sends opcode after POR with no preceding
+    # wake pulse -> DUT silent") asserts a WAKE-PULSE / command-response
+    # protocol. That protocol exists only when opcode synthesis was ENABLED by
+    # real half-duplex / command-table evidence. When the L3 records
+    # `opcode_synthesis_skipped_reason` (no half-duplex declared AND no
+    # command-table heading in input/docs), the opcodes were admitted SOLELY
+    # from an HDL `typedef enum` harvest (hdl_typedef_enum_opcode_v1_7_72) --
+    # i.e. the design's own ISA opcode table, NOT a wire command set. Such a
+    # design (e.g. a processor_cpu core) has no wake pulse and no response
+    # frame, so a pre-wake negative case is a category error: it fabricates a
+    # requirement the design does not have and hard-FAILs l10_tb_conformance's
+    # non-waivable "declared-silence" arm. chip-AGNOSTIC: gated on the L3's own
+    # opcode_synthesis_skipped_reason, never a chip/vendor/SKU literal. A real
+    # command-driven IC has opcode_synthesis_enabled -> no skip reason -> its
+    # pre_wake_false cases are still emitted and still FAIL without a TB.
+    _no_wake_protocol = bool(l3.get("opcode_synthesis_skipped_reason"))
     for op in opcodes[:24]:
         if not isinstance(op, dict) or op.get("hex") == "__TODO__":
             continue
@@ -44471,8 +49880,9 @@ def gen_l10_test_cases(project: Path,
         # a `pre_wake_false` (negative pre-wake) case per opcode that does
         # NOT carry pre_wake_allowed=true. The gate is chip-AGNOSTIC: any
         # opcode-class IC needs a "send opcode without prior wake → DUT
-        # silent" assertion in L10.
-        if not op.get("pre_wake_allowed"):
+        # silent" assertion in L10 -- BUT ONLY when a wake protocol exists
+        # (opcode synthesis enabled). See `_no_wake_protocol` above.
+        if not op.get("pre_wake_allowed") and not _no_wake_protocol:
             cases.append({
                 "name": f"send_{op.get('name','OP').lower()}_no_wake",
                 "kind": "pre_wake_false",
@@ -45497,7 +50907,84 @@ def emit_coverage_report(project: Path,
     except Exception:
         vendor_tokens = denom
 
+    # v1.7.72 — for #499 defect 4. The denominator above is built from
+    # `input_doc/*.txt`, i.e. from documents that EXTRACTED. A document
+    # the ingester visited and could not render contributes nothing to
+    # the numerator and nothing to the denominator, so it cannot lower
+    # the percentage: measured on a real design, this report said
+    # `254/254 = 100.0%` while a 21 KB document the design's own brief
+    # named as ground truth had contributed zero characters.
+    #
+    # A ratio that cannot notice missing input is not measuring coverage
+    # OF the input. The percentage itself is not touched — it is a
+    # literal-coverage figure and reshaping it would only move the
+    # dishonesty — but the report now carries the document-level census
+    # beside it, and a document left unread is disclosed in
+    # `overall.status` rather than averaged away.
+    _unread_docs = _ingest.unread_input_documents(project)
+    _skip_log = _ingest.read_skip_log(project) or {}
+    _visited = _skip_log.get("total_visited")
+    _extracted_n = _skip_log.get("total_extracted")
+    _status = "PASS" if pct >= 80.0 else "FAIL"
+    if _unread_docs:
+        _status = "FAIL_INPUT_NOT_FULLY_READ"
+
+    # The SAME defect shape as #499 above, one level down: that fix taught the
+    # ratio to notice a document it never read; this one teaches it to notice a
+    # LAYER it never filled. The percentage credits a literal when it appears
+    # ANYWHERE in the union of the L docs, so a fact that landed in three prose
+    # layers and missed the layer that CONSUMES it scores exactly the same as a
+    # fact that landed correctly. Measured on a real mixed-signal cell:
+    # `100.0% PASS`, `input_documents_unread = 0`, and `L21_POWER_INTENT` empty
+    # — while the design stated its supply rails outright in a two-row table
+    # under a heading called "Supplies / levels". That empty layer is what later
+    # FAILed the l21 pre-route gate and cost the run its DEF and its GDS.
+    #
+    # Same remedy as #499, deliberately: the percentage is NOT touched, and the
+    # miss is disclosed in `overall.status` rather than averaged away. A layer
+    # speaks only on POSITIVE evidence that the input stated something for it,
+    # so the 14-of-28 layers that are correctly empty stay silent.
+    try:
+        from phase1_layer_demand_probe import evaluate as _layer_demand_eval
+        _layer_demand = _layer_demand_eval(project)
+    except Exception:                                       # noqa: BLE001
+        _layer_demand = {"probes_run": 0, "layers": [], "silent_empty": [],
+                         "zero_unexamined": []}
+    if _layer_demand.get("silent_empty") and _status == "PASS":
+        _status = "FAIL_LAYER_DEMANDED_BUT_EMPTY"
+    # A probe that returned zero WITHOUT examining anything is not a finding
+    # about the design, but it is not a PASS about the design either — nothing
+    # was examined, so there is nothing to pass. `PASS` here is the same
+    # substitution this whole change is against, one level up: the artifact
+    # already carried `layers_zero_unexamined` while the WORD a consumer reads
+    # said the run was clean, and a list nobody is obliged to open cannot
+    # correct a verdict everybody reads.
+    #
+    # INCOMPLETE, not FAIL, and gated on `_status == "PASS"` exactly like the
+    # line above: a reading that did not happen accuses nobody, and a real FAIL
+    # outranks a disclosure. Named in this artifact's own dialect — its four
+    # existing words are `PASS` / `FAIL` / `FAIL_INPUT_NOT_FULLY_READ` /
+    # `FAIL_LAYER_DEMANDED_BUT_EMPTY`, so the bare `INCOMPLETE` that the P0
+    # umbrella uses would be the only unqualified word here.
+    #
+    # WHY A NEW WORD IS SAFE, MEASURED rather than assumed. Every reader of
+    # this field was enumerated: no allow-list, no enum and no JSON schema
+    # constrains it (the three status registries that exist —
+    # `_flow_verdict_tiers.PRODUCER_STATUSES`, `vibe_ic_log.VALID_STATUSES`,
+    # `analog_hil_report_schema_check._VALID_STATUS` — are each scoped to a
+    # different artifact). Exactly one consumer reads it as a verdict at all,
+    # `benchmark_evidence_publish._citations_under_a_pass`, and it fails OPEN:
+    # a word it does not recognise makes it assert LESS, never more, so it
+    # cannot turn a run red. Every other reader either reads `overall.pct` /
+    # `overall.total` only, or looks for a TOP-LEVEL `status` / `verdict` this
+    # artifact does not have. Across 114 published copies under
+    # `benchmark-data/` the field reads `PASS` x108 and `FAIL` x1, so no
+    # published verdict moves.
+    if _layer_demand.get("zero_unexamined") and _status == "PASS":
+        _status = "INCOMPLETE_ZERO_UNEXAMINED"
+
     report = {
+        "layer_demand": _layer_demand,
         "overall": {
             "denominator": denom,
             # `total` is the audit-gate-readable field (vendor-token
@@ -45507,8 +50994,36 @@ def emit_coverage_report(project: Path,
             "numerator": numer,
             "pct": round(pct, 2),
             "target_pct": 80.0,
-            "status": "PASS" if pct >= 80.0 else "FAIL",
+            "status": _status,
+            # v1.7.72 (#499) — the census the percentage cannot see.
+            "input_documents_visited": _visited,
+            "input_documents_extracted": _extracted_n,
+            "input_documents_unread": len(_unread_docs),
+            "layers_demanded_but_empty": list(
+                _layer_demand.get("silent_empty") or []),
+            # A probe that returned zero WITHOUT examining anything. Carried
+            # beside the list above so an empty `layers_demanded_but_empty`
+            # cannot be read as "measured, and nothing found" when it is
+            # "nothing was read". It does not FAIL the run — but it is no
+            # longer disclosure ONLY: a non-empty list degrades `status` to
+            # `INCOMPLETE_ZERO_UNEXAMINED`, because a list carried beside a
+            # verdict that says PASS is a correction nobody is obliged to read.
+            "layers_zero_unexamined": list(
+                _layer_demand.get("zero_unexamined") or []),
+            "measures": ("coverage of literals found in documents that "
+                         "EXTRACTED; a document that did not extract "
+                         "contributes to neither numerator nor "
+                         "denominator; a literal is credited when it appears "
+                         "ANYWHERE in the union of the L docs, so this ratio "
+                         "cannot by itself tell a fact that reached its "
+                         "consuming layer from one that only reached a prose "
+                         "layer — see `layer_demand` and "
+                         "`layers_demanded_but_empty` for that"),
         },
+        # v1.7.72 (#499) — named, not just counted, so a reader does not
+        # have to open a second report to learn WHICH document is
+        # missing from the number above.
+        "unread_input_documents": _unread_docs,
         # v1.6.9 Fix 5 — separate curated-vs-hands_on metrics so the
         # SUMMARY can render both.
         "curated": {
@@ -45534,6 +51049,17 @@ def emit_coverage_report(project: Path,
     out_md.parent.mkdir(parents=True, exist_ok=True)
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    # v1.7.72 (#499) — the document census renders next to the ratio, so
+    # a reader cannot see 100% without also seeing what was not read.
+    _unread_md = (
+        "- input documents: **{v} visited / {e} extracted / "
+        "{u} UNREAD**\n".format(
+            v=_visited if _visited is not None else "?",
+            e=_extracted_n if _extracted_n is not None else "?",
+            u=len(_unread_docs))
+        + "".join(f"  - UNREAD: `{d['path']}` — {d['reason']}\n"
+                  for d in _unread_docs[:10])
+    )
     out_md.write_text(
         f"# Extraction coverage report\n\n"
         f"- denominator (unique literals in input_doc/): **{denom}**\n"
@@ -45542,7 +51068,13 @@ def emit_coverage_report(project: Path,
         f"- status: **{report['overall']['status']}** (target ≥80%)\n"
         f"- curated: **{gate_hits}/{gate_total} = {gate_pct:.1f}%**\n"
         f"- hands_on: **{handson_hits}/{handson_total} = {handson_pct:.1f}%**"
-        f"\n\n"
+        f"\n"
+        + _unread_md
+        + "\n> The percentage measures literals in documents that "
+          "EXTRACTED. A document that did not extract contributes to "
+          "neither numerator nor denominator, so it cannot lower the "
+          "ratio — read the census line above alongside it.\n"
+        f"\n"
         f"## Per-L-doc\n\n"
         + "\n".join(
             f"- {r.name}: evidence={r.evidence_count} todo={r.todo_count}"
@@ -45787,8 +51319,7 @@ def _harvest_vendor_short_literals(project: Path,
     if short_lits:
         d["vendor_short_literals"] = short_lits[:512]
         try:
-            l1.write_text(json.dumps(d, indent=2, ensure_ascii=False)
-                          + "\n", encoding="utf-8")
+            _stamp.dump(l1, d)
         except Exception:
             pass
 
@@ -45911,9 +51442,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                 mutated = True
             if mutated:
                 _ensure_bool_flags(l7)
-                l7_path.write_text(
-                    json.dumps(l7, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l7_path, l7)
 
     # ---- L8 ----
     l8_path = gd / "L8_RTL_CONSTANTS.json"
@@ -45972,9 +51501,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     mutated = True
             if mutated:
                 _ensure_bool_flags(l8)
-                l8_path.write_text(
-                    json.dumps(l8, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l8_path, l8)
 
     # ---- L10 (v1.6.84 #15 Bug A) ----
     # Belt-and-suspenders: even though gen_l10_test_cases() now emits
@@ -46000,9 +51527,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     l10["bring_up_sequence"] = []
                     l10["no_bring_up_sequence_in_input"] = True
                     _ensure_bool_flags(l10)
-                    l10_path.write_text(
-                        json.dumps(l10, indent=2, ensure_ascii=False) + "\n",
-                        encoding="utf-8")
+                    _stamp.dump(l10_path, l10)
 
     # ---- L11 (v1.6.84 #15 Bug B) ----
     # Defensive: flip stale L11.content_hex="" to null when no OTP
@@ -46018,9 +51543,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     l11.get("content_hex") == ""):
                 l11["content_hex"] = None
                 _ensure_bool_flags(l11)
-                l11_path.write_text(
-                    json.dumps(l11, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l11_path, l11)
 
     # ---- L9 ----
     l9_path = gd / "L9_INTEGRATION_SPEC.json"
@@ -46044,9 +51567,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     mutated = True
             if mutated:
                 _ensure_bool_flags(l9)
-                l9_path.write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l9_path, l9)
 
     # ---- L13 ----
     l13_path = gd / "L13_LAB_CALIBRATION.json"
@@ -46091,9 +51612,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     mutated = True
             if mutated:
                 _ensure_bool_flags(l13)
-                l13_path.write_text(
-                    json.dumps(l13, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l13_path, l13)
 
 
 def _post_fix_l8_rtl_consts_flag(project: Path) -> None:
@@ -46132,7 +51651,7 @@ def _post_fix_l8_rtl_consts_flag(project: Path) -> None:
     # explicitly flip.
     _ensure_bool_flags(rtl)
     out = _pl.generated_docs_dir(project) / "L8_RTL_CONSTANTS.json"
-    out.write_text(json.dumps(rtl, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, rtl)
 
 
 # v1.6.107: removed _collect_fsm_states_from_rtl (and its helpers
@@ -46167,6 +51686,86 @@ _RTL_ORACLE_LEAK_RE = re.compile(
     r")"
 )
 
+# v1.7.72 — for #499. The `\.sv\s*$` clause above cannot tell the IP's
+# own generated RTL from an HDL document the DESIGN ITSELF staged as an
+# input. Both end in `.sv`, and `fsm_tokens[].source` carries a bare
+# basename, so path context is not available in the value.
+#
+# Measured (#499): with the `.sv` converter branch added, the very first
+# full-flow run aborted at exit 2 on
+#     L6_CONTROL_LOGIC.json.fsm_tokens[3].source: 'ibex_pkg.sv'
+# — a file the design's own `phase1_prompt.md` names as its "Parameter /
+# CSR ground truth", sitting in `input/docs/`. The guard was doing
+# exactly what #38 asked of it and was nonetheless wrong: the rule is
+# "phase 1 must not read the IP's own RTL or downstream BUILD
+# ARTEFACTS", and a staged input document is neither.
+#
+# The discriminator is provenance, not extension. `input/docs/` is the
+# tree the ingester walks; a file that exists there IS an input, by
+# definition of how it got there. Everything else the regex catches —
+# `phase2`, `phase3`, `stage1/rtl`, `/rtl/`, `harvested from *.sv` — is
+# a build-tree token and stays an unconditional violation, so a citation
+# of `phase2/stage1/rtl/foo.sv` is still caught even if a same-named
+# file happens to be staged.
+#
+# Chip-AGNOSTIC: a filesystem-convention path plus the design's own
+# staged file names.
+_V1_7_72_HDL_ORACLE_SUFFIX_ONLY_RE = re.compile(r"(?i)\.sv\s*$")
+_V1_7_72_BUILD_TREE_ORACLE_RE = re.compile(
+    r"(?i)("
+    r"\bphase2\b"
+    r"|\bphase3\b"
+    r"|stage1/rtl"
+    r"|harvested\s+from\s+\S+\.(?:sv|v|vhd|vhdl)\b"
+    r"|/rtl/"
+    r")"
+)
+
+
+def _v1_7_72_staged_input_doc_names(project: Path) -> Set[str]:
+    """Every file name the design staged under ``input/docs/``.
+
+    Returned as a set of lowercase basenames PLUS project-relative
+    POSIX paths, because L-doc evidence cites documents both ways
+    (``ibex_pkg.sv`` from ``fsm_tokens[].source``,
+    ``input/docs/ibex_pkg.sv`` from ``extraction_evidence``).
+    """
+    names: Set[str] = set()
+    src = project / "input" / "docs"
+    if not src.is_dir():
+        return names
+    try:
+        for f in src.rglob("*"):
+            if not f.is_file():
+                continue
+            names.add(f.name.lower())
+            try:
+                names.add(f.relative_to(project).as_posix().lower())
+            except ValueError:
+                pass
+    except Exception:
+        return names
+    return names
+
+
+def _v1_7_72_is_staged_input_citation(value: str,
+                                      staged: Set[str]) -> bool:
+    """True when ``value`` cites a document the design staged itself.
+
+    The value may carry a trailing parenthetical provenance note
+    (``"input/docs/foo.sv (pipeline stage)"``), so the leading path
+    token is what gets compared.
+    """
+    if not staged or not isinstance(value, str):
+        return False
+    token = value.strip().split()[0] if value.strip().split() else ""
+    token = token.strip("'\"`,;").lower()
+    if not token:
+        return False
+    if token in staged:
+        return True
+    return token.rsplit("/", 1)[-1] in staged
+
 
 # v1.6.603 — for #407 P0. The walker was applying
 # `_RTL_ORACLE_LEAK_RE` to EVERY string in the L*.json tree,
@@ -46189,7 +51788,8 @@ _V1_6_603_ORACLE_LEAK_SUSPECT_KEYS = frozenset({
 
 
 def _assert_no_rtl_oracle_leak_in_l_doc(
-        l_doc_dict: Any, doc_name: str) -> List[str]:
+        l_doc_dict: Any, doc_name: str,
+        staged_input_docs: Optional[Set[str]] = None) -> List[str]:
     """v1.6.107 (#38) — walk a single L*.json dict and return a list of
     forbidden-token paths. Returns ``[]`` when clean.
 
@@ -46225,9 +51825,19 @@ def _assert_no_rtl_oracle_leak_in_l_doc(
                     or last_key not in
                     _V1_6_603_ORACLE_LEAK_SUSPECT_KEYS):
                 return
-            if _RTL_ORACLE_LEAK_RE.search(obj):
-                snippet = obj if len(obj) <= 80 else obj[:80] + "..."
-                violations.append(f"{doc_name}{path}: '{snippet}'")
+            if not _RTL_ORACLE_LEAK_RE.search(obj):
+                return
+            # v1.7.72 — for #499. A build-tree token is always a
+            # violation. The HDL-suffix clause alone is a violation
+            # only when the cited file is NOT one the design staged
+            # under input/docs/ — see the constant block above.
+            if (not _V1_7_72_BUILD_TREE_ORACLE_RE.search(obj)
+                    and _V1_7_72_HDL_ORACLE_SUFFIX_ONLY_RE.search(obj)
+                    and _v1_7_72_is_staged_input_citation(
+                        obj, staged_input_docs or set())):
+                return
+            snippet = obj if len(obj) <= 80 else obj[:80] + "..."
+            violations.append(f"{doc_name}{path}: '{snippet}'")
 
     _walk(l_doc_dict, "")
     return violations
@@ -46244,13 +51854,18 @@ def _scan_generated_docs_for_oracle_leak(project: Path) -> List[str]:
     if not gd.is_dir():
         return []
     all_violations: List[str] = []
+    # v1.7.72 — for #499. Computed once per scan: the design's own
+    # staged input documents, so an HDL file the design named as its
+    # ground truth is not mistaken for the IP's generated RTL.
+    _staged = _v1_7_72_staged_input_doc_names(project)
     for l_path in sorted(gd.glob("L*.json")):
         try:
             data = json.loads(l_path.read_text(encoding="utf-8"))
         except Exception:
             continue
         all_violations.extend(
-            _assert_no_rtl_oracle_leak_in_l_doc(data, l_path.name))
+            _assert_no_rtl_oracle_leak_in_l_doc(
+                data, l_path.name, staged_input_docs=_staged))
     if all_violations:
         try:
             log_dir = project / "reports" / "phase1"
@@ -46547,9 +52162,7 @@ def _post_emit_ic_class_into_L9_L1(project: Path,
                     l1["class_path"] = None
                     l1["no_class_path_in_input"] = True
                 try:
-                    l1_path.write_text(
-                        json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-                        encoding="utf-8")
+                    _stamp.dump(l1_path, l1)
                 except Exception:
                     pass
 
@@ -46720,9 +52333,7 @@ def _post_emit_ic_class_into_L9_L1(project: Path,
                 l9["chip_top_interfaces"] = []
 
             try:
-                l9_path.write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l9_path, l9)
             except Exception:
                 pass
 
@@ -46906,9 +52517,7 @@ def _post_emit_l11_fsm_strict_gate(project: Path) -> None:
         needs_write = True
     if needs_write:
         try:
-            l11_path.write_text(
-                json.dumps(l11, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8")
+            _stamp.dump(l11_path, l11)
         except Exception:
             pass
 
@@ -46942,6 +52551,50 @@ _CRYPTO_CLASSES = {
     "crypto_stream_cipher",
     "crypto_hash",
 }
+
+# #512 — where the "read, and not a register" record lands. Same dual-write
+# shape as `extraction_skipped.json` (the existing precedent for "this input was
+# visited and produced nothing, here is the reason"): one copy beside the phase1
+# artefacts, one under reports/ where the audit tooling looks.
+REGMAP_NOT_REGISTERS_FILENAME = "regmap_tables_not_registers.json"
+
+
+def _write_regmap_tables_not_registers(
+        project: Path, records: "List[Dict[str, Any]]") -> None:
+    """Record every document table the register-table extractor READ and did
+    not turn into registers, with the reason.
+
+    Silence here is the same defect one layer down as the phantom registers
+    #512 removed: a consumer of L4 cannot otherwise tell "the input declares no
+    such register" from "a table was read and thrown away". Written on EVERY
+    run, including the empty case — a file that says `[]` is the statement that
+    nothing was dropped, which an absent file does not make.
+    """
+    payload = {
+        "produced_by": "_post_emit_pdf_regmap_table_rows",
+        "meaning": (
+            "document tables the register-table extractor read and did not "
+            "turn into L4 registers, with the structural reason. An empty "
+            "list means every table read yielded its rows."),
+        "count": len(records),
+        "tables": records,
+    }
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    for out_dir in (_pl.phase1_dir(project), _pl.reports_phase1_dir(project)):
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / REGMAP_NOT_REGISTERS_FILENAME).write_text(
+                text, encoding="utf-8")
+        except Exception:
+            pass
+    for rec in records:
+        try:
+            print(f"WARN: regmap table read but not registers — "
+                  f"{rec.get('source')} (rows_read={rec.get('rows_read')}, "
+                  f"reason={rec.get('reason')}): {rec.get('detail')}",
+                  file=sys.stderr)
+        except Exception:
+            pass
 
 
 def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
@@ -47013,15 +52666,28 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
     # Existing addr_hex set covers both the new (addr_hex) and legacy
     # (address) row shapes, so we never duplicate against the existing
     # _reg_row_re_a/b/c matches that emitted "address": "0xNN".
+    #
+    # v1.7.74 — for #507. Keep the RECORD as well as the address, so a
+    # deduped row can hand over what it knew (see
+    # `_v1_7_74_absorb_deduped_regmap_row`).
     existing_addrs = set()
+    existing_by_addr: Dict[str, Dict[str, Any]] = {}
     for r in registers:
         if not isinstance(r, dict):
             continue
         ah = r.get("addr_hex") or r.get("address")
         if isinstance(ah, str):
             existing_addrs.add(ah.lower())
+            existing_by_addr.setdefault(ah.lower(), r)
 
     appended = 0
+    absorbed = 0
+    # #512 — every table the extractor READ and declined to turn into registers
+    # (no name-bearing column; an address role claimed only by a value column;
+    # individual unnamed rows). A dropped row is DISCLOSED, not silently
+    # discarded: without this the flow cannot tell "the documents declare no
+    # such register" from "we read it and threw it away".
+    _not_registers: List[Dict[str, Any]] = []
     # #616 — also re-scan `.md` register docs (e.g. an auto-generated GFM
     # `*_registers.md`), not only `.txt`; the GFM pipe-table parser lives in
     # extract_regmap_table and needs the .md content to reach it.
@@ -47036,7 +52702,7 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
             rel = str(txt_file.relative_to(project))
         except Exception:
             rel = str(txt_file)
-        new_rows = extract_regmap_table(text, rel)
+        new_rows = extract_regmap_table(text, rel, disclosures=_not_registers)
         for row in new_rows:
             # v1.6.108 (#40 Bug 1B) — range rows lack addr_hex; dedup
             # against either single addr or range string.
@@ -47044,12 +52710,23 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
             if not ah:
                 continue
             if ah in existing_addrs:
+                # v1.7.74 — for #507. Another source already carries
+                # this address. Take what the row knew before dropping
+                # it; a dedupe that discards a whole record discards
+                # every fact on it, not just the duplicated one.
+                prior = existing_by_addr.get(ah.lower())
+                if prior is not None and _v1_7_74_absorb_deduped_regmap_row(
+                        prior, row):
+                    absorbed += 1
                 continue
             registers.append(row)
             existing_addrs.add(ah)
+            existing_by_addr.setdefault(ah.lower(), row)
             appended += 1
 
-    if appended == 0:
+    _write_regmap_tables_not_registers(project, _not_registers)
+
+    if appended == 0 and absorbed == 0:
         return
 
     l4["registers"] = registers
@@ -47057,9 +52734,7 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
     if l4.get("no_registers_in_input") and registers:
         l4["no_registers_in_input"] = False
     try:
-        l4_path.write_text(
-            json.dumps(l4, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l4_path, l4)
     except Exception:
         pass
 
@@ -47292,9 +52967,7 @@ def _post_emit_promote_registers_from_readme(project: Path) -> None:
         "register_name_direct_from_readme"
     )
     try:
-        l4_path.write_text(
-            json.dumps(l4, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l4_path, l4)
     except Exception:
         pass
 
@@ -47645,10 +53318,7 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                     l1["pin_table"] = list(merged["pins"])
                     l1["no_pin_table_in_input"] = False
                     try:
-                        l1_path.write_text(
-                            json.dumps(l1, indent=2,
-                                       ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(l1_path, l1)
                     except Exception:
                         pass
     # Wire subckts → L9.submodules when empty.
@@ -47664,10 +53334,7 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                 if not existing_subs:
                     l9["submodules"] = list(merged["subckts"])
                     try:
-                        l9_path.write_text(
-                            json.dumps(l9, indent=2,
-                                       ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(l9_path, l9)
                     except Exception:
                         pass
 
@@ -47759,10 +53426,7 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                             es["spice_to_l9_ports_promoted_v1_6_419"] = (
                                 len(promoted_ports))
                         try:
-                            l9_path.write_text(
-                                json.dumps(l9, indent=2,
-                                           ensure_ascii=False) + "\n",
-                                encoding="utf-8")
+                            _stamp.dump(l9_path, l9)
                         except Exception:
                             pass
     # Wire params → L5.design_parameters when empty.
@@ -47778,10 +53442,7 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                 if not existing_params:
                     l5["design_parameters"] = list(merged["params"])
                     try:
-                        l5_path.write_text(
-                            json.dumps(l5, indent=2,
-                                       ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(l5_path, l5)
                     except Exception:
                         pass
 
@@ -47849,9 +53510,7 @@ def _post_emit_promote_pipe_tables_to_l1(project: Path) -> None:
 
     l1["comparison_tables"] = all_tables
     try:
-        l1_path.write_text(
-            json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l1_path, l1)
     except Exception:
         pass
 
@@ -48962,9 +54621,7 @@ def _post_emit_promote_submodules_from_catalog(project: Path) -> None:
         l9["no_submodules_in_input"] = False
     l9["submodules_extraction_strategy"] = "module_catalog_bullet"
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -49286,9 +54943,7 @@ def _post_emit_promote_submodules_from_file_role_v1_6_307(
         "rst_sphinx_file_role_or_inline_backtick_sv_fallback"
     )
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -49438,9 +55093,7 @@ def _v1_6_351_post_emit_rst_underline_module_section(
     if l9.get("no_submodules_in_input"):
         l9["no_submodules_in_input"] = False
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -49590,9 +55243,7 @@ def _v1_6_354_post_emit_rst_underline_module_section(
     if l9.get("no_submodules_in_input"):
         l9["no_submodules_in_input"] = False
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -49652,9 +55303,7 @@ def _v1_6_435_post_emit_lift_unknown_strategy_lc(
     if not changed:
         return
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -50182,9 +55831,7 @@ def _v1_6_524_post_emit_chip_top_interfaces_groups(
 
     l9["chip_top_interfaces"] = cti
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -51014,9 +56661,7 @@ def _v1_6_526_post_emit_ascii_art_hierarchy(
     if l9.get("no_submodules_in_input"):
         l9["no_submodules_in_input"] = False
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -51083,9 +56728,7 @@ def _v1_6_578_normalize_l9_submodule_evidence(project: Path) -> None:
     if migrated == 0:
         return
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -51285,9 +56928,7 @@ def _post_emit_promote_registers_from_l12(project: Path) -> None:
         "register_name_promotion_from_l12"
     )
     try:
-        l4_path.write_text(
-            json.dumps(l4, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l4_path, l4)
     except Exception:
         pass
 
@@ -51341,9 +56982,7 @@ def _post_emit_crypto_arch_into_L1(project: Path) -> None:
             arch[k] = v
     l1["architecture"] = arch
     try:
-        l1_path.write_text(
-            json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l1_path, l1)
     except Exception:
         pass
 
@@ -51411,7 +57050,7 @@ def _post_emit_typed_clock_domains(project: Path) -> None:
         rtl["no_clock_domains_in_input"] = False
     _ensure_bool_flags(rtl)
     out = _pl.generated_docs_dir(project) / "L8_RTL_CONSTANTS.json"
-    out.write_text(json.dumps(rtl, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, rtl)
     # v1.6.312 — for #211 P2 ORGANIC. Pre-v1.6.312 the
     # L8_TIMING_WAVEFORM mirror block sat under an outer
     # `if len(clock_domains) != before_count:` guard. The guard
@@ -51438,9 +57077,50 @@ def _post_emit_typed_clock_domains(project: Path) -> None:
             _ensure_bool_flags(wfm)
             wfm_out = (_pl.generated_docs_dir(project)
                        / "L8_TIMING_WAVEFORM.json")
-            wfm_out.write_text(
-                json.dumps(wfm, indent=2, ensure_ascii=False)
-                + "\n")
+            _stamp.dump(wfm_out, wfm)
+
+
+#: L docs that carry the clock contract. Both are checked because a name at
+#: 10 ns in one and 8 ns in the other is contradictory wherever it sits.
+_CLOCK_CONTRACT_DOCS = ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM")
+
+
+def _post_emit_enforce_clock_contract(project: Path) -> List[str]:
+    """Final producer-side clock-contract enforcement — runs LAST.
+
+    `_write_l_doc` already applies `clock_contract.enforce` to every L doc it
+    writes, but a dozen post-emit hooks re-open the L8 docs and rewrite them
+    with `write_text` directly (the typed-clock-domains mirror, the staged-SDC
+    ingest, the `clocks[]` seeder, the AID-scaffold purge). Any of them can
+    reintroduce a second period for a clock AFTER the chokepoint has run, so
+    the contract is re-enforced here, after every hook, on what is actually on
+    disk.
+
+    Returns the conflicts that SURVIVED reconciliation — records that each own
+    the clock name and pin different periods. There is no principled winner
+    between them, so nothing is picked: the conflict is written into the
+    document as `clock_contract_conflicts[]` and returned, and the runner
+    fails on it. Chip-AGNOSTIC.
+    """
+    messages: List[str] = []
+    for doc_name in _CLOCK_CONTRACT_DOCS:
+        try:
+            doc = _try_load_l_doc(project, doc_name)
+        except Exception:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        before = json.dumps(doc, sort_keys=True, ensure_ascii=False)
+        _cc.enforce(doc)
+        after = json.dumps(doc, sort_keys=True, ensure_ascii=False)
+        if after != before:
+            try:
+                out = _pl.generated_docs_dir(project) / f"{doc_name}.json"
+                _stamp.dump(out, doc)
+            except OSError:
+                pass
+        messages.extend(_cc.conflict_messages(doc, where=doc_name))
+    return messages
 
 
 def _post_emit_sdc_constraints(project: Path) -> None:
@@ -51475,13 +57155,15 @@ def _post_emit_sdc_constraints(project: Path) -> None:
             l19["fields"] = fields
         fields["constraints_present"] = True
         if not fields.get("sdc_constraints_path"):
-            try:
-                fields["sdc_constraints_path"] = str(
-                    sdc_files[0].relative_to(project))
-            except ValueError:
-                fields["sdc_constraints_path"] = str(sdc_files[0])
+            # The former `except ValueError: str(sdc_files[0])` fallback wrote
+            # an ABSOLUTE path into the L document whenever the SDC sat
+            # outside the project. Unreachable for a file this function
+            # collected, but it is the same defect the shared helper exists
+            # to refuse — so route both branches through it.
+            fields["sdc_constraints_path"] = project_relative_source(
+                sdc_files[0], project)[0]
         out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
-        out.write_text(json.dumps(l19, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(out, l19)
 
     primary = _sdc.primary_clock(project)
     if primary is None:
@@ -51510,13 +57192,91 @@ def _post_emit_sdc_constraints(project: Path) -> None:
         target["freq_mhz"] = (freq_hz / 1_000_000.0) if freq_hz else None
         target["period_ns"] = period_ns
         target["source"] = "input/constraints/*.sdc"
-        target["evidence"] = primary["source"]
+        # PROJECT-RELATIVE. `sdc_constraints.collect_create_clocks` stamps
+        # `"source": str(sdc)` off an absolute project glob — correct for its
+        # report-only consumers, wrong here, because this value is written
+        # into L8, a design artefact the flow reads back and diffs. Measured
+        # on a fresh minimal project against current main: this line emitted
+        # `<abs>/input/constraints/clock.sdc` into BOTH L8 documents, so the
+        # four absolute paths in the published corpus are a LIVE defect, not
+        # a stale artefact. Note the sibling `source` two lines up and
+        # `sdc_constraints_path` above were already relative — only this one
+        # value escaped. See l_doc_consumer_contract.project_relative_source.
+        target["evidence"] = project_relative_source(
+            primary["source"], project)[0]
         if port_name and not target.get("source_pin"):
             target["source_pin"] = port_name
         if port_name and not target.get("name"):
             target["name"] = port_name
         out = _pl.generated_docs_dir(project) / f"{doc_name}.json"
-        out.write_text(json.dumps(l8, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(out, l8)
+
+
+def _post_emit_l22_coverage_goals(project: Path) -> int:
+    """SALVAGE #315 — lift measurable coverage targets stated in the design's
+    OWN inputs into ``L22.fields.coverage_goals[]``, the layer that CONSUMES
+    them. Returns the number of goals emitted (0 when there is nothing to
+    lift, or when L22 / the consumer gate is absent).
+
+    `l22_verification_plan_measurable_check` already FINDS the target — it
+    reports `coverage_target_hits_input_docs` — and then FAILs the run with
+    TARGET_OUTSIDE_CONSUMING_LAYER because nothing ever writes it back, so no
+    downstream coverage gate has a number to compare a measurement against.
+    The detection is a solved deterministic problem; only the write-back was
+    missing.
+
+    The emitter borrows THAT GATE'S OWN ``_COVERAGE_TARGET_RE`` and
+    ``framed_hits()`` rather than reimplementing the predicate — a private
+    predicate could drift and emit goals the gate still rejects.
+
+    REFUSES rather than guesses: with no stated target it emits nothing and
+    the gate keeps FAILing, which is correct — a fabricated goal would turn a
+    real gap into a false PASS. Existing goals are never modified and
+    re-running is idempotent. Fail-open on any import/IO error, like its
+    `_post_emit_*` neighbours. chip-AGNOSTIC: document vocabulary and
+    structure only; no design, PDK or vendor literal.
+    """
+    try:
+        from l22_coverage_goal_emit import run as _l22_cov_emit
+    except Exception:
+        return 0
+    rep = _l22_cov_emit(project)
+    n = rep.get("emitted_count", 0) if isinstance(rep, dict) else 0
+    if n:
+        print(f"      L22 coverage goals: lifted {n} measurable target(s) "
+              f"from the design's own inputs")
+    return n
+
+
+def _post_emit_l22_checklist_milestones(project: Path) -> int:
+    """vibe-ic#593 cause 2 — lift the verification checklist's own milestone
+    IDENTIFIERS into ``L22.fields.checklist_milestones[]``.
+
+    The ingester read the checklist's prose and never its identifiers, so a
+    document whose entire content is a verification plan contributed nothing to
+    L22 and 24 tokens read as uncaptured.
+
+    THE SCOPING DECISION IS THE DOCUMENT'S. #593 asks whether some milestones
+    are pure project tracking with no design meaning and requires the answer to
+    be RECORDED, not silently waived. The table states a `Type` per row, so each
+    milestone carries the document's own `type` and `resolution` and a consumer
+    that wants only design-bearing items filters on it. Nothing is dropped here.
+
+    Fail-open on any import/IO error, like its `_post_emit_*` neighbours.
+    """
+    try:
+        from l22_checklist_milestone_emit import run as _l22_chk_emit
+    except Exception:
+        return 0
+    try:
+        rep = _l22_chk_emit(project)
+    except Exception:
+        return 0
+    n = rep.get("emitted_count", 0) if isinstance(rep, dict) else 0
+    if n:
+        print(f"      L22 checklist: lifted {n} milestone(s) from the "
+              f"design's own verification checklist")
+    return n
 
 
 def _post_emit_floorplan_contract(project: Path) -> None:
@@ -51601,7 +57361,7 @@ def _post_emit_floorplan_contract(project: Path) -> None:
                 "label": "die_area_budget_um",
             })
         out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
-        out.write_text(json.dumps(l19, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(out, l19)
 
 
 # v1.6.369 — for #264 P2 ORGANIC. Structural emitter for
@@ -51984,8 +57744,7 @@ def _post_emit_mirror_clock_resets_to_l9_v1_6_311(
         _ensure_bool_flags(l9)
         out = (_pl.generated_docs_dir(project)
                / "L9_INTEGRATION_SPEC.json")
-        out.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(out, l9)
 
 
 # v1.6.323 — for #222 P1 ORGANIC. Symmetric clock-port shape regex
@@ -52047,13 +57806,23 @@ def _post_emit_derive_l9_clocks_v1_6_323(project: Path) -> None:
         # matching deep clock_domains[] entry so this derived clock view is not
         # a shallow stub that fails l8_clock_domains_typed_check (which scans
         # clock entries across ALL L docs). Chip-AGNOSTIC.
-        for _cd in (l9.get("clock_domains") or []):
-            if isinstance(_cd, dict) and _cd.get("name") == name_raw:
-                for _k in ("freq_hz", "freq_mhz", "period_ns",
-                           "role", "source", "domain_kind"):
-                    if _cd.get(_k) is not None and _entry.get(_k) is None:
-                        _entry[_k] = _cd[_k]
-                break
+        # Take the period from the record that OWNS the name, not from
+        # whichever record happens to sit first in the list — a borrowed-name
+        # record first in `clock_domains[]` used to hand this view a period
+        # the owning record contradicts, which is how one clock ended up with
+        # two periods across the two containers.
+        _cd_src = _cc.owning_entry_with_period(
+            l9.get("clock_domains") or [], name_raw)
+        if _cd_src is None:
+            _cd_src = next(
+                (_cd for _cd in (l9.get("clock_domains") or [])
+                 if isinstance(_cd, dict) and _cd.get("name") == name_raw),
+                None)
+        if isinstance(_cd_src, dict):
+            for _k in ("freq_hz", "freq_mhz", "period_ns",
+                       "role", "source", "domain_kind"):
+                if _cd_src.get(_k) is not None and _entry.get(_k) is None:
+                    _entry[_k] = _cd_src[_k]
         clocks.append(_entry)
     if not clocks:
         return
@@ -52061,8 +57830,7 @@ def _post_emit_derive_l9_clocks_v1_6_323(project: Path) -> None:
     _ensure_bool_flags(l9)
     out = (_pl.generated_docs_dir(project)
            / "L9_INTEGRATION_SPEC.json")
-    out.write_text(
-        json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, l9)
 
 
 # v1.6.571 — for #389 P3 ORGANIC. Clock-port pattern regex used by
@@ -52186,13 +57954,44 @@ def _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project: Path) -> None:
         # that fails l8_clock_domains_typed_check. The clock_domains walker
         # already resolved period_ns/freq from the input; share it with the
         # clocks[] view of the same physical clock. Chip-AGNOSTIC.
-        for _cd in (l8b.get("clock_domains") or []):
-            if isinstance(_cd, dict) and _cd.get("name") == name:
-                for _k in ("freq_hz", "freq_mhz", "period_ns",
-                           "role", "source", "domain_kind"):
-                    if _cd.get(_k) is not None and entry.get(_k) is None:
-                        entry[_k] = _cd[_k]
-                break
+        # Same rule as the L9 seeder above: inherit from the record that OWNS
+        # the name, not from list position, so `clocks[]` cannot be seeded
+        # with a period that `clock_domains[]` contradicts.
+        _cd_src = _cc.owning_entry_with_period(
+            l8b.get("clock_domains") or [], name)
+        if _cd_src is None:
+            _cd_src = next(
+                (_cd for _cd in (l8b.get("clock_domains") or [])
+                 if isinstance(_cd, dict) and _cd.get("name") == name),
+                None)
+        if _cd_src is None:
+            # C4/2026-07-31 — the same PHYSICAL clock reaches the two lists
+            # under two spellings: `clocks[]` is seeded from L1.pin_table
+            # (the DATASHEET spelling, e.g. `CK4`) and `clock_domains[]`
+            # from L9.top_ports (the SYNTHESIZABLE PORT spelling, e.g.
+            # `ck4` — verified against this design's own RTL, which
+            # declares `input wire ck4`). The exact-match lookup above
+            # therefore missed, `clocks[]` inherited nothing, and
+            # `sdc_validator_check` then saw TWO clocks where the design
+            # has ONE and reported the datasheet-spelled one as
+            # unconstrained. Match case-insensitively so the two views
+            # rejoin. Nothing is renamed: both spellings are preserved and
+            # `source_pin` below records which PORT the clock lives on.
+            _nl = name.lower()
+            _cd_src = next(
+                (_cd for _cd in (l8b.get("clock_domains") or [])
+                 if isinstance(_cd, dict)
+                 and (_cd.get("name") or "").lower() == _nl),
+                None)
+        if isinstance(_cd_src, dict):
+            # `source_pin` added to the inherited set: it is the field that
+            # says WHICH PORT this clock is on, and it is what lets a
+            # consumer match a create_clock by target port when the names
+            # differ only in case.
+            for _k in ("freq_hz", "freq_mhz", "period_ns",
+                       "role", "source", "domain_kind", "source_pin"):
+                if _cd_src.get(_k) is not None and entry.get(_k) is None:
+                    entry[_k] = _cd_src[_k]
         seeded.append(entry)
     if not seeded:
         return
@@ -52200,9 +57999,7 @@ def _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project: Path) -> None:
     _ensure_bool_flags(l8b)
     out = (_pl.generated_docs_dir(project)
            / "L8_TIMING_WAVEFORM.json")
-    out.write_text(
-        json.dumps(l8b, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8")
+    _stamp.dump(out, l8b)
 
 
 def _post_emit_mirror_parameters_to_l9_v1_6_327(
@@ -52261,8 +58058,7 @@ def _post_emit_mirror_parameters_to_l9_v1_6_327(
     _ensure_bool_flags(l9)
     out = (_pl.generated_docs_dir(project)
            / "L9_INTEGRATION_SPEC.json")
-    out.write_text(
-        json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, l9)
 
 
 # v1.6.551 — for #373 P3 ORGANIC. L7.debug_observability cross-walk
@@ -52391,9 +58187,7 @@ def _post_emit_crosswalk_l9_ports_to_l7_debug_v1_6_551(
     _ensure_bool_flags(l7)
     out = (_pl.generated_docs_dir(project)
            / "L7_TEST_DEBUG.json")
-    out.write_text(
-        json.dumps(l7, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8")
+    _stamp.dump(out, l7)
 
 
 # v1.6.555 — for #377 P3 ORGANIC. L1.pin_table cross-walk from
@@ -52612,9 +58406,7 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
             changed = True
     if changed:
         _ensure_bool_flags(l1)
-        (_pl.generated_docs_dir(project) / "L1_DATASHEET.json").write_text(
-            json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(_pl.generated_docs_dir(project) / 'L1_DATASHEET.json', l1)
     # (3) REVERSE mirror L1 → L9 (ORGANIC-20260705). When L9's port slots are
     # ALL empty but L1 now carries real ports, promote them into L9 so the
     # prompt-only design's L9.top_ports is no longer empty. Zero-regression: it
@@ -52636,10 +58428,7 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
                 _es = l9.setdefault("extraction_strategy", {})
                 if isinstance(_es, dict):
                     _es["top_ports"] = "reverse_promote_from_l1_organic_20260705"
-                (_pl.generated_docs_dir(project)
-                 / "L9_INTEGRATION_SPEC.json").write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(_pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json', l9)
 
 
 def _v1_6_collect_input_docs_text(project: Path) -> str:
@@ -52880,16 +58669,12 @@ def _post_emit_mirror_l2_l8_fmax_v1_6_554(project: Path) -> None:
         _ensure_bool_flags(l8)
         out_l8 = (_pl.generated_docs_dir(project)
                   / "L8_RTL_CONSTANTS.json")
-        out_l8.write_text(
-            json.dumps(l8, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(out_l8, l8)
     if added_l2:
         _ensure_bool_flags(l2)
         out_l2 = (_pl.generated_docs_dir(project)
                   / "L2_FRS.json")
-        out_l2.write_text(
-            json.dumps(l2, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(out_l2, l2)
 
 
 # v1.6.348 — for #245 P3 ORGANIC. URL / image-path context gate for
@@ -53343,8 +59128,7 @@ def _apply_alias_normalization(project: Path,
         if aliases_index:
             data["aliases_index"] = aliases_index
             try:
-                f.write_text(json.dumps(data, indent=2, ensure_ascii=False)
-                             + "\n", encoding="utf-8")
+                _stamp.dump(f, data)
             except Exception:
                 pass
 
@@ -53685,7 +59469,7 @@ def _backfill_auto_literals_into_typed(project: Path,
                 existing = []
             existing.extend(payload)
             d[key] = existing
-            f.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+            _stamp.dump(f, d)
             break
 
     if units:
@@ -53813,12 +59597,23 @@ def main() -> int:
                         "it OVERRIDES the doc heuristic (CLI > docs) so a "
                         "block-diagram SVG label/stem can never become the "
                         "ic_name.")
+    p.add_argument("--pdk", default=None,
+                   help="ORGANIC-20260803b — the process this design is "
+                        "being built in. Consulted ONLY to resolve a design "
+                        "document whose own timing table is keyed BY PDK "
+                        "(a `| <pdk> | <period> |` row per target). Omitted "
+                        "or 'auto' leaves every extraction byte-identical.")
     args = p.parse_args()
 
     # ORGANIC #541 — CLI --ic-name is authoritative for docs-mode.
     global _CLI_IC_NAME_OVERRIDE
     if args.ic_name and args.ic_name.strip():
         _CLI_IC_NAME_OVERRIDE = args.ic_name.strip()
+
+    # ORGANIC-20260803b — the run's PDK, for PDK-keyed spec rows only.
+    global _CLI_PDK
+    if args.pdk and args.pdk.strip().lower() not in ("", "auto"):
+        _CLI_PDK = args.pdk.strip()
 
     project = args.project.resolve()
     if not project.is_dir():
@@ -53937,12 +59732,104 @@ def main() -> int:
         if cov_cp.returncode == 1:
             cov_gate_failed = True
 
+    # v1.7.74 — for #507. Publish the routing decision for EVERY
+    # `typedef enum` the staged HDL inputs declare, before the layers
+    # that consume them are generated.
+    #
+    # The harvester used to route by type-name vocabulary alone, which
+    # decided two of the twenty-five declarations in one measured
+    # package. The other twenty-three had no destination AND no record:
+    # their members reached the L docs only where prose elsewhere
+    # happened to name them, so a design could lose 84 declared register
+    # addresses with nothing anywhere reporting a shortfall. Every
+    # decision — including "no layer consumes this shape" — is now
+    # written down with its reason, and `_hdl_enum.EnumRouting` refuses
+    # to be constructed without one.
+    try:
+        _v1_7_74_inventory = _hdlenum.routing_inventory(extracted)
+    except Exception as _exc:  # pragma: no cover — defensive
+        _v1_7_74_inventory = []
+        print(f"      hdl_enum_routing: SKIP (not derivable: {_exc})")
+    if _v1_7_74_inventory:
+        _v1_7_74_summary = _hdlenum.routing_summary(_v1_7_74_inventory)
+        _v1_7_74_path = _pl.report_path(
+            project, "phase1/hdl_enum_routing.json")
+        _v1_7_74_path.parent.mkdir(parents=True, exist_ok=True)
+        _v1_7_74_path.write_text(
+            json.dumps(_v1_7_74_summary, indent=2), encoding="utf-8")
+        _v1_7_74_dests = ", ".join(
+            f"{k} x{v}" for k, v in
+            sorted(_v1_7_74_summary["by_destination"].items()))
+        print(f"      hdl_enum_routing: "
+              f"{_v1_7_74_summary['typedef_enums']} typedef enum(s) "
+              f"declared by staged HDL input(s) — {_v1_7_74_dests} "
+              f"(every decision recorded in "
+              f"reports/phase1/hdl_enum_routing.json)")
+
     _run_layer("[5/15]", "L4_REGMAP",
                lambda: gen_l4_regmap(project, extracted))
     _run_layer("[6/15]", "L5_ADI_SPEC",
                lambda: gen_l5_adi_spec(project, extracted))
     _run_layer("[7/15]", "L6_CONTROL_LOGIC",
                lambda: gen_l6_control_logic(project, extracted))
+
+    # layergate-2 — run the L4/L5/L6 SEMANTIC layer gates INSIDE the
+    # convergence loop, not only from flow_compliance_check.
+    #
+    # These gates were previously reachable only via
+    # flow_compliance_check, i.e. long after phase 1 had self-reported
+    # PASS and downstream steps had already consumed the layer. Each
+    # asserts the layer carries what its CONSUMER needs in an actionable
+    # form; each failure mode degrades silently in the PASS direction
+    # (an empty FSM scaffold, an uncompilable register file, an analog
+    # block graded against a generic default). Same invocation shape as
+    # the l3_opcode_name_coverage gate above: subprocess, verdict routed
+    # to reports/phase1/, FAIL bubbles to the strict-mode exit via
+    # `cov_gate_failed`. Chip-AGNOSTIC — every gate reads only the
+    # project's own L docs and its consuming program.
+    for _gate_name, _report_stem in (
+        ("l4_regmap_phase2_emitter_contract_check",
+         "l4_regmap_emitter_contract"),
+        ("l4_regmap_enumerated_values_typed_check",
+         "l4_regmap_enumerated_values"),
+        # v1.7.74 — for #507. L4's denominator: how many register
+        # address bindings the input DECLARES against how many L4
+        # carries. Without it a shortfall of any size sits behind the
+        # enum-typing gate's PASS, which audits only the fields that
+        # are already present.
+        ("l4_regmap_declared_register_coverage_check",
+         "l4_regmap_declared_register_coverage"),
+        ("l5_analog_block_spec_actionable_check",
+         "l5_analog_block_spec_actionable"),
+        ("l6_fsm_scaffold_actionable_check",
+         "l6_fsm_scaffold_actionable"),
+    ):
+        _gate_path = (Path(__file__).resolve().parent
+                      / f"{_gate_name}.py")
+        if not _gate_path.is_file():
+            continue
+        _gate_report = _pl.report_path(
+            project, f"phase1/{_report_stem}.json")
+        _gate_report.parent.mkdir(parents=True, exist_ok=True)
+        _gate_cmd = [sys.executable, str(_gate_path), str(project)]
+        # Only the layergate-2 gates accept --json; the Wave-38 enum
+        # gate does not, so its verdict is captured from stdout only.
+        if _gate_name != "l4_regmap_enumerated_values_typed_check":
+            _gate_cmd += ["--json", str(_gate_report)]
+        try:
+            _gate_cp = subprocess.run(
+                _gate_cmd, capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError) as _exc:
+            print(f"      {_gate_name}: SKIP (not runnable: {_exc})")
+            continue
+        if _gate_cp.stdout:
+            print(f"      {_gate_name}: "
+                  f"{_gate_cp.stdout.strip().splitlines()[0]}")
+        # exit 1 == FAIL (blocks). exit 2 == SKIP / not applicable.
+        if _gate_cp.returncode == 1:
+            cov_gate_failed = True
+            print(f"      {_gate_name}: FAIL — blocks phase1 "
+                  f"(see reports/phase1/{_report_stem}.json)")
     _run_layer("[8/15]", "L7_TEST_DEBUG",
                lambda: gen_l7_test_debug(project, extracted))
     _run_layer("[9/15]", "L8_RTL_CONSTANTS",
@@ -54051,6 +59938,23 @@ def main() -> int:
     # clocks can carry a freq value. Chip-AGNOSTIC: pure RTL
     # naming convention + numeric aggregation.
     _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project)
+
+    # C4/2026-07-31 — bind a clock frequency the design STATES in a
+    # document table to the L8 clock records the SAME ROW names.
+    # Runs HERE, after BOTH clock producers above (`clock_domains[]`
+    # from _post_emit_typed_clock_domains, `clocks[]` from the
+    # v1.6.571 seeder), because it only ever fills records that
+    # already exist — it never invents a clock — so it must see the
+    # final record set. Fail-open and non-verdict, exactly like the
+    # sibling `l21_doc_supply_rail_synth` call site: a producer that
+    # cannot run must not take Phase 1 down with it, and the
+    # `l8_clock_period_actionability_check` gate remains the thing
+    # that BLOCKS on an unresolvable clock.
+    try:
+        from l8_doc_clock_freq_synth import main as _l8_clk_synth
+        _l8_clk_synth([str(project), "--apply"])
+    except Exception as _e:      # pragma: no cover - fail-open
+        print(f"      l8_doc_clock_freq_synth skipped (non-fatal): {_e}")
 
     # v1.6.96 (issue #28 Bug 1a) — propagate detect_ic_class verdict
     # into L9.interface_type + L1.class_path so sdc_gen._is_aid_class()
@@ -54256,6 +60160,16 @@ def main() -> int:
     _v1_6_394_post_emit_finalize_sim_only(
         _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json")
 
+    # LAST in the L9 post-emit chain, so it sees every producer's output:
+    # drop any submodule entry that cites a document not containing its own
+    # name. See `_post_emit_l9_drop_uninstantiated_submodule_names`.
+    _n_uncited = _post_emit_l9_drop_uninstantiated_submodule_names(
+        project, extracted)
+    if _n_uncited:
+        print(f"      l9_submodule_name_provenance: dropped {_n_uncited} "
+              f"entry(ies) whose name is absent from the document they cite "
+              f"(recorded in L9.submodules_dropped_uncited)")
+
     # v1.6.107 (#38) — _collect_fsm_states_from_rtl removed: phase1
     # must not read the IP's own RTL (RTL-as-oracle rule). Legitimate
     # OTP-internal FSM states (when described in a datasheet) flow
@@ -54307,6 +60221,12 @@ def main() -> int:
     # the keyword. Running back-fill AFTER the purge makes the back-
     # fill the FINAL signal that wins. Chip-AGNOSTIC.
     _v1_6_295_post_emit_l8_clock_mhz_back_fill(project)
+
+    # ORGANIC-20260803b — AFTER the back-fill, so the scalar `clock_mhz` and
+    # the primary domain are re-pointed together and cannot disagree (which
+    # is exactly what `l8_sta_clock_period_design_owned_check` L8-2 refuses).
+    # No-op unless the run named a PDK and a document row is keyed to it.
+    _v1_9_65_post_emit_l8_pdk_scoped_clock(project)
 
     # Wave-on-fix: backfill auto-discovered literals into typed fields
     # FIRST so subsequent coverage report sees the final state (otherwise
@@ -54381,7 +60301,7 @@ def main() -> int:
                     "l8_protocol_widths_v0_1_65"] = (
                     f"R19 extractor: width_parameters="
                     f"{len(_widths_payload['width_parameters'])}")
-                _l8_path.write_text(json.dumps(_l8_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l8_path, _l8_existing)
                 print(f"      → L8_RTL_CONSTANTS overlay: "
                       f"width_parameters={len(_widths_payload['width_parameters'])}")
     except Exception as _l8_err:
@@ -54459,7 +60379,7 @@ def main() -> int:
                         "l8_encoding_mirror_v0_1_72"] = (
                         f"R41: mirrored {_l8_mirror_count} L15 encoding "
                         f"tables into L8 canonical concept slots")
-                    _l8_path_r41.write_text(json.dumps(_l8_r41, indent=2, ensure_ascii=False) + "\n")
+                    _stamp.dump(_l8_path_r41, _l8_r41)
                     print(f"      → L8 encoding overlay: {_l8_mirror_count} tables")
     except Exception as _r41_err:
         print(f"      L8 encoding overlay FAILED: {_r41_err}", file=sys.stderr)
@@ -54594,7 +60514,7 @@ def main() -> int:
                     if isinstance(_alock, dict):
                         _alock.setdefault("AXI3", "2 bits")
                         _alock.setdefault("AXI4_AXI5", "1 bit")
-                _l8p_r48.write_text(json.dumps(_l8_r48, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l8p_r48, _l8_r48)
                 print(f"      → L8_RTL_CONSTANTS universal-constants overlay applied")
     except Exception as _r48_err:
         print(f"      R48 overlay FAILED (fail-open): {_r48_err}",
@@ -54689,7 +60609,7 @@ def main() -> int:
                     "l1_protocol_metadata_v0_1_68"] = (
                     f"R23+R44: overlaid {len(_payload_keys)} extractor keys "
                     f"+ sibling-L-doc synth")
-                _l1_path.write_text(json.dumps(_l1_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l1_path, _l1_existing)
                 print(f"      → L1_DATASHEET overlay: {len(_payload_keys)} protocol-doc keys")
     except Exception as _l1_err:
         print(f"      L1 protocol overlay FAILED (fail-open): {_l1_err}",
@@ -54744,7 +60664,7 @@ def main() -> int:
                 _l12_existing.setdefault("extraction_strategy", {})[
                     "l12_behavioral_sequences_v0_1_73"] = (
                     f"R43: overlaid {len(_payload_keys_l12)} L12 sequences")
-                _l12_path.write_text(json.dumps(_l12_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l12_path, _l12_existing)
                 print(f"      → L12 overlay: {len(_payload_keys_l12)} sequences")
     except Exception as _l12_err:
         print(f"      L12 overlay FAILED (fail-open): {_l12_err}",
@@ -54787,7 +60707,7 @@ def main() -> int:
                     "l6_control_logic_v0_1_72"] = (
                     f"R42: overlaid {len(_payload_keys_l6)} L6 concepts "
                     f"(paragraph + L17-channel-synth)")
-                _l6_path.write_text(json.dumps(_l6_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l6_path, _l6_existing)
                 print(f"      → L6 overlay: {len(_payload_keys_l6)} concepts")
     except Exception as _l6_err:
         print(f"      L6 overlay FAILED (fail-open): {_l6_err}",
@@ -54822,7 +60742,7 @@ def main() -> int:
                     "l9_integration_concepts_v0_1_72"] = (
                     f"R40: overlaid {len(_payload_keys_l9)} integration "
                     f"concepts for bus_interconnect_protocol class")
-                _l9_path.write_text(json.dumps(_l9_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l9_path, _l9_existing)
                 print(f"      → L9 overlay: {len(_payload_keys_l9)} concepts")
     except Exception as _l9_err:
         print(f"      L9 overlay FAILED (fail-open): {_l9_err}",
@@ -54861,7 +60781,7 @@ def main() -> int:
                         "l17_handshake_pairs_v0_1_70"] = (
                         f"R27: synthesised {len(_hs_pairs)} handshake_pairs "
                         f"from L17.channels")
-                    _l17p_r27.write_text(json.dumps(_l17_r27, indent=2, ensure_ascii=False) + "\n")
+                    _stamp.dump(_l17p_r27, _l17_r27)
                     print(f"      → L17.handshake_pairs: {len(_hs_pairs)} pairs")
     except Exception as _r27_err:
         print(f"      L17 handshake_pairs FAILED (fail-open): {_r27_err}",
@@ -55031,7 +60951,7 @@ def main() -> int:
                     f"R21+R25+R45: mirrored L17.channels + L17.handshake_pairs "
                     f"+ {_l15_mirror_count} L15 encoding tables + synth-universal "
                     f"L3 facts for bus_interconnect_protocol")
-                _l3p.write_text(json.dumps(_l3, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l3p, _l3)
                 print(f"      → L3 overlay: channels="
                       f"{len(_l17_channels) if isinstance(_l17_channels, list) else 0}, "
                       f"handshakes="
@@ -55065,7 +60985,7 @@ def main() -> int:
                     "Bus-interconnect protocol specification itself has no "
                     "architectural register map; implementation-side "
                     "configuration registers (if any) are integration-defined.")
-                _l4p_r52.write_text(json.dumps(_l4_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l4p_r52, _l4_r52)
             # L5 analog/digital interface presence
             _l5p_r52 = _gd_r52 / "L5_ADI_SPEC.json"
             if _l5p_r52.is_file():
@@ -55073,7 +60993,7 @@ def main() -> int:
                 _l5_r52.setdefault("analog_digital_interface_present", False)
                 _l5_r52.setdefault("signaling_summary",
                     "Pure digital protocol: synchronous CMOS single-ended signals; rising-edge sampling on ACLK; no analog content.")
-                _l5p_r52.write_text(json.dumps(_l5_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l5p_r52, _l5_r52)
             # L10 test cases / compliance
             _l10p_r52 = _gd_r52 / "L10_TEST_CASES.json"
             if _l10p_r52.is_file():
@@ -55092,7 +61012,7 @@ def main() -> int:
                     "Reset behavior (ARESETn assertion holds VALID LOW; rising-edge resumption)",
                     "Write-response ordering (BRESP returned per AWID order)",
                 ])
-                _l10p_r52.write_text(json.dumps(_l10_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l10p_r52, _l10_r52)
             # L14 backward compat traps + version naming.
             # Note: parity wants Claude's shape (list-of-dict trap records);
             # plain list-of-strings stays ABSENT.
@@ -55139,7 +61059,7 @@ def main() -> int:
                     "published before Issue F; AXI5 introduced in Issue G "
                     "(2021).")
                 _l14_r52["fields"] = _l14_f_r52
-                _l14p_r52.write_text(json.dumps(_l14_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l14p_r52, _l14_r52)
             # L15 burst address equations (universal pseudocode)
             _l15p_r52 = _gd_r52 / "L15_ENCODING_TABLES.json"
             if _l15p_r52.is_file():
@@ -55161,7 +61081,7 @@ def main() -> int:
                     "Upper_Byte_Lane_first": "Aligned_Address + (Number_Bytes - 1) - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes",
                 })
                 _l15_r52["fields"] = _l15_f_r52
-                _l15p_r52.write_text(json.dumps(_l15_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l15p_r52, _l15_r52)
             # L2 out_of_order_completion + protocol_overview wording fixes
             _l2p_r52 = _gd_r52 / "L2_FRS.json"
             if _l2p_r52.is_file():
@@ -55171,7 +61091,7 @@ def main() -> int:
                     _po_r52["burst_based"] = True
                     _po_r52["multiple_outstanding"] = True
                     _po_r52["out_of_order_completion"] = True
-                _l2p_r52.write_text(json.dumps(_l2_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l2p_r52, _l2_r52)
             # L3 burst_length_field.AxLEN_AXI4.range + lock_encodings.note + response 0b11 wording
             _l3p_r52 = _gd_r52 / "L3_CMD_PROTOCOL.json"
             if _l3p_r52.is_file():
@@ -55189,7 +61109,7 @@ def main() -> int:
                     _rresp = _re_r52.get("RRESP[1:0] / BRESP[1:0]")
                     if isinstance(_rresp, dict):
                         _rresp["0b11"] = "DECERR  - decode error (no slave at address)"
-                _l3p_r52.write_text(json.dumps(_l3_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l3p_r52, _l3_r52)
             # L8 width_parameters.WSTRB + exclusive_max_bytes + Wrap_Boundary alias + Upper_Byte_Lane wording
             _l8p_r52 = _gd_r52 / "L8_RTL_CONSTANTS.json"
             if _l8p_r52.is_file():
@@ -55213,7 +61133,7 @@ def main() -> int:
                 _blp_r52 = _l8_r52.setdefault("byte_lane_pseudocode", {})
                 if isinstance(_blp_r52, dict):
                     _blp_r52["Upper_Byte_Lane_subsequent"] = "Lower_Byte_Lane + Number_Bytes - 1"
-                _l8p_r52.write_text(json.dumps(_l8_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l8p_r52, _l8_r52)
             # L9 id_routing + interconnect_ordering wording
             _l9p_r52 = _gd_r52 / "L9_INTEGRATION_SPEC.json"
             if _l9p_r52.is_file():
@@ -55246,7 +61166,7 @@ def main() -> int:
                     "When the interconnect cannot decode a slave access, it "
                     "must return DECERR. Spec recommends routing to a "
                     "default slave that returns DECERR.")
-                _l9p_r52.write_text(json.dumps(_l9_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l9p_r52, _l9_r52)
             # L12 byte_invariance + narrow_transfer + early_response + device_transactions
             _l12p_r52 = _gd_r52 / "L12_BEHAVIORAL_SEQUENCES.json"
             if _l12p_r52.is_file():
@@ -55274,7 +61194,7 @@ def main() -> int:
                     _ors_r52["different_memory_locations"] = (
                         "No ordering guarantee unless made coherent via "
                         "barriers/CMOs in ACE.")
-                _l12p_r52.write_text(json.dumps(_l12_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l12p_r52, _l12_r52)
             # L6 default_ready per-channel wording fix
             _l6p_r52 = _gd_r52 / "L6_CONTROL_LOGIC.json"
             if _l6p_r52.is_file():
@@ -55300,7 +61220,7 @@ def main() -> int:
                         "AXI4/AXI5 add an additional slave dependency on AW "
                         "handshake before BVALID, so slaves take fewer "
                         "buffering decisions independent of the address.")
-                _l6p_r52.write_text(json.dumps(_l6_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l6p_r52, _l6_r52)
             # L17 ordering_rules.response_ordering / write_data_ordering wording
             _l17p_r52 = _gd_r52 / "L17_CHANNEL_SIGNAL_CATALOG.json"
             if _l17p_r52.is_file():
@@ -55318,7 +61238,7 @@ def main() -> int:
                         "transaction addresses. AXI4+ removes WID and "
                         "prohibits write data interleaving.")
                 _l17_r52["fields"] = _l17_f_r52
-                _l17p_r52.write_text(json.dumps(_l17_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l17p_r52, _l17_r52)
             # L18 slave_classification.Peripheral_slave shorten to match Claude
             _l18p_r52 = _gd_r52 / "L18_INTERCONNECT_TOPOLOGY.json"
             if _l18p_r52.is_file():
@@ -55334,7 +61254,7 @@ def main() -> int:
                         "side effects per access; reorder restrictions; may "
                         "support a subset of transaction types.")
                 _l18_r52["fields"] = _l18_f_r52
-                _l18p_r52.write_text(json.dumps(_l18_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l18p_r52, _l18_r52)
             print(f"      → R52 residual cleanup applied")
     except Exception as _r52_err:
         print(f"      R52 residual cleanup FAILED (fail-open): {_r52_err}",
@@ -55442,7 +61362,7 @@ def main() -> int:
                     "Shared address buses and multiple data buses",
                     "Multilayer, with multiple address and data buses",
                 ])
-                _l1p_r50.write_text(json.dumps(_l1_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l1p_r50, _l1_r50)
             # L2 functional requirements + error responses + protocol_overview extras
             _l2p_r50 = _gd_r50 / "L2_FRS.json"
             if _l2p_r50.is_file():
@@ -55475,7 +61395,7 @@ def main() -> int:
                     _wc = _po_r50.get("wire_count")
                     if isinstance(_wc, int) or (isinstance(_wc, str) and len(_wc.strip()) < 5):
                         _po_r50["wire_count"] = "5 independent channels, each with VALID/READY pair"
-                _l2p_r50.write_text(json.dumps(_l2_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l2p_r50, _l2_r50)
             # L6 anti_deadlock_rule (we have an extractor but it sometimes
             # misses; backstop here).
             _l6p_r50 = _gd_r50 / "L6_CONTROL_LOGIC.json"
@@ -55483,7 +61403,7 @@ def main() -> int:
                 _l6_r50 = json.loads(_l6p_r50.read_text())
                 _l6_r50.setdefault("anti_deadlock_rule",
                     "Inside the slave, VALID for an outgoing channel must not be combinationally dependent on the READY of the same channel; this prevents combinational deadlock.")
-                _l6p_r50.write_text(json.dumps(_l6_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l6p_r50, _l6_r50)
             # L7 spec-provided observability + AXI5 features mentioned in TOC
             _l7p_r50 = _gd_r50 / "L7_TEST_DEBUG.json"
             if _l7p_r50.is_file():
@@ -55509,7 +61429,7 @@ def main() -> int:
                     "E2.4 Optional read data parity",
                     "E2.5 Optional write data parity",
                 ])
-                _l7p_r50.write_text(json.dumps(_l7_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l7p_r50, _l7_r50)
             # L9: scrub garbage values from regex-noise extracts (R50b).
             # Several L9 catalog regexes (axi4_lite_subset,
             # interface_categories, interconnect_ordering_requirements,
@@ -55561,7 +61481,7 @@ def main() -> int:
                 for _k, _v_replacement in _L9_REPLACEMENTS_R50.items():
                     if _looks_garbage_r50(_l9_r50b.get(_k)):
                         _l9_r50b[_k] = _v_replacement
-                _l9p_r50b.write_text(json.dumps(_l9_r50b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l9p_r50b, _l9_r50b)
             # L12 ordering_rules_summary extras
             _l12p_r50 = _gd_r50 / "L12_BEHAVIORAL_SEQUENCES.json"
             if _l12p_r50.is_file():
@@ -55576,7 +61496,7 @@ def main() -> int:
                         "Write after read on the same ID must be observed in issue order.")
                     _ors_r50.setdefault("read_after_write_same_ID",
                         "Read after write on the same ID must be observed in issue order.")
-                _l12p_r50.write_text(json.dumps(_l12_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l12p_r50, _l12_r50)
             print(f"      → R50 universal-doc-fact synth applied")
     except Exception as _r50_err:
         print(f"      R50 universal-doc-fact synth FAILED (fail-open): {_r50_err}",
@@ -55664,7 +61584,7 @@ def main() -> int:
                         "issuing RVALID; RVALID stays asserted until RREADY "
                         "accepted and final RLAST transferred.")
                 _l17_r46b["fields"] = _l17_f_r46b
-                _l17p_r46b.write_text(json.dumps(_l17_r46b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l17p_r46b, _l17_r46b)
             # L8_TIMING
             _l8tp_r46b = _gd_r46b / "L8_TIMING_WAVEFORM.json"
             if _l8tp_r46b.is_file():
@@ -55718,7 +61638,7 @@ def main() -> int:
                     "AXI4/AXI5: BVALID may only be asserted after BOTH (AW handshake AND W handshake with WLAST=1) complete.",
                     "Same-ID write transactions: BRESP must follow same-AWID order of acceptance.",
                 ])
-                _l8tp_r46b.write_text(json.dumps(_l8t_r46b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l8tp_r46b, _l8t_r46b)
             # L18
             _l18p_r46b = _gd_r46b / "L18_INTERCONNECT_TOPOLOGY.json"
             if _l18p_r46b.is_file():
@@ -55810,7 +61730,7 @@ def main() -> int:
                         "False": "Not supported (or not declared)",
                     })
                 _l18_r46b["fields"] = _l18_f_r46b
-                _l18p_r46b.write_text(json.dumps(_l18_r46b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l18p_r46b, _l18_r46b)
             # L9
             _l9p_r46b = _gd_r46b / "L9_INTEGRATION_SPEC.json"
             if _l9p_r46b.is_file():
@@ -55822,7 +61742,7 @@ def main() -> int:
                     _idh_r46b.setdefault("id_routing", "For read data, interconnect uses the appended bits of RID to determine which master port the data is destined for. Interconnect removes these bits before passing RID back to the originating master.")
                 _l9_r46b.setdefault("default_signal_values_when_omitted",
                     "Refer to Tables A9-1..A9-4 for master/slave write/read channel default signal values applied when a signal is omitted from the integration interface.")
-                _l9p_r46b.write_text(json.dumps(_l9_r46b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l9p_r46b, _l9_r46b)
             print(f"      → batch synth applied to L17/L18/L8_TIMING/L9 (after 14c2)")
     except Exception as _r46b_err:
         print(f"      R46-relocated batch synth FAILED (fail-open): {_r46b_err}",
@@ -55904,6 +61824,18 @@ def main() -> int:
     except Exception as _fpc_err:
         print(f"      floorplan-contract ingest FAILED (fail-open): "
               f"{_fpc_err}", file=sys.stderr)
+
+    # SALVAGE #315 — lift measurable coverage targets stated in the design's
+    # OWN inputs into L22.fields.coverage_goals[], the layer that consumes
+    # them. Runs HERE — after the 14d L19-L23 skeleton emit, alongside the SDC
+    # and floorplan ingests — because L22_VERIFICATION_PLAN.json must exist on
+    # disk first. See `_post_emit_l22_coverage_goals`.
+    try:
+        _post_emit_l22_coverage_goals(project)
+        _post_emit_l22_checklist_milestones(project)
+    except Exception as _l22_cov_err:
+        print(f"      L22 coverage-goal emit FAILED (fail-open): "
+              f"{_l22_cov_err}", file=sys.stderr)
 
     # v0.1.77 (R53/R54/R55): serial_peripheral_protocol class-gated synth.
     # Runs AFTER 14d L19-L23 skeleton so the L19-L23 + L4 + L11 + L13
@@ -57597,9 +63529,7 @@ def main() -> int:
                     ]
                     if len(_kept_sweep) != len(_tc_sweep):
                         _l10_sweep["test_cases"] = _kept_sweep
-                        _l10p_sweep.write_text(
-                            json.dumps(_l10_sweep, indent=2,
-                                       ensure_ascii=False) + "\n")
+                        _stamp.dump(_l10p_sweep, _l10_sweep)
                         print(f"      → stripped "
                               f"{len(_tc_sweep) - len(_kept_sweep)} "
                               f"opcode_hex test_case(s) (L3.opcodes empty → "
@@ -57614,6 +63544,84 @@ def main() -> int:
     except Exception as _sweep_err:
         print(f"      L10↔L3 sweep FAILED (fail-open): {_sweep_err}",
               file=sys.stderr)
+
+    # LAST word on who named this design's top module. Runs here, after the
+    # whole protocol-synth chain, for the same reason the L4 reconciler below
+    # runs here: the wrong value is not written by any one overlay. Detectors
+    # co-fire — a document that mentions start bits and stop bits trips the
+    # UART detector whatever else it is about — and among the packs that fire,
+    # the one that writes `L9.top_module` need not be the one whose `ic_name`
+    # ends up naming the design. Measured in this repo's own committed
+    # artefacts: `ble` and `io_link` top out as `PC16550D`, `ddr4` as
+    # `DDR3_SDRAM_component`, `ddr5` and `gddr6` as `HBM3_stack_on_interposer`,
+    # `qspi_ospi` as `SPI`, `sas` as `AHCI_HBA`.
+    #
+    # `phase2_scaffold_gen.derive_top_module_name` ranks L9.top_module above
+    # L1.ic_name and sanitizes the winner into the Verilog top-module
+    # identifier, so this is not a labelling question — it decides what the
+    # RTL, the QSF and the full-stack TB all bind to.
+    #
+    # `_pack_top_module.apply` (called by each pack in place of its bare
+    # assignment) leaves the record this reads; `reconcile` compares the
+    # ic_name recorded WITH the claim against the ic_name left standing and
+    # puts the displaced value back when they disagree. It never removes or
+    # empties `top_module` — `l_doc_structured_field_count_check` counts a
+    # non-empty one toward L9's >=3 typed structural fields.
+    # Fail-open: a broken reconcile must not lose an otherwise complete run.
+    try:
+        import _pack_top_module as _ptm_rec
+        _gd_ptm = _pl.generated_docs_dir(project)
+        _l9p_ptm = _gd_ptm / "L9_INTEGRATION_SPEC.json"
+        if _l9p_ptm.is_file():
+            _l9_ptm = json.loads(_l9p_ptm.read_text())
+            _settled_ic = None
+            _l1p_ptm = _gd_ptm / "L1_DATASHEET.json"
+            if _l1p_ptm.is_file():
+                try:
+                    _l1_ptm = json.loads(_l1p_ptm.read_text())
+                    if isinstance(_l1_ptm, dict):
+                        _settled_ic = _l1_ptm.get("ic_name")
+                except (OSError, ValueError):
+                    _settled_ic = None
+            _ptm_change = _ptm_rec.reconcile(_l9_ptm, _settled_ic)
+            if _ptm_change:
+                _stamp.dump(_l9p_ptm, _l9_ptm)
+                print(f"      → L9 top_module {_ptm_change['action']}: "
+                      f"{_ptm_change.get('was')!r} → "
+                      f"{_ptm_change.get('top_module')!r} "
+                      f"(pack ic_name {_ptm_change.get('pack_ic_name')!r} "
+                      f"≠ settled {_ptm_change.get('settled_ic_name')!r})")
+    except Exception as _ptm_err:
+        print(f"      L9 top_module reconcile FAILED (fail-open): "
+              f"{_ptm_err}", file=sys.stderr)
+
+    # #516 — LAST word on L4's register-map claims. Runs here, after every
+    # L-doc generator, post-emit walker and protocol-synth overlay has had its
+    # turn, because the false claim this repairs is not written by any of them
+    # in particular: `spi_protocol_synth._apply_universal` is invoked for EVERY
+    # dispatched ic_class (~45 protocols, not just SPI) and unconditionally
+    # `setdefault`s `register_map_present=True`, so a document with an empty
+    # register list ends the run asserting a register map it does not carry.
+    # Placing the reconciler at the tail makes it a chokepoint: whichever
+    # overlay stamps the claim, the published L4 still has to agree with its own
+    # `registers[]`. See `l4_register_map_claim` for the four rules and why an
+    # unsupported True is REMOVED rather than negated (False is the gates' N/A
+    # escape — negating would hand out a pass, removing cannot).
+    # Fail-open: a broken reconcile must not lose an otherwise complete run.
+    try:
+        from l4_register_map_claim import reconcile_register_map_claims
+        _l4p_claim = _pl.generated_docs_dir(project) / "L4_REGMAP.json"
+        if _l4p_claim.is_file():
+            _l4_claim = json.loads(_l4p_claim.read_text())
+            _claim_changes = reconcile_register_map_claims(_l4_claim)
+            if _claim_changes:
+                _stamp.dump(_l4p_claim, _l4_claim)
+                for _ch in _claim_changes:
+                    print(f"      → L4 register-map claim {_ch['rule']}: "
+                          f"{_ch['field']} {_ch['action']} — {_ch['why']}")
+    except Exception as _claim_err:
+        print(f"      L4 register-map claim reconcile FAILED (fail-open): "
+              f"{_claim_err}", file=sys.stderr)
 
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the
     # gate sees the final L docs + explicit pattern set)
@@ -57653,12 +63661,211 @@ def main() -> int:
               f"{ho.get('numerator',0)}/{ho.get('denominator',0)} = "
               f"{ho.get('pct', 0.0):.1f}%")
     print(f"Coverage (overall):  {pct:.1f}%")
+    # v1.7.72 — for #499 defect 4. The three percentages above are
+    # computed over documents that EXTRACTED, so a document the
+    # ingester could not render cannot lower any of them. Measured on a
+    # real design, this block printed `254/254 = 100.0%` while a 21 KB
+    # document the design's own brief named as ground truth had
+    # contributed zero characters. Print the census next to the ratio so
+    # the two are never read apart.
+    _summary_overall = report.get("overall") or {}
+    _visited_n = _summary_overall.get("input_documents_visited")
+    _extracted_n2 = _summary_overall.get("input_documents_extracted")
+    _unread_n = _summary_overall.get("input_documents_unread") or 0
+    if _visited_n is not None:
+        print(f"Input documents:     {_visited_n} visited / "
+              f"{_extracted_n2} extracted / {_unread_n} UNREAD")
+    if _unread_n:
+        print("  !! the percentages above were computed WITHOUT these "
+              "documents — they cannot lower a coverage ratio:")
+        for _d in (report.get("unread_input_documents") or [])[:10]:
+            print(f"     UNREAD {_d.get('path')} — {_d.get('reason')}")
+    # Same reason as the census above, one level down: the percentages credit a
+    # literal that reached ANY layer, so they cannot tell a fact that reached
+    # its CONSUMING layer from one that only reached a prose layer. Printed
+    # here so the two are never read apart.
+    _ld = report.get("layer_demand") or {}
+    try:
+        from phase1_layer_demand_probe import summary_line as _ld_summary
+        if _ld.get("probes_run"):
+            print(_ld_summary(_ld))
+    except Exception:                                       # noqa: BLE001
+        pass
+    for _l in (_ld.get("layers") or []):
+        if _l.get("status") != "SILENT_EMPTY":
+            continue
+        print(f"  !! the input states {_l['input_states']} {_l['fact']}(s) "
+              f"and {_l['layer']} holds NONE — the percentages above cannot "
+              f"see this, because the same literals were credited from other "
+              f"layers.")
+        print(f"     consumer left starved: {_l['consumer']}")
+        for _it in (_l.get("stated_items") or [])[:10]:
+            _ev = _it["evidence"]
+            print(f"     STATED {_it['name']} ({_it['use']}, "
+                  f"{_it['voltage_v']} V) at {_ev['file']}:{_ev['line']}")
     print()
     print("=== AI deep-review handoff ===")
     print("After this runner completes, AI MUST invoke the "
           "`phase1-completeness-deep-review` skill to verify every "
           "fact in input docs lands in generated_docs/L*.json. "
           "Deterministic gate: phase1_doc_input_completeness_check.py.")
+
+    # ------------------------------------------------------------------
+    # CLOCK CONTRACT — one clock name declares exactly one period.
+    #
+    # Runs after every post-emit hook that can touch L8.clocks[] /
+    # L8.clock_domains[] (the typed-clock-domains mirror, the staged-SDC
+    # ingest, the `clocks[]` seeder, the AID-scaffold purge), on what those
+    # hooks actually left on disk. It folds a record that BORROWED a clock
+    # name onto the record that OWNS it — a stated rule, not a guess — and
+    # REFUSES anything else: two records that each own the name and pin
+    # different periods are left standing, stamped on the document as
+    # `clock_contract_conflicts[]`, and BLOCK the run. A timing contract
+    # that quietly picks one of two periods is the defect this prevents.
+    # ------------------------------------------------------------------
+    clock_contract_conflicts: List[str] = []
+    try:
+        clock_contract_conflicts = _post_emit_enforce_clock_contract(project)
+    except Exception as _cc_err:      # never let the guard crash the runner
+        print(f"      clock-contract enforcement ERRORED: {_cc_err}",
+              file=sys.stderr)
+    for _msg in clock_contract_conflicts:
+        print(f"      {_msg}", file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # POST-EMIT L-DOC GATES (batch layergate-1, + portability)
+    #
+    # Three of these are SEMANTIC: they assert that each layer carries what
+    # its CONSUMER needs in an ACTIONABLE form — not that a token appears
+    # somewhere. The fourth, `l_doc_path_portability_check`, is about the
+    # documents' FORM rather than their content: no emitted L document may
+    # carry an absolute filesystem path, because an L document is a design
+    # artefact the flow reads back and diffs, and an absolute path makes the
+    # same design emit a different document from every checkout.
+    #
+    # It belongs in THIS list, and only here, for the same reason the
+    # semantic three do: it must run after EVERY L document exists, since
+    # any emitter in the run can introduce the defect, and it must BLOCK.
+    # The rule was previously enforced only by
+    # `shipped_path_portability_check <plugin-root>` — over plugin SOURCE,
+    # never over the artefacts that actually carry the paths — so two
+    # separate live emitters reintroduced it and nothing noticed.
+    #
+    # These assert that each layer carries what its CONSUMER needs in an
+    # ACTIONABLE form — not that a token appears somewhere. They run HERE,
+    # after [15/15], because two of them derive their requirement from
+    # SIBLING L-docs (the L2 gate resolves the constants L8/L9 dereference
+    # by name), which do not exist yet at the L3 emit step where the
+    # older l3_opcode_name_coverage gate is invoked.
+    #
+    # They BLOCK: a FAIL returns exit 1 from the runner, exactly like
+    # cov_gate_failed. The documented anti-pattern this avoids is a layer
+    # gate whose verdict is FAIL while the flow continues anyway — the
+    # older typed-depth L1/L3 gates are reachable only from
+    # flow_compliance_check and the phase1 convergence loop never sees
+    # them. Each gate VACUOUS_PASSes when its layer is structurally
+    # inapplicable, so a non-protocol / scalar-pin design is unaffected.
+    # ------------------------------------------------------------------
+    _SEMANTIC_LAYER_GATES = (
+        ("l1_pin_bus_width_actionable_check",
+         "phase1/l1_pin_bus_width_actionable.json"),
+        ("l2_named_constant_resolvable_check",
+         "phase1/l2_named_constant_resolvable.json"),
+        ("l3_opcode_dispatch_key_actionable_check",
+         "phase1/l3_opcode_dispatch_key_actionable.json"),
+        ("l_doc_path_portability_check",
+         "phase1/l_doc_path_portability.json"),
+        # Sibling of the portability guard, and here for the same reason:
+        # about the documents' FORM, must run after EVERY L document
+        # exists, and must BLOCK. It asserts that every document this run
+        # emitted records the release that produced it. Any writer that
+        # creates an L document without going through
+        # `l_doc_generator_stamp.dump` leaves one unstamped, and this is
+        # what makes that FAIL the run that introduced it instead of being
+        # discovered in the published corpus seventy releases later — which
+        # is exactly how three issues came to be filed in one day against
+        # documents nobody could tell were old.
+        ("l_doc_generator_stamp",
+         "phase1/l_doc_generator_stamp.json"),
+    )
+    layer_gate_failures: List[str] = []
+    for _gate_name, _rel_report in _SEMANTIC_LAYER_GATES:
+        _gate_path = Path(__file__).resolve().parent / f"{_gate_name}.py"
+        if not _gate_path.is_file():
+            continue
+        try:
+            _rp = _pl.report_path(project, _rel_report)
+            _rp.parent.mkdir(parents=True, exist_ok=True)
+            _cp = subprocess.run(
+                [sys.executable, str(_gate_path), str(project),
+                 "--json", str(_rp)],
+                capture_output=True, text=True, timeout=300,
+            )
+        except Exception as _exc:      # never let a gate crash the runner
+            print(f"      {_gate_name}: SKIPPED ({_exc})")
+            continue
+        _out = (_cp.stdout or _cp.stderr or "").strip().splitlines()
+        print(f"      {_gate_name}: {_out[0] if _out else '(no output)'}")
+        if _cp.returncode == 1:
+            layer_gate_failures.append(_gate_name)
+            for _line in _out[1:6]:
+                print(f"        {_line}", file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # ADVISORY POST-CHECKS — these REPORT and CONTINUE. They are kept out
+    # of _SEMANTIC_LAYER_GATES above deliberately: that table BLOCKS, and
+    # silently adding a non-blocking member to it would make the table's
+    # own contract a lie.
+    #
+    # ORGANIC — `phase1_sufficiency_check.py` is the DECLARED sufficiency
+    # gate of the Phase-1 dual-track convergence, and it was wired into
+    # NOTHING: not this runner, not phase1_one_shot_runner, not
+    # flow/phase1_phase2_phase3.yaml. It was referenced only by its own
+    # tests, so `flow_gate_enforcement_audit` could not even classify it as
+    # orphaned — the audit walks the flow definition, and this gate was
+    # not in it. Measured consequence: a natural-language-only Phase-1
+    # emitted all 27 layers with ZERO ports and reported PASS, while the
+    # unwired gate — run by hand over the very same generated_docs — said
+    # `insufficient / MISSING required: ['ports']`. Phase-2 then failed
+    # with `rtl/ missing`, because there was no interface to build to.
+    # Wiring it ADVISORY makes the next blind run NAME that, instead of
+    # reporting a green Phase-1 into a Phase-2 that cannot succeed.
+    #
+    # ADVISORY, not BLOCKING, and deliberately so: promoting it would need
+    # the corpus sweep flow-change-acceptance §2/§3 require (evidence that
+    # it fires on no legitimately-complete design, and a prove-by-run of a
+    # stopped flow). That evidence is NOT claimed here.
+    # ------------------------------------------------------------------
+    _ADVISORY_POST_CHECKS = (
+        ("phase1_input_corpus_purity_check",
+         [str(project)], "phase1/input_corpus_purity.json"),
+        ("phase1_sufficiency_check",
+         [str(_pl.generated_docs_dir(project))],
+         "phase1/phase1_sufficiency.json"),
+    )
+    for _chk_name, _chk_args, _rel_report in _ADVISORY_POST_CHECKS:
+        _chk_path = Path(__file__).resolve().parent / f"{_chk_name}.py"
+        if not _chk_path.is_file():
+            # DEGRADE LOUDLY: an absent check is stated, never assumed clean.
+            print(f"      {_chk_name}: SKIPPED (program not present) "
+                  f"[ADVISORY]")
+            continue
+        try:
+            _rp = _pl.report_path(project, _rel_report)
+            _rp.parent.mkdir(parents=True, exist_ok=True)
+            _cp = subprocess.run(
+                [sys.executable, str(_chk_path), *_chk_args,
+                 "--json", str(_rp)],
+                capture_output=True, text=True, timeout=300,
+            )
+        except Exception as _exc:      # never let an advisory crash the run
+            print(f"      {_chk_name}: SKIPPED ({_exc}) [ADVISORY]")
+            continue
+        _out = (_cp.stdout or _cp.stderr or "").strip().splitlines()
+        print(f"      {_chk_name}: "
+              f"{_out[0] if _out else '(no output)'} [ADVISORY]")
+        for _line in _out[1:6]:
+            print(f"        {_line}")
 
     # v1.6.134 (#51 Fix 9c) — coverage gate FAIL hard-blocks the
     # runner exit, regardless of `--strict`. Pre-v1.6.134 the gate
@@ -57686,9 +63893,34 @@ def main() -> int:
     except OSError:
         pass
 
+    if clock_contract_conflicts:
+        # BLOCKING, by design and BEFORE every other verdict. The document
+        # says two things about one clock, so there is no timing contract to
+        # hand phase 2/3 — every consumer downstream would pick one period by
+        # list order and no artifact would record which. The conflict is on
+        # the document (`clock_contract_conflicts[]`) with both records and
+        # their provenance; fix the extraction that produced the second
+        # period, do not delete one record to make this green.
+        print("FAIL: L8 declares a clock with conflicting periods — "
+              f"{len(clock_contract_conflicts)} conflict(s); see "
+              "clock_contract_conflicts[] in generated_docs/L8_*.json")
+        return 1
     if cov_gate_failed:
-        print("FAIL: l3_opcode_name_coverage gate FAILed — see "
-              "reports/audit/phase1/l3_opcode_name_coverage.json")
+        # layergate-2: this flag is now raised by the l3 opcode-name
+        # coverage gate OR by any of the L4/L5/L6 semantic layer gates
+        # run in the loop above, so the message no longer names a single
+        # gate. Each failing gate has already printed its own verdict
+        # line and routed a report under reports/phase1/.
+        print("FAIL: a phase1 layer gate FAILed — see the gate verdict "
+              "lines above and reports/phase1/*.json")
+        return 1
+    if layer_gate_failures:
+        # BLOCKING, by design. Each of these means a layer is missing a
+        # requirement IN THE LAYER THAT CONSUMES IT, so the downstream
+        # consumer would silently emit a wrong port list / a hole where a
+        # timing constant belongs / a dispatcher missing a command.
+        print(f"FAIL: semantic layer gate(s) FAILed: "
+              f"{', '.join(layer_gate_failures)} — see reports/phase1/")
         return 1
     if args.strict and (pct < 80.0 or total_todo > 0):
         reasons = []

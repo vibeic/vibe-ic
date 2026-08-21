@@ -265,7 +265,7 @@ def test_openroad_accepts_routability_driven_flag():
     res = subprocess.run(
         ["openroad", "-no_init", "-exit"],
         input="help global_placement\n",
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     out = res.stdout + res.stderr
     assert "-routability_driven" in out
     assert "-timing_driven" in out

@@ -1,0 +1,1 @@
+/nix/store/5pg1p37fxc5pyi40lfgay9s953yp3qdh-devshell-dir/bin/python /workspace/scripts/klayout/check_top.py /data/rundir/runs/RUN_2026-08-18_21-40-05/01-klayout-readlayout/chip_top.gds --top chip_top
