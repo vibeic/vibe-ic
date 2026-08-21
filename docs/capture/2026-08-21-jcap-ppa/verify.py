@@ -678,6 +678,19 @@ check("the handoff's unswept list is the sweep table's unswept rows",
       WORDS.get(_m.group(1)) == len(_unswept) and _listed == _unswept,
       f"prose says {_m.group(1) if _m else '-'} ({len(_listed)} named), table has {len(_unswept)}")
 
+# 45. a bundle's directory declares a date and its emitted summary declares one
+# too, and nothing compared them. They disagree here: the batch was re-emitted
+# after midnight. Renaming the directory is the WRONG repair -- it abandons the
+# landed path -- so the rule is: agree, or say so with both dates present.
+_dirdate = re.match(r"(\d{4}-\d{2}-\d{2})", HERE.name)
+_sumdate = json.loads((CAND / "summary.json").read_text()).get("date", "")
+control("bundle-date", bool(_dirdate) and bool(_sumdate))
+_declared = bool(_dirdate) and _dirdate.group(1) in MD and _sumdate in MD
+check("the bundle's directory date and its summary date agree, or the gap is declared",
+      (_dirdate and _dirdate.group(1) == _sumdate) or _declared,
+      f"directory {_dirdate.group(1) if _dirdate else '-'}, summary {_sumdate}, "
+      f"declared in the report: {_declared}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

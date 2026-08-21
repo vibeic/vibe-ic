@@ -1365,6 +1365,23 @@ reported a *rename*, which is the only reason this bundle now updates the landed
 one instead of shipping a second copy of itself at a path that had already been
 ruled not to land.
 
+**A second clause, and this bundle violates it.** A bundle has an identity as
+well as a location:
+
+    directory name declares          2026-08-21
+    its own summary.json declares    2026-08-22
+    its backlog ids declare          20260822
+    the two sibling bundles          self-consistent, both 2026-08-21
+
+The batch was re-emitted after midnight, and the emitter derives its date from
+one instant at run time — which is right, since a record filed today should say
+today. **Nothing anywhere would have reported the disagreement.** It is
+deliberately not repaired by renaming the directory: that abandons the path this
+bundle already occupies on the landing branch and creates a second copy, which is
+this record's *first* clause failing. So it is declared instead, here and in the
+record, and check 45 requires exactly that — the dates agree, or the discrepancy
+is stated with both of them.
+
 **(o)** yes — it would have refused this lane's own first emit, which is exactly
 the event that produced the record.
 **(d)** yes, and it already has three other instances: the two sibling lanes that
@@ -2191,7 +2208,7 @@ rather than in a command line that would fail for whoever tried it.
 zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (44 fast + 4 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (45 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -2371,7 +2388,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            44 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            45 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -2391,7 +2408,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     44 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     45 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other
