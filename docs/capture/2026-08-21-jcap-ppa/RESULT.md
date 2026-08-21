@@ -1655,8 +1655,8 @@ Each mutation was reverted immediately and the working tree confirmed
 byte-identical afterwards (`git diff --exit-code`, zero dirty entries, three
 times).
 
-**Extended to twelve, and one of the runs disproved a claim.** The same
-procedure was applied to nine more of the sixteen:
+**Extended to thirteen, and one of the runs disproved a claim.** The same
+procedure was applied to ten more of the sixteen:
 
     F-10  de-duplicate by CONTENT, not by path
           -> 3 failed   test_one_measurement_is_not_counted_twice
@@ -1671,6 +1671,8 @@ procedure was applied to nine more of the sixteen:
 
 Two more were driven the same way:
 
+    (smaller) the bundled validator's semantics hold on a stock host
+          -> 1 failed   test_the_bundled_semantics
     (lane) a present-but-empty population is never a pass
           -> 2 failed   test_a_present_but_empty_population_is_never_a_pass
                         test_mutation_metric_extract_empty_bundle
@@ -1681,9 +1683,11 @@ Two more were driven the same way:
     (lane) a bad invocation is 3, not the could-not-check code
           -> 20 failed  test_unknown_flag_is_bad_invocation_not_undetermined
 
-So **twelve of the sixteen ALREADY-PROGRAM claims have now been driven: eleven
-fire and one cannot.** The four not driven are named rather than left to look
-covered: the bundled-schema entry was not attempted; F-13 is enforced by a
+So **thirteen of the sixteen ALREADY-PROGRAM claims have now been driven: twelve
+fire and one cannot.** The bundled validator was probed by letting a boolean
+validate as an integer — the JSON Schema subtlety a hand-written validator is
+most likely to get wrong — and `test_the_bundled_semantics` catches it. The three
+not driven are named rather than left to look covered: F-13 is enforced by a
 document and a naming convention, which a mutation cannot address; and the two
 denominator gates resisted an honest probe — the probe I built pointed each gate
 at a synthetic directory, and neither gate's population is the directory it is
@@ -1722,6 +1726,24 @@ already: folding a distinct failure into a neighbouring record is exactly how
 unable to fail is not a footnote on a population record. The rule is stated over
 the semantics rather than the syntax, because a default can also arrive from a
 dataclass field, a `dict.get`, or a base class.
+
+**One by-product, measured and deliberately NOT made a record.** The second
+mutation on the bundled validator — making `validate_schema_itself` return no
+errors at all — was undetected, and the reason is that the function has no caller
+anywhere in the tree. Swept, because a population of one would not be worth
+mentioning:
+
+    names exported in an `_ppa` `__all__` with no reference
+      outside their own file                                     15
+
+A name in `__all__` is a declared public interface, so fifteen of them having no
+consumer is the same declared-versus-actual disagreement this cluster keeps
+finding, and a mutation to any of them is undetectable by construction. It is
+written down here with its measurement rather than promoted to a record, and the
+distinction from `A-30` is deliberate: A-30 exists because a claim IN THIS REPORT
+was shown false, whereas this is a hygiene observation with no failing consequence
+demonstrated. The measurement is here for whoever wants to make the case; I have
+not made it.
 
 This is deliberately NOT wired into `verify.py`. A verifier that edits the
 product tree to prove a point is a verifier that can leave the tree edited, and
