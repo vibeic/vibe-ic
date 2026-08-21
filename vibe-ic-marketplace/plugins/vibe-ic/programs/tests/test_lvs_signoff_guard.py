@@ -128,3 +128,40 @@ def test_error_message_is_actionable():
         assert "PORTLESS" in msg
         assert "port makeall" in msg          # points to the canonical fix
         assert "magic_port_extract_emit" in msg or "lvs_def_port_seed" in msg
+
+
+# --- the exit code is what the caller reads, and no test drove main()
+
+def test_main_exits_non_zero_on_a_portless_extraction(tmp_path):
+    """`gate_cli_mutation_probe` reported this guard SILENT.
+
+    The tests above call `assert_lvs_trustworthy()` and assert the exception;
+    the caller reads the EXIT CODE, and nothing exercised `main()`'s mapping —
+    so the guard could have started exiting 0 on a portless extraction, which
+    is the one thing it exists to stop.
+
+    Driven by real SPICE and a real verdict file rather than stubs: the guard's
+    whole subject is what those two say.
+    """
+    import lvs_signoff_guard as L
+    sp = tmp_path / "layout.spice"
+    sp.write_text(".subckt top\nM1 a b c d nfet\n.ends\n")
+    vf = tmp_path / "netgen.log"
+    vf.write_text("Circuits match uniquely.\n")
+    assert L.main(["--spice", str(sp), "--verdict-file", str(vf)]) == 1
+
+
+def test_main_exits_zero_when_the_top_has_ports(tmp_path):
+    """The other direction, or the test above is met by always failing."""
+    import lvs_signoff_guard as L
+    sp = tmp_path / "layout.spice"
+    sp.write_text(".subckt top vdd vss in out\nM1 a b c d nfet\n.ends\n")
+    vf = tmp_path / "netgen.log"
+    vf.write_text("Circuits match uniquely.\n")
+    assert L.main(["--spice", str(sp), "--verdict-file", str(vf)]) == 0
+
+
+def test_main_refuses_on_a_missing_netlist(tmp_path):
+    """rc 2 — could not ask, which is not a pass."""
+    import lvs_signoff_guard as L
+    assert L.main(["--spice", str(tmp_path / "nope.spice")]) == 2

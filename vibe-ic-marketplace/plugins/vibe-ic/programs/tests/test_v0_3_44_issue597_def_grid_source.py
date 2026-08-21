@@ -27,6 +27,7 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import def_manufacturing_grid_check as DMG  # noqa: E402
 import phase3_one_shot_runner as R  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 
 
 def _def(coords, dbu=1000):
@@ -114,8 +115,8 @@ def test_cli_offgrid_source_exit_one(tmp_path):
 # ── live-corpus canary (content-gated): the real routed DEF is on-grid ──────
 
 def test_real_routed_def_is_grid_clean_when_present():
-    art = Path("/home/reyerchu/vibe-ic/benchmark_ic/5th__opentitan_aes_v0338"
-               "/phase3/stage3/pnr/routed_preantenna.def")
+    art = require_repo("benchmark_ic/5th__opentitan_aes_v0338/phase3/"
+                       "stage3/pnr/routed_preantenna.def")
     if not art.is_file():
         pytest.skip("real routed DEF not on this host (live corpus)")
     txt = art.read_text(errors="replace")

@@ -59,6 +59,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import _path_layout as _pl
+# Imported, never re-typed: the emitter's bookkeeping key must be excluded
+# from every string harvest here, and a local copy of the literal is how the
+# exclusion silently stops matching when the key is renamed.
+from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY
 
 
 # Generic single-wire half-duplex protocol nomenclature. Chip-AGNOSTIC.
@@ -247,6 +251,21 @@ def _l4_has_otp(l4: Optional[dict], l11: Optional[dict],
     different ICs (otp_field_table, otp_image_hex, otp_registers,
     otp_bytes, otp_program_table, otp_section_layout, otp_dump,
     otp_macro).
+
+    ORGANIC-20260614 (#653) — the Phase-1 L4 generator emits an
+    ``otp_layout`` SKELETON dict (default depth/width geometry, all
+    content lists empty: fields/read_map/write_map/lockbits/
+    trim_registers/mask_sources=[]) for NO-OTP ICs.  A non-empty dict
+    is truthy, so the old ``if v: return True`` reported has_otp=True
+    even for ICs that explicitly declare ``otp_present: false`` /
+    ``no_otp_layout_in_input: true``.  Fix is two-fold and chip-AGNOSTIC:
+      (1) an explicit absence veto (L11 ``otp_present == False`` OR
+          L4/L11 ``no_otp_layout_in_input``/``no_otp_in_input``) is a
+          HARD short-circuit to False; and
+      (2) a dict-valued OTP key only counts as evidence when at least
+          one CONTENT sub-field is non-empty — geometry-only skeletons
+          do not.  Non-dict OTP values (e.g. a populated ``lockbits``
+          list or ``otp_bytes`` blob) keep their plain truthiness.
     """
     otp_keys = (
         "otp_layout", "otp_table", "otp_image",
@@ -260,12 +279,75 @@ def _l4_has_otp(l4: Optional[dict], l11: Optional[dict],
         "otp_field_table", "otp_image_hex", "otp_registers",
         "otp_bytes", "otp_program_table", "otp_content",
     )
+    # Content sub-fields that distinguish a POPULATED OTP-layout dict from
+    # a geometry-only skeleton (which carries only depth/width defaults).
+    otp_content_subkeys = (
+        "fields", "read_map", "write_map", "lockbits",
+        "otp_bytes", "trim_registers", "mask_sources",
+        "registers", "image", "image_hex", "program_table",
+        "entries", "rows",
+    )
+
+    def _dict_has_content(d: dict) -> bool:
+        """True iff a dict-valued OTP key holds real content, not just
+        a geometry-only skeleton (all content sub-fields empty)."""
+        for ck in otp_content_subkeys:
+            if d.get(ck):
+                return True
+        return False
+
+    def _otp_value_is_evidence(v: Any) -> bool:
+        if isinstance(v, dict):
+            return _dict_has_content(v)
+        return bool(v)
+
+    def _doc_has_otp_content(j: Any) -> bool:
+        """True iff this L doc carries POPULATED OTP content (not a
+        geometry-only skeleton), at the top level or nested."""
+        if not isinstance(j, dict):
+            return False
+        for k in otp_keys:
+            if _otp_value_is_evidence(j.get(k)):
+                return True
+        for nested_key in ("L4_REGMAP", "L11_OTP_CONTENT", "L14_OTP_CONTENT"):
+            nv = j.get(nested_key)
+            if isinstance(nv, dict):
+                for k in nested_otp_keys:
+                    if _otp_value_is_evidence(nv.get(k)):
+                        return True
+        return False
+
+    # (1) Explicit absence veto — hard short-circuit to False.  A no-OTP
+    #     IC may carry a truthy-but-empty skeleton AND an honest negative
+    #     declaration; the declaration wins.
+    #
+    #     ...but ONLY over a skeleton.  #653 added this veto to beat a
+    #     truthy-but-EMPTY otp_layout, and its own docstring says so.  As an
+    #     UNCONDITIONAL short-circuit it also beat POPULATED content, which
+    #     turns the declaration from a tie-breaker into an override: a doc
+    #     carrying a real OTP image was reported has_otp=False because some
+    #     other pass had left an `otp_present: False` beside it.  The
+    #     declaration is a PROXY for "this design has no OTP"; the property
+    #     is "is there OTP content".  So the veto is now scoped to the case
+    #     #653 describes — no populated OTP content anywhere in L4/L11/L14.
+    #     When content IS present the content wins and the stale/foreign
+    #     declaration is ignored.
+    if not any(_doc_has_otp_content(j) for j in (l4, l11, l14_otp)):
+        for j in (l4, l11, l14_otp):
+            if not isinstance(j, dict):
+                continue
+            if j.get("otp_present") is False:
+                return False
+            for veto_key in ("no_otp_layout_in_input", "no_otp_in_input"):
+                if j.get(veto_key) is True:
+                    return False
+
     for j in (l4, l11, l14_otp):
         if not isinstance(j, dict):
             continue
         for k in otp_keys:
             v = j.get(k)
-            if v:
+            if _otp_value_is_evidence(v):
                 return True
         # Nested under L4_REGMAP / L11_OTP_CONTENT structure
         for nested_key in (
@@ -273,9 +355,23 @@ def _l4_has_otp(l4: Optional[dict], l11: Optional[dict],
         ):
             nv = j.get(nested_key)
             if isinstance(nv, dict):
-                for k in nested_otp_keys:
-                    if nv.get(k):
-                        return True
+                # Same scoping as the top-level veto above: a negative
+                # declaration only wins when the nested doc carries no
+                # populated content of its own.
+                nested_has_content = any(
+                    _otp_value_is_evidence(nv.get(k))
+                    for k in nested_otp_keys
+                )
+                if not nested_has_content:
+                    if nv.get("otp_present") is False:
+                        return False
+                    for veto_key in (
+                        "no_otp_layout_in_input", "no_otp_in_input",
+                    ):
+                        if nv.get(veto_key) is True:
+                            return False
+                if nested_has_content:
+                    return True
     return False
 
 
@@ -439,6 +535,39 @@ def _l1_declares_analog_class(l1: Optional[dict]) -> bool:
     return False
 
 
+# ORGANIC #613 — digital serial-readout signature of a data converter's
+# analog→digital interface. A data converter (sigma-delta / SAR / pipeline ADC,
+# or DAC) emits a DIGITAL serial bitstream (1-bit serial outputs / dout-style
+# pins) — the digital half that a pure-analog PMIC/LDO/amplifier never has.
+# Generic data-converter readout vocabulary only; NO chip / vendor / SKU name.
+_V1_6_613_SERIAL_READOUT_RE = re.compile(
+    r"(?:digital\s+serial\s+output"        # "Digital serial outputs OUT1..OUT6"
+    r"|serial\s+bitstream"                  # "serial bitstream"
+    r"|digital\s+bitstream"                 # "digital bitstream per channel"
+    r"|1[\s\-]?bit\s+serial"                # "1-bit serial (OUTn / dout)"
+    r"|bitstream\s+per\s+channel"           # "digital bitstream per channel"
+    r"|\bdout\w*\s+serial|serial\s+\w*dout" # "dout serial"
+    r"|serial\s+readout"                    # "serial readout"
+    r")",
+    re.IGNORECASE)
+
+
+def _v1_6_613_has_digital_serial_readout(l1: Optional[dict],
+                                         l5: Optional[dict]) -> bool:
+    """ORGANIC #613 — True iff the design exposes a DIGITAL serial readout (a
+    1-bit serial output / dout-style digital bitstream). This is the
+    discriminator that separates a data_converter (analog content AND a digital
+    serial readout) from a pure_analog IC (analog content, NO digital readout) —
+    a pure-analog PMIC/LDO/amplifier never emits a digital bitstream, so it does
+    NOT match and stays pure_analog. Harvests L1+L5 string leaves; chip-AGNOSTIC
+    (generic serial-bitstream vocabulary, no chip name)."""
+    sink: List[str] = []
+    for d in (l1, l5):
+        if isinstance(d, dict):
+            _harvest_strings(d, sink)
+    return bool(_V1_6_613_SERIAL_READOUT_RE.search(" ".join(sink)))
+
+
 def _l6_has_fsm(l6: Optional[dict]) -> bool:
     if not isinstance(l6, dict):
         return False
@@ -545,6 +674,33 @@ def detect_ic_class(project_dir: Path,
     return profile
 
 
+def infer_ic_class_uncached(project_dir: Path) -> Dict[str, Any]:
+    """Run the classifier NOW and return the profile WITHOUT reading OR
+    writing ``<project>/reports/ic_class.json``.
+
+    re #495 Stage 1 — there are THREE layers of ``ic_class`` in a project and
+    only two of them had a name:
+
+      layer 1  the per-L-doc ``ic_class`` stamp   frozen at phase-1 emit time
+      layer 2  ``reports/ic_class.json``          frozen at the last
+                                                  ``refresh=True`` run
+      layer 3  what the classifier says TODAY
+
+    ``detect_ic_class(p)`` returns layer 2 whenever the file exists (the #435
+    persist-once contract) and ``detect_ic_class(p, refresh=True)`` is the only
+    way to reach layer 3 — but it PERSISTS, so a read-only consumer such as a
+    gate cannot use it without mutating the project it is auditing. Layer 3 was
+    therefore unreachable from any gate, and layer-2 staleness was invisible:
+    measured over the 103 tracked projects that carry a persisted profile,
+    layer 2 and layer 3 disagree on 24 of them.
+
+    This is the read-only door to layer 3. It is deliberately NOT wired into
+    any pass/fail verdict — see ``ic_class_consistency_check``, which uses it
+    to DISCLOSE staleness, not to fail on it. chip-AGNOSTIC.
+    """
+    return _detect_ic_class_infer(Path(project_dir))
+
+
 def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
     """The actual single-pass inference (see detect_ic_class)."""
     project = Path(project_dir)
@@ -560,6 +716,7 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
         "is_pure_analog": False,
         "is_pure_digital": False,
         "is_mixed_signal": False,
+        "is_data_converter": False,  # ORGANIC #613
         "ic_class": "unknown",
         # ORGANIC-20260607 #495 — the rule/feature(s) that DECIDED the
         # class. Recorded for drift diagnosis: when two plugin versions
@@ -638,6 +795,35 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
         profile["decisive_evidence"] = "protocol_class==aid_class"
         return profile
 
+    # ORGANIC #613 — data-converter / mixed-signal-with-digital-readout class.
+    # A data converter (sigma-delta / SAR / pipeline ADC, or DAC) has analog
+    # content AND a digital serial readout (1-bit serial outputs / dout-style
+    # bitstream) but NO SW-visible command protocol and NO control FSM, so it
+    # would otherwise collapse to pure_analog (rtl_gen=null + fallback_skill=
+    # null → Phase 2 SKIPs RTL entirely, leaving NO generation path for the
+    # digital decimation / serial-readout datapath it genuinely needs).
+    # Detect it ABOVE the pure_analog fall-through, gated on a digital
+    # serial-readout signature that a pure-analog PMIC/LDO/amplifier never has
+    # (so pure_analog stays pure_analog). CRITICAL: is_pure_analog is set False
+    # so the design does NOT receive the pure-analog digital-backend WAIVE
+    # (both _project_is_pure_analog and _is_pure_analog_no_rtl_track key on that
+    # FLAG) — a data converter HAS a digital datapath that must reach
+    # synth → PnR → GDS via the registry's fallback_skill=spec-to-rtl.
+    # chip-AGNOSTIC: structural (has_analog + serial-readout vocab), no chip.
+    if (profile["has_analog"]
+            and not profile["has_command_protocol"]
+            and not profile["has_fsm"]
+            and _v1_6_613_has_digital_serial_readout(l1, l5)):
+        profile["is_data_converter"] = True
+        profile["is_pure_analog"] = False
+        profile["ic_class"] = "data_converter"
+        profile["decisive_evidence"] = (
+            "is_data_converter (has_analog + digital serial readout, no cmd, "
+            "no fsm) — analog→digital interface recognised; NOT pure_analog "
+            "so the digital decimation/serial-readout datapath reaches the "
+            "digital backend via spec-to-rtl (#613)")
+        return profile
+
     if profile["is_pure_analog"]:
         # Wave 42 (v0.119.70) / SF5 — fault-injection hardening.
         # If L1/L5 paint the IC as pure_analog yet the RTL exposes
@@ -668,13 +854,19 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
     if profile["is_mixed_signal"]:
         # Mixed signal w/o OTP collapses to digital_cmd_driven if it has
         # commands; else mixed_signal_otp without otp is rare — fall back.
-        if profile["has_command_protocol"]:
+        # Guard against processor_cpu misfire (ORGANIC #450 idiom, mirrors
+        # the #542 bus_peripheral guard): a CPU's ISA opcode enum harvests
+        # as has_command_protocol but carries no protocol framing, and must
+        # route to the ISA-bearing processor_cpu detector below, not here.
+        if (profile["has_command_protocol"]
+                and not _looks_like_processor_cpu(l1, l2)):
             profile["ic_class"] = "digital_cmd_driven"
             profile["decisive_evidence"] = (
                 "is_mixed_signal (no otp) + has_command_protocol")
             return profile
 
-    if profile["is_pure_digital"] and profile["has_command_protocol"]:
+    if (profile["is_pure_digital"] and profile["has_command_protocol"]
+            and not _looks_like_processor_cpu(l1, l2)):
         profile["ic_class"] = "digital_cmd_driven"
         profile["decisive_evidence"] = (
             "is_pure_digital + has_command_protocol")
@@ -825,7 +1017,15 @@ def _harvest_strings(obj: Any, sink: List[str], max_strings: int = 4000,
     """Walk nested dict/list and append every string leaf to `sink`. Bounded
     so a 100KB L doc with 5000 keys doesn't blow out. Skips obvious metadata
     fields (`extraction_evidence`, `extraction_strategy`) that contain only
-    snippets re-quoted from the input and would double-count features."""
+    snippets re-quoted from the input and would double-count features.
+
+    `_generator` is on that list for a stronger reason than double-counting:
+    it is the emitter's own bookkeeping (which release wrote this file), so
+    NOTHING in it is a fact about the chip. Measured: when its taxonomy
+    digest was first emitted as `"sha256:<hex>"`, the `algorithm_family`
+    pattern below matched it and nine documents' `ic_class` flipped from
+    `bus_peripheral` to `crypto_accelerator` — the classifier reading its
+    own toolchain's version record as evidence of a cipher core."""
     if len(sink) >= max_strings or max_depth <= 0:
         return
     if isinstance(obj, str):
@@ -834,7 +1034,8 @@ def _harvest_strings(obj: Any, sink: List[str], max_strings: int = 4000,
     if isinstance(obj, dict):
         for k, v in obj.items():
             if k in ("extraction_evidence", "extraction_strategy",
-                     "auto_cited_sections", "vendor_short_literals"):
+                     "auto_cited_sections", "vendor_short_literals",
+                     _GENERATOR_STAMP_KEY):
                 continue
             _harvest_strings(v, sink, max_strings, max_depth - 1)
     elif isinstance(obj, list):
@@ -1121,45 +1322,74 @@ _CONDITIONAL_LAYER_GUARDS = {
     "L10": ("has_command_protocol",),
     "L6": ("has_fsm", "has_command_protocol"),
     "L3": ("has_command_protocol",),
+    # Completeness layers (L24-L27). All four are guarded on profile flags
+    # that no CURRENT detector sets → they default absent → the conditional
+    # layer resolves to `skip` → it is NOT presence-enforced → NO false-fail
+    # on any current chip. They auto-activate (→ mandatory) the moment a
+    # detector/profile sets the flag (e.g. a future dedicated MEMS or memory-
+    # module class, or a project that has entered the physical-signoff flow).
+    #   L24 signoff / L25 reliability-mission-profile → `targets_signoff`
+    #     (a fabricated chip that has reached / declared physical signoff).
+    #   L26 MEMS/transduction  → `is_mems` OR `has_mechanical_transduction`.
+    #   L27 memory-module SPD  → `is_memory_module`.
+    "L24": ("targets_signoff",),
+    "L25": ("targets_signoff",),
+    "L26": ("is_mems", "has_mechanical_transduction"),
+    "L27": ("is_memory_module",),
 }
 
+
+# Completeness layers (L24-L27) — added to `conditional` for EVERY class so
+# `required_layers` classifies them (never silently drops one). Each is guarded
+# (see _CONDITIONAL_LAYER_GUARDS) on a profile flag that no current detector
+# sets, so they resolve to `skip` by default → NOT presence-enforced → NO
+# false-fail on any current chip. This keeps the L1-L13 mandatory floor
+# byte-unchanged (incl. the fail-closed unknown/bare_fpga → 13 mandatory) while
+# making L24/L25 enforceable once a project declares `targets_signoff` and
+# L26/L27 enforceable once a dedicated MEMS / memory-module class opts in.
+_COMPLETENESS_CONDITIONAL = ["L24", "L25", "L26", "L27"]
 
 _CLASS_LAYER_REQUIREMENTS = {
     "aid_class_half_duplex": {
         "mandatory": ["L1", "L2", "L3", "L4", "L5", "L6", "L7",
                       "L8", "L9", "L10", "L11", "L12", "L13"],
-        "conditional": [],
+        "conditional": list(_COMPLETENESS_CONDITIONAL),
     },
     "digital_cmd_driven": {
         "mandatory": ["L1", "L2", "L3", "L4", "L6", "L7", "L8", "L9", "L10"],
-        "conditional": ["L5", "L11", "L12", "L13"],
+        "conditional": ["L5", "L11", "L12", "L13"] + _COMPLETENESS_CONDITIONAL,
     },
     "mixed_signal_otp": {
         "mandatory": ["L1", "L2", "L3", "L4", "L5", "L6", "L7",
                       "L8", "L9", "L10", "L11"],
-        "conditional": ["L12", "L13"],
+        "conditional": ["L12", "L13"] + _COMPLETENESS_CONDITIONAL,
     },
     "pure_analog": {
         "mandatory": ["L1", "L2", "L5", "L8", "L13"],
-        "conditional": ["L3", "L6", "L7", "L10", "L11", "L12"],
+        "conditional": ["L3", "L6", "L7", "L10", "L11", "L12"]
+                       + _COMPLETENESS_CONDITIONAL,
     },
     "bare_fpga": {
         # Maintain legacy 13/13 path — fail-closed when we can't tell.
         "mandatory": ["L1", "L2", "L3", "L4", "L5", "L6", "L7",
                       "L8", "L9", "L10", "L11", "L12", "L13"],
-        "conditional": [],
+        "conditional": list(_COMPLETENESS_CONDITIONAL),
     },
     "unknown": {
         # Fail-closed default — every existing project keeps the legacy
         # 13/13 contract until L1/L2 are produced.
         "mandatory": ["L1", "L2", "L3", "L4", "L5", "L6", "L7",
                       "L8", "L9", "L10", "L11", "L12", "L13"],
-        "conditional": [],
+        "conditional": list(_COMPLETENESS_CONDITIONAL),
     },
 }
 
 
-_ALL_LAYERS = [f"L{i}" for i in range(1, 14)]
+# Universe of layers that `required_layers` classifies as mandatory / skip.
+# L1-L13 (the classic presence set) + the completeness layers L24-L27. The
+# advanced/protocol layers L14-L23 are intentionally NOT presence-enforced by
+# this brain (they remain opt-in, same as before), so they are excluded here.
+_ALL_LAYERS = [f"L{i}" for i in range(1, 14)] + ["L24", "L25", "L26", "L27"]
 
 
 def required_layers(profile: Dict[str, Any]) -> Dict[str, List[str]]:
@@ -1243,6 +1473,40 @@ def _lookup_registry_class(ic_class: str) -> Optional[dict]:
     return None
 
 
+def class_tree_node_for(ic_class: str) -> Dict[str, Any]:
+    """re #495 Stage 2 — translate a REGISTRY class name into a class-tree node.
+
+    The registry (snake_case) and ``agents/class_kb/class-tree.yaml``
+    (kebab-case) share no names, so a ``class_path`` written by the registry
+    side cannot be resolved by the tree side. Each registry entry now declares
+    where it belongs, with a status that says what that declaration is WORTH:
+
+      ``mapped``                   node exists and its template carries a floor
+      ``mapped_floorless``         node exists, template deliberately has no
+                                   floor (any-ic / digital-ic are categorical
+                                   intermediates) — resolving there is honest
+                                   and scores nothing
+      ``mapped_template_missing``  node exists, NO template — resolving there is
+                                   measurably identical to not resolving at all
+      ``unmappable``               no node can be asserted without over-claiming
+
+    Returns ``{"node", "status", "basis", "registry_matched"}``. An unknown name
+    fails closed to ``status="unregistered"`` and ``node=None`` so no caller can
+    mistake ignorance for a mapping. chip-AGNOSTIC: a table lookup.
+    """
+    cfg = _lookup_registry_class(ic_class)
+    if cfg is None:
+        return {"node": None, "status": "unregistered", "basis": "",
+                "registry_matched": False}
+    node = cfg.get("class_tree_node")
+    return {
+        "node": node if isinstance(node, str) and node else None,
+        "status": cfg.get("class_tree_node_status") or "undeclared",
+        "basis": cfg.get("class_tree_node_basis") or "",
+        "registry_matched": True,
+    }
+
+
 def class_verification_flags(ic_class: str) -> Dict[str, Any]:
     """Return the verification-track applicability flags for ``ic_class``.
 
@@ -1315,6 +1579,7 @@ ALL_IC_CLASSES: frozenset = frozenset({
     "bus_interconnect_protocol",
     "serial_peripheral_protocol",
     "digital_arithmetic_primitive",
+    "data_converter",          # ORGANIC #613
 })
 
 # Every class reaches the protocol-synth dispatch (Option A). Kept as a

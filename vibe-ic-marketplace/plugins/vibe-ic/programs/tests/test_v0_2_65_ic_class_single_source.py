@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ic_class_profile as ICP  # noqa: E402
-import phase2_one_shot_runner as P2  # noqa: E402
+import design_one_shot_runner as P2  # noqa: E402
 
 
 def _proj(tmp_path, opcodes):
