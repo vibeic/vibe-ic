@@ -115,7 +115,7 @@ def test_setup_renders_lessons_md_end_to_end(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PLUGIN / "programs" / "benchmark_dispatch.py"),
          "verilogeval-v2", "--setup", "--dataset", str(ds), "--run", str(run)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
     assert (run / "lessons.md").is_file()
     assert "lessons:" in r.stdout and "MUST read" in r.stdout

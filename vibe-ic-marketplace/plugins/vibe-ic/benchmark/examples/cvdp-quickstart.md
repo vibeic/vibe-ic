@@ -7,12 +7,12 @@ The full 1,500+ problem set is gated by NVIDIA + Turing — request access there
 # 1. Clone
 git clone https://github.com/NVlabs/cvdp_benchmark ~/datasets/cvdp_benchmark
 
-# 2. Plan + env check (verify iic-eda container is running)
+# 2. Plan + env check (verify vibeic-eda container is running)
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py cvdp
 
-# 3. Stage the project under the iic-eda mount root
+# 3. Stage the project under the vibeic-eda mount root
 #    (the container can only see paths under the mount; symlinks aren't followed)
-MOUNT=~/AI_IC_design              # whatever your iic-eda /foss/designs mount maps to
+MOUNT="$VIBEIC_DESIGNS"           # whatever your vibeic-eda /foss/designs mount maps to (you chose it at install)
 rsync -a ~/datasets/cvdp_benchmark/example_dataset/<problem>/ $MOUNT/<problem>/
 
 # 4. Drive the runner per blind_instructions_shape_d.md
@@ -20,7 +20,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $MOUNT/<proble
     --pdk sky130A --ic-name <ic>
 
 # 5. Score against the hidden cocotb harness
-python3 ${CLAUDE_PLUGIN_ROOT}/benchmark-harness/score_cocotb_mcp.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/benchmark/score_cocotb_mcp.py \
     --project $MOUNT/<problem> --top <dut> --rtl work/rtl/<dut>.sv \
     --mount-root $MOUNT
 # → writes $MOUNT/<problem>/reports/cocotb_score.json

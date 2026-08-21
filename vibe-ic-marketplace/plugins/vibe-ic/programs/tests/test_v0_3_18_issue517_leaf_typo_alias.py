@@ -240,7 +240,7 @@ def test_wired_into_phase2_runner(tmp_path):
     # step sweeps rtl/ and auto-emits the alias.
     import sys as _sys
     _sys.path.insert(0, str(PROGRAMS))
-    import phase2_one_shot_runner as P
+    import design_one_shot_runner as P
     import _path_layout as _pl
     rtl_dir = _pl.rtl_dir(tmp_path)
     rtl_dir.mkdir(parents=True)
@@ -256,7 +256,7 @@ def test_wired_into_phase2_runner(tmp_path):
 def test_step_skips_when_no_typo(tmp_path):
     import sys as _sys
     _sys.path.insert(0, str(PROGRAMS))
-    import phase2_one_shot_runner as P
+    import design_one_shot_runner as P
     import _path_layout as _pl
     rtl_dir = _pl.rtl_dir(tmp_path)
     rtl_dir.mkdir(parents=True)

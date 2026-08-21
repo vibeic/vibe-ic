@@ -1,7 +1,0 @@
-{
-  "fields": {
-    "pdk_target": "N/A (protocol spec, not a tapeout)",
-    "io_voltage": "VBUS 5-48 V; CC single-ended logic",
-    "baud_kbaud": 300
-  }
-}

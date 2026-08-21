@@ -28,6 +28,22 @@ Usage:
     python3 cmd_arg_range_validation_check.py --rtl-dir <dir> [--json <report.json>]
 
 Exit: 0 = PASS, 1 = findings, 2 = IO error.
+
+#496 — DENOMINATOR DISCLOSURE
+----------------------------
+This gate's summary used to carry only ``pass`` / ``findings_count`` /
+``dispatcher_files`` / ``truncations``, so a reader could not tell whether a
+PASS meant "the dispatchers are clean" or "the rule was never applied". It was
+the second. Measured over the 107 tracked ``rtl`` directories under
+``benchmark-data``: 4 files in 4 directories are recognised as dispatchers, and
+**0 of them** reach the body of the rule, because the rule additionally needs a
+command-buffer signal AND a range-checkable target signal in the same file, and
+no dispatcher in the corpus has the command-buffer half.
+
+Note that ``dispatcher_files`` is NOT the denominator, even though it is the
+only count the gate published and it is non-zero. Publishing it as though it
+were would have overstated coverage 4-to-0. The denominator is the number of
+files the truncation rule was actually applied to, and it is disclosed as such.
 """
 from __future__ import annotations
 
@@ -38,6 +54,8 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
+
+import _gate_denominator as GD
 
 
 @dataclass
@@ -105,6 +123,10 @@ MSB_CHECK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# #496 — one unit of this gate's denominator, in the gate's own terms.
+_DENOM_UNIT = ("dispatcher files carrying both a command buffer and a "
+               "range-checkable argument signal")
+
 
 def _find_v_files(rtl_dir: Path) -> List[Path]:
     return sorted(
@@ -135,14 +157,45 @@ def _strip_comments(src: str) -> str:
     return ''.join(out)
 
 
+def _denominator(examined: int, considered: int,
+                 no_cmd_buf: int, no_target: int) -> GD.Denominator:
+    """Say what the truncation rule was applied to, and why not more."""
+    if examined:
+        return GD.Denominator(unit=_DENOM_UNIT, examined=examined,
+                              considered=considered)
+    if considered == 0:
+        reason = ("no file contains a command dispatcher — searched for a "
+                  "`case (cmd/opcode/...)` statement or 3+ `if (cmd == ...)` "
+                  "comparisons. Nothing in this RTL decodes a command, so the "
+                  "argument-truncation rule has no subject here.")
+    else:
+        reason = (
+            f"{considered} dispatcher file(s) found, but none also carries the "
+            "two signals the rule needs: a command buffer "
+            "(cmd_buf/rx_buf/cmd_data/rx_data/pkt_buf/rx_payload) and a "
+            "range-checkable target (addr/offset/index/length/count/channel/"
+            f"page). {no_cmd_buf} lacked the command buffer, {no_target} "
+            "lacked a target signal. The dispatchers here decode commands "
+            "that carry no numeric argument to bounds-check.")
+    return GD.Denominator(unit=_DENOM_UNIT, examined=0, considered=considered,
+                          not_applicable_reason=reason)
+
+
 def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
     findings: List[Finding] = []
     if not rtl_dir.exists() or not rtl_dir.is_dir():
         findings.append(Finding("ERROR", "IO", f"RTL directory not found: {rtl_dir}"))
-        return findings, {}
+        return findings, GD.attach({}, GD.Denominator(
+            unit=_DENOM_UNIT, examined=0, considered=0,
+            not_applicable_reason=(
+                f"RTL directory not found: {rtl_dir} — nothing was read, so "
+                "this result is an input error, not a verdict.")))
 
     dispatcher_files: List[str] = []
     truncations_found: List[Dict] = []
+    examined = 0
+    no_cmd_buf = 0
+    no_target = 0
 
     for p in _find_v_files(rtl_dir):
         try:
@@ -160,7 +213,14 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
         has_cmd_buf = bool(CMD_BUF_RE.search(text))
         has_target = bool(TARGET_SIGNALS.search(text))
         if not (has_cmd_buf and has_target):
+            # #496 — count WHY the rule stopped. A dispatcher that never
+            # reaches the rule body is not evidence that the rule passed.
+            if not has_cmd_buf:
+                no_cmd_buf += 1
+            if not has_target:
+                no_target += 1
             continue
+        examined += 1
 
         lines = text.split('\n')
         has_any_bounds = bool(BOUNDS_CHECK_RE.search(text)) or \
@@ -206,10 +266,13 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
                     details=line.strip(),
                 ))
 
-    return findings, {
+    summary: Dict = {
         "dispatcher_files": dispatcher_files,
         "truncations": truncations_found,
     }
+    GD.attach(summary, _denominator(examined, len(dispatcher_files),
+                                    no_cmd_buf, no_target))
+    return findings, summary
 
 
 def main(argv: List[str] = None) -> int:

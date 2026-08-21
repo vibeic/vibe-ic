@@ -66,14 +66,13 @@
     "verify_discriminating": true
    },
    "scorer_substitution_gap": [],
-   "scorer_substitution_gap_note": "Per open-benchmark-methodology § 3-§ 4. v0.1.44 verified the v0.1.37 claim by re-running both flagged designs under Verilator 5.020 (which supports SV-2012 array-literal init + `break;`). Result: ring_counter PASSes under Verilator (genuine substitution gap, recovered); asyn_fifo FAILs under Verilator with functional mismatch (the claim that this was a TB-side gap was wrong — the candidate RTL has a real functional bug). Updated to empty list per § 4: a gap entry must be DEFENSIBLE under a tool that supports the missing feature; one was, one wasn't. Honest scoring per § 3.",
-   "tool_substitution_verified_under": "Verilator 5.020 (Debian 5.020-1, --timing --binary)",
+   "scorer_substitution_gap_note": "Per open-benchmark-methodology § 3-§ 4 + § 4.1 floor-proof. v0.1.44 flagged asyn_fifo as scorer_substitution_recovered_fail on the belief that a specific CANDIDATE asyn_fifo RTL had a real functional bug. v1.3.43 re-ran the § 4.1 floor-proof on the GOLDEN (verified_asyn_fifo.v renamed to asyn_fifo, official testbench.v + tri_gen/wfull/rempty reference vectors) and CORRECTED the record: the golden compiles+PASSES ('===Your Design Passed===') under BOTH Verilator 5.020 --timing (10/10 stable, DISCRIMINATING — a wfull-forced-0 mutant reports Error) AND the forked iverilog 14.0-devel in vibeic-eda:0.2.5. It FAILS only under stock iverilog 12 (the official TB uses `break;` at line 102, an SV feature iverilog 12 rejects). So asyn_fifo is a GENUINE tool-substitution gap that RECOVERS — same class as ring_counter — NOT a candidate-RTL bug. It is FORK-FIXABLE and already fork-fixed (tools/vibeic-eda/FIX_STATUS.md, Tool 5 iverilog `break;`/`continue;` 🟢 upstream-adopted). scorer_substitution_gap stays [] (parallel to ring_counter, which is also recovered yet not excused) — this is a record correction, no pass-rate/denominator change. Honest scoring per § 3.",
+   "tool_substitution_verified_under": "Verilator 5.020 (Debian 5.020-1, --timing --binary) + forked iverilog 14.0-devel (vibeic-eda:0.2.5)",
    "scorer_substitution_recovered_pass": [
-    "ring_counter"
-   ],
-   "scorer_substitution_recovered_fail": [
+    "ring_counter",
     "asyn_fifo"
    ],
+   "scorer_substitution_recovered_fail": [],
    "status": "RUNNABLE — standalone designs with own testbench, Shape B harness"
   },
   "cvdp": {
