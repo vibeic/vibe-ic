@@ -13,7 +13,8 @@ Heuristic (no full CDC analysis):
   - If the signal is not staged through at least 2 sequential `<=` assignments
     (a typical `_sync1 <= raw; _sync2 <= _sync1;` pattern), flag it.
 
-Exit: 0 = PASS (no unsynchronized async inputs), 1 = FAIL.
+Exit: 0 = PASS (no unsynchronized async inputs), 1 = FAIL,
+      2 = VACUOUS_PASS (zero RTL files were examined — see `_verdict_for`).
 """
 from __future__ import annotations
 import argparse
@@ -26,6 +27,8 @@ from typing import List, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rtl_scan_scope as _scan_scope  # noqa: E402
+import _vacuous_exit as _vx  # noqa: E402
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -43,6 +46,82 @@ class AuditResult:
     passed: bool
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
+    # ORGANIC #887 — see `_verdict_for`. Defaulted so every existing
+    # construction site, here and in any caller, is unchanged.
+    verdict: str = "PASS"
+
+
+#: ORGANIC #887 — the verdict word for "I ran, but the input I audit was not
+#: there". Spelled the way `_flow_verdict_tiers.normalize` reads it.
+_VACUOUS_VERDICT = "VACUOUS_PASS"
+
+#: The gate's OWN machine-readable skip-reason token, and a TOKEN on purpose:
+#: it is the only variable part of the disclosure line, so the line's length is
+#: fixed at import time and cannot be grown by anything a caller supplies.
+_VACUOUS_REASON = "zero-rtl-files-examined"
+
+
+def _verdict_for(result: AuditResult) -> str:
+    """PASS / FAIL / VACUOUS_PASS for a completed audit.
+
+    ORGANIC #887. A scan that read ZERO files has not cleared the design — it
+    never looked at it. `passed=True` written beside `files_scanned=0`, with
+    nothing said on either stream, is what let an EMPTY tree be certified in
+    silence: the step was scored a plain PASS and stayed in the published
+    executed-PASS numerator, while two of its siblings on the SAME step-3
+    `all_of` answered the identical tree with rc 1 (`cdc_crossing_check`) and
+    rc 2 (`clock_domain_reg_crossing_check`).
+
+    Chip-AGNOSTIC: the predicate is "how many files did I read" — nothing about
+    any design, PDK, vendor or cell.
+    """
+    if not result.passed:
+        return "FAIL"
+    if int(result.summary.get("files_scanned", 0) or 0) == 0:
+        return _VACUOUS_VERDICT
+    return "PASS"
+
+
+def _emit_vacuous_disclosure(stream=None) -> None:
+    """Disclose a zero-file scan so the FLOW, not only a human, can read it.
+
+    WHY THIS FUNCTION TAKES NO PROJECT PATH. That omission is the fix.
+
+    `flow_compliance_check.output_snippet` hands every consumer a FIXED-WIDTH
+    TAIL of each stream (`_OUTPUT_SNIPPET_CHARS`, 300 characters) and
+    `_stdout_signals_vacuous` matches the sentinel AT LINE START. A disclosure
+    therefore survives only if it sits inside that trailing window with its
+    first character intact.
+
+    The FIRST attempt at this fix printed one line that interpolated the
+    resolved project path. MEASURED on this tree — one gate, one empty project,
+    one variable:
+
+        project path 123 chars -> disclosure SEEN
+        project path 124 chars -> disclosure GONE; rc 0, scored a plain PASS
+
+    (`reset_dependency_check` flipped at 131/132.) Whether a blocking gate told
+    the truth was a function of how deep the checkout happened to sit — the
+    same path-length lottery `flow_compliance_check._CRASH_HINT_PREFIX` was
+    introduced to end one defect class earlier, reintroduced one layer down,
+    and invisible to any test written against a short `tmp_path`.
+
+    So the stream that carries the sentinel carries NOTHING ELSE, and every
+    character on it comes from a module constant. Its total length is fixed at
+    import time, is far below the window, and cannot be moved by the caller —
+    which makes the tail cut a no-op on it at every checkout depth rather than
+    a cut this line happens to fit under today.
+
+    The path is not lost: it is in the JSON report the clause already writes,
+    and in the step line's own command. It is simply not allowed onto the
+    channel whose width is fixed.
+
+    stderr, per `_vacuous_exit`: `--json -` puts the report document on stdout
+    and a sentinel mixed into it would not parse. `output_snippet` concatenates
+    both streams, so the token is read either way.
+    """
+    _vx.announce_vacuous("cdc_async_input_check", _VACUOUS_REASON,
+                         stream=stream if stream is not None else sys.stderr)
 
 
 def strip_comments(src: str) -> str:
@@ -265,6 +344,7 @@ def audit(project_dir: str) -> AuditResult:
             message=f"project_dir not found: {project_dir}"))
         result.passed = False
         result.summary = {'files_scanned': 0, 'violations': 1}
+        result.verdict = 'FAIL'
         return result
 
     files = find_rtl_files(root)
@@ -276,6 +356,7 @@ def audit(project_dir: str) -> AuditResult:
         'files_scanned': len(files),
         'violations': len(result.findings),
     }
+    result.verdict = _verdict_for(result)
     return result
 
 
@@ -289,6 +370,10 @@ def main():
                    help="Emit JSON. With no value → stdout. With a path → write file.")
     args = p.parse_args()
     result = audit(args.project_dir)
+    # ORGANIC #887 — say it BEFORE the report is emitted, on the stream whose
+    # width is fixed. See `_emit_vacuous_disclosure`.
+    if result.verdict == _VACUOUS_VERDICT:
+        _emit_vacuous_disclosure()
     if args.json is not None:
         payload = json.dumps(asdict(result), indent=2)
         if args.json == "-":
@@ -296,13 +381,38 @@ def main():
         else:
             from pathlib import Path as _P
             _P(args.json).parent.mkdir(parents=True, exist_ok=True)
-            _P(args.json).write_text(payload)
+            atomic_write_text(_P(args.json), payload)
     else:
         for f in result.findings:
             loc = f"{f.file}:{f.line}" if f.line else f.file
             print(f"[{f.severity}] {f.rule} ({loc}): {f.message}")
-        print(f"\n{'PASS' if result.passed else 'FAIL'} — {result.summary}")
-    sys.exit(0 if result.passed else 1)
+        # ORGANIC #887 — the WORD comes from `result.verdict`, derived from the
+        # same `files_scanned` the line prints right beside it. Printing "PASS"
+        # next to `files_scanned: 0` was the machine defect stated in human,
+        # out of two numbers this object had in hand the whole time.
+        print(f"\n{result.verdict} — {result.summary}")
+    # ORGANIC #887 — rc 2, from the SHARED router, not a local literal.
+    #
+    # WHY THE EXIT CODE MOVES AND THE DISCLOSURE LINE IS NOT ENOUGH ON ITS OWN.
+    # This gate has TWO consumers in `flow_compliance_check`, and only one of
+    # them ever reads a printed sentinel:
+    #
+    #   * step 3's `program_exit_zero` clause — `__check_program_exit_zero`
+    #     reads the (TRUNCATED) snippet on the rc==0 path, and on the rc==2
+    #     path returns `__VACUOUS_HINT__` WITHOUT CONSULTING THE OUTPUT AT ALL.
+    #   * the P0 structural-RTL umbrella — `_eval_gate_worker` classifies rc 0
+    #     as `_p0_gate_record(..., "PASS", ...)` and never looks at stdout or
+    #     stderr. A zero-file scan left at rc 0 is recorded there as a plain
+    #     PASS however loudly it announces itself.
+    #
+    # rc 2 is this repo's own "the artefact I audit is not here" convention
+    # (`_vacuous_exit`), it is what `clock_domain_reg_crossing_check` — a
+    # sibling on the SAME step-3 `all_of` and in the SAME P0 registry — already
+    # answers to the identical empty tree, and #887's own suggested fix names
+    # it. It fails nothing: rc 2 is `passed=True` for the clause and a SKIP
+    # (skip_kind `input-missing`) for the umbrella.
+    sys.exit(_vx.exit_code(result.passed,
+                           result.verdict == _VACUOUS_VERDICT))
 
 
 if __name__ == "__main__":
