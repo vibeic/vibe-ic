@@ -57,7 +57,16 @@ What this module DOES decide, live, on every run:
   2. **Every artefact the step declares is named somewhere the gate can reach.**
      A step that declares ``reports/phase3/em.json`` while its gate searches
      ``*em*.rpt`` only is measuring something adjacent to its own claim.
-  3. **A files-only gate checks the step's own deliverables** (steps 1, 12).
+  3. **A files-only gate checks EVERY ONE of the step's own declared
+     deliverables** (steps 1, 12) — entry by entry, because ``required_outputs``
+     is ALL-of-N across entries and any-of only inside one. Until 2026-08-06
+     this clause asked only whether the gate reached ANY declared alternative,
+     which no step with at least one checked artefact could fail; step 1
+     declares four alternatives, its gate checks two, and the cell was green.
+     A declared entry that no gate clause reads is now a failure, while an
+     entry satisfied by one of its ``" OR "`` spellings still passes. See
+     ``_assert_files_only_gate_matches_claim`` for the consumer line ranges
+     that define each half of that grammar.
   4. **P0's prose claims match the live structural-gate registry** — P0 has no
      ``gate`` key at all, so the NA precondition is asserted and the claim its
      ``notes`` make about ``_STRUCTURAL_RTL_GATES`` is checked against the
@@ -70,19 +79,26 @@ depth 3) were measured and rejected.
 ====================================================================
 SELF-CHECKS
 ====================================================================
-Three non-cell tests at the bottom keep the measurements honest: that the CLI
-probe can report a rejection, that the path matcher discriminates the
-same-basename/different-directory shape (the step-40 defect), and that the one
-excluded module really is a shared path catalogue.
+Six non-cell tests at the bottom keep the measurements honest: that the CLI
+probe can report a rejection; that the path matcher discriminates the
+same-basename/different-directory shape (the step-40 defect); that the
+files-only branch separates an any-of SPELLING from a separate DELIVERABLE, in
+both directions; that the one excluded module really is a shared path
+catalogue; that every waiver is evidence-backed; and that all 63 cells carry
+exactly one disposition. (This paragraph said "Three" while five existed — the
+count is now derived from the file and must be re-stated when one is added.)
 """
 from __future__ import annotations
 
+import copy
 import re
 import shlex
 import sys
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import pytest
+import yaml
 
 import matrix_d4_probe as P
 from matrix_63x8 import flowref as F
@@ -270,6 +286,68 @@ def _assert_files_only_gate_matches_claim(step_id) -> None:
     Steps 1 and 12 gate on file existence alone. The criteria-match question
     for them is whether the paths the gate checks are the artefacts the step
     says it produces — two independently written lists that can and do drift.
+
+    THE UNIT OF OBLIGATION IS THE ENTRY, NOT THE ALTERNATIVE
+    -------------------------------------------------------
+    This predicate used to flatten ``required_outputs`` into one pool of
+    alternatives and then ask only whether the pool intersected the gate::
+
+        alternatives = [alt for e in declared for alt in F.split_any_of(e)]
+        covered = [alt for alt in alternatives
+                   if any(P.covers(p, alt) for p in checked)]
+        assert covered, ...
+
+    Both halves of the yaml's grammar were destroyed by that flattening, and it
+    made the branch UNABLE TO GO RED for the defect it exists to catch: ANY ONE
+    declared alternative being checked satisfied it. MEASURED on this tree
+    before the fix — step 1 declares four alternatives, its gate checks two,
+    the remaining two are read by no gate of step 1 at all, and the cell was
+    GREEN (``1 passed``).
+
+    The grammar, and where each half is enforced by the real consumer:
+
+      * ACROSS entries the list is **ALL-of-N**. ``flow_compliance_check.py``
+        :8966 states it and :8980-:8996 executes it — one ``missing_entries``
+        append per unsatisfied ENTRY::
+
+            # EACH declared entry must be satisfied — the list is ALL-of-N ...
+            outputs = step.get("required_outputs", [])
+            missing_entries: List[str] = []
+            for pat in outputs:
+
+        and :9479 demotes a passing gate on the strength of that list::
+
+            if _T.is_done_claim(result.status) and missing_entries:
+                result.status = "MISSING"
+
+      * INSIDE one entry ``" OR "`` is **any-of** — the flow's spelling for one
+        artefact with several accepted names or locations. Same consumer,
+        :8984-:8988, first hit wins and the entry is done::
+
+            for sp in (p.strip() for p in pat.split(" OR ")):
+                if _glob_first(project, sp):
+                    hit_any = True
+                    break
+
+    So the two cases the brief asks to be told apart are told apart by the yaml
+    itself, mechanically, with no heuristic:
+
+      "several acceptable spellings of one artefact" = alternatives WITHIN one
+      entry, joined by the literal ``" OR "``. Covering any ONE of them covers
+      the entry, exactly as the consumer does — failing a step because its gate
+      names ``*.sv`` and not also ``*.v`` would be wrong, and does not happen.
+
+      "a separate declared output nobody consumes" = a SEPARATE ENTRY of the
+      list, none of whose alternatives any gate path reaches. That is a
+      deliverable the step claims and its gate cannot see.
+
+    This is also the rule the EXEC branch of this dimension has always applied:
+    ``P.grounding_report`` iterates ``F.required_outputs`` (entries) and
+    ``ground()``'s docstring says "grounding ANY alternative grounds the entry
+    — that is exactly what ``flow_compliance_check`` does". The files-only
+    branch was the only place in dimension 4 holding a step to a weaker
+    standard, and it was weaker for no reason other than the step having no
+    program to point a static read-closure at.
     """
     checked: List[str] = []
     for clause in F.gate_clauses(step_id):
@@ -298,14 +376,44 @@ def _assert_files_only_gate_matches_claim(step_id) -> None:
         f"does not claim to produce"
     )
 
-    covered = [
-        alt for alt in alternatives if any(P.covers(p, alt) for p in checked)
-    ]
-    assert covered, (
-        f"step {step_id} / d{DIM} criteria_match: none of the step's declared "
-        f"artefacts {alternatives} is among the {len(checked)} path(s) the gate "
-        f"checks ({checked})"
-    )
+    # ALL-of-N over ENTRIES, any-of INSIDE one entry. See this function's
+    # docstring for the two consumer line ranges that define each half.
+    unread = []
+    for entry in declared:
+        alts = F.split_any_of(entry)
+        if not any(P.covers(path, alt) for alt in alts for path in checked):
+            unread.append((entry, alts))
+
+    if unread:
+        lines = []
+        for entry, alts in unread:
+            spelling = (
+                f"any-of over {list(alts)}"
+                if len(alts) > 1
+                else "a single path, no ' OR ' alternative"
+            )
+            lines.append(
+                f"  declared entry {entry!r}\n"
+                f"      ({spelling}); no path the gate checks resolves any "
+                f"alternative of it"
+            )
+        pytest.fail(
+            f"step {step_id} / d{DIM} criteria_match: {len(unread)} of "
+            f"{len(declared)} declared required_outputs ENTRIES are read by no "
+            f"clause of this step's gate. The gate checks {checked}; the step "
+            f"claims to deliver {list(declared)}.\n" + "\n".join(lines) + "\n"
+            f"  required_outputs is ALL-of-N across entries "
+            f"(flow_compliance_check.py:8966 states it, :8980-:8996 executes "
+            f"it, :9479 demotes a passing gate to MISSING on it), so each "
+            f"entry above is a SEPARATE deliverable, not an alternative "
+            f"spelling of one that is checked. Only ' OR ' INSIDE one entry is "
+            f"any-of (same file, :8984-:8988) and an entry satisfied by any "
+            f"one of its alternatives is NOT reported here.\n"
+            f"  Either the gate is not measuring what the step claims, or the "
+            f"step is claiming a deliverable that belongs to another step — "
+            f"dimension 4 reports the mismatch and does not choose which side "
+            f"is wrong."
+        )
 
 
 _BACKTICKED = re.compile(r"`([A-Za-z_][\w]*)")
@@ -358,7 +466,7 @@ def _assert_gateless_step_prose_matches_mechanism(step_id) -> None:
         f"step {step_id} / d{DIM} criteria_match: the step's prose names "
         f"{absent} as gate name(s) that appear in the audit JSON's gates[] "
         f"array, but that array is built only from _STRUCTURAL_RTL_GATES "
-        f"(flow_compliance_check.py:7621 -> :7687) and the live registry's "
+        f"(flow_compliance_check.py:8019 -> :8085) and the live registry's "
         f"{len(registry)} members do not include them; "
         f"named-and-present = {[n for n in named if n in registry]}"
     )
@@ -422,6 +530,72 @@ def test_d4_selfcheck_cli_probe_can_report_a_rejection():
     )
 
 
+def test_d4_selfcheck_a_WILDCARD_root_still_spans_namespaces():
+    """The namespace guard must not over-tighten into a second false ruler.
+
+    The guard refuses a float-match across top-level namespaces, but a pattern
+    whose ROOT is a glob is a deliberate "anywhere under the project" read and
+    must keep grounding. Measured: of 132 grounded entries across every gated
+    step, exactly ONE rests on a cross-namespace match, and it is this one.
+
+    Pinned against the REAL step-31 entry rather than against a literal pair,
+    so that if the flow stops declaring it this test says so instead of
+    quietly proving something about a string.
+    """
+    entry = "reports/phase3/erc.rpt"
+    assert entry in F.required_outputs(31), (
+        f"this test is anchored to step 31 declaring {entry!r}; it no longer "
+        f"does, so the exemption it pins is pinned to nothing — step 31 "
+        f"declares {F.required_outputs(31)}"
+    )
+    hit = P.ground(31, entry)
+    assert hit is not None, (
+        "the wildcard-root exemption regressed: step 31's own declared "
+        f"{entry!r} is no longer grounded, so the namespace guard has "
+        "over-tightened into a false negative"
+    )
+    assert P.covers("*/phase3/erc.rpt", entry), (
+        "a glob-rooted pattern must still span namespaces"
+    )
+
+
+def test_d4_selfcheck_exec_branch_can_fail_on_an_UNGROUNDED_output(monkeypatch):
+    """The EXEC branch must be able to reject a declared output nobody reads.
+
+    It could not. Injecting `reports/phase1/ZZZ_CANARY_NOBODY_CHECKS_THIS.json`
+    into D1's `required_outputs` left dimension 4 fully green, because
+    `shape_match` floats a pattern (`**` + pattern, either direction) and
+    `phase1/*.json` — read from `l_doc_cross_consistency_check` — is a
+    contiguous TAIL of `reports/phase1/<anything>.json`. `phase1/` and
+    `reports/phase1/` are two different trees.
+
+    So every green EXEC-branch cell was green on an axis the ruler could not
+    fail on, which is this campaign's own defect sited in its instrument. The
+    files-only branch caught step 1; this half caught nothing.
+
+    Driven through `_assert_artefacts_grounded` rather than through `covers`,
+    because the matcher passing is necessary and not sufficient: `ground()`
+    has three channels and any one of them re-grounding the canary would put
+    the hole straight back.
+    """
+    sid = "D1"
+    assert _exec_clauses(sid), (
+        f"this self-check is anchored to step {sid} taking the EXEC branch; it "
+        f"no longer does, so the branch it proves is not the branch it runs"
+    )
+    canary = "reports/phase1/ZZZ_CANARY_NOBODY_CHECKS_THIS.json"
+    real = list(F.required_outputs(sid))
+    assert real, f"step {sid} declares no required_outputs to extend"
+
+    monkeypatch.setattr(F, "required_outputs", lambda s: (real + [canary]) if s == sid else F.required_outputs(s))
+    P.grounding_report.cache_clear() if hasattr(P.grounding_report, "cache_clear") else None
+    with pytest.raises(BaseException) as excinfo:
+        _assert_artefacts_grounded(sid)
+    assert canary in str(excinfo.value), (
+        f"the EXEC branch failed, but not because of the canary: {excinfo.value}"
+    )
+
+
 def test_d4_selfcheck_matcher_discriminates_wrong_directory():
     """The path matcher must not call a same-basename/different-dir pair a hit.
 
@@ -443,6 +617,117 @@ def test_d4_selfcheck_matcher_discriminates_wrong_directory():
     assert P.covers("*drc*.rpt", "reports/phase3/routed.drc.rpt"), (
         "the matcher rejects a genuine discovery glob"
     )
+
+
+def _with_step_12_outputs(
+    tmp_path: Path, outputs: List[str], tag: str, gate_checks: str
+) -> Path:
+    """A scratch copy of the flow yaml whose step 12 declares *outputs* under
+    a SYNTHETIC single-clause, files-only gate that checks *gate_checks*.
+
+    Step 12 was chosen as the id to graft this onto because it used to BE the
+    simplest files-only gate in the flow. It no longer is: 2026-08-08 gave it
+    a real ``program_exit_zero`` clause
+    (``dft_post_optimization_scan_survival_check``) closing a dimension-2 gap
+    — a genuine, separate fix, not a defect of this control. The gate is
+    therefore no longer "copied through untouched": it is OVERWRITTEN to the
+    one-``files_exist``-path, no-``any_of``, no-program shape this control
+    needs, so the only variable between the two cases below is still the
+    shape of ``required_outputs`` and nothing about step 12's real gate
+    leaks in. *gate_checks* is a single real PATH (never an ``" OR "``
+    entry-DSL string, which ``files_exist`` does not parse) — the caller
+    passes the plain ``netlist`` variable in both the FORWARD and REVERSE
+    case, matching "the gate ... checks only the first path" either way.
+    """
+    doc = copy.deepcopy(F.load_flow())
+    hits = [s for s in doc["steps"] if F.normalize_id(s["id"]) == "12"]
+    assert len(hits) == 1, f"expected exactly one step 12, got {len(hits)}"
+    hits[0]["required_outputs"] = list(outputs)
+    hits[0]["gate"] = {"files_exist": [gate_checks]}
+    hits[0].pop("programs", None)
+    out = tmp_path / f"flow_{tag}.yaml"
+    out.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return out
+
+
+def test_d4_selfcheck_files_only_branch_separates_spelling_from_deliverable(
+    tmp_path,
+):
+    """BIDIRECTIONAL control for the files-only branch's entry-level rule.
+
+    Two scratch flows, IDENTICAL in every byte that matters except the shape of
+    step 12's ``required_outputs``. The same two paths appear in both, the gate
+    is the same in both and checks only the first path. The single difference is
+    ``", "`` (two list entries) versus ``" OR "`` (one any-of entry):
+
+      FORWARD  ``["<netlist>", "<a report the gate never checks>"]``
+               -> two ENTRIES, the second read by nothing -> MUST FAIL.
+               Against the pre-fix predicate this PASSED: its
+               ``assert covered`` was satisfied by the netlist alone.
+
+      REVERSE  ``["<netlist> OR <the same report>"]``
+               -> ONE entry with two accepted spellings, one of them checked
+               -> MUST STILL PASS. This is the half that stops the fix from
+               degenerating into "every alternative must be checked", which
+               would red every legitimate either-or in the flow — step 1's
+               ``*.sv OR *.v`` and the 22 other ANY_OF entries among them.
+
+    Without the reverse case a stricter predicate looks like an improvement and
+    is actually a different defect, so both directions are asserted here rather
+    than one being left to a reviewer's imagination.
+    """
+    original = F.FLOW_YAML
+    netlist = "phase2/stage2/synth/post_dft_netlist.v"
+    unread = "reports/phase2/post_dft_area.rpt"
+
+    # Precondition, asserted so this control self-invalidates loudly if the
+    # predicate it exercises changes shape. Step 12's own REAL gate is no
+    # longer checked here — 2026-08-08 gave it a genuine exec clause of its
+    # own, so `_with_step_12_outputs` now synthesizes the single-clause,
+    # files-only shape this control needs rather than mirroring it; see that
+    # helper's docstring.
+    assert not P.covers(netlist, unread), (
+        f"the control needs {unread!r} to be an artefact the gate's "
+        f"{netlist!r} does NOT resolve, or the FORWARD case proves nothing"
+    )
+
+    try:
+        F.set_flow_yaml(
+            _with_step_12_outputs(tmp_path, [netlist, unread], "fwd", netlist)
+        )
+        assert F.required_outputs(12) == (netlist, unread)
+        # BOTH failure spellings: the branch uses `pytest.fail` (which raises
+        # `Failed`, a BaseException — `pytest.raises(Exception)` does NOT catch
+        # it) and plain `assert` above it. Naming both keeps the control valid
+        # whichever one a later edit uses.
+        with pytest.raises((AssertionError, pytest.fail.Exception)) as caught:
+            _assert_files_only_gate_matches_claim(12)
+        message = str(caught.value)
+        assert unread in message, (
+            "the files-only branch went red but did not name the declared "
+            f"output nobody reads; message was:\n{message}"
+        )
+        assert "ALL-of-N" in message, (
+            "the failure does not tell the reader WHY a second entry is an "
+            f"obligation rather than an alternative; message was:\n{message}"
+        )
+
+        F.set_flow_yaml(
+            _with_step_12_outputs(
+                tmp_path, [f"{netlist} OR {unread}"], "rev", netlist
+            )
+        )
+        assert F.required_outputs(12) == (f"{netlist} OR {unread}",)
+        assert F.split_any_of(F.required_outputs(12)[0]) == (netlist, unread)
+        # MUST NOT raise: one entry, two accepted spellings, one of them checked.
+        _assert_files_only_gate_matches_claim(12)
+    finally:
+        F.set_flow_yaml(original)
+
+    # The restore must be real — a leaked scratch path would silently repoint
+    # every later test in this process at a file nobody reviewed.
+    assert F.FLOW_YAML == original
+    assert F.required_outputs(12) == (netlist,)
 
 
 def test_d4_selfcheck_catalogue_exclusion_is_justified():
@@ -529,7 +814,21 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     registry entry this module can name.
     """
     cells = cells_for(DIM)
-    assert len(cells) == len(F.step_ids()) == 63, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(cells) == len(F.step_ids()) == 69, (
         f"the flow declares {len(F.step_ids())} steps; dimension {DIM} carries "
         f"{len(cells)} cells — the ledger and the yaml have diverged"
     )
@@ -551,7 +850,21 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     # The number stays hard-coded on purpose: deriving it from `waived` would
     # make this assertion unfalsifiable, and a NEW waiver must force a human
     # to re-state the census rather than slip in silently.
-    assert len(cells) - len(waived) == 63 and not waived, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(cells) - len(waived) == 69 and not waived, (
         f"{len(cells) - len(waived)} cells are enforced and {len(waived)} are "
         f"waived; this module was reported as enforcing all 63 with no "
         f"waiver. Update the report, or explain the change."

@@ -1,0 +1,315 @@
+{
+  "count": 25,
+  "density": 0.05,
+  "types": {
+    "inverter": 6,
+    "nand2": 5,
+    "nor2": 4,
+    "mux2": 4,
+    "aoi": 3,
+    "oai": 1,
+    "dff": 2
+  },
+  "tied_off": true,
+  "instances": [
+    {
+      "name": "spare_inverter_0",
+      "type": "inverter",
+      "cell": "sky130_fd_sc_hd__inv_1",
+      "llx": 13,
+      "lly": 13,
+      "keep": true
+    },
+    {
+      "name": "spare_inverter_1",
+      "type": "inverter",
+      "cell": "sky130_fd_sc_hd__inv_1",
+      "llx": 26,
+      "lly": 13,
+      "keep": true
+    },
+    {
+      "name": "spare_inverter_2",
+      "type": "inverter",
+      "cell": "sky130_fd_sc_hd__inv_1",
+      "llx": 39,
+      "lly": 13,
+      "keep": true
+    },
+    {
+      "name": "spare_inverter_3",
+      "type": "inverter",
+      "cell": "sky130_fd_sc_hd__inv_1",
+      "llx": 52,
+      "lly": 13,
+      "keep": true
+    },
+    {
+      "name": "spare_inverter_4",
+      "type": "inverter",
+      "cell": "sky130_fd_sc_hd__inv_1",
+      "llx": 65,
+      "lly": 13,
+      "keep": true
+    },
+    {
+      "name": "spare_inverter_5",
+      "type": "inverter",
+      "cell": "sky130_fd_sc_hd__inv_1",
+      "llx": 13,
+      "lly": 26,
+      "keep": true
+    },
+    {
+      "name": "spare_nand2_0",
+      "type": "nand2",
+      "cell": "sky130_fd_sc_hd__nand2_2",
+      "llx": 26,
+      "lly": 26,
+      "keep": true
+    },
+    {
+      "name": "spare_nand2_1",
+      "type": "nand2",
+      "cell": "sky130_fd_sc_hd__nand2_2",
+      "llx": 39,
+      "lly": 26,
+      "keep": true
+    },
+    {
+      "name": "spare_nand2_2",
+      "type": "nand2",
+      "cell": "sky130_fd_sc_hd__nand2_2",
+      "llx": 52,
+      "lly": 26,
+      "keep": true
+    },
+    {
+      "name": "spare_nand2_3",
+      "type": "nand2",
+      "cell": "sky130_fd_sc_hd__nand2_2",
+      "llx": 65,
+      "lly": 26,
+      "keep": true
+    },
+    {
+      "name": "spare_nand2_4",
+      "type": "nand2",
+      "cell": "sky130_fd_sc_hd__nand2_2",
+      "llx": 13,
+      "lly": 39,
+      "keep": true
+    },
+    {
+      "name": "spare_nor2_0",
+      "type": "nor2",
+      "cell": "sky130_fd_sc_hd__nor2_2",
+      "llx": 26,
+      "lly": 39,
+      "keep": true
+    },
+    {
+      "name": "spare_nor2_1",
+      "type": "nor2",
+      "cell": "sky130_fd_sc_hd__nor2_2",
+      "llx": 39,
+      "lly": 39,
+      "keep": true
+    },
+    {
+      "name": "spare_nor2_2",
+      "type": "nor2",
+      "cell": "sky130_fd_sc_hd__nor2_2",
+      "llx": 52,
+      "lly": 39,
+      "keep": true
+    },
+    {
+      "name": "spare_nor2_3",
+      "type": "nor2",
+      "cell": "sky130_fd_sc_hd__nor2_2",
+      "llx": 65,
+      "lly": 39,
+      "keep": true
+    },
+    {
+      "name": "spare_mux2_0",
+      "type": "mux2",
+      "cell": "sky130_fd_sc_hd__mux2_2",
+      "llx": 13,
+      "lly": 52,
+      "keep": true
+    },
+    {
+      "name": "spare_mux2_1",
+      "type": "mux2",
+      "cell": "sky130_fd_sc_hd__mux2_2",
+      "llx": 26,
+      "lly": 52,
+      "keep": true
+    },
+    {
+      "name": "spare_mux2_2",
+      "type": "mux2",
+      "cell": "sky130_fd_sc_hd__mux2_2",
+      "llx": 39,
+      "lly": 52,
+      "keep": true
+    },
+    {
+      "name": "spare_mux2_3",
+      "type": "mux2",
+      "cell": "sky130_fd_sc_hd__mux2_2",
+      "llx": 52,
+      "lly": 52,
+      "keep": true
+    },
+    {
+      "name": "spare_aoi_0",
+      "type": "aoi",
+      "cell": "sky130_fd_sc_hd__a21oi_2",
+      "llx": 65,
+      "lly": 52,
+      "keep": true
+    },
+    {
+      "name": "spare_aoi_1",
+      "type": "aoi",
+      "cell": "sky130_fd_sc_hd__a21oi_2",
+      "llx": 13,
+      "lly": 65,
+      "keep": true
+    },
+    {
+      "name": "spare_aoi_2",
+      "type": "aoi",
+      "cell": "sky130_fd_sc_hd__a21oi_2",
+      "llx": 26,
+      "lly": 65,
+      "keep": true
+    },
+    {
+      "name": "spare_oai_0",
+      "type": "oai",
+      "cell": "sky130_fd_sc_hd__o21ai_0",
+      "llx": 39,
+      "lly": 65,
+      "keep": true
+    },
+    {
+      "name": "spare_dff_0",
+      "type": "dff",
+      "cell": "sky130_fd_sc_hd__dfrtp_2",
+      "llx": 52,
+      "lly": 65,
+      "keep": true
+    },
+    {
+      "name": "spare_dff_1",
+      "type": "dff",
+      "cell": "sky130_fd_sc_hd__dfrtp_2",
+      "llx": 65,
+      "lly": 65,
+      "keep": true
+    }
+  ],
+  "rows": [
+    {
+      "row": 0,
+      "lly": 13,
+      "spare_count": 5,
+      "min_llx": 13,
+      "max_llx": 65,
+      "instances": [
+        "spare_inverter_0",
+        "spare_inverter_1",
+        "spare_inverter_2",
+        "spare_inverter_3",
+        "spare_inverter_4"
+      ]
+    },
+    {
+      "row": 1,
+      "lly": 26,
+      "spare_count": 5,
+      "min_llx": 13,
+      "max_llx": 65,
+      "instances": [
+        "spare_inverter_5",
+        "spare_nand2_0",
+        "spare_nand2_1",
+        "spare_nand2_2",
+        "spare_nand2_3"
+      ]
+    },
+    {
+      "row": 2,
+      "lly": 39,
+      "spare_count": 5,
+      "min_llx": 13,
+      "max_llx": 65,
+      "instances": [
+        "spare_nand2_4",
+        "spare_nor2_0",
+        "spare_nor2_1",
+        "spare_nor2_2",
+        "spare_nor2_3"
+      ]
+    },
+    {
+      "row": 3,
+      "lly": 52,
+      "spare_count": 5,
+      "min_llx": 13,
+      "max_llx": 65,
+      "instances": [
+        "spare_mux2_0",
+        "spare_mux2_1",
+        "spare_mux2_2",
+        "spare_mux2_3",
+        "spare_aoi_0"
+      ]
+    },
+    {
+      "row": 4,
+      "lly": 65,
+      "spare_count": 5,
+      "min_llx": 13,
+      "max_llx": 65,
+      "instances": [
+        "spare_aoi_1",
+        "spare_aoi_2",
+        "spare_oai_0",
+        "spare_dff_0",
+        "spare_dff_1"
+      ]
+    }
+  ],
+  "spare_pads": [],
+  "cell_map": {
+    "inverter": "sky130_fd_sc_hd__inv_1",
+    "nand2": "sky130_fd_sc_hd__nand2_2",
+    "nor2": "sky130_fd_sc_hd__nor2_2",
+    "mux2": "sky130_fd_sc_hd__mux2_2",
+    "aoi": "sky130_fd_sc_hd__a21oi_2",
+    "oai": "sky130_fd_sc_hd__o21ai_0",
+    "dff": "sky130_fd_sc_hd__dfrtp_2"
+  },
+  "tie_off": {
+    "measured": true,
+    "connected": 54,
+    "candidates": 54,
+    "tied_off": true,
+    "reason": "measured 54/54 spare input(s) tied to their per-spare tie-low net"
+  },
+  "placed_cells_est": 488,
+  "target_density": 0.05,
+  "actual_density": 0.05123,
+  "protection": {
+    "yosys_keep": true,
+    "openroad_dont_touch": true,
+    "inserted_after_abc": true,
+    "metal_fill_eco_aware": true,
+    "allowlist_doc": "Spare cells are tagged `(* keep *)` / `setattr -set keep 1`; Yosys opt_clean and `clean -purge` skip keep-marked objects by construction, so the runner's own clean/opt passes never strip them. Spares are inserted as physical instances AFTER abc so no logical optimization pass can reach them in the first place."
+  }
+}

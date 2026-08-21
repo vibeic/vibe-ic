@@ -1,6 +1,0 @@
-{
-  "produced_by": "_post_emit_pdf_regmap_table_rows",
-  "meaning": "document tables the register-table extractor read and did not turn into L4 registers, with the structural reason. An empty list means every table read yielded its rows.",
-  "count": 0,
-  "tables": []
-}
