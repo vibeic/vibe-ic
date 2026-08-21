@@ -1,0 +1,25 @@
+{
+  "gate": "l22_verification_plan_measurable_check",
+  "project": "/home/reyerchu/vibe-ic/benchmark-data/ic/opentitan_aes",
+  "verdict": "PASS_WITH_ADVISORY",
+  "blocking_findings": [],
+  "advisory_findings": [
+    {
+      "id": "UNFALSIFIABLE_PLAN_ASSERTION",
+      "severity": "ADVISE",
+      "detail": "L22 asserts a verification plan (verification_plan_present='implicit', 6 prose category/item(s), extraction_claimed=False) while coverage_goals[] and formal_properties[] are both EMPTY and regression_matrix is empty. Those fields read as POPULATED to any non-empty heuristic while carrying zero enforceable targets — nothing downstream can falsify this plan. ADVISE not BLOCK: the design's own inputs state no numeric verification target, so the layer contradicts no requirement."
+    }
+  ],
+  "evidence": {
+    "l22_path": "/home/reyerchu/vibe-ic/benchmark-data/ic/opentitan_aes/phase1/generated_docs/L22_VERIFICATION_PLAN.json",
+    "applicability": "APPLICABLE",
+    "coverage_goal_count": 0,
+    "measurable_goal_count": 0,
+    "formal_property_count": 0,
+    "prose_item_count": 6,
+    "verification_plan_present": "implicit",
+    "regression_matrix_populated": false,
+    "coverage_target_hits_input_docs": 0,
+    "coverage_target_hits_sibling_l_docs": 0
+  }
+}
