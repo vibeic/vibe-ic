@@ -341,3 +341,86 @@ def test_a_phantom_port_does_not_reach_the_budget_verdict():
                      S.parse_top_ports(commented, "chip_top"))
     assert rep["declared_signal_bits"] == clean["declared_signal_bits"]
     assert (rep["verdict"], rep["rc"]) == ("FITS", 0)
+
+
+# --------------------------------------------------------------------------- #
+# an ATTRIBUTE is not a comment, and it dropped a real port
+# --------------------------------------------------------------------------- #
+# PRE-EXISTING, and measured identical on the commit before the comment repair.
+# `(* keep = "true" *)` is live source a synthesiser reads, but it is not part
+# of a port declaration and `_DIR_RE` anchors with `^`. A port carrying one
+# reached the scan as a chunk beginning `(*`, matched no direction keyword, and
+# was discarded as an unparsable continuation.
+#
+# Same failure direction as the orphaned block comment above: a real port
+# DROPPED, a smaller interface than the design has, and a false FITS.
+
+def test_an_attribute_on_a_port_does_not_drop_it():
+    rtl = ('module chip_top (\n'
+           '    (* keep = "true" *) input wire clk,\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
+
+
+def test_an_attribute_spanning_lines_keeps_the_conditional_attribution():
+    """Attributes are replaced by the newlines they spanned, for the same
+    reason comments are: the conditional scan counts `ifdef` nesting by line."""
+    rtl = ('module chip_top (\n'
+           '`ifdef USE_PWR\n'
+           '    (* mark_debug = "true",\n'
+           '       keep = "true" *) inout wire vdda1,\n'
+           '`endif\n'
+           '    input wire clk\n'
+           ');\nendmodule\n')
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["vdda1", "clk"]
+    assert [p["name"] for p in ports if p["conditional"]] == ["vdda1"]
+
+
+def test_a_comment_that_contains_an_attribute_opener_is_still_a_comment():
+    """Order matters: comments are stripped first, so `(*` inside a block
+    comment never reaches the attribute pass. Real ports are clk and done."""
+    rtl = ('module chip_top (\n'
+           '    input wire clk,   /* (* not really an attribute *)\n'
+           '    output wire phantom,\n'
+           '    // end */\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
+
+
+def test_multiplication_inside_parentheses_is_not_an_attribute():
+    """`(*` begins an attribute; `( 2 * 4 )` does not. A stripper that ate the
+    latter would silently rewrite a parameter expression."""
+    rtl = ('module chip_top #(parameter W = (2 * 4)) (\n'
+           '    input wire [W-1:0] bus,\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["bus", "done"]
+
+
+def test_the_founding_shape_a_comment_naming_the_top_module():
+    """The defect the GATE was written for -- `\\bmodule\\s+(\\w+)` matching a
+    comment -- reaching this program's own inline module search. That regex is
+    written inline rather than as a module-level `re.compile`, so the gate's
+    detector cannot see it and never named it; it is covered here because the
+    defect class is what matters, not the finding string."""
+    rtl = ('// This module chip_top is described in section 4.\n'
+           '/* module chip_top (input wire decoy_a, output wire decoy_b); */\n'
+           'module chip_top (\n'
+           '    input wire clk,\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
+
+
+def test_a_block_comment_is_not_nested_and_ends_at_the_first_terminator():
+    """Verilog block comments do not nest. `/* outer /* inner */` ends at the
+    FIRST `*/`, so `done` is a real port."""
+    rtl = ('module chip_top (\n'
+           '    input wire clk,\n'
+           '    /* outer /* inner */\n'
+           '    output wire done\n'
+           ');\nendmodule\n')
+    assert [p["name"] for p in S.parse_top_ports(rtl, "chip_top")] == ["clk", "done"]
