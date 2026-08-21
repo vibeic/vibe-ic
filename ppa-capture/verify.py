@@ -453,6 +453,33 @@ check("the contents map lists every section",
 check("every contents entry names a real section",
       not (set(_entries) - set(_secs)), f"dangling {sorted(set(_entries) - set(_secs))[:3]}")
 
+# 27. the contents ANCHORS resolve, not merely the entry text. Checks 32-33
+#     compared strings; a link whose text is right and whose target is wrong
+#     sends the reader nowhere and reads as fine.
+#
+#     THE SLUG RULE IS "EACH SPACE BECOMES A HYPHEN", NOT "RUNS COLLAPSE". A
+#     stripped em-dash leaves two spaces and therefore a double hyphen. Testing
+#     with the collapsing rule reports 8 of 21 anchors broken, and all 8 are the
+#     test's assumption rather than the document's links.
+def _slug(h: str) -> str:
+    s = re.sub(r"[^\w\s-]", "", h.lower()).strip()
+    return s.replace(" ", "-")
+_hs = [h for h in re.findall(r"^## (.+)$", MD, re.M) if not h.startswith("Contents")]
+_ln = re.findall(r"^- \[[^\]]+\]\(#([^)]+)\)", MD, re.M)
+control("anchors", _slug("A — B") == "a--b")
+_broken = [l for l in _ln if l not in {_slug(h) for h in _hs}]
+check("every contents anchor resolves to a heading",
+      not _broken, f"{len(_ln)} links, broken {_broken[:2]}")
+
+# 28. the TITLE's own record count. The title is the one line every reader sees
+#     and the last structural level nothing walked — the STATUS block below it
+#     was checked, the title above it was not.
+_tm = re.search(r"— (\d+) records", MD.splitlines()[0])
+control("title-count", _tm is not None)
+check("the title's record count agrees with the record set",
+      bool(_tm) and int(_tm.group(1)) == len(RECS),
+      f"title {_tm.group(1) if _tm else '-'}, records {len(RECS)}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

@@ -1526,7 +1526,7 @@ lane — the sweep table as the batch grew, and routing. Then it did not cover t
 brief's *first* requirement, the rule stated for each of the eighteen findings,
 nor whether the emitted backlogs still pass the sanitiser that consumes them —
 and two of those were refused on first write, so a later edit could refuse them
-again in silence. **Thirty-two checks now, plus an authoritative mode**, the last of them the one that closes the loop:
+again in silence. **Thirty-four checks now, plus an authoritative mode**, the last of them the one that closes the loop:
 `candidates/` is *generated*, so editing `recoveries.json` without re-emitting
 leaves sketches that still resolve by name, still read plausibly, and describe
 the previous version of the rule. Name resolution cannot see content drift.
@@ -1600,6 +1600,18 @@ nobody had thought to walk.
 
 The map is checked in both directions: every section listed, every entry
 pointing at a real section.
+
+**Then the levels were enumerated deliberately rather than stumbled into**, and
+two were still unwalked: the anchors the map's links actually target, and the
+`#` title's own count — the one line every reader sees, sitting above a STATUS
+block that had been checked for several passes.
+
+The anchor check reported **8 of 21 broken** on its first run. The slug rule is
+*each space becomes a hyphen*, not *runs collapse*: a stripped em-dash leaves two
+spaces and so a double hyphen. All 8 were the test's assumption, not the
+document's links — 21 of 21 resolve. Nineteenth screen error of this lane, and
+the same shape as the eighteen before it: a plausible failure count produced by
+the measuring code.
 ---
 
 ## Summary
@@ -1607,7 +1619,7 @@ pointing at a real section.
 **STATUS**: 29 records emitted and validated — 26 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 ppa-capture/verify.py` (32 fast + 2 authoritative). No gate
+re-measurable by `python3 ppa-capture/verify.py` (34 fast + 2 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1782,7 +1794,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 ppa-capture/verify.py     32 checks, exit 0 = every claim holds
+    python3 ppa-capture/verify.py     34 checks, exit 0 = every claim holds
     python3 ppa-capture/verify.py --slow   + 2 authoritative gate-run checks
 
 **It was held to the two invocation properties this batch records about other
