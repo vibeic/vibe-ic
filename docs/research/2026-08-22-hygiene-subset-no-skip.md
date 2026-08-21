@@ -826,3 +826,69 @@ binding is the first variable to control if anyone wants to settle it.
 **Net effect on §6-§7:** the headline stands and is slightly stronger than it
 was written. The set genuinely ran, its refusals are honest refusals with named
 missing inputs, and none of its 9 failures belongs to this branch.
+
+## 16. The control I proposed, run: the corpus binding decides whether the runner completes
+
+§15 named `VIBE_IC_BENCHMARK_DATA` as "the first variable to control" for the
+wiring-error divergence between this host and `jmeas3`'s. Proposing a control
+and leaving it for someone else is not much better than not proposing one, so it
+was run: same tree, same runner, same host, one variable.
+
+```
+                       declared  decided  passed  failed  NOT_CHECKED  wiring_errors  outcome
+corpus BOUND               89       78      69       9         11            0        completed, 188s
+corpus UNBOUND             86       75      67       8         11            7        ERROR incomplete, 258s
+```
+
+The unbound arm's seven are exactly the signature `jmeas3` reported:
+
+```
+parallel coverage: arm A shard 3: PROGRESS_PROTOCOL_INCOMPLETE: unassigned gate
+                   label in attestation progress: corpus "published cells …"
+parallel coverage: Arm A produced unplanned attestations
+parallel coverage: 'gates are host-independent': expected one owning shard record, got 0
+[ERROR] parallel hygiene incomplete after 258s; coverage loss is not a result
+```
+
+**So the binding is not a detail of how the corpus gates are scored — it decides
+whether the run COMPLETES AT ALL.** Unbound, the coverage protocol sees gate
+labels in the attestation stream that it has no plan for, calls the arms
+unplanned, and refuses the whole run as incomplete. Bound, the same runner
+finishes clean with zero wiring errors.
+
+Note the DECLARED count moves too, 86 -> 89. The set contains a loop corpus
+(`published cells carrying a routed DEF`) that expands over corpus items, so
+binding the corpus changes the denominator as well as the verdicts. A run
+comparing 86-declared against 89-declared is comparing two different sets, which
+is worth knowing before anyone diffs two hygiene records.
+
+**What this does and does not settle.** It reproduces the qualitative defect on
+demand and gives it a cause: unbound corpus -> PROGRESS_PROTOCOL_INCOMPLETE ->
+run refused. It does NOT prove that is the only cause of what `jmeas3` saw — its
+counts were 15 and 19 against this arm's 7, on different trees. The honest claim
+is: binding flips this runner between "completes clean" and "refuses as
+incomplete" on one tree, so it must be controlled before any conclusion is drawn
+from that runner, and it is the first thing to try in reproducing the peer's
+numbers.
+
+**And it matters to the landing path**, which is why it is in this document
+rather than filed elsewhere: `gatekeeper_review` reaches hygiene through this
+runner (§12), and this branch is what makes the review actually run it. A
+landing whose environment lacks the corpus binding does not get a hygiene
+verdict — it gets a refusal — and that is the correct behaviour, but only if
+whoever reads it knows that "incomplete" here means "unbound", not "broken".
+
+### A measurement error of my own, on the way to this one
+
+The first unbound arm was launched as
+`env PYTHONDONTWRITEBYTECODE=1 -u VIBE_IC_BENCHMARK_DATA python3 …`. GNU `env`
+takes `-u` BEFORE assignments; after one, it is read as the command name. The
+process died instantly with `env: '-u': No such file or directory` — and my poll
+watched for the OUTPUT FILE, so "died in 0 s" and "still running" were the same
+observation. I waited ten minutes on a process that never existed.
+
+Same defect as everything in §15 and the reason it is written down: an absent
+result read as a pending one. The fix in the re-run was to (a) assert the
+variables really were unset by printing them from inside the interpreter before
+launching, and (b) poll the LOG as well as the file, so a dead run announces
+itself instead of looking patient.
