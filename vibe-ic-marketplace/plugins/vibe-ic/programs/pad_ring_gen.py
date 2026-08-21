@@ -39,45 +39,55 @@ touching. So this program computes every gap in the ring walk and refuses a
 ring whose gaps the declared filler cells cannot close, and records the gaps
 so the later filler step has its input.
 
-A MEASURED DIVERGENCE FROM UPSTREAM, RECORDED AND NOT RESOLVED
-==============================================================
-`_place` takes each pad's along-the-row extent from the master's ORIENTED
-footprint, so a side whose declared rotation does not swap the axes sums the
-master's HEIGHT. Upstream does not do that, and neither does the tool.
+THE ALONG-THE-ROW EXTENT IS THE MASTER'S WIDTH, ON ALL FOUR SIDES
+=================================================================
+This program used to take each pad's along-the-row extent from the ORIENTED
+footprint, so a side whose declared rotation did not swap the axes summed the
+master's HEIGHT. Two independent sources say that is wrong, and neither of them
+is the outcome:
 
-    upstream `pad_cfg.tcl`, in BOTH places it measures a cell, for all four
-    sides including the vertical ones:
-        set width [expr [[$inst getMaster] getWidth] / $units]
-        incr sum_of_cell_widths $width
-        ...
-        set cur_pos [expr $cur_pos + $space_between_pads_min_filler + $width]
-    There is no `getHeight` anywhere in its side arithmetic.
+    upstream `pad_cfg.tcl` measures a cell in exactly two places and BOTH are
+    `[[$inst getMaster] getWidth]`, for all four sides including the vertical
+    ones — the fit sum, and the along-the-row step
+    `cur_pos + space_between_pads_min_filler + $width`. There is no
+    `getHeight` anywhere in its side arithmetic.
 
-    MEASURED 2026-08-22, four SEPARATE OpenROAD processes (26Q3-1165), one per
-    `PAD_ROTATION_VERTICAL` value so no row from an earlier pass is reused:
+    MEASURED, four SEPARATE OpenROAD processes (26Q3-1165), one per
+    `PAD_ROTATION_VERTICAL` value so no row from an earlier pass could be
+    reused by a later one:
         ROTV = R0 / R90 / R180 / MX
-        WEST pad  ->  orient MXR90, 75 um along the row, 350 um into the die
-        EAST pad  ->  orient R90,   75 um along the row, 350 um into the die
-    identical in all four. A vertical-side pad is placed rotated whatever is
-    declared, and neither its orientation nor its extents are a function of
-    `PAD_ROTATION_VERTICAL`.
+        WEST -> orient MXR90, EAST -> orient R90
+        75 um along the row, 350 um into the die, IDENTICAL in all four.
 
-CONSEQUENCE, and it is reachable: on a PDK that declares no `PAD_ROTATION_*`
-(so upstream's `R0` default applies) a ring that upstream places is refused
-here with `PAD_RING_DOES_NOT_FIT`, because a 75-by-350 pad is summed as 350 on
-the vertical sides. Measured on a real 77-pad ring: 19 x 350 = 6650 um against
-a 1500 um side.
+The correction is right whichever way it moves a verdict — it was made on the
+strength of those two sources, not because a ring then fits. On a real ring it
+happened to be a 4.4x error: 19 x 350 = 6650 um against a 1500 um side, which
+refused a ring upstream places.
 
-WHY IT IS NOT FIXED HERE. The extent and the DEF orientation this step writes
-are one decision, and every way to correct the extent forces a second choice
-this program has no authority to make: adopt the tool's measured MXR90 / R90
-convention for the vertical sides, and `PAD_ROTATION_VERTICAL` — a variable of
-the borrowed config contract — becomes silently inert; or leave the declared
-orientation in the DEF beside a footprint that contradicts it. Changing the
-geometry so a refused ring passes is also precisely the move that turns a red
-into a green without earning it. So the divergence is DATA here rather than a
-patch: named, measured, reproducible from
-`evidence/rotation_probe/`, and left for the flow owner to decide.
+`PAD_ROTATION_VERTICAL` IS INERT, AND SAYS SO OUT LOUD
+======================================================
+The same measurement shows the placer does not read it. Silently honouring an
+inert variable is a lie; silently ignoring a declared one is the defect. So it
+degrades loudly in BOTH directions:
+
+    at librelane's default `R0`   — indistinguishable from never having set it
+                                    — PROCEED, and carry
+                                    `rotation_vertical_inert` in the report,
+                                    with the measurement, in EVERY report
+                                    including the skips. A disclosure only
+                                    present on the happy path is not one.
+    declared non-default          — refuse **rc 2, NOT DETERMINED**, naming the
+                                    variable and saying the placer ignores it.
+                                    Never rc 0 and never rc 1: "I cannot
+                                    honour what you asked" is neither a pass
+                                    nor a finding about the design. An author
+                                    who sets a knob is entitled to be told the
+                                    knob does nothing.
+
+And the DEF carries the orientation the placer ACTUALLY produces on the
+vertical sides (`_pad_ring.VERTICAL_SIDE_ORIENT`), not the declared one, so the
+footprint a DEF reader derives matches the geometry this step recorded. An
+artefact that disagrees with itself is worse than either half alone.
 
 WHAT THIS PROGRAM WILL NOT DO
 =============================
