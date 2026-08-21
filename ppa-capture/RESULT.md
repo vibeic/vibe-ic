@@ -1374,6 +1374,29 @@ required element was *present*, never whether two copies of it *agreed*.
 Presence is not agreement, which is the whole finding of the three records the
 brief singles out.
 
+**So the agreement question was then asked of the numbers too.** A screen
+comparing each record's figures against its report section flags 12 of 19 — and
+that number is **not a finding**: it counts numbers the section adds (line
+references, breakdowns) as though they were disagreements, conflating
+elaboration with contradiction. Reported here only so the next reader does not
+re-derive it and believe it.
+
+The answerable question is narrower — *did a figure I revised mid-lane survive
+in one place and not the other?* — and it was asked of the four records whose
+headline numbers changed:
+
+    invariance rule        24 / 54 and 8            both places agree
+    discovery rule         362 / 1584 and 12        both places agree
+    routing-vs-wiring      26 / 16 current          both agree; the superseded
+                                                    21 / 15 appears only in the
+                                                    record, deliberately, as history
+    screen-validation      0.07 / 0.38 / 0.966      all in the record; the report
+                                                    adds a population size
+
+**Zero contradictions.** One real drift in the whole deliverable, found in the
+prose the ladder demands and fixed above — which is the honest yield of asking a
+question I had not been asking.
+
 ---
 
 ## Summary
