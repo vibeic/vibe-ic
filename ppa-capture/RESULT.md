@@ -1248,26 +1248,39 @@ predicate and a population, in words my list did not happen to contain. So the
 answer is **zero**, and it took a control plus a read to get there rather than
 one regex.
 
-## No near-duplicates — the risk the brief names, measured two-directionally
+## No near-duplicates — and the first number I published from a broken instrument
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
-record. The emitter enforces that only for the buckets that write a backlog; the
-26 Bucket-A patterns are unchecked by anything. Measured over all 325 pairs:
+record. The emitter enforces that only for the buckets that write a backlog, so
+the patterns were unchecked by anything. Over **all 29 records**:
 
-    pairs compared                      325
-    maximum similarity                 0.07
-    pairs above 0.60                      0
+    pairs compared                      406
+    maximum similarity                 0.38
+    pairs above 0.40                      0
 
-**With both controls, because one direction proves nothing.** A record against
-itself scores 1.00 — that only shows the apparatus detects identity. The control
-that matters is the negative one: a deliberately near-duplicated pattern, three
-words changed, scores **0.97**, and an unrelated pair **0.02**. So the instrument
-separates the two cases by a wide margin, and 0.07 across the real pairs is a
-result rather than an artefact of a metric that cannot see similarity.
+**Controls, all three separating:** a record against itself **1.000**, a
+deliberately near-duplicated pattern **0.966**, an unrelated pair **0.144**. The
+0.38 maximum sits far below the near-duplicate signal, so the conclusion stands:
+no two records restate one class.
 
-Without the negative control the same 0.07 would have been unusable — indeed it
-looked implausibly low for prose on related subjects, which is what prompted the
-second control rather than a confident report.
+**The first version of this section was wrong, and how it went wrong matters
+more than the correction.** I reported 0.07 over 325 pairs. The similarity
+matcher applies a heuristic that discards frequent characters on inputs above a
+few hundred characters, and it is disabled by a constructor argument — I set the
+attribute *after* construction, where it does nothing. Every score in that run
+was produced by a matcher that could not see similarity.
+
+I did run controls. **They could not fail.** Self-against-self returns 1.00 even
+on a broken matcher, because identity survives any heuristic; and the
+near-duplicate control went through the same broken call path, so it inherited
+the defect it was meant to detect. A control executed with the fault it is
+testing for is decoration.
+
+That is the fourteenth apparatus error of this lane and **the first to reach a
+committed artefact** — which is exactly what **A-27** exists to prevent, and it
+happened anyway because the rule as written asks for a control and not for the
+one property that makes a control real: **it must demonstrate SEPARATION.** A-27
+now says so.
 
 ---
 
