@@ -1,0 +1,27 @@
+[INFO] USER_ID: 1000, GROUP_ID: 0
+[INFO] Final PATH variable: /headless/.local/bin:/foss/tools/bin:/foss/tools/sak:/usr/local/sbin:/headless/.local/bin:/foss/tools/bin:/foss/tools/sak:/foss/tools/kactus2:/foss/tools/klayout:/foss/tools/osic-multitool:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/foss/tools/kactus2:/foss/tools/klayout:/foss/tools/osic-multitool
+[INFO] Final PYTHONPATH variable: /headless/.local/lib/python3.12/site-packages:/foss/tools/yosys/share/yosys/python3:/usr/lib/python312.zip:/usr/lib/python3.12:/usr/lib/python3.12/lib-dynload:/usr/local/lib/python3.12/dist-packages:/opt/vibeic-forks/cocotb/src:/usr/lib/python3/dist-packages:/foss/tools/ngspyce/local/lib/python3.12/dist-packages:/foss/tools/openems/local/lib/python3.12/dist-packages:/foss/tools/pyopus/local/lib/python3.12/dist-packages:/foss/tools/yosys/share/yosys/python3:/foss/tools/klayout/pymod:/foss/tools/vacask/lib/vacask/python
+[INFO] SKIPPING UI STARTUP
+[INFO] Executing command: 'sta -no_init -exit /home/reyerchu/_jxlayer/records/trials/p08/diag/power_postroute.tcl'
+OpenSTA 2.7.0 f21d4a3878 Copyright (c) 2026, Parallax Software, Inc.
+License GPLv3: GNU GPL version 3 <http://gnu.org/licenses/gpl.html>
+
+This is free software, and you are free to change and redistribute it
+under certain conditions; type `show_copying' for details. 
+This program comes with ABSOLUTELY NO WARRANTY; for details type `show_warranty'.
+POWER_ANALYSIS_MODE: vectorless_sdc
+Warning 198: /home/reyerchu/_jxlayer/run/trials/p08/phase3/stage3/pnr/spm_pnr.v line 649, module sky130_fd_sc_hd__fill_1 not found. Creating black box for FILLER_0_109.
+Warning 198: /home/reyerchu/_jxlayer/run/trials/p08/phase3/stage3/pnr/spm_pnr.v line 690, module sky130_fd_sc_hd__fill_2 not found. Creating black box for FILLER_10_208.
+Warning 198: /home/reyerchu/_jxlayer/run/trials/p08/phase3/stage3/pnr/spm_pnr.v line 1571, module sky130_fd_sc_hd__tapvpwrvgnd_1 not found. Creating black box for TAP_TAPCELL_ROW_0_0.
+Warning 441: constraint.sdc line 5, set_input_delay relative to a clock defined on the same port/pin not allowed.
+Group                  Internal  Switching    Leakage      Total
+                          Power      Power      Power      Power (Watts)
+----------------------------------------------------------------
+Sequential             1.69e-04   2.92e-05   9.44e-10   1.99e-04  35.4%
+Combinational          5.89e-05   1.15e-04   1.62e-09   1.74e-04  31.0%
+Clock                  9.11e-05   9.79e-05   2.16e-09   1.89e-04  33.6%
+Macro                  0.00e+00   0.00e+00   0.00e+00   0.00e+00   0.0%
+Pad                    0.00e+00   0.00e+00   0.00e+00   0.00e+00   0.0%
+----------------------------------------------------------------
+Total                  3.20e-04   2.42e-04   4.73e-09   5.62e-04 100.0%
+                          56.9%      43.1%       0.0%
