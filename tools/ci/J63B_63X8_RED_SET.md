@@ -1191,5 +1191,19 @@ mitigation whose necessity is unproven.
 
 Nothing here was obtained by widening an assertion, rewriting a baseline,
 deleting a test or relaxing a rule deck. Where a story could not be replaced by
-a number, the story was retracted — twenty-three times, several of them against
-this agent's own earlier conclusions in this same file.
+a number, the story was retracted, repeatedly and including against this agent's
+own earlier conclusions in this same file. Both figures are checkable rather
+than asserted:
+
+```
+git log --format=%s origin/main..HEAD | grep -icE 'correct|retract|refut|wrong'
+    -> 12 commits whose subject states a correction
+grep -ciE 'retracted|CORRECTION' tools/ci/J63B_63X8_RED_SET.md
+    ->  8 marked retractions in this file
+```
+
+An earlier revision of this paragraph said "twenty-three times". That was a
+running tally kept in conversation, never measured, and it counted refinements
+that are not retractions. **A report arguing that no number should be published
+without measuring it had an unmeasured number in its last line**, which is worth
+leaving on the record rather than quietly correcting.
