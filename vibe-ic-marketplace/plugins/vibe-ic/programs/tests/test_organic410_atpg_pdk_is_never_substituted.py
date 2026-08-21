@@ -102,7 +102,36 @@ def test_the_default_is_no_longer_a_real_pdk():
 
 
 def test_an_unsupported_pdk_returns_rc2_with_the_supported_list():
-    src = (_PROGRAMS / "fault_atpg_run.py").read_text()
-    i = src.index("unsupported pdk:")
-    window = src[i:i + 300]
-    assert "Supported:" in window and "PDK_CONFIG.keys()" in window
+    """A refusal must NAME what is supported, or the caller cannot act on it.
+
+    Checked on every live emission site, with comments and docstrings removed
+    first. This used to take `src.index("unsupported pdk:")` — the FIRST
+    occurrence anywhere in the file — and a later change that merely QUOTED the
+    old message in a comment moved that index onto the quotation and broke the
+    test while the invariant still held. A guard that matches its subject being
+    discussed is the defect it exists to catch, and this repo has now fixed
+    three of those; this is the third.
+    """
+    import io
+    import tokenize
+
+    raw = (_PROGRAMS / "fault_atpg_run.py").read_text()
+    # Strip comments; keep strings, since the message itself IS a string.
+    out, prev_end = [], (1, 0)
+    for tok in tokenize.generate_tokens(io.StringIO(raw).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        if tok.start[0] > prev_end[0]:
+            out.append("\n" * (tok.start[0] - prev_end[0]))
+        out.append(tok.string)
+        prev_end = tok.end
+    code = "".join(out)
+
+    sites = [i for i in range(len(code))
+             if code.startswith("unsupported pdk:", i)]
+    assert sites, "the refusal message is gone — did it stop naming the case?"
+    for i in sites:
+        window = code[i:i + 300]
+        assert "Supported:" in window and "PDK_CONFIG.keys()" in window, (
+            f"an 'unsupported pdk:' refusal at offset {i} does not name the "
+            f"supported set: {window[:160]!r}")

@@ -1,9 +1,0 @@
-{
-  "fields": {
-    "power_domains": [
-      "VBUS 5-48 V negotiated rail",
-      "VCONN cable-marker supply"
-    ],
-    "power_considerations": "USB-PD negotiates VBUS up to 240 W (48 V at 5 A); PPS allows fine programmable voltage/current for efficient charging."
-  }
-}
