@@ -846,6 +846,10 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-10 | — | population of **1** | real defect, but the guard protects one site |
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
+| A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
+| A-2 | — | n/a | FP-free by construction, same reason |
+| A-9 | 29 records | 6 offenders | swept during construction; 6 of 29 IS its sweep |
+| A-13 | 47 pairs | 6 | swept during construction; unusable until the generic token was excluded |
 
 In every case the discriminator was invisible from the defect that motivated the
 rule, and in three of them a naive screen missed the motivating case itself.
@@ -863,9 +867,9 @@ were supplied. **Every rule here will be built by someone writing the same scree
 I wrote.** Each `fix_action` now names the specific way its own screen goes
 wrong.
 
-**Every Bucket-A rule is swept or accounted for — including A-15, which was
-added after this section was first written and which the claim briefly did not
-cover.** Ten were swept outright.
+**Every Bucket-A rule is swept or accounted for, and the table above now lists
+all fourteen** rather than only the ones with dramatic numbers — a reader should
+not have to reconcile prose against a partial table. Ten were swept outright.
 A-1 and A-2 are false-positive-free by construction — a set difference over
 declared tables cannot invent a member. A-9 and A-13 were swept during
 construction: A-9's 6-of-29 IS its sweep, and A-13 required the generic-token
