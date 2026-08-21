@@ -1248,6 +1248,23 @@ predicate and a population, in words my list did not happen to contain. So the
 answer is **zero**, and it took a control plus a read to get there rather than
 one regex.
 
+**Re-validated afterwards against A-27's tightened bar.** The control I used
+here was positive-only — a known-good record scoring three of three — which is
+the same shape as the self-against-self control that let a broken instrument
+publish a number two sections down. So the rubric was re-run against four
+deliberately-failing inputs:
+
+    empty fix_action            flagged, all three missing
+    vague prose, no mechanism   flagged, all three missing
+    predicate only              flagged, population + refusal missing
+    predicate + population,
+      no refusal stated         flagged, refusal missing
+
+All four are caught, including the subtle last one. **The instrument separates,
+so the zero is a result.** Checking this was not optional once A-27 changed: a
+rule tightened and not applied backwards to the author's own earlier claims is
+advice, which is the thing this whole batch exists to stop producing.
+
 ## No near-duplicates — and the first number I published from a broken instrument
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
