@@ -102,7 +102,9 @@ __all__ = [
     "ECO_AXIS", "ECO_M_COUNT", "ECO_M_SURVIVING", "ECO_M_POSITIONS",
     "ECO_M_TIE_OFF", "ECO_M_PADS", "eco_metric_for_kind",
     "ECO_REQUIRED", "ECO_NOT_REQUIRED", "ECO_NOT_DECLARED", "ECO_UNREADABLE",
-    "eco_requirement_state", "eco_proofs_and_limits",
+    "eco_requirement_state", "eco_proofs_and_limits", "eco_applicability",
+    "ECO_NOT_DECLARED_ON_CHIP_PATH", "ECO_NOT_APPLICABLE_ON_IP_PATH",
+    "ECO_PATH_UNDETERMINED",
     "FEASIBLE", "INFEASIBLE", "UNDETERMINED",
     "Proof", "Axis", "DEFAULT_AXES",
     "FeasibilityPolicy", "PenaltyWeights",
@@ -206,6 +208,24 @@ C_ECO_DECLARATION_UNREADABLE = "FEAS_ECO_DECLARATION_UNREADABLE"
 #: asserts the design needs ECO readiness and then says nothing that could be
 #: checked, which is a contradiction and not a pass.
 C_ECO_REQUIREMENT_EMPTY = "FEAS_ECO_REQUIREMENT_EMPTY"
+#: No declaration, and the flow routed this design onto the CHIP path. A
+#: tape-out-bound design that declared no spare/ECO requirement is a
+#: [CANNOT CHECK], never a silent pass -- the whole hole the delivery path
+#: closes.
+C_ECO_NOT_DECLARED_ON_CHIP_PATH = "FEAS_ECO_NOT_DECLARED_ON_CHIP_PATH"
+#: No declaration, and the flow routed this design to the hardmacro/IP
+#: terminal. An IP delivery is not tape-out-bound, so no spare population is
+#: owed and this is a finding, not a hole.
+C_ECO_NOT_APPLICABLE_ON_IP_PATH = "FEAS_ECO_NOT_APPLICABLE_ON_IP_PATH"
+#: No declaration, and the route could not be established -- no router artefact,
+#: both of them at once, or a flow that could not be read. A design that has
+#: not been shown to be an IP delivery must not be treated as one.
+C_ECO_PATH_UNDETERMINED = "FEAS_ECO_PATH_UNDETERMINED"
+#: A declaration that opts out, on a design the flow routed onto the CHIP path.
+#: Still NOT_APPLICABLE -- an opt-out is a decision somebody made and the axis
+#: does not overrule it -- but it is the one shape a reader must be able to
+#: find, so it does not share a code with an opt-out on the IP path.
+C_ECO_OPTED_OUT_ON_CHIP_PATH = "FEAS_ECO_OPTED_OUT_ON_CHIP_PATH"
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +332,29 @@ ECO_REQUIRED = "REQUIRED"
 ECO_NOT_REQUIRED = "NOT_REQUIRED"
 ECO_NOT_DECLARED = "NOT_DECLARED"
 ECO_UNREADABLE = "UNREADABLE"
+#: The three states an ABSENT declaration resolves to once the DELIVERY PATH is
+#: known. They exist because "nobody declared a requirement" is not one finding
+#: -- it is three, and only one of them is benign:
+#:
+#:     on the CHIP path   a tape-out-bound design with no stated spare/ECO
+#:                        requirement. [CANNOT CHECK]; never a silent pass.
+#:     on the IP path     a hardmacro delivery owes no spare population. A
+#:                        finding, and the right one.
+#:     path unknown       no route was established, so the design has NOT been
+#:                        shown to be an IP delivery. Refuse rather than guess.
+ECO_NOT_DECLARED_ON_CHIP_PATH = "NOT_DECLARED_ON_CHIP_PATH"
+ECO_NOT_APPLICABLE_ON_IP_PATH = "NOT_APPLICABLE_ON_IP_PATH"
+ECO_PATH_UNDETERMINED = "PATH_UNDETERMINED"
+
+#: The delivery-path values this module reasons about. They are RE-DECLARED
+#: here, as strings, rather than imported from `_ppa/delivery_path.py`, and that
+#: is deliberate: the gate reads records and must not acquire a dependency on a
+#: module that walks a filesystem. `test_the_two_path_vocabularies_agree`
+#: measures that the two spellings match, so the decoupling cannot silently
+#: become a divergence.
+PATH_CHIP = "CHIP"
+PATH_IP = "IP"
+PATH_NOT_SUPPLIED = "NOT_SUPPLIED"
 
 
 def _pos_int(v: Any) -> Optional[int]:
@@ -397,6 +440,68 @@ def eco_requirement_state(decl: Any) -> Tuple[str, str, Dict[str, Any]]:
         "reason": ("the declaration states no obligation and does not say "
                    "`required: true`, so it declares that this design needs "
                    "no spare/ECO population")}
+
+
+def eco_applicability(decl: Any, delivery: Any
+                      ) -> Tuple[str, str, Dict[str, Any]]:
+    """(state, code, detail) for one design: its DECLARATION and its ROUTE.
+
+    THE DECLARATION WINS WHERE IT SPEAKS. A design that states a requirement is
+    held to it whatever path it is on, and a design that states it needs none
+    has made a decision this axis does not overrule. The route only decides
+    what an ABSENT declaration means -- which is exactly the case that used to
+    mean nothing at all.
+
+    An opt-out ON THE CHIP PATH is still NOT_APPLICABLE, and it gets its own
+    code. It is the one shape somebody would reach for to get around this axis,
+    so a reader has to be able to find it; but converting it into a refusal
+    would be overruling a decision, which is not this module's to make.
+    """
+    state, code, detail = eco_requirement_state(decl)
+    path_row = delivery if isinstance(delivery, Mapping) else {}
+    path = str(path_row.get("path") or PATH_NOT_SUPPLIED)
+    detail = dict(detail)
+    detail["delivery_path"] = path
+    if path_row.get("reason"):
+        detail["delivery_path_reason"] = path_row["reason"]
+    if path_row.get("evidence"):
+        detail["delivery_path_evidence"] = path_row["evidence"]
+
+    if state == ECO_REQUIRED or state == ECO_UNREADABLE:
+        return state, code, detail
+    if state == ECO_NOT_REQUIRED:
+        if path == PATH_CHIP:
+            return state, C_ECO_OPTED_OUT_ON_CHIP_PATH, detail
+        return state, code, detail
+
+    # --- the declaration is ABSENT: the route decides what that means -------
+    if path == PATH_CHIP:
+        detail["reason"] = (
+            "the flow routed this design onto the CHIP path, so it is "
+            "tape-out-bound, and no design-for-ECO requirement was declared "
+            "for it. A tape-out-bound design with no stated spare/ECO "
+            "requirement is a [CANNOT CHECK]: this run cannot say whether the "
+            "layout could be repaired by a metal-only ECO, and saying nothing "
+            "must not read as saying it is fine")
+        return ECO_NOT_DECLARED_ON_CHIP_PATH, C_ECO_NOT_DECLARED_ON_CHIP_PATH, detail
+    if path == PATH_IP:
+        detail["reason"] = (
+            "the flow routed this design to the hardmacro/IP terminal, so it "
+            "is not tape-out-bound and owes no spare/ECO population of its "
+            "own. The die that integrates it owes one")
+        return ECO_NOT_APPLICABLE_ON_IP_PATH, C_ECO_NOT_APPLICABLE_ON_IP_PATH, detail
+    if path == PATH_NOT_SUPPLIED:
+        # Nobody asked. Distinct from every route answer, and it keeps the
+        # pre-route behaviour for a caller that adjudicates records with no
+        # project behind them.
+        return ECO_NOT_DECLARED, C_ECO_NOT_DECLARED, detail
+    detail["reason"] = (
+        f"no design-for-ECO requirement was declared and the delivery path is "
+        f"{path}: the route this design took could not be established, so it "
+        "has NOT been shown to be a hardmacro delivery. Treating an "
+        "unestablished route as an IP delivery is the guess this axis refuses "
+        "to make")
+    return ECO_PATH_UNDETERMINED, C_ECO_PATH_UNDETERMINED, detail
 
 
 #: Every obligation this axis knows how to prove, and the sentence that says
@@ -613,6 +718,23 @@ class FeasibilityPolicy:
     #: implies are derived into `limits` at evaluation time by
     #: `eco_proofs_and_limits`, so nothing here is a number this module chose.
     eco_requirement: Optional[Mapping[str, Any]] = None
+    #: The DELIVERY PATH this design is on, as `_ppa/delivery_path.resolve()`
+    #: returned it -- `{"path", "reason", "evidence"}` -- or None when nobody
+    #: established one.
+    #:
+    #: WHY A ROUTE AND NOT A DECLARATION. `eco_requirement` above is opt-in,
+    #: and a run that simply omits it would get NOT_APPLICABLE: the pre-fix
+    #: behaviour, silently. The predicate that closes that must be one a design
+    #: cannot accidentally omit, so it is the ROUTE THE FLOW TOOK -- a design
+    #: routed 0.5ic -> 15.5ic -> 26.5ic -> 37.5ic is tape-out-bound, and one
+    #: that terminates at 37.5ip is a hardmacro delivery and is not. It is NOT
+    #: inferred from a GDS (an IP delivery streams one too) or from the PDK
+    #: (every design here targets a real one).
+    #:
+    #: This field holds a VALUE, not a path to probe: the gate reads records
+    #: and never a filesystem, and a promotion gate that walked a tree could be
+    #: pointed at a different one than the records came from.
+    delivery_path: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -966,8 +1088,18 @@ def _eco_not_proved(state: str, not_asked: Sequence[str]
     proved ECO readiness.
     """
     if state == ECO_NOT_DECLARED:
-        why = ("no ECO-readiness requirement was declared for this design, so "
-               "nothing was owed and nothing was checked")
+        why = ("no ECO-readiness requirement was declared for this design and "
+               "no delivery path was supplied, so nothing was owed and "
+               "nothing was checked")
+    elif state == ECO_NOT_DECLARED_ON_CHIP_PATH:
+        why = ("this design is on the chip path and declared no ECO-readiness "
+               "requirement, so there was nothing to check it against")
+    elif state == ECO_NOT_APPLICABLE_ON_IP_PATH:
+        why = ("this design terminates at the hardmacro/IP delivery, so it "
+               "owes no spare/ECO population of its own")
+    elif state == ECO_PATH_UNDETERMINED:
+        why = ("no requirement was declared and the route this design took "
+               "could not be established")
     elif state == ECO_NOT_REQUIRED:
         why = "the declaration states this design requires no spare population"
     elif state == ECO_UNREADABLE:
@@ -1000,7 +1132,7 @@ def _evaluate_eco_axis(records: Sequence[Any],
             population is UNDETERMINED and never "0 spares, fails".
     """
     decl = policy.eco_requirement
-    state, code, detail = eco_requirement_state(decl)
+    state, code, detail = eco_applicability(decl, policy.delivery_path)
     proofs, limits, not_asked = eco_proofs_and_limits(decl)
     app: Dict[str, Any] = {
         "state": state,
@@ -1008,10 +1140,12 @@ def _evaluate_eco_axis(records: Sequence[Any],
         "not_proved": _eco_not_proved(state, not_asked),
     }
     app.update(detail)
-    if state in (ECO_NOT_DECLARED, ECO_NOT_REQUIRED):
+    if state in (ECO_NOT_DECLARED, ECO_NOT_REQUIRED,
+                 ECO_NOT_APPLICABLE_ON_IP_PATH):
         return AxisResult(ECO_AXIS, AXIS_NOT_APPLICABLE, (code,),
                           applicability=app)
-    if state == ECO_UNREADABLE:
+    if state in (ECO_UNREADABLE, ECO_NOT_DECLARED_ON_CHIP_PATH,
+                 ECO_PATH_UNDETERMINED):
         return AxisResult(ECO_AXIS, AXIS_UNDETERMINED, (code,),
                           applicability=app)
     if not proofs:
@@ -1244,6 +1378,14 @@ def policy_from_document(doc: Mapping[str, Any]) -> FeasibilityPolicy:
     #: that says something nobody wrote. A key that is absent stays absent, so
     #: "no declaration" survives as None all the way to the axis.
     eco = doc.get("eco_readiness") if "eco_readiness" in doc else None
+    #: A contract MAY carry the route already resolved, so a caller that has no
+    #: project tree to hand can still adjudicate one. It is read verbatim for
+    #: the same reason the declaration is: a second normalisation here is how a
+    #: malformed route becomes a well-formed one that says something nobody
+    #: wrote.
+    delivery = doc.get("delivery_path")
+    if not isinstance(delivery, Mapping):
+        delivery = None
     return FeasibilityPolicy(
         axes=DEFAULT_AXES,
         required_views=views,
@@ -1252,6 +1394,7 @@ def policy_from_document(doc: Mapping[str, Any]) -> FeasibilityPolicy:
                 if isinstance(v, Mapping)},
         allow_waivers=True if allow is None else bool(allow),
         eco_requirement=eco,
+        delivery_path=delivery,
     )
 
 

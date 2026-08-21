@@ -40,6 +40,11 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[1]
+#: The published arms, IN TREE. They landed on main in v1.11.66; an earlier
+#: revision of this script read byte-for-byte copies under `inputs/`, which was
+#: 964 KB of duplicated published record AND a digest pin that protected the
+#: copy instead of the record.
+TRIALS_DIR = REPO / "ppa-crosslayer" / "records" / "trials"
 PROGRAMS = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
 sys.path.insert(0, str(PROGRAMS))
 
@@ -61,13 +66,13 @@ def verify_manifest() -> list:
     man = json.loads((HERE / "MANIFEST.json").read_text(encoding="utf-8"))
     bad = []
     for row in man["files"]:
-        p = HERE / row["vendored_at"]
+        p = REPO / row["path"]
         if not p.is_file():
-            bad.append(f"{row['vendored_at']}: missing")
+            bad.append(f"{row['path']}: missing")
             continue
         got = "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()
         if got != row["sha256"]:
-            bad.append(f"{row['vendored_at']}: {got} != {row['sha256']}")
+            bad.append(f"{row['path']}: {got} != {row['sha256']}")
     return bad
 
 
@@ -75,7 +80,7 @@ def eco_records(trial: str, out_dir: pathlib.Path) -> list:
     out = out_dir / "eco_records.json"
     r = subprocess.run(
         [sys.executable, str(PRODUCER),
-         "--spare-plan", str(HERE / "inputs" / trial / "spare_cells.json"),
+         "--spare-plan", str(TRIALS_DIR / trial / "spare_cells.json"),
          "--stage", STAGE, "--json", str(out)],
         capture_output=True, text=True)
     if r.returncode != 0:
@@ -147,9 +152,9 @@ def main() -> int:
         out_dir = HERE / "out" / trial
         out_dir.mkdir(parents=True, exist_ok=True)
         published = json.loads(
-            (HERE / "inputs" / trial / "candidates.json").read_text(
+            (TRIALS_DIR / trial / "candidates.json").read_text(
                 encoding="utf-8"))
-        run = json.loads((HERE / "inputs" / trial / "run.json").read_text(
+        run = json.loads((TRIALS_DIR / trial / "run.json").read_text(
             encoding="utf-8"))
         recs = eco_records(trial, out_dir)
 
@@ -160,6 +165,20 @@ def main() -> int:
                                out_dir, "tapeout_bound")
         without = adjudicate(cand, contract_from(published, None),
                              out_dir, "no_declaration")
+        # THE THIRD ARM, and it is the one the delivery-path ruling adds. Same
+        # records, same ABSENT declaration -- and the route the flow took. The
+        # design's own run trees are long gone, so the route is supplied
+        # DIRECTLY here rather than resolved from a tree; that is stated in the
+        # summary so nobody reads it as a measurement of these five projects.
+        chip_route = contract_from(published, None)
+        chip_route["delivery_path"] = {
+            "path": "CHIP",
+            "reason": ("supplied by readjudicate.py, NOT resolved from a tree: "
+                       "the five arms' project directories no longer exist. "
+                       "The design's L2 names a primary tape-out target, so "
+                       "CHIP is the route it would have taken"),
+        }
+        chip = adjudicate(cand, chip_route, out_dir, "no_declaration_chip_path")
 
         def axes(rep):
             return {a["axis"]: a["status"] for a in rep["candidates"][0]["axes"]}
@@ -171,15 +190,15 @@ def main() -> int:
         # rather than assumed. If adding an axis moved any other axis's status
         # then this whole comparison is about two different adjudications and
         # not about ECO readiness.
-        pub = json.loads((HERE / "inputs" / trial /
-                          "published_feasibility.json").read_text(
+        pub = json.loads((TRIALS_DIR / trial /
+                          "feasibility_report.json").read_text(
                               encoding="utf-8"))
         pub_axes = {a["axis"]: a["status"] for a in pub["candidates"][0]["axes"]}
         now_axes = {a["axis"]: a["status"]
                     for a in with_decl["candidates"][0]["axes"]}
         drift = {k: (v, now_axes.get(k)) for k, v in pub_axes.items()
                  if now_axes.get(k) != v}
-        plan = json.loads((HERE / "inputs" / trial / "spare_cells.json"
+        plan = json.loads((TRIALS_DIR / trial / "spare_cells.json"
                            ).read_text(encoding="utf-8"))
         rows.append({
             "trial": trial,
@@ -200,6 +219,11 @@ def main() -> int:
                 "candidate_verdict": without["candidates"][0]["verdict"],
                 "eco_axis": axes(without)["eco_readiness"],
                 "exit_code": without["_exit_code_observed"],
+            },
+            "no_declaration_chip_path": {
+                "candidate_verdict": chip["candidates"][0]["verdict"],
+                "eco_axis": axes(chip)["eco_readiness"],
+                "exit_code": chip["_exit_code_observed"],
             },
         })
 
@@ -223,24 +247,35 @@ def main() -> int:
             "before and after the tenth was added; `readjudicate.py` refuses "
             "with rc=2 if any of them moves"),
         "control": ("`no_declaration` is the negative control: the SAME "
-                    "records with no `eco_readiness` block. Every arm reads "
-                    "NOT_APPLICABLE there, so the refusals in the "
-                    "`tapeout_bound` column come from the design's declared "
-                    "requirement and not from a rule that fires regardless."),
+                    "records with no `eco_readiness` block AND no delivery "
+                    "path. Every arm reads NOT_APPLICABLE there, so the "
+                    "refusals in the `tapeout_bound` column come from the "
+                    "design's declared requirement and not from a rule that "
+                    "fires regardless."),
+        "no_declaration_chip_path": (
+            "The same absent declaration WITH the route the flow took. Every "
+            "arm becomes UNDETERMINED, including the two that kept all ten "
+            "spares: on the chip path a design that declared no ECO "
+            "requirement cannot be said to be repairable, and this run makes "
+            "no finding rather than a silent pass. That is the hole the "
+            "opt-in declaration left, closed by a route a design cannot "
+            "accidentally omit."),
     }
     (HERE / "out" / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     w = max(len(t) for t in TRIALS)
-    print(f"{'trial':<{w}}  spares  eco(declared)  candidate(declared)  "
-          f"eco(control)  candidate(control)")
+    print(f"{'trial':<{w}}  spares  {'eco(declared)':<14} {'verdict':<13} "
+          f"{'eco(no decl,':<15} {'eco(no decl,':<15}")
+    print(f"{'':<{w}}  {'':>6}  {'':<14} {'':<13} {'no route)':<15} "
+          f"{'CHIP route)':<15}")
     for row in rows:
         print(f"{row['trial']:<{w}}  "
               f"{str(row['spare_count_in_plan']):>6}  "
-              f"{row['tapeout_bound']['eco_axis']:<13}  "
-              f"{row['tapeout_bound']['candidate_verdict']:<19}  "
-              f"{row['no_declaration']['eco_axis']:<12}  "
-              f"{row['no_declaration']['candidate_verdict']}")
+              f"{row['tapeout_bound']['eco_axis']:<14} "
+              f"{row['tapeout_bound']['candidate_verdict']:<13} "
+              f"{row['no_declaration']['eco_axis']:<15} "
+              f"{row['no_declaration_chip_path']['eco_axis']:<15}")
     print(f"\nsummary: {HERE / 'out' / 'summary.json'}")
     return 0
 

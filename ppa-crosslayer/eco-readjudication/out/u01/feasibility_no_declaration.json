@@ -1,7 +1,7 @@
 {
   "_exit_code_observed": 2,
   "_stdout": [
-    "eco_readiness: NOT_DECLARED (declaration from none)",
+    "eco_readiness: NOT_DECLARED (declaration from none; delivery path NOT_SUPPLIED)",
     "u01: UNDETERMINED  em:FEAS_NOT_MEASURED,em:FEAS_INCOMPLETE_VIEW_SET,equivalence:FEAS_NOT_MEASURED,equivalence:FEAS_INCOMPLETE_VIEW_SET  [eco_readiness NOT_APPLICABLE]"
   ],
   "candidates": [
@@ -1218,35 +1218,36 @@
         {
           "applicability": {
             "declaration_present": false,
+            "delivery_path": "NOT_SUPPLIED",
             "not_proved": [
               {
                 "obligation": "min_spare_cells",
-                "reason": "no ECO-readiness requirement was declared for this design, so nothing was owed and nothing was checked",
+                "reason": "no ECO-readiness requirement was declared for this design and no delivery path was supplied, so nothing was owed and nothing was checked",
                 "would_have_stated": "how many spare/ECO cells the insertion plan recorded"
               },
               {
                 "obligation": "min_spare_cells_by_kind",
-                "reason": "no ECO-readiness requirement was declared for this design, so nothing was owed and nothing was checked",
+                "reason": "no ECO-readiness requirement was declared for this design and no delivery path was supplied, so nothing was owed and nothing was checked",
                 "would_have_stated": "how many spares of each named kind -- a mux2 cannot do a flop's repair"
               },
               {
                 "obligation": "min_distinct_positions",
-                "reason": "no ECO-readiness requirement was declared for this design, so nothing was owed and nothing was checked",
+                "reason": "no ECO-readiness requirement was declared for this design and no delivery path was supplied, so nothing was owed and nothing was checked",
                 "would_have_stated": "how many distinct placement positions the spares occupy"
               },
               {
                 "obligation": "require_tie_off",
-                "reason": "no ECO-readiness requirement was declared for this design, so nothing was owed and nothing was checked",
+                "reason": "no ECO-readiness requirement was declared for this design and no delivery path was supplied, so nothing was owed and nothing was checked",
                 "would_have_stated": "whether every spare input is tied off rather than left floating"
               },
               {
                 "obligation": "min_spare_pads",
-                "reason": "no ECO-readiness requirement was declared for this design, so nothing was owed and nothing was checked",
+                "reason": "no ECO-readiness requirement was declared for this design and no delivery path was supplied, so nothing was owed and nothing was checked",
                 "would_have_stated": "how many spare ECO pads are reserved"
               },
               {
                 "obligation": "require_preservation",
-                "reason": "no ECO-readiness requirement was declared for this design, so nothing was owed and nothing was checked",
+                "reason": "no ECO-readiness requirement was declared for this design and no delivery path was supplied, so nothing was owed and nothing was checked",
                 "would_have_stated": "how many spares are still named by the SHIPPED artefacts after every optimisation pass that could have stripped them"
               },
               {
@@ -1303,6 +1304,7 @@
     "eco_readiness": {
       "declaration": null,
       "declaration_origin": "none",
+      "delivery_path": {},
       "state": "NOT_DECLARED"
     },
     "limits": {
@@ -1448,7 +1450,7 @@
       ]
     }
   },
-  "policy_digest": "sha256:23867e27a373ce4053a2db4a25599c5188975904497d926fc1f55bcde6e7bcc3",
+  "policy_digest": "sha256:a4b7ce8145b84a8581680a97ded27a580d54eeeb25a5c2d207319a96df1d9108",
   "schema": "vibeic.ppa.feasibility.v1",
   "sources": {
     "candidates": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/out/u01/candidates_with_eco.json",

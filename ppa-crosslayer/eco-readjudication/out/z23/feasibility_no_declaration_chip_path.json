@@ -1,4 +1,9 @@
 {
+  "_exit_code_observed": 2,
+  "_stdout": [
+    "eco_readiness: NOT_DECLARED_ON_CHIP_PATH (declaration from none; delivery path CHIP)",
+    "z23: UNDETERMINED  em:FEAS_NOT_MEASURED,em:FEAS_INCOMPLETE_VIEW_SET,equivalence:FEAS_NOT_MEASURED,equivalence:FEAS_INCOMPLETE_VIEW_SET,eco_readiness:FEAS_ECO_NOT_DECLARED_ON_CHIP_PATH  [eco_readiness UNDETERMINED]"
+  ],
   "candidates": [
     {
       "axes": [
@@ -99,7 +104,7 @@
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
                 "raw": "wns max 0.00",
-                "sha256": "sha256:6e6457175877baa8c8486ba65e4bc68d7c0986a3befdc02cbe1a42c53823c344",
+                "sha256": "sha256:2945f8bc699dddcaa31d733ece83390946dfdcef3beeb884ea76d970e5dd6e27",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -129,7 +134,7 @@
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_spef_based.rpt",
                 "raw": "wns max 0.00",
-                "sha256": "sha256:32fa9193647746c723eb23ac3bdd00074c4b5224c54bf93641abc60d021e12e1",
+                "sha256": "sha256:04f61de7dd28d789bd4e5cdbb1354d1539f66f0a9e80e77d080a3c2ea268cca2",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -159,7 +164,7 @@
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_mcorner_ocv.rpt",
                 "raw": "wns max 0.00",
-                "sha256": "sha256:6e6457175877baa8c8486ba65e4bc68d7c0986a3befdc02cbe1a42c53823c344",
+                "sha256": "sha256:2945f8bc699dddcaa31d733ece83390946dfdcef3beeb884ea76d970e5dd6e27",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -189,7 +194,7 @@
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_spef_based.rpt",
                 "raw": "wns max 0.00",
-                "sha256": "sha256:32fa9193647746c723eb23ac3bdd00074c4b5224c54bf93641abc60d021e12e1",
+                "sha256": "sha256:04f61de7dd28d789bd4e5cdbb1354d1539f66f0a9e80e77d080a3c2ea268cca2",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -219,7 +224,7 @@
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
                 "raw": "wns max 0.00",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -249,7 +254,7 @@
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_spef_multicorner.rpt",
                 "raw": "wns max 0.00",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -278,13 +283,13 @@
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
-                "raw": "worst slack max 3.05",
-                "sha256": "sha256:6e6457175877baa8c8486ba65e4bc68d7c0986a3befdc02cbe1a42c53823c344",
+                "raw": "worst slack max 2.94",
+                "sha256": "sha256:2945f8bc699dddcaa31d733ece83390946dfdcef3beeb884ea76d970e5dd6e27",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 3.05
+              "value": 2.94
             },
             {
               "kind": "slack_nonneg",
@@ -308,13 +313,13 @@
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_spef_based.rpt",
-                "raw": "worst slack max 3.91",
-                "sha256": "sha256:32fa9193647746c723eb23ac3bdd00074c4b5224c54bf93641abc60d021e12e1",
+                "raw": "worst slack max 4.55",
+                "sha256": "sha256:04f61de7dd28d789bd4e5cdbb1354d1539f66f0a9e80e77d080a3c2ea268cca2",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 3.91
+              "value": 4.55
             },
             {
               "kind": "slack_nonneg",
@@ -338,13 +343,13 @@
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_mcorner_ocv.rpt",
-                "raw": "worst slack max 3.05",
-                "sha256": "sha256:6e6457175877baa8c8486ba65e4bc68d7c0986a3befdc02cbe1a42c53823c344",
+                "raw": "worst slack max 2.94",
+                "sha256": "sha256:2945f8bc699dddcaa31d733ece83390946dfdcef3beeb884ea76d970e5dd6e27",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 3.05
+              "value": 2.94
             },
             {
               "kind": "slack_nonneg",
@@ -368,13 +373,13 @@
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_spef_based.rpt",
-                "raw": "worst slack max 3.91",
-                "sha256": "sha256:32fa9193647746c723eb23ac3bdd00074c4b5224c54bf93641abc60d021e12e1",
+                "raw": "worst slack max 4.55",
+                "sha256": "sha256:04f61de7dd28d789bd4e5cdbb1354d1539f66f0a9e80e77d080a3c2ea268cca2",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 3.91
+              "value": 4.55
             },
             {
               "kind": "slack_nonneg",
@@ -398,13 +403,13 @@
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-                "raw": "worst slack max 5.84",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "raw": "worst slack max 6.40",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 5.84
+              "value": 6.4
             },
             {
               "kind": "slack_nonneg",
@@ -428,13 +433,13 @@
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_spef_multicorner.rpt",
-                "raw": "worst slack max 5.84",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "raw": "worst slack max 6.40",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 5.84
+              "value": 6.4
             },
             {
               "absent": true,
@@ -536,12 +541,12 @@
                 "voltage_v": 1.8
               },
               "source": {
-                "line": 132,
+                "line": 121,
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
                 "raw": "wns min 0.00",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -566,12 +571,12 @@
                 "voltage_v": 1.8
               },
               "source": {
-                "line": 132,
+                "line": 121,
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_spef_multicorner.rpt",
                 "raw": "wns min 0.00",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -596,12 +601,12 @@
                 "voltage_v": 1.95
               },
               "source": {
-                "line": 126,
+                "line": 127,
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
                 "raw": "wns min 0.00",
-                "sha256": "sha256:6e6457175877baa8c8486ba65e4bc68d7c0986a3befdc02cbe1a42c53823c344",
+                "sha256": "sha256:2945f8bc699dddcaa31d733ece83390946dfdcef3beeb884ea76d970e5dd6e27",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -626,12 +631,12 @@
                 "voltage_v": 1.95
               },
               "source": {
-                "line": 126,
+                "line": 127,
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_mcorner_ocv.rpt",
                 "raw": "wns min 0.00",
-                "sha256": "sha256:6e6457175877baa8c8486ba65e4bc68d7c0986a3befdc02cbe1a42c53823c344",
+                "sha256": "sha256:2945f8bc699dddcaa31d733ece83390946dfdcef3beeb884ea76d970e5dd6e27",
                 "tool": "opensta",
                 "tool_commit": null
               },
@@ -656,17 +661,17 @@
                 "voltage_v": 1.8
               },
               "source": {
-                "line": 130,
+                "line": 119,
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-                "raw": "worst slack min 0.52",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "raw": "worst slack min 0.57",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 0.52
+              "value": 0.57
             },
             {
               "kind": "slack_nonneg",
@@ -686,17 +691,17 @@
                 "voltage_v": 1.8
               },
               "source": {
-                "line": 130,
+                "line": 119,
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_spef_multicorner.rpt",
-                "raw": "worst slack min 0.52",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "raw": "worst slack min 0.57",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 0.52
+              "value": 0.57
             },
             {
               "kind": "slack_nonneg",
@@ -716,17 +721,17 @@
                 "voltage_v": 1.95
               },
               "source": {
-                "line": 124,
+                "line": 125,
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
-                "raw": "worst slack min 0.30",
-                "sha256": "sha256:6e6457175877baa8c8486ba65e4bc68d7c0986a3befdc02cbe1a42c53823c344",
+                "raw": "worst slack min 0.33",
+                "sha256": "sha256:2945f8bc699dddcaa31d733ece83390946dfdcef3beeb884ea76d970e5dd6e27",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 0.3
+              "value": 0.33
             },
             {
               "kind": "slack_nonneg",
@@ -746,17 +751,17 @@
                 "voltage_v": 1.95
               },
               "source": {
-                "line": 124,
+                "line": 125,
                 "parser": "_ppa/backends/opensta.py",
                 "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
                 "path": "reports/phase3/sta_mcorner_ocv.rpt",
-                "raw": "worst slack min 0.30",
-                "sha256": "sha256:6e6457175877baa8c8486ba65e4bc68d7c0986a3befdc02cbe1a42c53823c344",
+                "raw": "worst slack min 0.33",
+                "sha256": "sha256:2945f8bc699dddcaa31d733ece83390946dfdcef3beeb884ea76d970e5dd6e27",
                 "tool": "opensta",
                 "tool_commit": null
               },
               "unit": "ns",
-              "value": 0.3
+              "value": 0.33
             },
             {
               "absent": true,
@@ -833,8 +838,8 @@
               },
               "source": {
                 "parser": "drv_records.py",
-                "path": "/home/reyerchu/_jxlayer/run/trials/u01/phase3/stage3/sta/sta_spef_multicorner.rpt",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "path": "/home/reyerchu/_jxlayer/run/trials/z23/phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta"
               },
               "unit": "count",
@@ -853,8 +858,8 @@
               },
               "source": {
                 "parser": "drv_records.py",
-                "path": "/home/reyerchu/_jxlayer/run/trials/u01/phase3/stage3/sta/sta_spef_multicorner.rpt",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "path": "/home/reyerchu/_jxlayer/run/trials/z23/phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta"
               },
               "unit": "count",
@@ -873,8 +878,8 @@
               },
               "source": {
                 "parser": "drv_records.py",
-                "path": "/home/reyerchu/_jxlayer/run/trials/u01/phase3/stage3/sta/sta_spef_multicorner.rpt",
-                "sha256": "sha256:2fe2fab7c8c63c2607b12d90755bc1a95143378e34e761b16b395f72b100096e",
+                "path": "/home/reyerchu/_jxlayer/run/trials/z23/phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "sha256": "sha256:fef84e53d90bb3994e4a9052a5b0854e40b9545b7506695402aba3707c5baff8",
                 "tool": "opensta"
               },
               "unit": "count",
@@ -970,7 +975,7 @@
                 "parser": "_ppa/signoff.py",
                 "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
                 "path": "reports/phase3/lvs_verdict.json",
-                "sha256": "sha256:53f2aa426eba7060eac722a3c86f8baa7e2b0381ff7b7aed67c9780f41846ff6",
+                "sha256": "sha256:96dfd51616d414c159dfc8cc19e62f617cdb6dbc2c01bb5cf20fb6e183b7d51a",
                 "tool": "netgen"
               },
               "unit": "verdict",
@@ -1017,7 +1022,7 @@
                 "parser": "_ppa/signoff.py",
                 "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
                 "path": "reports/phase3/antenna.json",
-                "sha256": "sha256:9550c7f702a45e0cc4b69e096e4b8dcb5ffc9f081f359c4d5d833db0f39d3dbc",
+                "sha256": "sha256:e5eb723918c641160dfea254522aab5e025a9b87f838f667c033cc69b6a4a3c1",
                 "tool": "openroad"
               },
               "unit": "count",
@@ -1070,7 +1075,7 @@
                 "parser": "_ppa/signoff.py",
                 "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
                 "path": "reports/phase3/ir_drop.json",
-                "sha256": "sha256:6c662c6fc471a54eaaabf7127566714f3ddf76379d0b1fc77adc597f043d532d",
+                "sha256": "sha256:33c56471d452ab173c01f1cde57cb903b4238ab6a6b66a192ed1d44942b3c986",
                 "tool": "openroad-psm"
               },
               "unit": "count",
@@ -1093,11 +1098,11 @@
                 "parser": "_ppa/signoff.py",
                 "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
                 "path": "reports/phase3/ir_drop.json",
-                "sha256": "sha256:6c662c6fc471a54eaaabf7127566714f3ddf76379d0b1fc77adc597f043d532d",
+                "sha256": "sha256:33c56471d452ab173c01f1cde57cb903b4238ab6a6b66a192ed1d44942b3c986",
                 "tool": "openroad-psm"
               },
               "unit": "V",
-              "value": 0.000259
+              "value": 0.000247
             }
           ],
           "status": "SATISFIED"
@@ -1209,14 +1214,75 @@
             }
           ],
           "status": "UNDETERMINED"
+        },
+        {
+          "applicability": {
+            "declaration_present": false,
+            "delivery_path": "CHIP",
+            "delivery_path_reason": "supplied by readjudicate.py, NOT resolved from a tree: the five arms' project directories no longer exist. The design's L2 names a primary tape-out target, so CHIP is the route it would have taken",
+            "not_proved": [
+              {
+                "obligation": "min_spare_cells",
+                "reason": "this design is on the chip path and declared no ECO-readiness requirement, so there was nothing to check it against",
+                "would_have_stated": "how many spare/ECO cells the insertion plan recorded"
+              },
+              {
+                "obligation": "min_spare_cells_by_kind",
+                "reason": "this design is on the chip path and declared no ECO-readiness requirement, so there was nothing to check it against",
+                "would_have_stated": "how many spares of each named kind -- a mux2 cannot do a flop's repair"
+              },
+              {
+                "obligation": "min_distinct_positions",
+                "reason": "this design is on the chip path and declared no ECO-readiness requirement, so there was nothing to check it against",
+                "would_have_stated": "how many distinct placement positions the spares occupy"
+              },
+              {
+                "obligation": "require_tie_off",
+                "reason": "this design is on the chip path and declared no ECO-readiness requirement, so there was nothing to check it against",
+                "would_have_stated": "whether every spare input is tied off rather than left floating"
+              },
+              {
+                "obligation": "min_spare_pads",
+                "reason": "this design is on the chip path and declared no ECO-readiness requirement, so there was nothing to check it against",
+                "would_have_stated": "how many spare ECO pads are reserved"
+              },
+              {
+                "obligation": "require_preservation",
+                "reason": "this design is on the chip path and declared no ECO-readiness requirement, so there was nothing to check it against",
+                "would_have_stated": "how many spares are still named by the SHIPPED artefacts after every optimisation pass that could have stripped them"
+              },
+              {
+                "property": "eco_reachability",
+                "reason": "whether a metal-only ECO could actually route from a given failing net to a given spare depends on the routing resources left around BOTH, and no artefact here is a routability answer. Distinct placement positions are a spread PROXY and are reported as one"
+              },
+              {
+                "property": "kind_sufficiency",
+                "reason": "whether the declared kind mix can implement the repairs this design will actually need is a judgement about future bugs. This axis checks the mix against the declaration and makes no claim that the declaration is the right mix"
+              },
+              {
+                "property": "post_eco_timing",
+                "reason": "whether a repair built from these spares would still meet timing is a question for an STA run on the ECO netlist, which does not exist yet"
+              }
+            ],
+            "reason": "the flow routed this design onto the CHIP path, so it is tape-out-bound, and no design-for-ECO requirement was declared for it. A tape-out-bound design with no stated spare/ECO requirement is a [CANNOT CHECK]: this run cannot say whether the layout could be repaired by a metal-only ECO, and saying nothing must not read as saying it is fine",
+            "state": "NOT_DECLARED_ON_CHIP_PATH"
+          },
+          "axis": "eco_readiness",
+          "codes": [
+            "FEAS_ECO_NOT_DECLARED_ON_CHIP_PATH"
+          ],
+          "coverage": [],
+          "evidence": [],
+          "status": "UNDETERMINED"
         }
       ],
-      "candidate_id": "u01",
+      "candidate_id": "z23",
       "codes": [
         "em:FEAS_NOT_MEASURED",
         "em:FEAS_INCOMPLETE_VIEW_SET",
         "equivalence:FEAS_NOT_MEASURED",
-        "equivalence:FEAS_INCOMPLETE_VIEW_SET"
+        "equivalence:FEAS_INCOMPLETE_VIEW_SET",
+        "eco_readiness:FEAS_ECO_NOT_DECLARED_ON_CHIP_PATH"
       ],
       "verdict": "UNDETERMINED",
       "waivers": []
@@ -1234,8 +1300,18 @@
       "antenna",
       "ir",
       "em",
-      "equivalence"
+      "equivalence",
+      "eco_readiness"
     ],
+    "eco_readiness": {
+      "declaration": null,
+      "declaration_origin": "none",
+      "delivery_path": {
+        "path": "CHIP",
+        "reason": "supplied by readjudicate.py, NOT resolved from a tree: the five arms' project directories no longer exist. The design's L2 names a primary tape-out target, so CHIP is the route it would have taken"
+      },
+      "state": "NOT_DECLARED_ON_CHIP_PATH"
+    },
     "limits": {
       "power.ir.worst_drop_v": {
         "max": 0.18
@@ -1266,6 +1342,11 @@
         }
       ],
       "drv": [
+        {
+          "stage": "post_route"
+        }
+      ],
+      "eco_readiness": [
         {
           "stage": "post_route"
         }
@@ -1327,6 +1408,11 @@
           "stage": "post_route"
         }
       ],
+      "eco_readiness": [
+        {
+          "stage": "post_route"
+        }
+      ],
       "em": [
         {
           "stage": "post_route"
@@ -1369,11 +1455,11 @@
       ]
     }
   },
-  "policy_digest": "sha256:d3ad1baaa143ef8a993aae4c3d792cbb6d413540512122184fd32d6d72491adb",
+  "policy_digest": "sha256:b65fcc889dfbf20cf70b12cb3356903daf5e555242893138819a03b1b6280d7c",
   "schema": "vibeic.ppa.feasibility.v1",
   "sources": {
-    "candidates": "/home/reyerchu/_jxlayer/records/trials/u01/candidates.json",
-    "contract": null
+    "candidates": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/out/z23/candidates_with_eco.json",
+    "contract": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/out/z23/contract_no_declaration_chip_path.json"
   },
   "verdict": "UNDETERMINED"
 }

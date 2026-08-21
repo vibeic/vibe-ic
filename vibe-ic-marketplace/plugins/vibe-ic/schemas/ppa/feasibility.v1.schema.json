@@ -88,7 +88,16 @@
                   "type": "object",
                   "required": ["state", "declaration_present", "not_proved"],
                   "properties": {
-                    "state": {"enum": ["NOT_DECLARED", "NOT_REQUIRED", "UNREADABLE", "REQUIRED"]},
+                    "state": {
+                      "description": "NOT_DECLARED means no requirement was stated AND no delivery path was supplied -- nobody asked. The three *_PATH states are what an absent declaration means once the route the flow took IS known: on the chip path (0.5ic -> 15.5ic -> 26.5ic -> 37.5ic) the design is tape-out-bound and an absent requirement is a [CANNOT CHECK]; at the 37.5ip hardmacro terminal it owes no spare population; and a route that could not be established is refused rather than guessed at, because a design that has not been shown to be an IP delivery must not be treated as one.",
+                      "enum": ["NOT_DECLARED", "NOT_REQUIRED", "UNREADABLE", "REQUIRED", "NOT_DECLARED_ON_CHIP_PATH", "NOT_APPLICABLE_ON_IP_PATH", "PATH_UNDETERMINED"]
+                    },
+                    "delivery_path": {
+                      "description": "The route the flow took, measured by driving flow_compliance_check._check_condition over steps 37.5ic and 37.5ip. Never inferred from a GDS (an IP delivery streams one too) or from the PDK.",
+                      "enum": ["CHIP", "IP", "BOTH", "NOT_DETERMINED", "UNREADABLE", "NOT_SUPPLIED"]
+                    },
+                    "delivery_path_reason": {"type": "string"},
+                    "delivery_path_evidence": {"type": "object"},
                     "declaration_present": {"type": "boolean"},
                     "not_proved": {"type": "array", "items": {"type": "object"}},
                     "obligations": {"type": "object"},

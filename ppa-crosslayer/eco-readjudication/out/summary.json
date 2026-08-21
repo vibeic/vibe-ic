@@ -1,6 +1,7 @@
 {
-  "control": "`no_declaration` is the negative control: the SAME records with no `eco_readiness` block. Every arm reads NOT_APPLICABLE there, so the refusals in the `tapeout_bound` column come from the design's declared requirement and not from a rule that fires regardless.",
+  "control": "`no_declaration` is the negative control: the SAME records with no `eco_readiness` block AND no delivery path. Every arm reads NOT_APPLICABLE there, so the refusals in the `tapeout_bound` column come from the design's declared requirement and not from a rule that fires regardless.",
   "declaration": "declaration/tapeout_bound.json",
+  "no_declaration_chip_path": "The same absent declaration WITH the route the flow took. Every arm becomes UNDETERMINED, including the two that kept all ten spares: on the chip path a design that declared no ECO requirement cannot be said to be repairable, and this run makes no finding rather than a silent pass. That is the hole the opt-in declaration left, closed by a route a design cannot accidentally omit.",
   "pre_existing_axes_unchanged": true,
   "pre_existing_axes_unchanged_basis": "for every arm, the status of all nine published axes is identical before and after the tenth was added; `readjudicate.py` refuses with rc=2 if any of them moves",
   "rows": [
@@ -12,6 +13,11 @@
       "no_declaration": {
         "candidate_verdict": "UNDETERMINED",
         "eco_axis": "NOT_APPLICABLE",
+        "exit_code": 2
+      },
+      "no_declaration_chip_path": {
+        "candidate_verdict": "UNDETERMINED",
+        "eco_axis": "UNDETERMINED",
         "exit_code": 2
       },
       "pnr_knobs": {
@@ -63,6 +69,11 @@
       "no_declaration": {
         "candidate_verdict": "UNDETERMINED",
         "eco_axis": "NOT_APPLICABLE",
+        "exit_code": 2
+      },
+      "no_declaration_chip_path": {
+        "candidate_verdict": "UNDETERMINED",
+        "eco_axis": "UNDETERMINED",
         "exit_code": 2
       },
       "pnr_knobs": {
@@ -118,6 +129,11 @@
         "eco_axis": "NOT_APPLICABLE",
         "exit_code": 2
       },
+      "no_declaration_chip_path": {
+        "candidate_verdict": "UNDETERMINED",
+        "eco_axis": "UNDETERMINED",
+        "exit_code": 2
+      },
       "pnr_knobs": {
         "die_um": "auto",
         "placement_density": "0.60",
@@ -171,6 +187,11 @@
         "eco_axis": "NOT_APPLICABLE",
         "exit_code": 2
       },
+      "no_declaration_chip_path": {
+        "candidate_verdict": "UNDETERMINED",
+        "eco_axis": "UNDETERMINED",
+        "exit_code": 2
+      },
       "pnr_knobs": {
         "die_um": "auto",
         "placement_density": "0.60",
@@ -222,6 +243,11 @@
       "no_declaration": {
         "candidate_verdict": "UNDETERMINED",
         "eco_axis": "NOT_APPLICABLE",
+        "exit_code": 2
+      },
+      "no_declaration_chip_path": {
+        "candidate_verdict": "UNDETERMINED",
+        "eco_axis": "UNDETERMINED",
         "exit_code": 2
       },
       "pnr_knobs": {

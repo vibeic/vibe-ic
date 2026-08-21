@@ -73,6 +73,16 @@ refuse. So when `--eco-declaration` supplies a design-for-ECO requirement,
 `spare_cell_density` is admitted BOUNDED BELOW and a zero value is refused with
 the declaration cited.
 
+AND THE DECLARATION ITSELF MUST NOT BE OPTIONAL WHERE IT MATTERS. `--eco-
+declaration` closes the hole only for a caller who passes it; a run that omits
+it would get the unbounded lever back, silently. So the ROUTE decides: with
+`--project`, a design the flow put on the CHIP path (0.5ic -> 15.5ic -> 26.5ic
+-> 37.5ic) is tape-out-bound, and emitting a space for it with no ECO
+declaration is rc=2 with NO SPACE PUBLISHED. A design that terminates at 37.5ip
+is a hardmacro delivery, owes no spare population, and its lever stays free.
+The route is not a new declaration anyone can forget -- it is the path the flow
+already took, measured by the flow's own condition predicate.
+
 WHAT THIS PROGRAM STILL CANNOT DO, AND SAYS SO. A declared floor is a COUNT of
 spare cells; this lever is a DENSITY as a fraction of placed cells. Converting
 one to the other needs the design's placed-cell count, which is a property of a
@@ -112,6 +122,7 @@ from _ppa import cli_exit  # noqa: E402 — PPA_INTERFACES §1: a bad invocation
 # the block itself: the space and the promotion gate must agree about what
 # "this design requires spares" means, and two parsers is how they stop
 # agreeing.
+from _ppa import delivery_path as dpath  # noqa: E402
 from _ppa import feasibility as feas  # noqa: E402
 
 PROGRAM = "ppa_pnr_search_space"
@@ -415,6 +426,7 @@ def build_space(flags: Dict[str, int], runner_digest: str,
                 explicit: Optional[Dict[str, List[str]]] = None,
                 checked: Optional[Dict[str, Dict[str, Any]]] = None,
                 eco: Optional[Mapping[str, Any]] = None,
+                route: Optional[Mapping[str, Any]] = None,
                 ) -> Dict[str, Any]:
     """One entry per lever, admitted or refused, and the flag that decided it."""
     explicit = dict(explicit or {})
@@ -484,6 +496,7 @@ def build_space(flags: Dict[str, int], runner_digest: str,
         "measured_against": {"path": RUNNER_REL, "sha256": runner_digest,
                              "cli_flags": sorted(flags)},
         "eco_declaration": dict(eco),
+        "delivery_path": dict(route or {}) or None,
         "levers": levers,
         "admitted_count": len(admitted),
         "refused_count": len(levers) - len(admitted),
@@ -656,6 +669,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--programs-dir", default=None,
                     help="where the runner lives (default: this file's "
                          "directory)")
+    ap.add_argument("--project", default=None, metavar="DIR",
+                    help="the project tree this space is for. Its DELIVERY "
+                         "PATH is read from the route the flow took, and on "
+                         "the CHIP path an absent --eco-declaration is "
+                         "[CANNOT CHECK] rather than an unbounded lever.")
     ap.add_argument("--eco-declaration", default=None, metavar="PATH",
                     help="a JSON document carrying the design's design-for-ECO "
                          "requirement (an `eco_readiness` block, or a document "
@@ -686,7 +704,35 @@ def main(argv: Optional[List[str]] = None) -> int:
               "values nor writes one", file=sys.stderr)
         return RC_BAD_INVOCATION
 
+    route = dpath.resolve(args.project)
     eco, eco_why = read_eco_declaration(args.eco_declaration)
+    if eco_why is None and not args.eco_declaration and args.project \
+            and route["path"] != dpath.PATH_IP:
+        # THE HOLE `--eco-declaration` LEFT, CLOSED BY THE ROUTE. A design the
+        # flow put on the chip path is tape-out-bound; publishing a space whose
+        # spare-cell lever is unbounded below, for a design nobody stated a
+        # spare requirement for, is how the deleted-spares candidate gets
+        # generated in the first place. Refusing is [CANNOT CHECK] and not a
+        # finding: nothing here says the design is wrong, only that this
+        # program cannot bound the lever without knowing what is required.
+        #
+        # THE TEST IS `!= IP`, NOT `== CHIP`, AND THAT IS THE WHOLE CARE. Only
+        # a design PROVEN to terminate at the hardmacro delivery owes no spare
+        # population. A tree with no router artefact, a tree carrying both, and
+        # a flow that could not be read are all routes NOBODY ESTABLISHED --
+        # and a design that has not been shown to be an IP delivery must not be
+        # treated as one. `== CHIP` would have let all three through, which is
+        # the same guess in a different coat.
+        #
+        # No `--project` at all stays rc=0: nobody asked this program about a
+        # tree, and inventing a refusal from a question nobody put is not the
+        # same as refusing to guess at an answer.
+        eco_why = (
+            f"the delivery path of {args.project} is {route['path']} "
+            f"({route.get('reason')}) and no --eco-declaration was supplied. "
+            "Only a design PROVEN to terminate at the hardmacro/IP delivery "
+            "owes no spare/ECO population, so this program will not leave the "
+            "spare-cell lever unbounded below for this one")
     if eco_why is not None:
         print(f"{MARK_CANNOT_CHECK} [{PROGRAM}] {eco_why}", file=sys.stderr)
         print("  A design-for-ECO declaration was NAMED and could not be read. "
@@ -817,7 +863,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"{MARK_REFUSE} [{PROGRAM}] {r}", file=sys.stderr)
             return RC_REFUSED
 
-    space = build_space(flags, _sha256(src), explicit, checked, eco)
+    space = build_space(flags, _sha256(src), explicit, checked, eco, route)
     problems = audit_space(space)
     space["self_audit_problems"] = problems
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -829,6 +875,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"[{PROGRAM}] admitted {space['admitted_count']} lever(s): "
           f"{', '.join(space['admitted_levers']) or '(none)'}")
+    print(f"[{PROGRAM}] delivery path: {route['path']} — {route['reason']}")
     print(f"[{PROGRAM}] design-for-ECO declaration: {eco.get('state')}"
           + (f" (min_spare_cells={eco.get('min_spare_cells')}, from "
              f"{eco.get('declared_in')})"

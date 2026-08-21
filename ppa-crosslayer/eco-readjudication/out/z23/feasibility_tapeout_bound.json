@@ -1,7 +1,7 @@
 {
   "_exit_code_observed": 2,
   "_stdout": [
-    "eco_readiness: REQUIRED (declaration from contract)",
+    "eco_readiness: REQUIRED (declaration from contract; delivery path NOT_SUPPLIED)",
     "z23: UNDETERMINED  em:FEAS_NOT_MEASURED,em:FEAS_INCOMPLETE_VIEW_SET,equivalence:FEAS_NOT_MEASURED,equivalence:FEAS_INCOMPLETE_VIEW_SET  [eco_readiness SATISFIED]"
   ],
   "candidates": [
@@ -1218,6 +1218,7 @@
         {
           "applicability": {
             "declaration_present": true,
+            "delivery_path": "NOT_SUPPLIED",
             "not_proved": [
               {
                 "obligation": "min_spare_pads",
@@ -1461,7 +1462,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1485,7 +1486,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1509,7 +1510,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1533,7 +1534,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1557,7 +1558,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1581,7 +1582,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1605,7 +1606,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1629,7 +1630,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1652,7 +1653,7 @@
               },
               "source": {
                 "parser": "ppa_eco_spare_records.py",
-                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z23/spare_cells.json",
+                "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z23/spare_cells.json",
                 "role": "spare_plan",
                 "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
                 "tool": "phase3_one_shot_runner"
@@ -1708,6 +1709,7 @@
         "required": true
       },
       "declaration_origin": "contract",
+      "delivery_path": {},
       "state": "REQUIRED"
     },
     "limits": {
@@ -1853,7 +1855,7 @@
       ]
     }
   },
-  "policy_digest": "sha256:22e6cc9c7a05e1d621cfb23d7dec8b958cadda18f0dfe96c42406acb7d871008",
+  "policy_digest": "sha256:e4bd4993175cfb73c3c61ad8b6519d3ba90dbb588f9d647a81b1c95987ea0bc8",
   "schema": "vibeic.ppa.feasibility.v1",
   "sources": {
     "candidates": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/out/z23/candidates_with_eco.json",

@@ -24,7 +24,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -47,7 +47,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -70,7 +70,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -93,7 +93,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -116,7 +116,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -139,7 +139,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -162,7 +162,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -185,7 +185,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -207,7 +207,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -226,7 +226,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -242,7 +242,7 @@
       },
       "source": {
         "parser": "ppa_eco_spare_records.py",
-        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
         "role": "spare_plan",
         "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
         "tool": "phase3_one_shot_runner"
@@ -267,7 +267,7 @@
     "preservation": null,
     "preservation_sha256": null,
     "preservation_unreadable": null,
-    "spare_plan": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/eco-readjudication/inputs/z21/spare_cells.json",
+    "spare_plan": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/z21/spare_cells.json",
     "spare_plan_sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
     "spare_plan_unreadable": null
   }

@@ -57,6 +57,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import _atomic_artefact  # noqa: E402
 from _ppa import canonical_json as cj  # noqa: E402
+from _ppa import delivery_path as dpath  # noqa: E402
 from _ppa import feasibility as feas  # noqa: E402
 
 MARK_CANNOT = "[CANNOT CHECK]"
@@ -126,8 +127,9 @@ def _report(results: List[feas.FeasibilityResult], rc: int,
                                 if isinstance(policy.eco_requirement, Mapping)
                                 else policy.eco_requirement),
                 "declaration_origin": eco_origin,
-                "state": feas.eco_requirement_state(
-                    policy.eco_requirement)[0],
+                "delivery_path": dict(policy.delivery_path or {}),
+                "state": feas.eco_applicability(
+                    policy.eco_requirement, policy.delivery_path)[0],
             },
         },
         "sources": dict(sources),
@@ -152,6 +154,15 @@ def main(argv=None) -> int:
     ap.add_argument("--json", default=None, help="report artefact path")
     ap.add_argument("--no-waivers", action="store_true",
                     help="adjudicate as if no waiver had been granted")
+    ap.add_argument("--project", default=None,
+                    help="the project tree these candidates came from. Its "
+                         "DELIVERY PATH is resolved from the route the flow "
+                         "took -- a design routed to step 37.5ic is "
+                         "tape-out-bound, one that terminates at 37.5ip is a "
+                         "hardmacro delivery -- and that decides what an "
+                         "ABSENT design-for-ECO declaration means. Without it "
+                         "no route is established and the ECO axis says so "
+                         "rather than assuming either answer.")
     try:
         args = ap.parse_args(argv)
     except SystemExit:
@@ -203,6 +214,13 @@ def main(argv=None) -> int:
 
     policy = feas.policy_from_document(
         contract_doc if isinstance(contract_doc, Mapping) else {})
+    # `--project` WINS over a route stamped in the contract: the route is a
+    # measurement over a tree, and a tree in front of us outranks a string
+    # somebody wrote about one. When neither is given the policy keeps None and
+    # the axis reports NOT_SUPPLIED -- which is not a finding about the design.
+    if args.project:
+        policy = dataclasses.replace(
+            policy, delivery_path=dpath.resolve(args.project))
     if args.no_waivers:
         # `replace` and not a positional rebuild: a positional constructor
         # silently reassigns every field when one is inserted, and this one
@@ -224,8 +242,22 @@ def main(argv=None) -> int:
     # a run that made no ECO finding must say so out loud rather than leaving
     # the reader to notice an absent row. A tape-out-bound design whose
     # contract declares nothing here is the case this line exists for.
-    eco_state = feas.eco_requirement_state(policy.eco_requirement)[0]
-    print(f"eco_readiness: {eco_state} (declaration from {eco_origin})")
+    eco_state = feas.eco_applicability(policy.eco_requirement,
+                                       policy.delivery_path)[0]
+    route = str((policy.delivery_path or {}).get("path")
+                or dpath.PATH_NOT_SUPPLIED)
+    print(f"eco_readiness: {eco_state} "
+          f"(declaration from {eco_origin}; delivery path {route})")
+    if eco_state == feas.ECO_NOT_DECLARED_ON_CHIP_PATH:
+        print(f"{MARK_CANNOT} this design is on the CHIP path and is therefore "
+              f"tape-out-bound, and no design-for-ECO requirement was declared "
+              f"for it. Nothing here can say whether the layout could be "
+              f"repaired by a metal-only ECO.", file=sys.stderr)
+    elif eco_state == feas.ECO_NOT_DECLARED and not args.project:
+        print(f"{MARK_CANNOT} no design-for-ECO requirement was declared and "
+              f"no --project was given, so the route this design took was not "
+              f"established and this run makes no ECO-readiness finding. Pass "
+              f"--project to have the flow's own route decide.", file=sys.stderr)
 
     # Print EVERY finding, whatever the exit code ends up being.
     for r in results:

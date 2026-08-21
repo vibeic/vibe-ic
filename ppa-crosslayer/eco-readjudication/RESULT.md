@@ -63,22 +63,77 @@ kinds produces no per-kind proof; one that does not require tie-off produces no
 tie-off proof. A gate that also checked the obligations nobody declared would be
 inventing requirements, which is the same defect as inventing a threshold.
 
-### 1.3 The four declaration states — and why they are four, not two
+### 1.3 The seven applicability states — and why none of them collapse
 
 The brief asks that a design which declares none is **NOT_APPLICABLE**, and that
-*the record says which of the two it is*. It does:
+*the record says which of the two it is*. The lander's ruling then supplied the
+predicate that decides what an **absent** declaration means: not a new
+declaration, but the route the flow took (§1.5). Together they give seven:
 
 | state | code | axis status | what it means |
 |---|---|---|---|
-| `NOT_DECLARED` | `FEAS_ECO_NOT_DECLARED` | NOT_APPLICABLE | No `eco_readiness` block. **Nobody was asked.** |
-| `NOT_REQUIRED` | `FEAS_ECO_NOT_REQUIRED` | NOT_APPLICABLE | A block that says `required: false`. **Somebody decided.** |
+| `REQUIRED` | — | SATISFIED / VIOLATED / UNDETERMINED | A requirement was stated; adjudicated against the candidate's own records. |
+| `NOT_REQUIRED` | `FEAS_ECO_NOT_REQUIRED` | NOT_APPLICABLE | `required: false`. **Somebody decided.** |
+| `NOT_REQUIRED` on the chip path | `FEAS_ECO_OPTED_OUT_ON_CHIP_PATH` | NOT_APPLICABLE | The same decision, made by a design that is tape-out-bound. Still not overruled — but it is the move somebody would make to get around this axis, so it does not share a code with an opt-out by an IP. |
 | `UNREADABLE` | `FEAS_ECO_DECLARATION_UNREADABLE` / `FEAS_ECO_REQUIREMENT_EMPTY` | **UNDETERMINED** | A requirement was stated and cannot be parsed, or says `required: true` and then states nothing checkable. Refused, never waived. |
-| `REQUIRED` | — | SATISFIED / VIOLATED / UNDETERMINED | Adjudicated against the candidate's own records. |
+| `NOT_DECLARED_ON_CHIP_PATH` | `FEAS_ECO_NOT_DECLARED_ON_CHIP_PATH` | **UNDETERMINED** | Nothing declared, and the flow routed this design to the chip terminal. **[CANNOT CHECK], never a silent pass.** |
+| `NOT_APPLICABLE_ON_IP_PATH` | `FEAS_ECO_NOT_APPLICABLE_ON_IP_PATH` | NOT_APPLICABLE | Nothing declared, and the design terminates at `37.5ip`. A hardmacro delivery owes no spare population of its own; the die that integrates it does. |
+| `PATH_UNDETERMINED` | `FEAS_ECO_PATH_UNDETERMINED` | **UNDETERMINED** | Nothing declared, and no route was established — no router artefact, both at once, or a flow that could not be read. **A design that has not been shown to be an IP delivery must not be treated as one.** |
+| `NOT_DECLARED` | `FEAS_ECO_NOT_DECLARED` | NOT_APPLICABLE | Nothing declared **and no project supplied**. Nobody asked. Distinct from every row above, because those are findings about a design and this is the absence of a question. |
 
-The row is on **every** verdict, including the two NOT_APPLICABLE ones. An
-absent row reads as a satisfied one, which is the failure being fixed.
+The row is on **every** verdict, including the NOT_APPLICABLE ones. An absent
+row reads as a satisfied one, which is the failure being fixed.
 
-### 1.4 Absent is not zero
+**A declaration wins wherever it speaks.** The route decides what an *absent*
+declaration means and nothing else — an IP that declares it wants spares in its
+own macro is held to that, on any path
+(`test_M_PATH_6_a_declaration_still_wins_on_either_path`).
+
+### 1.5 Tape-out-bound is the ROUTE, not a declaration
+
+The first version of this work left one hole and said so:
+`--eco-declaration` was opt-in, so a tape-out-bound run that simply omitted it
+got NOT_APPLICABLE — the pre-fix behaviour, silently. The gate had moved the
+problem, not solved it. **The lander's ruling closed it**, and the predicate is
+one a design cannot accidentally omit:
+
+> a design routed onto the CHIP path (`0.5ic → 15.5ic → 26.5ic → 37.5ic`) **is**
+> tape-out-bound; a design that terminates at `37.5ip` is an IP/hardmacro
+> delivery and is not. Do not infer it from the presence of a GDS or from the
+> PDK; infer it from the route the flow took.
+
+`_ppa/delivery_path.py` implements exactly that, and it does **not** glob for
+router artefacts. It loads the flow document, finds steps `37.5ic` and `37.5ip`,
+and drives `flow_compliance_check._check_condition` over the project tree with
+**their** conditions — so a renamed router artefact or a fourth route reaches
+this module instead of leaving it describing an older flow.
+`test_positive_the_predicate_is_the_flows_own_and_is_run_not_retyped` asserts
+the conditions used are literally the flow's.
+
+It answers six ways, and only one of them is `CHIP`:
+
+| answer | meaning |
+|---|---|
+| `CHIP` | `37.5ic`'s condition is met — self tape-out **or** shuttle. Tape-out-bound. |
+| `IP` | `37.5ip`'s condition is met. Not tape-out-bound. |
+| `BOTH` | Both at once. No silicon corresponds to it; this module will not pick one. |
+| `NOT_DETERMINED` | No router artefact. 0.5ic never ran, or ran and the design did not say what it is. |
+| `UNREADABLE` | The flow or the tree could not be read. |
+| `NOT_SUPPLIED` | Nobody asked. **Not** a finding about the design. |
+
+`is_tapeout_bound()` is a function precisely so that no caller spells the
+comparison itself and quietly folds `NOT_DETERMINED` into it. And the search
+space tests `!= IP` rather than `== CHIP` — only a design **proven** to
+terminate at the hardmacro delivery gets an unbounded spare lever; the other
+three non-CHIP answers are routes nobody established, and treating them as IP
+is the same guess in a different coat.
+
+The GDS/PDK inference the ruling forbids is made impossible rather than merely
+avoided: `test_M_PATH_2_a_gds_and_a_real_pdk_do_not_make_a_design_tapeout_bound`
+builds a tree with a streamed GDS and a real PDK and no router artefact, and
+asserts `NOT_DETERMINED`.
+
+### 1.6 Absent is not zero
 
 The producer, `ppa_eco_spare_records.py`, turns the flow's own
 `phase3/stage3/pnr/spare_cells.json` into canonical `vibeic.ppa.metric.v1`
@@ -102,22 +157,42 @@ does not believe.
 
 ## 2. Re-adjudication of the five published runs
 
-Inputs are copied **byte for byte** from `ppa-crosslayer-search` at
-`a09819cb1f524b74d547427931010c6781bddafe`; `MANIFEST.json` carries a sha256 for
-all twenty and `readjudicate.py` verifies every one before it reads a number.
-**No published record is edited.** The published `candidates.json` carried no
-ECO metric because no producer existed; the ECO records are emitted from each
+The five arms landed on main in **v1.11.66**, so `MANIFEST.json` pins the
+**in-tree** published records by sha256 — twenty files — and `readjudicate.py`
+verifies every one before it reads a number. (An earlier revision of this
+directory carried byte-for-byte copies under `inputs/`, from when the arms were
+on an unmerged branch. That was 964 KB of duplicated published record and, worse,
+a digest pin that protected the *copy* instead of the record. The copies are
+gone.) **No published record is edited.** The published `candidates.json` carried
+no ECO metric because no producer existed; the ECO records are emitted from each
 arm's own published `spare_cells.json` and appended to a **copy**.
 
 ```
 $ python3 ppa-crosslayer/eco-readjudication/readjudicate.py
-trial  spares  eco(declared)  candidate(declared)  eco(control)    candidate(control)
-b000       10  SATISFIED      UNDETERMINED         NOT_APPLICABLE  UNDETERMINED
-p04         0  VIOLATED       INFEASIBLE           NOT_APPLICABLE  UNDETERMINED
-u01         0  VIOLATED       INFEASIBLE           NOT_APPLICABLE  UNDETERMINED
-z21         0  VIOLATED       INFEASIBLE           NOT_APPLICABLE  UNDETERMINED
-z23        10  SATISFIED      UNDETERMINED         NOT_APPLICABLE  UNDETERMINED
+trial  spares  eco(declared)  verdict       eco(no decl,    eco(no decl,
+                                            no route)       CHIP route)
+b000       10  SATISFIED      UNDETERMINED  NOT_APPLICABLE  UNDETERMINED
+p04         0  VIOLATED       INFEASIBLE    NOT_APPLICABLE  UNDETERMINED
+u01         0  VIOLATED       INFEASIBLE    NOT_APPLICABLE  UNDETERMINED
+z21         0  VIOLATED       INFEASIBLE    NOT_APPLICABLE  UNDETERMINED
+z23        10  SATISFIED      UNDETERMINED  NOT_APPLICABLE  UNDETERMINED
 ```
+
+**Read the last two columns together — that pair is the hole, and the hole
+closed.** Both are the same records with the *same absent declaration*. Without
+a route, every arm reads NOT_APPLICABLE and the set passes on this axis: that is
+the pre-ruling behaviour, and it is a silent pass. With the CHIP route, every
+arm reads UNDETERMINED — **including `b000` and `z23`, which kept all ten
+spares.** That is correct and it is the point: on the chip path, a design that
+declared no ECO requirement cannot be *said* to be repairable, and ten spares
+nobody specified is not evidence that ten was enough. The run makes no finding
+instead of a flattering one.
+
+The CHIP route in that column is **supplied**, not measured: the five arms' run
+directories no longer exist, so no tree could be routed. `summary.json` says so
+in the same words rather than letting the column read as a measurement of these
+five projects. The design's `L2` names a primary tape-out target, which is why
+CHIP is the route it would have taken.
 
 Against the published numbers (`ppa-crosslayer/RESULT.md`, area
 `area.design_report.um2` @ `post_route`):
@@ -169,8 +244,9 @@ worth reporting and not the derivation.
 
 That absence is itself the root cause. **Nothing the search could read said the
 spare population was required**, so nothing stopped an arm deleting it — and the
-axis, correctly, would have said NOT_APPLICABLE and let all five through. The
-axis is necessary and it is not sufficient; §5 asks for the other half.
+axis alone, without a route, says NOT_APPLICABLE and lets all five through. That
+is the last column of the table above, and it is why the axis needed the route:
+the requirement can be missing, but the *route* cannot.
 
 ---
 
@@ -270,6 +346,24 @@ The parse is `_ppa/feasibility.eco_requirement_state`, imported. There is
 deliberately **not** a second parser: the space and the gate must not drift
 apart about what "this design requires spares" means.
 
+**And `--eco-declaration` is no longer optional where it matters.** With
+`--project`, the route decides: a design the flow put anywhere other than the
+`37.5ip` terminal, with no ECO declaration, is rc=2 and **no space is
+published**. Only a design *proven* to terminate at the hardmacro delivery gets
+the unbounded lever. Passing no `--project` at all stays rc=0 — nobody asked this
+program about a tree, and inventing a refusal from a question nobody put is not
+the same as refusing to guess at an answer.
+
+```
+chip tree,  no declaration  -> rc=2, no space written
+unrouted tree, no decl      -> rc=2, no space written   (not shown to be IP)
+both routers,  no decl      -> rc=2, no space written
+--project points at a file  -> rc=2, no space written
+IP tree,    no declaration  -> rc=0, space written, lever unbounded
+no --project                -> rc=0, space written, row says NOT_SUPPLIED
+chip tree,  with declaration-> rc=0, space written, lever BOUNDED_BELOW
+```
+
 This is the stronger half of the fix, exactly as the brief says: it stops the
 candidate being generated rather than catching it after. It is also, on its own,
 insufficient — `--eco-declaration` is opt-in, which is §5's first request.
@@ -279,7 +373,8 @@ insufficient — `--eco-declaration` is opt-in, which is §5's first request.
 ## 5. Verification
 
 ```
-tests/test_ppa_eco_readiness_axis.py ............................... 33 passed
+tests/test_ppa_eco_readiness_axis.py    34 passed
+tests/test_ppa_eco_delivery_path.py     19 passed
 ```
 
 Arms, per the brief: **positive** (a met requirement is FEASIBLE; the row states
@@ -298,9 +393,23 @@ insertion count still reads ten and the refusal comes from the shipped
 artefacts), required-but-never-measured, not-asked-for-and-disclosed, and a
 `NO_WITNESS` preservation report that must not vouch for anything.
 
+The delivery-path suite carries its own arms: **positive** (both chip routes —
+self tape-out and shuttle — resolve to CHIP; the hardmacro terminal does not;
+the predicate really is the flow's own conditions), **negative** (the chip path
+with no declaration is UNDETERMINED, an unestablished route is refused, and the
+same end to end through the CLI on a real tree), **vacuous** (no project is not
+a finding about the design; a project that is not a directory; the search space
+publishing no space at all for a chip tree it cannot bound), and **seven
+mutation arms** M-PATH-1…7 — the route alone flipping the verdict with records
+and declaration held identical, the forbidden GDS/PDK inference, the both-routers
+tree, the three findings never sharing a verdict, the two path vocabularies
+agreeing, a declaration still winning on either path, and the control that the
+space still publishes for a proven IP delivery.
+
 Two source-level guards: the gate's ECO section carries no numeric literal
 outside `{0, 1}` (measured over its AST), and the producer names no requirement
-at all.
+at all. `plugin_full_audit.py` D1 + D2 pass, and `source_chip_agnostic_check.py`
+passes over 1546 files.
 
 Wider PPA surface, `pytest -k "ppa or spare or feasib"`: **2091 passed, 14
 failed**. Thirteen of those fourteen **fail identically on `origin/main`** in a
@@ -330,18 +439,37 @@ published records, verbatim.
 
 ## REQUESTS TO THE LANDER
 
-1. **`--eco-declaration` is opt-in, and that is the remaining hole.** A search
-   run that simply omits it gets an unbounded `spare_cell_density` and a
-   NOT_APPLICABLE axis — the pre-fix behaviour, silently. The right shape is for
-   the flow to *resolve* the declaration from the project (an L9/L19 field, or
-   `reports/`), and for a **tape-out-bound** project with no declaration to be
-   `[CANNOT CHECK]` rather than NOT_APPLICABLE. I did not build that because it
-   needs a decision this brief does not contain: **which projects are
-   tape-out-bound, and where does a project say so?** Please rule on that; the
-   axis is already shaped to take it (`ECO_NOT_DECLARED` is a distinct state
-   precisely so a stricter policy can act on it without changing the axis).
+1. **ANSWERED, and built.** ~~`--eco-declaration` is opt-in, and that is the
+   remaining hole.~~ The ruling: a design routed onto the CHIP path
+   (`0.5ic → 15.5ic → 26.5ic → 37.5ic`) is tape-out-bound; one that terminates
+   at `37.5ip` is not; infer it from the route, never from a GDS or a PDK.
+   Implemented in `_ppa/delivery_path.py` by driving the flow's own condition
+   predicate over the two terminal steps (§1.5), wired into the axis, the
+   feasibility CLI (`--project`) and the search space (`--project`), and covered
+   by 19 tests.
 
-2. **The design under study declares nothing, and it should.** The five arms'
+   **What remains of it, much smaller:** `--project` is itself a flag, so a
+   caller that passes neither a declaration nor a project gets `NOT_SUPPLIED` →
+   NOT_APPLICABLE. That is deliberate — "you did not tell me where the design
+   lives" is not a finding about the design, and refusing there would turn every
+   record-only adjudication in the corpus (unit fixtures, `ppa-e2e/`, the search
+   bridge) UNDETERMINED at once. The clean fix is for the flow's own callers —
+   `ppa_search_run.py` and `phase3_one_shot_runner.py` — to always pass
+   `--project`, at which point `NOT_SUPPLIED` is only reachable by hand. I did
+   not make that change because it is a flow-wiring decision with a corpus sweep
+   attached, and this brief did not ask for one.
+
+2. **An opt-out on the chip path is visible but not refused, deliberately.**
+   A design that declares `required: false` while the flow has it on the chip
+   path is still NOT_APPLICABLE — an opt-out is a decision somebody made and
+   this axis does not overrule decisions. It carries its own code,
+   `FEAS_ECO_OPTED_OUT_ON_CHIP_PATH`, so every design that made that move is
+   findable in one grep. If the ruling is that a tape-out-bound design may
+   **not** opt out — that the only legitimate `required: false` is on the IP
+   path — that is a one-line change to `eco_applicability` and I would rather be
+   told than assume it.
+
+3. **The design under study declares nothing, and it should.** The five arms'
    design ships nine input documents and none names a spare/ECO requirement,
    while `L2` names a primary tape-out target. `L9_constraints_floorplan` is the
    natural home. Until it declares one, `ppa-crosslayer`'s published winners are
@@ -350,7 +478,7 @@ published records, verbatim.
    `eco-readjudication/declaration/tapeout_bound.json` is authored for the
    re-adjudication and is **not** a decision I can make on the design's behalf.
 
-3. **A candidate document can declare away its own axis.**
+4. **A candidate document can declare away its own axis.**
    `ppa_feasibility_check.py` lets the candidates document stand in for the
    contract when `--contract` is omitted, so a candidate set carrying
    `eco_readiness: {required: false}` disables the one axis that could refuse
@@ -361,7 +489,7 @@ published records, verbatim.
    contract lane should be the only source of an applicability declaration, that
    is a change to the CLI contract and I did not make it unasked.
 
-4. **Should `eco_readiness` be a tenth `FEASIBILITY_TERMS` entry, or a separate
+5. **Should `eco_readiness` be a tenth `FEASIBILITY_TERMS` entry, or a separate
    vector?** I made it the tenth term, so it appears on every search manifest
    and `audit_manifest` sees it (NOT_APPLICABLE is already accepted there
    beside PASS). The cost is that every consumer counting nine terms had to be
@@ -370,7 +498,7 @@ published records, verbatim.
    manifest's headline eligibility would once again not reflect ECO readiness,
    which is the failure being fixed.
 
-5. **`require_preservation` is implemented and unexercised on real data.** The
+6. **`require_preservation` is implemented and unexercised on real data.** The
    proof is wired (`design_for_eco.spares.surviving.count` against the same
    floor) and covered by five tests, but none of the five published arms carries a
    `reports/spare_preservation.json`, so it has never adjudicated a real run.
@@ -380,6 +508,6 @@ published records, verbatim.
    actually bears on a post-tape-out repair, and it is the one this
    re-adjudication could not test.
 
-6. **Thirteen pre-existing red tests on `origin/main`.** Listed in §5,
+7. **Thirteen pre-existing red tests on `origin/main`.** Listed in §5,
    reproduced in a clean detached worktree at `6dfe15a32`. Not mine, not fixed
    here, and they will show up in any CI run of this branch.
