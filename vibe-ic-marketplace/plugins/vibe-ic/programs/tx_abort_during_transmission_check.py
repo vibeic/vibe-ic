@@ -29,9 +29,12 @@ USAGE
 
 EXIT CODES
 ----------
-    0 — PASS or self-skip (no TX modules)
+    0 — PASS: TX modules were examined and none aborts mid-transmission
     1 — FAIL (TX abort during active transmission)
-    2 — IO / argument error
+    2 — VACUOUS: nothing was examined — no RTL directory, or no TX module in
+        it, so there is no transmission this gate could have audited. #515:
+        this used to be rc 0, which credited the gate in the plain PASS tier
+        for designs that contain no TX module at all.
 """
 from __future__ import annotations
 
@@ -42,6 +45,8 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
+
+import _vacuous_exit as _vx
 
 
 @dataclass
@@ -189,7 +194,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     target = Path(args.rtl_dir)
     if not target.exists():
         print(f"error: not found: {target}", file=sys.stderr)
-        return 2
+        return _vx.RC_VACUOUS
 
     result = audit(target)
     report = {
@@ -210,9 +215,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         for f in result.findings:
             print(f"[{f.severity}] {f.rule} @ {f.file}:{f.line}: {f.message}")
         errors = [f for f in result.findings if f.severity == "ERROR"]
-        print(f"\n{len(errors)} error(s); verdict: {'FAIL' if errors else 'PASS'}")
+        verdict = ("FAIL" if errors
+                   else "VACUOUS (nothing examined)"
+                   if _vx.summary_is_skipped(result.summary) else "PASS")
+        print(f"\n{len(errors)} error(s); verdict: {verdict}")
 
-    return 0 if result.passed else 1
+    # #515 — routed from the gate's OWN `summary["skipped"]`, never from the
+    # printed text. `no_tx_modules` is the dominant outcome across the tracked
+    # corpus (320 of 327 project roots); every one of those was being counted
+    # as a real pass over a transmission path that does not exist.
+    skipped = _vx.summary_is_skipped(result.summary)
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program,
+                             str(result.summary.get("reason", "unspecified")))
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

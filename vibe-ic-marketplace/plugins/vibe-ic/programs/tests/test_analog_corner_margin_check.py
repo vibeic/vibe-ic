@@ -21,15 +21,36 @@ import analog_corner_margin_check as mod  # noqa: E402
 
 # ───────────────────────── fixtures ─────────────────────────
 
+#: What a corner artefact says its circuit contains. `structure_and_geometry`
+#: means at least one bound input reached the content — a design-bound sweep.
+DESIGN_BOUND = "structure_and_geometry"
+
+
 def _write_corners(tmp_path, corners, *, block="ldo",
-                   fname="A4_corners.json", extra=None):
+                   fname="A4_corners.json", extra=None,
+                   design_content=DESIGN_BOUND):
     """Build a project tree with one analog block carrying an A4
-    corner artefact, and return the project root."""
+    corner artefact, and return the project root.
+
+    `design_content` is written by DEFAULT, and that default is the point of
+    this parameter rather than a convenience. This gate stopped certifying an
+    artefact that declines to say what circuit produced its corners, so a
+    fixture that omitted the field would be asserting that omission still
+    certifies the strictest PVT claim in the repo — which is the inverted
+    incentive the rule exists to remove. Every PASS fixture below now STATES
+    the content it certifies; the tests about corner counts and margin floors
+    are about counts and floors, and they need an artefact that clears every
+    other rule to be about only that.
+
+    Pass `design_content=None` to build the pre-disclosure shape deliberately.
+    """
     proj = tmp_path / "project"
     bdir = proj / "phase3" / "analog" / block
     bdir.mkdir(parents=True, exist_ok=True)
     payload = {"block": block, "total_corners": len(corners),
                "corners": corners}
+    if design_content is not None:
+        payload["design_content"] = design_content
     if extra:
         payload.update(extra)
     (bdir / fname).write_text(json.dumps(payload))
@@ -157,7 +178,8 @@ class TestGracefulDegrade:
         proj = tmp_path / "empty_project"
         proj.mkdir()
         res = run_cli(proj)
-        assert res.returncode == 0
+        # #521 — a margin gate that read no margin is VACUOUS (rc 2).
+        assert res.returncode == 2
         result = mod.run_audit(proj)
         assert result.summary.get("skipped") is True
         assert result.summary.get("reason") == "no_analog_dir"
@@ -192,6 +214,19 @@ class TestGracefulDegrade:
         rules = {f.rule for f in result.findings}
         assert "MARGIN_BELOW_FLOOR" not in rules
         assert "MARGIN_DATA_MISSING" in rules
+
+    def test_a_clean_cube_that_names_no_circuit_does_not_certify(
+            self, tmp_path):
+        """The rule this file's default now states, asserted here rather than
+        left implicit in a default. 27 corners and every margin above the
+        floor is true of a library nominal exactly as of a design; an artefact
+        that will not say which must not certify the step it is the evidence
+        for. Naming a library default certifies in its own tier — only
+        silence costs."""
+        proj = _write_corners(tmp_path, _full_pvt(12.0), design_content=None)
+        res = run_cli(proj)
+        assert res.returncode == 1, res.stdout + res.stderr
+        assert "MARGIN_SUBJECT_UNDECLARED" in res.stdout
 
     def test_unparsable_json_reports_error_not_crash(self, tmp_path):
         proj = tmp_path / "project"

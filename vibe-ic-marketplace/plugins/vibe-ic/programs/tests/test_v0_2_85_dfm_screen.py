@@ -55,7 +55,14 @@ def _proj(tmp_path, extra_single=8, fillers=100, util=99.0):
 def test_high_single_cut_fraction_is_advisory_warning(tmp_path):
     p = _proj(tmp_path, extra_single=18)   # 19 single vs 1 dual = 95%
     rep = DFM.audit(p)
-    assert rep["rc"] == 0
+    # FIXED ASSERTION (was `rep["rc"] == 0`). That line encoded the defect as
+    # the expected behaviour: it pinned the ADVISORY tier and the CLEAN tier
+    # onto the same exit code, which is exactly why every finding this screen
+    # raised was invisible to the flow gate. rc 1 == "screen ran and raised an
+    # advisory"; it is wired in the non-blocking `advisory_program_exit_zero`
+    # slot, so it still cannot fail Step 35 (asserted in
+    # test_step35_dfm_advisory_slot.py).
+    assert rep["rc"] == 1
     assert rep["verdict"] == "PASS_WITH_ADVISORIES"
     assert rep["via_redundancy"]["single_cut_fraction"] > 0.9
     assert any(f["category"] == "VIA_REDUNDANCY_LOW" for f in rep["findings"])
@@ -65,6 +72,9 @@ def test_balanced_via_mix_passes(tmp_path):
     p = _proj(tmp_path, extra_single=0)    # 1 single vs 1 dual = 50%
     rep = DFM.audit(p)
     assert rep["verdict"] == "PASS"
+    # DIRECTION-1 GUARD: a clean screen must keep exit code 0. Separating the
+    # tiers must not make a finding-free run look like a finding.
+    assert rep["rc"] == 0
     assert any(f["category"] == "VIA_REDUNDANCY_OK" for f in rep["findings"])
 
 
@@ -78,7 +88,14 @@ def test_density_is_cross_reference_not_duplicate_gate(tmp_path):
     (g / "metal_fill_density.json").write_text(_json.dumps(
         {"summary": {"pass": False, "errors_count": 1}}))
     rep = DFM.audit(p)
-    assert rep["rc"] == 0                      # never a duplicate FAIL
+    # FIXED ASSERTION (was `rep["rc"] == 0`, commented "never a duplicate
+    # FAIL"). The intent — Step 35 must not duplicate Step 34's density FAIL —
+    # is preserved and is now enforced where it belongs: by the flow wiring
+    # this program in the NON-BLOCKING advisory slot, not by the program
+    # flattening its own verdict onto rc 0. A Step-34 failure IS a DFM
+    # advisory, and an advisory that reports rc 0 reports nothing.
+    assert rep["rc"] == 1
+    assert rep["verdict"] == "PASS_WITH_ADVISORIES"
     assert rep["density_ref"]["step34_pass"] is False
     assert any(f["category"] == "DENSITY_REF"
                and f["severity"] == "WARNING" for f in rep["findings"])
@@ -124,11 +141,33 @@ def test_foundry_side_items_disclosed_not_executed(tmp_path):
 
 
 def test_canonical_artifact_written(tmp_path):
-    p = _proj(tmp_path)
+    # FIXED ASSERTION (was `DFM.main([str(p)]) == 0`). The default fixture has
+    # 1 single-cut + 1 dual-cut use = 50%, so it raises NO advisory and the
+    # exit code is still 0 — but pinning "main returns 0" on a fixture that
+    # happens to be clean also pinned it for fixtures that are not. Assert the
+    # artifact independently of the tier, and the tier explicitly.
+    p = _proj(tmp_path, extra_single=0)
     assert DFM.main([str(p)]) == 0
     assert (p / "reports" / "phase3" / "dfm_screen.json").is_file()
 
 
+def test_canonical_artifact_written_on_the_advisory_tier_too(tmp_path):
+    """A screen that RAISED a finding must still write the Step-35 artifact.
+
+    Step 35's blocking half is `files_exist reports/phase3/dfm_screen.json`;
+    if the advisory exit code suppressed the write, separating the tiers would
+    have converted an advisory into a hard MISSING.
+    """
+    p = _proj(tmp_path, extra_single=18)
+    assert DFM.main([str(p)]) == 1
+    canon = p / "reports" / "phase3" / "dfm_screen.json"
+    assert canon.is_file()
+    assert json.loads(canon.read_text())["verdict"] == "PASS_WITH_ADVISORIES"
+
+
 def test_vacuous_skip_without_inputs(tmp_path):
+    # DIRECTION-1 GUARD: the rc-2 "nothing to screen yet" convention is
+    # untouched by the tier split — flow_compliance_check maps rc 2 to
+    # VACUOUS_PASS and that must keep working.
     rep = DFM.audit(tmp_path)
     assert rep["rc"] == 2

@@ -80,3 +80,113 @@ def test_index_lists_every_non_helper_program():
         f"INDEX.md missing {len(missing)} program(s): {missing[:10]}"
         f"{'...' if len(missing) > 10 else ''}"
     )
+
+
+# --- the title rule: an em-dash is not always a name separator
+
+def _title_fn():
+    """Import `_title` out of the generator, which lives in the repo's tools/
+    rather than in the plugin, so it is skipped where only the plugin ships."""
+    if GEN is None or not Path(GEN).is_file():
+        pytest.skip("tools/gen_programs_index.py is not in this checkout")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gpi", GEN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod._title
+
+
+def test_a_punctuation_dash_does_not_eat_the_description():
+    """INDEX.md is how a reader navigates 1003 programs, and four rows told them
+    nothing.
+
+    The rule was an unconditional positional split on the first em-dash, which
+    assumes every docstring's first line is `<module> — <description>`. 816 of
+    them are. The ones that use an em-dash as ORDINARY PUNCTUATION lost their
+    description to it:
+
+        "A committed pointer to a file that does not exist — anywhere."
+             indexed as:  anywhere.
+
+    Found while regenerating a stale INDEX.md, not by anything failing.
+    """
+    title = _title_fn()
+    assert title("A committed pointer to a file that does not exist — anywhere.",
+                 "tracked_symlink_target_present_check") == \
+        "A committed pointer to a file that does not exist — anywhere."
+
+
+def test_a_module_name_prefix_is_still_dropped():
+    """The 816-case majority, pinned — the fix must not stop stripping the name
+    it was written to strip."""
+    title = _title_fn()
+    assert title("arbiter_starvation_check.py — BACKLOG-v11 P0.6.",
+                 "arbiter_starvation_check") == "BACKLOG-v11 P0.6."
+    assert title("programs/acceptance_evidence_in_fix_comment_check.py — v0.2.97",
+                 "acceptance_evidence_in_fix_comment_check") == "v0.2.97"
+
+
+def test_a_version_prefix_is_still_dropped():
+    """The third branch, and the reason the rule is not simply "keep prose".
+
+    `phase1_post_process` leads with a version, not its own name, and the
+    description is genuinely after the dash. A rule that only recognised the
+    module name would index it as "v0.1.51 — phase1 output post-processor.",
+    which is worse than what it replaced.
+    """
+    title = _title_fn()
+    assert title("v0.1.51 — phase1 output post-processor.",
+                 "phase1_post_process") == "phase1 output post-processor."
+
+
+def test_a_wrapped_summary_is_joined_not_truncated():
+    """The summary is the first PARAGRAPH; taking line 0 cut it mid-phrase.
+
+        "agent_report_sha256_attestation_check.py — verify the project's"
+        "final report attests every canonical chip / FPGA artefact with a"
+        "SHA256 hash."
+             indexed as:  verify the project's
+
+    Two-thirds of the sentence was in the index's own file and it printed the
+    first third. Found by counting how many of 1003 rows carry a title under 22
+    characters: 102 did.
+    """
+    title = _title_fn()
+    got = title("agent_report_sha256_attestation_check.py — verify the project's\n"
+                "final report attests every canonical chip / FPGA artefact with a\n"
+                "SHA256 hash.",
+                "agent_report_sha256_attestation_check")
+    assert got == ("verify the project's final report attests every canonical "
+                   "chip / FPGA artefact with a SHA256 hash.")
+
+
+def test_the_paragraph_stops_at_the_blank_line():
+    """…or "first paragraph" quietly becomes "the whole docstring"."""
+    title = _title_fn()
+    got = title("A committed pointer to a file that does not exist — anywhere.\n"
+                "\n"
+                "WHY THIS EXISTS\n"
+                "===============\n"
+                "A long explanation that must not reach the index.",
+                "tracked_symlink_target_present_check")
+    assert got == "A committed pointer to a file that does not exist — anywhere."
+
+
+def test_a_tag_only_summary_falls_through_to_the_next_paragraph():
+    """When a blank line separates the provenance marker from the description,
+    joining the paragraph yields only the marker, so the fallback takes over."""
+    title = _title_fn()
+    got = title("programs/acceptance_evidence_in_fix_comment_check.py — v0.2.97\n"
+                "\n"
+                "Deterministic pre-close gate for the core-agent loop (#447).",
+                "acceptance_evidence_in_fix_comment_check")
+    assert got == "Deterministic pre-close gate for the core-agent loop (#447)."
+
+
+def test_a_real_description_beginning_with_a_version_is_left_alone():
+    """The tag test is length-bounded on purpose: a genuine summary that merely
+    STARTS with a version is not a tag, and replacing it would lose it."""
+    title = _title_fn()
+    got = title("v2 of the width resolver, now separator-insensitive across "
+                "underscore and space forms.\n\nMore.", "verilog_width_resolve")
+    assert got.startswith("v2 of the width resolver")

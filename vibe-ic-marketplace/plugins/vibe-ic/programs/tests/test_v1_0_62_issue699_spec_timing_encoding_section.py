@@ -58,7 +58,7 @@ def test_chip_agnostic_no_design_literal():
     prog = (Path(__file__).resolve().parents[1] / "source_chip_agnostic_check.py")
     r = subprocess.run([sys.executable, str(prog),
                         str(Path(__file__).resolve().parents[1].parent)],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-500:]
 
 

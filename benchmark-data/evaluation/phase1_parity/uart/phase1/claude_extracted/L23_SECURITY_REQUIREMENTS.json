@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "PC16550D datasheet (1995) predates modern security requirements. No confidentiality / integrity / authentication features at the chip level. Serial data on SIN/SOUT is in plaintext. Application-layer security (TLS, SSH, etc.) is layered on top of the byte stream."
-  }
-}

@@ -2,6 +2,7 @@
 import importlib
 import json
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("phase1_protocol_spec_extract")
 
 
@@ -312,4 +313,6 @@ class TestDriver:
         mod.fill_skeletons(tmp_path, text)
         out = json.loads(
             (docs / "L14_PROTOCOL_VERSIONING.json").read_text())
-        assert "v0.1.51" in out["extracted_by"]
+        assert out["extracted_by"] == (
+            "phase1_protocol_spec_extract.extract_l14_* "
+            f"v{shipped_plugin_version()}")

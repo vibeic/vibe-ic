@@ -79,17 +79,100 @@ def _wave_label(text: str) -> str:
     return ""
 
 
+#: Provenance markers this repo leads docstrings with: a version, a wave, a
+#: backlog id, an analog-phase id (`A6 deterministic gate`). Deliberately
+#: anchored and length-bounded — a real description that merely BEGINS with a
+#: version ("v2 of the width resolver, now separator-insensitive") is long
+#: enough to fall outside and is left alone.
+_BARE_TAG_RE = re.compile(
+    r"^(?:v?\d[\w.]*|Wave\s*\d+[\w\s./-]*|BACKLOG[\w\s./-]*|[A-Z]\d+\s[\w\s./-]*)"
+    r"[.]?$")
+
+
+def _is_a_bare_tag(text: str) -> bool:
+    return len(text) < 30 and bool(_BARE_TAG_RE.match(text.strip()))
+
+
+def _next_prose_line(docstring: str):
+    """The first line after the summary that carries actual prose.
+
+    Skips blanks and underline rules (`====`, `----`), which are section
+    decoration rather than content.
+    """
+    for line in docstring.strip().splitlines()[1:]:
+        s = line.strip()
+        if len(s) > 25 and not set(s) <= set("=-~ "):
+            return s
+    return None
+
+
 def _title(docstring: str, fallback_name: str) -> str:
     if not docstring:
         return fallback_name
-    first = docstring.splitlines()[0].strip()
+    # THE SUMMARY IS THE FIRST PARAGRAPH, NOT THE FIRST LINE. Many docstrings
+    # here wrap it across two or three lines before the first blank, and taking
+    # only line 0 truncated them mid-phrase in the index:
+    #
+    #   "agent_report_sha256_attestation_check.py — verify the project's"
+    #   "final report attests every canonical chip / FPGA artefact with a"
+    #   "SHA256 hash."
+    #        indexed as:  verify the project's
+    #
+    # Joining the paragraph fixes those AND subsumes the wrapped-tag case
+    # ("A6 deterministic gate" + "(Per-Block Physical Verification: DRC + LVS)."),
+    # so no special join rule is needed for it.
+    para = []
+    for line in docstring.strip().splitlines():
+        if not line.strip():
+            break
+        para.append(line.strip())
+    first = " ".join(para)
     # "module — what it does" → drop the module name, keep the description.
-    if "—" in first:
-        first = first.split("—", 1)[1].strip()
-    elif " - " in first:
-        first = first.split(" - ", 1)[1].strip()
+    #
+    # SPLIT ONLY WHEN WHAT PRECEDES THE DASH IS THE MODULE NAME OR A VERSION TAG.
+    # An unconditional positional split assumes every first line is
+    # "<name> — <description>", and throws away the description of any line that
+    # uses an em-dash as ORDINARY PUNCTUATION. Measured over all 1003 programs:
+    # 816 lines do have the name in front and split correctly, 4 do not and lost
+    # their titles to it —
+    #
+    #   "A committed pointer to a file that does not exist — anywhere."
+    #        indexed as:  anywhere.
+    #   "Chip-level sign-off ladder runner (B1 from spm pilot) — REAL-gate wiring"
+    #        indexed as:  REAL-gate wiring
+    #
+    # — leaving INDEX.md, which is how a reader navigates 1003 programs, telling
+    # them nothing about those entries. The version-tag case is kept splitting
+    # ("v0.1.51 — phase1 output post-processor." must yield the description, not
+    # the version), so the rule is "drop a NAME or a VERSION prefix, never prose".
+    for sep in ("—", " - "):
+        if sep not in first:
+            continue
+        before, after = (s.strip() for s in first.split(sep, 1))
+        looks_like_name = (
+            before.replace("programs/", "").removesuffix(".py").strip()
+            == fallback_name)
+        looks_like_version = bool(re.match(r"^v?\d[\w.]*$", before))
+        if after and (looks_like_name or looks_like_version):
+            first = after
+        break
     if not first:
         return fallback_name
+
+    # A TAG IS NOT A DESCRIPTION. Rows carried `v0.2.97`, `Wave 39 / D3`,
+    # `BACKLOG-v11 P0.6.` — the whole of what their summary says once the module
+    # name is removed, telling a reader nothing about the program.
+    #
+    # Fixing the GENERATOR rather than ~98 docstrings: those docstrings are not
+    # wrong, they lead with a provenance tag by convention. It is the index that
+    # has to present something usable.
+    # …and when the whole first PARAGRAPH is only a tag — the shape where a
+    # blank line separates the provenance marker from the description — the
+    # substance is in the paragraph after it.
+    if _is_a_bare_tag(first):
+        nxt = _next_prose_line(docstring)
+        if nxt:
+            first = nxt
     if len(first) > 140:
         first = first[:137] + "..."
     return first
@@ -262,6 +345,18 @@ def main(argv: list[str]) -> int:
                 f"re-run `python3 tools/gen_programs_index.py`\n"
             )
             return 1
+        # A PASS must say how much it examined (vibe-ic#447). A silent `return
+        # 0` here is byte-identical to a run that walked nothing — and this
+        # tree's own `gate_discloses_denominator_check` catches exactly that,
+        # which is how this line came to exist.
+        if not rows:
+            sys.stderr.write(
+                "NOTHING_SCANNED: no programs found — this is NOT a pass; "
+                "an index generated over zero programs matches an empty "
+                "INDEX.md trivially.\n")
+            return 2
+        print(f"[PASS] programs index fresh: {len(rows)} program(s) indexed, "
+              f"INDEX.md matches what the tree would generate.")
         return 0
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

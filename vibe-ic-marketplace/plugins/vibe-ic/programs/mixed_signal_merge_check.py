@@ -30,6 +30,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 def _load_waivers(project):
@@ -110,6 +111,26 @@ def main(argv=None):
                           "message": ("merged GDS present + top-level "
                                       "netgen LVS PASS "
                                       f"({top_lvs.get('lvs_report', '?')})")}]
+        elif str(top_lvs.get("verdict")) == "SKIP":
+            # vibe-ic#614 — a SKIP means NO COMPARISON WAS PERFORMED, and this
+            # branch used to publish it as "the merged layout does not match
+            # the schematic". That is a statement about the ENVIRONMENT
+            # published as a statement about the DESIGN, and in `merge.json` it
+            # was indistinguishable from a real mismatch: the same producer,
+            # run where it can see the project, returns FAIL with
+            # `compared: true` and a netgen report — a materially different
+            # fact flattened into one message.
+            #
+            # Still non-PASS: a step that returned no verdict must not pass.
+            # The producer's own reason travels verbatim rather than being
+            # re-narrated.
+            verdict, rc = "FAIL", 1
+            findings = [{"severity": "ERROR", "rule": "MERGE_LVS_NOT_RUN",
+                          "message": ("top-level LVS did NOT run, so nothing "
+                                      "compared the merged layout to the "
+                                      "schematic — this is not a mismatch, it "
+                                      "is an absent comparison. Producer "
+                                      f"reason: {top_lvs.get('reason', '(none stated)')}")}]
         else:
             verdict, rc = "FAIL", 1
             findings = [{"severity": "ERROR", "rule": "MERGE_LVS_FAIL",
@@ -132,7 +153,7 @@ def main(argv=None):
     if args.json:
         out_path = Path(args.json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out_path, json.dumps(out, indent=2, ensure_ascii=False) + "\n")
     print(f"=== {_GATE_NAME} ({project.name}) ===")
     print(f"  verdict: {verdict}")
     if missing:

@@ -150,7 +150,7 @@ def _write_rtl_fixture(tmp_path, name, body):
 
 def _run_cli(args):
     r = subprocess.run([sys.executable, str(_PROG), *args],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -501,5 +501,5 @@ def test_source_is_chip_agnostic():
     guard = _PROGRAMS / "source_chip_agnostic_check.py"
     plugin_root = _PROGRAMS.parent
     r = subprocess.run([sys.executable, str(guard), str(plugin_root)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr

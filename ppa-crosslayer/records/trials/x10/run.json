@@ -1,0 +1,18 @@
+{
+  "trial": "x10",
+  "levers": {
+    "rtl_variant": "base",
+    "synthesis_strategy": "rab_swap"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.30",
+    "spare_cell_density": "0.02"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 288.693,
+    "cpu_seconds": 377.772,
+    "peak_rss_mb": 619.6
+  }
+}

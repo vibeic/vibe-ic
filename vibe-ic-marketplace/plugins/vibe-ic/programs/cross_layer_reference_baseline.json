@@ -1,0 +1,13 @@
+{
+  "_comment": "Measured cross-layer reference breaks on the published corpus. Counts only, never cell identity \u2014 cell paths carry design/PDK names and this file is scanned by source_chip_agnostic_check. A findings count may SHRINK freely; any increase, or a new row/code pair, FAILs CI. `examined` is the DENOMINATOR those counts were measured over: it may not shrink silently, because a sweep that reaches less than the recorded one produces a smaller findings count for a reason that is not a repair.",
+  "_seal_comment": "`seal` digests `recorded` + `examined` and NOTHING ELSE. It is what a run with NO CORPUS has instead of a measurement: since v1.10.56 the corpus lives in its own repository and this register does not, so a sweep can be excused while the register still has to be adjudicated. Written only by --write-baseline, which refuses a sweep that reached no cell \u2014 so re-sealing these numbers costs a corpus that actually reaches. Editing a count by hand does not. THIS SEAL WAS TAKEN OVER THE NUMBERS ALREADY IN THIS FILE, unchanged: no re-measurement happened when it was added, and `git show <the commit>^:<this file>` shows recorded and examined byte-identical.",
+  "recorded": {
+    "port_width_symbolic_to_parameter": {
+      "CONSUMER_CANNOT_REACH": 3
+    }
+  },
+  "examined": {
+    "port_width_symbolic_to_parameter": 9
+  },
+  "seal": "sha256:ab39facd0cdf0ff13a32e8071a4b8e63a345732cde3adf51d3b524045c61d2f2"
+}

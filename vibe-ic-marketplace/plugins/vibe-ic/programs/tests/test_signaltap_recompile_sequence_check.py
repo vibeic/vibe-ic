@@ -141,18 +141,31 @@ def test_fail_expect_stp_mismatch(tmp_path: Path):
 # --------------------------------------------------------------------------
 # Edge / honesty
 # --------------------------------------------------------------------------
-def test_skip_no_input():
-    assert M.main([]) == 0
+def test_skip_no_input(capsys):
+    """CONTRACT CHANGE (2026-08-03, vibe-ic#693): rc 2, not 0.
+
+    The old assertion and its own comment contradicted each other — it said
+    "not a vacuous PASS" while asserting the exit code that IS one.
+    `flow_compliance_check._check_program_exit_zero` reads rc==0 as a plain
+    PASS and rc==2 as the disclosed VACUOUS_PASS tier.
+    """
+    assert M.main([]) == 2
+    err = capsys.readouterr().err
+    # `gate_skip_routing_check._skip_token` matches at LINE START.
+    assert err.lstrip().startswith("[SKIP]"), err
 
 
-def test_skip_unrelated_file(tmp_path: Path):
+def test_skip_unrelated_file(tmp_path: Path, capsys):
     # A file with NONE of the quartus_* stages -> SKIP, not a vacuous PASS.
+    # rc 2 (the disclosed-skip tier) is what makes that sentence true; see
+    # test_skip_no_input.
     f = tmp_path / "notes.txt"
     f.write_text("This file talks about make and gcc, no quartus here.\n")
     out = tmp_path / "r.json"
     rc = M.main([str(f), "--json", str(out)])
-    assert rc == 0
+    assert rc == 2
     assert json.loads(out.read_text())["status"] == "SKIP"
+    assert capsys.readouterr().err.lstrip().startswith("[SKIP]")
 
 
 def test_missing_input_is_io_error(tmp_path: Path):

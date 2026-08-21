@@ -91,16 +91,88 @@ def test_reject_duplicate_id(tmp_path):
 
 
 def test_reject_id_out_of_range(tmp_path):
+    """#526 relocated the FATALITY of this finding without weakening it.
+
+    An id naming no flow step is still REPORTED, and `--strict-ids` still
+    exits 1 on it — that half is asserted below and is what a standalone gate
+    invocation asks for. What changed is the DEFAULT, because these findings
+    are also consumed by `flow_compliance_check`, which turns any error into
+    `SystemExit(1)`: an `id: 99` waiver is inert there (it is filed under a
+    key no flow step has and exempts nothing), so making it fatal withheld
+    nothing and instead deleted the entire compliance report — 63 step
+    verdicts and every advisory — to complain about a waiver that did
+    nothing. The complaint survives; the report does too.
+    """
     _write(tmp_path / "waivers.json", {
         "waived_steps": [
             {"id": 99, "reason": "this is a sufficiently long reason string to pass", "approver": "reyerchu"}
         ]
     })
+    strict = subprocess.run(
+        [sys.executable, str(SCRIPT), str(tmp_path), "--strict-ids"],
+        capture_output=True, text=True)
+    assert strict.returncode == 1
+
     r = _run(tmp_path)
-    assert r.returncode == 1
+    assert r.returncode == 0
+    assert "id-range" in r.stdout, (
+        "the finding must still be reported when it is not fatal — a "
+        "downgrade that also silenced it would be a real weakening")
 
 
 def test_malformed_json(tmp_path):
     (tmp_path / "waivers.json").write_text("{not json")
     r = _run(tmp_path)
     assert r.returncode == 1
+
+
+def test_reject_unfilled_template_approver(tmp_path):
+    """An UNFILLED waivers.json.template must not ship as waivers.json.
+
+    waiver_template_gen.py documents that its placeholders are "GUARANTEED to
+    reject", but the only approver rule was SELF_APPROVERS, which the sentinel
+    __TODO_HUMAN_NAME__ does not match. With a real (>= MIN_REASON_LEN) reason
+    filled in, an unapproved template therefore validated clean.
+    """
+    _write(tmp_path / "waivers.json", {
+        "waived_steps": [
+            {"id": 1,
+             "reason": "IC class registers rtl_gen=null; RTL authored via the spec-to-rtl skill",
+             "approver": "__TODO_HUMAN_NAME__",
+             "ticket": "OPS-101"}
+        ]
+    })
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    assert "placeholder" in (r.stdout + r.stderr).lower()
+
+
+def test_reject_placeholder_approver_variants(tmp_path):
+    """Generalises by SHAPE (dunder sentinel / bracketed / bare filler word),
+    not by our own template's literal string."""
+    for filler in ("__APPROVER__", "<TODO>", "[name]", "your name", "TBD", "xxx"):
+        _write(tmp_path / "waivers.json", {
+            "waived_steps": [
+                {"id": 11,
+                 "reason": "ATPG deferred to sign-off; scan insertion runs on the final netlist",
+                 "approver": filler}
+            ]
+        })
+        r = _run(tmp_path)
+        assert r.returncode == 1, f"{filler!r} was accepted as an approver"
+
+
+def test_real_approver_still_accepted(tmp_path):
+    """The placeholder rule must not swallow legitimate approvers — including
+    the sanctioned machine tier used by waivers_materialize.py."""
+    for good in ("reyerchu", "field-agent-attest (fpga-board cap-gap tier)",
+                 "Ada Lovelace", "eng-owner@example.com"):
+        _write(tmp_path / "waivers.json", {
+            "waived_steps": [
+                {"id": 11,
+                 "reason": "ATPG deferred to sign-off; scan insertion runs on the final netlist",
+                 "approver": good}
+            ]
+        })
+        r = _run(tmp_path)
+        assert r.returncode == 0, f"{good!r} was wrongly rejected: {r.stdout}{r.stderr}"

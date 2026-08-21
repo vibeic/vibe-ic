@@ -444,7 +444,43 @@ def main(argv=None) -> int:
         a.json.write_text(txt + "\n")
     print(txt)
     verdict = res.get("verdict")
-    if verdict in ("PASS", "NOT_APPLICABLE"):
+    if verdict == "NOT_APPLICABLE":
+        # vibe-ic#1115 (re-implementing #1236). THE FOURTH GATE OF THE SAME
+        # SHAPE #1173 repaired for `professional_tb_check`,
+        # `sta_corner_record_completeness_check` and
+        # `drv_promotion_corroboration_check`; this one was left out and is the
+        # only member of that class still doing it.
+        #
+        # This gate had ALREADY DECIDED the run was inapplicable — it writes
+        # `"reason": "no sim tree (step did not run)"` into its own report — and
+        # then said so on no channel that changes a verdict. `_check_program_exit_zero`
+        # reads the EXIT CODE and, on the passing path, exactly one stdout
+        # channel: `_stdout_signals_vacuous`, which matches `VACUOUS_PASS` at
+        # LINE START. A JSON blob containing `"verdict": "NOT_APPLICABLE"` does
+        # not match it, so the step recorded an ordinary PASS. The producer
+        # emitted nothing and the checker read the absence as consent — the
+        # LibreLane `klayout.py:486-490` shape (`return {}` when the PDK has no
+        # DRC deck, so `Checker.KLayoutDRC` finds nothing, warns, and passes) in
+        # our own tree.
+        #
+        # The gate's `--json` report IS read, by `_json_report_signals_vacuous`,
+        # but that channel is COUNTED and only tiers the step when EVERY gate
+        # clause that dispatched a program in it disclosed the same
+        # (`len(all_vacuous_cmds) >= len(ran_hints)`). This clause sits in an
+        # `all_of` beside substantive siblings, so the count is never unanimous
+        # and the step still records PASS — carrying a `PARTIALLY-VACUOUS`
+        # reason, which names the hole rather than closing it.
+        #
+        # rc 2 is the flow's disclosed-skip convention. `program_exit_zero`
+        # consumes it as VACUOUS_PASS rather than FAIL, so a legitimately
+        # sim-free run stays non-red while the repo-level zero-denominator
+        # guard can distinguish "nothing was checked" from a real rc-0 PASS.
+        # Keep the stdout sentinel as an independent channel: report, token,
+        # and rc must agree instead of asking a reader to infer one from another.
+        print(f"VACUOUS_PASS: vacuous_testbench examined 0 testbench(es) — "
+              f"{res.get('reason', 'the producing step left nothing to check')}")
+        return 2
+    if verdict == "PASS":
         return 0
     if verdict == "IO_ERROR":
         return 2

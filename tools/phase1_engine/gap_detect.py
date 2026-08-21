@@ -40,9 +40,25 @@ def _resolve_default_class_kb() -> Path:
 DEFAULT_CLASS_KB = _resolve_default_class_kb()
 
 # Default defaults/ directory (K3 library) — for suggested_default lookup.
-DEFAULT_DEFAULTS_DIR = Path(
-    "vibe-ic-marketplace/plugins/vibe-ic/agents/defaults"
-)
+# Resolved the same way, and for the same reason: a bare relative path only
+# resolves when cwd happens to be a repo root containing vibe-ic-marketplace/.
+# `_load_k3_defaults` reads it as `f.exists() else {}`, so a wrong cwd does not
+# raise — it yields an EMPTY class_reference and `suggest_default` then finds no
+# default for any gap and says nothing. Silent degradation, not a failure.
+def _resolve_default_defaults_dir() -> Path:
+    here = Path(__file__).resolve().parent          # .../phase1_engine
+    plugin_defaults = here.parent.parent / "agents" / "defaults"
+    if (plugin_defaults / "class_reference.yaml").is_file():
+        return plugin_defaults
+    for anc in (here, *here.parents):
+        c = (anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+             / "agents" / "defaults")
+        if (c / "class_reference.yaml").is_file():
+            return c
+    return Path("vibe-ic-marketplace/plugins/vibe-ic/agents/defaults")
+
+
+DEFAULT_DEFAULTS_DIR = _resolve_default_defaults_dir()
 
 
 @dataclass
@@ -77,6 +93,55 @@ def _parent_chain(class_path: str, class_tree: Dict[str, Any]) -> List[str]:
     """Return [any-ic, ..., class_path] walking the class_tree inheritance.
 
     class_tree is the parsed class-tree.yaml (nested dict).
+
+    THIS DOES NOT SPLIT A BREADCRUMB, AND THAT IS CURRENTLY DELIBERATE
+    ------------------------------------------------------------------
+    A `class_path` of "any-ic > digital-ic > apb-peripheral" is returned as a
+    single-element chain, so no template matches, no floor applies, and this
+    doc-set silently gets no gaps. `phase1_quality_parity_check`,
+    `no_protocol_consistency_check` and `layer_extension_presence_check` all
+    reduce the breadcrumb to its leaf first. Normalising here is therefore the
+    MASTER SWITCH for vibe-ic#495: it is the one change that makes the
+    class-tree floors apply to real doc-sets.
+
+    Measured before leaving it off (re #495 Stage 4) — all 201 tracked
+    doc-sets, PYTHONHASHSEED=0, `_parent_chain` monkey-patched in-process
+    against a fresh corpus copy:
+
+        gaps      0 -> 105        red   0/201 -> 3/201
+
+    All 105 land on ONE project's three doc-set views, 35 each, and NONE of the
+    35 is a real design defect:
+
+        5   the gate reads a key the producer does not write — the Stage-0
+            defect, unrepaired on this side: L1.package vs `package_info`,
+            L1.electrical_characteristics vs `electrical_specs`,
+            L2.requirements vs `functional_requirements`, L4.register_map vs
+            `register_map_present`, L9.top_level_ports vs `ports`;
+        8   `document_id`, on eight layers — `defaultable: true` in any-ic.yaml
+            and emitted by no producer in the tree;
+       ~9   facts the document EXPLICITLY declares absent from its source via
+            the `no_*_in_input` sentinels it already carries. `detect_gaps` has
+            no honest-absence escape and cannot see them;
+       ~9   apb-peripheral-specific facts demanded of a matmul accelerator
+            whose `apb-peripheral` breadcrumb is itself in question.
+
+    And it is not only a reporting change: with a resolvable chain `auto_fill`
+    fills 33 facts per doc-set including `L9.top_level_ports = []`
+    (provenance `defaulted`), which trips `l9_completeness_check`'s "Section
+    'top_level_ports' exists but is empty" ERROR — the co-requisite hazard
+    already recorded in `_RETIRED_MECHANISMS` below.
+
+    PREREQUISITES before throwing the switch, in order:
+      1. `_fact_covers_path` reads the producer key spellings (extend the
+         Stage-0 `_spec_floor_keys` treatment to the required-fact matcher);
+      2. `detect_gaps` honours the `no_*_in_input` honest-absence sentinels the
+         producers already emit;
+      3. `auto_fill` stops filling a required list-typed fact with `[]`;
+      4. the class actually assigned to a design is correct (#495 Stage 1).
+
+    Pinned, both halves, by
+    `programs/tests/test_v1_7_72_issue495_parent_chain_switch_cost.py`.
     """
     # Flatten tree: child -> parent.
     parent_of: Dict[str, Optional[str]] = {}
@@ -290,19 +355,9 @@ def _k3_default_for_gap(
             if ref_key in cr:
                 return cr[ref_key]
 
-    # (2b) typical_scaffolds — full-path match via class chain (v0.68).
-    # Lets us inject L6.submodule_control_logic, L9.dtop_top_level, etc.
-    # as class-typical defaults when the NL ingest didn't surface them.
-    # The scaffold dict is keyed by layer-prefixed path, e.g.
-    #   typical_scaffolds:
-    #     L6.submodule_control_logic: { decoder: {...}, alu: {...} }
-    #     L9.dtop_top_level: { module_name: ..., ports: [...] }
-    full_path = f"{gap_layer}.{gap_path}"
-    for cls in reversed(chain):
-        cr = class_ref.get(cls) or {}
-        scaffolds = cr.get("typical_scaffolds") or {}
-        if full_path in scaffolds:
-            return scaffolds[full_path]
+    # (2b) typical_scaffolds — REMOVED in #493. This was the second of the
+    # mechanism's two readers and the only one on the shipping path
+    # (`run-all` → detect_gaps → here). See _RETIRED_MECHANISMS below.
 
     # (3) clock frequency heuristic — common enough to hardcode
     if gap_path == "clock_frequency_hz":
@@ -540,11 +595,10 @@ def auto_fill(
     templates_dir = class_kb_root / "templates"
     sentinels_added = _apply_sentinels(graph, chain, templates_dir)
 
-    # (0b) Typical-scaffolds pass — apply every class_reference.typical_scaffolds
-    # entry unconditionally (if not already covered in graph). Catches parity
-    # floor fields like L9.internal_wires and L4.register_map that aren't
-    # declared as "required" in the K1 template but are checked downstream.
-    scaffolds_applied = _apply_typical_scaffolds(graph, chain)
+    # (0b) Typical-scaffolds pass — REMOVED in #493. See _RETIRED_MECHANISMS.
+    # The sentinel pass (0), the interfaces_floor pass (0c) and the gap-fill
+    # pass below are UNAFFECTED and remain live; only the unconditional
+    # class-typical injection is gone.
 
     # (0c) supported_interfaces floor — IC-agnostic L1 bullet-list of buses,
     # derived deterministically from pinout signatures. Closes D3 rubric gap.
@@ -599,46 +653,146 @@ def auto_fill(
         "no_default": no_default,
         "total_gaps": len(gaps),
         "sentinels_added": sentinels_added,
-        "scaffolds_applied": scaffolds_applied,
         "interfaces_added": interfaces_added,
     }
 
 
-def _apply_typical_scaffolds(graph: FactGraph, chain: List[str]) -> int:
-    """Inject class_reference.typical_scaffolds entries unconditionally
-    (if not already covered in graph). Walks the class chain, most-specific
-    first; first match wins per path.
-
-    Used for parity-floor fields (L9.internal_wires, L4.register_map, etc.)
-    that aren't declared in K1 as "required" but are checked by downstream
-    gates like phase1_quality_parity_check.
-    """
-    k3 = _load_k3_defaults()
-    class_ref = k3.get("class_reference", {}) or {}
-    added = 0
-    seen_paths = set()
-
-    for cls in reversed(chain):
-        cr = class_ref.get(cls) or {}
-        scaffolds = cr.get("typical_scaffolds") or {}
-        for full_path, value in scaffolds.items():
-            if full_path in seen_paths:
-                continue  # already injected by a more-specific class
-            seen_paths.add(full_path)
-            if _fact_covers_path(graph, full_path):
-                continue  # user-stated / NL-extracted already — don't overwrite
-            layer = full_path.split(".", 1)[0]
-            graph.add_fact(
-                path=full_path,
-                value=value,
-                views=[layer],
-                source="defaulted",
-                origin=f"class_reference:{cls}:typical_scaffolds",
-                confidence=0.8,
-                reasoning=f"unconditional class-typical scaffold for {cls}",
-            )
-            added += 1
-    return added
+# ---------------------------------------------------------------------------
+# ORGANIC #493 — RETIRED mechanism: `typical_scaffolds`.
+#
+# DELETED, not disabled. This record is kept (and asserted by tests) so the
+# deletion carries its reason forward and nobody re-lands the mechanism in its
+# original shape without first fixing the two defects below. vibe-ic#439 and
+# `phase1_k5_quality_check._RETIRED_CHECKS` (#491, v1.7.69) are the precedent:
+# a mechanism that has never done anything, and whose first real firing would
+# be harmful, is worse than no mechanism, because its presence reads as
+# coverage.
+#
+# WHAT WAS REMOVED
+#   1. `_apply_typical_scaffolds(graph, chain)` — the unconditional injector,
+#      called from `auto_fill` pass (0b), plus its `scaffolds_applied` summary
+#      counter (a counter that could only ever report 0).
+#   2. `_k3_default_for_gap` block (2b) — the gap-conditional lookup. This was
+#      the SECOND reader and the only one on the shipping path
+#      (`run-all` → detect_gaps → _k3_default_for_gap); the injector itself was
+#      reachable only from the `auto-fill` CLI verb, which `run-all` never
+#      calls. The issue named only reader 1; reader 2 was found by AST scan and
+#      confirmed by a runtime read-trace.
+#   3. The 59 `typical_scaffolds:` entries in `agents/defaults/
+#      class_reference.yaml` across 5 classes — apb-peripheral 17,
+#      uart-peripheral 13, crypto-engine 12, simple-cpu 12, bus-controller 5.
+#
+# WHAT WAS DELIBERATELY KEPT
+#   The `auto-fill` CLI verb, `auto_fill()` itself, and its sentinel pass,
+#   `interfaces_floor` pass and gap-fill pass. Those are used by the training
+#   loop and are unrelated to this mechanism.
+#
+# WHY — measured at v1.7.69 over the 201 tracked doc-sets (every directory
+# holding an L1_DATASHEET.json), driving `from_existing_docs` → `auto_fill`
+# and `from_existing_docs` → `detect_gaps` as pure functions:
+#
+#   * COVERAGE WAS 0. 0/201 doc-sets received even one scaffold fact; 0
+#     scaffold facts landed in total; the engine's own `scaffolds_applied`
+#     counter summed to 0 across all 201; `detect_gaps` produced 0 gaps
+#     corpus-wide, so reader 2 never got a chance either. The removal's
+#     opportunity cost is therefore exactly zero — nothing is being taken
+#     away from anyone.
+#
+#   * IT COULD NOT BECOME NON-ZERO WITHOUT A SEPARATE FIX. `_parent_chain`
+#     does not normalize a breadcrumb `class_path` ("any-ic > digital-ic >
+#     apb-peripheral") the way phase1_quality_parity_check,
+#     no_protocol_consistency_check and layer_extension_presence_check all do,
+#     and the registry taxonomy (13 snake_case names) and the class-tree
+#     taxonomy (31 kebab-case names) do not intersect at all (vibe-ic#495).
+#
+#   * AND ONCE CONNECTED IT WOULD BE NEGATIVE, for two mechanical reasons
+#     that are properties of the design, not of any one chip:
+#
+#     (a) WRONG INHERITANCE NODE. The 12 `crypto-engine` scaffolds encode
+#         AES-128 specifics but hang on the PARENT of `hash-function`,
+#         `stream-cipher` and `rng`. `_apply_typical_scaffolds` walks the
+#         whole parent chain, so a SHA-256 core inherits `L2.rounds = 10`
+#         (SHA-256 has 64), a `key[256]` port (SHA-256 is keyless),
+#         `block_in[128]`/`block_out[128]` (SHA-256 is 512-bit block,
+#         256-bit digest) and `sbox`/`mixcol`/`encipher`/`decipher`
+#         submodules. An `rng` inherits an encrypt/decrypt datapath. Any
+#         revival must first push these down to `block-cipher`.
+#
+#     (b) EMPTY CONTAINER FILLED INTO A REQUIRED FIELD — a CO-REQUISITE
+#         HAZARD, not a property of the scaffolds. Reviving the mechanism
+#         requires first making `class_path` resolve in the class tree
+#         (#495). That resolution ALONE, with no scaffold data present at
+#         all, makes the ROOT `any-ic` template's required
+#         `L9.top_level_ports` gap-fill with `suggested_default = []`,
+#         render as `"top_level_ports": []`, and trip
+#         `l9_completeness_check`'s "Section 'top_level_ports' exists but is
+#         empty" ERROR. ATTRIBUTION CORRECTED while landing #493: the
+#         original measurement read this as scaffold damage because it only
+#         ever appeared in the counterfactual run where class_path was
+#         normalized. Driving `auto_fill` on a resolvable class_path AFTER
+#         this removal still produces the empty container, with provenance
+#         `auto_fill:any-ic` — so it is a PRE-EXISTING gap-fill defect that
+#         this removal does not fix and must not claim to. It is recorded
+#         here because it is the first thing a revival would hit.
+#
+#     Beyond the mechanics, the class-typical premise fails for these classes:
+#     `apb-peripheral` covers timers, GPIO, watchdogs and accelerators alike,
+#     so a class-typical L9 TOPOLOGY does not exist for it; and
+#     `uart-peripheral`'s `L8.bit_period_cycles = 434` pins clock AND baud
+#     rate (50 MHz / 115200) into a single scalar that is silently wrong at
+#     any other operating point.
+#
+# IF YOU ARE REVIVING THIS: reader 2 (the gap-conditional lookup) is the
+# defensible half — it only ever fires on a field the class template already
+# declares required and that the input did not supply. Reader 1 (the
+# unconditional injector) is the dangerous half. Do not restore either
+# without (i) a class_path taxonomy decision (#495), (ii) scaffolds re-homed
+# to the node whose members are actually homogeneous in that field, and
+# (iii) topology-level claims (`dtop_top_level`, `submodules`,
+# `instantiation_order`) dropped — only plain scalars survive scrutiny.
+# ---------------------------------------------------------------------------
+_RETIRED_MECHANISMS = {
+    "typical_scaffolds": {
+        "was": [
+            "_apply_typical_scaffolds",
+            "_k3_default_for_gap block (2b)",
+            "class_reference.yaml typical_scaffolds data",
+        ],
+        "issue": "vibe-ic#493",
+        "retired_in": "v1.7.69+",
+        "read": "class_reference.yaml[<class>].typical_scaffolds",
+        "entries_removed": 59,
+        "classes_removed": {
+            "apb-peripheral": 17,
+            "uart-peripheral": 13,
+            "crypto-engine": 12,
+            "simple-cpu": 12,
+            "bus-controller": 5,
+        },
+        "measured_coverage": "0 of 201 tracked doc-sets; 0 scaffold facts",
+        "reason": (
+            "Coverage was 0/201, so removal costs nothing. It could not become "
+            "non-zero without a separate class_path taxonomy fix (#495), and "
+            "once connected it is NEGATIVE for two mechanical reasons: (a) the "
+            "12 crypto-engine scaffolds encode AES-128 specifics but hang on "
+            "the PARENT of hash-function/stream-cipher/rng, and the injector "
+            "walks the whole parent chain, so a SHA-256 core would inherit "
+            "rounds=10 (should be 64), a key[256] port (SHA-256 is keyless) "
+            "and block_in[128]/block_out[128] (SHA-256 is 512-bit block, "
+            "256-bit digest); (b) as a CO-REQUISITE hazard, reviving it "
+            "requires making class_path resolve (#495), and that resolution "
+            "alone gap-fills the root any-ic template's required "
+            "L9.top_level_ports with suggested_default=[], rendering an empty "
+            "list that trips l9_completeness_check's \"Section "
+            "'top_level_ports' exists but is empty\" ERROR. (b) is PRE-"
+            "EXISTING and still reproduces after this removal with provenance "
+            "auto_fill:any-ic; it is recorded, not claimed as fixed."),
+        "kept": (
+            "The `auto-fill` verb, auto_fill() itself, and its sentinel / "
+            "interfaces_floor / gap-fill passes are UNAFFECTED and remain "
+            "live; the training loop depends on them."),
+    },
+}
 
 
 def _check_count_floor(

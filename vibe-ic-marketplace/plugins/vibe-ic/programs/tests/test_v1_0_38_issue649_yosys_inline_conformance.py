@@ -47,8 +47,20 @@ import _yosys_inline_mode_detect as mod  # noqa: E402
 # ---------------------------------------------------------------------------
 def _running_cmd_line(body: str) -> str:
     """Wrap an inline yosys command body in the exact echo format yosys
-    emits to its log: ``-- Running command `<body>` --``."""
-    return f"-- Running command `{body}` --"
+    emits to its log.
+
+    v1.7.64 FIXED FIXTURE — this helper used to emit
+    ``-- Running command `<body>` --`` (closing BACKTICK), a format yosys
+    has NEVER produced. yosys uses GNU-style asymmetric quoting and prints
+    ``-- Running command `<body>' --`` (closing APOSTROPHE); verified
+    against a real converged run's phase2/stage2/synth/synth.log. Because
+    the fixture matched the buggy `_RUNNING_CMD_RE`, this whole suite
+    certified an extractor that returned NO_INLINE_COMMAND on every real
+    log — the test pinned a fiction and that is why the regex survived.
+    The fixture now emits the real format; every assertion below is
+    unchanged.
+    """
+    return f"-- Running command `{body}' --"
 
 
 def _make_inline_project(tmp_path: Path, log_body: str,

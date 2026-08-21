@@ -1,6 +1,7 @@
 """Unit tests for `phase3_verify_aggregate.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("phase3_verify_aggregate")
 
 
@@ -65,15 +66,29 @@ class TestAggregator:
                              drc_violations=0, wns=0.5, tns=0.0)
         assert rep.verdict == "FAIL"
 
-    def test_unknown_drc_count_does_not_fail(self):
+    def test_unknown_drc_count_is_UNMEASURED_not_PASS(self):
+        """This test used to assert `verdict == "PASS"` for drc=-1, and that
+        assertion WAS the defect vibe-ic#727 names.
+
+        drc=-1 means the count could not be determined — `parse_drc_count`
+        carries no XML dialect, so a KLayout report database (the format every
+        sign-off certificate in this corpus uses) is unparseable to it by
+        construction. "Not a failure" was right; "therefore a PASS" was not.
+        They are different facts, and a reader of a green verdict could not tell
+        which one it meant.
+
+        Still not a FAIL — the property this test was written for is preserved.
+        """
         rep = mod.aggregate(mod.Path("/x"), self._present_all(),
                              [self._c(0)], drc_violations=-1,
                              wns=0.5, tns=0.0)
-        # drc=-1 = file not present / not parseable; not a failure here
-        assert rep.verdict == "PASS"
+        assert rep.verdict != "FAIL", "an unreadable count is not a violation"
+        assert rep.verdict == "UNMEASURED", (
+            "nor is it a clean run — those must not share a verdict")
 
     def test_attribution(self):
         rep = mod.aggregate(mod.Path("/x"), [], [],
                              drc_violations=0, wns=0, tns=0)
         d = rep.as_dict()
-        assert "v0.1.50" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"phase3_verify_aggregate v{shipped_plugin_version()}"

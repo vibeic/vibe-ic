@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
-# pre-push — last line of defence: scan the MESSAGES of every commit about to be
-# pushed for an NDA foundry / SKU / process token.
+# pre-push — the ONLY enforced gate on what reaches `main`, by necessity.
+#
+# WHY THIS CARRIES MORE THAN THE NDA MESSAGE SCAN (vibe-ic#550)
+# =============================================================
+# `gatekeeper-ci.yml` exists to run the governance programs as REQUIRED status
+# checks. It has never run once. Actions is disabled at the ACCOUNT level —
+# `HTTP 422: Actions has been disabled for this user.` — the appeal to GitHub
+# Support was rejected, and twelve pushes to `main` produced zero runs. A
+# self-hosted runner does not help: SCHEDULING is the blocked layer, not
+# execution.
+#
+# Measured scope of the block, so nobody re-derives it: push, issues, PRs,
+# merges, releases and ghcr.io packages all work. Only Actions is refused.
+#
+# So the checks CI would enforce are enforced HERE or nowhere. Running them by
+# hand before each push is discipline, not enforcement — it holds until the one
+# time someone forgets, which is the case a gate exists for.
+#
+# Mirrors gatekeeper-ci.yml's cheap deterministic gates. The expensive suites
+# (plugin_full_audit, repo_hygiene_gates ~11 min) stay OUT: a hook slow enough
+# to be bypassed is a hook that gets bypassed.
 #
 # The commit-msg hook blocks the leak at authoring time, but a message can still
 # reach a push via `--no-verify`, a rebase/amend that reuses an old message, a
@@ -10,6 +29,36 @@
 # Install: tools/install-git-hooks.sh
 # stdin:   <local ref> <local sha> <remote ref> <remote sha>   (one line per ref)
 set -euo pipefail
+
+# A NON-ZERO EXIT THAT NAMES NOTHING IS INDISTINGUISHABLE FROM A NETWORK FAILURE
+# (vibe-ic#1254). Measured, single-variable control: with the fixed shared path
+# `/tmp/gk_push_commit_text.txt` made unwritable and NOTHING else changed, the
+# hook died at the `git log` redirect below with FAILED already set to 1, and
+# neither `pre-push: BLOCKED` nor the remediation block underneath it was ever
+# printed. `set -e` exits AT the failing command, so every line after it is
+# unreachable on exactly the path that needs them. The reporter lost about an
+# hour to this shape reading it as an auth or network problem.
+#
+# This is a MECHANISM, not a patch for that one line: it names ANY command that
+# aborts the hook, including the ones nobody has hit yet. The alternative --
+# hunting down each untested command -- leaves the next one silent again.
+#
+# Deliberately WITHOUT `set -E`: the trap stays out of functions, because
+# `run_gate` already captures its own rc via `|| rc=$?` and must keep doing so.
+_hook_aborted() {
+  local rc=$?
+  [ "$rc" -eq 0 ] && rc=1
+  echo "pre-push: ABORTED — the hook itself failed and could not finish." >&2
+  echo "    line:    ${1:-?}" >&2
+  echo "    command: ${2:-?}" >&2
+  echo "    rc:      $rc" >&2
+  echo "    Every gate AFTER this point did NOT run, so the push is refused" >&2
+  echo "    without a complete verdict. This is not a network or auth failure," >&2
+  echo "    and it is not a finding against your commits." >&2
+  echo "    Re-run the command above by hand; report it with these four lines." >&2
+  exit "$rc"
+}
+trap '_hook_aborted "$LINENO" "$BASH_COMMAND"' ERR
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 CHECKER="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py"
@@ -33,15 +82,342 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     RANGE="${remote_sha}..${local_sha}"
   fi
 
+  # A push publishing NO new commit has nothing to scan, and the checkers
+  # correctly REFUSE an empty range ("a clean result over an empty range is not
+  # a clean result"). That refusal is right; turning it into a blocked push
+  # would fail every re-push of an already-published tip. Skip the no-op here
+  # rather than weaken the checker.
+  #
+  # Latent since this hook was written — never hit, because the hooks had never
+  # been installed. `.git/hooks/` is untracked, so shipping a hook file does
+  # nothing until `tools/install-git-hooks.sh` runs.
+  if [ "$(git rev-list --count $RANGE 2>/dev/null || echo 0)" = "0" ]; then
+    continue
+  fi
+
   # The checker splits RANGE on whitespace into git-log arguments.
+  # NDA_MSG_FAILED is tracked SEPARATELY from FAILED because the remediation
+  # printed at the end -- "reword the offending commit message(s)" -- is advice
+  # about THIS gate and no other. See the summary block for why that distinction
+  # only started to matter once the hook stopped dying at its first failure.
   if ! python3 "$CHECKER" --repo "$REPO_ROOT" --rev-range "$RANGE"; then
     FAILED=1
+    NDA_MSG_FAILED=1
   fi
+
+  PUSH_RANGE="$RANGE"
+  PUSH_BASE="$remote_sha"
+  [ "$remote_sha" = "$ZERO" ] && PUSH_BASE="origin/main"
+  # WHERE this push LANDS decides which gates apply (vibe-ic#636). `_remote_ref`
+  # was read and discarded, so `refs/heads/main` and `refs/heads/feat/anything`
+  # were gated identically — and the version is assigned AT MERGE, by the
+  # gatekeeper. A contributor pushing a version-less branch therefore hit
+  #
+  #     version not bumped: current 1.9.51 == previous 1.9.51
+  #
+  # which is correct about the branch and wrong about the flow: bumping would
+  # claim a number that is not theirs to assign, and two concurrent branches
+  # would claim the same one. The gate was unsatisfiable in principle for the
+  # documented contributor path.
+  case "$_remote_ref" in
+    refs/heads/main) PUSH_TO_MAIN=1 ;;
+    *)               PUSH_TO_MAIN=0 ;;
+  esac
 done
 
+# --- the gates gatekeeper-ci.yml would have run as required status checks -----
+PROGRAMS="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
+PJSON="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
+
+# SHOW THE FINDING, NOT THE LAST THREE LINES.
+#
+# `tail -3` was the wrong selector, and it failed in the one direction that
+# matters: gates print their FINDINGS first and their PASSING entries after, so
+# on a failure the last three lines are reliably a [PASS] entry, a blank, and the
+# count. Measured 2026-08-13, blocking a 57-PR batch. The hook printed:
+#
+#     pre-push: FAILED — benchmark evidence structure
+#         [PASS] …/spm/v1.9.96_gf180mcuD  (verdict=PASS_WITH_WAIVERS)
+#
+#         benchmark_evidence_structure_check: 1/2 conformant, 1 nonconformant
+#
+# Three lines, none of them the finding. The actual sentence — a file sitting at
+# the IC level where only `input/` and `v<ver>_<PDK>` cells may live — was four
+# lines above and never reached the person who had to act on it. Re-running the
+# gate by hand was the only way to learn what had failed.
+#
+# A failure report whose entire body is a PASS is precisely the lie-shape this
+# repository exists to remove, and it had been sitting in the hook that guards
+# every push. So select on WHAT THE LINE SAYS rather than on where it sits:
+# finding-shaped lines first, and the summary line always, because it carries the
+# counts. Fall back to `tail` only when nothing is finding-shaped — a gate with an
+# unrecognised output format must still print something.
+#
+# `|| _ge_hits=""` IS LOAD-BEARING, and without it the `else` below CANNOT RUN.
+# This hook is `set -euo pipefail` (line 31). `grep` exits 1 when it matches
+# nothing; `pipefail` makes that the pipeline's status even though `head`
+# succeeded; the assignment carries it; `set -e` exits. So on exactly the input
+# the fallback exists to serve — a gate whose output has no finding-shaped line
+# — the hook printed the label and DIED, instead of printing the excerpt and
+# reaching `pre-push: BLOCKED`.
+#
+# It is the common case, not a corner: three of the five gates this hook runs
+# produce an argparse usage message on rc=2 with ZERO finding-shaped lines
+# (`marketplace_version_sync_check`, `benchmark_run_manifest`,
+# `commit_msg_nda_check`) — the "could not look" path. On those, the version
+# without this guard was STRICTLY WORSE than the `tail -3` it replaces: `tail`
+# printed the real reason and let the hook continue.
+#
+# It is also the rule this file already documents directly above `run_gate`:
+# "a bare `out="$(cmd)"` assignment CARRIES the substituted command's exit
+# status — so the first failing gate terminated the whole hook right here."
+# Same trap, new call site. (vibe-ic#1209 review)
+_gate_excerpt() {
+  _ge_out="$1"
+  _ge_hits=$(printf '%s\n' "$_ge_out" |
+             grep -E '^\[(FAIL|ERROR)\]|^[[:space:]]+x |^(FAIL|ERROR)[: ]|^[[:space:]]*(FAILED|MISSING|BLOCKED)\b' |
+             head -12) || _ge_hits=""
+  if [ -n "$_ge_hits" ]; then
+    printf '%s\n' "$_ge_hits" | sed 's/^/    /'
+    # the last line of a gate is its count; without it "1 nonconformant" is lost
+    printf '%s\n' "$_ge_out" | tail -1 | sed 's/^/    /'
+  else
+    printf '%s\n' "$_ge_out" | tail -3 | sed 's/^/    /'
+  fi
+}
+
+run_gate() {                       # run_gate <label> <program> [args…]
+  label="$1"; prog="$2"; shift 2
+  if [ ! -f "$PROGRAMS/$prog" ]; then
+    # A gate that is not there has NOT passed. Say so; never skip quietly.
+    echo "pre-push: NOT CHECKED — $label ($prog absent)" >&2
+    FAILED=1; return
+  fi
+  # GIT EXPORTS `GIT_DIR` WHEN A PUSH ORIGINATES IN A WORKTREE, and `git -C <dir>`
+  # does NOT override an explicitly-set `GIT_DIR` (vibe-ic#636).
+  #
+  # SCOPED FROM MEASUREMENT, corrected at merge. A hook that prints its own
+  # environment, on this git:
+  #
+  #     push from the primary checkout   GIT_DIR=<unset>
+  #     push from a worktree             GIT_DIR=…/.git/worktrees/<name>
+  #
+  # So it is not that no push ever passed these gates — pushes from the primary
+  # checkout resolve correctly, and this repo's own landings are the evidence.
+  # It is that EVERY PUSH FROM A WORKTREE was mis-gated, and the dispatch
+  # doctrine tells every agent to work in an isolated worktree. That is the
+  # narrower claim and the more useful one: the failure follows the workflow we
+  # ask people to use.
+  #
+  # Confirmed directly: `GIT_DIR=<other> git -C <repo> log -1` reports the OTHER
+  # repository's commit.
+  # Every gate here resolves paths and ranges with `git -C <repo>`, so the inherited
+  # environment silently pointed them at the wrong root: the version gate answered
+  # `cannot read plugin.json version at origin/main`, and in a worktree the
+  # benchmark-evidence gate reported a nonconformant cell for a changeset that
+  # touches no benchmark path at all. Both are FALSE — run by hand, with no
+  # GIT_DIR, the same commands pass. Strip it so each gate resolves from its own
+  # `--repo` / cwd exactly as it does when a human runs it.
+  # `|| rc=$?` IS LOAD-BEARING, NOT STYLE. This file runs under `set -e`, and a
+  # bare `out="$(cmd)"` assignment CARRIES the substituted command's exit
+  # status — so the first failing gate terminated the whole hook right here,
+  # before a single line below could run. Every diagnostic this function exists
+  # to print was unreachable on exactly the path that needs it.
+  #
+  # Measured: a push blocked by the version gate printed only the NDA gate's
+  # PASS and `error: failed to push some refs`. Nothing named the failing gate,
+  # its finding, or even that a gate had failed; the four gates had to be re-run
+  # by hand to learn which one it was. The gates were right and the block was
+  # right — the hook simply could not say why, which is the one thing a reader
+  # acts on, and which the comments below spend three paragraphs insisting on
+  # ("A GATE THAT COULD NOT RUN HAS NOT PASSED… only the sentence changes, and
+  # the sentence is what a reader acts on").
+  #
+  # `|| rc=$?` puts the substitution in a tested context, which suppresses
+  # `set -e` for it, and `rc` is pre-set so a PASSING gate still reads 0.
+  # The rc=1 / rc=2 distinction the next block depends on is preserved.
+  local rc=0
+  out="$(env -u GIT_DIR -u GIT_WORK_TREE python3 "$PROGRAMS/$prog" "$@" 2>&1)" || rc=$?
+  # A GATE THAT COULD NOT RUN HAS NOT PASSED, AND HAS NOT FAILED ITS SUBJECT
+  # (vibe-ic#640). The repo's checkers already distinguish these: rc 1 is a
+  # finding, rc 2 is "the question could not be put". Collapsing both into
+  # FAILED sent someone hunting for an NDA leak that did not exist — and the
+  # gate whose subject is the one thing this repo cannot afford to get wrong
+  # was the one reporting it. The push stays blocked either way; only the
+  # sentence changes, and the sentence is what a reader acts on.
+  if [ "$rc" = "2" ]; then
+    echo "pre-push: NOT CHECKED — $label (the gate could not run)" >&2
+    _gate_excerpt "$out" >&2
+    FAILED=1
+  elif [ "$rc" != "0" ]; then
+    echo "pre-push: FAILED — $label" >&2
+    _gate_excerpt "$out" >&2
+    FAILED=1
+  fi
+}
+
+if [ -n "${PUSH_RANGE:-}" ]; then
+  run_gate "NDA tokens in added content or paths" \
+           nda_diff_scan_check.py --rev-range "$PUSH_RANGE"
+  # 2026-08-03 — a commit of this push must not erase what an EARLIER commit of
+  # the SAME push is publishing. QUOTED, like the NDA gate above and unlike the
+  # `git log` below: for a new branch `PUSH_RANGE` is `<sha> --not --remotes`,
+  # three git arguments in one string, and this checker re-splits it itself
+  # (vibe-ic#640) instead of handing it to something that would exit 128.
+  run_gate "no collateral revert within the push" \
+           landing_collateral_revert_check.py --repo "$REPO_ROOT" \
+           --rev-range "$PUSH_RANGE"
+  # OFF-MAIN THE DEFERRAL IS `--version-by-gatekeeper`, NOT A SKIP. The flag
+  # already exists with exactly the right semantics and had simply never been
+  # plumbed into this hook (the program's own docstring says so):
+  #
+  #     case                            default   --version-by-gatekeeper
+  #     no change   (cur == prev)        FAIL       PASS   <- the documented path
+  #     bump        (cur >  prev)        PASS       PASS
+  #     BACKWARDS   (cur <  prev)        FAIL       FAIL   <- still refused
+  #
+  # So a version-less branch pushes, and a branch that REGRESSES the version is
+  # still stopped everywhere. Turning the gate off off-main would have traded an
+  # unsatisfiable gate for an unguarded one.
+  if [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
+    run_gate "version bumped monotonically vs the remote" \
+             version_bump_monotonic_check.py --plugin-json "$PJSON" --base "$PUSH_BASE"
+  else
+    run_gate "version monotonic (assigned at merge — off-main)" \
+             version_bump_monotonic_check.py --plugin-json "$PJSON" --base "$PUSH_BASE" \
+             --version-by-gatekeeper
+  fi
+  run_gate "agent check-in scope" \
+           agent_checkin_scope_guard.py --role core-agent --base "$PUSH_BASE"
+  # BENCHMARK EVIDENCE IS A LANDING CONCERN — AND IT ALREADY RUNS THERE.
+  # These two ran HERE and in `gatekeeper-land.sh` (lines 81 and 86) with identical
+  # arguments: one policy, implemented twice, free to drift apart. Push means "publish this
+  # branch to the remote"; it does not mean "this is fit to become main", and evidence
+  # governance answers only the second question.
+  #
+  # MEASURED 2026-08-14: a 135-PR landing was blocked at PUSH by `benchmark run manifest`
+  # over two scored runs missing RUN_MANIFEST.json. The finding was REAL and still fires —
+  # at the landing gate, where the remedy is to fix that run. At push it fired where the
+  # only remedy was to rebuild the entire batch.
+  #
+  # COVERAGE IS UNCHANGED, and that is checkable rather than asserted:
+  #   gatekeeper-land.sh:81  benchmark evidence structure   (same --tree, same --changed-since)
+  #   gatekeeper-land.sh:86  benchmark run manifest         (same)
+  # and the stamp check below refuses any push to main whose commit lacks a passing
+  # gatekeeper-land stamp. So nothing reaches main without both having answered.
+  # UNQUOTED ON PURPOSE (vibe-ic#636, second layer). For a NEW branch
+  # `PUSH_RANGE` is `<sha> --not --remotes` — three git arguments in one string,
+  # exactly as the comment beside the checker above already says. Quoted, git
+  # receives a single token and exits 128, which killed the hook on EVERY
+  # new-branch push before the `git prohibition guard` below could run at all.
+  # The checker above survives it because it re-splits the string itself.
+  #
+  # A FIXED NAME IN A SHARED /tmp IS TWO DEFECTS, BOTH MEASURED (vibe-ic#1254):
+  #   1. it is not private — several agents push from one host, and the second
+  #      writer wins, so this gate could scan the OTHER push's commit messages
+  #      and report on commits that are not being pushed;
+  #   2. it made the failure SILENT — the redirect is untested under `set -e`
+  #      and `2>/dev/null` discarded git's own reason, so a failure here left
+  #      `error: failed to push some refs` and nothing else.
+  # `mktemp` fixes (1); testing the command and KEEPING its stderr fixes (2).
+  PUSH_TEXT="$(mktemp "${TMPDIR:-/tmp}/gk_push_commit_text.XXXXXXXX")"
+  # shellcheck disable=SC2086
+  if git log --format='%B' $PUSH_RANGE > "$PUSH_TEXT" 2> "$PUSH_TEXT.err"; then
+    run_gate "git prohibition guard" \
+             git_prohibition_guard.py "$PUSH_TEXT"
+  else
+    # A GATE THAT COULD NOT BE FED HAS NOT PASSED — same rule as run_gate's
+    # rc 2 branch, and it must say which range it could not read.
+    echo "pre-push: NOT CHECKED — git prohibition guard (could not read the push range)" >&2
+    echo "    range: $PUSH_RANGE" >&2
+    tail -3 "$PUSH_TEXT.err" | sed 's/^/    /' >&2
+    FAILED=1
+  fi
+  rm -f "$PUSH_TEXT" "$PUSH_TEXT.err"
+fi
+run_gate "marketplace <-> plugin version sync" marketplace_version_sync_check.py
+
+# --- the expensive tier, enforced by stamp rather than by waiting -------------
+# `repo_hygiene_gates.sh` (37 gates) and `plugin_full_audit.py` take minutes.
+# Running them in a hook would make the hook slow enough to be bypassed, and a
+# bypassed hook enforces nothing. Instead `tools/gatekeeper-land.sh` runs them
+# and writes the verified commit into `.git/gatekeeper-stamp`; this checks the
+# stamp names the commit actually being pushed. Amend or add a commit and the
+# stamp stops matching, so it cannot be reused.
+#
+# MAIN ONLY (vibe-ic#636, third layer). The stamp is written by
+# `gatekeeper-land.sh` — the LANDING tool — so requiring it on a feature-branch
+# push demands the landing procedure from someone who is not landing. That is
+# the same shape as the version gate above: a required gate the documented
+# contributor flow cannot pass. Off-main the cheap tier still runs in full
+# (measured: 7 run_gate calls in BOTH directions); the expensive tier runs where
+# it belongs, at the merge, and a push to `main` without a matching stamp is
+# refused exactly as before.
+if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
+  # `--absolute-git-dir`, not "$REPO_ROOT/.git": in a worktree `.git` is a FILE,
+  # so this looked for a stamp inside a path that is not a directory, found
+  # none, and refused every push from a worktree. Same expression as the writer
+  # in gatekeeper-land.sh — one way to name the stamp, so the two cannot drift.
+  STAMP="$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  HEAD_SHA="$(git rev-parse HEAD)"
+  # LINE 1 IS THE COMMIT, AND ONLY THE COMMIT. `gatekeeper-land.sh` writes a
+  # one-line stamp; `gatekeeper-land-differential.sh` writes the same first line
+  # and then `base=`, `tier=`, `host=`. Reading line 1 keeps BOTH writers valid
+  # here, and the direction of the incompatibility is the safe one: an OLDER
+  # hook, which reads the whole file, sees a mismatch and REFUSES a differential
+  # stamp rather than accepting it blind.
+  if [ ! -f "$STAMP" ]; then
+    echo "pre-push: FAILED — the full suites have not been run for this commit" >&2
+    echo "    run: tools/gatekeeper-land.sh --differential" >&2
+    FAILED=1
+  elif [ "$(head -1 "$STAMP")" != "$HEAD_SHA" ]; then
+    echo "pre-push: FAILED — the gatekeeper stamp is for a different commit" >&2
+    echo "    stamped: $(head -1 "$STAMP" | cut -c1-9)   pushing: ${HEAD_SHA:0:9}" >&2
+    echo "    re-run:  tools/gatekeeper-land.sh --differential" >&2
+    FAILED=1
+  else
+    # A DIFFERENTIAL VERDICT IS ABOUT A PAIR, NOT A COMMIT.
+    #
+    # `--differential` answers "does this commit break anything the BASE does
+    # not". If `main` moved between the gate and the push, that pass describes a
+    # comparison against a tree nobody is about to create — the same staleness
+    # `gatekeeper-verify-merge.sh --reassert` exists to catch on the merge path,
+    # and one the single-SHA stamp could not express at all. The remote tip is
+    # already in hand: git hands it to this hook on stdin as `remote_sha`, which
+    # `PUSH_BASE` carries out of the loop.
+    #
+    # Only checked when the stamp DECLARES a base. A plain one-line stamp is the
+    # absolute tier, which claims nothing about a base and is unaffected.
+    STAMP_BASE="$(sed -n 's/^base=//p' "$STAMP" | tail -1)"
+    if [ -n "$STAMP_BASE" ] && [ -n "${PUSH_BASE:-}" ] \
+       && [ "$PUSH_BASE" != "origin/main" ] && [ "$STAMP_BASE" != "$PUSH_BASE" ]; then
+      echo "pre-push: FAILED — the differential was measured against a base that has moved" >&2
+      echo "    verified against: ${STAMP_BASE:0:9}" >&2
+      echo "    the remote is at: ${PUSH_BASE:0:9}" >&2
+      echo "    Commits landed in between, so 'this breaks nothing new' was" >&2
+      echo "    decided about a different tree. Rebase and re-run:" >&2
+      echo "    tools/gatekeeper-land.sh --differential" >&2
+      FAILED=1
+    fi
+  fi
+fi
+
 if [ "$FAILED" -ne 0 ]; then
-  echo "pre-push: BLOCKED — NDA token(s) in the commit message(s) being pushed." >&2
-  cat >&2 <<'EOF'
+  echo "pre-push: BLOCKED — see the gate(s) named above." >&2
+  # THE REMEDIATION MUST MATCH THE GATE THAT FIRED. This block used to print the
+  # NDA reword recipe unconditionally, and that was harmless only by accident:
+  # before the `|| rc=$?` fix one commit earlier, `set -e` killed the hook at the
+  # first failing run_gate, so the ONLY failure that could ever reach here was
+  # the NDA message check above -- which runs outside run_gate, in a tested `if`.
+  # The advice was therefore always correct, because nothing else could arrive.
+  #
+  # Making the hook survive its gates made this path reachable for every other
+  # gate too, and a version-gate failure was then answered with "reword the
+  # offending commit message(s)... use the generic wording (commercial PDK)" --
+  # confidently wrong instructions for a commit whose message was never in
+  # question. A fix that restores one sentence must not corrupt the next one.
+  if [ "${NDA_MSG_FAILED:-0}" = "1" ]; then
+    cat >&2 <<'EOF'
 Reword the offending commit message(s) before pushing:
     git rebase -i <base>      # mark the offending commit(s) `reword`
 Use the generic wording ("commercial PDK", "commercial foundry").
@@ -49,6 +425,15 @@ Re-scan with:
     python3 vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py \
         --rev-range origin/main..HEAD
 EOF
+  else
+    cat >&2 <<'EOF'
+Fix the finding printed under each FAILED gate, then push again. Each gate is a
+standalone program under vibe-ic-marketplace/plugins/vibe-ic/programs/ and can
+be re-run by hand with the same arguments the hook used.
+A "NOT CHECKED" gate has not passed -- it could not run, and needs the same
+attention as a failure.
+EOF
+  fi
   exit 1
 fi
 

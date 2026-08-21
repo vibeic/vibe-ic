@@ -167,3 +167,121 @@ def test_missing_spec_exits_2(tmp_path):
     res = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path / 'nope.md')],
                          capture_output=True, text=True)
     assert res.returncode == 2
+
+
+# ---- handshake-consume-undeclared : the RTLLM radix2_div signature ---------
+# A valid/req spec whose behaviour gates on the RESULT being CONSUMED but that
+# declares no ready/ack/consume input has a half-declared interface. Detected
+# from the spec ALONE (behaviour prose vs declared interface), never the TB.
+RADIX2_DIV = """\
+Implement a simplified radix-2 divider on 8-bit integers.
+Input ports:
+    clk: Clock signal used for synchronous operation.
+    rst: The reset signal.
+    sign: signed (1) or unsigned (0).
+    dividend: 8-bit dividend.
+    divisor: 8-bit divisor.
+    opn_valid: 1-bit indicates that a valid operation request is present.
+Output ports:
+    res_valid: 1-bit output signal indicating the result is valid and ready.
+    result: 16-bit remainder in the upper 8 bits and the quotient in the lower 8.
+Implementation:
+    res_valid is managed based on the reset signal, the counter, and whether
+    the result has been consumed.
+"""
+
+
+def test_handshake_consume_undeclared_fires_on_radix2_div(tmp_path):
+    res, f = run(tmp_path, RADIX2_DIV)
+    assert 'handshake-consume-undeclared' in codes(f)
+    # WARN, so the gate still PASSes (exit 0) without --strict
+    assert res.returncode == 0
+    msg = next(x['message'] for x in f if x['code'] == 'handshake-consume-undeclared')
+    assert 'consume' in msg.lower() or 'ready' in msg.lower()
+
+
+def test_handshake_consume_undeclared_strict_fails(tmp_path):
+    res, f = run(tmp_path, RADIX2_DIV, '.md', '--strict')
+    assert res.returncode == 1
+
+
+# The completeness proof: a harness-less Phase-1 doc of the SAME SHAPE (no TB
+# anywhere) must get the SAME verdict — the rule is not adapter-trapped.
+def test_handshake_consume_undeclared_fires_on_generic_multicycle_doc(tmp_path):
+    spec = """\
+Design a serial multiply-accumulate engine.
+Input ports:
+    clk: clock
+    rst: reset
+    a_valid: asserted when a new operand pair is presented
+    a: 16-bit operand
+    b: 16-bit operand
+Output ports:
+    result_valid: asserted when the accumulated result is available
+    result: 32-bit accumulated result
+Implementation:
+    The engine iterates over 16 cycles. result_valid stays high until the
+    result has been consumed, after which a new operation may begin.
+"""
+    res, f = run(tmp_path, spec)
+    assert 'handshake-consume-undeclared' in codes(f)
+
+
+# NEGATIVE 1: a free-running clock divider (multi-cycle, no handshake, no
+# consumption) must NOT fire — the rule is not "any multi-cycle design".
+def test_handshake_consume_free_running_divider_no_fire(tmp_path):
+    spec = """\
+Divide the input clock by 3 with a 50% duty cycle.
+Input ports:
+    clk: input clock
+    rst: reset
+Output ports:
+    clk_out: output clock at one third the input frequency
+Implementation:
+    On each rising edge advance a modulo-3 counter and toggle clk_out.
+"""
+    res, f = run(tmp_path, spec)
+    assert 'handshake-consume-undeclared' not in codes(f)
+
+
+# NEGATIVE 2: a COMPLETE valid+ready handshake (ready input declared) must NOT
+# fire — this is the mutation that proves the guard checks the interface, not
+# merely the presence of the word "consumed".
+def test_handshake_consume_full_handshake_no_fire(tmp_path):
+    spec = """\
+Design a divider with a complete handshake.
+Input ports:
+    clk: clock
+    rst: reset
+    opn_valid: request valid
+    dividend: 8-bit
+    divisor: 8-bit
+    res_ready: downstream asserts this when it consumes the result
+Output ports:
+    res_valid: result valid
+    result: 16-bit
+Implementation:
+    res_valid stays high until the result has been consumed (res_ready high).
+"""
+    res, f = run(tmp_path, spec)
+    assert 'handshake-consume-undeclared' not in codes(f)
+
+
+# NEGATIVE 3: a streaming valid interface with no consumption semantics must
+# NOT fire — a fire-and-forget valid without back-pressure is legitimate.
+def test_handshake_consume_streaming_no_fire(tmp_path):
+    spec = """\
+Design a streaming FIR filter.
+Input ports:
+    clk: clock
+    rst: reset
+    in_valid: a new sample is valid this cycle
+    sample: 12-bit input sample
+Output ports:
+    out_valid: a filtered sample is valid this cycle
+    y: 12-bit filtered output
+Implementation:
+    Each valid input sample produces one filtered output sample after latency.
+"""
+    res, f = run(tmp_path, spec)
+    assert 'handshake-consume-undeclared' not in codes(f)

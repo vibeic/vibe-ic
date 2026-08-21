@@ -29,20 +29,31 @@ FAIL for that step.
 
 PASS  iff every consecutive-iteration transition changed at most ONE knob.
 FAIL  iff any transition changed two or more knobs (the real defect this catches:
-      multi-knob bench edits that make a HW regression un-bisectable).
-SKIP  (exit 0) iff there are no history files, or a block has < 2 iterations
-      (nothing to diff).
-ERROR (exit 2) iff a history file exists but its iterations / sizing structure is
-      malformed — a garbage file must not vacuously pass.
+      multi-knob bench edits that make a HW regression un-bisectable), OR a
+      history file exists but its iterations / sizing structure is malformed —
+      a garbage file must not vacuously pass.
+NOT CHECKED (exit 2) iff there are no history files, or every block has < 2
+      iterations (nothing to diff).
+
+EXIT-CODE CONTRACT (repaired — the two tiers used to be the wrong way round)
+---------------------------------------------------------------------------
+Same measurement as `analog_hil_iteration_cap_check`: exit 2 is the consumer's
+CANNOT-JUDGE tier — `flow_compliance_check.__check_program_exit_zero` maps it to
+`__VACUOUS_HINT__` and returns True (counted as a pass), and the advisory slot
+renders it "n/a (input not present)". Returning 2 for a malformed history made
+"this file is garbage" indistinguishable from "there is no such file", and both
+read as a pass. So:
+    * malformed history file   -> 1 (a defect, and it blocks)
+    * nothing to diff          -> 2 (disclosed cannot-judge)
 
 Usage:
     python3 analog_hil_single_knob_check.py <project_dir> [--json <out>]
     python3 analog_hil_single_knob_check.py --file <history.json> [--json <out>]
 
 Exit codes:
-    0  PASS / SKIP
-    1  FAIL (a transition changed >1 knob)
-    2  argument / I/O / malformed-history error
+    0  PASS
+    1  FAIL (a transition changed >1 knob, or a malformed history file)
+    2  NOT CHECKED (no history / nothing to diff) / argument / I/O error
 """
 from __future__ import annotations
 
@@ -52,6 +63,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     import _path_layout as _pl
@@ -202,10 +214,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out, json.dumps(report, indent=2, ensure_ascii=False) + "\n")
 
     verdict = report["verdict"]
-    print(f"[{verdict}] analog_hil_single_knob_check")
+    label = "NOT CHECKED" if verdict == "SKIP" else verdict
+    print(f"[{label}] analog_hil_single_knob_check"
+          + (f" — {report.get('reason', 'nothing to diff')}"
+             if verdict == "SKIP" else ""))
     for b in report["blocks"]:
         print(f"  [{b['verdict']}] block={b['block']}: {b['reason']}")
         for s in b.get("steps", []):
@@ -213,9 +228,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"      iter {s['from_iter']}→{s['to_iter']} changed "
                       f"{s['n_changed']} knobs: {s['changed_knobs']}")
 
-    if verdict == "ERROR":
+    # 0 PASS / 1 FAIL (incl. ERROR) / 2 NOT CHECKED — see the module docstring
+    # for the measurement that swapped the ERROR and no-artefact tiers.
+    if verdict == "SKIP":
         return 2
-    return 0 if verdict in ("PASS", "SKIP") else 1
+    return 0 if verdict == "PASS" else 1
 
 
 if __name__ == "__main__":

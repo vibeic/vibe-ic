@@ -176,11 +176,11 @@ def _simulate(tmp_path: Path, rtl: str, tag: str):
     vvp = tmp_path / tag / "sim.vvp"
     build = subprocess.run(
         ["iverilog", "-o", str(vvp), "-s", "tc_alpha", str(tb), str(rtl_f)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert build.returncode == 0, (
         f"emitted TB does not COMPILE against the DUT:\n{build.stderr}\n"
         f"--- TB ---\n{tb.read_text()}")
-    run = subprocess.run([str(vvp)], capture_output=True, text=True, timeout=120)
+    run = subprocess.run([str(vvp)], capture_output=True, text=True, timeout=60)
     return run.returncode, run.stdout + run.stderr
 
 

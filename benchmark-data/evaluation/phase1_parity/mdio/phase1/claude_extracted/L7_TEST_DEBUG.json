@@ -1,9 +1,0 @@
-{
-  "ic_name": "IEEE 802.3 Management Data Input/Output (MDIO)",
-  "test_debug": {
-    "phy_discovery": "Read Status Register (Reg 1) and PHY Identifier (Reg 2 / Reg 3) to discover the attached PHY",
-    "link_status": "Read Link Status (BMSR Reg 1 bit 2) and Auto-Negotiation Complete (bit 5)",
-    "loopback": "Set BMCR bit 14 to put the PHY in loopback for test",
-    "phy_reset": "Write BMCR (Reg 0) bit 15 = 1 to reset the PHY; the bit self-clears"
-  }
-}
