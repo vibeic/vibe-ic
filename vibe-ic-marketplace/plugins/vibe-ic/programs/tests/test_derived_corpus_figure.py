@@ -87,20 +87,93 @@ def corpus_findings():
 # ==========================================================================
 # 1. THE CONTROLS — these fail on the pre-fix tree, on a value difference
 # ==========================================================================
-def test_wiring_audit_docstring_states_this_checkouts_populations():
-    """The three populations the docstring argues from must be THIS tree's.
+def _flow_declared_gate_programs_independently() -> set:
+    """Programs the flow declares as gate clauses, re-derived HERE.
 
-    Computed here from globs, independently of the module under test. Before
-    the fix the docstring says 533 / 560 / 1091 and these globs say something
-    else, so this fails on a value with the same code running on both sides.
+    Deliberately NOT `checker_execution_wiring_audit.flow_declared_gate_programs`.
+    The point of this module is that a stated figure is checkable by a reader
+    who does not trust the module under test, and calling that module's own
+    helper would make the check a tautology — it would agree with the docstring
+    for the same reason the docstring is written, which is no evidence at all.
+
+    Read from the YAML STRUCTURE, never its text (vibe-ic#1012: a substring test
+    counted a program named in a COMMENT as wired). Both slots that dispatch a
+    program are read, and only programs this checkout actually SHIPS are
+    counted, matching the rule `checker_population` states in prose:
+    a clause naming a program that is not here is a different defect and
+    `gate_is_wired` owns it.
+    """
+    flow = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
+    if not flow.is_file():
+        return set()
+    import yaml  # noqa: PLC0415
+
+    names: set = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if key in ("program_exit_zero", "advisory_program_exit_zero"):
+                    if isinstance(val, str) and val.split():
+                        names.add(val.split()[0] + ".py")
+                elif key == "optional_program_exit_zero":
+                    cmd = val.get("command") if isinstance(val, dict) else None
+                    if isinstance(cmd, str) and cmd.split():
+                        names.add(cmd.split()[0] + ".py")
+                else:
+                    walk(val)
+        elif isinstance(node, list):
+            for val in node:
+                walk(val)
+
+    walk(yaml.safe_load(flow.read_text(errors="replace")))
+    return {n for n in names if (PROGRAMS / n).is_file()}
+
+
+def test_wiring_audit_docstring_states_this_checkouts_populations():
+    """The populations the docstring argues from must be THIS tree's.
+
+    Computed here independently of the module under test. Before the original
+    fix the docstring said 533 / 560 / 1091 and this tree said something else,
+    so it failed on a VALUE with the same code running on both sides.
+
+    THE CHECKER-SHAPED POPULATION IS NOT A FILENAME GLOB, AND THIS TEST USED TO
+    SAY IT WAS (measured on `ab5a23a28`: it demanded 595 while the docstring
+    correctly rendered 603, an eight-program gap).
+
+    `checker_population` is the filename glob UNION the programs the flow
+    declares as gate clauses, and its own docstring gives the reason: *"A gate
+    is in this population because the flow runs it, not because somebody named
+    it `*_check.py`."* That union is vibe-ic#1130 — "THE FILENAME GLOB IS STILL
+    A NAME LIST, and #693 only made it a longer one". The eight this tree adds
+    are real gates the flow runs under names no suffix matches:
+
+        bsdl_emit.py                    metal_fill_emit.py
+        coverage_closure.py             mixed_signal_top_lvs_run.py
+        fmeda_fault_injection_coverage.py   phase1_expert_parse_track.py
+        route_congestion_trade_disclosure.py verilator_coverage_measure.py
+
+    So the glob-only figure describes neither the population the audit uses nor
+    anything it claims, and demanding the docstring state it would force the
+    module to publish a number that contradicts its own denominator. The
+    independent computation is re-derived from the flow YAML here rather than
+    imported, so this stays a check a distrustful reader can run.
     """
     target = PROGRAMS / "checker_execution_wiring_audit.py"
     as_shipped = len({p.name for suf in ("*_check.py", "*_audit.py")
                       for p in PROGRAMS.glob(suf)})
-    checker_shaped = len({p.name for suf in ("*_check.py", "*_audit.py",
-                                             "*_guard.py", "*_lint.py", "*_gate.py")
-                          for p in PROGRAMS.glob(suf)})
+    by_name = {p.name for suf in ("*_check.py", "*_audit.py", "*_guard.py",
+                                  "*_lint.py", "*_gate.py")
+               for p in PROGRAMS.glob(suf)}
+    checker_shaped = len(by_name | _flow_declared_gate_programs_independently())
     all_programs = len(list(PROGRAMS.glob("*.py")))
+
+    # The union must be a real widening on this tree, or the control above is
+    # measuring the glob under a longer name and would pass unchanged if the
+    # #1130 rule were reverted.
+    assert checker_shaped > len(by_name), (
+        "the flow declares no gate program outside the filename glob, so this "
+        "test cannot tell the #1130 union apart from the glob it replaced")
 
     rendered = _rendered_doc(target)
     for label, value in (("as-shipped", as_shipped),

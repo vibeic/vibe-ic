@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "LIN 2.2A (December 31, 2010) predates the inclusion of automotive cybersecurity in the standard's scope. The spec does not define confidentiality, integrity, authentication, freshness, or key-management primitives at the protocol level — data is transmitted in plaintext on the LIN bus line. Any security must be layered above LIN at the application level (e.g. host-side message authentication codes appended in the frame data field, fixed challenge-response across diagnostic services). Modern automotive cybersecurity (SecOC, AUTOSAR security, ISO/SAE 21434) was standardised after LIN 2.2A. The reserved-frame doctrine (IDs 0x3E / 0x3F shall not be used in LIN 2.x clusters) is the closest the spec comes to a forward-compatibility guard."
-  }
-}

@@ -1,9 +1,0 @@
-{
-  "fields": {
-    "power_domains": [
-      "SerDes analog (LVDS/CML)",
-      "PCS digital core"
-    ],
-    "power_considerations": "Serializing GMII onto one differential pair per direction cuts pin count and switching power vs the parallel 10-bit GMII/RGMII bus."
-  }
-}
