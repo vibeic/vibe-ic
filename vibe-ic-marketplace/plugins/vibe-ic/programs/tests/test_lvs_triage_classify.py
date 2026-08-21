@@ -1,6 +1,7 @@
 """Unit tests for `lvs_triage_classify.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("lvs_triage_classify")
 
 
@@ -67,7 +68,7 @@ class TestMarkdownEmit:
         rep = mod.classify_report("")
         md = mod.report_to_markdown(rep)
         assert "lvs_triage_classify.py" in md
-        assert "v0.1.50" in md
+        assert f"(v{shipped_plugin_version()})." in md
 
     def test_top_3_section_when_findings(self):
         rep = mod.classify_report("Net foo short")

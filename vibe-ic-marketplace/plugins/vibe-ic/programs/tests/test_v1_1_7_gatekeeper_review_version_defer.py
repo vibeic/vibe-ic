@@ -113,3 +113,39 @@ def test_review_without_flag_versionless_pr_blocks_on_version():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── data-only change-sets: the version gate is N/A, not FAIL ─────────────────
+# A benchmark-data-only PR (e.g. #278) could never pass gatekeeper_review: the
+# version gate demanded a bump even though the change ships nothing via
+# `/plugin update`, and main's own convention lands these as unversioned
+# `docs(benchmark-data): …` commits. That pressured the maintainer into either
+# bypassing the gate or inflating the version for a change no user receives.
+
+def test_ships_to_users_classification():
+    assert GR.ships_to_users(["vibe-ic-marketplace/plugins/vibe-ic/programs/x.py"])
+    assert GR.ships_to_users(["mcp/server.py"])
+    assert GR.ships_to_users([".claude-plugin/marketplace.json"])
+    assert GR.ships_to_users(["vibe-ic-marketplace/.claude-plugin/marketplace.json"])
+    assert not GR.ships_to_users(["benchmark-data/ic/spm/v1/waivers.json"])
+    assert not GR.ships_to_users(["docs/INSTALL.md", "tools/ci/some_gate.sh"])
+
+
+def test_data_only_changeset_skips_version_gate():
+    r = GR.version_bump_gate("1.5.75", "1.5.75", "1.5.75", False,
+                              ["benchmark-data/ic/spm/v1/waivers.json"])
+    assert r.rc == -1, f"data-only change-set should SKIP, got rc={r.rc}"
+    assert "ships nothing" in r.summary
+
+
+def test_shipping_changeset_still_enforced_without_bump():
+    """The exemption must NOT weaken the gate for anything users receive."""
+    r = GR.version_bump_gate("1.5.75", "1.5.75", "1.5.75", False,
+                              ["vibe-ic-marketplace/plugins/vibe-ic/programs/x.py"])
+    assert r.rc == 1, "a shipping change with no bump must still FAIL"
+
+
+def test_files_omitted_preserves_legacy_behaviour():
+    """Callers that pass no file list keep the original strict semantics."""
+    r = GR.version_bump_gate("1.5.75", "1.5.75", "1.5.75", False)
+    assert r.rc == 1

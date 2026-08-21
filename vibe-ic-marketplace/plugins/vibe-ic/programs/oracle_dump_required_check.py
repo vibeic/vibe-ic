@@ -101,7 +101,7 @@ def main():
     print('       {"oracle_referenced_fix": [')
     print('         {"opcode": "0xE6", "field": "tx_len",')
     print('          "spec": 22, "silicon": 18,')
-    print('          "evidence": "input/oracle/sn2025_bytewise_dump.json"}')
+    print('          "evidence": "input/oracle/example_bytewise_dump.json"}')
     print("       ]}")
     print("  4. Re-run spec-to-rtl. The patched L3 is now byte-exact.")
     print()

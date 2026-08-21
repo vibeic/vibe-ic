@@ -121,7 +121,7 @@ def run(prompt: str, rtl: str, top="TopModule", json_out=None):
                 "--rtl", str(td / "r.sv"), "--top", top]
         jp = td / "ev.json"
         args += ["--json", str(jp)]
-        c = subprocess.run(args, capture_output=True, text=True, timeout=300)
+        c = subprocess.run(args, capture_output=True, text=True, timeout=60)
         ev = json.loads(jp.read_text()) if jp.is_file() else {}
         return c.returncode, c.stdout + c.stderr, ev
 

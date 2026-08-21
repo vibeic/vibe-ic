@@ -203,6 +203,24 @@ def test_run_supervised_progressing_output_not_killed():
     assert "line 14" in res.out
 
 
+def test_run_supervised_can_ignore_chatty_output_and_watch_domain_events(
+        tmp_path):
+    """Output is still captured when a stronger caller channel excludes it."""
+    progress = tmp_path / "domain-progress"
+    progress.touch()
+    child = ("import sys,time\n"
+             "while True:\n"
+             " sys.stdout.write('noise\\n'); sys.stdout.flush()\n"
+             " time.sleep(0.02)\n")
+    res = W.run_supervised(
+        [sys.executable, "-c", child], output_progress=False,
+        domain_progress_probe=lambda: progress.stat().st_size,
+        stall_grace_s=0.4, poll_s=0.1, hard_ceiling_s=float("inf"))
+    assert res.outcome == "stalled", res.err
+    assert res.rc == W.RC_STALLED
+    assert "noise" in res.out
+
+
 def test_run_supervised_hung_is_stalled():
     res = W.run_supervised(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -288,3 +306,97 @@ def test_public_api_constants():
     assert W.DEFAULT_STALL_GRACE_S == 1800
     assert W.DEFAULT_HARD_CEILING_S == 86_400
     assert W.DEFAULT_POLL_S == 30
+
+
+# ── abort_probe (#330 salvage) ───────────────────────────────────────────────
+# Salvaged from PR #330, whose plateau-abort half is held back pending real
+# corpus evidence. This half — the MECHANISM — is opt-in and safe to land, but
+# it shipped with no test of its own, so these are written at land time.
+#
+# The contract that makes it landable: with abort_probe=None the loop must be
+# byte-identical to before. A kill mechanism that changes anything when it is
+# switched OFF is not opt-in.
+
+def _abort_harness(abort_probe, finish_after=20):
+    """The same fake-clock harness the stall proofs above use, plus a probe."""
+    clk = _FakeClock()
+    proc = _RunningProc()
+
+    def wait_fn(p, t):
+        clk.advance(t)
+        p.polls += 1
+        return 0 if p.polls >= finish_after else None
+
+    meter = W.ProgressMeter(size_fn=lambda: proc.polls)   # always progressing
+    killer = _KillCounter(proc)
+    outcome, rc = W.supervise(
+        proc, meter.sample, killer,
+        poll_s=10, stall_grace_s=10_000, hard_ceiling_s=1_000_000,
+        wait_fn=wait_fn, clock=clk, abort_probe=abort_probe)
+    return outcome, rc, killer, proc
+
+
+def test_abort_probe_is_opt_in_and_defaults_off():
+    import inspect
+    assert inspect.signature(W.supervise).parameters["abort_probe"].default is None
+
+
+def test_rc_aborted_is_distinct_from_the_other_outcomes():
+    """The abort must be tellable apart from a stall kill and a natural exit —
+    otherwise 'we killed it' reads as 'it failed', the empty-vs-clean confusion
+    in a new place."""
+    assert isinstance(W.RC_ABORTED, int)
+    others = {v for k, v in vars(W).items()
+              if k.startswith("RC_") and k != "RC_ABORTED" and isinstance(v, int)}
+    assert W.RC_ABORTED not in others, (W.RC_ABORTED, others)
+
+
+def test_no_probe_reaches_natural_exit_unchanged():
+    """The opt-in baseline: without a probe the loop behaves exactly as before."""
+    outcome, rc, killer, proc = _abort_harness(None)
+    assert outcome not in ("aborted",)
+    assert killer.calls == [] and not proc.killed
+
+
+def test_probe_returning_none_never_aborts():
+    """'No opinion' and 'abort' must not be the same value."""
+    seen = []
+    outcome, rc, killer, proc = _abort_harness(lambda: seen.append(1) or None)
+    assert seen, "the probe must actually be consulted"
+    assert outcome not in ("aborted",) and killer.calls == []
+
+
+def test_probe_raising_is_treated_as_no_opinion():
+    """A buggy probe must not kill a healthy run — the failure mode of a kill
+    mechanism has to be 'does nothing', never 'kills'."""
+    def boom():
+        raise RuntimeError("probe is broken")
+    outcome, rc, killer, proc = _abort_harness(boom)
+    assert outcome not in ("aborted",), "a raising probe aborted the process"
+    assert killer.calls == []
+
+
+def test_probe_returning_a_reason_aborts_and_reports_it():
+    """When the probe DOES abort, the reason must reach the caller — an abort
+    with no stated reason is the silent-decline shape (#307 / #313 §6)."""
+    outcome, rc, killer, proc = _abort_harness(lambda: "plateau: no progress",
+                                               finish_after=10_000)
+    assert outcome == "aborted", outcome
+    # supervise() is the CONTROL LOOP: on any kill it returns rc=None, because
+    # a killed process has no exit code of its own. RC_ABORTED is the mapping
+    # the run_supervised() layer applies — asserted separately below, so the
+    # two layers cannot silently diverge.
+    assert rc is None
+    assert killer.calls and killer.calls[-1] == "aborted"
+    assert proc.killed
+
+
+def test_run_supervised_maps_the_abort_to_rc_aborted():
+    """The layer that DOES own an exit code must map an abort to RC_ABORTED —
+    distinct from a stall and from a real non-zero exit, so 'we killed it'
+    never reads as 'the tool failed'."""
+    src = (_PROGRAMS / "_watchdog.py").read_text() if "_PROGRAMS" in dir() \
+        else (Path(W.__file__).read_text())
+    i = src.index("RC_ABORTED, out,")
+    window = src[max(0, i - 600):i]
+    assert "aborted" in window, "RC_ABORTED must be returned on the abort path"

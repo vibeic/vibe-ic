@@ -18,13 +18,51 @@ Ordering checked:
     3. `write_verilog` appears at least once, on a line AFTER every
        `hilomap`.
 
+Two input shapes, both audited (the second landed in v1.7.64, PR #474; this
+docstring described only the first until then, so the file promised a
+narrower gate than it ships):
+    * a `.ys` script — `--ys-file <path>`, or every `*.ys` auto-discovered
+      under a project dir. The ordering checks above run on the script text.
+    * NO `.ys` script, because the runner synthesised with an inline
+      `yosys -p '<commands>'`. The command is recovered from the runner's own
+      synth log (the `-- Running command \\`...'` echo line) and the same
+      hilomap + flatten requirement is checked on its TEXT, by
+      `_yosys_inline_mode_detect.resolve_no_ys_script`.
+
+What the project-dir branch reports when there is no `.ys` script — note that
+`verdict` stays VACUOUS_PASS on every rc=0 tier, so `reason_class` is the
+field that says how much was actually verified:
+    rc=1  verdict FAIL,          reason_class inline_yosys_p_mode_nonconformant
+          — a real-PDK inline command (one that binds a Liberty library) is
+          missing hilomap and/or flatten. Blocking, by design.
+    rc=0  verdict VACUOUS_PASS,  reason_class inline_yosys_p_mode_conformant
+          — an inline command WAS extracted and checked, and it conforms (or
+          only simulation-only commands, which bind no Liberty, were found).
+          The verdict word is "vacuous" because no `.ys` script existed to
+          audit; the reason_class is what records that the command itself was
+          read and verified. `inline_evidence` names the log(s).
+    rc=0  verdict VACUOUS_PASS,  reason_class inline_yosys_p_mode_confirmed
+    rc=0  verdict VACUOUS_PASS_UNCONFIRMED,
+                                 reason_class inline_yosys_p_mode_unconfirmed
+          — no inline command was echoed anywhere, so nothing could be read.
+          These are the pre-v1.7.64 marker-FILE-existence tiers, kept: a
+          non-Yosys flow is legitimate, and `_unconfirmed` flags for a
+          reviewer that no synthesis evidence was found at all.
+
 Usage:
     python3 yosys_hilomap_required_check.py --ys-file scripts/synth.ys
+    python3 yosys_hilomap_required_check.py <project_dir> [--json <out>]
 
 Exit codes:
-    0 — all three conditions satisfied.
-    1 — one or more conditions violated; stderr lists which.
-    2 — argument or I/O error.
+    0 — every audited input satisfied the ordering; or a `.ys` script issues
+        none of {dfflibmap, abc, synth} and so is not a synth script at all;
+        or the no-`.ys`-script branch reached one of its three rc=0 tiers
+        above.
+    1 — one or more conditions violated; stderr lists which. Reachable from
+        BOTH branches — a non-conformant inline command fails here too.
+    2 — argument error, unreadable `--ys-file`, or a project dir that does
+        not exist. NOT used for "nothing to audit"; that is a rc=0
+        VACUOUS_PASS tier.
 """
 from __future__ import annotations
 
@@ -211,8 +249,13 @@ def main(argv: list[str] | None = None) -> int:
     # preserving the legacy `--ys-file <path>` form for direct CLI use.
     ap.add_argument("project_dir", nargs="?", default=None,
                     help="Project directory; auto-discovers *.ys scripts "
-                         "under synth/, phase3/, scripts/, and reports SKIP "
-                         "(rc=2) if none found.")
+                         "under synth/, phase3/, scripts/. If none are found "
+                         "it audits the inline `yosys -p` command echoed in "
+                         "the runner's synth log instead — rc=1 when that "
+                         "command is a non-conformant real-PDK one, else a "
+                         "rc=0 VACUOUS_PASS tier. (This help used to say "
+                         "'reports SKIP (rc=2) if none found'; that branch "
+                         "has never returned 2.)")
     ap.add_argument("--ys-file", default=None,
                     help="Path to a single Yosys .ys synthesis script.")
     ap.add_argument("--json", default=None,
@@ -253,45 +296,48 @@ def main(argv: list[str] | None = None) -> int:
 
     import json as _json
     if not ys_files:
-        # v1.6.180 (#72 P2-8) — positively confirm the inline-mode
-        # case. Look for runner artefacts and inline `yosys -p`
-        # invocations; report a distinct verdict tier when no
-        # supporting evidence is found so audit reviewers can spot
-        # an unconfirmed VACUOUS_PASS.
-        from _yosys_inline_mode_detect import detect_inline_mode
-        inline_status, inline_evidence = detect_inline_mode(project)
-        if inline_status == "confirmed":
-            verdict = "VACUOUS_PASS"
-            reason_class = "inline_yosys_p_mode_confirmed"
-            reason_text = (
-                "no .ys scripts found, BUT inline `yosys -p` runner "
-                "mode is positively confirmed by project markers "
-                f"({len(inline_evidence)} evidence path(s)); gate is "
-                "legitimately not applicable."
-            )
-        else:
-            verdict = "VACUOUS_PASS_UNCONFIRMED"
-            reason_class = "inline_yosys_p_mode_unconfirmed"
-            reason_text = (
-                "no .ys scripts found AND no inline `yosys -p` "
-                "runner-mode markers detected. Gate stays rc=0 "
-                "(vacuous) but reviewers should confirm a synthesis "
-                "step actually ran — otherwise a missing synth "
-                "artefact is being silently masked."
-            )
+        # v1.6.180 (#72 P2-8) — positively confirm the inline-mode case.
+        # v1.7.64 — before falling back to that file-existence confirmer,
+        # run the #649 CONTENT audit on the inline `yosys -p` command the
+        # runner echoed into its synth log. Until now the content audit
+        # existed only inside flow_compliance_check._run_yosys_gates, and
+        # that in-process copy governs Step 14 only when it FAILs; the gate
+        # the flow YAML actually declares (this CLI) emitted VACUOUS_PASS
+        # for a real-PDK inline synth that skipped hilomap.
+        from _yosys_inline_mode_detect import resolve_no_ys_script
+        rc, fields = resolve_no_ys_script(project)
+        verdict = fields["verdict"]
+        reason_text = fields["reason"]
         report = {
             "verdict": verdict,
-            "reason_class": reason_class,
+            "reason_class": fields["reason_class"],
             "reason": reason_text,
-            "inline_evidence": inline_evidence,
-            "project": str(project), "messages": [],
+            "inline_evidence": fields["inline_evidence"],
+            "project": str(project), "messages": fields["messages"],
         }
         if args.json:
             out = _Path(args.json)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(_json.dumps(report, indent=2) + "\n")
-        print(f"{verdict}: {reason_text}")
-        return 0
+        stream = sys.stderr if rc else sys.stdout
+        print(f"{verdict}: {reason_text}", file=stream)
+        # vibe-ic#599. The verdict word stays VACUOUS_PASS on purpose — no `.ys`
+        # script existed to audit, and `reason_class` is what records how much
+        # was verified. That distinction was invisible to the roll-up, which
+        # reads the printed token and never the report, so a step whose inline
+        # `yosys -p` command HAD been extracted and checked was tallied as one
+        # where nothing was examined. This line is the disclosure the roll-up
+        # consumes; it is emitted only on the tiers whose reason_class says a
+        # command was actually read, never on `_unconfirmed`.
+        if rc == 0 and fields["reason_class"] in (
+                "inline_yosys_p_mode_conformant",
+                "inline_yosys_p_mode_confirmed"):
+            print(f"SUBSTANTIVE_PASS: no `.ys` script existed, and the "
+                  f"equivalent was verified by another route "
+                  f"({fields['reason_class']})", file=stream)
+        for m in report["messages"]:
+            print(f"  {m}", file=stream)
+        return rc
 
     overall = 0
     findings: list[dict] = []

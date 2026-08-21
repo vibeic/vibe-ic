@@ -26,6 +26,35 @@ _PAD = "# " + ("=" * 78 + "\n") * 40  # ~3.2 KB
 # DRC mode
 # ---------------------------------------------------------------------------
 def test_drc_report_pass(tmp_path):
+    """A genuinely CLEAN report (0 real violations) passes.
+
+    Fixed from a fixture that said "3 violations total" and asserted
+    `passed is True` — a real defect in the fixture, not a defect this test
+    was checking: `_check_drc` used to gate on rule-CATEGORY VOCABULARY
+    presence only, so it could not tell "3 violations" from "0 violations"
+    as long as the word "spacing" appeared somewhere. Kept the vocabulary
+    (categories_found must still populate) but made the report say what a
+    real clean signoff report says: an explicit zero count.
+    """
+    rpt = tmp_path / "run_drc.rpt"
+    rpt.write_text(
+        "[INFO drt-0012] OpenROAD detailed_route\n"
+        "spacing check: clean\n"
+        "via enclosure check: clean\n"
+        "0 violations total\n" + _PAD
+    )
+    result = era._check_drc(tmp_path)
+    assert result.passed is True
+    assert "spacing" in result.summary["categories_found"]
+    assert result.summary["has_count"] is True
+    assert result.summary["tool_authentic"] is True
+    assert result.summary["real_violation_total"] == 0
+
+
+def test_drc_report_with_real_violations_fails(tmp_path):
+    """DIRECTION 2, the case the old fixture accidentally exercised backwards:
+    a report that genuinely states violations occurred must FAIL, not pass
+    because the rule-category words happen to appear in the same text."""
     rpt = tmp_path / "run_drc.rpt"
     rpt.write_text(
         "[INFO drt-0012] OpenROAD detailed_route\n"
@@ -34,10 +63,74 @@ def test_drc_report_pass(tmp_path):
         "3 violations total\n" + _PAD
     )
     result = era._check_drc(tmp_path)
+    assert result.passed is False
+    assert result.summary["real_violation_total"] == 3
+
+
+_KLAYOUT_RDB_HEADER = (
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+    "<report-database>\n"
+    " <generator>klayout drc: script='foo.drc'</generator>\n"
+    " <categories>\n"
+    "  <category><name>spacing</name></category>\n"
+    "  <category><name>enclosure</name></category>\n"
+    " </categories>\n"
+)
+
+
+# `_PAD` must sit INSIDE the document (as a comment), never appended raw
+# after `</report-database>` — trailing non-whitespace content after the
+# root element's close tag is not well-formed XML, so ET.fromstring would
+# raise and these tests would silently exercise the TEXT fallback path
+# instead of the XML <items>-counting path they exist to pin. (Caught by
+# running this exact case: the padding-after-close variant made the "prose
+# injected" test read 9999 from the fallback regex instead of 0 from the
+# real <items> count — a bug in the FIXTURE, not in `_check_drc`.)
+_PAD_AS_COMMENT = "<!-- " + _PAD.replace("--", "- -") + " -->\n"
+
+
+def test_drc_klayout_real_item_gates_fail(tmp_path):
+    """A real klayout RDB <item> under <items> is a real violation and must
+    FAIL — the counting path distinct from the magic-style text regex
+    exercised by test_drc_report_with_real_violations_fails above."""
+    rpt = tmp_path / "drc_signoff.rpt"
+    rpt.write_text(
+        _KLAYOUT_RDB_HEADER +
+        " <items>\n"
+        "  <item><category-name>spacing</category-name>"
+        "<cell><name>top</name></cell></item>\n"
+        " </items>\n" +
+        _PAD_AS_COMMENT +
+        "</report-database>\n"
+    )
+    result = era._check_drc(tmp_path)
+    assert result.passed is False
+    assert result.summary["real_violation_total"] == 1
+
+
+def test_drc_prose_injected_into_a_clean_klayout_report_does_not_flip_pass(tmp_path):
+    """THE ORGANIC EXPLOIT this fix closes, stated as a precision guard: a
+    genuinely clean klayout report (0 real <item> elements under <items>)
+    hand-edited to ALSO contain a comment describing a massive violation
+    count must still PASS — the injected sentence is prose, not a real
+    <item>, and the fix must read the STRUCTURE, not the vocabulary, in
+    either direction. (This is the real drc_signoff.rpt mutation used to
+    demonstrate the original defect: same report, same edit, different
+    verdict once <items> is actually counted instead of grepped.)
+    """
+    rpt = tmp_path / "drc_signoff.rpt"
+    rpt.write_text(
+        _KLAYOUT_RDB_HEADER +
+        " <items>\n"
+        " </items>\n"
+        " <!-- 9999 spacing violations found. Total: 9999 violations. "
+        "DRC FAILED -->\n" +
+        _PAD_AS_COMMENT +
+        "</report-database>\n"
+    )
+    result = era._check_drc(tmp_path)
     assert result.passed is True
-    assert "spacing" in result.summary["categories_found"]
-    assert result.summary["has_count"] is True
-    assert result.summary["tool_authentic"] is True
+    assert result.summary["real_violation_total"] == 0
 
 
 def test_drc_stub_rejected(tmp_path):
@@ -159,6 +252,37 @@ def test_em_stub_rejected(tmp_path):
 # STA mode
 # ---------------------------------------------------------------------------
 def test_sta_report_pass(tmp_path):
+    """A genuinely CLEAN report (non-negative WNS/TNS) passes.
+
+    Fixed from a fixture that said `WNS = -0.05 ns` / `TNS = -1.2 ns` — both
+    NEGATIVE, i.e. real (if small) timing violations — and asserted
+    `passed is True`. That was a real defect in the fixture: `_check_sta`
+    used to gate on WNS/TNS-shaped VOCABULARY presence only, never on the
+    sign of the value, so it could not tell a violated design from a clean
+    one as long as the report used the right words. Kept the report shape,
+    made the numbers what a real clean signoff report reports.
+    """
+    rpt = tmp_path / "sta_final.rpt"
+    rpt.write_text(
+        "OpenSTA timing report\n"
+        "Startpoint: clk_i\nEndpoint: out_q\n"
+        "WNS = 0.05 ns\nTNS = 0.0 ns\n"
+        "setup slack: 0.1 ns\nhold slack: 0.02 ns\n"
+        "data arrival time: 2.34 ns\n" + _PAD
+    )
+    result = era._check_sta(tmp_path)
+    assert result.passed is True
+    assert result.summary["has_wns_tns"] is True
+    assert result.summary["has_setup_hold"] is True
+    assert result.summary["any_verdict_determined"] is True
+    assert result.summary["real_violation_found"] is False
+
+
+def test_sta_report_with_negative_wns_fails(tmp_path):
+    """DIRECTION 2, the case the old fixture accidentally exercised
+    backwards: a report that genuinely states a negative WNS/TNS — a real
+    timing violation — must FAIL, not pass because the summary carries the
+    right vocabulary. This is the exact fixture the old test used."""
     rpt = tmp_path / "sta_final.rpt"
     rpt.write_text(
         "OpenSTA timing report\n"
@@ -168,9 +292,47 @@ def test_sta_report_pass(tmp_path):
         "data arrival time: 2.34 ns\n" + _PAD
     )
     result = era._check_sta(tmp_path)
+    assert result.passed is False
+    assert result.summary["real_violation_found"] is True
+
+
+def test_sta_pathtable_violated_entry_fails_even_with_clean_summary_words(tmp_path):
+    """THE ORGANIC EXPLOIT this fix closes: a real OpenSTA per-path table
+    whose only path is genuinely VIOLATED must FAIL — even though the
+    report legitimately contains "setup"/"hold" vocabulary elsewhere, which
+    is all the old check required."""
+    rpt = tmp_path / "sta_pathtable.rpt"
+    rpt.write_text(
+        "Startpoint: clk_i (rising edge-triggered flip-flop clock clk)\n"
+        "Endpoint: out_q (rising edge-triggered flip-flop clock clk)\n"
+        "Path Type: max\n"
+        "  data arrival time    6.65\n"
+        "  data required time   0.10\n"
+        "           6.65   slack (VIOLATED)\n"
+        "setup/hold analysis complete\n" + _PAD
+    )
+    result = era._check_sta(tmp_path)
+    assert result.passed is False
+    assert result.summary["real_violation_found"] is True
+
+
+def test_sta_pathtable_all_met_passes(tmp_path):
+    """DIRECTION 1 sibling: the same path-table shape with a genuinely MET
+    verdict must still pass — this fix must not become a blanket path-table
+    rejection."""
+    rpt = tmp_path / "sta_pathtable.rpt"
+    rpt.write_text(
+        "Startpoint: clk_i (rising edge-triggered flip-flop clock clk)\n"
+        "Endpoint: out_q (rising edge-triggered flip-flop clock clk)\n"
+        "Path Type: max\n"
+        "  data arrival time    0.10\n"
+        "  data required time   6.65\n"
+        "           6.55   slack (MET)\n"
+        "setup/hold analysis complete\n" + _PAD
+    )
+    result = era._check_sta(tmp_path)
     assert result.passed is True
-    assert result.summary["has_wns_tns"] is True
-    assert result.summary["has_setup_hold"] is True
+    assert result.summary["real_violation_found"] is False
 
 
 def test_sta_stub_rejected(tmp_path):

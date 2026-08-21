@@ -38,6 +38,11 @@ The remaining 27% requires:
 
 - Use KLayout with official rule decks (not Magic)
 - Path: `/foss/pdks/gf180mcuD/libs.tech/klayout/tech/drc/run_drc.py`
-- Set `PATH` to include `/foss/tools/klayout` before running
+- Put the vibeic klayout build first when the image has one — set BOTH `PATH`
+  and `LD_LIBRARY_PATH` to `/foss/tools/klayout-vibeic`, falling back to
+  `/foss/tools/klayout`. PATH alone is not enough: the pymod links
+  `libklayout_db.so` by SONAME, so our build with the base directory on the
+  library search path produces the base's geometry (8 off-grid vertices vs 0 on
+  the fork's own MANUFACTURINGGRID fixture)
 - Use `--no_feol` for BEOL-only check if standard cells are trusted
 - Variant C = 9K metal_top, 5LM (most common)

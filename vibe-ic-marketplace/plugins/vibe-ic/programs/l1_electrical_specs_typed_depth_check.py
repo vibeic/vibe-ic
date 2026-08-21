@@ -10,9 +10,8 @@ inside L1.description, never as typed min/typ/max/unit/conditions
 records that spec-to-rtl, lab-calibration and analog-spec-extract
 can lookup.
 
-Trigger: when extracted vendor docs contain an electrical-table
-mention (``VDD``, ``VDDA``, ``IDD``, ``Typ.``, ``Min.``, ``Max.``,
-explicit ``\\d+\\.?\\d*\\s*(V|mV|mA|μA|uA)``) or the L1 doc has an
+Trigger: when extracted vendor docs contain an electrical mention
+(see ``_electrical_mention``) or the L1 doc has an
 ``electrical_specs``-shaped field of any depth.
 
 Required typed shape (any of these aliases): ``electrical_specs``,
@@ -22,29 +21,44 @@ Each entry MUST have at least ``name`` + ``unit`` + one of
 {``min``, ``typ``, ``max``, ``min_typ_max``} + ``evidence``
 (``<file>:<line>``).
 
-The gate is chip-AGNOSTIC: only the schema depth is enforced, not
-specific voltage/current values.
+v1.7.80 — for #514. The gate ALSO falsifies L1's positive claim
+``no_electrical_specs_in_input``. That field asserts something about
+the INPUT; nothing checked it, so it read identically whether the
+input was empty or the extractor was. Empty entries now split three
+ways:
+
+  * mentions found, L1 declares none      -> FAIL (the claim is false)
+  * mentions found, L1 makes no claim     -> FAIL (unextracted)
+  * no mentions, L1 declares none         -> PASS (corroborated: two
+                                             independent scans agree)
+
+The gate is chip-AGNOSTIC: only the schema depth and the input/claim
+agreement are enforced, never specific voltage/current values.
 
 Usage:
     python3 l1_electrical_specs_typed_depth_check.py <project_dir>
 
 Exit codes:
-    0 = PASS (no electrical mention OR typed sub-field depth OK)
-    1 = FAIL (electrical mentions present but no/shallow typed entries)
-    2 = input-missing (skip)
+    0 = PASS (typed sub-field depth OK, OR a corroborated "the input
+        has no electrical specs")
+    1 = FAIL (electrical mentions present but no/shallow typed
+        entries, or L1 falsely claims the input has none)
+    2 = input-missing / nothing to validate and nothing to falsify
 
 Honors waiver ``l1_electrical_specs_depth_intentional`` (>=40 chars).
 """
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ic_class_profile import detect_ic_class  # noqa: E402
+from _electrical_mention import (  # noqa: E402
+    search_line as _elec_search_line,
+)
 
 
 # Wave 43 (v0.119.75) — explicit ic_class_profile guard.
@@ -67,12 +81,15 @@ _L1_GLOBS = (
     "**/L1_DATASHEET.json",
 )
 
-_RE_ELEC = re.compile(
-    r"\b(VDD|VDDA|VSS|VDDIO|IDD|IDDQ|VTH|VOH|VOL|VIH|VIL|VBG|VREF)"
-    r"|(?:\d+\.?\d*)\s*(?:V|mV|mA|μA|uA|kΩ|Ω)\b"
-    r"|\b(?:Typ\.|Min\.|Max\.)\b",
-    re.IGNORECASE,
-)
+# v1.7.80 — for #514. `_RE_ELEC` used to be defined here. Every
+# mention it reported on `benchmark-data/ic/ibex` was a false
+# positive: `VOL` matched inside "Volume" (the alternation had a
+# leading \b and no trailing one) and `2v` inside the tool name
+# "sv2v" (the quantity branch had no left boundary). The gate was
+# therefore FAILing a CPU core whose documents contain no electrical
+# quantity at all, while a design with four invented amperes passed.
+# The definition now lives in `_electrical_mention`, shared with the
+# L1 emitter whose claim this gate exists to falsify.
 
 _SPEC_KEYS = (
     "electrical_specs", "electrical_limits",
@@ -95,8 +112,17 @@ def _find_l1(project: Path) -> Optional[Path]:
     return None
 
 
-def _scan_docs(project: Path) -> List[Tuple[Path, int]]:
-    hits: List[Tuple[Path, int]] = []
+def _scan_docs(project: Path) -> List[Tuple[Path, int, str]]:
+    """Return ``[(doc, line_number, matched_literal), ...]``.
+
+    v1.7.80 — for #514. The matched literal is carried so a FAIL can
+    QUOTE its evidence. The old message said "16 electrical
+    mention(s) (e.g. ibex_compliance.txt:7)" and every one of them was
+    the word "Volume" or the tool name "sv2v"; had the literal been
+    printed, the false positive would have been visible from the
+    gate's own output instead of requiring an investigation.
+    """
+    hits: List[Tuple[Path, int, str]] = []
     seen = set()
     for pat in _DOC_GLOBS:
         for doc in project.glob(pat):
@@ -108,8 +134,9 @@ def _scan_docs(project: Path) -> List[Tuple[Path, int]]:
             except Exception:
                 continue
             for i, line in enumerate(text.splitlines(), start=1):
-                if _RE_ELEC.search(line):
-                    hits.append((doc, i))
+                m = _elec_search_line(line)
+                if m:
+                    hits.append((doc, i, m.group(0)))
                     if len(hits) >= 50:
                         return hits
     return hits
@@ -187,15 +214,43 @@ def main() -> int:
     _collect_spec_entries(data, entries)
 
     if not entries:
+        # v1.7.80 — for #514. L1 publishes a POSITIVE claim about the
+        # input, `no_electrical_specs_in_input`. This gate is the only
+        # thing that can falsify it, so check it rather than ignoring
+        # it: an unchecked claim about the input is indistinguishable
+        # from "the extractor returned nothing", which is what the
+        # field meant before it was corroborated.
+        declares_none = data.get("no_electrical_specs_in_input") is True
         if hits:
+            if declares_none:
+                print(f"[FAIL] l1_electrical_specs_typed_depth_check: "
+                      f"L1 declares no_electrical_specs_in_input=true but "
+                      f"the input carries {len(hits)} electrical "
+                      f"mention(s) (e.g. {hits[0][0].name}:{hits[0][1]} "
+                      f"{hits[0][2]!r}). That is a false claim about the "
+                      f"input, not a missing value: either extract typed "
+                      f"entries or set the flag false and list the "
+                      f"mentions under "
+                      f"electrical_specs_unextracted_mentions[].")
+                return 1
             print(f"[FAIL] l1_electrical_specs_typed_depth_check: "
                   f"{len(hits)} electrical mention(s) (e.g. "
-                  f"{hits[0][0].name}:{hits[0][1]}) but L1 has no typed "
-                  f"electrical_specs[] / electrical_limits[] / "
-                  f"electrical_characteristics[] array. Add typed "
+                  f"{hits[0][0].name}:{hits[0][1]} {hits[0][2]!r}) but L1 "
+                  f"has no typed electrical_specs[] / electrical_limits[] "
+                  f"/ electrical_characteristics[] array. Add typed "
                   f"entries with name/min_typ_max/unit/conditions/evidence.")
             return 1
-        # No mentions and no entries => silent skip.
+        if declares_none:
+            # No entries, no mentions, and L1 says so. Two independent
+            # scans agree the input carries nothing electrical: that is
+            # a verified negative, not an absence of information.
+            print("[PASS] l1_electrical_specs_typed_depth_check: L1 "
+                  "declares no_electrical_specs_in_input=true and an "
+                  "independent scan of the input agrees (0 electrical "
+                  "mentions) — corroborated, not merely unextracted")
+            return 0
+        # No mentions, no entries, and no claim either way => nothing
+        # to validate and nothing to falsify.
         print("[SKIP] l1_electrical_specs_typed_depth_check: "
               "no electrical entries to validate")
         return 2

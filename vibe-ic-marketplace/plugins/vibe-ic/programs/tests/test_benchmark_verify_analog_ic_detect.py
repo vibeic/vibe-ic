@@ -110,7 +110,13 @@ def _analog_project(tmp_path: Path, verdict: str, partial: bool) -> Path:
         json.dumps({"verdict": verdict}))
     for blk in ("blk_a", "blk_b"):
         _mk(tmp_path, f"phase3/analog/{blk}/corner_results.json",
-            json.dumps({"partial_measurement": partial and blk == "blk_b"}))
+            json.dumps({"partial_measurement": partial and blk == "blk_b",
+                        # `partial_measurement` says whether every corner
+                        # resolved; it says nothing about WHICH CIRCUIT
+                        # resolved them. A fixture silent on the second was
+                        # asserting that a sweep which will not name its
+                        # subject can still show the analog loop closed.
+                        "design_content": "structure_and_geometry"}))
     return tmp_path
 
 
@@ -138,7 +144,45 @@ def test_pillar5_missing_a_track_verdict_is_pending(tmp_path):
 
 def test_pillar5_passes_on_converged_a_track(tmp_path):
     """The positive case must still pass — a converged A-track with fully
-    measured sweeps."""
+    measured sweeps, over netlists the artefacts say are design-bound."""
     _analog_project(tmp_path, "PASS", partial=False)
     out = _run_report(tmp_path)
     assert "analog=CONVERGED" in out, f"converged A-track did not pass: {out}"
+
+
+def test_pillar5_does_not_pass_a_loop_that_closed_on_a_library_default(
+        tmp_path):
+    """The same converged A-track, over artefacts that RECORD that the circuit
+    they measured came from a topology library with no bound input reaching any
+    device parameter. Real corners on a library nominal are a measurement of
+    that topology; the analog loop has not closed on this design.
+
+    Deliberately its own state and not FAIL: a run whose A-track failed is the
+    row above, and an honest ceiling must never be shown scoring the same as a
+    run that invented content to fill the gap."""
+    _analog_project(tmp_path, "PASS", partial=False)
+    for blk in ("blk_a", "blk_b"):
+        p = tmp_path / "phase3" / "analog" / blk / "corner_results.json"
+        d = json.loads(p.read_text())
+        d["design_content"] = "structure_only"
+        p.write_text(json.dumps(d))
+    out = _run_report(tmp_path)
+    assert "analog=STRUCTURE_ONLY" in out, out
+    assert "analog=CONVERGED" not in out, out
+
+
+def test_pillar5_does_not_pass_a_sweep_that_will_not_name_its_subject(
+        tmp_path):
+    """Silence must not be the cheap answer. Same converged A-track, the one
+    field removed — which is the shape of every artefact written before the
+    field existed, and of every stale one. Pre-fix this tree read
+    'CONVERGED — all corner sweeps fully measured' and PASSED the pillar."""
+    _analog_project(tmp_path, "PASS", partial=False)
+    for blk in ("blk_a", "blk_b"):
+        p = tmp_path / "phase3" / "analog" / blk / "corner_results.json"
+        d = json.loads(p.read_text())
+        d.pop("design_content")
+        p.write_text(json.dumps(d))
+    out = _run_report(tmp_path)
+    assert "analog=UNDISCLOSED" in out, out
+    assert "analog=CONVERGED" not in out, out

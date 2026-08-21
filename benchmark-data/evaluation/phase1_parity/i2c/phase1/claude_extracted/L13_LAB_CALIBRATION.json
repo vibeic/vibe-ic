@@ -1,5 +1,0 @@
-{
-  "ic_name": "I2C-bus (UM10204)",
-  "lab_calibration_present": false,
-  "notes": "I2C is a wire-level protocol; no analog reference / trim / calibration loop at the protocol layer. Per-device calibration (e.g. ADC offset trim, oscillator trim) is documented in individual device datasheets, not in UM10204."
-}

@@ -9,7 +9,15 @@ using the same chip-AGNOSTIC regex families as
 ``extraction_coverage_denominator_audit`` + ``phase1_coverage_report_gen``,
 then verify each token appears somewhere in the union of every
 ``generated_docs/L*.json`` text. A token is considered "captured"
-when it appears as a substring in any L doc JSON serialization.
+when it appears as a substring in any L doc JSON serialization,
+OR — for a hex quantity of at least ``_VALUE_CREDIT_MIN_HEX_DIGITS``
+canonical digits — when an L doc carries the SAME VALUE under a
+different base-tagged notation (#517: input ``0x1A110000`` vs the
+Verilog instantiation literal ``32'h1A110000``). Capture is a
+question about the quantity, not about its spelling; see the
+``#517`` block for the two discipline rules (base-tagged literals
+only, magnitude floor) that keep the value comparison from
+degrading into a value-soup match.
 
 Why this gate exists
 --------------------
@@ -335,6 +343,54 @@ def _is_binary_context(text: str, span_start: int, span_end: int) -> bool:
     return (bad / len(window)) >= _BINARY_CTX_THRESHOLD
 
 
+# ── ORGANIC #781 — verification-harness address context filter ──────────────
+# A hex address whose surrounding prose describes it as a TESTBENCH signature /
+# handshake / tohost / fromhost address is a VERIFICATION-HARNESS constant, not
+# a chip-design fact. Canonical example (RISCV-DV / riscv-tests convention):
+#     "the signature address that this testbench uses for the handshaking is
+#      ``0x8ffffffc``."
+# The value is where the *software test program* writes to signal the external
+# testbench — it is never latched or decoded inside the DUT RTL, so it has no
+# L1-L27 design-layer home and can never be "captured" without fabricating a
+# layer. It is therefore excluded from the 100%-capture design-token denominator
+# exactly as URL slugs / build-tool flags / binary-blob garble already are.
+#
+# NO-LEAK: the filter fires ONLY on (a) a HEX-address-shaped token (`0x…` /
+# `@0x…`) — never an ISA / architecture / numeric+unit design token — AND
+# (b) an UNAMBIGUOUS verification-harness marker in the ±window: the exact
+# phrase "signature address", the riscv-tests `tohost` / `fromhost` memory-
+# mapped test-IO names, or the co-occurrence of "testbench" and "handshak…".
+# A real design register address (decoded by the RTL) is described by none of
+# these, so it still counts. Chip-AGNOSTIC: pure verification vocabulary, no
+# chip/vendor literal.
+_VERIF_HARNESS_CTX_WINDOW = 90
+_VERIF_HARNESS_ADDR_RE = re.compile(r"^@?0x[0-9A-Fa-f]+$")
+_VERIF_HARNESS_STRONG_RE = re.compile(
+    r"signature\s+address|\btohost\b|\bfromhost\b", re.IGNORECASE)
+_VERIF_HARNESS_TB_RE = re.compile(r"test[\s_]*bench", re.IGNORECASE)
+_VERIF_HARNESS_HS_RE = re.compile(r"handshak", re.IGNORECASE)
+
+
+def _is_verification_harness_context(tok: str, text: str,
+                                     span_start: int, span_end: int) -> bool:
+    """ORGANIC #781 — True when `tok` is a hex-address-shaped token whose
+    ±_VERIF_HARNESS_CTX_WINDOW context marks it as a testbench signature /
+    handshake / tohost / fromhost address (verification-harness, not design).
+    Restricted to hex-address tokens so no ISA / numeric+unit design token is
+    ever excluded. Chip-AGNOSTIC."""
+    if not _VERIF_HARNESS_ADDR_RE.match(tok):
+        return False
+    a = max(0, span_start - _VERIF_HARNESS_CTX_WINDOW)
+    b = min(len(text), span_end + _VERIF_HARNESS_CTX_WINDOW)
+    window = text[a:b]
+    if _VERIF_HARNESS_STRONG_RE.search(window):
+        return True
+    if (_VERIF_HARNESS_TB_RE.search(window)
+            and _VERIF_HARNESS_HS_RE.search(window)):
+        return True
+    return False
+
+
 def _harvest_tokens(text: str):
     """Returns (design_tokens, garble_tokens).
 
@@ -364,6 +420,13 @@ def _harvest_tokens(text: str):
                 seen_dirty.add(normalised)
                 continue
             if _is_binary_context(text, m.start(), m.end()):
+                seen_dirty.add(normalised)
+                continue
+            # ORGANIC #781 — verification-harness signature/handshake address
+            # is a testbench constant with no design-layer home; exclude from
+            # the 100%-capture denominator (like URL / binary garble).
+            if _is_verification_harness_context(
+                    normalised, text, m.start(), m.end()):
                 seen_dirty.add(normalised)
                 continue
             seen_clean.add(normalised)
@@ -616,6 +679,9 @@ def _load_generated_haystacks(project: Path):
             "ai_text_ns": ai_text.replace(" ", ""),
             "prog_text": prog_text,
             "prog_text_ns": prog_text.replace(" ", ""),
+            # #517 — canonical values of this layer's base-tagged numeric
+            # literals, for the cross-notation VALUE credit.
+            "tagged_values": _collect_base_tagged_values(combined_raw),
         }
     # Layers that exist in sidecar but not in generated_docs/ —
     # uncommon but legitimate (e.g. user pre-staged patches before
@@ -633,7 +699,118 @@ def _load_generated_haystacks(project: Path):
             "ai_text_ns": sidecar_text.replace(" ", ""),
             "prog_text": "",
             "prog_text_ns": "",
+            # #517 — see above.
+            "tagged_values": _collect_base_tagged_values(sidecar_text),
         }
+    return out
+
+
+# ── #517 — numeric VALUE equivalence across notations ───────────────────────
+# A hex quantity that Phase 1 correctly transcodes into a different NOTATION is
+# still the same quantity, but the flat substring search reads it as a loss.
+# Canonical reproduction (ibex): the input parameter table writes
+# ``0x1A110000``; L9's ``instantiation_template`` renders the same value as
+# ``32'h1A110000`` — the only literal that would actually compile in a Verilog
+# instantiation. ``32'h1A110000`` does not contain the substring ``0x1A110000``,
+# so a CORRECT transcoding was counted as a missing token and the document was
+# reported at 87.0% when it is 100% captured.
+#
+# The fix compares VALUES, not spellings: both sides are normalised to a
+# canonical magnitude and compared numerically. It is deliberately NOT a list of
+# accepted string variants — that would be the same defect with more entries,
+# and the next notation would defeat it again.
+#
+# TWO discipline rules keep this from degrading into a value-soup match, which
+# would turn an unwaivable gate (forbidden prefix `phase1_input_vs_generated_*`,
+# so a false PASS here has NO backstop) into the false-PASS shape it exists to
+# avoid:
+#
+#   (1) BASE-TAGGED ONLY. The L-doc literal must carry an explicit base tag —
+#       `0x…`, or a Verilog `'h` / `'d` / `'b` / `'o` (with optional width,
+#       optional `s` signed marker, optional `_` digit grouping). A base tag is
+#       the author's own statement that the characters are a deliberate numeric
+#       constant. A BARE decimal integer is NOT eligible: JSON is full of
+#       incidental integers (array lengths, bit widths, counts, indices) and
+#       crediting a hex token against any of them is precisely the value soup
+#       that #515 / #521 warn about. Measured on this corpus, the difference
+#       between "base-tagged only" and "base-tagged + bare decimal" at the
+#       magnitude floor below is ZERO tokens — the guard, not the notation set,
+#       is doing the safety work — so the tighter rule costs nothing.
+#
+#   (2) MAGNITUDE FLOOR. The credit applies only when the token's CANONICAL
+#       value (leading zeros stripped) is at least `_VALUE_CREDIT_MIN_HEX_DIGITS`
+#       hex digits wide, i.e. >= 0x100. SHORT VALUES (1-2 hex digits, 0x00-0xFF)
+#       ARE NOT ELIGIBLE and continue to require an exact substring match exactly
+#       as before. Rationale, independent of this corpus: the 0x00-0xFF band is
+#       the small-integer band that saturates every design document — reset
+#       values, bit widths, counts, small offsets — so an equal-valued literal
+#       somewhere else is weak evidence of the same fact. At >= 0x100 the value
+#       space is large enough that an equal-valued base-tagged literal is strong
+#       evidence. Corpus confirmation: the ONLY sub-floor credit anywhere in the
+#       corpus was value 0x0 (an address-map base `0x0000` whose L4 neighbour
+#       `0x00` is a DIFFERENT range) — a genuine false credit the floor blocks.
+#
+# Chip-AGNOSTIC: the rule is about numeric notation only. No design, document,
+# vendor or SKU literal appears anywhere in it.
+_VALUE_CREDIT_MIN_HEX_DIGITS = 3
+
+# Input-side: the harvester only ever emits hex tokens in `0x…` / `@0x…` shape
+# (see `_REGEX_FAMILIES`), so that is the only token family this credit reads.
+_VALUE_CREDIT_TOKEN_RE = re.compile(r"^@?0[xX]([0-9A-Fa-f][0-9A-Fa-f_]*)$")
+
+# Haystack-side: base-tagged numeric literals, keyed by the base they declare.
+# `0x` carries the same `(?<![0-9A-Fa-f])` lookbehind the harvester uses, so a
+# dimension literal like `640x480` does not masquerade as `0x480`.
+_VALUE_CREDIT_LITERAL_RES = (
+    (re.compile(r"(?<![0-9A-Fa-f])0[xX]([0-9A-Fa-f][0-9A-Fa-f_]*)"), 16),
+    (re.compile(r"'[sS]?[hH]([0-9A-Fa-f][0-9A-Fa-f_]*)"), 16),
+    (re.compile(r"'[sS]?[dD]([0-9][0-9_]*)"), 10),
+    (re.compile(r"'[sS]?[oO]([0-7][0-7_]*)"), 8),
+    (re.compile(r"'[sS]?[bB]([01][01_]*)"), 2),
+)
+
+
+def _canonical_numeric_value(digits: str, base: int):
+    """Normalise a literal's digit run to a canonical magnitude string
+    (uppercase hex, no underscores, no leading zeros). Returns None when the
+    digits do not parse in `base`. This is what makes the comparison a VALUE
+    comparison: `0x0324`, `12'h324`, `10'd804` and `'o1444` all canonicalise
+    to `324`."""
+    try:
+        return format(int(digits.replace("_", ""), base), "X")
+    except (ValueError, TypeError):
+        return None
+
+
+def _value_credit_token_value(tok: str):
+    """Canonical value of an input token eligible for notation credit, or None.
+
+    Returns None for any token that is not `0x…` / `@0x…` shaped, AND for any
+    token whose canonical value falls below the magnitude floor — so a 1-2 hex
+    digit value (0x00-0xFF) is never value-credited."""
+    m = _VALUE_CREDIT_TOKEN_RE.match(tok.replace(" ", ""))
+    if not m:
+        return None
+    val = _canonical_numeric_value(m.group(1), 16)
+    if val is None or len(val) < _VALUE_CREDIT_MIN_HEX_DIGITS:
+        return None
+    return val
+
+
+def _collect_base_tagged_values(text: str):
+    """Set of canonical values of every BASE-TAGGED numeric literal in `text`.
+
+    Values below the magnitude floor are dropped at collection time — they can
+    never be credited, so carrying them would only waste memory and widen the
+    surface of an accidental match."""
+    out: set = set()
+    if not text:
+        return out
+    for rx, base in _VALUE_CREDIT_LITERAL_RES:
+        for m in rx.finditer(text):
+            val = _canonical_numeric_value(m.group(1), base)
+            if val is not None and len(val) >= _VALUE_CREDIT_MIN_HEX_DIGITS:
+                out.add(val)
     return out
 
 
@@ -764,10 +941,12 @@ def _attribute_token(tok: str, layer_blobs, regfield_map=None):
       layers_hit = list of L doc names that contain the token
       source     = "ai" if any hit was inside an AI-patched
                    sub-tree, "program" if any hit was in
-                   deterministic content, "program_alias" if the
-                   token was credited by the #746 register-macro
-                   alias pass (register+field both in L4_REGMAP),
-                   else "missing".
+                   deterministic content, "program_notation" if the
+                   token was credited by the #517 cross-notation VALUE
+                   pass (same quantity, base-tagged differently),
+                   "program_alias" if the token was credited by the
+                   #746 register-macro alias pass (register+field both
+                   in L4_REGMAP), else "missing".
     Token is matched under raw / single-space / no-space normalisation.
     """
     if not tok:
@@ -793,6 +972,17 @@ def _attribute_token(tok: str, layer_blobs, regfield_map=None):
             # Treat as program-captured by default.
             found_in_prog = True
     if not layers_hit:
+        # #517 — the substring search compares SPELLINGS. Before declaring the
+        # token lost, ask whether its VALUE is present under a different
+        # base-tagged notation (e.g. input `0x1A110000` vs L9's Verilog
+        # instantiation literal `32'h1A110000`). Gated by the magnitude floor,
+        # so a 1-2 hex digit value is never credited this way.
+        val = _value_credit_token_value(tok)
+        if val is not None:
+            value_layers = [layer for layer, blob in layer_blobs.items()
+                            if val in blob.get("tagged_values", ())]
+            if value_layers:
+                return value_layers, "program_notation"
         # #746 — substring search missed; try the register-macro alias
         # credit (register+field both captured structurally in L4_REGMAP).
         if regfield_map and _regmacro_alias_credit(tok, regfield_map):
@@ -931,6 +1121,7 @@ def main(argv=None) -> int:
     program_tokens_global: set = set()
     ai_tokens_global: set = set()
     alias_tokens_global: set = set()
+    notation_tokens_global: set = set()
     reference_docs_seen: list = []
     per_doc = []
     fail_docs = []
@@ -967,6 +1158,7 @@ def main(argv=None) -> int:
         prog_cnt = 0
         ai_cnt = 0
         alias_cnt = 0
+        notation_cnt = 0
         missing = []
         for tok in design_toks:
             _layers, source = _attribute_token(tok, layer_blobs,
@@ -979,6 +1171,14 @@ def main(argv=None) -> int:
                 ai_cnt += 1
                 if not is_ref:
                     ai_tokens_global.add(tok)
+            elif source == "program_notation":
+                # #517 — cross-notation VALUE credit: the same quantity is
+                # present in an L doc under a different base-tagged notation.
+                # Tracked separately so the report stays transparent about
+                # HOW each token was credited.
+                notation_cnt += 1
+                if not is_ref:
+                    notation_tokens_global.add(tok)
             elif source == "program_alias":
                 # #746 — register-macro alias credit. Counts toward
                 # capture (register+field both structurally in L4_REGMAP);
@@ -988,7 +1188,7 @@ def main(argv=None) -> int:
                     alias_tokens_global.add(tok)
             else:
                 missing.append(tok)
-        captured = prog_cnt + ai_cnt + alias_cnt
+        captured = prog_cnt + ai_cnt + alias_cnt + notation_cnt
         pct = captured / n if n else 1.0
         missing_sample = sorted(missing,
                                 key=lambda x: (-len(x), x))[:30]
@@ -1007,6 +1207,7 @@ def main(argv=None) -> int:
             "program_captured": prog_cnt,
             "ai_captured": ai_cnt,
             "alias_captured": alias_cnt,
+            "notation_captured": notation_cnt,
             "missing": len(missing),
             "captured": captured,
             "captured_pct": round(pct, 4),
@@ -1090,6 +1291,30 @@ def main(argv=None) -> int:
         "reference_docs": reference_docs_seen,
         "ai_captured_tokens_count": len(ai_tokens_global),
         "alias_captured_tokens_count": len(alias_tokens_global),
+        # #517 — tokens credited because the same VALUE is present in an L doc
+        # under a different base-tagged notation (e.g. input `0x…` vs a Verilog
+        # `<width>'h…` instantiation literal). Surfaced so a reader can always
+        # see how much of the capture rests on notation equivalence rather than
+        # on a verbatim match.
+        "notation_captured_tokens_count": len(notation_tokens_global),
+        "notation_captured_tokens": sorted(notation_tokens_global),
+        # ORGANIC #312 — `ai_captured_tokens_count: 0` was indistinguishable
+        # between "the AI/Expert rail RAN and found nothing" and "the rail
+        # NEVER RAN". Measured: `ai_patches` has FOUR readers in programs/ and
+        # ZERO producers — no program anywhere writes the sidecar — and the
+        # expert-track evidence check reports NOT MEASURED on all 8 benchmark
+        # ICs. So today the count is always the second case, and a reader with
+        # only the number in front of them cannot tell.
+        #
+        # This does not build the missing rail; it stops the absence being
+        # reported as a measurement. Same rule the L-doc field-producer gate
+        # encodes: an empty value and a clean value must not look alike.
+        "ai_track_ran": _resolve_sidecar_path(project) is not None,
+        "ai_captured_tokens_count_meaning": (
+            "measured" if _resolve_sidecar_path(project) is not None
+            else "NOT MEASURED — no ai_patches sidecar exists for this run, "
+                 "so 0 means the AI/Expert rail did not run, not that it ran "
+                 "and found nothing (vibe-ic#312)"),
         "per_layer": per_layer,
         "per_doc": per_doc,
     }

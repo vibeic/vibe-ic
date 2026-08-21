@@ -247,6 +247,85 @@ def test_a_negative_vacuous_regmap_tb_is_caught(tmp_path):
     assert res["register_map_evidence"]["registers"] == 7
 
 
+# ===========================================================================
+# CAPTURE A — processor_cpu CSR file is NOT a register-slave protocol
+# (ORGANIC — ibex x sky130A: L4 = RISC-V CSRs reachable only by executed
+#  csr* instructions, never an externally addressable top-level slave).
+# ===========================================================================
+def _stamp_ic_class(proj: Path, ic_class: str) -> None:
+    rep = proj / "reports"
+    rep.mkdir(parents=True, exist_ok=True)
+    (rep / "ic_class.json").write_text(json.dumps(
+        {"ic_class": ic_class,
+         "has_command_protocol": ic_class != "processor_cpu",
+         "protocol_class": "none" if ic_class == "processor_cpu"
+         else "slave_like"}, indent=2))
+
+
+def test_a_regmap_evidence_none_for_processor_cpu(tmp_path):
+    """UNIT — a processor_cpu's L4 (CSR file) is NOT a register-slave protocol.
+
+    Even with many addressable registers, ic_class=processor_cpu means the L4
+    map is internal architectural state (CSRs/GPRs) reachable only by a csr*
+    instruction the core executes — not a top-level addr/data/we slave. The
+    evidence resolver must return None so the opcode-TB N/A decision stands.
+    """
+    proj = _mk_project(tmp_path, opcodes=[], registers=_regs(43),
+                       scored_vectors=0, placeholder_vectors=8)
+    gd = proj / "phase1" / "generated_docs"
+    assert tbgate.register_map_protocol_evidence(
+        gd, ic_class="processor_cpu") is None
+    # …and WITHOUT the CPU hint the same map IS a register-slave protocol,
+    # proving the discriminator is exactly ic_class (no accidental blanket).
+    assert tbgate.register_map_protocol_evidence(gd) is not None
+
+
+def test_a_regmap_evidence_present_for_non_cpu_slave(tmp_path):
+    """UNIT — a non-CPU class with a real register map still yields evidence."""
+    proj = _mk_project(tmp_path, opcodes=[], registers=_regs(7),
+                       scored_vectors=0, placeholder_vectors=8)
+    ev = tbgate.register_map_protocol_evidence(
+        proj / "phase1" / "generated_docs",
+        ic_class="serial_peripheral_protocol")
+    assert ev is not None and ev["registers"] == 7
+
+
+def test_a_positive_processor_cpu_csr_is_vacuous_na(tmp_path):
+    """POSITIVE — the exact canary shape under ic_class=processor_cpu is N/A.
+
+    L3.opcodes == [] + a 43-register L4 (RISC-V CSR map) + 0 scored vectors —
+    identical to the FUNCTIONAL_COVERAGE_GAP canary — but because the IC is a
+    CPU core it has NO externally-addressable register-slave protocol, so the
+    gate mirrors reports/ic_class.json (has_command_protocol=false) and the
+    cpu_functional_oracle deferral: VACUOUS_PASS, not a FAIL.
+    """
+    proj = _mk_project(tmp_path, opcodes=[], registers=_regs(43),
+                       scored_vectors=0, placeholder_vectors=8)
+    _stamp_ic_class(proj, "processor_cpu")
+    rc, res = _run_gate(proj, tmp_path)
+    assert rc == 2, res
+    assert res["pass"] is True
+    assert res["vacuous_pass"] is True
+    assert res["rule"] == "N/A"
+    assert res.get("verdict") != "FUNCTIONAL_COVERAGE_GAP"
+
+
+def test_a_negative_non_cpu_slave_stamp_still_caught(tmp_path):
+    """NEGATIVE — a NON-CPU ic_class stamp must NOT leak the CPU relaxation.
+
+    Same canary shape, ic_class=serial_peripheral_protocol: the register-slave
+    functional-coverage GAP must still fire exactly as before.
+    """
+    proj = _mk_project(tmp_path, opcodes=[], registers=_regs(7),
+                       scored_vectors=0, placeholder_vectors=8)
+    _stamp_ic_class(proj, "serial_peripheral_protocol")
+    rc, res = _run_gate(proj, tmp_path)
+    assert rc == 1, res
+    assert res["pass"] is False
+    assert res["verdict"] == "FUNCTIONAL_COVERAGE_GAP"
+    assert res["rule"] == "register_map_protocol_unsynthesized"
+
+
 def test_a_negative_pillar1_refuses_100pct_at_zero_scored(tmp_path):
     """NEGATIVE — Pillar 1 must HONOR the gap even if a coverage report
     claims 100%. A vacuous TB is not a pass, and an upstream requirements

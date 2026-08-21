@@ -44,12 +44,13 @@ No external tool dependencies — pure Python.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 from dataclasses import dataclass, asdict
-from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from pathlib import Path, PurePosixPath
+from typing import Dict, List, Optional, Set, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +406,518 @@ def audit_netlist(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# STEP 9's OTHER DECLARED ARTEFACT — the AREA / STATS accounting
+#
+# Step 9 declares TWO outputs:
+#
+#     phase2/stage2/synth/netlist.v
+#     phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json
+#
+# This program opened only the first. `provenance_check`, the step's other gate
+# program, reads `provenance.jsonl`. So the step's own AREA claim — the number
+# a reader quotes as "the synthesised design is N cells / X um^2" — was gated by
+# nothing at all.
+#
+# The measurement itself is real: `_yosys_stat.emit_stats_json` parses the
+# yosys `stat` block out of the synth log and writes `cells`, `chip_area_um2`,
+# the `netlist` it measured and that netlist's `netlist_sha256`. What was never
+# checked is that the accounting DESCRIBES THE NETLIST BEING GATED.
+#
+# WHAT "DESCRIBES THIS NETLIST" IS, AND WHAT IT IS NOT
+# ----------------------------------------------------
+# The first cut of this gate tested two proxies and both were the wrong
+# quantity, in the two opposite directions the campaign keeps producing:
+#
+#   * MTIME. "stats.json older than netlist.v" is not staleness, it is
+#     ORDERING. `design_one_shot_runner.step_yosys_synth` rewrites the netlist
+#     at the top of every synth pass and writes stats.json at the bottom, so on
+#     the second pass of a converged project the previous pass's stats.json is
+#     unavoidably older than the netlist that was just re-emitted from the same
+#     RTL — byte-identical content, an honest area number, and an ERROR. Worse,
+#     the ERROR returned before stats.json was refreshed, so the project could
+#     never recover: measured PASS / FAIL / FAIL over three passes. An mtime
+#     ordering says nothing about whether the numbers are true.
+#
+#   * FILENAME. "stats.json records netlist=netlist.v but I was handed
+#     netlist_yosys.v" is not a different design, it is an ALIAS: the runner
+#     copies one to the other byte for byte so the canonical name exists for
+#     downstream gates. A name comparison calls two identical files different
+#     designs, which is the opposite error.
+#
+# The quantity that actually decides the claim is the netlist's CONTENT. The
+# emitter records `netlist_sha256` of the file it measured; this gate hashes
+# the file it was handed and compares. Same bytes -> the numbers describe this
+# netlist, whatever it is called and whenever it was written. Different bytes
+# -> the accounting is for a design that is not the one being gated, which is
+# the real lie both proxies were groping at.
+#
+# The NAME still has one job, and only one: grading a disagreement. A record
+# that names THIS path and disagrees with it is a ghost — the file was replaced
+# and the accounting was not — and that blocks. A record that names ANOTHER
+# file in the same directory is a real measurement of a different netlist, and
+# that is reported without blocking, because the flow really does put two
+# netlists there (see the branch's own comment). The name never decides
+# AGREEMENT: identical bytes are the same design under any filename.
+#
+# WHY THIS IS NOT SELF-CERTIFICATION
+# ----------------------------------
+# `step_yosys_synth` now emits stats.json BEFORE it invokes this program (it
+# has to: the file must describe the netlist the gate is about to judge), so on
+# the runner path this gate does see an artefact its own run produced — and it
+# is never allowed to earn credit from that. Nothing here PASSES a step because
+# stats.json exists: absence is INFO, an unbindable record is a WARNING, and
+# the only rc-1 outcomes are CONTRADICTIONS between two independently written
+# facts (the digest the emitter recorded, and the bytes on disk now). The
+# emitter also cannot make the comparison true by fiat — when the synth capture
+# carries no stat block it writes nothing and removes its own stale artefact,
+# so the run drops to the honest MISSING that step 9's `required_outputs`
+# reports. On the flow-gate path (`program_exit_zero: synth_netlist_check
+# --netlist phase2/stage2/synth/netlist.v ...`) the artefact pre-exists the
+# audit outright.
+#
+# `_yosys_stat`'s anti-fabrication contract ("None means no measurement;
+# callers MUST NOT write stats.json in that case") also becomes enforceable
+# here: a `cells: 0` record is a zeroed measurement that the contract says
+# should never have been written.
+#
+# ABSENCE IS DISCLOSED, NOT FAILED: the entry is an any-of and step 9's
+# `required_outputs` (ALL-of-N across entries) already reports a run that
+# produced neither. The gate states the gap instead of double-failing it.
+# ---------------------------------------------------------------------------
+STATS_JSON_NAME = "stats.json"
+AREA_RPT_NAME = "area.rpt"
+STEP9_DECLARED_AREA = ("phase2/stage2/synth/area.rpt OR "
+                       "phase2/stage2/synth/stats.json")
+#: Field `_yosys_stat` / `synth_area_stats_emit` record the measured netlist's
+#: digest under. Kept as a literal rather than imported so this gate still runs
+#: when it is copied out of the plugin.
+NETLIST_DIGEST_FIELD = "netlist_sha256"
+
+
+def _names_this_netlist(recorded: object, netlist_path: Path) -> bool:
+    """Does the record's ``netlist`` field name the file under audit?
+
+    Component-wise SUFFIX match (never a substring one — ``netlist.v`` and
+    ``eco_netlist.v`` share a tail), with a same-file fallback for a
+    differently-spelled root. Used ONLY to grade a digest disagreement, never
+    to decide agreement: two files with the same bytes are the same design
+    whatever they are called.
+    """
+    if not isinstance(recorded, str) or not recorded.strip():
+        return False
+    rec_parts = [p for p in
+                 PurePosixPath(recorded.strip().replace("\\", "/")).parts
+                 if p not in (".", "", "/")]
+    act_parts = [p for p in PurePosixPath(netlist_path.as_posix()).parts
+                 if p not in (".", "", "/")]
+    if rec_parts and len(rec_parts) <= len(act_parts) \
+            and act_parts[-len(rec_parts):] == rec_parts:
+        return True
+    try:
+        return ((netlist_path.parent / recorded.strip()).resolve()
+                == netlist_path.resolve())
+    except OSError:
+        return False
+
+
+def _sha256_file(path: Path) -> Optional[str]:
+    """``"sha256:<hex>"`` for ``path``, or ``None`` when it cannot be read.
+
+    ``None`` is a failed measurement, not a zero: every caller below states the
+    gap rather than comparing against a stand-in value.
+    """
+    try:
+        h = hashlib.sha256()
+        with path.open("rb") as fp:
+            for chunk in iter(lambda: fp.read(65536), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return "sha256:" + h.hexdigest()
+
+
+def _first_present(rec: dict, names: Tuple[str, ...]):
+    """``(value, field-name)`` for the first of *names* the record carries.
+
+    Step 9's one declared area artefact has two writers with two payload
+    schemas; a reader that knows only one of them silently reports "not
+    recorded" for a number that IS recorded. Returns ``(None, None)`` when the
+    record carries none of the spellings.
+    """
+    for name in names:
+        if name in rec:
+            return rec.get(name), name
+    return None, None
+
+
+def audit_area_stats(netlist_path: Path) -> Tuple[List[Finding], dict]:
+    """Cross-check step 9's area/stats artefact against the netlist gated here.
+
+    Both artefacts are looked for beside the netlist, which is where the flow
+    declares them and where `_yosys_stat.emit_stats_json` writes them.
+
+    The decision is content-bound: `netlist_sha256` in the record against the
+    digest of the file under audit. See the block comment above for why neither
+    the artefacts' mtime ordering nor their filenames can stand in for it.
+    """
+    findings: List[Finding] = []
+    synth_dir = netlist_path.parent
+    stats_path = synth_dir / STATS_JSON_NAME
+    area_path = synth_dir / AREA_RPT_NAME
+    actual_digest = _sha256_file(netlist_path)
+    info = {
+        "declared": STEP9_DECLARED_AREA,
+        "stats_json": str(stats_path) if stats_path.is_file() else None,
+        "area_rpt": str(area_path) if area_path.is_file() else None,
+        "recorded_cells": None,
+        "recorded_chip_area_um2": None,
+        "recorded_netlist": None,
+        # The whole verdict, laid out so a reader can redo it by hand.
+        "audited_netlist": str(netlist_path),
+        "audited_netlist_sha256": actual_digest,
+        "recorded_netlist_sha256": None,
+        "netlist_binding": "NO_ARTEFACT",
+    }
+    if not stats_path.is_file() and not area_path.is_file():
+        findings.append(Finding(
+            severity="INFO",
+            category="NO_AREA_ARTEFACT",
+            message=(f"neither {STATS_JSON_NAME} nor {AREA_RPT_NAME} is "
+                     f"present beside the netlist, so step 9's declared area "
+                     f"claim ({STEP9_DECLARED_AREA}) is not cross-checked "
+                     f"here; the step's required_outputs is what reports it"),
+        ))
+        return findings, info
+
+    if stats_path.is_file():
+        try:
+            rec = json.loads(stats_path.read_text(errors="replace"))
+        except (OSError, ValueError) as exc:
+            info["netlist_binding"] = "UNREADABLE"
+            findings.append(Finding(
+                severity="ERROR",
+                category="BAD_AREA_ARTEFACT",
+                message=(f"{STATS_JSON_NAME} is not readable JSON ({exc}) — "
+                         f"step 9's declared area artefact carries no "
+                         f"measurement, and unmeasured is not zero"),
+            ))
+            return findings, info
+        if not isinstance(rec, dict):
+            info["netlist_binding"] = "UNREADABLE"
+            findings.append(Finding(
+                severity="ERROR",
+                category="BAD_AREA_ARTEFACT",
+                message=f"{STATS_JSON_NAME} is not a JSON object",
+            ))
+            return findings, info
+
+        # BOTH PRODUCERS' SPELLINGS, on purpose. Step 9's ONE declared area
+        # artefact has TWO writers and they do not share a payload schema:
+        # `_yosys_stat` writes `cells` / `chip_area_um2`, while
+        # `synth_area_stats_emit` writes `cell_count` / `chip_area`
+        # (programs/synth_area_stats_emit.py:424,428). Reading only the first
+        # spelling made this gate blind on exactly the artefacts the second
+        # producer writes: a `{"cell_count": 0}` record — a zeroed measurement,
+        # the thing ZEROED_AREA_ARTEFACT exists to refuse — returned rc 0 with
+        # no findings, and `recorded_cells` was reported as null for a record
+        # that does carry a count, which is a MEASURED quantity reported as
+        # unmeasured. Neither producer's field is preferred; whichever is
+        # present is read, and `recorded_cells_field` says which one was.
+        cells, cells_field = _first_present(rec, ("cells", "cell_count"))
+        area, area_field = _first_present(rec, ("chip_area_um2", "chip_area"))
+        info["recorded_cells"] = cells
+        info["recorded_cells_field"] = cells_field
+        info["recorded_chip_area_um2"] = area
+        info["recorded_chip_area_field"] = area_field
+        info["recorded_netlist"] = rec.get("netlist")
+
+        if isinstance(cells, int) and not isinstance(cells, bool) and cells <= 0:
+            findings.append(Finding(
+                severity="ERROR",
+                category="ZEROED_AREA_ARTEFACT",
+                message=(
+                    f"{STATS_JSON_NAME} records {cells_field}={cells}. "
+                    f"`_yosys_stat.emit_stats_json` returns None rather than "
+                    f"writing the file when the synth log carries no stat "
+                    f"block, so a zeroed record is a measurement that should "
+                    f"never have been written — step 9 would report an area "
+                    f"claim for an unmeasured synthesis"),
+            ))
+
+        recorded_digest = rec.get(NETLIST_DIGEST_FIELD)
+        info["recorded_netlist_sha256"] = (
+            recorded_digest if isinstance(recorded_digest, str) else None)
+        if not isinstance(recorded_digest, str) or not recorded_digest.strip():
+            # Say the gap out loud rather than pass on silence. An artefact
+            # written before the binding existed (or by a third-party emitter)
+            # genuinely cannot be tied to this netlist — but a run that simply
+            # does not carry the field is not thereby proven wrong, so this
+            # discloses and does not block.
+            info["netlist_binding"] = "UNBOUND"
+            findings.append(Finding(
+                severity="WARNING",
+                category="AREA_ARTEFACT_UNBOUND",
+                message=(
+                    f"{STATS_JSON_NAME} carries no {NETLIST_DIGEST_FIELD}, so "
+                    f"nothing ties step 9's area claim to the netlist under "
+                    f"audit ({netlist_path.name}); the record names "
+                    f"netlist={rec.get('netlist')!r}, and a NAME cannot tell "
+                    f"this run's netlist from the previous run's at the same "
+                    f"path. Re-run synthesis to have the emitter bind them"),
+            ))
+        elif actual_digest is None:
+            info["netlist_binding"] = "NETLIST_UNREADABLE"
+            findings.append(Finding(
+                severity="WARNING",
+                category="AREA_ARTEFACT_UNBOUND",
+                message=(f"{netlist_path.name} could not be hashed, so the "
+                         f"{NETLIST_DIGEST_FIELD} recorded in "
+                         f"{STATS_JSON_NAME} could not be checked — "
+                         f"unmeasured, not agreed"),
+            ))
+        elif recorded_digest.strip() == actual_digest:
+            info["netlist_binding"] = "MATCH"
+        elif _names_this_netlist(rec.get("netlist"), netlist_path):
+            # SAME PATH, DIFFERENT BYTES. The record claims to account for this
+            # very file and does not. Nothing legitimate produces that: the
+            # emitters write the digest of the file they measured, so a
+            # disagreement means the netlist was replaced after the accounting
+            # was written and the accounting was not refreshed. This is the
+            # ghost artefact, and it blocks.
+            info["netlist_binding"] = "MISMATCH"
+            findings.append(Finding(
+                severity="ERROR",
+                category="AREA_ARTEFACT_WRONG_NETLIST",
+                message=(
+                    f"{STATS_JSON_NAME} says it was measured on "
+                    f"{rec.get('netlist')!r}, which IS the netlist under "
+                    f"audit ({netlist_path}), but the contents no longer "
+                    f"agree: the record was measured on "
+                    f"{recorded_digest.strip()} and the file now hashes to "
+                    f"{actual_digest} — step 9's area claim is a previous "
+                    f"synthesis's number attached to this netlist"),
+                details=(f"recorded {recorded_digest.strip()} != actual "
+                         f"{actual_digest}"),
+            ))
+        else:
+            # DIFFERENT PATH, DIFFERENT BYTES. The artefact accounts for
+            # another netlist that lives in the same directory. Reported, not
+            # blocked — and the reason is measured, not assumed: the synthesis
+            # directory legitimately holds more than one netlist, and the two
+            # producers of this ONE declared artefact do not agree on which of
+            # them it describes. `design_one_shot_runner.step_yosys_synth`
+            # writes it for `netlist.v`; `phase3_one_shot_runner.step_synth`
+            # writes `<top>_synth.v` into the same directory and its emitter
+            # overwrites the same stats.json for THAT file, while the
+            # canonical `netlist.v` alias is only created when absent — so on
+            # a phase2-then-phase3 run the accounting is genuinely about the
+            # other netlist. Failing that would redden step 9 on every full
+            # run; passing it in silence would let a reader quote an area
+            # number for a design that is not the one being gated. Naming both
+            # files is the honest tier, and picking which synthesis step 9
+            # should account for is a flow decision this gate must not make on
+            # its own.
+            info["netlist_binding"] = "DESCRIBES_ANOTHER_NETLIST"
+            findings.append(Finding(
+                severity="WARNING",
+                category="AREA_ARTEFACT_DESCRIBES_ANOTHER_NETLIST",
+                message=(
+                    f"{STATS_JSON_NAME} accounts for "
+                    f"{rec.get('netlist')!r} ({recorded_digest.strip()}), "
+                    f"not for the netlist under audit ({netlist_path}, "
+                    f"{actual_digest}) — step 9's area claim is a real "
+                    f"measurement of a DIFFERENT file in this directory, so "
+                    f"quoting it as this netlist's area would be wrong"),
+                details=(f"recorded {recorded_digest.strip()} != actual "
+                         f"{actual_digest}"),
+            ))
+    elif area_path.is_file():
+        # `area.rpt` is the free-text alternative the step allows. It carries
+        # no machine-readable binding to any netlist, so the only thing that
+        # can be decided about it here is whether it carries a measurement at
+        # all; the missing binding is disclosed rather than assumed away.
+        info["netlist_binding"] = "UNBOUND"
+        findings.append(Finding(
+            severity="WARNING",
+            category="AREA_ARTEFACT_UNBOUND",
+            message=(f"{AREA_RPT_NAME} is a free-text report with no "
+                     f"{NETLIST_DIGEST_FIELD}, so step 9's area claim cannot "
+                     f"be tied to the netlist under audit "
+                     f"({netlist_path.name}) by this gate"),
+        ))
+        try:
+            if not area_path.read_text(errors="replace").strip():
+                findings.append(Finding(
+                    severity="ERROR",
+                    category="BAD_AREA_ARTEFACT",
+                    message=(f"{AREA_RPT_NAME} is empty — step 9's declared "
+                             f"area artefact carries no measurement"),
+                ))
+        except OSError as exc:
+            findings.append(Finding(
+                severity="ERROR",
+                category="BAD_AREA_ARTEFACT",
+                message=f"{AREA_RPT_NAME} unreadable: {exc}",
+            ))
+    return findings, info
+
+
+# ---------------------------------------------------------------------------
+# THE CELL CENSUS MUST REACH THE VERDICT (63x8 artefact finding, step 9 / dim 2)
+#
+# THE DEFECT. This program counts every cell instance in the netlist and
+# ENUMERATES them by type in `stats.cell_type_counts`. It then forms no opinion
+# about any of it. MEASURED on the published run named by the ledger entry
+# ART-NETLIST-PRIMITIVE-SWAP, substituting `$_AND_` for `$_NAND_` at all 221
+# instantiation sites — 221 gates whose output is inverted with respect to what
+# synthesis produced, a netlist that no longer implements the RTL:
+#
+#     synth_netlist_check --netlist phase2/stage2/synth/netlist.v --json ...
+#         -> rc=0   total_cells 449 before and after,
+#            and `$_AND_: 221` PRINTED IN THE GATE'S OWN REPORT
+#
+# The gate listed the substituted primitive and passed. A report that states a
+# fact and passes anyway is not a weaker check than one that does not state it;
+# it is the same check with better documentation, and it reads to a reviewer as
+# though the fact was considered.
+#
+# WHAT DECIDES IT — THE TOOL'S OWN OUTPUT. `design_one_shot_runner.
+# step_yosys_synth` writes the synthesiser's output to `netlist_yosys.v` and
+# COPIES it to the canonical `netlist.v` that every downstream gate reads. So
+# the tool's own artefact is on disk beside the one under audit, and the census
+# of the audited file is a checkable claim about it rather than a number with
+# no second opinion anywhere. A cell census that disagrees with the census of
+# the file the tool actually wrote is one of two things, and both block: the
+# audited netlist was edited after synthesis, or it is a previous pass's ghost.
+#
+# WHY THE ALIAS AND NOT THE SYNTH LOG — MEASURED, NOT PREFERRED. The obvious
+# second authority is the yosys `stat` block, and it is NOT used here, because
+# one synthesis invocation writes SEVERAL netlists and logs a stat block for
+# each. Measured on that same run, the LAST stat block in the two logs beside
+# this netlist describes two different files:
+#
+#     yosys.log  -> 449 cells  {$_DFF_P_ 65, $_NAND_ 221, $_NOR_ 128, $_NOT_ 35}
+#     synth.log  -> 287 cells  (the technology-mapped census of `spm_synth.v`)
+#
+# Only the first describes `netlist.v`. A rule of the shape "compare against the
+# last stat block in the log beside the netlist" would raise a CONTRADICTION on
+# a run where nothing whatever is wrong — a ruler change reported as a defect,
+# which is the failure this campaign is least entitled to commit. Nothing here
+# reads a log; if a log-sourced authority is ever added it needs its own way to
+# say WHICH netlist a block describes, and that is not this change.
+#
+# ABSENCE IS DISCLOSED, NEVER FAILED. A netlist with no tool-emitted sibling is
+# reported as uncorroborated with the count of sources that were found (zero),
+# and the verdict is formed exactly as before. That follows the house rule
+# `gate_zero_denominator_refuses_check` states in its own words — refusing on a
+# zero denominator is a separate, individually measured change, and a blanket
+# one was tried in this repo and reverted after it flipped 182 of 182 run dirs.
+# ---------------------------------------------------------------------------
+#: The name `design_one_shot_runner` writes the SYNTHESISER'S OWN output under,
+#: before copying it to the canonical `netlist.v`. A literal, because it is a
+#: fixed part of the flow's own artefact contract and pinned by its own test —
+#: not a chip, PDK, or process token.
+TOOL_EMITTED_NETLIST_NAME = "netlist_yosys.v"
+
+
+def tool_emitted_netlist(netlist_path: Path) -> Optional[Path]:
+    """The synthesiser's own output file beside ``netlist_path``, or ``None``.
+
+    ``None`` when it is absent, unreadable, or IS the file under audit — a gate
+    pointed straight at the tool's output has no independent second copy to
+    corroborate against, and pretending otherwise would compare a file with
+    itself and call the agreement evidence.
+    """
+    candidate = netlist_path.parent / TOOL_EMITTED_NETLIST_NAME
+    if not candidate.is_file():
+        return None
+    try:
+        if candidate.resolve() == netlist_path.resolve():
+            return None
+    except OSError:                       # pragma: no cover - defensive
+        return None
+    return candidate
+
+
+def audit_cell_census(netlist_path: Path, cell_counts: Dict[str, int],
+                      total_cells: int) -> Tuple[List[Finding], dict]:
+    """``(findings, info)`` for the census cross-check against the tool's output.
+
+    The comparison is over the CELL CENSUS, not over bytes. Two files that
+    instantiate the same cells in the same numbers are the same design however
+    they are formatted, and a byte comparison would block on a re-write that
+    changed nothing — the same wrong quantity `audit_area_stats` documents
+    rejecting for mtime and filename.
+    """
+    findings: List[Finding] = []
+    info: dict = {
+        "corroborating_sources": 0,
+        "source": None,
+        "audited_total_cells": total_cells,
+        "tool_total_cells": None,
+        "status": "",
+    }
+
+    source = tool_emitted_netlist(netlist_path)
+    if source is None:
+        info["status"] = "NO_TOOL_EMITTED_NETLIST"
+        findings.append(Finding(
+            severity="INFO",
+            category="CELL_CENSUS_UNCORROBORATED",
+            message=(
+                f"the cell census was read from the netlist under audit and "
+                f"corroborated against 0 independent source(s): no "
+                f"{TOOL_EMITTED_NETLIST_NAME} beside it. The counts below are "
+                f"this file's own word about itself."),
+            details=f"searched: {netlist_path.parent / TOOL_EMITTED_NETLIST_NAME}",
+        ))
+        return findings, info
+
+    try:
+        tool_text = source.read_text(errors="replace")
+    except OSError as exc:
+        info["status"] = "TOOL_NETLIST_UNREADABLE"
+        findings.append(Finding(
+            severity="WARNING",
+            category="CELL_CENSUS_UNCORROBORATED",
+            message=(
+                f"{source.name} is present but could not be read "
+                f"({type(exc).__name__}), so the census is uncorroborated. NOT "
+                f"read is not agreement."),
+        ))
+        return findings, info
+
+    tool_total, tool_counts = count_cell_instances(tool_text)
+    info.update({"corroborating_sources": 1, "source": str(source),
+                 "tool_total_cells": tool_total})
+
+    audited = dict(cell_counts)
+    types = sorted(set(audited) | set(tool_counts))
+    differing = {t: {"audited": audited.get(t, 0), "tool": tool_counts.get(t, 0)}
+                 for t in types if audited.get(t, 0) != tool_counts.get(t, 0)}
+    info["cell_types_differing"] = differing
+
+    if not differing and tool_total == total_cells:
+        info["status"] = "AGREE"
+        return findings, info
+
+    info["status"] = "CONTRADICTS"
+    findings.append(Finding(
+        severity="ERROR",
+        category="CELL_CENSUS_CONTRADICTS_TOOL",
+        message=(
+            f"the audited netlist instantiates a different set of cells from "
+            f"the one the synthesiser itself wrote beside it "
+            f"({source.name}): {total_cells} cell(s) here against "
+            f"{tool_total} there. A netlist that disagrees with the tool's own "
+            f"output was either edited after synthesis or is a previous pass's "
+            f"ghost, and neither is the design this step certifies."),
+        details=f"per-type disagreement (audited vs tool): {differing}",
+    ))
+    return findings, info
+
+
 def build_report(findings: List[Finding], stats: dict,
                  netlist_path: str, min_cells: int) -> dict:
     n_err = sum(1 for f in findings if f.severity == "ERROR")
@@ -417,6 +930,15 @@ def build_report(findings: List[Finding], stats: dict,
             "file_exists": stats["file_exists"],
             "total_cells": stats["total_cells"],
             "unique_cell_types": stats["unique_cell_types"],
+            # A PASS states how much it looked at. `total_cells` is the
+            # netlist's own word about itself; this is how many INDEPENDENT
+            # sources that word was checked against, so a reader can tell an
+            # uncorroborated census from a corroborated one without opening
+            # `stats`.
+            "cell_census_corroborating_sources":
+                stats.get("cell_census", {}).get("corroborating_sources", 0),
+            "cell_census_status":
+                stats.get("cell_census", {}).get("status", ""),
             "findings_count": len(findings),
             "error_count": n_err,
             # since v1.1.0 (#427): WARNING/INFO findings no longer fail the gate —
@@ -447,6 +969,26 @@ def main(argv: list = None) -> int:
     netlist_path = Path(args.netlist)
     findings, stats = audit_netlist(netlist_path, args.min_cells,
                                     [Path(p) for p in args.rtl])
+
+    # Step 9's OTHER declared artefact. Only meaningful once the netlist is
+    # readable — the area accounting is a claim ABOUT the netlist, so an
+    # absent netlist is already the finding.
+    if stats.get("file_exists"):
+        area_findings, area_info = audit_area_stats(netlist_path)
+        findings.extend(area_findings)
+        stats["area_stats"] = area_info
+
+    # The census this program already enumerated, put to the tool that produced
+    # it. Gated on `has_module` rather than `file_exists`: the earlier returns
+    # for an empty / module-less netlist leave `cell_type_counts` empty, and
+    # comparing an empty census against a real one would relabel an existing
+    # EMPTY_NETLIST error as a contradiction.
+    if stats.get("has_module"):
+        census_findings, census_info = audit_cell_census(
+            netlist_path, stats.get("cell_type_counts", {}),
+            stats.get("total_cells", 0))
+        findings.extend(census_findings)
+        stats["cell_census"] = census_info
 
     report = build_report(findings, stats, str(netlist_path), args.min_cells)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)

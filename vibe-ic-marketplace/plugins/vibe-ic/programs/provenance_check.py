@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import pathlib
 import json
 import sys
 from pathlib import Path
@@ -67,13 +68,47 @@ def _load_log(project: Path) -> List[dict]:
     return entries
 
 
+def _bare_digest(value) -> str:
+    """A digest with any `sha256:` prefix removed; "" when there is none."""
+    s = str(value or "")
+    return s[7:] if s.startswith("sha256:") else s
+
+
+def _declares(entry: dict, out_rel: str, out_sha: str | None) -> bool:
+    """Does this entry declare THIS artefact — by path, or by CONTENT?
+
+    A path-only match calls a published artefact undeclared the moment the
+    publisher moves it. MEASURED on the published corpus: three cells record
+    `phase3/stage3/pnr/<top>.gds` in provenance and ship
+    `phase3/stage4/gds/<top>.gds`, with a BYTE-IDENTICAL sha256 in both places.
+    The run declared exactly this artefact; only its address changed.
+
+    That is #448's ROUTED_AWAY distinction — "stored elsewhere" is not "never
+    produced" — applied to provenance instead of citations. The digest is the
+    stronger key anyway: a path match with a different digest would be a
+    DIFFERENT file wearing the right name, and this rejects that too.
+    """
+    outputs = entry.get("outputs", {}) or {}
+    if out_rel in outputs:
+        return True
+    # BOTH sides carry the `sha256:` prefix (`_sha256_file` emits it and the
+    # log records it), so normalise both rather than one — stripping only the
+    # recorded side compares a bare digest against a prefixed one and never
+    # matches, which is exactly the silent no-op this guards against.
+    want = _bare_digest(out_sha)
+    if not want:
+        return False
+    return any(_bare_digest(rec) == want for rec in outputs.values())
+
+
 def _find_entry(entries: List[dict], out_rel: str,
-                allowed_tools: set) -> Tuple[dict | None, List[str]]:
+                allowed_tools: set,
+                out_sha: str | None = None) -> Tuple[dict | None, List[str]]:
     """Return (matching_entry, reasons_if_none)."""
     reasons: List[str] = []
     matches = []
-    for e in entries:
-        if out_rel not in e.get("outputs", {}):
+    for i, e in enumerate(entries):
+        if not _declares(e, out_rel, out_sha):
             continue
         if e.get("exit_code", -1) != 0:
             reasons.append(f"entry {e.get('timestamp','?')} "
@@ -85,15 +120,22 @@ def _find_entry(entries: List[dict], out_rel: str,
                            f"tool '{e.get('tool')}' not in allowed "
                            f"{sorted(allowed_tools)}")
             continue
-        matches.append(e)
+        matches.append((i, e))
     if not matches:
         if not reasons:
             reasons.append(f"no entry in provenance.jsonl declares "
                            f"'{out_rel}' as an output")
         return None, reasons
-    # pick the most recent matching entry
-    matches.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
-    return matches[0], []
+    # Pick the most recent matching entry. TIES BREAK TOWARD THE LATER LOG
+    # POSITION, not the earlier one: `timestamp` is second-resolution, so a
+    # correction written in the same second as the record it supersedes ties,
+    # and a stable descending sort would then hand back the SUPERSEDED entry —
+    # the opposite of "most recent". (The failure is safe-direction — the
+    # superseded digest no longer matches the file, so the check FAILs rather
+    # than passing — but it FAILs a corrected ledger for the wrong reason.)
+    matches.sort(key=lambda ie: (ie[1].get("timestamp", ""), ie[0]),
+                 reverse=True)
+    return matches[0][1], []
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -192,16 +234,28 @@ def main(argv: List[str] | None = None) -> int:
             disk_hash = _sha256_file(abs_out)
 
             # Find a matching entry
-            entry, reasons = _find_entry(entries, out_rel, allowed)
+            entry, reasons = _find_entry(entries, out_rel, allowed, disk_hash)
             if entry is None:
                 check["reasons"].extend(reasons)
                 report["checks"].append(check)
                 overall_ok = False
                 continue
 
-            # Hash match
-            logged_hash = entry["outputs"][out_rel]
-            if logged_hash != disk_hash:
+            # Hash match. The entry may declare this artefact under the path
+            # the RUN wrote (`_declares` accepts a digest match), so resolve
+            # the recorded hash the same way rather than assuming the
+            # published path is a key — a KeyError here would turn a
+            # successful match into a crash.
+            logged_hash = entry["outputs"].get(out_rel)
+            if logged_hash is None:
+                want = _bare_digest(disk_hash)
+                logged_hash = next(
+                    (str(v) for v in entry["outputs"].values()
+                     if _bare_digest(v) == want), disk_hash)
+                check["declared_under"] = next(
+                    (k for k, v in entry["outputs"].items()
+                     if _bare_digest(v) == want), None)
+            if _bare_digest(logged_hash) != _bare_digest(disk_hash):
                 check["reasons"].append(
                     f"hash mismatch: log={logged_hash[:18]}... disk={disk_hash[:18]}..."
                     " — file modified after tool run, or log is stale"

@@ -27,6 +27,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -37,7 +40,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def _ensure_dict(d: dict, key: str) -> dict:
@@ -1010,7 +1015,7 @@ def _l9(gd: Path) -> None:
         "interface, a memory-mapped AHCI register block, a per-port DMA engine + Command "
         "List walker + Received-FIS poster + Task File shadow + interrupt aggregator, and "
         "an integrated SATA Transport / Link / PHY macro per port.")
-    d["top_module"] = "AHCI_HBA"
+    _ptm.apply(d, "AHCI_HBA")
     io = _ensure_dict(d, "integration_overview")
     io.setdefault("system_bus_options",
                   ["PCI", "PCI-X", "PCI-Express", "PCI-like (HyperTransport)"])

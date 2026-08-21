@@ -1,0 +1,48 @@
+{
+  "schema": "vibe-ic/synth-stats/1",
+  "netlist": "phase2/stage2/synth/chip_top_synth.v",
+  "netlist_sha256": "sha256:59d48a1e762533eb7f8da668d73a829febdb82b14b7c958a778d4a16092f8f38",
+  "top_module": "chip_top",
+  "chip_area": 8047.6032,
+  "chip_area_unit": "cell-library area unit (as declared by the library the synthesis script loaded)",
+  "sequential_area": 4137.952,
+  "cell_count": 262,
+  "cell_types": 12,
+  "includes_submodules": false,
+  "selection": {
+    "rule": "SINGLE_MODULE_NO_HIERARCHY",
+    "why": "no roll-up block exists because the design holds one module, so its local figure is the total",
+    "source_log": "synth.log",
+    "source_line": 726,
+    "source_text": "   Chip area for module '\\chip_top': 8047.603200",
+    "source_block": "chip_top",
+    "area_lines_in_log": 1
+  },
+  "corroboration": {
+    "r0_completeness": {
+      "what": "rows parsed out of the block against the count the block states it tabulated",
+      "stated_cells": 262,
+      "parsed_priced": 262,
+      "parsed_unpriced": 0,
+      "parsed_total": 262,
+      "status": "AGREE"
+    },
+    "r1_internal": {
+      "what": "per-cell-type area column summed against the selected figure",
+      "row_area_sum": 8049.652,
+      "selected_area": 8047.6032,
+      "delta": 2.0488,
+      "tolerance": 160.952064,
+      "status": "AGREE"
+    },
+    "r2_external": {
+      "what": "per-cell-type count column against instantiations in the netlist the same invocation wrote",
+      "netlist": "chip_top_synth.v",
+      "netlist_modules": 1,
+      "block_cell_count": 262,
+      "netlist_instantiations": 262,
+      "status": "AGREE"
+    }
+  },
+  "tool_version": "Yosys 0.68+ (git sha1 41a01aece, Release, GNU /usr/bin/c++ 13.3.0) [github.com/vibeic/yosys at HEAD]"
+}

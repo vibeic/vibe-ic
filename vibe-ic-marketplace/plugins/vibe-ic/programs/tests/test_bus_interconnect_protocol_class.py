@@ -62,7 +62,15 @@ def test_detector_general_not_brand_keyword():
     """Per memory: 'enhancements must be general, not keyword'. The
     detector's regex catalog must NOT contain brand names (AMBA, AXI,
     AHB, APB, Wishbone, TileLink, ACE, CHI). Anyone reading the source
-    must see SHAPE patterns only."""
+    must see SHAPE patterns only.
+
+    WHOLE WORDS, not substrings. The bare-substring form of this check
+    fired on the word "chip" (`CHI` inside `chip`) the first time ordinary
+    prose was added to this block — and it would equally have fired on
+    "interface", "replace" or "trace" for `ACE`. A brand name appears in a
+    regex catalog as a token, so a token is what is searched for; matching
+    inside longer words made the check reject the one vocabulary a chip
+    classifier cannot avoid."""
     mod = _load()
     src = (PROGRAMS / "ic_class_profile.py").read_text()
     forbidden = ["AMBA", "AXI", "AHB", "APB", "ACE",
@@ -71,7 +79,7 @@ def test_detector_general_not_brand_keyword():
     detector_block_end = src.find("def _looks_like_bus_interconnect_protocol")
     block = src[detector_block_start:detector_block_end]
     for brand in forbidden:
-        assert brand.lower() not in block.lower(), (
+        assert not re.search(rf"\b{re.escape(brand)}\b", block, re.I), (
             f"bench-keyword {brand!r} found in detector regex block; "
             f"per memory enhancements must be general, not keyword.")
 

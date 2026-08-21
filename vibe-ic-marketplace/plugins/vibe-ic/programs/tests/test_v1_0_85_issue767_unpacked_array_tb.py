@@ -199,7 +199,7 @@ def test_scalar_port_is_array_false():
 
 def _run_lcc(args):
     cp = subprocess.run([sys.executable, str(_PROG), *args],
-                        capture_output=True, text=True, timeout=180)
+                        capture_output=True, text=True, timeout=60)
     return cp.returncode, cp.stdout + cp.stderr
 
 

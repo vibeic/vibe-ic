@@ -10,9 +10,12 @@ candidate (vector-self-shift-fold) was NOT promoted: passing solutions
 legitimately use the idiom it flags.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
@@ -20,6 +23,21 @@ from _specrtl_common import Port, extract_spec_contract, parse_rtl_ports, strip_
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
+
+#: Same shape, same reason, same wording as the already-gated sibling
+#: `test_v0_2_50_msbfirst_direction_rule`: the tests below RUN `gates_atomic.py`
+#: and then read the `gates.json` it writes. Without iverilog the harness dies at
+#: `run(["iverilog", ...])` and writes no report, so the read fails with
+#: `FileNotFoundError` on `.../gates.json` — a failure whose text names an absent
+#: ARTEFACT and never the absent TOOL, so a reader triaging it reasonably
+#: concludes a producer defect (vibe-ic#1357). The rule-function tests in the
+#: first half of this file are pure and need no toolchain, so this is applied per
+#: test and never as `pytestmark`.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="runs gates_atomic.py and reads the gates.json it writes; without "
+           "iverilog the harness cannot run and writes nothing")
 
 
 # ── onebased-port-range tightenings ──────────────────────────────────────
@@ -142,9 +160,10 @@ def _run_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbT",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
+@_needs_gate
 def test_gate_blocks_mealy_under_moore_spec(tmp_path):
     ds, run = _stage(tmp_path,
         "module TopModule(input clk, input in, output out);\n"
@@ -162,6 +181,7 @@ def test_gate_blocks_mealy_under_moore_spec(tmp_path):
     assert not (run / "samples" / "ProbT_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_after_fix(tmp_path):
     ds, run = _stage(tmp_path,
         "module TopModule(input clk, input in, output out);\n"
@@ -183,10 +203,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import rtl_hygiene_lint as rhl  # noqa: E402
 
 
-def test_fold_or_form_is_error_and_form_is_warn():
+def test_fold_or_form_is_error_xor_and_form_are_warn():
+    # ORGANIC-20260723: `^` demoted ERROR->WARN. `x^(x<<1)` is the standard
+    # edge/transition/first-difference idiom (leading-one detect, contiguous-ones
+    # $countones()<=2, delta encode) — the boundary bit through x[0] is correct-
+    # by-construction, not a leak. Only `|` (OR-form, VerilogEval-v2 Prob092 +
+    # two clean-room campaigns) is a real-bug signal and stays ERROR.
     mk = lambda op: (f"module t(input [3:0] vec, output [3:0] y);\n"  # noqa: E731
                      f"  assign y = vec {op} {{1'b0, vec[3:1]}};\nendmodule\n")
-    for op, sev in (("|", "ERROR"), ("^", "ERROR"), ("&", "WARN")):
+    for op, sev in (("|", "ERROR"), ("^", "WARN"), ("&", "WARN")):
         fs = rhl.rule_vector_self_shift_fold(mk(op), "t.sv")
         assert [f.severity for f in fs] == [sev], (op, fs)
         assert fs[0].rule == "vector-self-shift-fold"
@@ -223,9 +248,10 @@ def _run_fold_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbF",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
+@_needs_gate
 def test_gate_blocks_or_fold_when_prompt_requires_zero_boundary(tmp_path):
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL)
     r = _run_fold_gate(ds, run)
@@ -236,6 +262,7 @@ def test_gate_blocks_or_fold_when_prompt_requires_zero_boundary(tmp_path):
     assert not (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_advisory_not_block_when_boundary_dontcare(tmp_path):
     # OR 形 fire，但 prompt 宣告邊界 don't-care → advisory、照常 emit
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_DONTCARE, _FOLD_BUG_RTL)
@@ -248,6 +275,7 @@ def test_gate_advisory_not_block_when_boundary_dontcare(tmp_path):
     assert (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_correct_fold_fix(tmp_path):
     # 正確寫法（兩運算元皆移位、邊界顯式擺 0）→ 不 fire、emit
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_GOOD_RTL)
@@ -264,10 +292,11 @@ _FOLD_BUG_RTL_MIRRORED = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
 
 
 def test_fold_mirrored_operand_order_same_severities():
-    # OR/XOR 可交換：鏡像寫法（concat 在左、整向量在右）同樣分級
+    # 鏡像寫法（concat 在左、整向量在右）同樣分級：| 仍 ERROR、^ 與 & 皆 WARN
+    # （ORGANIC-20260723：^ 為 edge/transition idiom，boundary 正確、非 bug）。
     mk = lambda op: (f"module t(input [3:0] vec, output [3:0] y);\n"  # noqa: E731
                      f"  assign y = {{1'b0, vec[3:1]}} {op} vec;\nendmodule\n")
-    for op, sev in (("|", "ERROR"), ("^", "ERROR"), ("&", "WARN")):
+    for op, sev in (("|", "ERROR"), ("^", "WARN"), ("&", "WARN")):
         fs = rhl.rule_vector_self_shift_fold(mk(op), "t.sv")
         assert [f.severity for f in fs] == [sev], (op, fs)
 
@@ -279,6 +308,7 @@ def test_fold_mirrored_sliced_ident_not_matched():
     assert rhl.rule_vector_self_shift_fold(src, "t.sv") == []
 
 
+@_needs_gate
 def test_gate_blocks_mirrored_or_fold_when_required_zero(tmp_path):
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL_MIRRORED)
     r = _run_fold_gate(ds, run)
@@ -289,6 +319,7 @@ def test_gate_blocks_mirrored_or_fold_when_required_zero(tmp_path):
     assert not (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_mirrored_and_fold(tmp_path):
     # 鏡像 AND 形 = 合法遮蔽 idiom → WARN-only、照常 emit
     rtl = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
@@ -299,3 +330,53 @@ def test_gate_emits_mirrored_and_fold(tmp_path):
     gates = json.loads((run / "work" / "ProbF" / "gates.json").read_text())
     assert "structural_emit_block" not in gates["steps"]
     assert (run / "samples" / "ProbF_sample01.sv").exists()
+
+
+# ── ORGANIC-20260723-boundary-fold-xor-is-edge-idiom ─────────────────────────
+# REPRODUCE: three silicon-proven OpenTitan XOR-fold idioms false-blocked the
+# REUSED-IP AES flow (opentitan_aes × sky130A) as ERROR. They must be WARN.
+
+def test_fold_xor_leading_one_detector_is_warn_not_error():
+    # OpenTitan prim_leading_one_ppc.sv: isolate the single edge of a prefix-OR
+    # thermometer vector. `ppc ^ {ppc[N-2:0],1'b0}` = ppc ^ (ppc<<1). Correct.
+    src = ("module prim_leading_one_ppc #(parameter N=8)\n"
+           "  (input [N-1:0] ppc_out, output [N-1:0] leading_one_o);\n"
+           "  assign leading_one_o = ppc_out ^ {ppc_out[N-2:0], 1'b0};\n"
+           "endmodule\n")
+    fs = rhl.rule_vector_self_shift_fold(src, "prim_leading_one_ppc.sv")
+    assert len(fs) == 1 and fs[0].rule == "vector-self-shift-fold"
+    assert fs[0].severity == "WARN", fs
+
+
+def test_fold_xor_contiguous_ones_assertion_is_warn_not_error():
+    # OpenTitan prim_packer.sv / tlul_assert.sv contiguous-ones check:
+    # $countones(mask ^ {mask[W-2:0],1'b0}) <= 2 counts the <=2 run boundaries.
+    src = ("module t(input [7:0] mask_i);\n"
+           "  wire ok = ($countones(mask_i ^ {mask_i[6:0],1'b0}) <= 2);\n"
+           "endmodule\n")
+    fs = rhl.rule_vector_self_shift_fold(src, "prim_packer.sv")
+    assert len(fs) == 1 and fs[0].severity == "WARN", fs
+
+
+@_needs_gate
+def test_gate_emits_xor_leading_one_detector(tmp_path):
+    # End-to-end: the XOR edge idiom must NOT block the structural-emit gate.
+    rtl = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
+           "  assign y = vec ^ {vec[2:0], 1'b0};\nendmodule\n")
+    ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, rtl)
+    r = _run_fold_gate(ds, run)
+    assert r.returncode == 0, r.stdout + r.stderr
+    gates = json.loads((run / "work" / "ProbF" / "gates.json").read_text())
+    assert "structural_emit_block" not in gates["steps"]
+    assert (run / "samples" / "ProbF_sample01.sv").exists()
+
+
+@_needs_gate
+def test_gate_still_blocks_or_fold_negative_control(tmp_path):
+    # NEGATIVE CONTROL: the OR-form real bug (Prob092) MUST still block ERROR.
+    ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL)
+    r = _run_fold_gate(ds, run)
+    assert r.returncode == 1, r.stdout + r.stderr
+    gates = json.loads((run / "work" / "ProbF" / "gates.json").read_text())
+    blk = gates["steps"]["structural_emit_block"]
+    assert any(f["rule"] == "vector-self-shift-fold" for f in blk["findings"])

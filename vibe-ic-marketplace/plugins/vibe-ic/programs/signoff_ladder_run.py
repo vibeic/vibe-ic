@@ -26,14 +26,42 @@ Modes:
   triage  (default) — the diagnostic ladder. The LVS-net tier can still
                       SHOW a POWER_PIN_ONLY / open-source waiver (it is a
                       reasoned triage waiver). Nothing here claims a
-                      tapeout.
+                      tapeout — and so `released` is ALWAYS False in this
+                      mode, whatever the overall verdict reads.
   tapeout           — the RELEASE ladder. POWER_PIN_ONLY no longer
                       releases; STA-rigor / MBIST / (Caravel) precheck +
-                      XOR gates are added. Only this mode tightens.
+                      XOR gates are added. Only this mode tightens, and
+                      only this mode can set `released`.
 
 §4.05 (LOAD-BEARING): a design whose real gate FAILs makes the ladder NOT
 release; a POWER_PIN_ONLY LVS does NOT count as a tapeout pass; a missing
 artifact is an honest SKIP/NOT_RUN, never a silent pass.
+
+The §4.05 "never a silent pass" rule binds the AGGREGATE, not just the tier
+label. Labelling a tier NOT_RUN and then aggregating it to a releasing verdict
+IS the silent pass the rule forbids — the release decision, not the row in the
+table, is what a reader acts on. So:
+
+  * ABSENT evidence never releases. A release-gating tier that produced no
+    artifact aggregates to `NOT_RELEASED_EVIDENCE_ABSENT`, alongside the
+    already-non-releasing `WAIVED_PENDING` / `INCOMPLETE`. The reasoning the
+    module already wrote for INCOMPLETE ("incomplete evidence: NON-releasing")
+    applies more strongly to evidence that does not exist at all.
+  * A REVIEWED WAIVER still releases, and stays distinguishable. `WAIVED` is a
+    decision a human made and documented (an allow-listed blackbox-macro XOR
+    residual, a reasoned triage LVS waiver, a reviewed ENV_UNAVAILABLE tier
+    deferral read from the project's `waivers.json`); `NOT_RUN` is nobody
+    deciding anything. They aggregate to different verdicts — collapsing them
+    is what let an all-NOT_RUN design read as PASS_WITH_WAIVERS.
+  * A tier that legitimately CANNOT run has a reviewed way out, and only that.
+    See `apply_tier_waivers` — the ladder's ingestion of the project's reviewed
+    waivers, built on the ONE shared reader (`_waiver_entries`, #519) and
+    modelled on `flow_compliance_check._synthesise_fpga_skip_waivers`:
+    disclosure buys deferral, silence buys failure, and a waiver naming a tier
+    that RAN is refused out loud so it can never overwrite a real result.
+  * `released` respects the MODE. `triage` is the diagnostic ladder and its own
+    docstring says "Nothing here claims a tapeout", so triage NEVER sets
+    `released`; only the `tapeout` release ladder can.
 
 Each tier is a deterministic check; the runner does not invoke EDA tools
 itself (that is mcp-eda's job) — it consumes per-tier check artifacts (or
@@ -55,13 +83,47 @@ _PROGRAMS = Path(__file__).resolve().parent
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
+import _evidence_independence as _ev_ind  # noqa: E402  (path bootstrap above)
+import _signoff_drc_format as _sdf  # noqa: E402  (ONE producer/dialect answer)
+import _waiver_entries as _we  # noqa: E402  (#519's ONE waiver reader)
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+
 
 # ---------------------------------------------------------------------------
 # Verdict vocabulary
 # ---------------------------------------------------------------------------
 # A ladder overall_verdict is "releasing" iff it is one of these. Everything
-# else (FAIL / WARN / NOT_RELEASED) blocks a tapeout release.
+# else (FAIL / WARN / NOT_RELEASED / NOT_RELEASED_EVIDENCE_ABSENT) blocks a
+# tapeout release.
 RELEASING_VERDICTS = ("PASS", "PASS_WITH_WAIVERS")
+
+# The overall verdict for "nothing was checked": at least one RELEASE-GATING
+# tier produced no evidence at all. NON-releasing, for the reason the module
+# already recorded for INCOMPLETE — evidence that does not exist cannot be a
+# pass. Named with the `NOT_RELEASED` prefix so a consumer that only
+# pattern-matches the blocking family still classifies it as blocking, and it
+# carries no PASS/FAIL substring a text scanner could misread.
+NOT_RELEASED_EVIDENCE_ABSENT = "NOT_RELEASED_EVIDENCE_ABSENT"
+
+# The overall verdict for "every gate was deferred, none was executed": the
+# ladder carries at least one reviewed waiver and NOT ONE release-gating tier
+# reached a PASS. NON-releasing.
+#
+# #520 established that absence does not release. A reviewed waiver is not
+# absence — somebody decided and owns it — and one, or several, correctly
+# release a design whose other gates really ran. But a ladder where EVERY gate
+# was deferred has run no sign-off at all, and a stack of paperwork over an
+# empty ladder is the same claim #520 refused, re-entered through the front
+# door. The line is not arbitrary: it is the difference between a sign-off with
+# documented gaps and no sign-off. Same `NOT_RELEASED` prefix so a consumer
+# matching the blocking family still classifies it correctly.
+NOT_RELEASED_ALL_WAIVED = "NOT_RELEASED_ALL_WAIVED"
+
+# Per-tier verdicts that block a release wherever they appear, gating or not.
+# (`NOT_RUN` blocks too, but only from a release-GATING tier — see
+# `TierResult.release_gating`.) Deliberately conservative: a non-gating tier can
+# still block, it can just never be the SOLE reason a release is withheld.
+BLOCKING_TIER_VERDICTS = ("FAIL", "WAIVED_PENDING", "INCOMPLETE", "WARN")
 
 # TAPEOUT-tier gate defaults (this session's sign-off gates). Each is a
 # permissive, DISCLOSED generic default — never a foundry number — so a gate
@@ -83,6 +145,14 @@ class TierResult:
     details: Dict[str, Any] = field(default_factory=dict)
     artifact_path: Optional[str] = None
     notes: str = ""
+    # True  → a real sign-off gate: its ABSENCE (NOT_RUN) withholds the release,
+    #         because a tapeout cannot be signed off on a check nobody ran.
+    # False → an advisory/diagnostic row that is not part of the sign-off
+    #         evidence set, so its absence alone never withholds a release. This
+    #         is the ONLY way a NOT_RUN can be non-blocking, it is set in code
+    #         (never from a design artifact, so no project can opt its own gates
+    #         out), and a FAIL/WARN on such a tier still blocks.
+    release_gating: bool = True
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -173,6 +243,15 @@ def _parse_drc_violations(art: Path) -> Tuple[Optional[int], str]:
     # <category> rule descriptions. An empty <items></items> = 0 = clean.
     if "<report-database" in text or "<items>" in text or "</item>" in text:
         return len(re.findall(r"<item>", text)), "klayout_items"
+    # (2b) SVRF-native sign-off — a per-rule FAIL/PASS tally and NO summary
+    # line. MEASURED before this branch existed: a clean 4533-PASS foundry-deck
+    # sign-off returned (None, "no count pattern"), i.e. the HIGHEST-authority
+    # producer was the one this release-gating tier could not judge, while the
+    # router's projection below was judged PASS. Same grammar as
+    # `signoff_audit` and `eda_report_audit`, imported rather than re-authored.
+    _svrf = _sdf.svrf_fail_count(text)
+    if _svrf is not None:
+        return _svrf, "svrf_rule_fails"
     # (3) plain-text report — explicit count patterns; else "DRC clean: YES".
     for rx in _DRC_COUNT_RES:
         hits = rx.findall(text)
@@ -210,6 +289,46 @@ def check_tier_1_drc(project_dir: Path) -> TierResult:
                             notes="no DRC sign-off report "
                                   "(reports/phase3/drc_signoff.rpt) — "
                                   "§4.05: absent → SKIP")
+    # THE TIER IS NAMED FOR ITS PRODUCER AND MUST CHECK IT. MEASURED on
+    # origin/main, handed a project whose `reports/phase3/drc_signoff.rpt` is
+    # the router's own detailed-route projection::
+    #
+    #   check_tier_1_drc(proj) -> TierResult(tier_id='T1',
+    #       name='Full DRC (KLayout/Magic)', verdict='PASS',
+    #       details={'violations': 0, 'count_source': 'text_count'},
+    #       release_gating=True)
+    #
+    # A release-gating tier literally named for KLayout/Magic issuing PASS from
+    # an OpenROAD router log. The router's DRC is a routability measurement over
+    # its own database, not a rule deck applied to a layout.
+    #
+    # THE RULE IS MONOTONE: router evidence can WITHHOLD credit, never grant it,
+    # and it can never REMOVE a failure. A router-level violation is a real
+    # defect and keeps its FAIL (FAIL is not waivable; downgrading it to NOT_RUN
+    # would have made it deferrable through waivers.json — a weakening). Only
+    # the router's CLEAN — the verdict it is not competent to give — becomes
+    # NOT_RUN, which is the state the governed waiver channel exists for.
+    _prod = _sdf.classify_file(art)
+    if _prod.kind == _sdf.OPENROAD:
+        _n, _src = _parse_drc_violations(art)
+        if _n is None or _n == 0:
+            return TierResult(
+                "T1", "Full DRC (KLayout/Magic)", "NOT_RUN",
+                details={"producer": _prod.kind, "evidence": _prod.evidence,
+                         "router_violations": _n},
+                artifact_path=str(art),
+                notes="the sign-off DRC artifact is the ROUTER's own "
+                      "detailed-route DRC projection, not a KLayout/Magic/SVRF "
+                      "sign-off deck run — this tier did not run. §4.05: a "
+                      "producer that cannot answer the question is a SKIP, "
+                      "never a pass.")
+        return TierResult(
+            "T1", "Full DRC (KLayout/Magic)", "FAIL",
+            details={"violations": _n, "count_source": _src,
+                     "producer": _prod.kind},
+            artifact_path=str(art),
+            notes="ROUTER-level DRC violations. The sign-off deck did not run, "
+                  "so this count is a floor, not the sign-off verdict.")
     n, src = _parse_drc_violations(art)
     if n is None:
         return TierResult(
@@ -224,13 +343,21 @@ def check_tier_1_drc(project_dir: Path) -> TierResult:
 
 
 def check_tier_1_5_drc_heatmap(project_dir: Path) -> TierResult:
-    """Tier 1.5 — diagnostic only, report presence."""
+    """Tier 1.5 — diagnostic only, report presence.
+
+    NOT a sign-off gate: the heatmap is a where-are-the-violations visual aid
+    over the SAME data tier T1 already signs off, so its absence is a missing
+    convenience, not missing sign-off evidence. Hence `release_gating=False` —
+    a design does not lose its release because nobody drew the picture. T1, the
+    tier that actually judges the DRC result, remains fully gating.
+    """
     art = project_dir / "reports" / "drc" / "geographic_heatmap.json"
     if not art.exists():
         return TierResult("T1.5", "DRC heatmap", "NOT_RUN",
-                            notes="diagnostic only")
+                            notes="diagnostic only (not a release gate)",
+                            release_gating=False)
     return TierResult("T1.5", "DRC heatmap", "PASS",
-                        artifact_path=str(art))
+                        artifact_path=str(art), release_gating=False)
 
 
 _SPECIALNETS_HDR_RE = re.compile(r"^\s*SPECIALNETS\s+(\d+)\s*;", re.M)
@@ -1009,16 +1136,53 @@ def _find_metal_density_report(project_dir: Path) -> Optional[Path]:
     return None
 
 
+def _resolve_metal_density_pdk(report: Optional[Path],
+                               pdk: Optional[str]) -> Optional[str]:
+    """Which PDK's density rules should judge this measurement.
+
+    Order: the caller's explicit answer, then the REPORT'S OWN declaration, then
+    the environment. The report is preferred over the environment because it
+    records the PDK the measurement was actually taken under, whereas the
+    environment records whatever this shell happens to be pointed at — reading a
+    stored report from a differently-configured shell must not silently rejudge
+    it against another foundry's numbers.
+
+    None is a real answer and the honest one for a report that predates the
+    declaration and is read outside its run: no foundry window is supplied and
+    the DISCLOSED generic default stands, exactly as before."""
+    if pdk:
+        return pdk
+    if report is not None and report.is_file():
+        try:
+            doc = json.loads(report.read_text(errors="replace"))
+        except (OSError, ValueError):
+            doc = None
+        if isinstance(doc, dict):
+            declared = doc.get("pdk")
+            if isinstance(declared, str) and declared.strip():
+                return declared.strip()
+    for var in ("PDK_VARIANT", "PDK"):
+        v = os.environ.get(var)
+        if v and v.strip():
+            return v.strip()
+    return None
+
+
 def check_tier_metal_density(project_dir: Path,
                              default_min: float = _METAL_DENSITY_MIN,
-                             default_max: float = _METAL_DENSITY_MAX
+                             default_max: float = _METAL_DENSITY_MAX,
+                             pdk: Optional[str] = None
                              ) -> TierResult:
-    """Per-layer metal density (foundry CMP / Efabless met_min_ca_density).
+    """Per-layer metal density (foundry CMP / min-clear-area pattern density).
 
-    Delegates to `metal_layer_density_check.check`. When the report ships its
-    own per-layer windows those win; else the DISCLOSED generic default window
-    [_METAL_DENSITY_MIN.._METAL_DENSITY_MAX] is applied so a real per-layer
-    density can still be judged (the report carries the generic-default note):
+    Delegates to `metal_layer_density_check.check`, supplying THAT PDK'S OWN
+    stated per-layer windows. Before this was wired the call passed `{}` and so
+    every run on every process was judged by the gate's generic default, which
+    is wider on both sides than at least one open PDK's own sign-off script —
+    a design its foundry would reject could clear our gate. Precedence per
+    layer: a window the report itself ships > the PDK's stated window > the
+    DISCLOSED generic default, resolved BOUND BY BOUND so a foundry minimum
+    beside a generic ceiling is reported as exactly that.
       PASS     -> PASS
       FAIL     -> FAIL     (a layer outside its window, or a report with no
                   per-layer metal-density data)
@@ -1031,7 +1195,12 @@ def check_tier_metal_density(project_dir: Path,
             "T_METAL_DENSITY", "Per-layer metal density (CMP)", "NOT_RUN",
             notes="no per-layer metal-density report — §4.05: absent → SKIP, "
                   "never the row-util density.json")
-    res = mld.check(rpt, {}, default_min, default_max)
+    resolved = _resolve_metal_density_pdk(rpt, pdk)
+    windows: Dict[str, "mld.Window"] = {}
+    provenance: Optional[Dict[str, object]] = None
+    if resolved:
+        windows, provenance = mld.pdk_windows_for(resolved)
+    res = mld.check(rpt, windows, default_min, default_max, provenance)
     v = res.get("verdict")
     ladder = {"PASS": "PASS", "FAIL": "FAIL",
               "IO_ERROR": "NOT_RUN"}.get(v, "FAIL")
@@ -1040,9 +1209,34 @@ def check_tier_metal_density(project_dir: Path,
         notes = "; ".join(res.get("failures", [])) or res.get("detail", "")
         if not notes and res.get("unchecked_layers"):
             notes = f"unchecked layers (no window): {res['unchecked_layers']}"
+    # Say WHOSE numbers produced this verdict, on a PASS as much as on a FAIL —
+    # "density within window" means something different when the window is the
+    # foundry's than when it is our generic stand-in, and a reader who cannot
+    # tell them apart cannot weigh the tier.
+    attribution = _metal_density_attribution(resolved, provenance)
+    notes = f"{notes}; {attribution}" if notes else attribution
     return TierResult(
         "T_METAL_DENSITY", "Per-layer metal density (CMP)", ladder,
         details=res, artifact_path=str(rpt), notes=notes)
+
+
+def _metal_density_attribution(resolved: Optional[str],
+                               provenance: Optional[Dict[str, object]]) -> str:
+    """One line naming which windows judged the run — never left implicit."""
+    if not resolved:
+        return ("windows: DISCLOSED generic default (the run declares no PDK "
+                "and none was given, so no foundry window could be looked up)")
+    status = (provenance or {}).get("status")
+    if status == "stated":
+        unstated = (provenance or {}).get("bounds_unstated") or []
+        tail = (f"; that PDK states no bound for {', '.join(unstated)}, where "
+                f"the generic default stands") if unstated else ""
+        return f"windows: {resolved}'s own stated per-layer rules{tail}"
+    if status == "states-none":
+        return (f"windows: DISCLOSED generic default — {resolved} was read and "
+                f"states no per-layer density rule")
+    return (f"windows: DISCLOSED generic default — no stated density rules on "
+            f"record for {resolved}")
 
 
 def check_tier_aging_sta(project_dir: Path,
@@ -1206,6 +1400,323 @@ def _is_caravel_project(project_dir: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Reviewed tier waivers — "this tier cannot run here, it was reviewed, why"
+# ---------------------------------------------------------------------------
+# #520 made ABSENT evidence non-releasing, which is right: a check nobody ran is
+# not a pass. It also made an existing gap load-bearing. Before this module, the
+# ladder had exactly two sources of `WAIVED` — the XOR allow-list and a
+# report-declared triage LVS waiver — and both are decided INSIDE a tier. There
+# was no way for a reviewer to say "this tier cannot run in this environment,
+# here is the review". `T_AGING_STA` is the plain case: its own note reads "the
+# open PDK ships no foundry aging Liberty", a real environmental capability gap,
+# and so that tier was permanently non-releasing for every project.
+#
+# THE PRECEDENT THIS FOLLOWS. `flow_compliance_check` already has this exact
+# shape for the FPGA board steps and the analog PDK substitution: a DISCLOSED,
+# reviewed ENV_UNAVAILABLE attestation converts a natural MISSING into
+# WAIVED-DEFERRED, while an UNDISCLOSED missing artefact still hard-FAILs.
+# Disclosure buys deferral; silence buys failure. The asymmetry is the whole
+# design and it is reproduced here.
+#
+# ONE READER, NOT AN EIGHTH. The entries are read through `_waiver_entries`
+# (#519), which owns "where a project's waiver entries live" — the union of the
+# `waived_steps` and `waivers` keys, in one documented order. This module adds
+# no second notion of that. What it does add is its own MATCHING and
+# ELIGIBILITY rules, which `_waiver_entries` explicitly leaves to each consumer:
+# reading a list and granting a permission are different jobs.
+#
+# WHY A LADDER WAIVER MUST NAME A LADDER TIER. A waiver in this file names a
+# FLOW STEP ("drc", id 31, id 39). Those were reviewed against a different
+# question — "did this flow step run" — and the corpus shows the difference is
+# not academic: tracked entries include a `step: "drc"` waiver whose rationale
+# is about accepting thousands of stdcell-library-internal DRC violations. That
+# is a reviewed judgement about a RESULT, not a statement that a sign-off tier
+# could not run, and silently spending it on a tapeout release tier would be a
+# reviewer's decision applied to a question they were never asked. So a ladder
+# waiver is addressed to the ladder, by TIER ID, and a flow-step waiver that
+# does not name a tier is left alone for its own consumers — neither honoured
+# nor reported here, because complaining about it would be a category error.
+#
+# WHAT IT CANNOT BECOME. `TierResult.release_gating` is set in code and never
+# read from a design artefact, precisely so no project can opt its own gates
+# out. This path must not become that back door, so:
+#   * every review marker the waiver schema defines is REQUIRED — `ticket`,
+#     `review_required: true`, a non-empty `evidence` list, and a substantive
+#     `rationale` — the same quartet `flow_compliance_check` requires, and a
+#     missing one refuses the waiver out loud;
+#   * `verdict_tier` must be ENV_UNAVAILABLE. For a tier that produced NO
+#     evidence, the only reviewable ground for releasing is that the evidence
+#     COULD NOT be produced here. A result waiver relabelled at a tier with no
+#     result is not that;
+#   * ONLY a NOT_RUN tier can be waived. A tier that RAN keeps its own verdict
+#     and the waiver is refused and named. This is also the staleness guard
+#     `flow_compliance_check._refuse_stale_waivers` applies to the same shape:
+#     positive execution evidence refuses a waiver, so a file that outlives the
+#     condition it was written under can never excuse a real FAIL;
+#   * an ADVISORY tier (`release_gating=False`) is refused too — its absence
+#     never withheld a release, so waiving it buys nothing and would only
+#     demote an otherwise-clean PASS to PASS_WITH_WAIVERS;
+#   * nothing in the entry can set `release_gating`. The field is never read
+#     from the document.
+#
+# EVIDENCE IS CLASSIFIED, NEVER DEMANDED. #524 established that an
+# ENV_UNAVAILABLE attestation is UNCORROBORATED BY CONSTRUCTION: its claim is
+# that a tool was absent, and no independent artefact can corroborate a
+# non-execution. `_evidence_independence` classifies what the list actually
+# holds and the result is DISCLOSED; requiring corroboration here would make an
+# honest, correctly disclosed capability gap impossible to honour, i.e. would
+# break "disclosure buys deferral" for the exact population the tier serves.
+#
+# chip-AGNOSTIC: every test is structural — key presence, a token compared to a
+# ladder tier id, a string length, a verdict. No vendor, no SKU, no design name.
+# ---------------------------------------------------------------------------
+
+#: Every tier id the ladder can emit, across BOTH modes and with the shuttle
+#: tiers on. Needed so a waiver naming a real tier that THIS mode does not run
+#: ("T_AGING_STA" on a triage run) is told that, rather than being reported as
+#: an unknown tier — two different mistakes with two different fixes.
+#: `test_ladder_tier_ids_cover_every_tier_the_ladder_emits` re-derives this by
+#: RUNNING both modes, so a new tier cannot drift away from the list.
+LADDER_TIER_IDS: Tuple[str, ...] = (
+    "T1", "T1.5", "T2_PDN", "T2_IR", "T2_EM", "T3_ANTENNA", "T3_ESD",
+    "T4_LVS_DEV", "T4.5_LVS_NET", "T4.5_LVS_TAPEOUT", "T5_LATCHUP",
+    "T_STA_RIGOR", "T_MBIST", "T_DYN_IR", "T_METAL_DENSITY", "T_AGING_STA",
+    "T_THERMAL", "T_DFT_SIGNOFF", "T_LEC_POST", "T_MPW_PRECHECK", "T_XOR",
+)
+
+#: The ONLY `verdict_tier` a ladder-tier waiver may carry. A tier with no
+#: evidence can be deferred because the evidence could not be produced here;
+#: it cannot be "waived" on a judgement about a result that does not exist.
+TIER_WAIVER_VERDICT_TIER = "ENV_UNAVAILABLE"
+
+#: Minimum `rationale` length, matching `flow_compliance_check`'s ENV_UNAVAILABLE
+#: bar. Short enough that a real sentence clears it, long enough that a token
+#: ("n/a", "later") does not.
+TIER_WAIVER_MIN_RATIONALE_CHARS = 40
+
+#: Entry keys that may carry the tier a waiver is addressed to, in precedence
+#: order. `tier` is the ladder-scoped spelling and is ALWAYS treated as
+#: addressed to the ladder (so a typo is reported, not silently dropped);
+#: `step`/`id` are the two existing dialects' identity keys and are treated as
+#: addressed to the ladder only when they literally name a ladder tier.
+TIER_WAIVER_ID_KEYS: Tuple[str, ...] = ("tier", "step", "id")
+
+
+def _tier_token(value: Any) -> str:
+    """A tier identifier normalised for comparison. Empty for anything that is
+    not a scalar identifier (a dict, a list, None)."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return ""
+    return str(value).strip().upper()
+
+
+def _addressed_tier(entry: Dict[str, Any]) -> Tuple[Optional[str], bool]:
+    """`(token, explicit)` for the tier an entry is addressed to.
+
+    `explicit` is True when the entry used the ladder-scoped `tier` key, which
+    means the entry is talking to THIS ladder even if the token is wrong — so a
+    misspelt tier is reported rather than silently ignored. `(None, False)`
+    means the entry is not addressed to the ladder at all (a flow-step waiver),
+    which is a different consumer's business and is left alone."""
+    if "tier" in entry:
+        return _tier_token(entry.get("tier")), True
+    for key in TIER_WAIVER_ID_KEYS[1:]:
+        if key in entry:
+            token = _tier_token(entry.get(key))
+            if token:
+                return token, False
+    return None, False
+
+
+def _tier_waiver_rationale(entry: Dict[str, Any]) -> str:
+    """The entry's rationale text. `rationale` and `reason` are used
+    interchangeably by waiver authors and every consumer that read only one of
+    them displayed a valid entry as "(no reason)" — normalise once, here."""
+    for key in ("rationale", "reason"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def tier_waiver_review_defects(entry: Dict[str, Any]) -> List[str]:
+    """Everything this entry is missing before it may defer a ladder tier.
+
+    Empty list = reviewable. Each item is phrased as the thing that is ABSENT,
+    so the disclosure reads as an instruction rather than a verdict."""
+    missing: List[str] = []
+    declared = str(entry.get("verdict_tier") or "").strip().upper()
+    if declared != TIER_WAIVER_VERDICT_TIER:
+        missing.append(
+            f"`verdict_tier: \"{TIER_WAIVER_VERDICT_TIER}\"` (found "
+            f"{entry.get('verdict_tier')!r}) — the only reviewable ground for "
+            f"releasing on a tier that produced NO evidence is that the "
+            f"evidence could not be produced in this environment")
+    ticket = entry.get("ticket")
+    if not (isinstance(ticket, str) and ticket.strip()):
+        missing.append("a non-empty `ticket`")
+    if entry.get("review_required") is not True:
+        missing.append("`review_required: true`")
+    evidence = entry.get("evidence")
+    if not (isinstance(evidence, list) and evidence):
+        missing.append("a non-empty `evidence` list")
+    if len(_tier_waiver_rationale(entry)) < TIER_WAIVER_MIN_RATIONALE_CHARS:
+        missing.append(
+            f"a `rationale` (or `reason`) of at least "
+            f"{TIER_WAIVER_MIN_RATIONALE_CHARS} characters naming the missing "
+            f"capability, why it cannot be produced here, and what would close "
+            f"the deferral")
+    return missing
+
+
+def load_tier_waiver_entries(project_dir: Path) -> List[Dict[str, Any]]:
+    """Every dict-shaped waiver entry for the project, via the ONE shared
+    reader. No second notion of where waivers live is created here."""
+    return _we.dict_entries(_we.read_document(Path(project_dir)))
+
+
+def apply_tier_waivers(project_dir: Path,
+                       tiers: List[TierResult],
+                       mode: Optional[str] = None) -> List[str]:
+    """Honour the project's REVIEWED ladder-tier waivers, mutating `tiers`.
+
+    A honoured waiver turns a release-gating tier's `NOT_RUN` into `WAIVED` —
+    the ladder's existing word for a decision somebody made and owns — and
+    records the whole attestation (ticket, rationale, evidence and what that
+    evidence was made of) in the tier's `details["waiver"]`, with
+    `deferred_from: "NOT_RUN"` so the report never loses the fact that no
+    evidence exists. It is a DEFERRAL, not an executed pass, and the tier note
+    says so.
+
+    Returns the disclosure lines: every waiver that was refused and why, plus a
+    named advisory for every honoured waiver that nothing independent
+    corroborates (#524). Silence is never an outcome — a refusal is always
+    reported, and the refused tier keeps its own verdict."""
+    project_dir = Path(project_dir)
+    entries = load_tier_waiver_entries(project_dir)
+    if not entries:
+        return []
+    by_id: Dict[str, TierResult] = {t.tier_id.upper(): t for t in tiers}
+    # Snapshot BEFORE any mutation: every eligibility test asks what the tier
+    # reported ON ITS OWN, so an earlier honoured waiver can never make a later
+    # entry look eligible. Today this is REDUNDANT with the `honoured` guard
+    # below — the only in-loop write to a tier verdict is a honoured waiver,
+    # and `honoured` short-circuits a second entry for that tier before the
+    # verdict is consulted — so no reachable state distinguishes the snapshot
+    # from a live read, and mutating it to a live read is not observable. It is
+    # kept because the invariant it states ("eligibility is judged against what
+    # the ladder measured") must survive a future reordering, and stating it
+    # here costs one line.
+    original = {key: t.verdict for key, t in by_id.items()}
+    honoured: set = set()
+    disclosures: List[str] = []
+
+    for index, entry in enumerate(entries):
+        token, explicit = _addressed_tier(entry)
+        if token is None or (not explicit and token not in by_id):
+            # Not addressed to this ladder. A flow-step waiver answers a
+            # different question and is left to its own consumers.
+            continue
+        label = f"waiver entry #{index}"
+        if token not in by_id:
+            if token in {t.upper() for t in LADDER_TIER_IDS}:
+                where = f" (mode={mode})" if mode else ""
+                disclosures.append(
+                    f"{label} names {token}, a ladder tier that THIS run{where} "
+                    f"does not include — NOT applied here. The waiver is not "
+                    f"malformed; it only applies to a run that reaches that "
+                    f"tier.")
+            else:
+                disclosures.append(
+                    f"{label} names tier {token!r}, which is not a tier this "
+                    f"ladder runs — NOT applied. Tiers in this run: "
+                    + ", ".join(sorted(by_id)) + ".")
+            continue
+        tier = by_id[token]
+        if token in honoured:
+            disclosures.append(
+                f"{label} also names {tier.tier_id}, which an earlier entry "
+                f"already deferred — NOT applied a second time.")
+            continue
+        if original[token] != "NOT_RUN":
+            disclosures.append(
+                f"{label} names {tier.tier_id}, but that tier RAN and reported "
+                f"{original[token]}. A waiver defers a check that could not "
+                f"run; it never overwrites a check that did — NOT applied, and "
+                f"{tier.tier_id} keeps its own verdict.")
+            continue
+        if not tier.release_gating:
+            disclosures.append(
+                f"{label} names {tier.tier_id}, an ADVISORY tier whose absence "
+                f"never withheld the release — NOT applied, because there is "
+                f"nothing to defer.")
+            continue
+        defects = tier_waiver_review_defects(entry)
+        if defects:
+            disclosures.append(
+                f"{label} for {tier.tier_id} was NOT applied — it is missing "
+                + "; ".join(defects)
+                + f". {tier.tier_id} stays {original[token]} until the waiver "
+                  f"is completed and reviewed.")
+            continue
+
+        ticket = str(entry.get("ticket")).strip()
+        rationale = _tier_waiver_rationale(entry)
+        evidence = list(entry.get("evidence") or [])
+        assessment = _ev_ind.assess(evidence, project_dir)
+        tier.verdict = "WAIVED"
+        tier.details = dict(tier.details or {})
+        tier.details["waiver"] = {
+            "source": _we.WAIVERS_FILENAME,
+            "entry_index": index,
+            "verdict_tier": TIER_WAIVER_VERDICT_TIER,
+            "ticket": ticket,
+            "review_required": True,
+            "approver": entry.get("approver"),
+            "rationale": rationale,
+            "evidence": evidence,
+            "evidence_assessment": assessment.as_dict(),
+            # The tier produced nothing. Recording what was deferred keeps a
+            # honoured waiver from reading like a check that ran and passed.
+            "deferred_from": "NOT_RUN",
+        }
+        tier.notes = (
+            f"WAIVED-DEFERRED on a reviewed {TIER_WAIVER_VERDICT_TIER} waiver "
+            f"[ticket={ticket}, review_required=True, "
+            f"evidence={assessment.describe()}"
+            + ("" if assessment.corroborated
+               else ", NO independent corroboration")
+            + f"] — this tier produced NO evidence and is DEFERRED, not "
+              f"executed-PASS: {rationale[:200]}")
+        honoured.add(token)
+        if not assessment.corroborated:
+            disclosures.append(
+                "HONOURED but UNCORROBORATED — "
+                + _ev_ind.disclosure(tier.tier_id, assessment)
+                + f" {tier.tier_id} remains WAIVED-DEFERRED on ticket "
+                  f"{ticket}; review_required stays true.")
+    return disclosures
+
+
+def waived_tiers(tiers: List[TierResult]) -> List[TierResult]:
+    """Every tier the ladder is carrying on a waiver rather than on a check
+    that passed — in ladder order. A release that rests on these must name
+    them, the way it already names every tier that withheld one."""
+    return [t for t in tiers if t.verdict == "WAIVED"]
+
+
+def _waiver_basis(tier: TierResult) -> str:
+    """Where a WAIVED tier's waiver came from — a reviewed entry in the
+    project's waiver document, or a decision the tier made internally (the XOR
+    allow-list, a report-declared triage LVS waiver)."""
+    waiver = (tier.details or {}).get("waiver")
+    if isinstance(waiver, dict):
+        return (f"reviewed {waiver.get('verdict_tier')} waiver in "
+                f"{waiver.get('source')}")
+    return "tier-internal waiver (allow-list / report-declared)"
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 @dataclass
@@ -1215,6 +1726,40 @@ class LadderReport:
     overall_verdict: str
     mode: str = "triage"
     caravel: bool = False
+    #: Every waiver this run refused and why, plus a named advisory for each
+    #: honoured waiver nothing independent corroborates. Never silent.
+    waiver_disclosures: List[str] = field(default_factory=list)
+
+    @property
+    def released(self) -> bool:
+        """Mode-aware release flag — triage never releases (see `is_released`)."""
+        return is_released(self.overall_verdict, self.mode)
+
+    def release_note(self) -> str:
+        """One line a human can act on: why the ladder is / is not releasing,
+        and — symmetrically with the tiers that withheld it — which tiers it is
+        resting on a waiver for rather than on a check that passed."""
+        if self.released:
+            note = "the tapeout release ladder is satisfied"
+        elif self.mode != "tapeout":
+            note = (f"mode '{self.mode}' is the diagnostic ladder and never "
+                    f"releases — re-run with --mode tapeout to gate a release")
+        elif self.overall_verdict == NOT_RELEASED_ALL_WAIVED:
+            note = ("every release-gating tier was DEFERRED and not one was "
+                    "executed — a ladder carried entirely by waivers has run "
+                    "no sign-off, so it does not release")
+        else:
+            blockers = release_blockers(self.tiers)
+            note = (f"{len(blockers)} tier(s) withhold the release: "
+                    + ", ".join(f"{t.tier_id}={t.verdict}" for t in blockers)
+                    ) if blockers else (
+                f"overall verdict {self.overall_verdict} does not release")
+        waived = waived_tiers(self.tiers)
+        if waived:
+            note += (f"; {len(waived)} tier(s) carried by a waiver, not by a "
+                     f"check that ran: "
+                     + ", ".join(t.tier_id for t in waived))
+        return note
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -1223,35 +1768,108 @@ class LadderReport:
             "caravel": self.caravel,
             "tiers": [t.as_dict() for t in self.tiers],
             "overall_verdict": self.overall_verdict,
-            "released": self.overall_verdict in RELEASING_VERDICTS,
-            "emitted_by": "signoff_ladder_run v0.1.51 (release-gate-wired)",
+            "released": self.released,
+            "release_note": self.release_note(),
+            "release_blockers": [
+                {"tier_id": t.tier_id, "name": t.name, "verdict": t.verdict}
+                for t in release_blockers(self.tiers)],
+            "evidence_absent_tiers": [
+                t.tier_id for t in evidence_absent_tiers(self.tiers)],
+            # A release that rests on waivers names them, exactly as it already
+            # names every tier that withheld one. Each row says WHAT bought the
+            # waiver, so a reviewed capability-gap deferral and a tier-internal
+            # allow-list waiver are never read as the same thing.
+            "waived_tiers": [
+                {"tier_id": t.tier_id, "name": t.name,
+                 "basis": _waiver_basis(t),
+                 "ticket": ((t.details or {}).get("waiver") or {}).get(
+                     "ticket"),
+                 "deferred_from": ((t.details or {}).get("waiver") or {}).get(
+                     "deferred_from")}
+                for t in waived_tiers(self.tiers)],
+            "waiver_disclosures": list(self.waiver_disclosures),
+            "emitted_by": _pmd.emitted_by("signoff_ladder_run",
+                                         "release-gate-wired"),
         }
+
+
+def evidence_absent_tiers(tiers: List[TierResult]) -> List[TierResult]:
+    """The release-GATING tiers that produced no evidence at all (NOT_RUN).
+
+    Advisory tiers (`release_gating=False`) are excluded — their absence is a
+    missing convenience, not missing sign-off evidence."""
+    return [t for t in tiers
+            if t.verdict == "NOT_RUN" and getattr(t, "release_gating", True)]
+
+
+def executed_signoff_tiers(tiers: List[TierResult]) -> List[TierResult]:
+    """The release-gating tiers that actually RAN and PASSED — the evidence a
+    release rests on, as opposed to the deferrals it carries. A ladder with
+    none of these has performed no sign-off, whatever its paperwork says."""
+    return [t for t in tiers
+            if t.verdict == "PASS" and getattr(t, "release_gating", True)]
+
+
+def release_blockers(tiers: List[TierResult]) -> List[TierResult]:
+    """Every tier that withholds the release, in ladder order — the actionable
+    form of a non-releasing overall verdict."""
+    absent = {id(t) for t in evidence_absent_tiers(tiers)}
+    return [t for t in tiers
+            if t.verdict in BLOCKING_TIER_VERDICTS or id(t) in absent]
 
 
 def aggregate_verdict(tiers: List[TierResult]) -> str:
     """Aggregate per-tier verdicts to overall.
 
-      any FAIL                        → FAIL
+      any FAIL                           → FAIL
       else any WAIVED_PENDING/INCOMPLETE → NOT_RELEASED   (a documented waiver
           pending real closure, or incomplete evidence: NON-releasing, never a
           silent pass — this is the §4.05 tapeout-tier tightening)
-      else any WARN                   → WARN
-      else any WAIVED/NOT_RUN         → PASS_WITH_WAIVERS
-      else (all PASS, N/A ignored)    → PASS
+      else any GATING tier NOT_RUN       → NOT_RELEASED_EVIDENCE_ABSENT
+          (nothing was checked. §4.05 again, and harder: incomplete evidence
+          already refuses to release, so evidence that was never produced
+          cannot release either. This is the branch that used to hand an
+          all-NOT_RUN design a PASS_WITH_WAIVERS.)
+      else any WARN                      → WARN
+      else any WAIVED and NO gating PASS → NOT_RELEASED_ALL_WAIVED  (every gate
+          deferred, none executed: paperwork over an empty ladder is the claim
+          #520 refused, re-entered through the front door)
+      else any WAIVED                    → PASS_WITH_WAIVERS  (a REVIEWED,
+          documented waiver is a decision somebody made and owns; it stays
+          releasing, and it is no longer reachable by a tier nobody ran)
+      else (all PASS, N/A ignored)       → PASS
 
     N/A tiers (e.g. a RAM-less MBIST tier) are neutral — they never demote the
-    verdict and never inflate a PASS.
+    verdict and never inflate a PASS. Advisory tiers (`release_gating=False`)
+    are neutral for ABSENCE only: a FAIL/WARN on one still blocks.
     """
     verdicts = [t.verdict for t in tiers]
     if "FAIL" in verdicts:
         return "FAIL"
     if "WAIVED_PENDING" in verdicts or "INCOMPLETE" in verdicts:
         return "NOT_RELEASED"
+    if evidence_absent_tiers(tiers):
+        return NOT_RELEASED_EVIDENCE_ABSENT
     if "WARN" in verdicts:
         return "WARN"
-    if "WAIVED" in verdicts or "NOT_RUN" in verdicts:
+    if "WAIVED" in verdicts:
+        if not executed_signoff_tiers(tiers):
+            return NOT_RELEASED_ALL_WAIVED
         return "PASS_WITH_WAIVERS"
     return "PASS"
+
+
+def is_released(overall_verdict: str, mode: str) -> bool:
+    """Whether the ladder RELEASES — the mode-aware form of the flag.
+
+    `triage` is the diagnostic ladder; its own docstring says "Nothing here
+    claims a tapeout". So triage NEVER releases, however clean it reads: the
+    diagnostic ladder does not run the release-tier gates (LVS genuine-match,
+    STA rigor, MBIST, dynamic-IR, metal density, aging STA, thermal, DFT,
+    post-layout LEC, and — for a shuttle project — precheck + XOR) at all, so a
+    releasing triage verdict was never a statement about those checks. Only
+    `tapeout`, which runs them, can set the flag."""
+    return mode == "tapeout" and overall_verdict in RELEASING_VERDICTS
 
 
 def run_ladder(project_dir: Path,
@@ -1260,7 +1878,8 @@ def run_ladder(project_dir: Path,
                jmax: Optional[Path] = None,
                tech_lef: Optional[Path] = None,
                sources: Optional[List[Tuple[str, str]]] = None,
-               xor_allow_macros: Optional[List[str]] = None) -> LadderReport:
+               xor_allow_macros: Optional[List[str]] = None,
+               pdk: Optional[str] = None) -> LadderReport:
     """Run the sign-off ladder.
 
     mode='triage'  (default) — the diagnostic ladder; the LVS-net tier may SHOW
@@ -1297,7 +1916,7 @@ def run_ladder(project_dir: Path,
         # This session's sign-off gates — each blocks a tapeout on a real FAIL
         # and honestly NOT_RUNs (SKIP) on an absent artifact (§4.05).
         tiers.append(check_tier_dynamic_ir(project_dir))
-        tiers.append(check_tier_metal_density(project_dir))
+        tiers.append(check_tier_metal_density(project_dir, pdk=pdk))
         tiers.append(check_tier_aging_sta(project_dir))
         tiers.append(check_tier_thermal(project_dir))
         tiers.append(check_tier_dft_signoff(project_dir))
@@ -1307,12 +1926,20 @@ def run_ladder(project_dir: Path,
             tiers.append(check_tier_xor(project_dir,
                                         allow_macros=xor_allow_macros))
 
+    # Reviewed tier waivers, LAST — after every tier has reported on its own
+    # merits, so a waiver is only ever weighed against what the tier actually
+    # produced. The aggregate is computed from the post-waiver tiers, which is
+    # the point: a reviewed capability-gap deferral releases, an unrun tier
+    # does not.
+    disclosures = apply_tier_waivers(project_dir, tiers, mode=mode)
+
     return LadderReport(
         project_dir=str(project_dir),
         tiers=tiers,
         overall_verdict=aggregate_verdict(tiers),
         mode=mode,
         caravel=bool(caravel),
+        waiver_disclosures=disclosures,
     )
 
 
@@ -1332,7 +1959,7 @@ def report_to_markdown(rep: LadderReport) -> str:
                + "**")
     out.append("")
     out.append(f"**Overall verdict: {rep.overall_verdict}** "
-               f"(released={rep.overall_verdict in RELEASING_VERDICTS})")
+               f"(released={rep.released}) — {rep.release_note()}")
     out.append("")
     out.append("| Tier | Check | Verdict | Notes |")
     out.append("|---|---|---|---|")
@@ -1340,6 +1967,29 @@ def report_to_markdown(rep: LadderReport) -> str:
         notes = t.notes or json.dumps(t.details)[:80]
         out.append(f"| {t.tier_id} | {t.name} | {t.verdict} | {notes} |")
     out.append("")
+    absent = evidence_absent_tiers(rep.tiers)
+    if absent:
+        out.append(f"**{len(absent)} release-gating tier(s) produced no "
+                   f"evidence** — §4.05: a check nobody ran is not a pass, so "
+                   f"the ladder does not release on it: "
+                   + ", ".join(t.tier_id for t in absent) + ".")
+        out.append("")
+    waived = waived_tiers(rep.tiers)
+    if waived:
+        out.append(f"**{len(waived)} tier(s) are carried by a WAIVER, not by a "
+                   f"check that passed** — a waiver is a decision somebody made "
+                   f"and owns, and it stays open work:")
+        for t in waived:
+            ticket = ((t.details or {}).get("waiver") or {}).get("ticket")
+            tail = f", ticket {ticket}" if ticket else ""
+            out.append(f"- `{t.tier_id}` — {_waiver_basis(t)}{tail}.")
+        out.append("")
+    if rep.waiver_disclosures:
+        out.append("**Waiver disclosures** — every waiver this run refused, "
+                   "and every honoured waiver nothing independent corroborates:")
+        for line in rep.waiver_disclosures:
+            out.append(f"- {line}")
+        out.append("")
     return "\n".join(out)
 
 
@@ -1363,15 +2013,23 @@ def _cli() -> int:
                    dest="xor_allow_macros",
                    help="EXPLICIT blackbox-macro cell name waivable in the XOR "
                         "tier (repeatable). Never a count/floor.")
+    p.add_argument("--pdk", default=None,
+                   help="PDK name — judge per-layer metal density against THAT "
+                        "PDK's own stated windows. Default: the density "
+                        "report's own declaration, else $PDK_VARIANT / $PDK, "
+                        "else the DISCLOSED generic window.")
     p.add_argument("--out-md", type=Path)
     p.add_argument("--out-json", type=Path)
     p.add_argument("--strict", action="store_true",
-                   help="Exit non-zero unless the overall verdict releases "
-                        "(PASS / PASS_WITH_WAIVERS).")
+                   help="Exit non-zero unless the ladder RELEASES — i.e. "
+                        "--mode tapeout AND a releasing overall verdict "
+                        "(PASS / PASS_WITH_WAIVERS). --mode triage is the "
+                        "diagnostic ladder and never releases, so --strict "
+                        "there always exits non-zero by design.")
     args = p.parse_args()
     rep = run_ladder(args.project_dir, mode=args.mode, caravel=args.caravel,
                      jmax=args.jmax, tech_lef=args.tech_lef,
-                     xor_allow_macros=args.xor_allow_macros)
+                     xor_allow_macros=args.xor_allow_macros, pdk=args.pdk)
     md = report_to_markdown(rep)
     if args.out_md:
         args.out_md.write_text(md, encoding="utf-8")
@@ -1380,7 +2038,10 @@ def _cli() -> int:
     if args.out_json:
         args.out_json.write_text(json.dumps(rep.as_dict(), indent=2),
                                   encoding="utf-8")
-    if args.strict and rep.overall_verdict not in RELEASING_VERDICTS:
+    # `--strict` is the actionable form of the `released` flag, so it obeys the
+    # SAME mode guard — a run that prints released=False must not exit 0 under
+    # --strict, or the contradiction just moves down one level.
+    if args.strict and not rep.released:
         return 1
     return 0
 

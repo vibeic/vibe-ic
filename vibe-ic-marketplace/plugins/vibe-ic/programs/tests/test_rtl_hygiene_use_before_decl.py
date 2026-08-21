@@ -183,3 +183,33 @@ endmodule
 """
     # `ready` appears only inside the $display string -> not a read.
     assert _hits(src) == []
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC-20260723 — assignment-pattern member KEY is a field label, NOT a read.
+# OpenTitan tlul_sram_byte.sv `'{ … data_intg: <value> }` false-fired
+# use-before-declaration and blocked the REUSED-IP AES flow.
+# ---------------------------------------------------------------------------
+def test_excludes_assignment_pattern_member_key():
+    # `data_intg:` is the STRUCT FIELD LABEL of the assignment pattern (a name of
+    # the LHS type), not a read of the same-named local net declared below.
+    src = """module m(input [6:0] src_intg, output logic [6:0] o);
+  assign packed_u = '{rsvd: 1'b0, data_intg: src_intg};
+  logic [6:0] data_intg;
+  assign o = data_intg;
+endmodule
+"""
+    assert _hits(src) == []
+
+
+def test_member_key_value_still_flagged():
+    # NEGATIVE CONTROL: only the field LABEL is excluded. A declared-below net
+    # used as the field VALUE (`data_intg: src_intg`, src_intg the value) is a
+    # genuine forward reference and must still fire.
+    src = """module m(output logic [6:0] o);
+  assign packed_u = '{data_intg: src_intg};
+  logic [6:0] src_intg;
+  assign o = src_intg;
+endmodule
+"""
+    assert {h.symbol for h in _hits(src)} == {"src_intg"}
