@@ -1,0 +1,603 @@
+
+=== Vibe-IC phase1_phase2_phase3 compliance ===
+Project: /home/reyerchu/_agent_scratch_sn/run25_control
+Flow def: /home/reyerchu/.claude/plugins/cache/vibe-ic-marketplace/vibe-ic/1.9.76/flow/phase1_phase2_phase3.yaml
+Steps: 63 total (4/49 executed PASS, 4 DEFERRED via waiver, 2 VACUOUS-PASS excluded from executed)
+  PASS=4  FAIL=14  MISSING=12  WAIVED-DEFERRED=4  DEFERRED-BY-UPSTREAM=3  SKIPPED=9  VACUOUS-PASS=2  PASS-VOIDED=15
+
+  ✗ [FAIL             ] Step P0: Structural-RTL gates (P0 umbrella, 210 of 246 checkers returned a verdict)  (stage1)
+       └─ Failed gates (13):
+       └─   - spice_correlation_check — [FAIL] spice_correlation_check
+       └─   - analog_block_coverage_check — [FAIL] analog_block_coverage_check
+       └─   - analog_hardmacro_check — [FAIL] analog_hardmacro_check
+       └─   - mixed_signal_cosim_check — [FAIL] mixed_signal_cosim_check
+       └─   - analog_flow_compliance_check — [FAIL] analog_flow_compliance_check: examined 90 A1-A9 step obligation(s) evaluated (one per declared analog block per A-step)
+       └─   - analog_digital_interface_check — [FAIL] analog_digital_interface_check
+       └─   - analog_a6_block_pv_check — === analog_a6_block_pv_check (run25_control) ===
+       └─   - bit_level_full_stack_tb_oracle_check — FAIL — 2 bit-level oracle violation(s)
+       └─   - fpga_sdc_clock_constraint_check — FAIL — FPGA_SDC_BOARD_OSC_MISMATCH
+       └─   - l_doc_structured_field_count_check — FAIL — Wave 31/32 (v0.119.64): 1 L doc(s) carry fewer typed structured fields than required:
+       └─   - phase1_doc_input_completeness_check — FAIL — 5 input doc(s) below 100% capture (program + AI). Per-doc report: reports/phase1/phase1_input_vs_generated_completeness.json
+       └─   - l6_fsm_scaffold_actionable_check — [FAIL] l6_fsm_scaffold_actionable_check: 1 L6 item(s) are not actionable by their consumers (parts checked: fsm)
+       └─   - l20_dft_scan_topology_actionable_check — [ADVISE] l20_dft_scan_topology_actionable_check: BACKEND_INSERTED_UNDECLARED_TOPOLOGY — Scan insertion demonstrably RAN — 1 backend DFT artifact(s) present, e.g. atpg_coverage.unmeasured.rpt — while L
+       └─ NEVER VALIDLY INVOKED (36 of 246 registered gates) — argument parsing rejected the umbrella's argv, so these gates returned no verdict and what they audit is UNCHECKED:
+       └─   - tristate_self_rx_mask_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - pulse_decoder_edge_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - packet_length_check_present (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - otp_write_lock_gate_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - l12_sequence_implementation_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - transient_signal_latch_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - bit_count_modulo_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - cmd_arg_range_validation_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - response_payload_template_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - pre_awake_silence_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - oe_pattern_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-files, --out-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - crc_bitorder_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-files, --crc-signal, --out-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - interface_encoding_audit (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir, --top-module, --out-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - mask_application_check (NOT INVOKED: gate requires an option the umbrella does not supply: error: no masks supplied (--masks or --mask) — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - crc_seed_consistency_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --vectors-json — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - protocol_gap_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --name, --end-signal, --bus-idle, --min-cycles, --out-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - warn_acceptance_policy_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --project-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - tristate_bus_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --bus-name, --drivers, --out-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - periodic_signal_required_check (NOT INVOKED: gate requires an option the umbrella does not supply: error: no required signals supplied (--periodic or --required) — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - fpga_async_input_synchronizer_check (NOT INVOKED: gate requires an option the umbrella does not supply: error: top module not resolved (give --top or --qsf) — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - cross_constant_invariant_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_agent_scratch_sn/run25_control — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - backlog_sanitize_check (NOT INVOKED: argparse rejected the umbrella's argv: one of the arguments --file --dir is required — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - fpga_qsf_lint (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --qsf-file, --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - fresh_agent_provenance_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: reference_dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - json_schema_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --json-file — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - l9_completeness_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --l9-file — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - module_port_audit (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_agent_scratch_sn/run25_control — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - openroad_tcl_deprecation_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_agent_scratch_sn/run25_control — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - output_artifact_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --base-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - payload_bit_position_check (NOT INVOKED: gate requires an option the umbrella does not supply: error: empty bitmap (give --bitmap or --layer-l3/--layer-l4) — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - phase1_gate_contract_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_agent_scratch_sn/run25_control — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - practical_notes_specificity_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_agent_scratch_sn/run25_control — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - rtl_precheck_gate (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - scope_periodic_pulse_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_agent_scratch_sn/run25_control — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - testbench_exists_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─   - tester_oracle_health_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --config — this gate returned NO verdict; the umbrella has not checked what it audits)
+       └─ SKIP: l9_response_delay_schema_check
+       └─ SKIP: otp_image_layer_consistency_check
+       └─ SKIP: analog_corner_sweep_check
+       └─ SKIP: analog_netlist_pdk_check
+       └─ SKIP: analog_hw_spice_correlation_check
+       └─ SKIP: analog_pre_vs_post_layout_check
+       └─ SKIP: break_framing_vs_l3_check
+       └─ SKIP: break_handler_safety_check
+       └─ SKIP: clock_divider_period_check
+       └─ SKIP: cross_module_1cycle_handshake_check
+       └─ SKIP: crc_oracle_vector_check
+       └─ SKIP: arbiter_starvation_check
+       └─ SKIP: protocol_ip_simulation_required_check
+       └─ SKIP: klayout_deck_mode_check
+       └─ SKIP: waiver_staleness_check
+       └─ SKIP: l4_regmap_enumerated_values_typed_check
+       └─ SKIP: l4_regmap_declared_register_coverage_check
+       └─ SKIP: l11_otp_lock_dependencies_typed_check
+       └─ SKIP: l11_sequence_covers_l6_reject_rules_check
+       └─ SKIP: fpga_program_chain_attest_check
+       └─ SKIP: phase1_k5_quality_check
+       └─ SKIP: deliverable_verdict_consistency_check
+       └─ SKIP: l24_signoff_evidence_backed_check
+       └─ SKIP: l25_reliability_envelope_actionable_check
+  ~ [WAIVED-DEFERRED  ] Step D1: Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)  (stage_phase1)
+       └─ ADVISORY (non-blocking, #306): ok: phase1_expert_track_evidence_check .
+       └─ ADVISORY (non-blocking, #306): ok: l16_compliance_properties_actionable_check .
+       └─ ADVISORY (non-blocking, #306): ok: l17_channel_catalog_consumer_contract_check .
+       └─ ADVISORY (non-blocking, #306): ok: l21_macro_supply_rail_declared_check .
+       └─ ADVISORY (non-blocking, #306): ok: l8_sta_clock_period_design_owned_check .
+       └─ ADVISORY (non-blocking, #306): ok: l7_debug_access_grounding_check .
+       └─ ADVISORY (non-blocking, #306): ok: l8_clock_period_actionability_check .
+       └─ ADVISORY (non-blocking, #306): ok: l9_floorplan_contract_check .
+       └─ ADVISORY (non-blocking, #306): FINDING: l10_test_case_oracle_anchor_check . :: o_wake: expected text 'DUT silent (no response frame)' contains no literal, no comparison relation, and no name this design declares in its own L-docs (552 observable names harvested). testbench_gen w
+       └─ ADVISORY (non-blocking, #306): FINDING: l11_otp_content_consumer_contract_check . :: [FAIL] l11_otp_content_consumer_contract_check: 1 finding(s) (resolved='L11_OTP_CONTENT.json', otp_declared=True, field_map_entries=1, lock_bits=0):
+  - [UNTYPED_FIELD] field[0]: field map row lacks a
+       └─ ADVISORY (non-blocking, #306): ok: l12_sequences_in_consumed_layer_check .
+       └─ ADVISORY (non-blocking, #306): FINDING: l13_bringup_contract_check . :: ontract_complete: hardware/lab work is in scope (calibration_targets is non-empty) but L13 declares no `tester` identity. An attestation that cannot name the instrument that produced it is not an atte
+       └─ ADVISORY (non-blocking, #306): ok: l14_protocol_versioning_contract_check .
+       └─ ADVISORY (non-blocking, #306): ok: l15_encoding_tables_contract_check .
+       └─ ADVISORY (non-blocking, #306): ok: l18_interconnect_topology_factuality_check .
+       └─ ADVISORY (non-blocking, #306): n/a (input not present): cross_layer_reference_check .
+       └─ ADVISORY (non-blocking, #306): FINDING: l_doc_cross_consistency_check . :: pass=0 fail=2 na=0
+  [FAIL] R_pin_table_subset_ports — 1 L1 pin(s) absent from L9 ports[ports]
+      violations: ['ip']
+  [FAIL] R_otp_bytes_subset_layout — 128 L11 OTP address(es) not declared in L4 
+       └─ ADVISORY (non-blocking, #306): n/a (input not present): spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md
+       └─ stub-backed (#434, review_required): evidence tagged deterministic_stub/low_confidence is DEFERRED work, not executed verification — excluded from strict PASS: phase1/generated_docs/L5_ADI_SPEC.json; phase1/generated_docs/L9_INTEGRATION_SPEC.json
+  ✓ [PASS             ] Step  1: Spec-to-RTL  (stage1)
+  ✓ [PASS             ] Step  2: 🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)  (stage1)
+  ✓ [PASS             ] Step  3: 🔁 CDC / RDC check  (stage1)
+  ✗ [FAIL             ] Step  4: 🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)  (stage1)
+       └─ optional program failed: l10_tb_conformance_check --l10 phase1/generated_docs/L10_TEST_CASES.json --tb-dir phase2/stage1/sim/tb --out reports/phase2/gates/l10_tb_conformance.json
+       └─ output: x)
+  - send_set_testmode_bits_len_above_max (len_max)
+  - send_reserved_happy (happy_path)
+  - send_reserved_no_wake (pre_wake_false)
+  - send_reserved_addr_at_max (addr_max)
+  - send_reserved_addr_ab
+       └─ ADVISORY (non-blocking, #306): n/a (input not present): coverage_closure .
+  ✗ [FAIL             ] Step  5: 🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)  (stage1)
+       └─ program failed: bit_level_full_stack_tb_check . --json reports/phase2/gates/bit_level_full_stack.json
+       └─ output: /protocol_tb/aid_class_reference_tb.v",
+      "transcript_path": "/home/reyerchu/_n24_sn2025/run25/phase2/stage1/sim/reference_tb/ref_tb.log",
+      "protocol_reference_tb": "PROTOCOL_REFERENCE_TB_PAS
+       └─ (informational gate — excluded from Phase 2 verdict; see INFORMATIONAL_GATES in flow_compliance_check.py)
+  ~ [WAIVED-DEFERRED  ] Step  6: FPGA early prototype + verification report audit  (stage1)
+       └─ ENV_UNAVAILABLE waiver applied (natural verdict was FAIL/MISSING): ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND final sign-off) is DEFERRED to board bring-up (NOT executed-PASS) [ticket=fpga-board-prototype-capgap-v1.0.18, review_required=True, cap:fpga_board_prototype] (approver: field-agent-attest (fpga-board cap-gap tier))
+       └─   ↳ natural: missing files (any_of=False): ['phase2/stage1/fpga/output_files/*.sof']
+       └─   ↳ natural: ADVISORY (non-blocking, #306): n/a (input not present): fpga_led_probe_lint phase2/stage1/fpga --qsf phase2/stage1/fpga/*.qsf --json reports/phase2/gates/fpga_led_probe_lint.json
+  ✓ [PASS             ] Step  7: Constraint setup (SDC + PVT matrix)  (stage2)
+  ✗ [FAIL             ] Step  8: 🔁 SDC validation  (stage2)
+       └─ optional program failed: sdc_validator_check . --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json
+       └─ output: [FAIL] sdc_validator_check: 2 issue(s)
+  - de10lite_top.sdc: missing set_input_delay
+  - de10lite_top.sdc: missing set_output_delay
+  ⊘ [PASS-VOIDED      ] Step  9: Synthesis (Yosys → mapped netlist)  (stage2)
+       └─ PASS voided: dependency [8] 🔁 SDC validation = FAIL, so this step's PASS certifies nothing about the design
+  ✗ [FAIL             ] Step 10: 🔁 Pre-layout STA (multi-corner)  (stage2)
+       └─ program failed: sta_report_check . --mode sta --json reports/phase3/sta/pre_pnr_summary.json
+       └─ output: ue,
+    "has_setup_hold": true,
+    "tool_authentic": true,
+    "corner_dirs_found": 1,
+    "corner_reports": 3,
+    "corner_reports_distinct": 3,
+    "multi_corner_claim_not_broken": true,
+    "multi
+  - [SKIPPED-CONDITION] Step 11: DFT insertion (scan chain + ATPG + at-speed + BSDL)  (stage2)
+       └─ SKIPPED-CONDITION: gate evidence self-reports a skip (#608/#675): phase2/stage2/dft/dft_atpg_not_run.json: sibling self-reports verdict=SKIPPED-CONDITION (OSS Fault ATPG CRASHED on a library-mapped m18e80pm180su netlist: the engine process was killed by a signal (exit 152 = 128 + SIG24) across 3 attempt(s) (exits )
+  ○ [VACUOUS-PASS     ] Step FS1: ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only)  (stage2)
+       └─ vacuous: gate program signalled VACUOUS_PASS (input not applicable): fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl --asil D --json reports/phase2/safety/fmeda_coverage.json
+       └─ vacuous: gate program signalled VACUOUS_PASS (input not applicable): fmeda_coverage_check . --json reports/phase2/safety/fmeda_coverage_gate.json
+  ✗ [FAIL             ] Step DT1: Transition-delay-fault (at-speed LOC) ATPG  (stage2)
+       └─ program failed: transition_coverage_check . --json reports/phase2/dft/transition_coverage_gate.json
+       └─ output: chip_top_asic.\n<suppressed ~3 debug messages>\nVIBEICTDF_SETUP_DONE\n\nERROR: Found processes in selected module."
+  ],
+  "program": "transition_coverage_check",
+  "version": "1.0.0",
+  "project_dir"
+  - [SKIPPED-CONDITION] Step 12: Post-DFT optimization (resynth / buffering)  (stage2)
+       └─ no required_outputs found (expected: ['phase2/stage2/synth/post_dft_netlist.v'])
+       └─ SKIPPED-CONDITION: canonical output absent but a co-located sibling that OWNS it honestly self-reports a disclosed capability-gap skip (#675 strict): phase2/stage2/synth/post_dft_not_run.json: owns this output (skips_required_output) and self-reports verdict=SKIPPED-CONDITION [cap:post_dft_scan_optimization] (no scan_netlist.v (DFT was disclosed-skipped) — post-DFT optimization has no scan netlist to optimise)
+       └─ ADVISORY (non-blocking, #306): declared gate files_exist[phase2/stage2/synth/post_dft_netlist.v] was NOT evaluated for this step — the disclosed capability-gap skip above resolved it. The gate audits the same absent output(s) the sibling marker owns, so its verdict would restate that absence, not add a finding.
+  ~ [WAIVED-DEFERRED  ] Step 13: 🔁 Equivalence check (RTL ≡ post-DFT netlist)  (stage2)
+       └─ WAIVED-DEFERRED: gate program signalled PASS_WITH_WAIVERS (#651 — a slot credited via a waiver, NOT a bare PASS; production tapeout review must close it): lec_equivalence_check . --json reports/lec_equivalence_check.json
+  · [MISSING          ] Step A1: Analog Spec Extraction  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/analog/*/spec.json OR phase1/analog/*/spec.json'])
+  · [MISSING          ] Step A2: Analog Topology Selection  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/analog/*/topology.md OR phase2/analog/*/topology.md'])
+  · [MISSING          ] Step A3: Analog Netlist Generation  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/analog/*/*.sp OR phase2/analog/*/*.sp'])
+  · [MISSING          ] Step A4: Analog Corner Sweep (PVT)  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/analog/*/corner_results.json OR phase2/analog/*/corner_results.json'])
+  · [MISSING          ] Step A5: Analog Layout  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/analog/*/layout.mag OR phase3/analog/*/*.gds'])
+  · [MISSING          ] Step A6: Analog Physical Verification (per-block DRC + LVS before merge)  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt', 'phase3/analog/*/lvs_match.flag OR phase3/analog/*/lvs.report OR phase3/analog/*/comp.json OR phase3/analog/*/lvs.rpt'])
+  · [MISSING          ] Step A7: 🔁 Post-Layout Resimulation  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/analog/*/pre_vs_post.json'])
+  · [MISSING          ] Step A8: Hardmacro Generation (LEF + Liberty + GDS + Verilog)  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/analog/hardmacro/*/*.lef', 'phase3/analog/hardmacro/*/*.lib', 'phase3/analog/hardmacro/*/*.gds', 'phase3/analog/hardmacro/*/*.v'])
+  · [MISSING          ] Step A9: 🔁 Co-Simulation (+ HW correlation when bench data exists)  (stage_analog)
+       └─ no required_outputs found (expected: ['phase3/mixed_signal/cosim/*_cosim_results.json OR phase3/mixed_signal/cosim/mixed_signal_results.json OR phase3/analog/*/hw_measurements.json'])
+  ○ [VACUOUS-PASS     ] Step 14: 🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)  (stage2)
+       └─ vacuous: gate program signalled VACUOUS_PASS (input not applicable): yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json
+       └─ ADVISORY (non-blocking, #306): ok: yosys_tiecell_recipe_order_check . --json reports/phase2/gates/yosys_tiecell_recipe_order.json
+  ✗ [FAIL             ] Step 15: Floorplan + PDN  (stage3)
+       └─ optional program failed: ip_integration_check . --json reports/phase2/gates/ip_integration.json
+       └─ output: l 'VPP', which the design does not independently declare — dangling, so it does NOT count as coverage. If RTL ties this pin, synthesis drives it with a TIE cell and detailed routing aborts (DRT-0307).
+  ⊘ [PASS-VOIDED      ] Step 16: Clock planning  (stage3)
+       └─ PASS voided: dependency [15] Floorplan + PDN = FAIL, so this step's PASS certifies nothing about the design
+  ⊘ [PASS-VOIDED      ] Step 17: Placement (global + detailed)  (stage3)
+       └─ PASS voided: dependency [15] Floorplan + PDN = FAIL, so this step's PASS certifies nothing about the design
+  ~ [DEFERRED-BY-UPSTREAM] Step 18: Spare-cell + ECO-prep insertion (Design-for-ECO)  (stage3)  [deferred-by-upstream(13, ticket=?)]
+       └─ deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow — one waiver, one deduction
+       └─ no required_outputs found (expected: ['phase3/stage3/pnr/spare_cells.json', 'reports/spare_cell_coverage.json'])
+  ⊘ [PASS-VOIDED      ] Step 19: CTS (Clock Tree Synthesis)  (stage3)
+       └─ PASS voided: dependency [15] Floorplan + PDN = FAIL, so this step's PASS certifies nothing about the design
+  ✗ [FAIL             ] Step 20: 🔁 Post-CTS hold fixing  (stage3)
+       └─ program failed: hold_closure_check . --json reports/phase3/pnr/hold_closure.json
+       └─ output: === hold_closure_check (run25_control) ===
+  verdict: FAIL
+  worst hold slack: -8.680074682484532
+  [FAIL] HOLD_SLACK_NEGATIVE: hold report shows NEGATIVE worst hold slack -8.680074682484532 — hold vi
+  ⊘ [PASS-VOIDED      ] Step 21: Routing (global + detailed)  (stage3)
+       └─ ADVISORY (non-blocking, #306): ok: route_congestion_trade_disclosure .
+       └─ PASS voided: dependency [20] 🔁 Post-CTS hold fixing = FAIL, so this step's PASS certifies nothing about the design
+  ⊘ [PASS-VOIDED      ] Step 22: Parasitic Extraction (RC → SPEF)  (stage3)
+       └─ PASS voided: dependency [20] 🔁 Post-CTS hold fixing = FAIL, so this step's PASS certifies nothing about the design
+  ✗ [FAIL             ] Step DT2: Path-delay-fault (at-speed, timing-graded) ATPG  (stage2)
+       └─ program failed: path_delay_coverage_check . --json reports/phase2/dft/path_delay_coverage_gate.json
+       └─ output: 80.0% (sensitised 0 / testable 13; 13 graded; robust 0; false/held 0 excluded; aborted 13 counted as non-covered)"
+  ],
+  "program": "path_delay_coverage_check",
+  "version": "1.0.0",
+  "project_dir":
+  ⊘ [PASS-VOIDED      ] Step DT3: Small-delay-defect (SDD) at-speed grade  (stage2)
+       └─ PASS voided: dependency [DT2] Path-delay-fault (at-speed, timing-graded) ATPG = FAIL, so this step's PASS certifies nothing about the design
+  ✗ [FAIL             ] Step 23: 🔁 Post-route STA (multi-corner multi-mode sign-off)  (stage3)
+       └─ program failed: sta_report_check . --mode sta --json reports/phase3/sta/post_route_summary.json
+       └─ output: ue,
+    "has_setup_hold": true,
+    "tool_authentic": true,
+    "corner_dirs_found": 1,
+    "corner_reports": 3,
+    "corner_reports_distinct": 3,
+    "multi_corner_claim_not_broken": true,
+    "multi
+  ⊘ [PASS-VOIDED      ] Step 24: 🔁 IR Drop (static + dynamic)  (stage3)
+       └─ PASS voided: dependency [20] 🔁 Post-CTS hold fixing = FAIL, so this step's PASS certifies nothing about the design
+  ⊘ [PASS-VOIDED      ] Step 25: 🔁 EM check (electromigration lifetime)  (stage3)
+       └─ PASS voided: dependency [20] 🔁 Post-CTS hold fixing = FAIL, so this step's PASS certifies nothing about the design
+  ⊘ [PASS-VOIDED      ] Step 26: 🔁 Antenna check (gate-oxide protection)  (stage3)
+       └─ PASS voided: dependency [20] 🔁 Post-CTS hold fixing = FAIL, so this step's PASS certifies nothing about the design
+  ⊘ [PASS-VOIDED      ] Step 27: 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)  (stage3)
+       └─ PASS voided: dependency [20] 🔁 Post-CTS hold fixing = FAIL, so this step's PASS certifies nothing about the design
+  ⊘ [PASS-VOIDED      ] Step 28: 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)  (stage3)
+       └─ PASS voided: dependency [20] 🔁 Post-CTS hold fixing = FAIL, so this step's PASS certifies nothing about the design
+  - [SKIPPED-CONDITION] Step 29: Post-Layout Gate-Level Simulation (Post-Sim + SDF)  (stage3)
+       └─ no required_outputs found (expected: ['phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag'])
+       └─ SKIPPED-CONDITION: canonical output absent but a co-located sibling that OWNS it honestly self-reports a disclosed capability-gap skip (#675 strict): phase3/stage3/sim_postlayout/sdf_sim_skipped.json: owns this output (skips_required_output) and self-reports verdict=SKIPPED-CONDITION [cap:sdf_gatelevel_tb_port_contract] (SDF-annotated gate-level sim NOT run: the built-in gate-sim testbench generator binds exactly one port contract (bit-serial multiplier: clk + reset + )
+       └─ ADVISORY (non-blocking, #306): declared gate files_exist[phase3/stage3/sim_postlayout/results.log, phase3/stage3/sim_postlayout/pass.flag], post_layout_sim_check was NOT evaluated for this step — the disclosed capability-gap skip above resolved it. The gate audits the same absent output(s) the sibling marker owns, so its verdict would restate that absence, not add a finding.
+  - [SKIPPED-CONDITION] Step 30: Post-Layout SPICE Verification (critical-path correlation + analog)  (stage3)
+       └─ no required_outputs found (expected: ['phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR sim_spice/*.sp', 'phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json'])
+       └─ SKIPPED-CONDITION: canonical output absent but a co-located sibling that OWNS it honestly self-reports a disclosed capability-gap skip (#675 strict): phase3/stage3/spice/spice_correlation_not_run.json: owns this output (skips_required_output) and self-reports verdict=SKIPPED-CONDITION [cap:post_layout_spice_correlation] (no critical-path SPICE correlation ran; it requires an extracted transistor netlist + vector/analog stimulus + device models (an analog/mixed-signal c)
+       └─ ADVISORY (non-blocking, #306): declared gate files_exist[phase3/stage3/spice/*.sp, phase3/stage3/spice/*.spice, sim_spice/*.sp], spice_correlation_check was NOT evaluated for this step — the disclosed capability-gap skip above resolved it. The gate audits the same absent output(s) the sibling marker owns, so its verdict would restate that absence, not add a finding.
+  ✗ [FAIL             ] Step 31: 🔁 Physical Verification (DRC + LVS + ERC + Density)  (stage3)
+       └─ program failed: drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json
+       └─ output: rc_signoff.rpt",
+        "producer": "openroad",
+        "deck": null,
+        "is_signoff_deck": false
+      }
+    ],
+    "layout_evidence_tier": "none",
+    "layout_topcell_match": null,
+    "layout
+  ✗ [FAIL             ] Step 32: 🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)  (stage3)
+       └─ optional program failed: eco_loop_audit . --json reports/phase2/gates/eco_audit.json
+       └─ output: ction": "eco_fired_no_netlist",
+    "findings_count": 1,
+    "errors_count": 1,
+    "pass": false
+  },
+  "findings": [
+    {
+      "severity": "ERROR",
+      "category": "NOT_REVERIFIED",
+      "messa
+  ⊘ [PASS-VOIDED      ] Step 33: Power analysis (pre/post-layout)  (stage4)
+       └─ PASS voided: dependency [23] 🔁 Post-route STA (multi-corner multi-mode sign-off) = FAIL, so this step's PASS certifies nothing about the design
+  ⊘ [PASS-VOIDED      ] Step 34: Metal Fill (ECO-aware density fill insertion)  (stage4)
+       └─ PASS voided: dependency [32] 🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute) = FAIL, so this step's PASS certifies nothing about the design
+  ⊘ [PASS-VOIDED      ] Step 35: DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure)  (stage4)
+       └─ ADVISORY (non-blocking, #306): FINDING: dfm_screen_check . --json reports/phase2/gates/dfm_screen.json :: sign-off DRC deck (KLayout) — not re-executed here"
+    }
+  ]
+}
+dfm_screen_check: PASS_WITH_ADVISORIES — 1 advisory finding(s) [VIA_REDUNDANCY_LOW]: 100.0% of the 13002 RESOLVED signal-net via uses ar
+       └─ PASS voided: dependency [32] 🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute) = FAIL, so this step's PASS certifies nothing about the design
+  ✗ [FAIL             ] Step 36: Tapeout checklist (final sign-off confirmation)  (stage4)
+       └─ program failed: tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json
+       └─ output: "folds_proved": 1478,
+      "waived": false,
+      "waiver_approver": "",
+      "waiver_reason": "",
+      "waiver_refused": "",
+      "accepted_vacuity_codes": [],
+      "why": "1478 victim-net MCF f
+       └─ ADVISORY (non-blocking, #306): FINDING: report_belongs_to_project_check . --json reports/audit/report_belongs_to_project.json :: verdict: FAIL
+  FOREIGN  /home/reyerchu/_agent_scratch_sn/run25_control/reports/phase1_one_shot.json
+      claims project : /home/reyerchu/_n24_sn2025/run25
+      sits in        : /home/reyerchu/_agen
+  ~ [DEFERRED-BY-UPSTREAM] Step 37: GDSII output (only if Step 31 PV fully clean)  (stage4)  [deferred-by-upstream(13, ticket=?)]
+       └─ deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow — one waiver, one deduction
+       └─ no required_outputs found (expected: ['phase3/stage4/gds/*.gds'])
+  ✗ [FAIL             ] Step 38: Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)  (stage4)
+       └─ program failed: foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json
+       └─ output: === foundry_handoff_package_check (run25_control) ===
+  verdict: FAIL
+  ~ [WAIVED-DEFERRED  ] Step 39: FPGA final sign-off (recompile + on-board test)  (stage4)
+       └─ ENV_UNAVAILABLE waiver applied (natural verdict was FAIL/MISSING): ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND final sign-off) is DEFERRED to board bring-up (NOT executed-PASS) [ticket=fpga-board-prototype-capgap-v1.0.18, review_required=True, cap:fpga_board_prototype] (approver: field-agent-attest (fpga-board cap-gap tier))
+       └─   ↳ natural: json gate failed: all_scenarios_passed = False
+  ~ [DEFERRED-BY-UPSTREAM] Step M1: Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)  (stage_mixed_signal)  [deferred-by-upstream(13, ticket=?)]
+       └─ deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow — one waiver, one deduction
+       └─ no required_outputs found (expected: ['phase3/mixed_signal/top_merged.gds', 'reports/analog/mixed_signal/merge.json'])
+  · [MISSING          ] Step M2: Mixed-Signal Power Domain + Level Shifter / Isolation Verification  (stage_mixed_signal)  [known-gap(M2)]
+       └─ known-gap(M2): this step DECLARES its own gap, so no upstream waiver explains it and the verdict stays MISSING — no program in this plugin writes M2's required_outputs; closing this needs a real emitter that reads the UPF and the post-PnR netlist for INSERTED protection cells — an owner decision, not a declaration edit
+       └─ no required_outputs found (expected: ['reports/analog/mixed_signal/power_domain.json', 'reports/analog/mixed_signal/level_shifter.json', 'reports/analog/mixed_signal/isolation.json'])
+  · [MISSING          ] Step M3: Mixed-Signal Verification (AMS co-sim + RNM + interface signal integrity)  (stage_mixed_signal)  [blocked-by-known-gap(M2)]
+       └─ blocked-by-known-gap(M2): the nearest blocking ancestor DECLARES a gap rather than carrying a waiver, so this is not deferred work — no program in this plugin writes M2's required_outputs; closing this needs a real emitter that reads the UPF and the post-PnR netlist for INSERTED protection cells — an owner decision, not a declaration edit
+       └─ no required_outputs found (expected: ['phase3/mixed_signal/cosim/mixed_signal_results.json', 'reports/analog/mixed_signal/interface_si.json'])
+  · [MISSING          ] Step M4: Mixed-Signal Sign-Off (top-level PV + final verdict)  (stage_mixed_signal)  [blocked-by-known-gap(M2)]
+       └─ blocked-by-known-gap(M2): the nearest blocking ancestor DECLARES a gap rather than carrying a waiver, so this is not deferred work — no program in this plugin writes M2's required_outputs; closing this needs a real emitter that reads the UPF and the post-PnR netlist for INSERTED protection cells — an owner decision, not a declaration edit
+       └─ no required_outputs found (expected: ['reports/analog/mixed_signal/signoff.json'])
+  - [SKIPPED-CONDITION] Step 40: Fabrication (foundry mask-set + wafer fab — external)  (stage5_manufacturing)
+       └─ condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}
+  - [SKIPPED-CONDITION] Step 41: Wafer Sort / Probe Test (ATE + probe card)  (stage5_manufacturing)
+       └─ condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}
+  - [SKIPPED-CONDITION] Step 42: Packaging (assembly: wirebond / FC-CSP / WLCSP)  (stage5_manufacturing)
+       └─ condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}
+  - [SKIPPED-CONDITION] Step 43: Final Test (ATE: functional + parametric + burn-in)  (stage5_manufacturing)
+       └─ condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}
+  - [SKIPPED-CONDITION] Step 44: Reliability qualification (HTOL / FIT attestation)  (stage5_manufacturing)
+       └─ condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}
+
+Overall: FAIL  (strict=True)
+  ⚠ 2 SIGN-OFF step(s) SELF-SKIPPED (disclosed capability gap on a step this flow lists as an open-source-container sign-off bar) — review required:
+    • Step 11 (DFT insertion (scan chain + ATPG + at-speed + BSDL)) — needs DFT insertion (Tessent Scan / DFTMAX)
+    • Step 12 (Post-DFT optimization (resynth / buffering)) — needs Post-DFT optimisation (Design Compiler + DFT)
+
+Step-execution ordering violations (179) — a hand-off step was marked done before a step it depends on completed:
+  ✗ [9] Synthesis (Yosys → mapped netlist) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [FS1] ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only) = VACUOUS-PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [FS1] ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only) = VACUOUS-PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [14] 🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific) = VACUOUS-PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [14] 🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific) = VACUOUS-PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [16] Clock planning = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [16] Clock planning = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [16] Clock planning = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [16] Clock planning = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [16] Clock planning = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [16] Clock planning = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [16] Clock planning = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [16] Clock planning = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [16] Clock planning = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [16] Clock planning = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [16] Clock planning = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [17] Placement (global + detailed) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [19] CTS (Clock Tree Synthesis) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [21] Routing (global + detailed) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [22] Parasitic Extraction (RC → SPEF) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [DT2] Path-delay-fault (at-speed, timing-graded) ATPG = FAIL
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [DT1] Transition-delay-fault (at-speed LOC) ATPG = FAIL
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [DT3] Small-delay-defect (SDD) at-speed grade = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [24] 🔁 IR Drop (static + dynamic) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [25] 🔁 EM check (electromigration lifetime) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [26] 🔁 Antenna check (gate-oxide protection) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [27] 🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [28] 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [23] 🔁 Post-route STA (multi-corner multi-mode sign-off) = FAIL
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [33] Power analysis (pre/post-layout) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [32] 🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute) = FAIL
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [23] 🔁 Post-route STA (multi-corner multi-mode sign-off) = FAIL
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [31] 🔁 Physical Verification (DRC + LVS + ERC + Density) = FAIL
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [34] Metal Fill (ECO-aware density fill insertion) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [32] 🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute) = FAIL
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [23] 🔁 Post-route STA (multi-corner multi-mode sign-off) = FAIL
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [31] 🔁 Physical Verification (DRC + LVS + ERC + Density) = FAIL
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [20] 🔁 Post-CTS hold fixing = FAIL
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [15] Floorplan + PDN = FAIL
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [A8] Hardmacro Generation (LEF + Liberty + GDS + Verilog) = MISSING
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [A7] 🔁 Post-Layout Resimulation = MISSING
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [8] 🔁 SDC validation = FAIL
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [A6] Analog Physical Verification (per-block DRC + LVS before merge) = MISSING
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [10] 🔁 Pre-layout STA (multi-corner) = FAIL
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [A5] Analog Layout = MISSING
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [A4] Analog Corner Sweep (PVT) = MISSING
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [A3] Analog Netlist Generation = MISSING
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [A2] Analog Topology Selection = MISSING
+  ✗ [35] DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) = PASS marked done while dependency [A1] Analog Spec Extraction = MISSING
+GATE EXECUTION LEDGER: 91 invocation(s) — every program gate this run dispatched, whatever it returned.
+  GATE_RAN formal_proof_evidence_check                  rc=2           VACUOUS_PASS
+  GATE_RAN cpu_functional_oracle_waiver_check           rc=0           PASS
+  GATE_RAN fpga_led_probe_lint                          rc=2           VACUOUS_PASS
+  GATE_RAN bit_level_full_stack_tb_check                rc=1           FAIL
+  GATE_RAN vacuous_testbench_check                      rc=0           PASS
+  GATE_RAN phase1_all_l_docs_present_check              rc=0           PASS
+  GATE_RAN l10_tb_conformance_check                     rc=1           FAIL
+  GATE_RAN synth_netlist_check                          rc=0           PASS
+  GATE_RAN sdc_syntax_check                             rc=0           PASS
+  GATE_RAN coverage_closure                             rc=2           VACUOUS_PASS
+  GATE_RAN pvt_matrix_check                             rc=0           PASS
+  GATE_RAN sdc_syntax_check                             rc=0           PASS
+  GATE_RAN provenance_check                             rc=0           PASS
+  GATE_RAN dft_atpg_coverage_check                      rc=2           VACUOUS_PASS
+  GATE_RAN sdc_exception_correlation_check              rc=0           PASS
+  GATE_RAN bsdl_emit                                    rc=2           VACUOUS_PASS
+  GATE_RAN fmeda_fault_injection_coverage               rc=0           PASS
+  GATE_RAN sdc_validator_check                          rc=1           FAIL
+  GATE_RAN dft_signoff_check                            rc=2           VACUOUS_PASS
+  GATE_RAN fmeda_coverage_check                         rc=0           PASS
+  GATE_RAN transition_coverage_check                    rc=1           FAIL
+  GATE_RAN yosys_hilomap_required_check                 rc=0           PASS
+  GATE_RAN ip_integration_check                         rc=1           FAIL
+  GATE_RAN yosys_script_template_check                  rc=0           PASS
+  GATE_RAN lec_equivalence_check                        rc=3           PASS_WITH_WAIVERS
+  GATE_RAN yosys_tiecell_recipe_order_check             rc=0           PASS
+  GATE_RAN placement_legality_check                     rc=0           PASS
+  GATE_RAN cts_quality_check                            rc=0           PASS
+  GATE_RAN clock_plan_check                             rc=0           PASS
+  GATE_RAN hold_closure_check                           rc=1           FAIL
+  GATE_RAN spef_extraction_check                        rc=0           PASS
+  GATE_RAN sta_report_check                             rc=1           FAIL
+  GATE_RAN provenance_check                             rc=0           PASS
+  GATE_RAN rtl_hygiene_lint                             rc=0           PASS
+  GATE_RAN rom_init_lint                                rc=0           PASS
+  GATE_RAN path_delay_coverage_check                    rc=1           FAIL
+  GATE_RAN sdd_coverage_check                           rc=0           PASS
+  GATE_RAN internal_vs_external_timing_check            rc=0           PASS
+  GATE_RAN threshold_range_contiguity_check             rc=0           PASS
+  GATE_RAN rsp_example_otp_consistency_check            rc=0           PASS
+  GATE_RAN spec_response_delay_check                    rc=0           PASS
+  GATE_RAN nba_addr_read_race_check                     rc=0           PASS
+  GATE_RAN periodic_timer_vs_rx_activity_check          rc=0           PASS
+  GATE_RAN memory_read_pipeline_check                   rc=0           PASS
+  GATE_RAN cdc_crossing_check                           rc=0           PASS
+  GATE_RAN fpga_wrapper_input_polluter_check            rc=0           PASS
+  GATE_RAN sta_report_check                             rc=1           FAIL
+  GATE_RAN antenna_report_check                         rc=0           PASS
+  GATE_RAN si_crosstalk_check                           rc=0           PASS
+  GATE_RAN perc_signoff_check                           rc=0           PASS
+  GATE_RAN phase1_expert_parse_track                    rc=0           PASS
+  GATE_RAN drc_report_check                             rc=0           PASS
+  GATE_RAN eco_loop_audit                               rc=1           FAIL
+  GATE_RAN ir_drop_report_check                         rc=0           PASS
+  GATE_RAN analog_a0_skip_forbidden_check               rc=0           PASS
+  GATE_RAN def_stage_progression_check                  rc=0           PASS
+  GATE_RAN dynamic_ir_drop_check                        rc=0           PASS
+  GATE_RAN em_report_check                              rc=0           PASS
+  GATE_RAN provenance_check                             rc=0           PASS
+  GATE_RAN metal_fill_density_check                     rc=0           PASS
+  GATE_RAN route_congestion_trade_disclosure            rc=0           PASS
+  GATE_RAN foundry_handoff_package_check                rc=1           FAIL
+  GATE_RAN cdc_async_input_check                        rc=0           PASS
+  GATE_RAN phase1_expert_track_evidence_check           rc=0           PASS
+  GATE_RAN si_mcf_sta_check                             rc=0           PASS
+  GATE_RAN dfm_screen_check                             rc=1           FAIL
+  GATE_RAN l16_compliance_properties_actionable_check   rc=0           PASS
+  GATE_RAN clock_domain_reg_crossing_check              rc=0           PASS
+  GATE_RAN power_report_check                           rc=0           PASS
+  GATE_RAN l17_channel_catalog_consumer_contract_check  rc=0           PASS
+  GATE_RAN l21_macro_supply_rail_declared_check         rc=0           PASS
+  GATE_RAN l8_sta_clock_period_design_owned_check       rc=0           PASS
+  GATE_RAN drc_vacuous_pass_check                       rc=0           PASS
+  GATE_RAN l7_debug_access_grounding_check              rc=0           PASS
+  GATE_RAN l8_clock_period_actionability_check          rc=0           PASS
+  GATE_RAN l9_floorplan_contract_check                  rc=0           PASS
+  GATE_RAN l10_test_case_oracle_anchor_check            rc=1           FAIL
+  GATE_RAN l11_otp_content_consumer_contract_check      rc=1           FAIL
+  GATE_RAN l12_sequences_in_consumed_layer_check        rc=0           PASS
+  GATE_RAN l13_bringup_contract_check                   rc=1           FAIL
+  GATE_RAN l14_protocol_versioning_contract_check       rc=0           PASS
+  GATE_RAN l15_encoding_tables_contract_check           rc=0           PASS
+  GATE_RAN l18_interconnect_topology_factuality_check   rc=0           PASS
+  GATE_RAN drc_report_check                             rc=1           FAIL
+  GATE_RAN cross_layer_reference_check                  rc=2           VACUOUS_PASS
+  GATE_RAN reset_dependency_check                       rc=0           PASS
+  GATE_RAN l_doc_todo_stub_count_check                  rc=0           PASS
+  GATE_RAN l_doc_cross_consistency_check                rc=1           FAIL
+  GATE_RAN spec_review_lint                             rc=2           VACUOUS_PASS
+  GATE_RAN tapeout_signoff_check                        rc=1           FAIL
+  GATE_RAN report_belongs_to_project_check              rc=1           FAIL

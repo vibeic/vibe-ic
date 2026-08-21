@@ -1,0 +1,21 @@
+OpenROAD 26Q3-1110-g2f9fbcd47e 
+Features included (+) or not (-): -GPU +GUI -Python
+This program is licensed under the BSD-3 license. See the LICENSE file for details.
+Components of this program may be licensed under more restrictive licenses which must be honored.
+[INFO ODB-0227] LEF file: /home/reyerchu/_n25_sn2025/run26/input/pdk/lef/m18e80pm180su_lef_210820/STD/m18e80pm180su_5lm_tech_v56.lef, created 44 layers, 8 vias
+[INFO ODB-0227] LEF file: /home/reyerchu/_n25_sn2025/run26/phase3/pdk_stage/m18e80pm180su_macro_v56_supplydir_fix.lef, created 325 library cells
+[WARNING ODB-0176] error: undefined layer (OVERLAP) referenced
+[INFO ODB-0227] LEF file: /home/reyerchu/_n25_sn2025/run26/input/pdk_local/otp_ip/LEF/EO0128X8KA180BA11_M3.lef, created 1 library cells
+[INFO ODB-0127] Reading DEF file: /home/reyerchu/_n25_sn2025/run26/phase3/stage3/pnr/chip_top_asic.def
+[INFO ODB-0128] Design: chip_top_asic
+[INFO ODB-0130]     Created 5 pins.
+[INFO ODB-0131]     Created 1699 components and 9726 component-terminals.
+[INFO ODB-0132]     Created 2 special nets and 3398 connections.
+[INFO ODB-0133]     Created 1738 nets and 6277 connections.
+[INFO ODB-0134] Finished DEF file: /home/reyerchu/_n25_sn2025/run26/phase3/stage3/pnr/chip_top_asic.def
+=== PSM_NET VDD ===
+[WARNING PSM-0038] Unconnected shape on net VDD at (239.720um, 152.860um) - (249.720um, 153.460um), layer: MET3.
+[WARNING PSM-0038] Unconnected shape on net VDD at (416.240um, 54.020um) - (416.840um, 64.020um), layer: MET3.
+[WARNING PSM-0039] Unconnected instance u_otp.u_otp/VDD at location (330.630um, 106.090um).
+[ERROR PSM-0069] Check connectivity failed on VDD.
+PSM_NONFATAL VDD: PSM-0069
