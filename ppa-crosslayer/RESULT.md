@@ -347,9 +347,12 @@ area — and that a design wanting to keep it should read `t020` at 6291 µm²
 instead of `t028` at 6136.
 
 `z23` is the shared-XOR RTL + Kogge-Stone techmap at density 0.60 with the
-**shipped spare density 0.02 kept**: **6106 µm², 0.000541 W, ten tie-off spare
-cells present in the routed netlist** (verified by cell-category decomposition:
-`tie 37.5 µm² (10)`).
+**shipped spare density 0.02 kept**: **6106 µm², 0.000541 W, and ten spare ECO
+cells actually in the routed database.** Not asserted — the flow's own
+`phase3/stage3/pnr/spare_cells.json` reads `{"count": 10, "density": 0.02}` for
+`z23` and `{"count": 0, "density": 0.0}` for `p04`, and the cell-category
+decomposition of the two routed netlists finds their ten tie-offs
+(`tie 37.5 µm² (10)`) present in one and absent in the other.
 
 | | area | power | spare ECO cells |
 |---|---:|---:|---:|
