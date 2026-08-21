@@ -18,6 +18,16 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. Directory arguments
+# route through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist_yosys.v can never enter the char-level scan again
+# (see _specrtl_common.rtl_source_files for the full scale rationale).
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 
 @dataclass
 class Finding:
@@ -208,8 +218,9 @@ def main(argv: List[str]) -> int:
     for p in args.paths:
         pp = Path(p)
         if pp.is_dir():
-            files.extend(sorted(pp.rglob("*.v")))
-            files.extend(sorted(pp.rglob("*.sv")))
+            # Authored-RTL-source collection via the shared helper (an
+            # explicit FILE argument is still honoured verbatim below).
+            files.extend(rtl_source_files(pp))
         elif pp.is_file():
             files.append(pp)
 
@@ -240,6 +251,21 @@ def main(argv: List[str]) -> int:
             f"Warnings: {result.stats['warnings']}  "
             f"Result: {'PASS' if result.passed else 'FAIL'}"
         )
+
+    # Zero files scanned is not a clean project (#564). `passed` is true
+    # because nothing contradicted the rule, and rc 0 is what the P0 umbrella
+    # aggregates — so a path with no RTL under it would be certified as having
+    # no bitwidth consistency defect.
+    #
+    # Measured over 40 tracked corpus projects before landing: every one
+    # scanned at least 1 file (counts 1..2, tracking the project), so no real
+    # project moves. rc 2 is "could not check", which the CI dispatcher
+    # already separates from a finding.
+    if result.stats.get("files_scanned", 0) == 0:
+        print(f"VACUOUS_PASS: bitwidth_consistency_check examined nothing "
+              f"(reason: 0 files scanned) — this is not a clean result",
+              file=sys.stderr)
+        return 2
 
     return 0 if result.passed else 1
 

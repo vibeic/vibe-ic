@@ -22,6 +22,7 @@ Covers the 7 backlog items:
 """
 import importlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -170,7 +171,7 @@ class TestSpefTclCaptable:
         spef = ex / "chip_top.spef"
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
-                            lambda c, cmd, timeout=0: (0, "", ""))
+                            lambda c, cmd, timeout=0, **_: (0, "", ""))
         runner._emit_spef(project, "chip_top", _fake_pdk(), "x", spef, [])
         tcl_files = list(ex.glob("extract_*.tcl"))
         assert tcl_files, "extract TCL was not written"
@@ -186,11 +187,26 @@ class TestSpefTclCaptable:
 
     def test_estimate_is_fallback_only(self, tmp_path, monkeypatch):
         tcl = self._emit(tmp_path, monkeypatch)
-        # estimate_parasitics may remain ONLY inside the no-captable fallback branch
-        assert "SPEF_NO_CAPTABLE_FALLBACK_ESTIMATE" in tcl
-        # write_spef still present + last
+        # v1.3.94: the no-captable fallback is a REAL OpenRCX v2 `-lef_rc`
+        # grounded-cap extraction (SPEF_LEF_RC_V2_EXTRACT), which SUPERSEDED the
+        # old estimate_parasitics fallback (the retired marker
+        # SPEF_NO_CAPTABLE_FALLBACK_ESTIMATE). estimate_parasitics only populates
+        # lumped STA RC → RCX-0134 → an EMPTY SPEF, so write_spef can never depend
+        # on it: the fallback must ITSELF be a real extraction. Intent preserved
+        # (real extraction is primary; estimate never feeds write_spef) — in fact
+        # strengthened: estimate_parasitics is not invoked by the SPEF emit at all
+        # (it survives only in the explanatory comments).
+        assert "SPEF_LEF_RC_V2_EXTRACT" in tcl, (
+            "no-captable fallback must be the real OpenRCX v2 LEF-RC extraction")
         lines = [l.strip() for l in tcl.splitlines()
                  if l.strip() and not l.strip().startswith("#")]
+        assert any("extract_parasitics -lef_rc" in l for l in lines), (
+            "no-captable fallback must call OpenRCX -lef_rc (real grounded-cap "
+            "extraction), not estimate_parasitics")
+        assert not any("estimate_parasitics" in l for l in lines), (
+            "estimate_parasitics must NOT feed write_spef — it produces no OpenRCX "
+            "extraction data (RCX-0134 → empty SPEF); the fallback is real extraction")
+        # write_spef still present + last; a real extract_parasitics precedes it
         i_ext = next(i for i, l in enumerate(lines)
                      if "extract_parasitics -ext_model_file" in l)
         i_ws = next(i for i, l in enumerate(lines) if "write_spef" in l)
@@ -219,7 +235,7 @@ class TestIrEmReports:
         rpt3.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
 
-        def fake_exec(container, cmd, timeout=0):
+        def fake_exec(container, cmd, timeout=0, **_):
             # Emit an EM segment CSV where the emitter expects it.
             for tok in cmd.split():
                 if tok.endswith("em_segments.csv"):
@@ -261,7 +277,7 @@ class TestIrEmReports:
         rpt3.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
-                            lambda c, cmd, timeout=0: (0, "", ""))
+                            lambda c, cmd, timeout=0, **_: (0, "", ""))
         notes = []
         ir_ok, em_ok = runner._emit_ir_em_reports(
             project, "chip_top", _fake_pdk(), "x",
@@ -285,7 +301,7 @@ class TestAntennaReport:
         rpt3.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
-                            lambda c, cmd, timeout=0: (0, _ANT_STDOUT, ""))
+                            lambda c, cmd, timeout=0, **_: (0, _ANT_STDOUT, ""))
         ant = rpt3 / "antenna.rpt"
         ok = runner._emit_antenna_report(
             project, "chip_top", _fake_pdk(), "x", ant, [])
@@ -303,35 +319,53 @@ class TestAntennaReport:
 class TestAntennaRepairTcl:
     """Pin the silicon-critical antenna-repair sequence (v0.1.49 doctrine: the
     Tcl-block builder is a pure helper so a regression cannot silently revert it).
-    The chacha verification (85/112 -> 0/0) depended on every one of these."""
+
+    v1.3.46 — the sequence is now an INCREMENTAL repair->reroute->repair OUTER
+    loop with NO full `global_route`: `repair_antennas -iterations 1` (which does
+    not trip GRT-0121 the way -iterations N>1 does) marks only the diode nets
+    dirty, then `detailed_route` re-routes ONLY those dirty nets (incremental).
+    The loop re-checks and breaks on 0 net violations. Dropping the full
+    global_route both fixes the ibex ~1900-net reroute timeout and converges the
+    sha256/caravel residuals (proven in-session on sha256 at v1.3.46)."""
 
     def test_proven_sequence_present(self):
         tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
-        # Inside the repair branch: global_route BEFORE repair_antennas (jumper
-        # insertion needs a fresh GRT graph) -> repair_antennas -> detailed_route
-        # (realize) -> the FINAL check_antennas (last occurrence).
-        # anchor on COMMAND forms (bare keywords also appear in comments)
-        i_gr = tcl.index("catch {global_route}")
+        # Repair branch: an OUTER loop of check -> repair_antennas -iterations 1 ->
+        # incremental detailed_route, then a FINAL authoritative check_antennas.
+        # anchor on COMMAND forms (bare keywords also appear in comments).
+        i_loop = tcl.index("for {set _i 0}")
         i_ra = tcl.index("repair_antennas sky130")
         i_dr = tcl.index("catch {detailed_route")
         i_ck_last = tcl.index("catch {check_antennas}")   # final post-repair check
-        assert i_gr < i_ra < i_dr < i_ck_last, "antenna repair sequence out of order"
+        assert i_loop < i_ra < i_dr < i_ck_last, "antenna repair sequence out of order"
+        assert "-iterations 1" in tcl          # ONE repair pass/turn (no GRT-0121)
+        assert "-iterations 5" not in tcl      # the pre-v1.3.46 GRT-0121 form is gone
         assert "ANTENNA_POSTROUTE_DONE" in tcl   # sentinel for the in-session read
+
+    def test_no_full_global_route_command(self):
+        # v1.3.46: a full global_route before the reroute forces a full re-route of
+        # EVERY net (ibex timeout). It is DROPPED — no `global_route` COMMAND (the
+        # comments may still explain why it is gone, hence command-line-only scan).
+        tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
+        cmds = "\n".join(ln for ln in tcl.splitlines()
+                         if not ln.lstrip().startswith("#"))
+        assert "global_route" not in cmds
 
     def test_skip_when_clean_precheck(self):
         # SKIP-WHEN-CLEAN (perf): a cheap read-only check_antennas runs on the main
-        # route FIRST (before the repair global_route); if 0 net violations, the
-        # expensive repair+reroute is skipped, and that skip branch runs NO
-        # global_route (so it cannot disturb the main route's wires).
+        # route FIRST (before the repair loop); if 0 net violations, the expensive
+        # repair+incremental-reroute loop is skipped, and that skip branch runs NO
+        # reroute (so it cannot disturb the main route's wires).
         tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
         i_precheck = tcl.index("set _ant_pre [check_antennas]")   # read-only precheck
-        i_gr = tcl.index("catch {global_route}")                  # repair-branch GR
-        assert i_precheck < i_gr, "precheck must run before the repair global_route"
+        i_loop = tcl.index("for {set _i 0}")                      # repair-branch loop
+        assert i_precheck < i_loop, "precheck must run before the repair loop"
         assert "ANTENNA_ALREADY_CLEAN" in tcl          # the skip marker
         assert "$_ant_pre == 0" in tcl                 # gate on 0 net violations
-        # the skip branch (if-body, before `} else {`) emits NO global_route command
+        # the skip branch (if-body, before `} else {`) emits NO repair/reroute command
         skip_seg = tcl[tcl.index("$_ant_pre == 0"):tcl.index("} else {")]
-        assert "catch {global_route}" not in skip_seg
+        assert "repair_antennas" not in skip_seg
+        assert "detailed_route" not in skip_seg
 
     def test_diode_cell_is_positional_not_flag(self):
         # The v0.2.14 bug: `repair_antenna -diode_cell <c>` (singular + flag) errors
@@ -348,9 +382,9 @@ class TestAntennaRepairTcl:
 
     def test_all_steps_nonfatal_guarded(self):
         # Antenna repair must never abort the PnR — every step is catch-guarded.
+        # (v1.3.46: global_route is dropped, so it is no longer in the set.)
         tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
-        for cmd in ("global_route", "repair_antennas", "detailed_route",
-                    "check_antennas"):
+        for cmd in ("repair_antennas", "detailed_route", "check_antennas"):
             assert ("catch {" + cmd) in tcl, f"{cmd} not NONFATAL-guarded"
 
 
@@ -387,29 +421,235 @@ class TestDontUseTcl:
         assert "clkbuf_" not in tcl
         assert "tapvpwrvgnd" not in tcl and "__fill_" not in tcl
 
-    def test_sky130a_pdk_points_at_drc_exclude(self):
+    def test_sky130a_pdk_points_at_librelane_pnr_excluded(self):
+        # R8 (v1.3.50) — the fork's newer image MOVED+RENAMED the exclusion file
+        # to libs.tech/librelane/<lib>/pnr_excluded.cells; the sky130A config now
+        # points its PRIMARY hint there. `_dont_use_tcl` globs BOTH dirs + BOTH
+        # filenames inside the container so the old-image openlane/drc_exclude.cells
+        # is still resolved as a fallback (see test_v1_3_50_forkadapt_batch.py).
         pdk = runner._detect_pdk(__import__("pathlib").Path("/nonexistent"), "sky130A")
         assert pdk.pnr_exclude_cell_file is not None
+        assert "/libs.tech/librelane/" in pdk.pnr_exclude_cell_file
         assert pdk.pnr_exclude_cell_file.endswith(
-            "sky130_fd_sc_hd/drc_exclude.cells")
+            "sky130_fd_sc_hd/pnr_excluded.cells")
 
     def test_wired_after_link_design_before_opt(self):
+        """The do-not-use list must land after `read_sdc` and before the
+        wire-RC / optimisation sequence: a pool restriction that arrives after
+        the pick is not a restriction.
+
+        Asserted on the EMITTED ORDER rather than on the template source, and
+        specifically NOT on the adjacency of two literals. The previous form
+        pinned `"{dont_use_block}# === v0.1.26 wire-RC model ==="` — i.e. that
+        NOTHING may ever sit between those two placeholders — so it went red
+        the moment a second pre-optimisation block was added between them,
+        while the property it exists for was untouched. An ordering test that
+        forbids insertion is testing the layout, not the ordering.
+        """
         import inspect
         src = inspect.getsource(runner.step_pnr)
         assert "dont_use_block = _dont_use_tcl(pdk)" in src
-        # ORGANIC #581 — the pnr.tcl template moved into the pure builder
-        # _build_pnr_tcl_text (tclsh-validated); the injection-point pin
-        # moves with it: right after read_sdc, before the wire-RC / opt
-        # sequence.
-        tmpl = inspect.getsource(runner._build_pnr_tcl_text)
-        assert "{dont_use_block}# === v0.1.26 wire-RC model ===" in tmpl
+        tcl = runner._build_pnr_tcl_text(
+            tech_lef_c="/x/tech.lef", cell_lef_c="/x/cell.lef",
+            macro_lefs_tcl="", liberty_c="/x/c.lib", macro_libs_tcl="",
+            netlist_c="/x/d.v", top="d", sdc_c="/x/d.sdc",
+            dont_use_block="#DONT_USE_MARKER\n",
+            metal_prefix="met", die_w=100, die_h=100, core_pad=10,
+            core_w=90, core_h=90, site="unit", out_dir_c="/out",
+            tapcell_block="", pdn_block="", util=0.3,
+            spare_protection_tcl="", spare_postfix_tcl="",
+            clk_buf="BUF", clk_buf_root="BUF", routing_constraint_tcl="",
+            pg_cleanup_block="", spef_repair_block="",
+            antenna_repair_block="", filler_block="")
+        du = tcl.index("#DONT_USE_MARKER")
+        sdc = tcl.index("read_sdc ")
+        wire_rc = tcl.index("set_wire_rc")
+        assert sdc < du < wire_rc, (
+            f"do-not-use at {du} is not between read_sdc ({sdc}) and the "
+            f"wire-RC/opt sequence ({wire_rc})")
+        # ...and before every command that can PICK a cell.
+        for cmd in ("global_placement", "buffer_ports", "repair_design",
+                    "repair_timing", "clock_tree_synthesis"):
+            assert du < tcl.index(cmd), (
+                f"the do-not-use list is emitted after `{cmd}`, which can "
+                f"already have chosen an excluded master")
+
+
+class TestDontUseFamilyFallback:
+    """v1.2.86 — the file-based set_dont_use above SILENTLY degraded to zero
+    exclusions on iic-osic-tools (which ships no drc_exclude.cells ANYWHERE):
+    repair_design then inserted sky130_fd_sc_hd__probe_p_8 as slew/load buffers,
+    detailed_route aborted with [ERROR DRT-0085], and write_def emitted a
+    signal-UNROUTED DEF (root cause of the LVS_INPUT_DEF_SIGNAL_UNROUTED guard
+    on opentitan_aes). The GENERAL fallback excludes the unroutable
+    probe/probec/lpflow (and the delay-macro) cell FAMILIES via OpenROAD's own
+    get_lib_cells, so the resizer never picks a probe cell even with no PDK
+    exclude file."""
+
+    @staticmethod
+    def _patterns():
+        """The pattern list AS EMITTED — read out of the Tcl instead of retyped,
+        so the test cannot drift away from the code it is guarding."""
+        m = re.search(r"foreach _du_pat \{([^}]*)\}",
+                      runner._dont_use_family_fallback_tcl())
+        assert m, "no `foreach _du_pat {...}` in the emitted fallback"
+        pats = m.group(1).split()
+        assert pats
+        return pats
+
+    def test_fallback_matches_both_naming_conventions_not_just_open_pdk(self):
+        """THE defect-present test. Every pattern used to be anchored on the
+        OPEN-PDK ``<lib>__<fn>`` double-underscore habit (``*__probe_*``,
+        ``*__dly*``). A commercial library spells the SAME families with bare,
+        upper-case names (``DLY1D1``), so the pattern list matched ZERO cells
+        while the log still printed ``DONT_USE_FALLBACK_APPLIED`` — the guard
+        reported that it ran and protected nothing. Measured consequence on a
+        real run: repair_design picked a 4-stage delay macro as the slew-fix
+        buffer. So the assertion is on BEHAVIOUR over both conventions, not on
+        a spelling: restore any ``__``-anchored pattern and the bare-name rows
+        below stop matching and this test FAILS."""
+        pats = self._patterns()
+        tcl = runner._dont_use_family_fallback_tcl()
+        # `-regexp` is what makes `-nocase` take effect AT ALL. Measured
+        # in-container (OpenSTA inside OpenROAD): in GLOB mode it prints
+        # `[WARNING STA-0358] -nocase ignored without -regexp` and matches
+        # case-SENSITIVELY — `-nocase -quiet *dly*` returned 0 cells while
+        # `-quiet *DLY*` returned 4. Asking for -nocase without -regexp makes
+        # the guard protect nothing while still logging that it ran.
+        assert "get_lib_cells -regexp -nocase -quiet $_du_pat" in tcl
+        # …and NO executable line may ask for -nocase without it. (Comment
+        # lines quote the STA-0358 warning verbatim, so they are excluded.)
+        for ln in tcl.splitlines():
+            if ln.lstrip().startswith("#") or "-nocase" not in ln:
+                continue
+            assert "-regexp" in ln.split("-nocase")[0], (
+                f"a -nocase without a preceding -regexp is silently ignored "
+                f"by OpenSTA: {ln.strip()!r}")
+
+        def hit(name):
+            # OpenSTA anchors a -regexp pattern to the WHOLE cell name
+            # (measured: `dly` -> 0 cells, `.*dly.*` -> 4), hence fullmatch.
+            return any(re.fullmatch(p, name, re.IGNORECASE) for p in pats)
+
+        must_exclude = [
+            # open-PDK <lib>__<fn> spelling (the only one the old list caught)
+            "sky130_fd_sc_hd__probe_p_8",
+            "sky130_fd_sc_hd__probec_p_8",
+            "sky130_fd_sc_hd__lpflow_inputiso0p_1",
+            "sky130_fd_sc_hd__dlygate4sd3_1",
+            "sky130_fd_sc_hd__dlymetal6s2s_1",
+            "sky130_fd_sc_hd__clkdlybuf4s15_1",
+            "gf180mcu_fd_sc_mcu7t5v0__dlya_1",
+            # bare commercial spelling, upper case — the whole point
+            "DLY1D1", "DLY2D1", "DLY3D1", "DLY4D1",
+            "DELAY2X", "PROBE_X1", "LPFLOW_ISO1",
+        ]
+        missed = [n for n in must_exclude if not hit(n)]
+        assert not missed, (
+            "these cells are the unroutable/delay families the fallback exists "
+            f"to exclude, yet no emitted pattern matches them: {missed}\n"
+            f"patterns as emitted: {pats}")
+
+        must_keep = [
+            # ordinary drive ladder, both conventions — excluding these would
+            # empty the pool the resizer/CTS draw from.
+            "sky130_fd_sc_hd__buf_8", "sky130_fd_sc_hd__inv_2",
+            "sky130_fd_sc_hd__dfxtp_1", "sky130_fd_sc_hd__clkbuf_16",
+            "gf180mcu_fd_sc_mcu7t5v0__buf_20",
+            "BUFD1", "BUFD20", "INVD4", "CLKBUFD20", "DFCRQD1", "NAND2D2",
+        ]
+        wrong = [n for n in must_keep if hit(n)]
+        assert not wrong, (
+            "the fallback would exclude ordinary logic/buffer/flop cells, "
+            f"starving the resizer and CTS: {wrong}\npatterns: {pats}")
+
+    def test_case_insensitive_matching_is_asked_for_in_the_mode_sta_honours(
+            self):
+        """OpenSTA honours ``-nocase`` ONLY with ``-regexp``; in glob mode it
+        warns ``[WARNING STA-0358] -nocase ignored without -regexp`` and matches
+        case-sensitively. Measured in-container on a commercial 180 nm liberty:
+        ``-nocase -quiet *dly*`` -> 0 cells, ``-quiet *DLY*`` -> 4. The run then
+        printed ``DONT_USE_FALLBACK_APPLIED: 0 … usable buffer cells 63 -> 63``,
+        i.e. the guard announced itself and excluded nothing. Because OpenSTA
+        anchors a regexp to the WHOLE cell name, each pattern must also carry
+        its own ``.*`` (measured: ``dly`` -> 0, ``.*dly.*`` -> 4)."""
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "-regexp" in tcl, "case-insensitive matching needs -regexp"
+        for pat in self._patterns():
+            # A GLOB (`*dly*`) fails BOTH halves of this: it does not open or
+            # close with the regex any-run `.*`. Restore the globs and this
+            # test FAILS on the first pattern.
+            assert pat.startswith(".*") and pat.endswith(".*"), (
+                f"{pat!r} is not whole-name-anchored: OpenSTA fullmatches a "
+                "-regexp pattern, so an unanchored stem matches nothing")
+            re.compile(pat)          # must be a valid regex, not a glob
+
+    def test_fallback_pool_emptying_is_measured_and_reverted_never_silent(self):
+        """A wider net can, on a pathological library, exclude EVERY buffer.
+        The block must COUNT what OpenSTA itself calls a buffer before and
+        after, revert the whole set when the count would hit zero, and say so.
+        Delete the revert and this test FAILS."""
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "get_property $_c is_buffer" in tcl   # the resizer's own pool
+        assert "set _du_before" in tcl and "set _du_after" in tcl
+        assert "if {$_du_before > 0 && $_du_after == 0} {" in tcl
+        assert "unset_dont_use $_du_all" in tcl
+        assert "DONT_USE_FALLBACK_REVERTED" in tcl
+        # the before/after counts are REPORTED, not just used internally
+        assert "usable buffer cells $_du_before -> $_du_after" in tcl
+
+    def test_fallback_uses_get_lib_cells_over_loaded_liberty(self):
+        # GENERAL + authoritative: only excludes cells that actually exist in the
+        # loaded liberty (empty-match patterns are skipped), no baked cell literal.
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "get_lib_cells -regexp -nocase -quiet" in tcl
+        assert "set_dont_use $_du_cells" in tcl
+        assert "DONT_USE_FALLBACK_APPLIED" in tcl
+
+    def test_fallback_is_nonfatal_guarded(self):
+        # A bad pattern must never abort PnR.
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "catch {set_dont_use" in tcl
+        assert "DONT_USE_FALLBACK_NONFATAL" in tcl
+
+    def test_fallback_never_touches_cts_or_physical_masters(self):
+        # CTS needs plain clkbuf; tap/decap/fill/diode have dedicated placers.
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "clkbuf_" not in tcl
+        assert "tapvpwrvgnd" not in tcl
+        assert "__fill_" not in tcl
+        assert "diode" not in tcl
+
+    def test_fallback_carries_no_design_literal(self):
+        # chip-AGNOSTIC / §4.05: family suffixes only, no chip/benchmark name.
+        tcl = runner._dont_use_family_fallback_tcl()
+        for bad in ("aes", "chip_top", "opentitan", "spm", "ibex"):
+            assert bad not in tcl.lower()
+
+    def test_dont_use_tcl_always_includes_fallback(self):
+        # With a PDK exclude file AND without one, the fallback is always present
+        # (the file is the authoritative superset; the fallback is the floor).
+        with_file = runner._dont_use_tcl(_fake_pdk_with_exclude())
+        no_file = runner._dont_use_tcl(_fake_pdk())
+        assert "DONT_USE_FALLBACK_APPLIED" in with_file
+        assert "DONT_USE_FALLBACK_APPLIED" in no_file
+        # honest skip message for the file part is still emitted when absent
+        assert "DONT_USE_SKIPPED" in no_file
+
+    def test_fallback_precedes_the_file_block(self):
+        # The get_lib_cells fallback runs BEFORE the file read so a resizer that
+        # runs immediately still sees the family exclusions.
+        tcl = runner._dont_use_tcl(_fake_pdk_with_exclude())
+        assert (tcl.index("DONT_USE_FALLBACK_APPLIED")
+                < tcl.index("DONT_USE_APPLIED"))
 
 
 class TestPgNetCleanupTcl:
     """Pin the DRT-0305 PG-net cleanup that MUST precede routing (v0.1.49 doctrine).
-    A non-special POWER/GROUND net in regular NETS aborts ALL detailed routing;
-    this pass removes/reclassifies it so the design routes instead of silently
-    shipping unrouted."""
+    A non-special POWER/GROUND net in regular NETS aborts ALL detailed routing
+    when it is DANGLING; this pass removes those so the design routes instead of
+    silently shipping unrouted. One with real terminals is an unrouted SUPPLY
+    and is reported, not reclassified (vibe-ic#687)."""
 
     def test_cleanup_targets_nonspecial_pg_only(self):
         tcl = runner._pg_net_cleanup_tcl()
@@ -417,11 +657,25 @@ class TestPgNetCleanupTcl:
         assert '"POWER"' in tcl and '"GROUND"' in tcl
         assert 'isSpecial' in tcl              # real PG nets (special) are spared
 
-    def test_cleanup_deletes_dangling_reclassifies_connected(self):
+    def test_cleanup_deletes_dangling_and_REPORTS_connected(self):
+        """RENAMED AND INVERTED — vibe-ic#687. This test pinned the defect: it
+        asserted `setSigType SIGNAL`, i.e. that a POWER net WITH terminals gets
+        handed to the detailed router as a signal.
+
+        That net is not dangling; it is an UNROUTED SUPPLY, and routing it at
+        minimum signal width is how a run went green — it leaves SPECIALNETS so
+        geometry gates have nothing to examine, the PG connect audit sees every
+        terminal attached, and DRC/ERC/PV then pass. Worst for a secondary
+        supply above the core voltage, where the vendor requires supply-pin
+        width and signal width is an order of magnitude under it.
+
+        The DANGLING branch is unchanged and still asserted: that one is the
+        DRT-abort fix this pass exists for."""
         tcl = runner._pg_net_cleanup_tcl()
         assert 'dbNet_destroy' in tcl          # dangling stub -> delete
-        assert 'setSigType SIGNAL' in tcl      # connected -> route as signal
-        # delete is gated on zero iterms AND zero bterms (dangling only)
+        assert 'setSigType SIGNAL' not in tcl  # connected -> REPORTED, not retyped
+        assert 'PG_CLEANUP_UNROUTED_SUPPLY' in tcl
+        # delete is still gated on zero iterms AND zero bterms (dangling only)
         assert 'getITerms' in tcl and 'getBTerms' in tcl
 
     def test_cleanup_is_nonfatal_guarded(self):
@@ -572,7 +826,7 @@ class TestAntennaInSessionPreference:
         # re-global_route measurement (container) is used instead.
         calls = {"n": 0}
 
-        def _fake_exec(c, cmd, timeout=0):
+        def _fake_exec(c, cmd, timeout=0, **_):
             calls["n"] += 1
             return (0, "[INFO ANT-0002] Found 7 net violations.\n"
                        "[INFO ANT-0001] Found 0 pin violations.\n", "")
@@ -699,7 +953,7 @@ class TestMetalFill:
 
         filled = pnr / "filled.def"
 
-        def fake_exec(container, cmd, timeout=0):
+        def fake_exec(container, cmd, timeout=0, **_):
             # The write_def target lives inside the TCL, not the command;
             # emit filled.def directly (larger than routed) as OpenROAD would.
             filled.write_text(_DEF_WITH_PDN + "\n# fill\n" * 50)
@@ -723,7 +977,7 @@ class TestMetalFill:
         filled = pnr / "filled.def"
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
 
-        def fake_exec(container, cmd, timeout=0):
+        def fake_exec(container, cmd, timeout=0, **_):
             filled.write_text(_DEF_WITH_PDN + "\n# fill\n" * 50)
             return (0, _FILL_STDOUT, "")
 
@@ -763,7 +1017,7 @@ class TestErcReport:
         rpt3.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
-                            lambda c, cmd, timeout=0: (0, _ERC_STDOUT, ""))
+                            lambda c, cmd, timeout=0, **_: (0, _ERC_STDOUT, ""))
         erc = rpt3 / "erc.rpt"
         ok = runner._emit_erc_report(
             project, "chip_top", _fake_pdk(), "x", erc, [])

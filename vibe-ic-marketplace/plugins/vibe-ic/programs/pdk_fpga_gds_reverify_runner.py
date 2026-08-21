@@ -23,7 +23,7 @@ USAGE — pre-compile
     python3 pdk_fpga_gds_reverify_runner.py \\
         --project           ./bench-a \\
         --pnr-netlist       phase3/chip_top_asic_pnr.v \\
-        --pdk-behavioral    pdk/m18e80_neg.v \\
+        --pdk-behavioral    pdk/<pdk>_neg.v \\
         --otp-hex           input/otp.hex \\
         --rtl-chip-top      rtl/chip_top.sv \\
         --rtl-chip-top-asic rtl/chip_top_asic.sv \\
@@ -298,7 +298,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--bus-prefix", default="id_bus")
     ap.add_argument("--mif-name", default="otp_init",
                     help="MIF filename stem (no extension)")
-    ap.add_argument("--container", default="iic-eda")
+    ap.add_argument("--container", default="vibeic-eda")
     ap.add_argument("--quartus-bin",
                     default="/mnt/2a6ff798-a964-4a91-b131-e34fd4ca66ed/"
                             "eda/quartus/quartus/bin/quartus_sh")

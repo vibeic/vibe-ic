@@ -8,7 +8,7 @@ required, no core changes required.
 This guide covers the four common contribution shapes:
 
 1. **New IC class** (e.g. RFIC, MCU, sensor) — generator + reference TB
-2. **New PDK / foundry** (e.g. KeyFoundry HP18E80, TSMC 65) — registry + sign-off decks
+2. **New PDK / foundry** (e.g. commercial_foundry commercial_pdk, TSMC 65) — registry + sign-off decks
 3. **New device / tester / scope** (e.g. ACME-9000 tester) — driver + manifest
 4. **New methodology / skill** (e.g. specialised analog flow) — SKILL.md + agents
 
@@ -33,8 +33,8 @@ plugins/
 ```
 
 Naming: `partner-<vendor>-<topic>` (lowercase). Examples:
-- `partner-keyfoundry-hp18e80`
-- `partner-emory-otp-eo0128x8`
+- `partner-commercial_foundry-commercial_pdk`
+- `partner-memvendor-otp128x8`
 - `partner-tsmc-65nm`
 - `partner-acme-tester-md9000`
 - `community-class-rfic`

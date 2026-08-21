@@ -11,7 +11,7 @@ Background
 ==========
 The 25th fresh-agent benchmark (v0.119.51) replaced the Wave 16
 explicit `(* ram_init_file *)` pattern with a `case (addr) ... endcase`
-LUT-style ROM driven by a SystemVerilog `\`include` of literal entries.
+LUT-style ROM driven by a SystemVerilog ``include` of literal entries.
 Quartus STILL emitted
 
     Info (276013): RAM logic "otp_mem:u_otp|Ram0" is uninferred
