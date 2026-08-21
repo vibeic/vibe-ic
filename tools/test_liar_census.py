@@ -2278,38 +2278,58 @@ def test_a_CHURN_is_not_invisible_the_way_it_is_to_a_count(tmp_path):
 
 
 def test_the_identity_keeps_the_cmd_and_not_just_the_program(tmp_path):
-    """The flow really does declare `provenance_check` twice inside step 31 --
-    once for the DRC sign-off report, once for the LVS one. They differ ONLY in
-    `cmd`, so an identity projected onto `(step, kind, program)` folds them into
-    one and a delta that removes either reports NO CHANGE: a blocking clause
-    leaves the flow and the instrument says nothing."""
-    dupes = [c for c in lc.discover_clauses(lc.FLOW_YAML)
-             if (c.step, c.program) == ("31", "provenance_check")]
-    assert len(dupes) == 2, dupes
-    assert len({c.cmd for c in dupes}) == 2, dupes
+    """An identity projected onto `(step, kind, program)` folds two clauses that
+    differ only in their arguments into one, so removing either reports NO
+    CHANGE: a blocking clause leaves the flow and the instrument says nothing.
 
+    TWO HALVES, AND NEITHER NAMES A STEP. The behaviour is pinned on planted
+    blobs, which cannot rot. The flow is then asked whether it actually CONTAINS
+    such a pair -- DERIVED by grouping, never a typed `("31", ...) == 2`, which
+    would be a third hand-maintained coupling to the flow in the same file whose
+    whole subject is that hand-maintained couplings rot. Today exactly one group
+    qualifies; if the flow ever has none, `cmd` stops being load-bearing HERE
+    without becoming wrong, so that half DISCLOSES and skips rather than
+    reddening on a change that broke nothing."""
     kept = _delta_flow(tmp_path / "a", """
         steps:
-          - id: 31
+          - id: 99
             name: planted
             gate:
               all_of:
-                - program_exit_zero: "provenance_check . --output drc.rpt"
-                - program_exit_zero: "provenance_check . --output lvs.rpt"
+                - program_exit_zero: "planted_check . --output one.rpt"
+                - program_exit_zero: "planted_check . --output two.rpt"
         """)
     one_left = _delta_flow(tmp_path / "b", """
         steps:
-          - id: 31
+          - id: 99
             name: planted
             gate:
               all_of:
-                - program_exit_zero: "provenance_check . --output drc.rpt"
+                - program_exit_zero: "planted_check . --output one.rpt"
         """)
     d = lc.population_delta(kept, one_left)
     assert d["before"] == 2 and d["after"] == 1, d
     assert [c["cmd"] for c in d["removed"]] == [
-        "provenance_check . --output lvs.rpt"], d["removed"]
+        "planted_check . --output two.rpt"], d["removed"]
     assert d["shrank"] is True, d
+
+    # ... and the real flow, derived. The claim worth making is not "a group
+    # exists" -- restating the filter that built the group would be a tautology
+    # -- it is that the WEAKER identity LOSES CLAUSES on this flow: fold the
+    # arguments away and the population shrinks, which is precisely the silent
+    # removal `population_delta` must never report as no change.
+    clauses = lc.discover_clauses(lc.FLOW_YAML)
+    keeping_cmd = {(c.step, c.kind, c.cmd) for c in clauses}
+    folding_cmd = {(c.step, c.kind, c.program) for c in clauses}
+    if len(keeping_cmd) == len(folding_cmd):
+        pytest.skip("no clause group in the flow shares (step, kind, program) "
+                    "with differing arguments today, so this flow cannot tell "
+                    "the two identities apart -- pinned on the fixture above")
+    assert len(keeping_cmd) > len(folding_cmd), (
+        len(keeping_cmd), len(folding_cmd))
+    assert len(keeping_cmd) == len(clauses), (
+        "every clause is distinct under the identity population_delta uses",
+        len(keeping_cmd), len(clauses))
 
 
 def test_two_clauses_that_are_IDENTICAL_are_two_and_not_one(tmp_path):
