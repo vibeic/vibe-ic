@@ -56,7 +56,10 @@ side would have shipped a number that was true of neither tree.
 
 ```
 A  vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_path_step_matrix_ic_and_ip.py
-       the matrix. 129 collected node ids.
+       the matrix. 133 collected node ids.
+
+M  vibe-ic-marketplace/plugins/vibe-ic/programs/submission_template_check.py
+       finding F0 — the only shipped program this branch changes.
 
 M  vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_tapeout_readiness_check.py
        finding F6 — a pre-existing red ON step 37.5ic, repaired.
@@ -70,9 +73,9 @@ M  vibe-ic-marketplace/plugins/vibe-ic/README.md
 A  RESULT.md
 ```
 
-**No flow yaml byte changed**, no shipped program changed, no version bump, no
-`--write-baseline` on any gate, no protected path touched, and nothing was
-pushed to `main`.
+**No flow yaml byte changed.** One shipped program changed (F0, and its four
+arms are in that finding). No version bump, no `--write-baseline` on any gate,
+no protected path touched, and nothing was pushed to `main`.
 
 ---
 
@@ -439,8 +442,8 @@ head   FAILED 17  PASSED 1977  SKIPPED 124
 RED SETS IDENTICAL             True
 ```
 
-The new module itself is additive: **129 node ids**, none of which exist on the
-base. Final state `116 passed, 11 skipped, 2 xfailed` — the two xfails are
+The new module itself is additive: **133 node ids**, none of which exist on the
+base. Final state `120 passed, 11 skipped, 2 xfailed` — the two xfails are
 findings F3 and F4, both `strict=True`.
 
 ### The one red this A/B caught, and what was done about it
@@ -556,7 +559,15 @@ and closable only by publishing a run tree.
 
 ## REQUESTS TO THE LANDER
 
-1. **F4 is the one that matters.** Three producers — `submission_template_ingest`,
+0. **F0 is landed in this branch and is the one to read first.** It is the only
+   defect here with a remedy narrow enough to take without an owner's decision,
+   and it blocks an entire delivery route: step 0.5ic's own gate refused the
+   tree step 0.5ic's own producers build for a die that tapes itself out. One
+   shipped program changed (`submission_template_check`), four measured arms,
+   two mutation arms including the one that proves it is a correction and not a
+   relaxation.
+
+1. **F4 is the one that matters most for what happens next.** Three producers — `submission_template_ingest`,
    `tapeout_declaration_gen`, `pad_ring_gen` — are declared by a step and
    invoked by nothing. The first two write the router file every other path
    step conditions on, so the chip-path repair that landed as v1.11.38 cannot
@@ -606,7 +617,17 @@ and closable only by publishing a run tree.
    `tools/ci/protected_landing_transition.json` needs no change and I have no
    sha256 to hand you.
 
-6. **`git push` needs the tracked hook on this host.** `.git/hooks/pre-push`
+6. **A predecessor session on this brief left unpushed work.** It was reaped
+   before it could push, and its worktree is still on this host at
+   `/home/reyerchu/_jicip/wt` (branch `agent/jicip-tapeout-path-matrix`,
+   uncommitted): a 1004-line matrix of its own and the F0 diagnosis. F0 is
+   taken here, reproduced independently first. Its matrix is NOT taken — this
+   one is complete and measured — but somebody may want to read its
+   `_tapeout_path_classes.py` before that worktree is cleaned up, because two
+   independent attempts at the same brief agreeing on a defect is worth more
+   than one.
+
+7. **`git push` needs the tracked hook on this host.** `.git/hooks/pre-push`
    symlinks to the main checkout's copy, which was 646 commits behind
    `origin/main` and still runs the benchmark-evidence gate that moved to
    `gatekeeper-land.sh`. Pushed with
