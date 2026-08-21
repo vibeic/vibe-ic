@@ -134,3 +134,31 @@ def test_emit_dict_pattern_caught(tmp_path: Path) -> None:
     v, findings = audit(root)
     assert v == "FAIL"
     assert any(f.function == "emit_em_report" for f in findings)
+
+# --- the exit code is what the flow reads, and no test drove main()
+
+def test_main_exits_non_zero_on_a_finding(tmp_path, monkeypatch):
+    """`gate_cli_mutation_probe` reported this gate SILENT: neutering `main()`
+    reddened nothing in its own test file.
+
+    The tests above drive `audit()` and assert the VERDICT it returns; the flow
+    reads the EXIT CODE and nothing exercised the mapping. Findings are left
+    EMPTY on purpose — the verdict is what `main()` maps, and constructing this
+    module's finding type by guessing its fields would test the guess.
+    """
+    import emitter_failure_mode_check as M
+    monkeypatch.setattr(M, "audit", lambda *a, **k: ("FAIL", []))
+    assert M.main([str(tmp_path)]) == 1
+
+
+def test_main_exits_zero_when_clean(tmp_path, monkeypatch):
+    """The other direction, or the test above is met by always failing."""
+    import emitter_failure_mode_check as M
+    monkeypatch.setattr(M, "audit", lambda *a, **k: ("PASS", []))
+    assert M.main([str(tmp_path)]) == 0
+
+
+def test_main_refuses_on_a_missing_root(tmp_path):
+    """rc 2 — the question could not be asked, which is not a pass."""
+    import emitter_failure_mode_check as M
+    assert M.main([str(tmp_path / "nope")]) == 2

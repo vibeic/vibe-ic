@@ -1,6 +1,6 @@
 ---
 name: core-agent-loop
-description: Closed-loop core-agent that fixes plugin issues filed by the field-agent. Invoke as a cron prompt; the loop polls the repo for ANY OPEN non-PR issue (new OR reopened — no label gating, no comment classifier), reproduces and fixes the bug chip-AGNOSTIC-ally, SELF-VERIFIES (reproduce + run the full plugin test suite the CI way), bumps the patch version, pushes to main, posts a 繁體中文 fix comment in the canonical 5-section shape (incl 本機驗證 evidence), then `gh issue close` + adds the `core-closed` label. CLOSED is the terminal state; the field-agent audits closed issues on the real benchmark and reopens any it finds inadequate.
+description: Closed-loop core-agent that fixes plugin issues filed by the field-agent. Invoke as a cron prompt; the loop polls the repo for ANY OPEN non-PR issue (new OR reopened — no label gating, no comment classifier), reproduces and fixes the bug chip-AGNOSTIC-ally, SELF-VERIFIES (reproduce + run the cadence-correct plugin test suite the CI way), then SHIPS by DIRECT PUSH (2026-06-26 owner directive — direct commit + `git push origin main`, no PR ceremony) gated by `gatekeeper_review.py --role core-agent` (MERGE_OK) + Step-2.7 + `gatekeeper_assign_version.py --write` (the pusher assigns the monotonic version pre-push) — posts a 繁體中文 fix comment in the canonical 5-section shape (incl 本機驗證 evidence), then `gh issue close` + adds the `core-closed` label. CLOSED is the terminal state; the field-agent audits closed issues on the real benchmark and reopens any it finds inadequate.
 ---
 
 
@@ -40,11 +40,78 @@ recognises canonical pattern); no fix references `IC-A`,
 `BENCH-A`, `Vendor`, `usb_hid_tester`, `aid`, or any vendor IC name as
 detection logic.
 
+> **Contribution-layer framing (so Step 3 is not misread as the public model).**
+> The DIRECT PUSH in §Step 3 is the **Layer-2** *maintainer-internal* landing
+> method, used while the plugin is built out — it is NOT what external users do.
+> The **Layer-1** public contribution model is unchanged and retained: an external
+> contributor files a **backlog** (a report, no code) **or** a **PR** (a fix, with
+> code). This loop serves both — it polls open **backlog** items (Step 1) AND
+> auto-lands any externally-filed **PR** through the gatekeeper flow (§per-tick
+> scope). You are the maintainer, so you ship your OWN fixes by direct push; a
+> non-maintainer contributor never pushes to `main`.
+
+## Issue repo + per-tick scope (BINDING)
+
+**ALL vibe-ic issues are filed to, polled from, and closed on
+`vibeic/vibe-ic`** — the plugin's own GitHub repo. `AI_IC_design` is the
+local **design-WORKSPACE directory** (the mounted RTL/GDS tree), NOT an
+issue tracker; never poll or file issues against it. `poll.py` defaults to
+`vibeic/vibe-ic`.
+
+**Every tick performs TWO fresh checks (PRs FIRST, then issues):**
+1. **Open PRs** — `gh pr list --repo vibeic/vibe-ic --state open`. The
+   core-agent itself ships by DIRECT PUSH (Step 3), so it normally opens NO
+   PRs; but a PR filed from ELSEWHERE (an external contributor, or a legacy
+   in-flight branch) is still auto-landed via the gatekeeper flow (rebase onto
+   current main → `gatekeeper_review.py` MERGE_OK → Step-2.7 adversarial review
+   → remediate every reproduced finding + pin a §4.05 regression test →
+   `gatekeeper_assign_version.py --write` → enforced re-gate →
+   squash-merge). "Land/fix any open PR" is a STANDING per-tick action, not
+   one-shot.
+2. **Open issues** — `poll.py` (below).
+
+A tick may report idle ONLY after BOTH checks were actually run THIS tick —
+never assert "no open PR" / "no issues" from memory or a prior tick.
+
+> **BINDING (owner directive 2026-06-19): the repo-gatekeeper FIXES every
+> open PR, it does not merely merge-or-bounce it.** When a PR carries a
+> reproduced finding, the single-identity gatekeeper **AUTHORS the
+> remediation itself** (a structural code/test fix committed onto the
+> landing branch) and lands the corrected PR — it does NOT leave the PR
+> bounced-and-waiting for some external author. "Fix all open PRs" means
+> *no open PR is left un-actioned each tick*: either it lands clean, or the
+> gatekeeper authors the fix and lands the corrected version. Bounce-via-
+> `gh pr comment` (the single identity cannot `--request-changes` its own
+> PR) is reserved for the rare case where the correct fix genuinely cannot
+> be authored this tick (needs a design decision only the owner can make);
+> even then the PR stays OPEN and the NEXT tick must attempt the fix again,
+> not idle past it.
+>
+> **REPRODUCE ON THE REAL ARTIFACT BEFORE FIXING OR BOUNCING (the #40
+> lesson).** A finding — and the fix it motivates — MUST be reproduced on
+> the **REAL benchmark artifact** (the dataset's own prompt + its reference
+> golden / official testbench), NEVER only on a hand-crafted or synthetic
+> fixture. A synthetic fixture can silently encode the WRONG convention and
+> invert the verdict: PR #40's wired test hand-crafted a *same-edge*
+> circuit7 waveform, but the real VerilogEval TB drives inputs via NBA at
+> the posedge (`@(posedge clk) a<=val`), so the real published table is
+> *NBA-lead* (output lags the input by one edge, X at the first posedge).
+> Reviewing on the hand-crafted table "reproduced" a false-block that does
+> NOT exist on the real prompt — the shipped check was correct all along
+> (it PASSes the real golden `q<=~a` and BLOCKs the real wrong sample, and
+> a sweep over ALL real circuitN goldens false-blocked ZERO). The phantom
+> nearly drove an inverted "fix" that would have broken the gate on real
+> data. So: pull the real `*_prompt.txt` + `*_ref.sv` + `*_test.sv` from the
+> dataset, reproduce there, and when in doubt sweep the whole real-golden
+> family to prove no-leak — a green synthetic fixture proves nothing about
+> the axis (here: the TB's input-drive convention) that actually decides the
+> verdict.
+
 ## The four-step loop
 
 ### Step 1 — poll
 
-Run **before** any other action, deterministically:
+Run **before** any other action, deterministically (polls `vibeic/vibe-ic`):
 
 ```bash
 python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py
@@ -85,6 +152,20 @@ For each actionable issue:
    from `tests/chip_deny_list.txt`). Heuristics must use deny-list
    / length-floor / structural checks, not chip-class string
    literals; the fix must work across **every** benchmark chip.
+   **GENERAL-CORE / THIN-ADAPTER (BINDING):** a fix found while
+   converging a benchmark must land in a **benchmark-AGNOSTIC general
+   core** (operates on plain prose + a supplied interface; named for
+   what it does — `verilog_width_resolve`, `spec_complete_extract`),
+   called by a **thin benchmark adapter** (the `cvdp_`/`rtllm_`/
+   `verilogeval_` prefix is correct ONLY for the record-IO shell).
+   Never fuse reusable logic into a benchmark-named file — that traps
+   the value away from the Phase-1 general path. If you touch a
+   `cvdp_…`/`rtllm_…` file whose logic is pure prose/param handling
+   (no record literal), it is naming debt: extract it to a neutral
+   name. Verify flow-back: a plain Phase-1 doc of the same spec shape
+   gets the SAME verdict with no harness. Full doctrine:
+   `benchmark-enhancement-capture` → THE GENERAL-CORE / THIN-ADAPTER
+   PRINCIPLE.
 4. Add tests covering BOTH the new path AND a regression-guard for
    the prior behaviour. Convention: `tests/test_v1_<MAJOR>_<MINOR>_<PATCH>_<slug>.py`.
 5. **Self-verify** before closing. New-tests-green +
@@ -102,6 +183,44 @@ For each actionable issue:
      `## 驗收` / acceptance section, say so explicitly with the
      `無驗收區` disclosure wording (see Step 4) and fall back to a
      reproduce-the-`現象` end-state instead.
+   - **(5a-i) A CHECKER CHANGE IS NOT AN ARTEFACT FIX.** When the
+     issue reports a defective **artefact** (a report asserting a
+     verdict it cannot back, a ledger field that was never measured,
+     a document citing evidence it does not ship), adding or fixing
+     the gate that *detects* it does NOT satisfy 5a. The acceptance
+     re-run must be against **the named artefact**, and the artefact
+     must have CHANGED. Two closes in two days broke this
+     (vibe-ic#381): #366 was closed by landing an evidence gate and
+     #365 by fixing an emitter, while all three
+     `formal_evidence.json` still asserted PASS citing a `.sby` with
+     zero files at that path, and 71 provenance entries still carried
+     an unmeasured `duration_ms: 0`. Both were still reproducible on
+     `main` after the close. This is the repo's own core defect —
+     a check that reports a problem while the flow ships anyway —
+     turned on its issue hygiene. **A gate reading PASS because the
+     instance is in its debt register is NOT the artefact being
+     fixed**; that is precisely the state that reads as done and is
+     not.
+
+     This paragraph is prose, and prose is what failed here — it
+     already said all of the above and the close happened anyway. The
+     deterministic half is a program; run it before closing, with the
+     range you are about to push:
+     ```bash
+     python3 plugins/vibe-ic/programs/artefact_defect_close_check.py \
+         --issue-number <num> --range origin/main..HEAD
+     ```
+     `FAIL` (exit 1) when the issue carries the `artefact-defect`
+     label and the range changed none of the artefacts its body names
+     — clear it by repairing the artefact, or by writing
+     `ARTEFACT-UNCHANGED: <reason, >=30 chars>` in the close comment
+     so the residue is recorded instead of implied. `ADVISORY`
+     (exit 0) on an unlabelled issue whose body names a shipped
+     artefact the range never touched: read it, do not skim past it.
+     A version-bump manifest and a gate's own `*_baseline.json` are
+     both counted as *not* an artefact repair, because writing the
+     defective instance into a debt register is the exact move that
+     made the measured close read green.
    - **(5b)** Reproduce the original failing scenario and confirm it
      now passes.
    - **(5c)** Run the FULL plugin test suite the CI way (see Step 3 —
@@ -239,39 +358,155 @@ not after the field agent reopens.
    `from <shared_tokens> import …` over re-typing a regex, and pin
    the emitter's current format in the checker's tests.
 
-### Step 3 — push
+4. **A Phase-1 doc-extraction fix must keep the ANTI-FABRICATION grounding
+   gate green (§4.05, OUTPUT→INPUT).** The Phase-1 gates verify COMPLETENESS
+   (`extraction_coverage_check`, INPUT→OUTPUT — did we drop an input fact) and
+   PROVENANCE PRESENCE + SCHEMA, but the load-bearing anti-fabrication direction
+   is `phase1_evidence_grounding_check.py`: every direct input-doc evidence
+   `literal`'s NAME identifiers must appear in the input, so an
+   LLM-/extractor-INVENTED fact (a hallucinated port / register / opcode) is
+   caught. Any fix that touches doc extraction or L-doc emission MUST run it on
+   the affected project (it is also composed into `phase1_verify_aggregate`), and
+   MUST keep an emitted evidence `literal` a VERBATIM source quote — never a
+   synthesised string whose token need not be in the spec (the `wake_pulse` leak).
+   This is **program-first wired into the loop**: `test_v1_2_39_grounding_loop_smoke`
+   runs the gate on the committed `synthetic_benchmark_phase1` fixtures (stay-clean)
+   AND on a fabricated fixture (stay-effective) inside the suite that
+   `gatekeeper_review.py` -> `full_suite_run_check` runs every iteration — so a
+   change that makes the extractor fabricate, OR that weakens the gate, fails the
+   loop's own gate before merge.
+
+   > **why_not_bucket_a:** whether a literal is a faithful quote vs a
+   > synthesised description is a reading judgment; the deterministic residue —
+   > the gate's NAME-identifier grounding + the smoke-test's stay-clean /
+   > stay-effective assertions — is what's pinned here.
+
+#### Step 2.8 — keep your turn ALIVE to completion; self-verify the deliverable (v1.3.51)
+
+When any step of this loop delegates LONG work (a multi-minute/hour
+sub-process — the full test suite, a reproduce run, a benchmark/IC flow),
+**never launch it as a detached fire-and-forget and let your turn end.**
+The launch-and-idle abandon bug: a detached background process finishes,
+NOTHING re-invokes you, and your "then write the result" step never runs —
+the tool's own outputs exist but your deliverable is never written
+The three beliefs that make this feel safe are each impossible, and an agent in
+vibe-ic#558 gave all three at once as its justification for yielding:
+
+* *"the harness will re-invoke me when the background job exits"* — nothing
+  re-invokes a finished turn. There is no such mechanism.
+* *"a background waiter is armed to fire"* — a waiter can only wake a turn that
+  is STILL ALIVE. It cannot start a new one.
+* *"the monitor will fire"* — a monitor notifies the DISPATCHER, not you. It
+  cannot resume you.
+
+Refuting only the first leaves the other two as routes to the same outcome.
+
+(observed 3× in one session). Two binding rules:
+
+- **Run it through the BLOCKING `_watchdog.run_supervised`** (returns ONLY
+  on process exit or stall; kills only a non-progressing job, never a live
+  one) — NOT a raw detached host `timeout &`. Your turn then stays alive
+  until the work genuinely completes, so your write step actually runs.
+- **Your FINAL act before reporting done is to WRITE + SELF-VERIFY the
+  deliverable** by running `python3 programs/run_output_completeness_check.py
+  <run_dir>` on your own run_dir. Exit 0 (`COMPLETE`) is the only "done";
+  exit 3 (`RUN_STILL_IN_PROGRESS`) means it isn't finished; any FAIL
+  (`COMPUTE_DONE_DELIVERABLE_MISSING` / `DELIVERABLE_STUB` /
+  `RUN_DIED_EARLY`) means you have not delivered. **NO RESULT / empty
+  output = the run FAILED** — never report an abandoned run as complete.
+  (The self-verify is the program-first gate; this line is the discipline.)
+
+### Step 3 — ship by DIRECT PUSH (gatekeeper-gated)
+
+**BINDING (2026-06-26, owner directive — STANDING preference; supersedes the
+2026-06-17 PR-method):** the core-agent ships by **direct commit + `git push
+origin main`** — NO `gh pr create`, NO PR branch, NO worktree-PR. Only the PR
+*ceremony* is dropped; **every quality GATE is retained.** Because ONE identity
+serializes its direct pushes to `main`, there is no two-in-flight collision, so
+the pusher assigns the monotonic version **pre-push** (no version-less bundle
+needed). CLOSED issues are still the terminal state.
+
+> **Doctrine history (so the flip-flop is legible):** direct-push through v1.1.5
+> → PR-method 2026-06-17 (to serialize concurrent authors via a gatekeeper merge
+> queue) → **direct-push again 2026-06-26 owner directive** — the gates are
+> retained in every era; only the landing *ceremony* changed.
+
+The gates that MUST be green before the push are unchanged from the PR era:
+1. `gatekeeper_review.py` → **MERGE_OK** is the AUTHORITATIVE machine gate of
+   record (run locally — it composes `source_chip_agnostic_check`,
+   `git_prohibition_guard`, `marketplace_version_sync_check`,
+   `version_bump_monotonic_check`, `agent_checkin_scope_guard --role core-agent`,
+   `plugin_full_audit`, the cadence-correct pytest, blindness/full-suite asserts,
+   **and — since #538 — the ENTIRE `tools/ci/repo_hygiene_gates.sh` set that CI
+   runs**). Do NOT run that script by hand as a separate step: it is invoked by
+   the review, and its verdict line states its own denominator
+   (`N/M gate(s) ran`, plus any gate that refused). Before #538 the review
+   overlapped CI's hygiene set in 5 of 34 gates, and MERGE_OK twice failed to
+   mean "this will land green" — v1.7.89 landed RED, and v1.7.92 was caught
+   only because a maintainer happened to run the script manually. The gate now
+   costs minutes rather than seconds for exactly that reason; that cost is the
+   coverage, not overhead.
+2. **Step-2.7** adversarial review on any guard/transform/extractor diff.
+3. `gatekeeper_assign_version.py --write` for the strictly-monotonic version bump
+   (one push = one version bump — honors `one-version-per-push`).
+
+A regression test (`test_v<M>_<m>_<p>_*.py`) covering the new path AND a
+regression guard is REQUIRED (≥1 per issue; multi-issue batches carry one per
+issue). The `<M>_<m>_<p>` slug should match the version you assign below.
 
 ```bash
-# Bump patch version in BOTH locations:
-#   plugins/vibe-ic/.claude-plugin/plugin.json     ("version": ...)
-#   .claude-plugin/marketplace.json                 (.plugins[0].version)
-# Version invariants are DETERMINISTIC gates, not prose:
-#   - equality (plugin.json == marketplace.json)  -> enforced by
-#     programs/marketplace_version_sync_check.py
-#   - strict monotonic bump (new > previous commit) + equality re-assert
-#     -> enforced by programs/version_bump_monotonic_check.py
-#        (e.g. version_bump_monotonic_check.py --plugin-json <pj> \
-#              --marketplace-json <mj> --base HEAD)
+# VERSION SCHEME: patch段 0..99; x.y.99 之後 = x.(y+1).0. The PUSHER assigns it
+#   pre-push now (serialized single identity — no collision). An x.y.0 rollover
+#   is a milestone → run the FULL suite (cadence-correct) before the push.
 
-# Verify locally — HARD RULE: run the FULL suite (BOTH test trees), not a
-# subset. A subset run once let a real regression onto main. That "did the
-# agent run the full suite, not a -k/single-file subset" check is enforced by
-# programs/full_suite_run_check.py (feed it the pytest command you ran).
-# pytest.ini testpaths pins the trees:
-( cd "$PLUGIN_ROOT" && python3 -m pytest -q )   # collects the full suite
-python3 -m pytest -q mcp-eda/test        # if MCP server touched
-# (added a program? -> programs/INDEX.md via tools/gen_programs_index.py;
-#  added a skill? -> compliance.yaml + tests/test_compliance.py. The tests/ gates enforce both.)
-bash tools/sync_opensource.sh --no-test     # mirror to opensource_repo/
+# 0) Work on the MAIN checkout, but commit ONLY your own touched files by explicit
+#    path (concurrent-tree hazard: another session's pull/edit shares this tree).
+#    Re-poll (gh pr list / gh issue list) IMMEDIATELY before the push; if main
+#    moved, `git pull --rebase` (or --ff-only) FIRST. NEVER edit unrelated files.
+git fetch origin && git pull --ff-only origin main
+#    …make the fix + tests in the working tree…
 
-# Commit ONLY the files you touched:
-git add <specific files>
-git commit -m "vX.Y.Z — for #<num> <one-line summary>"
+# 1) Run the MACHINE GATES locally — version gate ENFORCED (this is a direct push,
+#    so the bump is real here, not deferred to a gatekeeper merge):
+( cd vibe-ic-marketplace/plugins/vibe-ic \
+  && python3 programs/gatekeeper_assign_version.py --write \
+  && python3 programs/gatekeeper_review.py --base origin/main --head HEAD \
+       --role core-agent --json /tmp/gk.json )
+#    -> MERGE_OK(0)/REQUEST_CHANGES(1)/REJECT(2). Drive every red gate to green
+#    (MERGE_OK) BEFORE the push. + run Step-2.7 on any guard/transform/extractor
+#    diff. (gatekeeper_assign_version.py --write bumps plugin.json + marketplace.json
+#    so version_bump_monotonic_check + marketplace_version_sync_check PASS.)
 
-# Push (NEVER --force, NEVER --no-verify — see §Hard prohibitions,
-# enforced by programs/git_prohibition_guard.py):
+# 2) Commit ONLY the files you touched (NEVER -A/--force/--no-verify) — the fix +
+#    its tests + the two version files — then push DIRECTLY to main:
+git add <specific source files> <test files> \
+        vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json \
+        vibe-ic-marketplace/.claude-plugin/marketplace.json
+git commit -m "vX.Y.Z — for #<num> — <one-line summary>
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 git push origin main
 ```
+
+**One identity authors, gates, and pushes** (post-v1.1.1 — quality is the GATE,
+not identity separation). The order is fixed: drive `gatekeeper_review.py` to
+**MERGE_OK** + a clean **Step-2.7** pass, assign the version
+(`gatekeeper_assign_version.py --write`), then `git push origin main`. A red gate
+is NOT pushed — fix it first. If the push is rejected because `main` advanced,
+`git pull --rebase origin main`, RE-RUN `gatekeeper_review.py` on the rebased tree
+(catches a semantic conflict a 3-way merge misses), and push again. NEVER
+`--admin`/`--force`/`--no-verify`/`--no-ff` bypass of a gate.
+
+> **Environment note (vibeic/vibe-ic, private free plan):** GitHub branch
+> protection is unavailable (Pro/public-only) and Actions may be disabled, so the
+> `gatekeeper_review.py` verdict, run locally by the pusher BEFORE the push, is
+> the AUTHORITATIVE machine gate. The push to `main` is gated by that local
+> verdict, not by a GitHub required check.
+
+(Added a program? -> `programs/INDEX.md` via `tools/gen_programs_index.py`. Added a
+skill? -> `compliance.yaml` + `tests/test_compliance.py`. Touched the MCP server?
+-> `python3 -m pytest -q mcp-eda/test`. Mirror with `bash tools/sync_opensource.sh
+--no-test` inside the bundle when the opensource mirror is tracked.)
 
 ### Step 4 — self-verify + CLOSE
 
@@ -385,23 +620,41 @@ dispatch to track.
 ## Cron-invocation template
 
 ```
-Run /core-agent-loop against reyerchu/AI_IC_design.
+Run /core-agent-loop against vibeic/vibe-ic.
 
-Each tick must:
-1. python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py
-2. If rc=0 → output "(no actionable issues)" and exit.
+Each tick must (FRESH-CHECK both; PRs FIRST):
+0. gh pr list --repo vibeic/vibe-ic --state open  → the core-agent ships by
+   DIRECT PUSH so it opens no PRs of its own, but any PR filed from elsewhere
+   (external / legacy in-flight) is auto-landed via the gatekeeper flow (rebase
+   onto current main → gatekeeper_review.py MERGE_OK → Step-2.7 → remediate every
+   reproduced finding + pin a §4.05 test → gatekeeper_assign_version.py --write
+   → enforced re-gate → squash-merge). Never assert "no open PR" without
+   running this THIS tick.
+1. python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py  (issues on
+   vibeic/vibe-ic)
+2. If rc=0 (and step 0 found no PR) → output "(no actionable issues)" and exit.
 3. If rc=1 → for each entry in `actionable[]`:
      a. Reproduce the bug from issue body + comments.
      b. Write a chip-AGNOSTIC fix + tests.
-     c. Bump patch version (plugin.json + marketplace.json),
-        commit (`vX.Y.Z — for #<num> <summary>`), push origin main
-        (NO --force, NO --no-verify).
+     c. SHIP by DIRECT PUSH (see SKILL.md §Step 3 — 2026-06-26 owner
+        directive, supersedes the PR-method): on the MAIN checkout (re-poll +
+        `git pull --ff-only` first; commit ONLY your own touched files by
+        explicit path), ASSIGN the version (`gatekeeper_assign_version.py
+        --write` → patch 0..99 / x.y.99 → x.(y+1).0, bumps plugin.json +
+        marketplace.json), run `gatekeeper_review.py --base origin/main --head
+        HEAD --role core-agent` until MERGE_OK (version bump ENFORCED), run
+        Step-2.7 on any guard/transform/extractor diff, commit (`vX.Y.Z — for
+        #<num> <summary>`, NO --force/--no-verify), then `git push origin main`.
+        If the push is rejected because main advanced: `git pull --rebase`,
+        RE-RUN gatekeeper_review.py on the rebased tree, push again.
      d. Self-verify: FIRST execute the issue's `## 驗收` commands
         VERBATIM on the named defect artifact / reproduced fixture
         and capture the END-STATE output, THEN confirm the original
-        failure now passes, THEN run the FULL plugin test suite the
-        CI way; the `本機驗證` evidence MUST quote the acceptance
-        command + its end-state output (not just `N/N PASS`). Run
+        failure now passes, THEN run the test suite per the CADENCE
+        POLICY — TARGETED regression on a PATCH bump, the FULL both-tree
+        suite ONLY at an x.y.0 minor milestone; the `本機驗證` evidence
+        MUST quote the acceptance command + its end-state output (not
+        just `N/N PASS`). Run
         acceptance_evidence_in_fix_comment_check.py +
         defect_artifact_fixture_check.py (#478, exit 0 each) before
         posting.
@@ -448,5 +701,10 @@ programmable; only Step 2 fix-authoring is genuine LLM judgment):
 - Terminology guard (prohibition 6): `programs/field_agent_terminology_scan.py`
 - Version equality: `programs/marketplace_version_sync_check.py`
 - Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
+- Authoritative machine gate (run locally → MERGE_OK before the direct push;
+  `--version-by-gatekeeper` is the legacy flag that DEFERS the version gate for
+  an externally-filed version-less PR): `programs/gatekeeper_review.py`
+- Version assignment (next monotonic version → plugin.json + marketplace.json;
+  the pusher runs `--write` pre-push): `programs/gatekeeper_assign_version.py`
 - Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
 - Field-agent counterpart: `vibe-ic:field-agent-loop`

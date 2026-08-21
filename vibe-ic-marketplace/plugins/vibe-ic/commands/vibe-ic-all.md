@@ -4,7 +4,7 @@ description: Run the complete Vibe-IC flow (Phase 1 → Phase 2 → Analog → P
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--skip-analog] [--skip-phase3] [--ic-name <name>] [--die-um WxH] [--util 0.4] [--pdk auto|sky130A|<custom>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-all <project-dir>` (e.g. `/vibe-ic-all 1st_benchmark_sn2025/phase2_v0119.48-vendor`).
+> `/vibe-ic-all <project-dir>` (e.g. `/vibe-ic-all 1st_benchmark_example/phase2_v0119.48-vendor`).
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
@@ -18,7 +18,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS
 
 This runner is the **top-level chain**:
 1. Auto-detect Path A (NL prompt) vs Path B (vendor docs) → run `phase1_one_shot_runner` if needed
-2. `phase2_one_shot_runner` (= phase1 + phase2)
+2. `design_one_shot_runner` (= phase1 + phase2)
 3. `analog_one_shot_runner` (only runs if analog blocks are declared; analog FAIL does not block digital)
 4. `phase3_one_shot_runner` (synth → PnR → GDS → DRC → LVS)
 
@@ -50,4 +50,4 @@ After the run completes, the AI must:
 
 ## ⚠ Anti-fabrication 5 hard rules (v1.6.30, span Phase 1→2→Analog→3)
 
-Any violation ⇒ verdict-FAIL: (1) no symlinks under `phase3/stage4/**` / `phase3/mixed_signal/**` / `phase2/stage1/fpga/**` / `analog/hardmacro/**` (exceptions via `.canonical_symlink_allowlist`); (2) every `provenance.jsonl` entry must carry `outputs: sha256:<64hex>`; (3) `reports/` root may only contain `final_summary.md` + `chip_specific_summary.md`; (4) any sub-gate FAIL inside a step / phase ⇒ verdict FAIL; (5) `final_summary.md` must include the SHA256 table of every canonical artefact across the flow (L1-L23 / SOF / GDS / netlist / LEF / Liberty / each sign-off report). Full version: `commands/_anti_fabrication_rules.md`.
+Any violation ⇒ verdict-FAIL: (1) no symlinks under `phase3/stage4/**` / `phase3/mixed_signal/**` / `phase2/stage1/fpga/**` / `analog/hardmacro/**` (exceptions via `.canonical_symlink_allowlist`); (2) every `provenance.jsonl` entry must carry `outputs: sha256:<64hex>`; (3) `reports/` root may only contain `final_summary.md` + `chip_specific_summary.md`; (4) any sub-gate FAIL inside a step / phase ⇒ verdict FAIL; (5) `final_summary.md` must include the SHA256 table of every canonical artefact across the flow (L1-L27 / SOF / GDS / netlist / LEF / Liberty / each sign-off report). Full version: `commands/_anti_fabrication_rules.md`.

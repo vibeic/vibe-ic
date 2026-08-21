@@ -17,7 +17,7 @@ vibe-ic-marketplace/
 └── plugins/vibe-ic/      Claude Code plugin — one install = everything
     ├── skills/           One folder per skill — SKILL.md + assets
     ├── programs/         Deterministic checks / gates / generators
-    ├── agents/           PM Agent, IC Expert Agent, lessons, defaults
+    ├── agents/           IC Expert Agent, lessons, defaults
     ├── mcp-eda/              Bundled MCP server — 55 tools, auto-registered
     ├── ip-catalog/       Open-source IP catalogue (manifests)
     ├── benchmark/        Benchmark harness + registry
@@ -30,12 +30,46 @@ tools/                    Repo dev / CI utilities
 
 ## How to contribute
 
-### 1. File an issue first
+Vibe-IC's **public contribution model has two intake paths**, and both are
+valid — pick by whether you are carrying a fix. Either way the merged
+**repo-gatekeeper / maintainer** role reviews and **lands the change into the
+next version**; external contributors do **not** push to `main` themselves. (The
+maintainer's own in-house fixes land by direct push with every gate retained —
+that internal shortcut is *not* part of the external contribution path.)
 
-For anything more than a typo fix, please open an issue describing
-**what** is broken or missing and **why**. Use the issue templates
-under `.github/ISSUE_TEMPLATE/`. Wait for a maintainer to triage before
-sinking time into a PR — we'll save you rework.
+### 1. File a backlog first (report-only) — or open a PR (report-with-fix)
+
+- **Backlog (a report, no code).** Found a bug or a gap but not a fix? File a
+  **backlog item** describing **what** is broken or missing and **why**. It is
+  filed as a GitHub issue using the templates under `.github/ISSUE_TEMPLATE/`
+  (the plugin's `community-backlog-submit` skill can draft a chip-AGNOSTIC one
+  for you). A maintainer triages it into the plugin.
+- **PR (a proposed fix, with code).** Carrying a fix? Open a PR directly
+  (steps 2-7 below). For anything more than a typo, filing a linked backlog
+  first still saves you rework — wait for a maintainer to triage before sinking
+  time into a large PR.
+
+> **Looking for open issues? Ask GraphQL (`gh issue list`), not the REST
+> listing and not the search index.** Measured on this repository on
+> 2026-08-15, at a moment when 33 issues were open:
+>
+> ```
+> gh issue list --repo vibeic/vibe-ic --state open --limit 200  ->  33  (GraphQL)
+> gh api 'repos/vibeic/vibe-ic/issues?state=open&per_page=100'  ->   0  (REST)
+> gh api 'search/issues?q=repo:vibeic/vibe-ic+is:issue+is:open' ->   0  (search index)
+> gh api repos/vibeic/vibe-ic --jq .open_issues_count           ->   0
+> gh api repos/vibeic/vibe-ic/issues/1645 --jq .state           -> "open"
+> gh api 'repos/vibeic/vibe-ic/pulls?state=open&per_page=100'   ->   6  (REST is fine here)
+> ```
+>
+> The REST **listings** and the search index answer HTTP 200 with an empty set
+> for a repository whose issues are intact over GraphQL and readable one at a
+> time over REST. An empty listing and an empty backlog are byte-identical:
+> anyone looking for work through `gh api .../issues` or `search/issues` sees
+> nothing to claim and cannot tell that apart from a queue that is genuinely
+> clear. See vibe-ic#1645; `skills/core-agent-loop/programs/poll.py`,
+> `programs/open_issue_claim_scan.py` and `programs/open_organic_issue_count.py`
+> all enumerate over GraphQL for this reason.
 
 ### 2. Fork + branch
 
@@ -88,23 +122,27 @@ The two hard gates that **must** pass before any PR is mergeable:
 python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
         vibe-ic-marketplace/plugins/vibe-ic
 
-# (b) Full test suite — BOTH plugin test trees + the MCP server
+# (b) Full test suite — `run_tests.sh` IS the full suite. Bare `pytest` is NOT.
 #
-#     HARD RULE: validate with bare `pytest` from the plugin root. The plugin has TWO
-#     test trees and you MUST run both:
-#       - programs/tests/ : unit tests for the deterministic programs
-#       - tests/          : integration/regression GATES (INDEX.md freshness,
-#                           every-skill-has-compliance.yaml + test_compliance.py,
-#                           orchestrator input-branch regressions, end-to-end skill audit)
-#     pytest.ini pins `testpaths = programs/tests tests`, so bare `pytest` runs both.
-#     NEVER validate with only `pytest programs/tests/` (or only `tests/`) — that silently
-#     skips the other tree. A real on-main regression once slipped through exactly this way
-#     (an orchestrator fix verified only against programs/tests/).
-( cd vibe-ic-marketplace/plugins/vibe-ic && pytest -q )   # collects programs/tests/ + tests/
-pytest -q vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/test
+#     `pytest.ini` declares ONE testpath (`programs/tests`) on purpose, and
+#     `single_testpath_guard.py` pins it there. Every other tree is discovered by
+#     `run_tests.sh` and NOWHERE else:
+#       - programs/tests/            unit tests for the deterministic programs
+#       - tools/phase1_engine/tests/ the Phase-1 gap/render engine
+#       - mcp-eda/test/              the MCP EDA server sub-project
+#       - skills/*/tests/            per-skill compliance regression
+#
+#     WHAT USED TO BE HERE was a HARD RULE saying the plugin had two trees,
+#     `programs/tests/` and `tests/`, that `testpaths` listed both, and that bare
+#     `pytest` therefore ran both. All three were false. `testpaths` has only ever
+#     listed one, and `tests/` HAS NEVER EXISTED in this repository — pytest does not
+#     fail on a path that is not there, it collects nothing. So the reader who obeyed
+#     the rule got a clean-looking ZERO from the tree they were told to be most careful
+#     about. See `pytest.ini` and vibe-ic#1391.
+( cd vibe-ic-marketplace/plugins/vibe-ic && ./run_tests.sh )
 ```
 
-> Adding a program or skill? The `tests/` gates enforce registration: every new program
+> Adding a program or skill? The `programs/tests/` gates enforce registration: every new program
 > must be in `programs/INDEX.md` (`python3 tools/gen_programs_index.py`), and every new
 > skill needs `compliance.yaml` + `tests/test_compliance.py`
 > (`_shared/bootstrap_compliance.py` + `_shared/gen_compliance_tests.py`).
