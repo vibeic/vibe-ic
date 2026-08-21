@@ -1473,6 +1473,79 @@ def test_the_reach_survives_a_REFUSAL(tmp_path):
         "a file that could not be read vanished behind the refusal:\n" + out)
 
 
+# ── K: a COUNT, or a LOWER BOUND ─────────────────────────────────────────────
+#
+EMITTER_HELPER_ASSEMBLED = (
+    'def _repair(name):\n'
+    '    return "  if {[catch {%s}]} { incr _n }\\n" % name\n\n\n'
+    'def script():\n    return ("  set _n 0\\n" + _repair("a") + _repair("b")\n'
+    '            + _repair("c") + "  if {$_n >= 3} { puts ALL }\\n")\n')
+
+
+def test_a_helper_assembled_population_is_NOT_DECIDABLE_not_refused(tmp_path):
+    """The false refusal this file recorded as a limitation, and then fixed --
+    because the reason recorded for leaving it was measured to be wrong.
+
+    The emitter is HONEST: three repairs, denominator 3. K counts `incr` written
+    in the SOURCE, so it saw 1 and refused. `multiplied_counters` now decides
+    per counter whether K is a count or a lower bound, and where it is a lower
+    bound a shortfall is exactly what a helper called N times produces.
+
+    It is NOT DECIDABLE, not a pass in disguise: printed, counted in the head,
+    carried in the JSON. `sites > denominator` stays REFUSED -- see the control
+    below -- because a lower bound that EXCEEDS the stated population cannot be
+    explained by emitting more."""
+    progs, tests = _tree(tmp_path, EMITTER_HELPER_ASSEMBLED,
+                         "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, (
+        "an honest helper-assembled emitter is still refused:\n" + r.stdout)
+    assert "[NOT DECIDABLE]" in r.stdout, (
+        "the guard stopped comparing without saying so:\n" + r.stdout)
+    assert "NOT DECIDABLE" in [l for l in r.stdout.splitlines()
+                               if l.startswith("[PASS]")][0], r.stdout
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["findings"] == [], doc
+    assert len(doc["not_determined"]) == 1, doc
+    assert doc["not_determined"][0]["emitted_per_site"] == 3, doc
+
+
+def test_a_lower_bound_that_EXCEEDS_the_denominator_is_still_refused(tmp_path):
+    """THE CONTROL, and the reason this change is not a relaxation. Reading K as
+    a lower bound only excuses a SHORTFALL. Four sites per helper call against a
+    denominator of 3 is a disagreement no amount of multiplication explains, and
+    it must still be refused -- which is also the direction the lane defect
+    lives in ("add a fourth repair and `of 3` is wrong")."""
+    emitter = EMITTER_HELPER_ASSEMBLED.replace(
+        '    return "  if {[catch {%s}]} { incr _n }\\n" % name\n',
+        '    return "  if {[catch {%s}]} { incr _n }\\n  { incr _n }\\n'
+        '  { incr _n }\\n  { incr _n }\\n" % name\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    r = _run(progs, tests)
+    assert r.returncode == RC_FAIL, (
+        "a real disagreement was excused as undecidable:\n" + r.stdout)
+    assert "incremented at 4 site(s)" in r.stdout, r.stdout
+
+
+def test_the_real_tree_has_no_undecidable_population(tmp_path):
+    """The shipped corpus must be untouched by the change. `_prr_refused` --
+    the only counter that reaches a comparison -- has its `incr` literals INLINE
+    in `_postroute_repair_estimate_tcl`, which is called once, so it is a count
+    and stays fully compared. Ten other counters in that file DO qualify as
+    lower bounds, and none of them states a denominator, so none reaches a
+    verdict either way."""
+    r = subprocess.run(
+        [sys.executable, str(PROG), "--programs", str(PROGRAMS_DIR),
+         "--tests", str(TESTS_DIR), "--json", str(tmp_path / "r.json")],
+        capture_output=True, text=True, timeout=900)
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["not_determined"] == [], (
+        "the change moved a verdict on the shipped tree: "
+        + json.dumps(doc["not_determined"], indent=2))
+    assert doc["counters_examined"] == 3, doc
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

@@ -83,46 +83,28 @@ Narrowing to POPULATION phrases with a HARD-CODED denominator is what makes the
 question answerable: those are the only ones where the emitter states the number
 itself, and therefore the only ones where a test can disagree with it.
 
-WHAT THIS CANNOT COUNT, AND IT PREDATES THE POLARITY WORK
-==========================================================
-K is the number of `incr` sites written IN THE SOURCE, not the number of times
-the script emits one. An emitter that builds each repair through a helper --
+WHAT K IS: A COUNT, OR A LOWER BOUND
+====================================
+K is the number of `incr` sites written IN THE SOURCE. An emitter that builds
+each repair through a HELPER is honest and states a real population, and this
+guard used to refuse it: "incremented at 1 site(s) but its comparison
+denominator says 3". That was recorded as a limitation and left alone.
 
-    def _repair(name):
-        return "  if {[catch {%s}]} { incr _n }\n" % name
-    return "  set _n 0\n" + _repair("a") + _repair("b") + _repair("c") + ...
+IT IS NO LONGER LEFT ALONE, because the reason recorded for leaving it was
+wrong. `multiplied_counters` decides, PER COUNTER, whether K is a count or a
+lower bound: the `incr X` literal lives inside a function body, and that
+function is called more than once. Where it is a lower bound:
 
--- is HONEST and states a population of 3, and this guard refuses it: "counter
-$_n is incremented at 1 site(s) but its comparison denominator says 3". MEASURED
-identically against the pre-polarity revision of this file, so it is a property
-of the K-is-a-count premise, not of anything the polarity work changed.
+    sites > denominator   STILL REFUSED -- a lower bound that exceeds the
+                          stated population cannot be explained by emitting
+                          more, so the disagreement is real
+    sites < denominator   NOT DECIDABLE -- the shortfall is exactly what a
+                          helper called N times produces. Printed, counted in
+                          the head, carried in the JSON as `not_determined`,
+                          never silently skipped
 
-IT IS LEFT ALONE, AND THE REASON IS MEASURED RATHER THAN DEFERRED. The obvious
-repair is to read K as a LOWER BOUND wherever the emitted text is assembled
-through a call, refusing only `sites > denominator` -- which is the direction the
-lane defect lives in ("add a fourth repair and `of 3` is wrong"), so the guard's
-whole purpose would survive.
-
-THAT DETECTION MISFIRES ON THE ONE COUNTER THIS TREE ACTUALLY HAS. MEASURED: the
-`incr _prr_refused` literals in `phase3_one_shot_runner` sit in an expression
-with THREE `_est0104_recovery_tcl(...)` calls interleaved between them, so
-"assembled through a call" is true of it. The repair would classify the only
-counter this guard checks as a lower bound and stop comparing
-`sites < denominator` there -- and it would do so SILENTLY, which is worse than
-what it replaces.
-
-WEIGH THE TWO FAILURE MODES, NOT THE TWO DESIGNS. Today's wrong answer is LOUD:
-"incremented at 1 site(s) but its comparison denominator says 3" prints both
-numbers and a reader diagnoses the helper in seconds. Every detection-based
-repair trades that for an analysis whose false positives are invisible. On this
-corpus the trade buys nothing -- zero real counters are helper-assembled, so the
-false refusal fires on nothing -- while the misfire above lands on the one
-counter that matters.
-
-So this stays a KNOWN LIMITATION with a reproducer, not because it is somebody
-else's decision, but because the fix that suggests itself is measurably worse
-here. If a helper-assembled counter ever arrives, the reproducer and this
-measurement are what the implementer needs first.
+THE LANE DEFECT IS STILL CAUGHT. "Add a fourth repair and `of 3` is wrong before
+any test runs" is `sites > denominator`, which stays decidable.
 
 THE REACH IS PRINTED, ALWAYS
 ============================
@@ -586,6 +568,52 @@ def counters_of(tree: ast.AST) -> Tuple[
     return rows, refused
 
 
+def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
+    """``{counter: how many times its `incr` is emitted per written site}`` for
+    counters whose K is only a LOWER BOUND.
+
+    K COUNTS `incr` WRITTEN IN THE SOURCE, not times emitted. An emitter that
+    builds each repair through a HELPER is honest and states a real population,
+    and the guard refuses it: "incremented at 1 site(s) but its comparison
+    denominator says 3". Recorded as a known limitation until it was measured
+    properly.
+
+    THE DETECTION IS PER-COUNTER AND NARROW: the `incr X` literal lives inside a
+    FUNCTION BODY, and that function is called more than once in the module. An
+    earlier, coarser sketch -- "the script is assembled through a call anywhere"
+    -- was rejected because it fires on `phase3_one_shot_runner::_prr_refused`,
+    whose literals sit in an expression with three `_est0104_recovery_tcl(...)`
+    calls interleaved. MEASURED, this one does not: those literals are INLINE in
+    `_postroute_repair_estimate_tcl`, which is called once. The rejection was of
+    the sketch, not of the repair.
+
+    MEASURED over the shipped tree: ten counters qualify (`_n`, `_duf`, `_skip`,
+    `_rrc` and others), and `_prr_refused` -- the only counter that reaches a
+    comparison at all -- is NOT among them. So no verdict this guard reaches
+    today moves.
+    """
+    parent: Dict[int, ast.AST] = {}
+    for n in ast.walk(tree):
+        for child in ast.iter_child_nodes(n):
+            parent[id(child)] = n
+    calls: Dict[str, int] = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            calls[n.func.id] = calls.get(n.func.id, 0) + 1
+    out: Dict[str, int] = {}
+    for node in _emitted_nodes(tree):
+        for m in INCR.finditer(node.value):
+            cur, host = node, None
+            while id(cur) in parent:
+                cur = parent[id(cur)]
+                if isinstance(cur, ast.FunctionDef):
+                    host = cur.name
+                    break
+            if host and calls.get(host, 0) > 1:
+                out[m.group(1)] = max(out.get(m.group(1), 0), calls[host])
+    return out
+
+
 def named_program(tree: ast.AST, stems: Set[str]) -> Optional[str]:
     """The single program a test file names, or None if it names 0 or >1.
 
@@ -653,6 +681,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     #: text -- before that a broken file was still regex-scanned, so this is the
     #: one direction that change could quietly lose.
     unparsed: List[str] = []
+    #: Counters whose K is a LOWER BOUND, not a count -- see
+    #: `multiplied_counters`. Printed, never silently skipped.
+    undecidable: List[dict] = []
     counters_examined = 0
     pins_examined = 0
 
@@ -691,6 +722,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             record_unparsed(sources[stem].name, e)
             continue
         rows, refused = counters_of(tree)
+        lower_bound = multiplied_counters(tree)
         del tree
         for what, matched, word in refused:
             denied.append({"where": sources[stem].name, "what": what,
@@ -698,6 +730,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         for name, sites, dens in rows:
             for kind, value in dens:
                 counters_examined += 1
+                if value != sites and name in lower_bound and sites < value:
+                    # K IS A LOWER BOUND HERE, so `sites < denominator` is not a
+                    # disagreement -- the shortfall is exactly what a helper
+                    # called more than once produces. `sites > denominator`
+                    # still is one, and is left to the comparison below: a lower
+                    # bound that EXCEEDS the stated population cannot be
+                    # explained by emitting more.
+                    undecidable.append({
+                        "program": sources[stem].name, "counter": name,
+                        "increment_sites": sites, "denominator": value,
+                        "denominator_kind": kind,
+                        "emitted_per_site": lower_bound[name],
+                    })
+                    continue
                 if value != sites:
                     findings.append({
                         "check": "emitter-self",
@@ -758,13 +804,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     head = (f"{counters_examined} emitted counter denominator(s) and "
             f"{pins_examined} test pin(s) examined; {len(denied)} match(es) "
             f"not counted because the statement DENIES them; {len(unparsed)} "
-            f"source(s) NOT examined because they would not parse")
+            f"source(s) NOT examined because they would not parse; "
+            f"{len(undecidable)} population(s) NOT DECIDABLE")
     report = {"tool": TOOL, "counters_examined": counters_examined,
               "pins_examined": pins_examined, "denied_by_polarity": denied,
-              "unparsed": unparsed, "findings": findings}
+              "unparsed": unparsed, "not_determined": undecidable,
+              "findings": findings}
     if args.json:
         _atomic.write_json(args.json, report)
 
+    for u in undecidable:
+        print(f"  [NOT DECIDABLE] {u['program']}: counter ${u['counter']} is "
+              f"written at {u['increment_sites']} site(s) but its `incr` sits "
+              f"in a helper called {u['emitted_per_site']}x, so that is a LOWER "
+              f"BOUND, not a count; its {u['denominator_kind']} denominator "
+              f"says {u['denominator']} and the shortfall is exactly what a "
+              f"helper produces — NOT compared")
     for u in unparsed:
         print(f"  [UNPARSED] {u} — this guard could NOT read it, so nothing in "
               f"it was examined")
