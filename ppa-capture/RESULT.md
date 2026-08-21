@@ -565,12 +565,12 @@ raises. Blocking the module entirely, which is the only state I can synthesise
 here, does not reproduce it. Absent and too-old are different states and only the
 first is an import failure.
 
-> **why_not_bucket_a**: A program cannot decide this from the source — I built
-> the static check four ways and every one over-reported, and every survivor I
-> could execute behaved correctly. The input that would settle it, the dependency
-> installed at an older release, does not exist on the host at check time, and no
-> amount of reading the code conjures it. Producing that input is a version
-> matrix in CI, and that is the engineering.
+> **why_not_bucket_a**: A program cannot decide this from the source: I built the static check four
+> ways and every one over-reported, and all six survivors I could execute
+> degraded correctly. The input that would settle it — the dependency
+> INSTALLED AT AN OLDER RELEASE — does not exist on the host at check time,
+> and no amount of reading the code conjures it. Producing that input is a
+> version matrix in CI, and that is the engineering.
 
 Cost of the case that bit: **33 red test identifiers** on a stock host, and a
 crash returned under the exit code reserved for a finding about the design.
@@ -1353,6 +1353,26 @@ genuine.
 Not "sixteen verified guards", and not a bare name count either. The claims are
 demonstrably not resting on tests that assert only the happy path, and the
 residual is a regex's blind spot rather than a doubt about the guards.
+
+## The honest sentences, checked verbatim against the records
+
+The deliverable owes, *"for each Bucket B/C/D, the one honest sentence the ladder
+demands."* Three records owe one (2 C, 1 T). Checking that the sentence in this
+report is the sentence in `recoveries.json` — not merely that a blockquote exists
+— found **one had drifted**:
+
+    record:  "...all six survivors I could execute DEGRADED CORRECTLY"
+    report:  "...every survivor I could execute BEHAVED CORRECTLY"
+
+Both defensible; the record's is the more precise, and the record is what an
+implementer reads. The report is now aligned to it, and all three render verbatim.
+
+**The drift is this batch's own subject, committed by its author.** One fact held
+in two places with nothing relating them is exactly **A-9** and **A-17** — and it
+survived every other check here, because each of my audits asked whether a
+required element was *present*, never whether two copies of it *agreed*.
+Presence is not agreement, which is the whole finding of the three records the
+brief singles out.
 
 ---
 
