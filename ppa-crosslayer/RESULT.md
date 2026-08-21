@@ -47,8 +47,9 @@ baseline RTL**, cycle for cycle, at every port, by the shipped
 unproven, zero counterexamples.
 
 **And the arm that would have won biggest is published as NOT ADMITTED.** A
-non-redundant accumulator removes 32 of the design's 65 flip-flops and is
-**−21.3 % at synthesis** — three times the RTL win reported above. It appears
+non-redundant accumulator removes **31 of the design's 65 flip-flops** and is
+**−21.3 % to −27.3 % at synthesis** — three to four times the best admitted RTL
+win. It appears
 nowhere in the headline, because the equivalence gate could not prove it and
 `unproven is not proven`. Twelve candidates are published as failures for that
 reason and for one other, and §7 is about them.
@@ -162,7 +163,7 @@ spare 0.00 too.
 
 ### The RTL and micro-architecture levers, as candidate files
 
-Ten candidate RTLs, all in [`rtl/`](rtl/), each carrying its lever and its
+Thirteen candidate RTLs, all in [`rtl/`](rtl/), each carrying its lever and its
 citation in its own header:
 
 | variant | lever moved | what changed |
@@ -386,12 +387,19 @@ arm checked.
 Three quarters of it is the combinational cells, at an **identical cell count**:
 the mapper picked a cheaper structure. The cell-level diff shows exactly that —
 22 `xor2_1`, 22 `a22oi_1`, 38 `nor2_1`, 14 `nand2_1` and 12 `xnor2_1` disappear;
-51 `nand3_1`, 31 `a21o_1` and 35 more `a21oi_1` appear. **Nothing was given up.**
-No spare cell, no diode, no buffer the design needed: the flop count is
-unchanged and the ten spares are present or absent exactly as `--spare-density`
-put them.
+51 `nand3_1`, 31 `a21o_1` and 35 more `a21oi_1` appear.
 
-### 5.5 The pre-PnR win is three times the post-route win, and that is the finding
+**Nothing was given up, and every row of that table was checked for it.** The
+flop count is identical (99 / 99), so no state was dropped. The spare-cell count
+is whatever `--spare-density` put there and both arms sit at 0.00, so this
+comparison is not the ECO trade (§5.3 is). The one row that could look like
+something removed is the antenna diode, 2 → 1: the router inserts diodes to fix
+antenna violations, so a diode fewer means one fewer violation to fix, and the
+`antenna` feasibility axis is **SATISFIED with 0 violations on both arms**. The
+clock tree got 5.0 µm² *bigger*, which is the win paying a small cost rather
+than hiding one.
+
+### 5.5 The synthesis win is not the post-route win, and the gap is the finding
 
 | variant | synthesis area | Δ | post-route objective (0.30/0.02) | Δ |
 |---|---:|---:|---:|---:|
@@ -399,7 +407,7 @@ put them.
 | `csa_alt_maj` | 2532.4 | −2.6 % | 6509 | −1.3 % |
 | `csa_mux` | 2427.3 | −6.7 % | 6312 | −4.3 % |
 | `nr_csel16` | 2047.0 | **−21.3 %** | 6379 | −3.3 % |
-| `nr_rca` | 1891.8 | **−27.3 %** | *no number — §7* |
+| `nr_rca` | 1891.8 | **−27.3 %** | *no number* | *tool crash, §7.3* |
 
 **A −21.3 % synthesis win becomes a −3.3 % post-route win.** The decomposition
 of `b000` → `x05` says where it goes: the 31 flops removed are worth −628 µm²
@@ -454,7 +462,7 @@ lane wrote is under [`ppa-crosslayer/`](.) and calls the shipped programs.
 
 ---
 
-## 7. The twelve failures, and the arm that would have won
+## 7. The failures — five not admitted, twelve with no number, and the arm that would have won
 
 ### 7.1 Five candidates are NOT ADMITTED by the equivalence gate
 
@@ -505,7 +513,7 @@ which would have been a headline. It is not in the headline. **A rewritten RTL
 the gate cannot prove is a different design and its number is not comparable**,
 so it is published as infeasible on the equivalence axis and nowhere else.
 
-### 7.3 Twelve candidates produced no number at all, and eleven of twelve are the same family
+### 7.3 Twelve candidates produced no number at all, and all twelve are the same family
 
 | cause | n | which |
 |---|---:|---|
