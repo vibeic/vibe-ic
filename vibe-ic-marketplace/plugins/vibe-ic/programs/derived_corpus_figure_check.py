@@ -5,9 +5,15 @@
 
 That sentence justifies a scope decision with two numbers. The second one
 reproduces exactly. The first one reproduces under no reading of the predicate
-it describes -- reconstructions of the same clause measured 41, 49, 71, 440 and
-595. The conclusion the sentence supports is correct; the sentence is still not
-evidence, because a reader cannot get 113 back out of the program.
+it describes -- reconstructing the same clause against b85d68ac on 2026-08-05
+measured 41, 49, 71, 440 and 595, and none of them is 113. The conclusion the
+sentence supports is correct; the sentence is still not evidence, because a
+reader cannot get 113 back out of the program.
+
+Those five reconstruction figures are PINNED to the date and commit above, by
+this file's own rule. They record what was measured when this gate was argued
+for. They are not a claim about any later tree, and nothing here maintains
+them.
 
 That is the whole rule. A stated justification must be checkable. A funnel
 figure is checkable exactly when the program derives it, and a program that
@@ -98,10 +104,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _derived_corpus_figure import (  # noqa: E402
     FIGURES_ATTR,
+    PIN_RE,
     PLACEHOLDER_RE,
     CorpusFigures,
     FigureError,
+    anchored_figures,
+    paragraphs,
     placeholder_names,
+    population_figures,
     render,
 )
 
@@ -111,46 +121,34 @@ RC_CLEAN, RC_FOUND, RC_USAGE = 0, 1, 2
 #: does not, cannot, and is out of scope for the blocking funnel clause.
 _WALKS_A_TREE = re.compile(r"\.rglob\(|\.glob\(|os\.walk\(|\.iterdir\(")
 
-#: Nouns that make an integer a POPULATION figure rather than a threshold, an
-#: index, a byte count or a duration. Closed vocabulary, extended only with a
-#: measured reason.
-_POPULATION_NOUN = (
-    r"programs?|files?|checkers?|matches|match|sites?|candidates?|entries|entry|"
-    r"tests?|occurrences?|instances?|documents?|projects?|modules?|records?|"
-    r"accumulators?|merges?|directories|dirs?|cells?|hits?|rows?|blobs?"
-)
+# THE POPULATION-FIGURE VOCABULARY NOW LIVES IN THE SEAM (vibe-ic#961).
+#
+# It was defined here, and this file was the only consumer -- until a second
+# consumer appeared: the 63x8 census generator, which must report how many
+# stated figures in the documents it guards are NOT derived. A coverage report
+# that graded "is this a corpus figure?" by a second, private copy of these
+# regexes could disagree with the gate whose coverage it reports, and a
+# disagreement between a gate and its own coverage line is precisely what a
+# coverage line exists to remove.
+#
+# The names below are re-bound, not re-implemented: `_PIN` and
+# `population_figures` keep working for every existing caller and test.
+_PIN = PIN_RE
 
-#: ``123 files`` / ``123 syntactic matches`` / ``population 123``.
-_FIGURE_AFTER = re.compile(
-    r"(?<![\w.#$%/:-])(\d{1,7})\s+(?:\w+[- ]){0,2}(?:" + _POPULATION_NOUN + r")\b",
-    re.IGNORECASE)
-_FIGURE_BEFORE = re.compile(
-    r"\b(?:" + _POPULATION_NOUN + r")\s+(?![\w.-])(\d{1,7})\b", re.IGNORECASE)
-
-#: A number in a threshold is a RULE CONSTANT, not a measurement of anything.
-_THRESHOLD_LEAD = re.compile(
-    r"(>=|<=|>|<|at\s+least|at\s+most|fewer\s+than|more\s+than|up\s+to|"
-    r"exactly|than|only|least|most)\s*$", re.IGNORECASE)
+#: An anchored figure (``63<!--figure:name-->``) is DERIVED, and
+#: `population_figures` already drops it. Named here so a reader of the clauses
+#: below can see why an anchored number is never reported as unbound.
+_ANCHORED = anchored_figures
 
 #: An explicit narrowing relation between two figures. This -- not the mere
 #: presence of two numbers -- is what identifies a self-selectivity funnel.
+#: Stays HERE, not in the seam: it is a property of clause 1's shape, and no
+#: anchor adopter needs it.
 _NARROWING = re.compile(
     r"\b(?:down\s+to|narrow(?:s|ed|ing)?\s+(?:it\s+|them\s+)?to|"
     r"reduc(?:es|ed|ing)?\s+(?:it\s+|them\s+)?to|cut(?:s|ting)?\s+(?:it\s+)?to|"
     r"takes?\s+.{0,60}?\s+to|leaves?|leaving)\b|(?:->|-->|→)",
     re.IGNORECASE | re.DOTALL)
-
-#: A PIN marks a figure as a record of a measurement taken THEN, against a
-#: state a reader can still get back to. It is the only thing that exempts a
-#: figure from being derived, because it is the only thing that stops the
-#: figure being a claim about the tree as it is now.
-_PIN = re.compile(
-    r"\{figure:[a-z0-9_]+\}"                 # derived by this seam: not a claim
-    r"|(?<![\w])[0-9a-f]{7,40}(?![\w])"      # pinned commit
-    r"|#\d{2,5}\b"                           # pinned issue / PR
-    r"|\bv\d+\.\d+\.\d+\b"                   # pinned version
-    r"|\b20\d\d-\d\d-\d\d\b",                # dated measurement
-    re.IGNORECASE)
 
 #: A LOCATOR -- a glob, a `git ls-files` -- looks like a pin and is not one. It
 #: tells a reader how to re-take the measurement; it does not say the figure
@@ -166,35 +164,6 @@ _LOCATOR = re.compile(
 
 
 # ------------------------------------------------------------------ helpers --
-def paragraphs(doc: str) -> List[Tuple[int, str]]:
-    """Blank-line separated blocks, with the 1-based line offset of each."""
-    out: List[Tuple[int, str]] = []
-    cur: List[str] = []
-    start = 1
-    for i, line in enumerate(doc.splitlines(), start=1):
-        if line.strip():
-            if not cur:
-                start = i
-            cur.append(line)
-        elif cur:
-            out.append((start, "\n".join(cur)))
-            cur = []
-    if cur:
-        out.append((start, "\n".join(cur)))
-    return out
-
-
-def population_figures(text: str) -> List[str]:
-    """Integers sitting in population position, thresholds excluded."""
-    found: List[str] = []
-    for rx in (_FIGURE_AFTER, _FIGURE_BEFORE):
-        for m in rx.finditer(text):
-            if _THRESHOLD_LEAD.search(text[max(0, m.start() - 16):m.start()]):
-                continue
-            found.append(" ".join(m.group(0).split()))
-    return found
-
-
 def all_docstrings(tree: ast.AST) -> List[Tuple[str, str, int]]:
     """(owner, docstring, lineno) for the module and every def/class."""
     out: List[Tuple[str, str, int]] = []

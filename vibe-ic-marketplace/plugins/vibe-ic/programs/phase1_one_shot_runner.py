@@ -38,11 +38,12 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
+import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 # THE L-document write chokepoint — records the producing release on the
 # L1 / L4 / L8 documents this runner back-fills from a prompt.
 import l_doc_generator_stamp as _stamp
@@ -72,6 +73,46 @@ class StepResult:
     status: str
     duration_s: float
     detail: str
+    # ADDED for the pre-flight. This runner's row was the only one of the four
+    # with no `extras`, so a refusal would have had to throw away everything
+    # that makes it actionable — which artefact was absent, which step owed it,
+    # where the ledger is. Additive and defaulted, so every existing
+    # construction site and every existing `asdict(...)` reader is unchanged.
+    extras: Dict[str, Any] = field(default_factory=dict)
+
+
+def _preflight_refusal(name: str):
+    """This runner's refusal row for `step_preflight.gate`.
+
+    `BLOCKED` carries the same meaning it does in the other three runners: the
+    step was NOT attempted because an INPUT could not support it, so NOTHING is
+    known. It is listed in `_aggregate_verdict._FAIL_STATUSES` — without that it
+    would have fallen through that function's catch-all `return "PASS"` and a
+    refusal would have produced a GREEN run, which is the defect class this
+    whole pre-flight exists to remove. Measured on this ladder specifically:
+    Phase 1's verdict was `FAIL if any FAIL else PASS_WITH_WAIVERS if any
+    WAIVED/SKIP else PASS`, so a lone BLOCKED row scored PASS — the cleanest
+    possible green run over a Phase 1 that was never given a document.
+    """
+    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
+        return StepResult(name, _spf.REFUSAL_STATUS, 0.0, detail, extras=extras)
+    return _mk
+
+
+# Statuses that must NOT reach a green verdict. `BLOCKED` is `step_preflight`'s
+# refusal status; `FAIL` is this runner's pre-existing one, unchanged.
+_FAIL_STATUSES = ("FAIL", _spf.REFUSAL_STATUS)
+
+
+def _aggregate_verdict(plan: List[StepResult]) -> str:
+    """Phase 1's top-level verdict. Extracted from `main()` unchanged except
+    for the BLOCKED tier, so a control can assert the non-greenness directly
+    rather than re-running the whole dispatcher to observe it."""
+    if any(s.status in _FAIL_STATUSES for s in plan):
+        return "FAIL"
+    if any(s.status in ("WAIVED", "SKIP") for s in plan):
+        return "PASS_WITH_WAIVERS"
+    return "PASS"
 
 
 # ── Input-mode detection ────────────────────────────────────────────
@@ -559,13 +600,37 @@ def main() -> int:
     # Docs mode: delegate to phase1_doc_one_shot_runner
     if mode == "docs":
         t0 = time.time()
-        rc = _run_docs_mode(project, args.ic_name, extras)
-        rc = run_phase1_second_track(project, rc)
+        # PRE-FLIGHT (canonical step D1). Its declared input is the STAGED
+        # corpus — `input/docs/*`, `input/phase1_prompt.md`,
+        # `input/phase1_structured.yaml`, or a directly-staged
+        # `phase1/input_{doc,prompt}/`. Without this, a project with nothing
+        # staged ran the whole 17-skill doc-extraction track over an empty
+        # tree and reported a verdict about the L-docs it "produced".
+        _pf = _spf.gate(
+            project, "phase1_one_shot_runner", "doc_extract",
+            _preflight_refusal("phase1_doc_extract"),
+            _run_docs_mode, project, args.ic_name, extras)
+        # `_run_docs_mode` returns an int rc; the refusal factory returns a
+        # StepResult. The TYPE is the discriminator, and it is exact — there is
+        # no rc value that is also a StepResult.
+        refused = isinstance(_pf, StepResult)
+        rc = 1 if refused else int(_pf)
+        if refused:
+            # The second track parses the L-docs D1 was supposed to write. D1
+            # was never called, so there is nothing for it to examine — running
+            # it would manufacture a second, derived failure and bury the real
+            # one. RECORDED in the summary below rather than skipped silently.
+            second_track = ("not run — D1 was REFUSED, so no L-doc exists for "
+                            "the expert track to parse")
+        else:
+            second_track = "ran"
+            rc = run_phase1_second_track(project, rc)
         # The dispatcher always emits reports/phase1_one_shot.json so
         # callers / tests see a unified entry point regardless of mode.
         reports = project / "reports"
         reports.mkdir(parents=True, exist_ok=True)
-        verdict = "PASS" if rc == 0 else "FAIL"
+        verdict = (_aggregate_verdict([_pf]) if refused
+                   else ("PASS" if rc == 0 else "FAIL"))
         summary = {
             "phase": 1,
             "mode": "docs",
@@ -575,20 +640,43 @@ def main() -> int:
             "delegated_rc": rc,
             "duration_s": time.time() - t0,
             "verdict": verdict,
+            "second_track": second_track,
         }
+        if refused:
+            # A refusal must be readable AS a refusal, not as "the delegate
+            # returned 1". Same shape as the prompt branch's `steps` list.
+            summary["steps"] = [asdict(_pf)]
+            summary["preflight_ledger"] = _spf.LEDGER_REL
+        # Per-step output view — see the prompt-mode call below. BOTH exits of
+        # this main() get it; wiring only one would leave the docs entry (Path
+        # A, the vendor-document front door) without a steps tree.
+        summary["steps_view"] = _pl.emit_steps_view(
+            project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
         (reports / "phase1_one_shot.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
         return rc
 
     # Prompt mode: original phase1_engine path
     plan: List[StepResult] = []
-    plan.append(step_ingest_render(project, args.ic_name))
+    # PRE-FLIGHT (canonical step D1) — the SAME site as the docs branch above:
+    # one flow step, two mode branches, one question. Gating only one of them
+    # would leave whichever front door a given design used unexamined, which is
+    # the shape of the gap this closes.
+    plan.append(_spf.gate(
+        project, "phase1_one_shot_runner", "doc_extract",
+        _preflight_refusal("phase1_ingest_render"),
+        step_ingest_render, project, args.ic_name))
     plan.append(step_human_docs(project))
 
     # The prompt path emits the same L-docs, so it gets the same second track
     # and the same supply gate. Wiring only the docs path would leave every
     # dialogue-entered design unexamined by both.
-    rc_second = run_phase1_second_track(project, 0)
+    #
+    # NOT after a refusal, for the reason given in the docs branch: the track
+    # parses L-docs that were never written, so it can only report a derived
+    # failure on top of the real one.
+    _refused = any(s.status == _spf.REFUSAL_STATUS for s in plan)
+    rc_second = 0 if _refused else run_phase1_second_track(project, 0)
 
     reports = project / "reports"
     reports.mkdir(parents=True, exist_ok=True)
@@ -598,11 +686,18 @@ def main() -> int:
         "project": str(project),
         "ic_name": args.ic_name,
         "steps": [asdict(s) for s in plan],
-        "verdict": ("FAIL" if any(s.status == "FAIL" for s in plan)
-                    else "PASS_WITH_WAIVERS"
-                    if any(s.status in ("WAIVED", "SKIP") for s in plan)
-                    else "PASS"),
+        "verdict": _aggregate_verdict(plan),
+        "second_track": "not run — D1 was REFUSED" if _refused else "ran",
     }
+    if _refused:
+        summary["preflight_ledger"] = _spf.LEDGER_REL
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # A phase1-only run shows every later step with zero outputs, which is the
+    # honest picture: the tree is the flow, and "nothing produced yet" is a
+    # statement worth having on disk. Best-effort, non-gating; recorded in
+    # reports/audit/steps_view.json either way.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
     (reports / "phase1_one_shot.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     print(f"\n=== phase1_one_shot_runner DONE (mode={mode}) ===")

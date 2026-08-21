@@ -1,8 +1,0 @@
-{
-  "tool": "openroad-filler_placement",
-  "filler_instances": 0,
-  "row_utilization_pct": 100.0,
-  "core_utilization_pct": 28.0,
-  "utilization_below_report_precision": false,
-  "note": "row_utilization_pct = odb occupied-CORE-master / row area; core_utilization_pct = report_design_area (logic/core); per-layer metal CMP density screened by KLayout met_min_ca_density at sign-off DRC"
-}

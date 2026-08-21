@@ -1,5 +1,0 @@
-{
-  "ic_name": "IEEE 1149.1 JTAG TAP Controller (TI SSYA002C primer)",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "Pure digital protocol. TCK / TMS / TDI / TDO / TRST are CMOS or TTL-compatible digital signals at the device's I/O voltage (typically VDD-IO). IEEE 1149.1 does not specify voltage levels or drive characteristics at the protocol layer; per-device datasheets define VIH / VIL / VOH / VOL for the TAP pins. Although JTAG is used to boundary-scan-test analog pins on mixed-signal devices, the boundary-scan extension for true analog measurement is IEEE Std 1149.4 (Standard for a Mixed-Signal Test Bus), which is a separate standard not covered by the base 1149.1 primer."
-}

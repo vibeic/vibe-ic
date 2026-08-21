@@ -50,8 +50,28 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # ── digital clock / reset input name patterns (aligned with the plugin's
 #    existing cvdp_complete_extract convention set) ─────────────────────────
+# vibe-ic dfa75131a — `ck<N>` AND `phi<N>` ARE CLOCKS. They are the standard
+# switched-capacitor spellings, and omitting them made a pin's CLASS depend on
+# how its designer spelled it: measured on this file before the fix, only the
+# spelling changed between the two rows —
+#
+#     ck1,  ck2   -> digital_data_input   (has_digital_clock_input=False)
+#     clk1, clk2  -> digital_clk_input    (has_digital_clock_input=True)
+#
+# It was also an INTERNAL inconsistency, not merely an omission: in the SAME
+# plugin version `harness_exact_selfverify._CLOCK_NAME_RE` already matches
+# `ck`/`ck1`/`ck4`. Two regexes in one plugin disagreed about what a clock is,
+# and the analog track got the losing one — an SC modulator whose own L1 calls
+# CK4/CK5/CK6 "modulator clocks" had them classified as DATA.
+#
+# SCOPE, stated so this is not over-read: fixing the regex does NOT by itself
+# reroute such a design. `digital_datapath_absent` is
+# `not (has_clk or has_rst or has_data)`, so ANY clock still forces the digital
+# track. A clocked-but-logic-free SC modulator (clock in, bitstream out, no
+# data, no reset) is exactly the case that predicate cannot express. That is a
+# separate design decision and is deliberately NOT bundled here.
 _CLK_RE = re.compile(
-    r"(?i)^(clk|clock|sclk|aclk|hclk|pclk|mclk|refclk|xclk|clkin)"
+    r"(?i)^(clk|clock|ck|phi|sclk|aclk|hclk|pclk|mclk|refclk|xclk|clkin)"
     r"(\d+)?"
     r"([_\.]?(in|i|sys|core|div|gen|en|ref))?(\d+)?$")
 _RST_RE = re.compile(
